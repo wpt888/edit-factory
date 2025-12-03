@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+temp/
+*.mp4
+*.mov
+*.mp3
+*.wav
+*.srt
+logs/*.log
+
+# Keep folders but ignore contents
+!.gitkeep
+
+# Claude Code
+.claude/
