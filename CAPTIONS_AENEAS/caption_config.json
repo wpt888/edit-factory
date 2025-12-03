@@ -1,0 +1,17 @@
+{
+  "words_per_caption": 2,
+  "min_duration": 0.7,
+  "max_duration": 3.0,
+  "model_name": "large",
+  "output_formats": {
+    "SRT": true,
+    "VTT": false,
+    "JSON": false,
+    "CSV": false
+  },
+  "remove_punctuation": false,
+  "text_case": "normal",
+  "output_folder": "C:/Users/ukfdb/Downloads",
+  "audio_file": "C:/Users/ukfdb/Downloads/ElevenLabs_2025-11-17T21_27_11_Ana Maria _pvc_sp117_s57_sb75_se22_b_m2.mp3",
+  "original_text": "Luna aceasta găsești reduceri la echipamente de protecție, pe nortia.ro.\nÎmbrăcăminte reflectorizantă, jachete călduroase, costume de lucru, căști de protecție și multe alte accesorii de protecție. Ce mai aștepți? Stocurile sunt limitate."
+}
