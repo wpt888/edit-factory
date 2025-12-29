@@ -1,0 +1,473 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  DollarSign,
+  TrendingUp,
+  Mic,
+  Video,
+  RefreshCw,
+  ChevronLeft,
+  AlertCircle,
+  CheckCircle2,
+  Settings,
+} from "lucide-react";
+import Link from "next/link";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+
+interface CostSummary {
+  source: string;
+  totals: {
+    elevenlabs: number;
+    gemini: number;
+  };
+  total_all: number;
+  today: {
+    elevenlabs: number;
+    gemini: number;
+  };
+  entry_count: number;
+  last_entries: CostEntry[];
+}
+
+interface CostEntry {
+  id?: string;
+  job_id: string;
+  service: string;
+  operation: string;
+  units: number;
+  estimated_cost: number;
+  details?: Record<string, unknown>;
+  created_at?: string;
+}
+
+interface UsageStats {
+  elevenlabs?: {
+    character_count: number;
+    character_limit: number;
+    characters_remaining: number;
+    tier: string;
+    estimated_cost_usd: number;
+  };
+  gemini?: {
+    status: string;
+    estimated_cost_per_video: number;
+  };
+  errors: string[];
+}
+
+export default function UsagePage() {
+  const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
+  const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
+  const [allEntries, setAllEntries] = useState<CostEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [budget, setBudget] = useState<number>(50); // Default $50 budget
+  const [showAllEntries, setShowAllEntries] = useState(false);
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [costsRes, usageRes] = await Promise.all([
+        fetch(`${API_URL}/costs`),
+        fetch(`${API_URL}/usage`),
+      ]);
+
+      if (costsRes.ok) {
+        const costsData = await costsRes.json();
+        setCostSummary(costsData);
+      }
+
+      if (usageRes.ok) {
+        const usageData = await usageRes.json();
+        setUsageStats(usageData);
+      }
+    } catch (error) {
+      console.error("Failed to fetch usage data:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const fetchAllEntries = async () => {
+    try {
+      const res = await fetch(`${API_URL}/costs/all`);
+      if (res.ok) {
+        const data = await res.json();
+        setAllEntries(data.entries || []);
+        setShowAllEntries(true);
+      }
+    } catch (error) {
+      console.error("Failed to fetch all entries:", error);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+    // Load saved budget from localStorage
+    const savedBudget = localStorage.getItem("editai_budget");
+    if (savedBudget) {
+      setBudget(parseFloat(savedBudget));
+    }
+  }, [fetchData]);
+
+  const saveBudget = (value: number) => {
+    setBudget(value);
+    localStorage.setItem("editai_budget", value.toString());
+  };
+
+  const totalSpent = costSummary?.total_all || 0;
+  const budgetRemaining = budget - totalSpent;
+  const budgetUsedPercent = Math.min((totalSpent / budget) * 100, 100);
+
+  const formatCost = (cost: number) => `$${cost.toFixed(4)}`;
+  const formatDate = (dateStr?: string) => {
+    if (!dateStr) return "-";
+    return new Date(dateStr).toLocaleString("ro-RO", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  return (
+    <div className="min-h-screen bg-background text-foreground">
+      <div className="container mx-auto p-6">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-4">
+            <Link href="/library">
+              <Button variant="ghost" size="icon">
+                <ChevronLeft className="h-5 w-5" />
+              </Button>
+            </Link>
+            <div>
+              <h1 className="text-3xl font-bold text-foreground">Usage & Costs</h1>
+              <p className="text-muted-foreground">Monitor API usage and spending</p>
+            </div>
+          </div>
+          <Button
+            onClick={fetchData}
+            variant="outline"
+          >
+            <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        </div>
+
+        {/* Budget Overview */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+          {/* Budget Card */}
+          <Card className="bg-card border-border col-span-2">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-foreground flex items-center gap-2">
+                <DollarSign className="h-5 w-5 text-green-500" />
+                Budget Overview
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="flex items-center gap-4">
+                  <Label className="text-muted-foreground w-24">Budget ($):</Label>
+                  <Input
+                    type="number"
+                    value={budget}
+                    onChange={(e) => saveBudget(parseFloat(e.target.value) || 0)}
+                    className="w-24 bg-muted/50 border-border"
+                    min={0}
+                    step={10}
+                  />
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-2">
+                    <span className="text-muted-foreground">
+                      Spent: <span className="text-foreground font-bold">{formatCost(totalSpent)}</span>
+                    </span>
+                    <span className="text-muted-foreground">
+                      Remaining:{" "}
+                      <span className={`font-bold ${budgetRemaining < 0 ? "text-destructive" : "text-green-500"}`}>
+                        {formatCost(budgetRemaining)}
+                      </span>
+                    </span>
+                  </div>
+                  <Progress
+                    value={budgetUsedPercent}
+                    className="h-3"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1 text-right">
+                    {budgetUsedPercent.toFixed(1)}% used
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Today's Spending */}
+          <Card className="bg-card border-border">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-foreground text-lg flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-yellow-500" />
+                Today
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold text-foreground">
+                {formatCost((costSummary?.today?.elevenlabs || 0) + (costSummary?.today?.gemini || 0))}
+              </div>
+              <div className="text-sm text-muted-foreground mt-2 space-y-1">
+                <div className="flex justify-between">
+                  <span>ElevenLabs:</span>
+                  <span>{formatCost(costSummary?.today?.elevenlabs || 0)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Gemini:</span>
+                  <span>{formatCost(costSummary?.today?.gemini || 0)}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Total Jobs */}
+          <Card className="bg-card border-border">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-foreground text-lg flex items-center gap-2">
+                <Video className="h-4 w-4 text-blue-500" />
+                Total Jobs
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold text-foreground">
+                {costSummary?.entry_count || 0}
+              </div>
+              <p className="text-sm text-muted-foreground mt-2">
+                API calls tracked
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Service Breakdown */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+          {/* ElevenLabs */}
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="text-foreground flex items-center gap-2">
+                <Mic className="h-5 w-5 text-primary" />
+                ElevenLabs TTS
+              </CardTitle>
+              <CardDescription className="text-muted-foreground">
+                Text-to-Speech usage
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Total Spent:</span>
+                  <span className="text-2xl font-bold text-foreground">
+                    {formatCost(costSummary?.totals?.elevenlabs || 0)}
+                  </span>
+                </div>
+                {usageStats?.elevenlabs && (
+                  <>
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Characters Used:</span>
+                        <span className="text-foreground">
+                          {usageStats.elevenlabs.character_count.toLocaleString()} /{" "}
+                          {usageStats.elevenlabs.character_limit.toLocaleString()}
+                        </span>
+                      </div>
+                      <Progress
+                        value={
+                          (usageStats.elevenlabs.character_count /
+                            usageStats.elevenlabs.character_limit) *
+                          100
+                        }
+                        className="h-2"
+                      />
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Remaining:</span>
+                      <span className="text-green-500 font-medium">
+                        {usageStats.elevenlabs.characters_remaining.toLocaleString()} chars
+                      </span>
+                    </div>
+                    <Badge variant="outline">
+                      {usageStats.elevenlabs.tier} Plan
+                    </Badge>
+                  </>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Gemini */}
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="text-foreground flex items-center gap-2">
+                <Video className="h-5 w-5 text-blue-500" />
+                Gemini Vision
+              </CardTitle>
+              <CardDescription className="text-muted-foreground">
+                Video analysis usage
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Total Spent:</span>
+                  <span className="text-2xl font-bold text-foreground">
+                    {formatCost(costSummary?.totals?.gemini || 0)}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Rate:</span>
+                  <span className="text-foreground">~$0.02 / frame</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Est. per Video:</span>
+                  <span className="text-foreground">~$1.20 (60 frames)</span>
+                </div>
+                {usageStats?.gemini && (
+                  <Badge
+                    variant="outline"
+                    className={
+                      usageStats.gemini.status === "active"
+                        ? "border-green-500 text-green-500"
+                        : "border-destructive text-destructive"
+                    }
+                  >
+                    <CheckCircle2 className="h-3 w-3 mr-1" />
+                    {usageStats.gemini.status}
+                  </Badge>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Recent Jobs Table */}
+        <Card className="bg-card border-border">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <div>
+              <CardTitle className="text-foreground">Cost History</CardTitle>
+              <CardDescription className="text-muted-foreground">
+                {showAllEntries ? "All API calls" : "Last 10 API calls"}
+              </CardDescription>
+            </div>
+            {!showAllEntries && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={fetchAllEntries}
+              >
+                Show All
+              </Button>
+            )}
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow className="border-border">
+                  <TableHead className="text-muted-foreground">Date</TableHead>
+                  <TableHead className="text-muted-foreground">Job ID</TableHead>
+                  <TableHead className="text-muted-foreground">Service</TableHead>
+                  <TableHead className="text-muted-foreground">Operation</TableHead>
+                  <TableHead className="text-muted-foreground text-right">Units</TableHead>
+                  <TableHead className="text-muted-foreground text-right">Cost</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(showAllEntries ? allEntries : costSummary?.last_entries || []).map(
+                  (entry, idx) => (
+                    <TableRow key={entry.id || idx} className="border-border">
+                      <TableCell className="text-foreground text-sm">
+                        {formatDate(entry.created_at)}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground font-mono text-xs">
+                        {entry.job_id?.slice(0, 8)}...
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={
+                            entry.service === "elevenlabs"
+                              ? "border-primary text-primary"
+                              : "border-blue-500 text-blue-500"
+                          }
+                        >
+                          {entry.service === "elevenlabs" ? (
+                            <Mic className="h-3 w-3 mr-1" />
+                          ) : (
+                            <Video className="h-3 w-3 mr-1" />
+                          )}
+                          {entry.service}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-foreground">{entry.operation}</TableCell>
+                      <TableCell className="text-foreground text-right">
+                        {entry.units?.toLocaleString() || "-"}
+                        <span className="text-muted-foreground text-xs ml-1">
+                          {entry.service === "elevenlabs" ? "chars" : "frames"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-green-500 text-right font-medium">
+                        {formatCost(entry.estimated_cost || 0)}
+                      </TableCell>
+                    </TableRow>
+                  )
+                )}
+                {(!costSummary?.last_entries || costSummary.last_entries.length === 0) &&
+                  !showAllEntries && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                        <AlertCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                        No cost entries yet. Start processing videos to see usage.
+                      </TableCell>
+                    </TableRow>
+                  )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+
+        {/* Errors */}
+        {usageStats?.errors && usageStats.errors.length > 0 && (
+          <Card className="bg-destructive/10 border-destructive/30 mt-4">
+            <CardHeader>
+              <CardTitle className="text-destructive flex items-center gap-2">
+                <AlertCircle className="h-5 w-5" />
+                API Errors
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ul className="space-y-1">
+                {usageStats.errors.map((error, idx) => (
+                  <li key={idx} className="text-destructive text-sm">
+                    {error}
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}

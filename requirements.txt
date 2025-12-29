@@ -1,13 +1,49 @@
 # Edit Factory - Python Dependencies
-# Install in venv: pip install -r requirements.txt
+# Install: pip install -r requirements.txt
+
+# Web Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# Background Tasks
+celery>=5.3.0
+redis>=5.0.0
 
 # Video Processing
 scenedetect[opencv]>=0.6.0
 opencv-python-headless>=4.8.0
 numpy>=1.24.0
+scipy>=1.11.0
+
+# Google Gemini AI
+google-genai>=0.2.0
 
 # Audio Transcription (SRT generation)
 openai-whisper>=20231117
 
+# TTS & External APIs
+httpx>=0.25.0
+aiofiles>=23.0.0
+edge-tts>=6.1.0
+
+# Voice Activity Detection (VAD) - pentru detectarea și mutarea vocilor din video
+# Silero VAD necesită PyTorch
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Voice Cloning (optional - requires GPU for best performance)
+# Comentat pentru că torch e deja inclus mai sus
+
+# Supabase
+supabase>=2.0.0
+
+# Google Drive
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.1.0
+
 # Utilities
+python-dotenv>=1.0.0
 tqdm>=4.65.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
