@@ -20,12 +20,16 @@ from app.models import (
 from app.services.video_processor import VideoProcessorService
 
 import logging
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# In-memory job storage (pentru development - in productie folosim Redis)
-jobs_store: dict = {}
+# Job storage - unified Supabase storage (with in-memory fallback)
+from app.services.job_storage import get_job_storage
+
+# All jobs now use get_job_storage() for persistent storage
+# This provides: Supabase persistence, automatic fallback to memory if unavailable
 
 
 def get_processor() -> VideoProcessorService:
@@ -133,6 +137,60 @@ async def get_usage_stats():
         }
     else:
         result["errors"].append("Gemini API key not configured")
+
+    return result
+
+
+@router.get("/gemini/status")
+async def get_gemini_status():
+    """
+    Test Gemini API connectivity and return status.
+    Returns connection status, model info, and link to check balance.
+    """
+    settings = get_settings()
+    result = {
+        "configured": False,
+        "connected": False,
+        "model": None,
+        "error": None,
+        "balance_url": "https://aistudio.google.com/apikey",
+        "billing_url": "https://console.cloud.google.com/billing"
+    }
+
+    if not settings.gemini_api_key:
+        result["error"] = "Gemini API key not configured"
+        return result
+
+    result["configured"] = True
+    result["model"] = settings.gemini_model
+
+    # Test connection with a simple request
+    try:
+        from google import genai
+
+        client = genai.Client(api_key=settings.gemini_api_key)
+        response = client.models.generate_content(
+            model=settings.gemini_model,
+            contents="Say OK"
+        )
+
+        if response and response.text:
+            result["connected"] = True
+            result["test_response"] = response.text.strip()[:50]  # Limit response
+        else:
+            result["error"] = "Empty response from Gemini"
+
+    except Exception as e:
+        error_str = str(e)
+        result["error"] = error_str
+
+        # Check for common errors
+        if "quota" in error_str.lower():
+            result["error"] = "Quota exceeded - check billing"
+        elif "invalid" in error_str.lower() and "key" in error_str.lower():
+            result["error"] = "Invalid API key"
+        elif "billing" in error_str.lower():
+            result["error"] = "Billing not enabled"
 
     return result
 
@@ -272,11 +330,12 @@ async def mute_voice_in_video(
         shutil.copyfileobj(video.file, f)
 
     # Creăm job-ul
+    job_storage = get_job_storage()
     job = {
         "job_id": job_id,
         "job_type": "voice_mute",
         "status": JobStatus.PENDING,
-        "created_at": datetime.now(),
+        "created_at": datetime.now().isoformat(),
         "updated_at": None,
         "progress": "Queued for voice muting",
         "video_path": str(video_path),
@@ -285,7 +344,7 @@ async def mute_voice_in_video(
         "result": None,
         "error": None
     }
-    jobs_store[job_id] = job
+    job_storage.create_job(job)
 
     # Lansăm procesarea în background
     background_tasks.add_task(process_voice_mute_job, job_id)
@@ -300,13 +359,15 @@ async def mute_voice_in_video(
 
 async def process_voice_mute_job(job_id: str):
     """Procesează un job de voice muting în background."""
-    job = jobs_store.get(job_id)
+    job_storage = get_job_storage()
+    job = job_storage.get_job(job_id)
     if not job:
         return
 
-    job["status"] = JobStatus.PROCESSING
-    job["updated_at"] = datetime.now()
-    job["progress"] = "Detecting voice segments..."
+    job_storage.update_job(job_id, {
+        "status": JobStatus.PROCESSING,
+        "progress": "Detecting voice segments..."
+    })
 
     try:
         from app.services.voice_detector import VoiceDetector, mute_voice_segments
@@ -319,8 +380,9 @@ async def process_voice_mute_job(job_id: str):
         detector = VoiceDetector(threshold=0.5, min_speech_duration=0.25)
         voice_segments = detector.detect_voice(video_path)
 
-        job["progress"] = f"Found {len(voice_segments)} voice segments. Muting..."
-        job["updated_at"] = datetime.now()
+        job_storage.update_job(job_id, {
+            "progress": f"Found {len(voice_segments)} voice segments. Muting..."
+        })
 
         if voice_segments:
             # Aplicăm mute
@@ -338,26 +400,28 @@ async def process_voice_mute_job(job_id: str):
             # No voice detected, just copy
             shutil.copy(video_path, output_path)
 
-        job["status"] = JobStatus.COMPLETED
-        job["result"] = {
-            "status": "success",
-            "final_video": str(output_path),
-            "voice_segments": [seg.to_dict() for seg in voice_segments],
-            "segments_muted": len(voice_segments),
-            "total_voice_duration": round(sum(seg.duration for seg in voice_segments), 2)
-        }
-        job["progress"] = f"Completed - muted {len(voice_segments)} voice segments"
+        job_storage.update_job(job_id, {
+            "status": JobStatus.COMPLETED,
+            "result": {
+                "status": "success",
+                "final_video": str(output_path),
+                "voice_segments": [seg.to_dict() for seg in voice_segments],
+                "segments_muted": len(voice_segments),
+                "total_voice_duration": round(sum(seg.duration for seg in voice_segments), 2)
+            },
+            "progress": f"Completed - muted {len(voice_segments)} voice segments"
+        })
 
         # Cleanup input
         video_path.unlink(missing_ok=True)
 
     except Exception as e:
         logger.error(f"Voice mute job {job_id} failed: {e}")
-        job["status"] = JobStatus.FAILED
-        job["error"] = str(e)
-        job["progress"] = f"Failed: {e}"
-
-    job["updated_at"] = datetime.now()
+        job_storage.update_job(job_id, {
+            "status": JobStatus.FAILED,
+            "error": str(e),
+            "progress": f"Failed: {e}"
+        })
 
 
 @router.post("/analyze")
@@ -564,7 +628,7 @@ async def create_job(
         "result": None,
         "error": None
     }
-    jobs_store[job_id] = job
+    get_job_storage().create_job(job)
 
     # Lansam procesarea in background
     background_tasks.add_task(process_job, job_id)
@@ -579,7 +643,7 @@ async def create_job(
 
 async def process_job(job_id: str):
     """Proceseaza un job in background."""
-    job = jobs_store.get(job_id)
+    job = get_job_storage().get_job(job_id)
     if not job:
         return
 
@@ -628,7 +692,9 @@ async def process_job(job_id: str):
         job["error"] = str(e)
         job["progress"] = f"Failed: {e}"
 
-    job["updated_at"] = datetime.now()
+    job["updated_at"] = datetime.now().isoformat()
+    # Persist final job state to storage
+    get_job_storage().update_job(job_id, job)
 
 
 def _cleanup_input_files(job: dict):
@@ -645,7 +711,7 @@ def _cleanup_input_files(job: dict):
 @router.get("/jobs/{job_id}", response_model=JobResponse)
 async def get_job(job_id: str):
     """Obtine statusul unui job."""
-    job = jobs_store.get(job_id)
+    job = get_job_storage().get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -671,15 +737,16 @@ async def get_job(job_id: str):
 @router.get("/jobs")
 async def list_jobs():
     """Lista toate job-urile."""
+    all_jobs = get_job_storage().list_jobs()
     return {
         "jobs": [
             {
-                "job_id": j["job_id"],
-                "status": j["status"],
-                "created_at": j["created_at"],
-                "progress": j["progress"]
+                "job_id": j.get("job_id"),
+                "status": j.get("status"),
+                "created_at": j.get("created_at"),
+                "progress": j.get("progress")
             }
-            for j in jobs_store.values()
+            for j in all_jobs
         ]
     }
 
@@ -687,7 +754,7 @@ async def list_jobs():
 @router.get("/jobs/{job_id}/download")
 async def download_result(job_id: str):
     """Descarca rezultatul unui job finalizat."""
-    job = jobs_store.get(job_id)
+    job = get_job_storage().get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -824,7 +891,7 @@ async def create_multi_video_job(
         "result": None,
         "error": None
     }
-    jobs_store[job_id] = job
+    get_job_storage().create_job(job)
 
     # Lansăm procesarea în background
     background_tasks.add_task(process_multi_video_job, job_id)
@@ -839,7 +906,7 @@ async def create_multi_video_job(
 
 async def process_multi_video_job(job_id: str):
     """Procesează un job multi-video în background."""
-    job = jobs_store.get(job_id)
+    job = get_job_storage().get_job(job_id)
     if not job:
         return
 
@@ -891,7 +958,9 @@ async def process_multi_video_job(job_id: str):
         job["error"] = str(e)
         job["progress"] = f"Failed: {e}"
 
-    job["updated_at"] = datetime.now()
+    job["updated_at"] = datetime.now().isoformat()
+    # Persist final job state to storage
+    get_job_storage().update_job(job_id, job)
 
 
 def _cleanup_multi_video_input_files(job: dict):
@@ -975,7 +1044,7 @@ async def generate_tts(
         "result": None,
         "error": None
     }
-    jobs_store[job_id] = job
+    get_job_storage().create_job(job)
 
     background_tasks.add_task(process_tts_generate_job, job_id)
 
@@ -991,7 +1060,7 @@ async def process_tts_generate_job(job_id: str):
     """Process TTS generation job in background."""
     from app.services.elevenlabs_tts import get_elevenlabs_tts
 
-    job = jobs_store.get(job_id)
+    job = get_job_storage().get_job(job_id)
     if not job:
         return
 
@@ -1055,13 +1124,15 @@ async def process_tts_generate_job(job_id: str):
         job["error"] = str(e)
         job["progress"] = f"Failed: {e}"
 
-    job["updated_at"] = datetime.now()
+    job["updated_at"] = datetime.now().isoformat()
+    # Persist final job state to storage
+    get_job_storage().update_job(job_id, job)
 
 
 @router.get("/tts/{job_id}/download")
 async def download_tts_audio(job_id: str):
     """Download generated TTS audio file."""
-    job = jobs_store.get(job_id)
+    job = get_job_storage().get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -1148,7 +1219,7 @@ async def add_tts_to_videos(
         "result": None,
         "error": None
     }
-    jobs_store[job_id] = job
+    get_job_storage().create_job(job)
 
     # Process in background
     background_tasks.add_task(process_tts_job, job_id)
@@ -1165,7 +1236,7 @@ async def process_tts_job(job_id: str):
     """Process TTS job in background with automatic silence removal."""
     from app.services.elevenlabs_tts import get_elevenlabs_tts
 
-    job = jobs_store.get(job_id)
+    job = get_job_storage().get_job(job_id)
     if not job:
         return
 
@@ -1285,7 +1356,9 @@ async def process_tts_job(job_id: str):
         job["error"] = str(e)
         job["progress"] = f"Failed: {e}"
 
-    job["updated_at"] = datetime.now()
+    job["updated_at"] = datetime.now().isoformat()
+    # Persist final job state to storage
+    get_job_storage().update_job(job_id, job)
 
 
 @router.get("/files/{file_path:path}")
@@ -1338,7 +1411,7 @@ async def serve_file(file_path: str, download: bool = False):
 @router.delete("/jobs/{job_id}")
 async def delete_job(job_id: str):
     """Sterge un job si fisierele asociate."""
-    job = jobs_store.get(job_id)
+    job = get_job_storage().get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -1353,5 +1426,5 @@ async def delete_job(job_id: str):
             if job["result"].get(key):
                 Path(job["result"][key]).unlink(missing_ok=True)
 
-    del jobs_store[job_id]
+    get_job_storage().delete_job(job_id)
     return {"status": "deleted", "job_id": job_id}

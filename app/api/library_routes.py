@@ -7,9 +7,10 @@ import shutil
 import subprocess
 import json
 import mimetypes
+import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query
 from fastapi.responses import FileResponse
@@ -21,6 +22,23 @@ import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/library", tags=["library"])
+
+# ============== PROJECT LOCKS (prevent race conditions) ==============
+_project_locks: Dict[str, threading.Lock] = {}
+_locks_lock = threading.Lock()  # Meta-lock for managing project locks
+
+def get_project_lock(project_id: str) -> threading.Lock:
+    """Get or create a lock for a specific project."""
+    with _locks_lock:
+        if project_id not in _project_locks:
+            _project_locks[project_id] = threading.Lock()
+        return _project_locks[project_id]
+
+def cleanup_project_lock(project_id: str):
+    """Remove project lock when no longer needed."""
+    with _locks_lock:
+        if project_id in _project_locks:
+            del _project_locks[project_id]
 
 # Supabase client pentru DB
 _supabase_client = None
@@ -362,6 +380,12 @@ async def _generate_raw_clips_task(
 
     settings = get_settings()
 
+    # Acquire project lock to prevent concurrent operations
+    lock = get_project_lock(project_id)
+    if not lock.acquire(blocking=False):
+        logger.warning(f"Project {project_id} is already being processed, skipping")
+        return
+
     try:
         processor = VideoProcessorService(
             input_dir=settings.input_dir,
@@ -437,6 +461,11 @@ async def _generate_raw_clips_task(
             "status": "failed",
             "updated_at": datetime.now().isoformat()
         }).eq("id", project_id).execute()
+    finally:
+        # Always release and cleanup the lock
+        lock.release()
+        cleanup_project_lock(project_id)
+        logger.debug(f"Released and cleaned up lock for project {project_id}")
 
 
 # ============== CLIPS (LIBRARY) ==============
@@ -653,6 +682,18 @@ async def list_export_presets():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============== MAINTENANCE ==============
+
+@router.post("/maintenance/cleanup-temp")
+async def cleanup_temp_files(max_age_hours: int = 24):
+    """
+    Cleanup orphaned temp files older than specified hours.
+    Useful for manual maintenance or scheduled cleanup.
+    """
+    deleted = cleanup_orphaned_temp_files(max_age_hours)
+    return {"status": "completed", "deleted_files": deleted}
+
+
 # ============== FINAL RENDER ==============
 
 @router.post("/clips/{clip_id}/render")
@@ -723,6 +764,22 @@ async def _render_final_clip_task(
         return
 
     settings = get_settings()
+    project_id = clip_data.get("project_id")
+
+    # Acquire project lock to prevent concurrent operations on same project
+    lock = get_project_lock(project_id) if project_id else None
+    if lock and not lock.acquire(timeout=300):  # Wait up to 5 min for renders
+        logger.warning(f"Could not acquire lock for project {project_id} within timeout")
+        supabase.table("editai_clips").update({
+            "final_status": "failed",
+            "updated_at": datetime.now().isoformat()
+        }).eq("id", clip_id).execute()
+        return
+
+    # Initialize temp file paths for cleanup in finally block
+    audio_path = None
+    srt_path = None
+    temp_dir = settings.base_dir / "temp"
 
     try:
         raw_video_path = Path(clip_data["raw_video_path"])
@@ -732,12 +789,9 @@ async def _render_final_clip_task(
         # Directorul pentru output
         output_dir = settings.output_dir / "finals"
         output_dir.mkdir(parents=True, exist_ok=True)
-
-        temp_dir = settings.base_dir / "temp"
         temp_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. Generăm TTS dacă avem text
-        audio_path = None
         if content_data and content_data.get("tts_text"):
             tts = get_elevenlabs_tts()
             audio_path = temp_dir / f"tts_{clip_id}.mp3"
@@ -751,7 +805,6 @@ async def _render_final_clip_task(
             logger.info(f"Generated TTS for clip {clip_id}")
 
         # 2. Generăm SRT temporar dacă avem conținut
-        srt_path = None
         if content_data and content_data.get("srt_content"):
             srt_path = temp_dir / f"srt_{clip_id}.srt"
             with open(srt_path, "w", encoding="utf-8") as f:
@@ -789,12 +842,6 @@ async def _render_final_clip_task(
         # Actualizăm contorul din proiect
         _update_project_counts(clip_data["project_id"])
 
-        # Cleanup temp files
-        if audio_path and audio_path.exists():
-            audio_path.unlink()
-        if srt_path and srt_path.exists():
-            srt_path.unlink()
-
         logger.info(f"Rendered final clip {clip_id} -> {output_path}")
 
     except Exception as e:
@@ -803,6 +850,24 @@ async def _render_final_clip_task(
             "final_status": "failed",
             "updated_at": datetime.now().isoformat()
         }).eq("id", clip_id).execute()
+    finally:
+        # Always cleanup temp files (even on error)
+        try:
+            if audio_path and Path(audio_path).exists():
+                Path(audio_path).unlink()
+                logger.debug(f"Cleaned up temp audio: {audio_path}")
+            if srt_path and Path(srt_path).exists():
+                Path(srt_path).unlink()
+                logger.debug(f"Cleaned up temp srt: {srt_path}")
+        except Exception as cleanup_err:
+            logger.warning(f"Failed to cleanup temp files: {cleanup_err}")
+
+        # Always release and cleanup the lock
+        if lock:
+            lock.release()
+            if project_id:
+                cleanup_project_lock(project_id)
+            logger.debug(f"Released and cleaned up render lock for project {project_id}")
 
 
 @router.post("/clips/bulk-render")
@@ -966,6 +1031,40 @@ def _update_project_counts(project_id: str):
         logger.warning(f"Failed to update project counts: {e}")
 
 
+def cleanup_orphaned_temp_files(max_age_hours: int = 24):
+    """
+    Cleanup orphaned temp files older than max_age_hours.
+    Called periodically or on startup to prevent temp dir from growing.
+    """
+    try:
+        settings = get_settings()
+        temp_dir = settings.base_dir / "temp"
+        if not temp_dir.exists():
+            return 0
+
+        from datetime import timedelta
+        import time
+
+        cutoff_time = time.time() - (max_age_hours * 3600)
+        deleted_count = 0
+
+        for temp_file in temp_dir.iterdir():
+            if temp_file.is_file():
+                try:
+                    if temp_file.stat().st_mtime < cutoff_time:
+                        temp_file.unlink()
+                        deleted_count += 1
+                        logger.debug(f"Cleaned up orphaned temp file: {temp_file.name}")
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup {temp_file}: {e}")
+
+        if deleted_count > 0:
+            logger.info(f"Cleaned up {deleted_count} orphaned temp files")
+        return deleted_count
+
+    except Exception as e:
+        logger.error(f"Error cleaning up temp files: {e}")
+        return 0
 
 
 def _hex_to_ass_color(hex_color: str) -> str:
