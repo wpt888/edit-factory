@@ -1,5 +1,5 @@
 """
-Edit Factory - Video Processor Service v2.1
+Edit Factory - Video Processor Service v2.2
 Procesor video avansat cu AI (Gemini) pentru selecție inteligentă de segmente.
 """
 import json
@@ -14,10 +14,17 @@ import cv2
 import numpy as np
 from scipy.fftpack import dct
 
+# IMPORTANT: Încărcăm .env ÎNAINTE de a verifica GEMINI_API_KEY
+from dotenv import load_dotenv
+load_dotenv()
+
 # Import GeminiAnalyzer (optional - funcționează și fără dacă nu ai API key)
 try:
     from .gemini_analyzer import GeminiVideoAnalyzer, AnalyzedSegment
-    GEMINI_AVAILABLE = bool(os.getenv("GEMINI_API_KEY"))
+    _gemini_key = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_AVAILABLE = bool(_gemini_key and len(_gemini_key) > 10)
+    if GEMINI_AVAILABLE:
+        logging.getLogger(__name__).info("Gemini AI available for intelligent frame selection")
 except ImportError:
     GEMINI_AVAILABLE = False
     GeminiVideoAnalyzer = None
@@ -116,10 +123,10 @@ class VideoAnalyzer:
         self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         # Detectam rotatia video-ului (important pentru telefoane!)
-        rotation = self._detect_rotation()
-        if rotation in [90, 270]:
+        self.rotation = self._detect_rotation()
+        if self.rotation in [90, 270]:
             self.width, self.height = self.height, self.width
-            logger.info(f"Video rotated {rotation}°, swapped dimensions")
+            logger.info(f"Video rotated {self.rotation}°, swapped dimensions")
 
         logger.info(f"Video loaded: {self.video_path.name}")
         logger.info(f"  Duration: {self.duration:.2f}s ({self.duration/60:.1f} min), FPS: {self.fps:.2f}")
@@ -166,7 +173,7 @@ class VideoAnalyzer:
         self,
         start_frame: int,
         end_frame: int,
-        sample_count: int = 30
+        sample_count: int = 15  # Optimized: 15 samples sufficient for motion detection (was 30)
     ) -> Tuple[float, float]:
         """
         Calculeaza scorul de miscare pentru un interval, sampling uniform.
@@ -256,11 +263,12 @@ class VideoAnalyzer:
             # Calculam scorurile
             motion_score, variance_score = self._calculate_motion_for_interval(start_frame, end_frame)
 
-            # Calculam hash-uri pentru 3 pozitii
+            # Calculam hash-uri pentru mid-point (optimized: was 3 positions [0.1, 0.5, 0.9])
+            # Single mid-point is sufficient for duplicate detection while reducing CPU usage by 66%
             visual_hashes = []
             brightness_samples = []
 
-            for pos in [0.1, 0.5, 0.9]:
+            for pos in [0.5]:  # Optimized: only mid-point needed for duplicate detection
                 frame_idx = start_frame + int((end_frame - start_frame) * pos)
                 frame = self._read_frame_at(frame_idx)
                 if frame is not None:
@@ -268,9 +276,21 @@ class VideoAnalyzer:
                     brightness_samples.append(np.mean(frame) / 255.0)
 
             avg_brightness = np.mean(brightness_samples) if brightness_samples else 0.5
+            min_brightness = min(brightness_samples) if brightness_samples else 0.5
 
-            # FILTRAM dead zones - segmente cu miscare prea mica
-            if motion_score >= min_motion_threshold:
+            # FILTRAM: dead zones (mișcare mică) și black frames (luminozitate mică)
+            # Brightness < 0.05 = aproape negru (12.75/255)
+            # Brightness < 0.10 = foarte întunecat
+            MIN_BRIGHTNESS_THRESHOLD = 0.08  # ~20/255
+
+            is_too_dark = min_brightness < MIN_BRIGHTNESS_THRESHOLD
+            is_too_static = motion_score < min_motion_threshold
+
+            if is_too_dark:
+                logger.debug(f"Skipped BLACK FRAME: {start_time:.1f}s - {end_time:.1f}s (brightness: {min_brightness:.3f})")
+            elif is_too_static:
+                logger.debug(f"Skipped dead zone: {start_time:.1f}s - {end_time:.1f}s (motion: {motion_score:.4f})")
+            else:
                 segment = VideoSegment(
                     start_time=start_time,
                     end_time=end_time,
@@ -280,8 +300,6 @@ class VideoAnalyzer:
                     visual_hashes=visual_hashes if visual_hashes else None
                 )
                 segments.append(segment)
-            else:
-                logger.debug(f"Skipped dead zone: {start_time:.1f}s - {end_time:.1f}s (motion: {motion_score:.4f})")
 
             current_time += step
             analyzed_count += 1
@@ -302,7 +320,8 @@ class VideoAnalyzer:
         min_segment: float = 1.5,
         max_segment: float = 3.0,  # Max 3 secunde pentru dinamism
         similarity_threshold: int = 12,
-        min_motion: float = 0.008
+        min_motion: float = 0.008,
+        progress_callback: Optional[callable] = None
     ) -> List[VideoSegment]:
         """
         Selecteaza cele mai bune segmente pentru durata tinta.
@@ -314,7 +333,8 @@ class VideoAnalyzer:
         all_segments = self.analyze_full_video(
             segment_duration=segment_duration,
             overlap=0.3,
-            min_motion_threshold=min_motion
+            min_motion_threshold=min_motion,
+            progress_callback=progress_callback
         )
 
         selected = []
@@ -365,7 +385,8 @@ class VideoAnalyzer:
             "fps": self.fps,
             "width": self.width,
             "height": self.height,
-            "frame_count": self.frame_count
+            "frame_count": self.frame_count,
+            "rotation": getattr(self, 'rotation', 0)  # Rotația pentru corecție output
         }
 
     def close(self):
@@ -482,6 +503,44 @@ class VideoEditor:
         except Exception:
             return False
 
+    def _run_ffmpeg(self, cmd: list, operation: str) -> subprocess.CompletedProcess:
+        """
+        Executa comanda FFmpeg cu logging detaliat pentru erori.
+
+        Args:
+            cmd: Lista de argumente pentru FFmpeg
+            operation: Descrierea operatiei (pentru logging)
+
+        Returns:
+            CompletedProcess result
+
+        Raises:
+            RuntimeError: Daca FFmpeg esueaza
+        """
+        logger.debug(f"FFmpeg command ({operation}): {' '.join(cmd)}")
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            # Parse FFmpeg stderr for useful info
+            stderr = result.stderr
+            error_lines = [line for line in stderr.split('\n') if 'error' in line.lower() or 'Error' in line]
+
+            # Log detailed error
+            logger.error(f"FFmpeg {operation} failed (exit code {result.returncode})")
+            logger.error(f"Command: {' '.join(cmd[:6])}...")  # First 6 args
+
+            if error_lines:
+                logger.error(f"Error details: {'; '.join(error_lines[:3])}")
+            else:
+                # Log last 5 lines of stderr
+                last_lines = [l for l in stderr.split('\n') if l.strip()][-5:]
+                logger.error(f"FFmpeg output: {'; '.join(last_lines)}")
+
+            raise RuntimeError(f"FFmpeg {operation} failed: {error_lines[0] if error_lines else stderr[-500:]}")
+
+        return result
+
     def _track_intermediate(self, path: Path):
         """Adauga fisier la lista pentru cleanup."""
         self._intermediate_files.append(path)
@@ -555,6 +614,8 @@ class VideoEditor:
 
         # Un singur filtru volume cu toate condițiile combinate
         # Sintaxa corectă: volume=LEVEL:enable='CONDITION'
+        # NOTĂ: FFmpeg NECESITĂ ghilimele în jurul expresiei enable!
+        # subprocess.run cu listă de argumente pasează string-ul direct, fără shell interpretation
         combined_condition = "+".join(conditions)
         return f"volume=0:enable='{combined_condition}'"
 
@@ -563,7 +624,8 @@ class VideoEditor:
         video_path: Path,
         segments: List[VideoSegment],
         output_name: str,
-        voice_segments: Optional[List] = None
+        voice_segments: Optional[List] = None,
+        source_rotation: int = 0
     ) -> Path:
         """
         Extrage si concateneaza segmentele selectate.
@@ -574,9 +636,20 @@ class VideoEditor:
             output_name: Numele output
             voice_segments: Lista de VoiceSegment pentru mute selectiv (opțional)
                            Dacă e furnizată, vocile sunt mutate doar în porțiunile care se suprapun
+            source_rotation: Rotația video sursă (0, 90, 180, 270) pentru a aplica corecție
         """
         video_path = Path(video_path)
         segment_files = []
+
+        # Construim filtrul video pentru rotație (pentru format vertical/reels)
+        # FFmpeg transpose values: 1=90°CW, 2=90°CCW, 3=90°CW+vflip
+        video_filter = None
+        if source_rotation == 90:
+            video_filter = "transpose=1"  # 90° clockwise
+        elif source_rotation == 270:
+            video_filter = "transpose=2"  # 90° counter-clockwise
+        elif source_rotation == 180:
+            video_filter = "hflip,vflip"  # 180° rotation
 
         for i, seg in enumerate(segments):
             temp_file = self.temp_dir / f"segment_{output_name}_{i:03d}.mp4"
@@ -593,45 +666,81 @@ class VideoEditor:
                     audio_filter = self._build_mute_filter(overlapping_mutes)
                     logger.info(f"Segment {i+1}: Muting {len(overlapping_mutes)} voice portions")
 
-            if self.use_gpu:
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-hwaccel", "cuda",
-                    "-hwaccel_output_format", "cuda",
-                    "-i", str(video_path),
-                    "-ss", str(seg.start_time),
-                    "-t", str(seg.duration),
-                ]
-                if audio_filter:
-                    cmd.extend(["-af", audio_filter])
-                cmd.extend([
-                    "-c:v", self.video_codec,
-                    "-preset", self.video_preset,
-                    "-cq", self.video_quality,
-                    "-c:a", "aac", "-b:a", "128k",
-                    str(temp_file)
-                ])
-            else:
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-i", str(video_path),
-                    "-ss", str(seg.start_time),
-                    "-t", str(seg.duration),
-                ]
-                if audio_filter:
-                    cmd.extend(["-af", audio_filter])
-                cmd.extend([
-                    "-c:v", self.video_codec,
-                    "-preset", self.video_preset,
-                    "-crf", self.video_quality,
-                    "-c:a", "aac", "-b:a", "128k",
-                    str(temp_file)
-                ])
+            # Funcție helper pentru a construi comanda
+            def build_cmd(use_gpu_encoding: bool):
+                if use_gpu_encoding:
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-hwaccel", "cuda",
+                        "-hwaccel_output_format", "cuda",
+                        "-i", str(video_path),
+                        "-ss", str(seg.start_time),
+                        "-t", str(seg.duration),
+                    ]
+                    # Pentru GPU: trebuie să descărcăm din CUDA înainte de filtru video
+                    if video_filter:
+                        cmd.extend(["-vf", f"hwdownload,format=nv12,{video_filter},hwupload_cuda"])
+                    if audio_filter:
+                        cmd.extend(["-af", audio_filter])
+                    cmd.extend([
+                        "-c:v", self.video_codec,
+                        "-preset", self.video_preset,
+                        "-cq", self.video_quality,
+                        # Keyframe interval (2 sec at 30fps)
+                        "-g", "60",
+                        "-bf", "2",
+                        # Audio
+                        "-c:a", "aac", "-b:a", "128k",
+                        "-ar", "48000", "-ac", "2",
+                        # Pixel format
+                        "-pix_fmt", "yuv420p",
+                        str(temp_file)
+                    ])
+                else:
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-i", str(video_path),
+                        "-ss", str(seg.start_time),
+                        "-t", str(seg.duration),
+                    ]
+                    if video_filter:
+                        cmd.extend(["-vf", video_filter])
+                    if audio_filter:
+                        cmd.extend(["-af", audio_filter])
+                    cmd.extend([
+                        "-c:v", "libx264",  # CPU codec
+                        "-profile:v", "high",
+                        "-level:v", "4.0",
+                        "-preset", "fast",
+                        "-crf", "23",
+                        # Keyframe interval (2 sec at 30fps) - prevents platform recompression
+                        "-g", "60",
+                        "-keyint_min", "60",
+                        "-sc_threshold", "0",
+                        "-bf", "2",
+                        # Audio
+                        "-c:a", "aac", "-b:a", "128k",
+                        "-ar", "48000", "-ac", "2",
+                        # Pixel format
+                        "-pix_fmt", "yuv420p",
+                        "-sar", "1:1",
+                        str(temp_file)
+                    ])
+                return cmd
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.error(f"FFmpeg error: {result.stderr}")
-                raise RuntimeError(f"Failed to extract segment: {result.stderr}")
+            # Încearcă GPU, fallback pe CPU dacă eșuează
+            try:
+                cmd = build_cmd(self.use_gpu)
+                self._run_ffmpeg(cmd, f"extract segment {i+1}/{len(segments)}")
+            except RuntimeError as e:
+                error_lower = str(e).lower()
+                # Fallback pe CPU pentru erori NVENC sau filtergraph (combinația GPU + audio filter poate cauza probleme)
+                if self.use_gpu and ("nvenc" in error_lower or "filtergraph" in error_lower or "filter not found" in error_lower):
+                    logger.warning(f"GPU encoding failed for segment {i+1}, falling back to CPU: {str(e)[:100]}")
+                    cmd = build_cmd(False)
+                    self._run_ffmpeg(cmd, f"extract segment {i+1}/{len(segments)} (CPU fallback)")
+                else:
+                    raise
 
             segment_files.append(temp_file)
             has_mute = " (voice muted)" if audio_filter else ""
@@ -652,17 +761,15 @@ class VideoEditor:
             str(output_video)
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to concatenate: {result.stderr}")
+        self._run_ffmpeg(cmd, "concatenate segments")
 
         # Cleanup segment files
         for f in segment_files:
             f.unlink(missing_ok=True)
         concat_file.unlink(missing_ok=True)
 
-        # Track for later cleanup
-        self._track_intermediate(output_video)
+        # NOTE: Don't track as intermediate - this may be the final output
+        # The caller should track it if needed for further processing
 
         logger.info(f"Created segments video: {output_video}")
         return output_video
@@ -708,9 +815,7 @@ class VideoEditor:
                 str(output_video)
             ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to add audio: {result.stderr}")
+        self._run_ffmpeg(cmd, "add audio")
 
         # Track for cleanup
         self._track_intermediate(output_video)
@@ -860,10 +965,7 @@ class VideoEditor:
             ]
 
         logger.info(f"Running subtitle command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.error(f"FFmpeg subtitle error: {result.stderr}")
-            raise RuntimeError(f"Failed to add subtitles: {result.stderr}")
+        self._run_ffmpeg(cmd, "add subtitles")
 
         logger.info(f"Added subtitles: {output_video}")
         return output_video
@@ -900,10 +1002,7 @@ class VideoEditor:
             str(output_video)
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.error(f"FFmpeg concat error: {result.stderr}")
-            raise RuntimeError(f"Failed to concatenate segments: {result.stderr}")
+        self._run_ffmpeg(cmd, f"concatenate {len(segment_files)} segments")
 
         # Cleanup concat file
         concat_file.unlink(missing_ok=True)
@@ -1129,9 +1228,13 @@ class VideoProcessorService:
                     logger.warning(f"Variant {variant_idx + 1}: No segments, skipping")
                     continue
 
-                # Extract segments
+                # Extract segments (cu rotație pentru format vertical)
                 report_progress(f"Extracting segments for variant {variant_idx + 1}")
-                segments_video = self.editor.extract_segments(video_path, selected_segments, variant_name)
+                source_rotation = analysis.get("video_info", {}).get("rotation", 0)
+                segments_video = self.editor.extract_segments(
+                    video_path, selected_segments, variant_name,
+                    source_rotation=source_rotation
+                )
                 current_video = segments_video
 
                 # Add audio
@@ -1164,8 +1267,15 @@ class VideoProcessorService:
             report_progress("Cleaning up intermediate files")
             self.editor.cleanup_intermediates()
 
+            # Colectam fisierele finale INAINTE de cleanup
+            final_videos = set()
+            for var in results["variants"]:
+                if var.get("final_video"):
+                    final_videos.add(Path(var["final_video"]).name)
+
+            # Stergem doar fisierele intermediare, NU cele finale
             for f in self.output_dir.glob(f"{output_name}*"):
-                if "_final.mp4" not in f.name:
+                if f.name not in final_videos:
                     try:
                         f.unlink()
                     except:
@@ -1381,20 +1491,24 @@ class VideoProcessorService:
                     report_progress("AI Analysis completed", "completed")
                 except Exception as e:
                     logger.warning(f"Gemini analysis failed, falling back to motion analysis: {e}")
+                    report_progress("Motion Analysis (fallback)")
                     # Fallback la analiza clasică
                     required_duration = target_duration * variant_count * 2
                     all_segments = analyzer.select_best_segments(
                         required_duration,
                         min_motion=0.008,
-                        similarity_threshold=10
+                        similarity_threshold=10,
+                        progress_callback=progress_callback
                     )
             else:
                 # Analizam tot video-ul cu metoda clasică (motion-based)
+                report_progress("Motion Analysis")
                 required_duration = target_duration * variant_count * 2
                 all_segments = analyzer.select_best_segments(
                     required_duration,
                     min_motion=0.008,
-                    similarity_threshold=10
+                    similarity_threshold=10,
+                    progress_callback=progress_callback
                 )
 
             analyzer.close()
@@ -1456,13 +1570,15 @@ class VideoProcessorService:
                     logger.warning(f"Variant {variant_idx + 1}: No segments available, skipping")
                     continue
 
-                # Extract segments (cu mute selectiv dacă avem voice_segments)
+                # Extract segments (cu mute selectiv + rotație pentru format vertical)
                 report_progress(f"Extracting segments for variant {variant_idx + 1}")
+                source_rotation = video_info.get("rotation", 0)
                 segments_video = self.editor.extract_segments(
                     video_path,
                     selected_segments,
                     variant_name,
-                    voice_segments=voice_segments  # Mute selectiv doar în porțiunile cu voce
+                    voice_segments=voice_segments,  # Mute selectiv doar în porțiunile cu voce
+                    source_rotation=source_rotation  # Corectează orientarea pentru vertical
                 )
                 current_video = segments_video
 
@@ -1498,9 +1614,15 @@ class VideoProcessorService:
             report_progress("Cleaning up intermediate files")
             self.editor.cleanup_intermediates()
 
-            # Pastram doar fisierele _final.mp4
+            # Colectam fisierele finale INAINTE de cleanup
+            final_videos = set()
+            for var in results["variants"]:
+                if var.get("final_video"):
+                    final_videos.add(Path(var["final_video"]).name)
+
+            # Stergem doar fisierele intermediare, NU cele finale
             for f in self.output_dir.glob(f"{output_name}*"):
-                if "_final.mp4" not in f.name:
+                if f.name not in final_videos:
                     try:
                         f.unlink()
                         logger.info(f"Cleaned up intermediate: {f.name}")
@@ -1707,8 +1829,15 @@ class VideoProcessorService:
             report_progress("Cleaning up intermediate files")
             self.editor.cleanup_intermediates()
 
+            # Colectam fisierele finale INAINTE de cleanup
+            final_videos = set()
+            for var in results["variants"]:
+                if var.get("final_video"):
+                    final_videos.add(Path(var["final_video"]).name)
+
+            # Stergem doar fisierele intermediare, NU cele finale
             for f in self.output_dir.glob(f"{output_name}*"):
-                if "_final.mp4" not in f.name:
+                if f.name not in final_videos:
                     try:
                         f.unlink()
                     except:
@@ -1855,7 +1984,14 @@ class VideoProcessorService:
                     "-c:v", self.editor.video_codec,
                     "-preset", self.editor.video_preset,
                     "-cq", self.editor.video_quality,
+                    # Keyframe interval (2 sec at 30fps)
+                    "-g", "60",
+                    "-bf", "2",
+                    # Audio
                     "-c:a", "aac", "-b:a", "128k",
+                    "-ar", "48000", "-ac", "2",
+                    # Pixel format
+                    "-pix_fmt", "yuv420p",
                     str(temp_file)
                 ]
             else:
@@ -1865,9 +2001,21 @@ class VideoProcessorService:
                     "-ss", str(seg.start_time),
                     "-t", str(item['duration']),
                     "-c:v", self.editor.video_codec,
+                    "-profile:v", "high",
+                    "-level:v", "4.0",
                     "-preset", self.editor.video_preset,
                     "-crf", self.editor.video_quality,
+                    # Keyframe interval (2 sec at 30fps)
+                    "-g", "60",
+                    "-keyint_min", "60",
+                    "-sc_threshold", "0",
+                    "-bf", "2",
+                    # Audio
                     "-c:a", "aac", "-b:a", "128k",
+                    "-ar", "48000", "-ac", "2",
+                    # Pixel format
+                    "-pix_fmt", "yuv420p",
+                    "-sar", "1:1",
                     str(temp_file)
                 ]
 
@@ -1877,7 +2025,12 @@ class VideoProcessorService:
                 self.editor._track_intermediate(temp_file)
                 logger.info(f"Extracted timeline item {i+1}/{len(timeline)}: {item['source']} at {seg.start_time:.1f}s")
             else:
-                logger.error(f"Failed to extract timeline item {i}: {result.stderr}")
+                # Parse error for better logging
+                stderr = result.stderr
+                error_lines = [line for line in stderr.split('\n') if 'error' in line.lower()]
+                error_msg = error_lines[0] if error_lines else stderr[-300:]
+                logger.error(f"FFmpeg failed for timeline item {i+1}/{len(timeline)}: {error_msg}")
+                logger.debug(f"Full FFmpeg stderr: {stderr}")
 
         # Concatenăm toate segmentele
         if not segment_files:
