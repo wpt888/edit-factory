@@ -17,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.api.routes import router as api_router
 from app.api.library_routes import router as library_router
+from app.api.segments_routes import router as segments_router
+from app.api.postiz_routes import router as postiz_router
 
 # Configurare logging
 logging.basicConfig(
@@ -44,6 +46,8 @@ app.add_middleware(
 # Include API routes
 app.include_router(api_router, prefix="/api/v1", tags=["Video Processing"])
 app.include_router(library_router, prefix="/api/v1", tags=["Library & Workflow"])
+app.include_router(segments_router, prefix="/api/v1", tags=["Segments & Manual Selection"])
+app.include_router(postiz_router, prefix="/api/v1", tags=["Postiz Publishing"])
 
 # Static files pentru frontend
 static_path = Path(__file__).parent.parent / "static"
