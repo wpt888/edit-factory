@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 
 // Config persistence key
 const CONFIG_KEY = "editai_library_config";
@@ -37,6 +37,8 @@ import { Slider } from "@/components/ui/slider";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -80,6 +82,8 @@ import {
   Scissors,
   Tag,
   Video,
+  Pencil,
+  Send,
   Star,
   Share2,
   Calendar,
@@ -90,6 +94,7 @@ import {
   Timer,
 } from "lucide-react";
 import Link from "next/link";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { VideoSegmentPlayer } from "@/components/video-segment-player";
 import { SimpleSegmentPopup } from "@/components/simple-segment-popup";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
@@ -124,6 +129,10 @@ interface Clip {
   final_video_path?: string;
   final_status: string;
   created_at: string;
+  // Postiz publishing status
+  postiz_status?: "not_sent" | "scheduled" | "sent";
+  postiz_post_id?: string;
+  postiz_scheduled_at?: string;
 }
 
 interface ClipContent {
@@ -196,7 +205,12 @@ interface PostizIntegration {
   disabled: boolean;
 }
 
-export default function LibraryPage() {
+function LibraryPageContent() {
+  // URL routing
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
   // State
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
@@ -270,6 +284,10 @@ export default function LibraryPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
 
+  // Clip rename state
+  const [renamingClipId, setRenamingClipId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+
   // Segment mode state
   const [showSegmentModal, setShowSegmentModal] = useState(false);
   const [sourceVideos, setSourceVideos] = useState<SourceVideo[]>([]);
@@ -298,7 +316,7 @@ export default function LibraryPage() {
   const [workflowMode, setWorkflowMode] = useState<"video_only" | "with_audio">("video_only");
   const [scriptText, setScriptText] = useState("");
   const [generateTts, setGenerateTts] = useState(false);
-  const [muteSourceVoice, setMuteSourceVoice] = useState(false);
+  const [muteSourceVoice, setMuteSourceVoice] = useState(true); // Default true: mute source voice for professional output
   const [ttsPreviewDuration, setTtsPreviewDuration] = useState<number | null>(null);
   const [generatingTtsPreview, setGeneratingTtsPreview] = useState(false);
 
@@ -325,6 +343,94 @@ export default function LibraryPage() {
 
   // Track if initial load is done
   const configLoaded = useRef(false);
+  const urlInitialized = useRef(false);
+
+  // ============== URL TRACKING ==============
+  // Helper to update URL without full page reload
+  const updateUrl = useCallback((params: Record<string, string | null>) => {
+    const current = new URLSearchParams(searchParams.toString());
+
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === null || value === undefined) {
+        current.delete(key);
+      } else {
+        current.set(key, value);
+      }
+    });
+
+    const newUrl = current.toString() ? `${pathname}?${current.toString()}` : pathname;
+    router.replace(newUrl, { scroll: false });
+  }, [searchParams, pathname, router]);
+
+  // Sync URL when selectedProject changes
+  useEffect(() => {
+    if (!urlInitialized.current) return;
+    updateUrl({
+      project: selectedProject?.id || null,
+      clip: null, // Reset clip when project changes
+    });
+  }, [selectedProject?.id]);
+
+  // Sync URL when selectedClip changes
+  useEffect(() => {
+    if (!urlInitialized.current) return;
+    if (selectedClip) {
+      updateUrl({ clip: selectedClip.id });
+    }
+  }, [selectedClip?.id]);
+
+  // Sync URL when generationMode changes
+  useEffect(() => {
+    if (!urlInitialized.current) return;
+    updateUrl({ mode: generationMode });
+  }, [generationMode]);
+
+  // ============== URL → STATE SYNC (on page load) ==============
+  // Restore state from URL params after projects are loaded
+  useEffect(() => {
+    // Only run once when projects are loaded
+    if (urlInitialized.current || projects.length === 0) return;
+
+    const projectId = searchParams.get("project");
+    const clipId = searchParams.get("clip");
+    const mode = searchParams.get("mode");
+
+    // Set generation mode from URL
+    if (mode === "ai" || mode === "segments") {
+      setGenerationMode(mode);
+    }
+
+    // Find and select project from URL
+    if (projectId) {
+      const project = projects.find((p) => p.id === projectId);
+      if (project) {
+        setSelectedProject(project);
+        // Clips will be fetched by the selectedProject effect
+        // Store clipId to select after clips load
+        if (clipId) {
+          // We need to wait for clips to load, so store in ref
+          pendingClipId.current = clipId;
+        }
+      }
+    }
+
+    // Mark URL as initialized (prevents state → URL sync during initial load)
+    urlInitialized.current = true;
+  }, [projects, searchParams]);
+
+  // Ref to store pending clip ID to select after clips load
+  const pendingClipId = useRef<string | null>(null);
+
+  // Select clip from URL after clips are loaded
+  useEffect(() => {
+    if (pendingClipId.current && clips.length > 0) {
+      const clip = clips.find((c) => c.id === pendingClipId.current);
+      if (clip) {
+        setSelectedClip(clip);
+      }
+      pendingClipId.current = null;
+    }
+  }, [clips]);
 
   // Load saved config on mount
   useEffect(() => {
@@ -812,15 +918,62 @@ export default function LibraryPage() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case "completed":
-        return "bg-green-500";
+        return "bg-primary text-primary-foreground";
       case "processing":
-        return "bg-blue-500";
+        return "bg-secondary text-secondary-foreground";
       case "failed":
-        return "bg-red-500";
+        return "bg-destructive text-destructive-foreground";
       case "pending":
-        return "bg-gray-500";
+        return "bg-muted text-muted-foreground";
       default:
-        return "bg-gray-500";
+        return "bg-muted text-muted-foreground";
+    }
+  };
+
+  // Get Postiz publishing status badge
+  const getPostizStatusBadge = (clip: Clip) => {
+    const status = clip.postiz_status || "not_sent";
+    switch (status) {
+      case "sent":
+        return {
+          color: "bg-green-500 text-white",
+          label: "Trimis",
+          icon: <CheckCircle2 className="h-3 w-3 mr-1" />
+        };
+      case "scheduled":
+        return {
+          color: "bg-blue-500 text-white",
+          label: "Programat",
+          icon: <Clock className="h-3 w-3 mr-1" />
+        };
+      case "not_sent":
+      default:
+        return {
+          color: "bg-muted text-muted-foreground",
+          label: "Netrimis",
+          icon: null  // No icon for "not sent" status
+        };
+    }
+  };
+
+  // Rename clip function
+  const renameClip = async (clipId: string, newName: string) => {
+    try {
+      const res = await fetch(`${API_URL}/library/clips/${clipId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ variant_name: newName }),
+      });
+      if (res.ok) {
+        // Update local state
+        setClips(prev => prev.map(c =>
+          c.id === clipId ? { ...c, variant_name: newName } : c
+        ));
+        setRenamingClipId(null);
+        setRenameValue("");
+      }
+    } catch (error) {
+      console.error("Failed to rename clip:", error);
     }
   };
 
@@ -991,23 +1144,28 @@ export default function LibraryPage() {
     try {
       setGenerating(true);
 
-      const formData = new FormData();
-      formData.append("variant_count", variantCount.toString());
-      formData.append("selection_mode", selectionMode);
-      formData.append("target_duration", targetDuration.toString());
+      // Build request body as JSON
+      const requestBody: Record<string, unknown> = {
+        variant_count: variantCount,
+        selection_mode: selectionMode,
+        target_duration: targetDuration,
+        mute_source_voice: muteSourceVoice, // ALWAYS send this, regardless of workflow mode
+      };
 
       // Add TTS/Script data if workflow mode is with_audio
       if (workflowMode === "with_audio" && scriptText.trim()) {
-        formData.append("tts_text", scriptText);
-        formData.append("generate_tts", generateTts.toString());
-        formData.append("mute_source_voice", muteSourceVoice.toString());
+        requestBody.tts_text = scriptText;
+        requestBody.generate_tts = generateTts;
       }
 
       const res = await fetch(
         `${API_URL}/library/projects/${selectedProject.id}/generate-from-segments`,
         {
           method: "POST",
-          body: formData,
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
         }
       );
 
@@ -1022,7 +1180,8 @@ export default function LibraryPage() {
         });
       } else {
         const error = await res.json();
-        alert(`Eroare: ${error.detail || "Generare eșuată"}`);
+        const errorMsg = typeof error === 'object' ? (error.detail || JSON.stringify(error)) : String(error);
+        alert(`Eroare: ${errorMsg}`);
         setGenerating(false);
       }
     } catch (error) {
@@ -1237,16 +1396,16 @@ export default function LibraryPage() {
                         <Badge variant="outline" className="text-xs">
                           {project.variants_count} clipuri
                         </Badge>
-                        <Badge variant="outline" className="text-xs text-green-500">
+                        <Badge variant="outline" className="text-xs">
                           {project.selected_count} selectate
                         </Badge>
                       </div>
                       <Badge
                         className={`mt-2 text-xs ${
                           project.status === "ready_for_triage"
-                            ? "bg-green-500"
+                            ? "bg-primary text-primary-foreground"
                             : project.status === "generating"
-                            ? "bg-blue-500"
+                            ? "bg-secondary text-secondary-foreground"
                             : "bg-muted"
                         }`}
                       >
@@ -1283,42 +1442,14 @@ export default function LibraryPage() {
                           </Badge>
                         )}
                       </Button>
-                      <Select value={selectedPreset} onValueChange={setSelectedPreset}>
-                        <SelectTrigger className="w-[200px] bg-muted/50">
-                          <SelectValue placeholder="Export Preset" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {presets.map((preset) => (
-                            <SelectItem key={preset.id} value={preset.name}>
-                              <div className="flex items-center gap-2">
-                                {getPresetIcon(preset.name)}
-                                {preset.display_name}
-                              </div>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Button
-                        onClick={renderAllSelected}
-                        disabled={rendering || clips.filter((c) => c.is_selected).length === 0}
-                        variant="default"
-                        className="bg-green-600 hover:bg-green-700"
-                      >
-                        {rendering ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <Film className="h-4 w-4 mr-2" />
-                        )}
-                        Randează Selectate ({clips.filter((c) => c.is_selected).length})
-                      </Button>
                       <Button
                         onClick={openBulkPostizModal}
-                        disabled={clips.filter((c) => c.is_selected && c.final_video_path).length === 0}
+                        disabled={clips.filter((c) => c.final_video_path).length === 0}
                         variant="outline"
                         className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
                       >
                         <Share2 className="h-4 w-4 mr-2" />
-                        Postiz ({clips.filter((c) => c.is_selected && c.final_video_path).length})
+                        Postiz ({clips.filter((c) => c.final_video_path).length})
                       </Button>
                     </div>
                   </div>
@@ -1434,7 +1565,7 @@ export default function LibraryPage() {
                           <div className="bg-muted/30 rounded-lg p-4">
                             <div className="flex items-center justify-between mb-3">
                               <h4 className="font-medium flex items-center gap-2">
-                                <CheckCircle2 className="h-4 w-4 text-green-500" />
+                                <CheckCircle2 className="h-4 w-4 text-primary" />
                                 Segmente Selectate ({projectSegments.length})
                               </h4>
                               <div className="flex gap-2">
@@ -1516,64 +1647,6 @@ export default function LibraryPage() {
                             )}
                           </div>
 
-                          {/* Generation Options */}
-                          {projectSegments.length > 0 && (
-                            <div className="border rounded-lg p-4 bg-green-500/5 border-green-500/30">
-                              <h4 className="font-medium mb-4 flex items-center gap-2 text-green-700 dark:text-green-400">
-                                <Settings className="h-4 w-4" />
-                                Opțiuni Generare
-                              </h4>
-                              <div className="flex flex-wrap items-center gap-6 mb-4">
-                                <div className="flex items-center gap-2">
-                                  <Label className="text-foreground">Variante:</Label>
-                                  <Input
-                                    type="number"
-                                    min={1}
-                                    max={10}
-                                    value={variantCount}
-                                    onChange={(e) => setVariantCount(parseInt(e.target.value) || 6)}
-                                    className="w-20 bg-background"
-                                  />
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <Label className="text-foreground">Mod selecție:</Label>
-                                  <Select
-                                    value={selectionMode}
-                                    onValueChange={(v) => setSelectionMode(v as "random" | "sequential" | "weighted")}
-                                  >
-                                    <SelectTrigger className="w-32 bg-background">
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      <SelectItem value="random">Aleator</SelectItem>
-                                      <SelectItem value="sequential">Secvențial</SelectItem>
-                                      <SelectItem value="weighted">Ponderat</SelectItem>
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-                              </div>
-
-                              {/* Generate button - BIG and prominent */}
-                              <Button
-                                onClick={generateFromSegments}
-                                disabled={generating}
-                                size="lg"
-                                className="w-full bg-green-600 hover:bg-green-700 text-lg py-6"
-                              >
-                                {generating ? (
-                                  <>
-                                    <Loader2 className="h-5 w-5 mr-2 animate-spin" />
-                                    Se generează...
-                                  </>
-                                ) : (
-                                  <>
-                                    <Play className="h-5 w-5 mr-2" />
-                                    🎬 GENEREAZĂ {variantCount} VARIANTE
-                                  </>
-                                )}
-                              </Button>
-                            </div>
-                          )}
                         </div>
                       )}
                     </div>
@@ -1646,58 +1719,37 @@ export default function LibraryPage() {
                     </div>
                   )}
 
-                  {(selectedProject.status === "ready_for_triage" ||
-                    selectedProject.status === "processing_finals" ||
-                    selectedProject.status === "completed" ||
-                    selectedProject.status === "failed" ||
-                    selectedProject.status === "draft") && clips.length === 0 && !generating && (
+                  {/* Empty state - option to reset to draft for new generation */}
+                  {clips.length === 0 && !generating && selectedProject.status !== "draft" && (
                     <div className="border-2 border-dashed border-border rounded-lg p-8 text-center">
                       <Film className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
                       <p className="text-foreground mb-2">
                         Nu există clipuri în acest proiect
                       </p>
                       <p className="text-muted-foreground text-sm mb-4">
-                        Toate clipurile au fost șterse. Poți genera clipuri noi din același video sau un altul.
+                        Toate clipurile au fost șterse. Resetează proiectul pentru a genera clipuri noi.
                       </p>
-                      <div className="flex flex-col items-center gap-4">
-                        {/* Local path option (for testing) */}
-                        <div className="w-full max-w-md">
-                          <Input
-                            type="text"
-                            placeholder="C:\path\to\video.mp4"
-                            value={localVideoPath}
-                            onChange={(e) => setLocalVideoPath(e.target.value)}
-                            className="bg-muted/50 text-sm"
-                          />
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <Label className="text-foreground">Variante:</Label>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={10}
-                            value={variantCount}
-                            onChange={(e) => setVariantCount(parseInt(e.target.value) || 3)}
-                            className="w-20 bg-muted/50"
-                          />
-                        </div>
-                        <Button
-                          onClick={generateRawClips}
-                          disabled={!localVideoPath || generating}
-                        >
-                          {generating ? (
-                            <>
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                              Generare...
-                            </>
-                          ) : (
-                            <>
-                              <RefreshCw className="h-4 w-4 mr-2" />
-                              Regenerează Clipuri
-                            </>
-                          )}
-                        </Button>
-                      </div>
+                      <Button
+                        onClick={async () => {
+                          try {
+                            const res = await fetch(`${API_URL}/library/projects/${selectedProject.id}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ status: "draft" })
+                            });
+                            if (res.ok) {
+                              const updated = await res.json();
+                              setSelectedProject(updated);
+                              setProjects(prev => prev.map(p => p.id === updated.id ? updated : p));
+                            }
+                          } catch (error) {
+                            console.error("Failed to reset project:", error);
+                          }
+                        }}
+                      >
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Resetează pentru Generare Nouă
+                      </Button>
                     </div>
                   )}
 
@@ -1718,13 +1770,13 @@ export default function LibraryPage() {
                             selectedClip?.id === clip.id
                               ? "ring-2 ring-primary"
                               : "hover:ring-1 hover:ring-border"
-                          } ${clip.is_selected ? "ring-2 ring-green-500" : ""}`}
+                          } ${clip.is_selected ? "ring-2 ring-primary" : ""}`}
                         >
                           {/* Thumbnail or placeholder */}
                           <div className="aspect-[9/16] bg-muted relative">
                             {clip.thumbnail_path ? (
                               <img
-                                src={`${API_URL}/library/files/${encodeURIComponent(clip.thumbnail_path)}`}
+                                src={`${API_URL}/library/files/${encodeURIComponent(clip.thumbnail_path)}?v=${clip.id}`}
                                 alt={clip.variant_name}
                                 className="w-full h-full object-cover"
                               />
@@ -1734,31 +1786,29 @@ export default function LibraryPage() {
                               </div>
                             )}
 
-                            {/* Selection checkbox */}
-                            <div
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleClipSelection(clip.id, !clip.is_selected);
-                              }}
-                              className={`absolute top-2 left-2 w-6 h-6 rounded-full flex items-center justify-center cursor-pointer ${
-                                clip.is_selected
-                                  ? "bg-green-500 text-white"
-                                  : "bg-background/80 text-muted-foreground hover:bg-accent"
-                              }`}
-                            >
-                              {clip.is_selected && <Check className="h-4 w-4" />}
-                            </div>
+                            {/* Selection checkbox - only show when selected */}
+                            {clip.is_selected && (
+                              <div
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleClipSelection(clip.id, false);
+                                }}
+                                className="absolute top-2 left-2 w-6 h-6 rounded-full flex items-center justify-center cursor-pointer bg-primary text-primary-foreground shadow-md"
+                              >
+                                <Check className="h-4 w-4" />
+                              </div>
+                            )}
 
-                            {/* Status badge */}
-                            <Badge
-                              className={`absolute top-2 right-2 ${getStatusColor(clip.final_status)}`}
-                            >
-                              {clip.final_status === "completed" && <CheckCircle2 className="h-3 w-3 mr-1" />}
-                              {clip.final_status === "processing" && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-                              {clip.final_status === "failed" && <XCircle className="h-3 w-3 mr-1" />}
-                              {clip.final_status === "pending" && <Clock className="h-3 w-3 mr-1" />}
-                              {clip.final_status}
-                            </Badge>
+                            {/* Postiz publishing status badge */}
+                            {(() => {
+                              const postizBadge = getPostizStatusBadge(clip);
+                              return (
+                                <Badge className={`absolute top-2 right-2 ${postizBadge.color}`}>
+                                  {postizBadge.icon}
+                                  {postizBadge.label}
+                                </Badge>
+                              );
+                            })()}
 
                             {/* Duration */}
                             {clip.duration && (
@@ -1766,73 +1816,121 @@ export default function LibraryPage() {
                                 {Math.floor(clip.duration)}s
                               </span>
                             )}
-                          </div>
 
-                          {/* Clip info */}
-                          <div className="p-2 bg-card">
-                            <p className="text-foreground text-sm truncate">
-                              {clip.variant_name || `Varianta ${clip.variant_index}`}
-                            </p>
-                          </div>
-
-                          {/* Actions overlay */}
-                          <div className="absolute inset-0 bg-background/60 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                // Play video - open in new tab
-                                const videoPath = clip.final_video_path || clip.raw_video_path;
-                                if (videoPath) {
-                                  window.open(
-                                    `${API_URL}/library/files/${encodeURIComponent(videoPath)}`,
-                                    "_blank"
-                                  );
-                                }
-                              }}
-                            >
-                              <Play className="h-4 w-4" />
-                            </Button>
-                            {clip.final_video_path && (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
+                            {/* Actions overlay - INSIDE thumbnail div so it doesn't cover clip info */}
+                            <div className="absolute inset-0 bg-background/60 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const videoPath = clip.final_video_path || clip.raw_video_path;
+                                  if (videoPath) {
                                     window.open(
-                                      `${API_URL}/library/files/${encodeURIComponent(clip.final_video_path || "")}?download=true`,
+                                      `${API_URL}/library/files/${encodeURIComponent(videoPath)}?v=${clip.id}`,
                                       "_blank"
                                     );
+                                  }
+                                }}
+                              >
+                                <Play className="h-4 w-4" />
+                              </Button>
+                              {clip.final_video_path && (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      window.open(
+                                        `${API_URL}/library/files/${encodeURIComponent(clip.final_video_path || "")}?download=true&v=${clip.id}`,
+                                        "_blank"
+                                      );
+                                    }}
+                                  >
+                                    <Download className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openPostizModal(clip);
+                                    }}
+                                  >
+                                    <Share2 className="h-4 w-4" />
+                                  </Button>
+                                </>
+                              )}
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setClipToDelete(clip);
+                                  setShowDeleteDialog(true);
+                                }}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
+
+                          {/* Clip info with rename - OUTSIDE thumbnail div, not covered by overlay */}
+                          <div className="p-2 bg-card">
+                            {renamingClipId === clip.id ? (
+                              <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                <Input
+                                  value={renameValue}
+                                  onChange={(e) => setRenameValue(e.target.value)}
+                                  className="h-6 text-xs"
+                                  autoFocus
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      renameClip(clip.id, renameValue);
+                                    } else if (e.key === "Escape") {
+                                      setRenamingClipId(null);
+                                      setRenameValue("");
+                                    }
                                   }}
+                                />
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 w-6 p-0"
+                                  onClick={() => renameClip(clip.id, renameValue)}
                                 >
-                                  <Download className="h-4 w-4" />
+                                  <Check className="h-3 w-3" />
                                 </Button>
                                 <Button
                                   size="sm"
-                                  variant="outline"
-                                  className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    openPostizModal(clip);
+                                  variant="ghost"
+                                  className="h-6 w-6 p-0"
+                                  onClick={() => {
+                                    setRenamingClipId(null);
+                                    setRenameValue("");
                                   }}
                                 >
-                                  <Share2 className="h-4 w-4" />
+                                  <X className="h-3 w-3" />
                                 </Button>
-                              </>
+                              </div>
+                            ) : (
+                              <div
+                                className="flex items-center justify-between cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setRenamingClipId(clip.id);
+                                  setRenameValue(clip.variant_name || `Varianta ${clip.variant_index}`);
+                                }}
+                                title="Click pentru a redenumi"
+                              >
+                                <p className="text-foreground text-sm truncate flex-1">
+                                  {clip.variant_name || `Varianta ${clip.variant_index}`}
+                                </p>
+                                <Pencil className="h-3 w-3 text-muted-foreground" />
+                              </div>
                             )}
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setClipToDelete(clip);
-                                setShowDeleteDialog(true);
-                              }}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
                           </div>
                         </div>
                       ))}
@@ -1840,34 +1938,50 @@ export default function LibraryPage() {
                   )}
 
                   {/* ============== WORKFLOW STEPS PANEL ============== */}
+                  {/* Show when: has segments, not generating (clips optional - needed for pre-generation config) */}
                   {projectSegments.length > 0 && !generating && selectedProject.status !== "generating" && (
                     <div className="mt-6 border-t pt-6 space-y-4">
                       {/* STEP 1: Script & Audio */}
-                      <div className="bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/30 rounded-lg p-4">
+                      <div className="bg-secondary/50 rounded-lg p-4">
                         <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-2">
-                            <div className="h-8 w-8 rounded-full bg-blue-500/20 flex items-center justify-center">
-                              <FileText className="h-4 w-4 text-blue-500" />
+                            <div className="h-8 w-8 rounded-full bg-secondary/50 flex items-center justify-center">
+                              <FileText className="h-4 w-4 text-secondary-foreground" />
                             </div>
                             <div>
                               <h4 className="font-medium text-foreground text-sm">Pas 1: Script & Audio</h4>
                               <p className="text-xs text-muted-foreground">Opțional - pentru voiceover sincronizat</p>
                             </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <Label htmlFor="workflow-mode" className="text-xs">Cu Audio</Label>
-                            <Switch
-                              id="workflow-mode"
-                              checked={workflowMode === "with_audio"}
-                              onCheckedChange={(checked) => {
-                                setWorkflowMode(checked ? "with_audio" : "video_only");
-                                if (checked) {
-                                  setDurationMode("auto");
-                                } else {
-                                  setDurationMode("manual");
-                                }
-                              }}
-                            />
+                          {/* Audio controls - grouped together on the right */}
+                          <div className="flex items-center gap-4">
+                            <div className="flex items-center gap-2">
+                              <Label htmlFor="workflow-mode" className="text-xs">Cu Audio</Label>
+                              <Switch
+                                id="workflow-mode"
+                                checked={workflowMode === "with_audio"}
+                                onCheckedChange={(checked) => {
+                                  setWorkflowMode(checked ? "with_audio" : "video_only");
+                                  if (checked) {
+                                    setDurationMode("auto");
+                                  } else {
+                                    setDurationMode("manual");
+                                  }
+                                }}
+                              />
+                            </div>
+                            {/* Mute Source Voice - ALWAYS VISIBLE */}
+                            <div className="flex items-center gap-2 border-l pl-3 border-border/50">
+                              <VolumeX className="h-4 w-4 text-orange-400" />
+                              <Label htmlFor="mute-source" className="text-xs cursor-pointer whitespace-nowrap">
+                                Elimină vocea sursă
+                              </Label>
+                              <Switch
+                                id="mute-source"
+                                checked={muteSourceVoice}
+                                onCheckedChange={setMuteSourceVoice}
+                              />
+                            </div>
                           </div>
                         </div>
 
@@ -1898,7 +2012,7 @@ export default function LibraryPage() {
                                 <span className="text-xs text-muted-foreground">
                                   {scriptText.length} caractere
                                   {scriptText.length > 0 && (
-                                    <span className="text-blue-500 ml-1">
+                                    <span className="text-primary ml-1">
                                       (~{Math.ceil(scriptText.length / 150)}s audio)
                                     </span>
                                   )}
@@ -1934,28 +2048,17 @@ export default function LibraryPage() {
                                   onCheckedChange={setGenerateTts}
                                 />
                               </div>
-                              <div className="flex items-center gap-2">
-                                <VolumeX className="h-4 w-4 text-muted-foreground" />
-                                <Label htmlFor="mute-source" className="text-xs cursor-pointer">
-                                  Elimină vocea sursă
-                                </Label>
-                                <Switch
-                                  id="mute-source"
-                                  checked={muteSourceVoice}
-                                  onCheckedChange={setMuteSourceVoice}
-                                />
-                              </div>
                             </div>
                           </div>
                         )}
                       </div>
 
                       {/* STEP 2: Duration Control */}
-                      <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/30 rounded-lg p-4">
+                      <div className="bg-secondary/50 rounded-lg p-4">
                         <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-2">
-                            <div className="h-8 w-8 rounded-full bg-amber-500/20 flex items-center justify-center">
-                              <Timer className="h-4 w-4 text-amber-500" />
+                            <div className="h-8 w-8 rounded-full bg-secondary/50 flex items-center justify-center">
+                              <Timer className="h-4 w-4 text-secondary-foreground" />
                             </div>
                             <div>
                               <h4 className="font-medium text-foreground text-sm">Pas 2: Durată Video</h4>
@@ -1971,25 +2074,27 @@ export default function LibraryPage() {
 
                         <div className="space-y-3">
                           {/* Duration mode toggle */}
-                          <div className="flex items-center gap-4">
-                            <Button
-                              variant={durationMode === "manual" ? "default" : "outline"}
-                              size="sm"
-                              className="text-xs h-7"
-                              onClick={() => setDurationMode("manual")}
-                            >
+                          <ToggleGroup
+                            type="single"
+                            value={durationMode}
+                            onValueChange={(value) => {
+                              if (value) setDurationMode(value as "auto" | "manual");
+                            }}
+                            variant="outline"
+                            size="sm"
+                            spacing={0}
+                          >
+                            <ToggleGroupItem value="manual" className="text-xs">
                               Manual
-                            </Button>
-                            <Button
-                              variant={durationMode === "auto" ? "default" : "outline"}
-                              size="sm"
-                              className="text-xs h-7"
-                              onClick={() => setDurationMode("auto")}
+                            </ToggleGroupItem>
+                            <ToggleGroupItem
+                              value="auto"
                               disabled={!scriptText || scriptText.length === 0}
+                              className="text-xs"
                             >
                               Auto (din script)
-                            </Button>
-                          </div>
+                            </ToggleGroupItem>
+                          </ToggleGroup>
 
                           {/* Manual slider */}
                           {durationMode === "manual" && (
@@ -2015,7 +2120,7 @@ export default function LibraryPage() {
 
                           {/* Auto duration info */}
                           {durationMode === "auto" && ttsPreviewDuration && (
-                            <div className="p-2 bg-green-500/10 rounded text-xs text-green-600">
+                            <div className="p-2 bg-primary/10 rounded text-xs text-primary">
                               Video-ul va fi tăiat la {ttsPreviewDuration}s pentru a se potrivi cu audio-ul
                             </div>
                           )}
@@ -2023,11 +2128,11 @@ export default function LibraryPage() {
                       </div>
 
                       {/* STEP 3: Segment Generation Panel */}
-                      <div className="bg-gradient-to-r from-green-500/10 to-blue-500/10 border border-green-500/30 rounded-lg p-4">
+                      <div className="bg-secondary/50 rounded-lg p-4">
                         <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-2">
-                            <div className="h-8 w-8 rounded-full bg-green-500/20 flex items-center justify-center">
-                              <Scissors className="h-4 w-4 text-green-500" />
+                            <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center">
+                              <Scissors className="h-4 w-4 text-primary" />
                             </div>
                             <div>
                               <h4 className="font-medium text-foreground text-sm">Pas 3: Generare Video</h4>
@@ -2098,7 +2203,8 @@ export default function LibraryPage() {
                         <Button
                           onClick={generateFromSegments}
                           size="lg"
-                          className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-6"
+                          variant="default"
+                          className="w-full font-semibold py-6 shadow-md hover:shadow-lg transition-shadow"
                         >
                           <Play className="h-5 w-5 mr-2" />
                           GENEREAZĂ {variantCount} VARIANTE DIN SEGMENTE
@@ -2194,13 +2300,14 @@ Text subtitrare..."
                   </Tabs>
 
                   <div className="flex gap-2">
-                    <Button onClick={saveClipContent} className="flex-1 bg-blue-600 hover:bg-blue-700">
+                    <Button onClick={saveClipContent} className="flex-1" variant="secondary">
                       Salvează
                     </Button>
                     <Button
                       onClick={() => renderFinalClip(selectedClip.id)}
                       disabled={rendering}
-                      className="flex-1 bg-green-600 hover:bg-green-700"
+                      className="flex-1"
+                      variant="default"
                     >
                       {rendering ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
@@ -2444,7 +2551,7 @@ Text subtitrare..."
                               <p className="text-sm font-medium truncate">{video.name}</p>
                               <p className="text-xs text-muted-foreground">
                                 {videoSegmentsSelected > 0 ? (
-                                  <span className="text-green-600">
+                                  <span className="text-primary">
                                     {videoSegmentsSelected}/{video.segments_count} selectate
                                   </span>
                                 ) : (
@@ -2546,7 +2653,7 @@ Text subtitrare..."
                             key={segment.id}
                             className={`p-2 rounded-lg border transition-colors ${
                               isSelected
-                                ? "border-green-500 bg-green-500/10"
+                                ? "border-primary bg-primary/10"
                                 : "border-border hover:border-primary/50"
                             }`}
                           >
@@ -2586,9 +2693,9 @@ Text subtitrare..."
                 {/* Selected for project */}
                 <div className="border-t pt-4">
                   <h3 className="text-sm font-medium mb-2 flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-green-500" />
+                    <CheckCircle2 className="h-4 w-4 text-primary" />
                     Selectate pentru Proiect
-                    <Badge variant="default" className="bg-green-500">
+                    <Badge variant="default">
                       {projectSegments.length}
                     </Badge>
                   </h3>
@@ -2621,7 +2728,8 @@ Text subtitrare..."
                   <Button
                     onClick={saveProjectSegments}
                     disabled={projectSegments.length === 0}
-                    className="w-full bg-green-600 hover:bg-green-700"
+                    variant="default"
+                    className="w-full"
                   >
                     Salvează Selecția ({projectSegments.length} segmente)
                   </Button>
@@ -2842,5 +2950,20 @@ Text subtitrare..."
         </div>
       )}
     </div>
+  );
+}
+
+// Wrapper with Suspense for useSearchParams
+export default function LibraryPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-background p-6">
+        <div className="flex items-center justify-center h-64">
+          <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full"></div>
+        </div>
+      </div>
+    }>
+      <LibraryPageContent />
+    </Suspense>
   );
 }

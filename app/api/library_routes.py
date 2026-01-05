@@ -40,6 +40,26 @@ def cleanup_project_lock(project_id: str):
         if project_id in _project_locks:
             del _project_locks[project_id]
 
+# ============== PROGRESS TRACKING ==============
+_generation_progress: Dict[str, dict] = {}
+
+def update_generation_progress(project_id: str, percentage: int, current_step: str, estimated_remaining: Optional[int] = None):
+    """Update generation progress for a project."""
+    _generation_progress[project_id] = {
+        "percentage": percentage,
+        "current_step": current_step,
+        "estimated_remaining": estimated_remaining
+    }
+
+def get_generation_progress(project_id: str) -> Optional[dict]:
+    """Get generation progress for a project."""
+    return _generation_progress.get(project_id)
+
+def clear_generation_progress(project_id: str):
+    """Clear generation progress for a project."""
+    if project_id in _generation_progress:
+        del _generation_progress[project_id]
+
 # Supabase client pentru DB
 _supabase_client = None
 
@@ -125,7 +145,12 @@ async def serve_file(file_path: str, download: bool = Query(default=False)):
     settings = get_settings()
     full_path = Path(file_path)
     if not full_path.is_absolute():
-        full_path = settings.output_dir / file_path
+        # Handle paths that start with "output/" - strip the prefix since output_dir already ends with /output
+        if file_path.startswith("output/"):
+            relative_path = file_path[7:]  # Remove "output/"
+            full_path = settings.output_dir / relative_path
+        else:
+            full_path = settings.output_dir / file_path
 
     allowed_dirs = [settings.output_dir, settings.input_dir, settings.base_dir / "temp"]
 
@@ -236,6 +261,29 @@ async def get_project(project_id: str):
     except Exception as e:
         logger.error(f"Error getting project: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/projects/{project_id}/progress")
+async def get_project_progress(project_id: str):
+    """Obține progresul generării pentru un proiect."""
+    progress = get_generation_progress(project_id)
+    if progress:
+        return progress
+
+    # If no progress tracked, check project status
+    supabase = get_supabase()
+    if supabase:
+        result = supabase.table("editai_projects").select("status").eq("id", project_id).single().execute()
+        if result.data:
+            status = result.data.get("status")
+            if status == "generating":
+                return {"percentage": 0, "current_step": "Se inițializează...", "estimated_remaining": None}
+            elif status == "ready_for_triage":
+                return {"percentage": 100, "current_step": "Complet", "estimated_remaining": 0}
+            elif status == "failed":
+                return {"percentage": 100, "current_step": "Eșuat", "estimated_remaining": 0}
+
+    raise HTTPException(status_code=404, detail="Progress not found")
 
 
 @router.patch("/projects/{project_id}")
@@ -468,6 +516,558 @@ async def _generate_raw_clips_task(
         logger.debug(f"Released and cleaned up lock for project {project_id}")
 
 
+# ============== GENERATE FROM SEGMENTS ==============
+
+class GenerateFromSegmentsRequest(BaseModel):
+    variant_count: int = 3
+    selection_mode: str = "random"
+    target_duration: int = 30
+    tts_text: Optional[str] = None
+    generate_tts: bool = False
+    mute_source_voice: bool = False
+
+@router.post("/projects/{project_id}/generate-from-segments")
+async def generate_from_segments(
+    background_tasks: BackgroundTasks,
+    project_id: str,
+    request: GenerateFromSegmentsRequest = GenerateFromSegmentsRequest()
+):
+    """
+    Generează clipuri din segmentele pre-selectate ale proiectului.
+
+    Args:
+        project_id: ID-ul proiectului
+        variant_count: Numărul de variante de generat (1-10)
+        selection_mode: random, sequential, weighted
+        target_duration: Durata țintă în secunde
+        tts_text: Text opțional pentru TTS
+        generate_tts: Dacă să genereze audio TTS
+        mute_source_voice: Dacă să suprime vocea din video sursă
+    """
+    # Log the received request for debugging
+    logger.info(f"[MUTE DEBUG] /generate-from-segments called for project {project_id}")
+    logger.info(f"[MUTE DEBUG] Request parameters: variant_count={request.variant_count}, mute_source_voice={request.mute_source_voice}")
+
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    settings = get_settings()
+    settings.ensure_dirs()
+
+    # Verificăm că proiectul există
+    project = supabase.table("editai_projects").select("*").eq("id", project_id).single().execute()
+    if not project.data:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Obținem segmentele asignate proiectului
+    segments_result = supabase.table("editai_project_segments")\
+        .select("*, editai_segments(*, editai_source_videos(file_path, name))")\
+        .eq("project_id", project_id)\
+        .order("sequence_order")\
+        .execute()
+
+    if not segments_result.data:
+        raise HTTPException(status_code=400, detail="No segments assigned to this project")
+
+    # Găsim cel mai mare variant_index existent pentru a continua de acolo
+    existing_clips = supabase.table("editai_clips").select("variant_index").eq("project_id", project_id).eq("is_deleted", False).execute()
+    start_variant_index = 1
+    if existing_clips.data:
+        max_index = max(clip.get("variant_index", 0) for clip in existing_clips.data)
+        start_variant_index = max_index + 1
+        logger.info(f"Found {len(existing_clips.data)} existing clips, starting from variant {start_variant_index}")
+
+    # Actualizăm statusul proiectului
+    supabase.table("editai_projects").update({
+        "status": "generating",
+        "target_duration": request.target_duration,
+        "updated_at": datetime.now().isoformat()
+    }).eq("id", project_id).execute()
+
+    # Limitări
+    variant_count = max(1, min(10, request.variant_count))
+
+    # Lansăm generarea în background
+    background_tasks.add_task(
+        _generate_from_segments_task,
+        project_id=project_id,
+        segments=segments_result.data,
+        variant_count=variant_count,
+        selection_mode=request.selection_mode,
+        target_duration=request.target_duration,
+        tts_text=request.tts_text if request.generate_tts else None,
+        mute_source_voice=request.mute_source_voice,
+        start_variant_index=start_variant_index
+    )
+
+    return {
+        "status": "generating",
+        "project_id": project_id,
+        "variant_count": variant_count,
+        "segments_count": len(segments_result.data),
+        "message": f"Generating {variant_count} clip variants from {len(segments_result.data)} segments..."
+    }
+
+
+# ============== HELPER FUNCTIONS FOR VOICE MUTING ==============
+
+def _get_overlapping_voice_mutes(
+    segment_start: float,
+    segment_end: float,
+    voice_segments: list
+) -> list:
+    """
+    Calculează porțiunile de voce care se suprapun cu un segment video.
+
+    Args:
+        segment_start: Timpul de start al segmentului video (în video original)
+        segment_end: Timpul de end al segmentului video (în video original)
+        voice_segments: Lista de VoiceSegment detectate
+
+    Returns:
+        Lista de tuple (start_relativ, end_relativ) - timpuri RELATIVE la segmentul extras
+        Exemplu: segment video 10-15s, voce la 11-13s → returnează [(1.0, 3.0)]
+    """
+    overlapping = []
+
+    for vs in voice_segments:
+        # Verificăm suprapunerea
+        voice_start = vs.start_time if hasattr(vs, 'start_time') else vs.get('start', 0)
+        voice_end = vs.end_time if hasattr(vs, 'end_time') else vs.get('end', 0)
+
+        # Calculăm intersecția
+        overlap_start = max(segment_start, voice_start)
+        overlap_end = min(segment_end, voice_end)
+
+        if overlap_start < overlap_end:
+            # Există suprapunere - convertim la timp relativ
+            relative_start = overlap_start - segment_start
+            relative_end = overlap_end - segment_start
+            overlapping.append((relative_start, relative_end))
+
+    return overlapping
+
+
+def _merge_close_intervals(intervals: list, gap_threshold: float = 0.3) -> list:
+    """
+    Combină intervalele care sunt foarte apropiate pentru a evita audio sacadat.
+
+    Args:
+        intervals: Lista de (start, end) tuplu
+        gap_threshold: Distanța minimă între intervale pentru a le păstra separate
+
+    Returns:
+        Lista de intervale combinate
+    """
+    if not intervals:
+        return []
+
+    sorted_intervals = sorted(intervals, key=lambda x: x[0])
+    merged = [sorted_intervals[0]]
+
+    for start, end in sorted_intervals[1:]:
+        last_start, last_end = merged[-1]
+        # Dacă intervalul curent începe înainte ca cel precedent să se termine + gap
+        if start <= last_end + gap_threshold:
+            # Extindem intervalul precedent
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+
+    return merged
+
+
+def _build_mute_filter(mute_intervals: list, fade_duration: float = 0.8, min_volume: float = 0.03) -> str:
+    """
+    Construiește filtrul FFmpeg pentru mute selectiv cu fade exponențial profesional.
+
+    Implementare stil Adobe Premiere "Exponential Fade":
+    - Fade out: curba exponențială (slow start, fast drop)
+    - Fade in: curba exponențială inversă (fast rise, slow settle)
+    - Nu merge la 0 complet, ci la min_volume pentru a păstra naturalețea
+
+    Args:
+        mute_intervals: Lista de (start, end) în secunde, relative la segment
+        fade_duration: Durata fade in/out în secunde (default 0.8s pentru tranziție smoothă)
+        min_volume: Volumul minim în timpul vocii (default 0.03 = aproape inaudibil)
+
+    Returns:
+        String cu filtrul audio pentru FFmpeg
+    """
+    if not mute_intervals:
+        return None
+
+    # Combinăm intervalele apropiate pentru a evita sacadare
+    merged_intervals = _merge_close_intervals(mute_intervals, gap_threshold=0.4)
+
+    if not merged_intervals:
+        return None
+
+    # Pentru un singur interval mare, folosim filtrul afade simplu (cel mai curat)
+    if len(merged_intervals) == 1:
+        start, end = merged_intervals[0]
+        fade_out_start = max(0, start - fade_duration)
+        # Folosim afade care are implementare nativă de fade exponențial
+        # curve=exp pentru curbă exponențială
+        return (
+            f"afade=t=out:st={fade_out_start:.3f}:d={fade_duration:.3f}:curve=exp,"
+            f"afade=t=in:st={end:.3f}:d={fade_duration:.3f}:curve=exp"
+        )
+
+    # Pentru multiple intervale, construim o expresie volume complexă
+    # Formula pentru fade exponențial:
+    # - Fade out (t aproape de voice_start): pow(distance/fade_duration, 2)
+    # - Fade in (t după voice_end): 1 - pow(1 - distance/fade_duration, 2)
+
+    fd = fade_duration
+    mv = min_volume
+
+    # Construim expresia pentru fiecare interval
+    # Volumul pentru fiecare interval: 1 când departe, fade când aproape, min_volume în interior
+    interval_expressions = []
+
+    for start, end in merged_intervals:
+        # Expresie pentru acest interval:
+        # - t < start - fd: volum = 1 (departe, niciun efect)
+        # - start - fd <= t < start: fade out exponențial
+        # - start <= t <= end: volum = min_volume
+        # - end < t <= end + fd: fade in exponențial
+        # - t > end + fd: volum = 1 (departe, niciun efect)
+
+        fade_start = start - fd
+        fade_end = end + fd
+
+        # Curba exponențială: pow(x, 2) pentru slow-start/fast-end
+        # x = (start - t) / fd pentru fade out, normalizat la [0, 1]
+        # rezultat: 1 când t = start - fd, 0 când t = start
+
+        expr = (
+            f"if(lt(t,{fade_start:.3f}),1,"  # înainte de fade: volum 1
+            f"if(lt(t,{start:.3f}),"  # în zona de fade out
+            f"{mv}+(1-{mv})*pow((({start:.3f}-t)/{fd:.3f}),2),"  # fade exponențial spre min_volume
+            f"if(lt(t,{end:.3f}),{mv},"  # în zona de voce: min_volume
+            f"if(lt(t,{fade_end:.3f}),"  # în zona de fade in
+            f"{mv}+(1-{mv})*(1-pow((1-(t-{end:.3f})/{fd:.3f}),2)),"  # fade exponențial de la min_volume
+            f"1))))"  # după fade: volum 1
+        )
+        interval_expressions.append(expr)
+
+    # Combinăm toate expresiile - luăm minimul pentru cazul când intervalele se suprapun
+    if len(interval_expressions) == 1:
+        volume_expr = interval_expressions[0]
+    else:
+        # Înmulțim expresiile - dacă oricare interval vrea volum redus, se aplică
+        volume_expr = "*".join([f"({e})" for e in interval_expressions])
+
+    return f"volume='{volume_expr}':eval=frame"
+
+
+async def _generate_from_segments_task(
+    project_id: str,
+    segments: List[dict],
+    variant_count: int,
+    selection_mode: str,
+    target_duration: int,
+    tts_text: Optional[str],
+    mute_source_voice: bool,
+    start_variant_index: int = 1
+):
+    """Task pentru generarea clipurilor din segmente în background."""
+    import subprocess
+    import random
+
+    supabase = get_supabase()
+    if not supabase:
+        logger.error("Supabase not available for segment generation")
+        return
+
+    settings = get_settings()
+
+    # Acquire project lock
+    lock = get_project_lock(project_id)
+    if not lock.acquire(blocking=False):
+        logger.warning(f"Project {project_id} is already being processed, skipping")
+        return
+
+    try:
+        # Initial progress
+        update_generation_progress(project_id, 5, "Se pregătesc segmentele...")
+
+        # Pregătim lista de segmente cu fișierele lor
+        available_segments = []
+        for ps in segments:
+            seg = ps.get("editai_segments", {})
+            source_video = seg.get("editai_source_videos", {})
+            file_path = source_video.get("file_path")
+
+            if file_path and Path(file_path).exists():
+                available_segments.append({
+                    "id": seg.get("id"),
+                    "file_path": file_path,
+                    "start_time": seg.get("start_time", 0),
+                    "end_time": seg.get("end_time", 0),
+                    "duration": seg.get("end_time", 0) - seg.get("start_time", 0),
+                    "source_name": source_video.get("name", "unknown")
+                })
+
+        if not available_segments:
+            raise Exception("No valid segments with existing video files")
+
+        logger.info(f"Processing {len(available_segments)} segments for project {project_id}")
+
+        # ============== VOICE DETECTION (dacă mute_source_voice este activat) ==============
+        voice_segments_by_file = {}
+        logger.info(f"[MUTE DEBUG] Project {project_id}: mute_source_voice={mute_source_voice}")
+        if mute_source_voice:
+            logger.info(f"[MUTE DEBUG] Starting voice detection for project {project_id}")
+            update_generation_progress(project_id, 8, "Se detectează vocile din video-uri sursă...")
+            try:
+                from app.services.voice_detector import VoiceDetector
+                detector = VoiceDetector(threshold=0.5, min_speech_duration=0.25)  # Balanced threshold
+
+                # Detectăm vocile pentru fiecare fișier sursă unic
+                unique_files = set(seg["file_path"] for seg in available_segments)
+                for idx, file_path in enumerate(unique_files):
+                    try:
+                        logger.info(f"Detecting voice in: {file_path}")
+                        voice_segs = detector.detect_voice(Path(file_path))
+                        if voice_segs:
+                            voice_segments_by_file[file_path] = voice_segs
+                            total_voice_duration = sum(v.duration for v in voice_segs)
+                            logger.info(f"  Found {len(voice_segs)} voice segments ({total_voice_duration:.1f}s total)")
+                        else:
+                            logger.info(f"  No voice detected")
+                    except Exception as e:
+                        logger.warning(f"Voice detection failed for {file_path}: {e}")
+
+                logger.info(f"Voice detection complete: {len(voice_segments_by_file)} files with voice")
+            except Exception as e:
+                logger.error(f"Voice detection initialization failed: {e}")
+                # Continuăm fără mute dacă detectarea eșuează
+                voice_segments_by_file = {}
+
+        # Generăm variante
+        variants_created = []
+        end_variant_index = start_variant_index + variant_count
+
+        for variant_idx in range(start_variant_index, end_variant_index):
+            try:
+                # Update progress for this variant (relative to this batch)
+                relative_idx = variant_idx - start_variant_index + 1
+                base_pct = 10 + int(((relative_idx - 1) / variant_count) * 80)
+                update_generation_progress(
+                    project_id,
+                    base_pct,
+                    f"Se generează varianta {variant_idx} ({relative_idx} din {variant_count} noi)..."
+                )
+
+                # Selectăm segmente pentru această variantă
+                if selection_mode == "sequential":
+                    selected = available_segments.copy()
+                elif selection_mode == "weighted":
+                    # Pentru weighted, prioritizăm segmentele mai lungi
+                    selected = sorted(available_segments, key=lambda x: x["duration"], reverse=True)
+                else:  # random
+                    selected = available_segments.copy()
+                    random.shuffle(selected)
+
+                # Colectăm segmente până atingem durata țintă
+                segments_for_variant = []
+                current_duration = 0
+
+                logger.info(f"Variant {variant_idx}: target_duration={target_duration}s, available segments={len(selected)}")
+
+                for seg in selected:
+                    if current_duration >= target_duration:
+                        logger.info(f"  Stopping: current_duration ({current_duration:.1f}s) >= target ({target_duration}s)")
+                        break
+
+                    remaining_duration = target_duration - current_duration
+
+                    # Dacă segmentul depășește durata rămasă, îl trunchiez
+                    if seg["duration"] > remaining_duration:
+                        # Adaugă segment trunchiat
+                        truncated_seg = seg.copy()
+                        truncated_seg["duration"] = remaining_duration
+                        truncated_seg["end_time"] = seg["start_time"] + remaining_duration
+                        truncated_seg["truncated"] = True
+                        segments_for_variant.append(truncated_seg)
+                        logger.info(f"  Added truncated segment: {seg['duration']:.1f}s -> {remaining_duration:.1f}s")
+                        current_duration = target_duration
+                        break
+                    else:
+                        segments_for_variant.append(seg)
+                        current_duration += seg["duration"]
+                        logger.info(f"  Added segment: {seg['duration']:.1f}s, total={current_duration:.1f}s")
+
+                logger.info(f"  Final selection: {len(segments_for_variant)} segments, {current_duration:.1f}s")
+
+                if not segments_for_variant:
+                    logger.warning(f"No segments selected for variant {variant_idx}")
+                    continue
+
+                # Creăm video-ul pentru această variantă
+                output_filename = f"project_{project_id[:8]}_variant_{variant_idx}.mp4"
+                output_path = settings.output_dir / output_filename
+
+                # Construim lista de fișiere pentru concat
+                concat_list_path = settings.base_dir / "temp" / f"concat_{project_id}_{variant_idx}.txt"
+                concat_list_path.parent.mkdir(parents=True, exist_ok=True)
+
+                with open(concat_list_path, "w") as f:
+                    for seg in segments_for_variant:
+                        # Extragem segmentul din video sursă
+                        segment_output = settings.base_dir / "temp" / f"seg_{project_id}_{variant_idx}_{seg['id'][:8]}.mp4"
+
+                        # ============== VOICE MUTING: Construim filtrul audio dacă e necesar ==============
+                        audio_filter_args = []
+                        logger.info(f"[MUTE DEBUG] Segment {seg['id'][:8]}: mute_source_voice={mute_source_voice}, file in voice_map={seg['file_path'] in voice_segments_by_file}")
+                        if mute_source_voice and seg["file_path"] in voice_segments_by_file:
+                            voice_segs = voice_segments_by_file[seg["file_path"]]
+                            overlapping_mutes = _get_overlapping_voice_mutes(
+                                seg["start_time"],
+                                seg["end_time"],
+                                voice_segs
+                            )
+                            logger.info(f"[MUTE DEBUG] Found {len(overlapping_mutes)} overlapping voice intervals for segment")
+                            if overlapping_mutes:
+                                audio_filter = _build_mute_filter(overlapping_mutes)
+                                if audio_filter:
+                                    # Adăugăm noise cancelling după mute pentru a reduce vocile reziduale
+                                    # afftdn: FFT-based denoiser (mai agresiv)
+                                    # - nr=25: noise reduction puternică (25dB)
+                                    # - nf=-20: noise floor mai ridicat
+                                    # - tn=1: track noise (adaptiv)
+                                    noise_filter = "afftdn=nr=25:nf=-20:tn=1"
+                                    combined_filter = f"{audio_filter},{noise_filter}"
+                                    audio_filter_args = ["-af", combined_filter]
+                                    logger.info(f"[MUTE DEBUG] Applying audio filter with noise cancelling: {combined_filter}")
+                                    logger.info(f"    Applying voice mute filter: {len(overlapping_mutes)} intervals + noise reduction")
+
+                        # Dacă nu avem mute filter dar avem mute_source_voice activat,
+                        # aplicăm doar noise cancelling pentru a reduce vocile nedetectate
+                        if mute_source_voice and not audio_filter_args:
+                            noise_filter = "afftdn=nr=25:nf=-20:tn=1"
+                            audio_filter_args = ["-af", noise_filter]
+                            logger.info(f"[MUTE DEBUG] Applying noise cancelling only: {noise_filter}")
+
+                        extract_cmd = [
+                            "ffmpeg", "-y",
+                            "-ss", str(seg["start_time"]),
+                            "-i", seg["file_path"],
+                            "-t", str(seg["duration"]),
+                            "-c:v", "libx264", "-preset", "fast",
+                            *audio_filter_args,  # Filtrul audio pentru mute (dacă există)
+                            "-c:a", "aac",
+                            "-avoid_negative_ts", "make_zero",
+                            str(segment_output)
+                        ]
+
+                        # Log the FULL FFmpeg command for debugging
+                        logger.info(f"[MUTE DEBUG] FFmpeg command: {' '.join(extract_cmd)}")
+
+                        result = subprocess.run(extract_cmd, capture_output=True, text=True)
+                        if result.returncode != 0:
+                            logger.error(f"FFmpeg extract error: {result.stderr}")
+                            continue
+
+                        f.write(f"file '{segment_output}'\n")
+
+                # Concatenăm segmentele
+                concat_cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "concat", "-safe", "0",
+                    "-i", str(concat_list_path),
+                    "-c:v", "libx264", "-preset", "fast",
+                    "-c:a", "aac",
+                    str(output_path)
+                ]
+
+                result = subprocess.run(concat_cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    logger.error(f"FFmpeg concat error: {result.stderr}")
+                    continue
+
+                # Verificăm că fișierul a fost creat
+                if not output_path.exists():
+                    logger.error(f"Output file not created: {output_path}")
+                    continue
+
+                # Obținem durata efectivă
+                actual_duration = _get_video_duration(output_path)
+
+                # Generăm thumbnail
+                thumbnail_path = _generate_thumbnail(output_path)
+
+                # Salvăm în DB
+                supabase.table("editai_clips").insert({
+                    "project_id": project_id,
+                    "variant_index": variant_idx,
+                    "variant_name": f"variant_{variant_idx}",
+                    "raw_video_path": str(output_path),
+                    "thumbnail_path": str(thumbnail_path) if thumbnail_path else None,
+                    "duration": actual_duration,
+                    "is_selected": False,
+                    "is_deleted": False,
+                    "final_status": "pending"
+                }).execute()
+
+                variants_created.append({
+                    "variant_index": variant_idx,
+                    "path": str(output_path),
+                    "duration": actual_duration
+                })
+
+                logger.info(f"Created variant {variant_idx} for project {project_id}: {actual_duration:.1f}s")
+
+                # Update progress after variant created
+                done_pct = 10 + int((variant_idx / variant_count) * 80)
+                update_generation_progress(
+                    project_id,
+                    done_pct,
+                    f"Varianta {variant_idx} completă ({actual_duration:.1f}s)"
+                )
+
+            except Exception as e:
+                logger.error(f"Error creating variant {variant_idx}: {e}")
+                continue
+
+        # Final progress update
+        update_generation_progress(project_id, 95, "Se finalizează...")
+
+        # Actualizăm proiectul
+        if variants_created:
+            # Numărăm TOATE clipurile din proiect (existente + noi)
+            total_clips = supabase.table("editai_clips").select("id", count="exact").eq("project_id", project_id).eq("is_deleted", False).execute()
+            total_count = total_clips.count if total_clips.count else len(variants_created)
+
+            supabase.table("editai_projects").update({
+                "status": "ready_for_triage",
+                "variants_count": total_count,
+                "updated_at": datetime.now().isoformat()
+            }).eq("id", project_id).execute()
+            logger.info(f"Added {len(variants_created)} new clips (total: {total_count}) for project {project_id}")
+        else:
+            supabase.table("editai_projects").update({
+                "status": "failed",
+                "updated_at": datetime.now().isoformat()
+            }).eq("id", project_id).execute()
+            logger.error(f"Failed to generate any clips for project {project_id}")
+
+    except Exception as e:
+        logger.error(f"Error generating from segments for {project_id}: {e}")
+        supabase.table("editai_projects").update({
+            "status": "failed",
+            "updated_at": datetime.now().isoformat()
+        }).eq("id", project_id).execute()
+    finally:
+        lock.release()
+        cleanup_project_lock(project_id)
+        clear_generation_progress(project_id)
+        logger.debug(f"Released lock for project {project_id}")
+
+
 # ============== CLIPS (LIBRARY) ==============
 
 @router.get("/projects/{project_id}/clips")
@@ -485,6 +1085,67 @@ async def list_project_clips(project_id: str, include_deleted: bool = False):
         return {"clips": result.data}
     except Exception as e:
         logger.error(f"Error listing clips: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/all-clips")
+async def list_all_clips():
+    """Listează toate clipurile din toate proiectele pentru librărie."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        # Get all clips with project info
+        clips_result = supabase.table("editai_clips")\
+            .select("*, editai_projects(name)")\
+            .eq("is_deleted", False)\
+            .order("created_at", desc=True)\
+            .execute()
+
+        if not clips_result.data:
+            return {"clips": []}
+
+        # Get content info for all clips to check subtitles/voiceover
+        clip_ids = [c["id"] for c in clips_result.data]
+        content_result = supabase.table("editai_clip_content")\
+            .select("clip_id, srt_content, tts_audio_path")\
+            .in_("clip_id", clip_ids)\
+            .execute()
+
+        # Create a map of clip_id -> content
+        content_map = {}
+        for content in (content_result.data or []):
+            content_map[content["clip_id"]] = content
+
+        # Build response with has_subtitles and has_voiceover flags
+        clips_with_info = []
+        for clip in clips_result.data:
+            content = content_map.get(clip["id"], {})
+            project_data = clip.get("editai_projects", {})
+
+            clips_with_info.append({
+                "id": clip["id"],
+                "project_id": clip["project_id"],
+                "project_name": project_data.get("name", "Unknown"),
+                "variant_index": clip["variant_index"],
+                "variant_name": clip.get("variant_name"),
+                "raw_video_path": clip["raw_video_path"],
+                "thumbnail_path": clip.get("thumbnail_path"),
+                "duration": clip.get("duration"),
+                "final_video_path": clip.get("final_video_path"),
+                "final_status": clip.get("final_status", "pending"),
+                "created_at": clip["created_at"],
+                "postiz_status": clip.get("postiz_status", "not_sent"),
+                "postiz_post_id": clip.get("postiz_post_id"),
+                "postiz_scheduled_at": clip.get("postiz_scheduled_at"),
+                "has_subtitles": bool(content.get("srt_content")),
+                "has_voiceover": bool(content.get("tts_audio_path")),
+            })
+
+        return {"clips": clips_with_info}
+    except Exception as e:
+        logger.error(f"Error listing all clips: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -510,6 +1171,48 @@ async def get_clip(clip_id: str):
         }
     except Exception as e:
         logger.error(f"Error getting clip: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ClipUpdateRequest(BaseModel):
+    variant_name: Optional[str] = None
+    is_selected: Optional[bool] = None
+    postiz_status: Optional[str] = None
+    postiz_post_id: Optional[str] = None
+    postiz_scheduled_at: Optional[str] = None
+
+
+@router.patch("/clips/{clip_id}")
+async def update_clip(clip_id: str, request: ClipUpdateRequest):
+    """Actualizează un clip (nume, selecție, status Postiz)."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        update_data = {"updated_at": datetime.now().isoformat()}
+
+        if request.variant_name is not None:
+            update_data["variant_name"] = request.variant_name
+        if request.is_selected is not None:
+            update_data["is_selected"] = request.is_selected
+        if request.postiz_status is not None:
+            update_data["postiz_status"] = request.postiz_status
+        if request.postiz_post_id is not None:
+            update_data["postiz_post_id"] = request.postiz_post_id
+        if request.postiz_scheduled_at is not None:
+            update_data["postiz_scheduled_at"] = request.postiz_scheduled_at
+
+        result = supabase.table("editai_clips").update(update_data).eq("id", clip_id).execute()
+
+        if result.data:
+            clip = result.data[0]
+            if request.is_selected is not None:
+                _update_project_counts(clip["project_id"])
+            return {"status": "updated", "clip": clip}
+        raise HTTPException(status_code=404, detail="Clip not found")
+    except Exception as e:
+        logger.error(f"Error updating clip: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -755,7 +1458,16 @@ async def _render_final_clip_task(
     content_data: Optional[dict],
     preset_data: dict
 ):
-    """Task pentru randarea finală în background."""
+    """
+    Task pentru randarea finală în background.
+
+    SYNC LOGIC (Script-First Workflow):
+    1. Generează TTS cu silence removal → audio dinamic
+    2. Compară durata video cu audio:
+       - Video < Audio: extinde video cu mai multe segmente
+       - Video > Audio: trimează video la durata audio
+    3. Render final cu video sincronizat
+    """
     from app.services.elevenlabs_tts import get_elevenlabs_tts
 
     supabase = get_supabase()
@@ -779,6 +1491,7 @@ async def _render_final_clip_task(
     # Initialize temp file paths for cleanup in finally block
     audio_path = None
     srt_path = None
+    adjusted_video_path = None
     temp_dir = settings.base_dir / "temp"
 
     try:
@@ -791,30 +1504,81 @@ async def _render_final_clip_task(
         output_dir.mkdir(parents=True, exist_ok=True)
         temp_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. Generăm TTS dacă avem text
+        video_duration = _get_video_duration(raw_video_path)
+        audio_duration = None
+        final_video_path = raw_video_path  # Default: use raw video
+
+        # 1. Generăm TTS dacă avem text (cu silence removal pentru dinamism)
         if content_data and content_data.get("tts_text"):
             tts = get_elevenlabs_tts()
             audio_path = temp_dir / f"tts_{clip_id}.mp3"
 
-            # Generăm cu silence removal
-            audio_path, _ = tts.generate_audio_trimmed(
+            # Generăm cu silence removal ACTIVAT pentru audio dinamic
+            audio_path, silence_stats = tts.generate_audio_trimmed(
                 text=content_data["tts_text"],
                 output_path=audio_path,
-                remove_silence=True
+                remove_silence=True,
+                min_silence_duration=0.25,  # Păstrăm pauze < 250ms pentru ritm natural
+                padding=0.06  # 60ms padding pentru tranziții line
             )
-            logger.info(f"Generated TTS for clip {clip_id}")
+            audio_duration = _get_audio_duration(audio_path)
 
-        # 2. Generăm SRT temporar dacă avem conținut
+            if silence_stats:
+                logger.info(f"TTS generated for clip {clip_id}: {silence_stats.get('original_duration', 0):.1f}s → {audio_duration:.1f}s (removed {silence_stats.get('removed_duration', 0):.1f}s silence)")
+            else:
+                logger.info(f"TTS generated for clip {clip_id}: {audio_duration:.1f}s")
+
+        # 2. SYNC: Ajustăm video-ul la durata audio-ului
+        if audio_duration and audio_duration > 0:
+            duration_diff = video_duration - audio_duration
+
+            if abs(duration_diff) < 0.5:
+                # Diferență neglijabilă, folosim video-ul original
+                logger.info(f"Video sync OK: video={video_duration:.1f}s, audio={audio_duration:.1f}s")
+                final_video_path = raw_video_path
+
+            elif duration_diff > 0:
+                # VIDEO MAI LUNG: Trimează video la durata audio
+                logger.info(f"Video > Audio ({video_duration:.1f}s > {audio_duration:.1f}s): trimming video")
+                adjusted_video_path = temp_dir / f"trimmed_{clip_id}.mp4"
+                _trim_video_to_duration(raw_video_path, adjusted_video_path, audio_duration)
+                final_video_path = adjusted_video_path
+
+            else:
+                # VIDEO MAI SCURT: Extinde cu segmente adiționale
+                needed_duration = audio_duration - video_duration
+                logger.info(f"Video < Audio ({video_duration:.1f}s < {audio_duration:.1f}s): extending by {needed_duration:.1f}s")
+
+                # Încercăm să extindem cu segmente din proiect
+                adjusted_video_path = temp_dir / f"extended_{clip_id}.mp4"
+                extended = _extend_video_with_segments(
+                    base_video=raw_video_path,
+                    target_duration=audio_duration,
+                    project_id=project_id,
+                    output_path=adjusted_video_path,
+                    supabase=supabase
+                )
+
+                if extended and adjusted_video_path.exists():
+                    final_video_path = adjusted_video_path
+                else:
+                    # Fallback: loop video pentru a umple gap-ul
+                    logger.warning(f"Could not extend with segments, using loop fallback")
+                    _loop_video_to_duration(raw_video_path, adjusted_video_path, audio_duration)
+                    if adjusted_video_path.exists():
+                        final_video_path = adjusted_video_path
+
+        # 3. Generăm SRT temporar dacă avem conținut
         if content_data and content_data.get("srt_content"):
             srt_path = temp_dir / f"srt_{clip_id}.srt"
             with open(srt_path, "w", encoding="utf-8") as f:
                 f.write(content_data["srt_content"])
 
-        # 3. Randăm cu FFmpeg folosind preset-ul
+        # 4. Randăm cu FFmpeg folosind preset-ul
         output_path = output_dir / f"final_{clip_id}_{preset_data['name']}.mp4"
 
         _render_with_preset(
-            video_path=raw_video_path,
+            video_path=final_video_path,
             audio_path=audio_path,
             srt_path=srt_path,
             subtitle_settings=content_data.get("subtitle_settings") if content_data else None,
@@ -859,6 +1623,9 @@ async def _render_final_clip_task(
             if srt_path and Path(srt_path).exists():
                 Path(srt_path).unlink()
                 logger.debug(f"Cleaned up temp srt: {srt_path}")
+            if adjusted_video_path and Path(adjusted_video_path).exists():
+                Path(adjusted_video_path).unlink()
+                logger.debug(f"Cleaned up adjusted video: {adjusted_video_path}")
         except Exception as cleanup_err:
             logger.warning(f"Failed to cleanup temp files: {cleanup_err}")
 
@@ -1029,6 +1796,230 @@ def _update_project_counts(project_id: str):
         }).eq("id", project_id).execute()
     except Exception as e:
         logger.warning(f"Failed to update project counts: {e}")
+
+
+# ============== VIDEO SYNC HELPERS (Script-First Workflow) ==============
+
+def _get_audio_duration(audio_path: Path) -> float:
+    """Obține durata fișierului audio în secunde."""
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(audio_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            return float(result.stdout.strip())
+    except Exception as e:
+        logger.warning(f"Failed to get audio duration: {e}")
+    return 0.0
+
+
+def _trim_video_to_duration(input_path: Path, output_path: Path, target_duration: float) -> bool:
+    """
+    Trimează video-ul la durata specificată.
+    Folosește -t pentru a tăia precis la durată.
+    """
+    try:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(input_path),
+            "-t", str(target_duration),
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "23",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-movflags", "+faststart",
+            str(output_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0 and output_path.exists():
+            logger.info(f"Trimmed video to {target_duration:.1f}s: {output_path.name}")
+            return True
+        else:
+            logger.error(f"Failed to trim video: {result.stderr[:200]}")
+            return False
+    except Exception as e:
+        logger.error(f"Error trimming video: {e}")
+        return False
+
+
+def _loop_video_to_duration(input_path: Path, output_path: Path, target_duration: float) -> bool:
+    """
+    Loopează video-ul pentru a atinge durata specificată.
+    Fallback când nu avem segmente disponibile.
+    """
+    try:
+        # Folosim stream_loop pentru looping și -t pentru a tăia la durată
+        cmd = [
+            "ffmpeg", "-y",
+            "-stream_loop", "-1",  # Loop infinit
+            "-i", str(input_path),
+            "-t", str(target_duration),
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "23",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-movflags", "+faststart",
+            str(output_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0 and output_path.exists():
+            logger.info(f"Looped video to {target_duration:.1f}s: {output_path.name}")
+            return True
+        else:
+            logger.error(f"Failed to loop video: {result.stderr[:200]}")
+            return False
+    except Exception as e:
+        logger.error(f"Error looping video: {e}")
+        return False
+
+
+def _extend_video_with_segments(
+    base_video: Path,
+    target_duration: float,
+    project_id: str,
+    output_path: Path,
+    supabase
+) -> bool:
+    """
+    Extinde video-ul cu segmente adiționale din proiect pentru a atinge durata țintă.
+
+    Algoritm:
+    1. Obține segmentele disponibile din proiect
+    2. Calculează cât mai avem nevoie
+    3. Extrage și concatenează segmente până atingem target_duration
+    """
+    try:
+        current_duration = _get_video_duration(base_video)
+        needed_duration = target_duration - current_duration
+
+        if needed_duration <= 0:
+            return False
+
+        # Obținem segmentele proiectului
+        project_segments = supabase.table("editai_project_segments")\
+            .select("*, editai_segments(*, editai_source_videos(file_path))")\
+            .eq("project_id", project_id)\
+            .order("sequence_order")\
+            .execute()
+
+        if not project_segments.data:
+            logger.warning(f"No segments found for project {project_id}")
+            return False
+
+        # Pregătim lista de segmente
+        available_segments = []
+        for ps in project_segments.data:
+            seg = ps.get("editai_segments", {})
+            if not seg:
+                continue
+
+            source_video = seg.get("editai_source_videos", {})
+            source_path = source_video.get("file_path") if source_video else None
+
+            if source_path and Path(source_path).exists():
+                available_segments.append({
+                    "source_path": source_path,
+                    "start_time": seg["start_time"],
+                    "end_time": seg["end_time"],
+                    "duration": seg["end_time"] - seg["start_time"]
+                })
+
+        if not available_segments:
+            logger.warning("No valid segments available for extension")
+            return False
+
+        # Selectăm segmente pentru a umple gap-ul
+        import random
+        random.shuffle(available_segments)
+
+        selected_segments = []
+        accumulated = 0
+        for seg in available_segments:
+            if accumulated >= needed_duration:
+                break
+            selected_segments.append(seg)
+            accumulated += seg["duration"]
+
+        if not selected_segments:
+            return False
+
+        settings = get_settings()
+        temp_dir = settings.base_dir / "temp" / f"extend_{project_id[:8]}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Extragem segmentele adiționale
+            segment_files = [base_video]  # Start with base video
+
+            for idx, seg in enumerate(selected_segments):
+                seg_output = temp_dir / f"ext_seg_{idx:03d}.mp4"
+
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", str(seg["start_time"]),
+                    "-i", seg["source_path"],
+                    "-t", str(seg["duration"]),
+                    "-c:v", "libx264",
+                    "-preset", "fast",
+                    "-crf", "23",
+                    "-an",  # No audio - will be replaced with TTS
+                    "-pix_fmt", "yuv420p",
+                    str(seg_output)
+                ]
+
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode == 0 and seg_output.exists():
+                    segment_files.append(seg_output)
+
+            if len(segment_files) <= 1:
+                logger.warning("No additional segments extracted")
+                return False
+
+            # Creăm concat list
+            concat_list = temp_dir / "concat.txt"
+            with open(concat_list, "w") as f:
+                for sf in segment_files:
+                    safe_path = str(sf).replace("'", "'\\''")
+                    f.write(f"file '{safe_path}'\n")
+
+            # Concatenăm și trimăm la durata exactă
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", str(concat_list),
+                "-t", str(target_duration),  # Trim to exact duration
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "23",
+                "-an",  # No audio
+                "-movflags", "+faststart",
+                str(output_path)
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if result.returncode == 0 and output_path.exists():
+                logger.info(f"Extended video to {target_duration:.1f}s with {len(selected_segments)} additional segments")
+                return True
+            else:
+                logger.error(f"Failed to concat extended video: {result.stderr[:200]}")
+                return False
+
+        finally:
+            # Cleanup temp files
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    except Exception as e:
+        logger.error(f"Error extending video with segments: {e}")
+        return False
 
 
 def cleanup_orphaned_temp_files(max_age_hours: int = 24):
