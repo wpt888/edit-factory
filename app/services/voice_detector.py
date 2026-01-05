@@ -102,6 +102,23 @@ class VoiceDetector:
             return False
         return True
 
+    def _convert_to_wav(self, audio_path: Path, output_path: Path) -> bool:
+        """Convertește orice format audio la WAV 16kHz mono."""
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(audio_path),
+            "-vn",  # No video
+            "-acodec", "pcm_s16le",  # WAV format
+            "-ar", str(self._sample_rate),  # 16kHz sample rate
+            "-ac", "1",  # Mono
+            str(output_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.error(f"FFmpeg audio conversion failed: {result.stderr}")
+            return False
+        return True
+
     def _read_audio(self, audio_path: Path) -> Optional[torch.Tensor]:
         """Citește fișierul audio ca tensor."""
         try:
@@ -119,12 +136,26 @@ class VoiceDetector:
 
             return waveform.squeeze()
         except ImportError:
-            # Fallback: use scipy
+            # Fallback: use scipy (requires WAV format)
             try:
                 from scipy.io import wavfile
                 import numpy as np
 
-                sample_rate, audio = wavfile.read(str(audio_path))
+                audio_path = Path(audio_path)
+
+                # Dacă nu e WAV, convertim mai întâi via FFmpeg
+                if audio_path.suffix.lower() not in ['.wav', '.wave']:
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                        tmp_wav = Path(tmp.name)
+                    try:
+                        if not self._convert_to_wav(audio_path, tmp_wav):
+                            return None
+                        audio_path = tmp_wav
+                        sample_rate, audio = wavfile.read(str(audio_path))
+                    finally:
+                        tmp_wav.unlink(missing_ok=True)
+                else:
+                    sample_rate, audio = wavfile.read(str(audio_path))
 
                 # Convert to float
                 if audio.dtype == np.int16:
@@ -132,11 +163,18 @@ class VoiceDetector:
                 elif audio.dtype == np.int32:
                     audio = audio.astype(np.float32) / 2147483648.0
 
+                # Resample dacă e necesar
+                if sample_rate != self._sample_rate:
+                    # Simple resampling via interpolation
+                    import scipy.signal
+                    num_samples = int(len(audio) * self._sample_rate / sample_rate)
+                    audio = scipy.signal.resample(audio, num_samples)
+
                 # Convert to mono
                 if len(audio.shape) > 1:
                     audio = audio.mean(axis=1)
 
-                return torch.from_numpy(audio)
+                return torch.from_numpy(audio.astype(np.float32))
             except Exception as e:
                 logger.error(f"Failed to read audio: {e}")
                 return None
