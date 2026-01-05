@@ -1,0 +1,30 @@
+{
+  "session_id": "20260102_205534",
+  "timestamp": "2026-01-02T20:55:34.003572",
+  "duration_seconds": 13,
+  "pages_visited": [
+    "/"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_sliders",
+      "target": "sliders",
+      "result": "none found",
+      "duration_ms": 45,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_responsive",
+      "target": "{'width': 375, 'height': 812}",
+      "result": "ok",
+      "duration_ms": 10,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 2 tests passed on 1 pages"
+}

@@ -1,0 +1,55 @@
+{
+  "session_id": "20260101_184058",
+  "timestamp": "2026-01-01T18:40:58.039657",
+  "duration_seconds": 15,
+  "pages_visited": [
+    "/",
+    "/usage"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "scroll_page",
+      "target": "418px",
+      "result": "scrolled",
+      "duration_ms": 317,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_upload_area",
+      "target": "file input",
+      "result": "found",
+      "duration_ms": 34,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "215px",
+      "result": "scrolled",
+      "duration_ms": 318,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_charts",
+      "target": "20 chart elements",
+      "result": "found",
+      "duration_ms": 22,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_stats",
+      "target": "9 stat elements",
+      "result": "found",
+      "duration_ms": 516,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 5 tests passed on 2 pages"
+}

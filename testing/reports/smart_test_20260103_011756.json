@@ -1,0 +1,30 @@
+{
+  "session_id": "20260103_011756",
+  "timestamp": "2026-01-03T01:17:56.546874",
+  "duration_seconds": 15,
+  "pages_visited": [
+    "/usage"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "scroll_page",
+      "target": "622px",
+      "result": "scrolled",
+      "duration_ms": 319,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_stats",
+      "target": "9 stat elements",
+      "result": "found",
+      "duration_ms": 545,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 2 tests passed on 1 pages"
+}

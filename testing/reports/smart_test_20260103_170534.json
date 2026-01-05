@@ -1,0 +1,86 @@
+{
+  "session_id": "20260103_170534",
+  "timestamp": "2026-01-03T17:05:34.957175",
+  "duration_seconds": 19,
+  "pages_visited": [
+    "/usage",
+    "/",
+    "/segments"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_charts",
+      "target": "0 chart elements",
+      "result": "found",
+      "duration_ms": 46,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_stats",
+      "target": "0 stat elements",
+      "result": "found",
+      "duration_ms": 519,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_upload_area",
+      "target": "file input",
+      "result": "not found",
+      "duration_ms": 25,
+      "screenshot": null,
+      "error": "No file input found"
+    },
+    {
+      "action_type": "check_inputs",
+      "target": "0 inputs",
+      "result": "found",
+      "duration_ms": 10,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_timeline",
+      "target": "timeline",
+      "result": "not found",
+      "duration_ms": 33,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_list",
+      "target": "0 video elements",
+      "result": "found",
+      "duration_ms": 1021,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_segment_controls",
+      "target": "0 controls",
+      "result": "found",
+      "duration_ms": 10,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_player",
+      "target": "video player",
+      "result": "not found",
+      "duration_ms": 10,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [
+    "Home/check_upload_area: No file input found"
+  ],
+  "console_errors": [
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)"
+  ],
+  "summary": "\u274c 3 errors, 1 warnings in 8 tests"
+}

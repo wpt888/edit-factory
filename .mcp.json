@@ -1,11 +1,3 @@
 {
-  "mcpServers": {
-    "context7": {
-      "type": "http",
-      "url": "https://mcp.context7.com/mcp",
-      "headers": {
-        "Authorization": "Bearer ctx7sk-f202ab46-c9b5-4182-9a4b-9c2e285b7956"
-      }
-    }
-  }
+  "mcpServers": {}
 }

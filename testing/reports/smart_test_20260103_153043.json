@@ -1,0 +1,40 @@
+{
+  "session_id": "20260103_153043",
+  "timestamp": "2026-01-03T15:30:43.481157",
+  "duration_seconds": 13,
+  "pages_visited": [
+    "/segments"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_segment_controls",
+      "target": "0 controls",
+      "result": "found",
+      "duration_ms": 39,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_list",
+      "target": "0 video elements",
+      "result": "found",
+      "duration_ms": 1017,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_timeline",
+      "target": "timeline",
+      "result": "not found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)"
+  ],
+  "summary": "\u274c 1 errors, 0 warnings in 3 tests"
+}

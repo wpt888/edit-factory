@@ -1,0 +1,109 @@
+{
+  "timestamp": "2025-12-31T23:37:42.185011",
+  "summary": {
+    "total": 14,
+    "passed": 10,
+    "failed": 4,
+    "success_rate": 71.42857142857143
+  },
+  "results": [
+    {
+      "name": "Home Page Loads",
+      "status": "fail",
+      "duration_ms": 10873,
+      "error": "Page.wait_for_selector: Timeout 10000ms exceeded.\nCall log:\n  - waiting for locator(\"text=Edit Factory\") to be visible\n",
+      "screenshot": "/mnt/c/OBSID SRL/n8n/edit_factory/testing/screenshots/Home_Page_Loads_20251231_233658.png"
+    },
+    {
+      "name": "Library Page Loads",
+      "status": "pass",
+      "duration_ms": 23999,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Segments Page Loads",
+      "status": "pass",
+      "duration_ms": 1218,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Usage Page Loads",
+      "status": "pass",
+      "duration_ms": 2402,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "File Upload Area Exists",
+      "status": "pass",
+      "duration_ms": 778,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Tabs Navigation",
+      "status": "pass",
+      "duration_ms": 2010,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Slider Controls",
+      "status": "pass",
+      "duration_ms": 751,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Variant Count Slider",
+      "status": "fail",
+      "duration_ms": 725,
+      "error": "object Locator can't be used in 'await' expression",
+      "screenshot": "/mnt/c/OBSID SRL/n8n/edit_factory/testing/screenshots/Variant_Count_Slider_20251231_233730.png"
+    },
+    {
+      "name": "Library Project List",
+      "status": "pass",
+      "duration_ms": 2020,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Library Create Project Button",
+      "status": "fail",
+      "duration_ms": 920,
+      "error": "object Locator can't be used in 'await' expression",
+      "screenshot": "/mnt/c/OBSID SRL/n8n/edit_factory/testing/screenshots/Library_Create_Project_Button_20251231_233734.png"
+    },
+    {
+      "name": "Segments Video List",
+      "status": "pass",
+      "duration_ms": 2007,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Segments Video Player",
+      "status": "fail",
+      "duration_ms": 1961,
+      "error": "object Locator can't be used in 'await' expression",
+      "screenshot": "/mnt/c/OBSID SRL/n8n/edit_factory/testing/screenshots/Segments_Video_Player_20251231_233738.png"
+    },
+    {
+      "name": "Mobile Viewport",
+      "status": "pass",
+      "duration_ms": 1069,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "No Console Errors",
+      "status": "pass",
+      "duration_ms": 2823,
+      "error": null,
+      "screenshot": null
+    }
+  ]
+}

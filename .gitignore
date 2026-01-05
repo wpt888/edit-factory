@@ -1,33 +1,131 @@
+# ======================
+# Environment & Secrets
+# ======================
+.env
+.env.local
+.env*.local
+.env.production
+.env.development
+*.pem
+*.key
+credentials/
+secrets/
+
+# ======================
 # Python
+# ======================
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
 venv/
+venv_*/
 ENV/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.eggs/
+*.egg-info/
+dist/
+build/
 
+# ======================
+# Node.js / Next.js
+# ======================
+node_modules/
+.next/
+out/
+.npm/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ======================
 # IDE
+# ======================
 .vscode/
 .idea/
 *.swp
 *.swo
+*.sublime-*
 
+# ======================
 # OS
+# ======================
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 
-# Project specific
+# ======================
+# Project Data (don't commit user data)
+# ======================
+input/
+output/
+processed/
+segments/
+logs/
 temp/
+source_videos/
+static/uploads/
+
+# Media files
 *.mp4
 *.mov
+*.avi
+*.mkv
 *.mp3
 *.wav
-*.srt
-logs/*.log
+*.ogg
+*.flac
 
-# Keep folders but ignore contents
-!.gitkeep
+# ======================
+# Build Artifacts
+# ======================
+*.log
+*.tmp
+*.bak
+*.old
+.cache/
 
-# Claude Code
+# ======================
+# Testing
+# ======================
+test-results/
+playwright-report/
+coverage/
+.playwright-mcp/
+screenshots/
+
+# ======================
+# Docker
+# ======================
+docker-compose.override.yml
+
+# ======================
+# FFmpeg binaries (download separately)
+# ======================
+ffmpeg/
+
+# ======================
+# Misc
+# ======================
 .claude/
+Tmux-Orchestrator/
+
+# Keep directory structure
+!.gitkeep
+!input/.gitkeep
+!output/.gitkeep
+!logs/.gitkeep
