@@ -1,0 +1,80 @@
+{
+  "session_id": "20260101_014655",
+  "timestamp": "2026-01-01T01:46:55.915739",
+  "duration_seconds": 20,
+  "pages_visited": [
+    "/usage",
+    "/",
+    "/library"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "scroll_page",
+      "target": "753px",
+      "result": "scrolled",
+      "duration_ms": 318,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_charts",
+      "target": "20 chart elements",
+      "result": "found",
+      "duration_ms": 37,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "navigate_tabs",
+      "target": "3 tabs",
+      "result": "clicked random tab",
+      "duration_ms": 567,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_buttons",
+      "target": "6 buttons",
+      "result": "found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "642px",
+      "result": "scrolled",
+      "duration_ms": 314,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_filters",
+      "target": "0 filters",
+      "result": "found",
+      "duration_ms": 22,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_project_list",
+      "target": "projects",
+      "result": "found",
+      "duration_ms": 1018,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "777px",
+      "result": "scrolled",
+      "duration_ms": 315,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 8 tests passed on 3 pages"
+}

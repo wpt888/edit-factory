@@ -1,0 +1,63 @@
+{
+  "session_id": "20260103_182032",
+  "timestamp": "2026-01-03T18:20:32.978974",
+  "duration_seconds": 18,
+  "pages_visited": [
+    "/library",
+    "/"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "scroll_page",
+      "target": "661px",
+      "result": "scrolled",
+      "duration_ms": 319,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_project_list",
+      "target": "projects",
+      "result": "found",
+      "duration_ms": 1030,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_create_button",
+      "target": "create button",
+      "result": "not found",
+      "duration_ms": 38,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_filters",
+      "target": "0 filters",
+      "result": "found",
+      "duration_ms": 10,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "217px",
+      "result": "scrolled",
+      "duration_ms": 319,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_responsive",
+      "target": "{'width': 1366, 'height': 768}",
+      "result": "ok",
+      "duration_ms": 9,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 6 tests passed on 2 pages"
+}

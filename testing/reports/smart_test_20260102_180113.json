@@ -1,0 +1,48 @@
+{
+  "session_id": "20260102_180113",
+  "timestamp": "2026-01-02T18:01:13.982920",
+  "duration_seconds": 16,
+  "pages_visited": [
+    "/"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_buttons",
+      "target": "6 buttons",
+      "result": "found",
+      "duration_ms": 46,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "navigate_tabs",
+      "target": "3 tabs",
+      "result": "clicked random tab",
+      "duration_ms": 709,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_upload_area",
+      "target": "file input",
+      "result": "not found",
+      "duration_ms": 11,
+      "screenshot": null,
+      "error": "No file input found"
+    },
+    {
+      "action_type": "check_sliders",
+      "target": "3 sliders",
+      "result": "interacted",
+      "duration_ms": 38,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [
+    "Home/check_upload_area: No file input found"
+  ],
+  "console_errors": [],
+  "summary": "\u26a0\ufe0f 1 warnings in 4 tests (no critical errors)"
+}

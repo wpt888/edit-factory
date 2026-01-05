@@ -1,0 +1,63 @@
+{
+  "session_id": "20260101_191307",
+  "timestamp": "2026-01-01T19:13:07.194606",
+  "duration_seconds": 16,
+  "pages_visited": [
+    "/segments",
+    "/usage"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_video_player",
+      "target": "video player",
+      "result": "not found",
+      "duration_ms": 35,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_segment_controls",
+      "target": "10 controls",
+      "result": "found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_list",
+      "target": "2 video elements",
+      "result": "found",
+      "duration_ms": 1017,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_timeline",
+      "target": "timeline",
+      "result": "not found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_stats",
+      "target": "9 stat elements",
+      "result": "found",
+      "duration_ms": 527,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_charts",
+      "target": "20 chart elements",
+      "result": "found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 6 tests passed on 2 pages"
+}

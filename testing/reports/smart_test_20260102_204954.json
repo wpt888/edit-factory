@@ -1,0 +1,71 @@
+{
+  "session_id": "20260102_204954",
+  "timestamp": "2026-01-02T20:49:54.304979",
+  "duration_seconds": 19,
+  "pages_visited": [
+    "/usage",
+    "/library"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_charts",
+      "target": "20 chart elements",
+      "result": "found",
+      "duration_ms": 35,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "236px",
+      "result": "scrolled",
+      "duration_ms": 315,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_stats",
+      "target": "9 stat elements",
+      "result": "found",
+      "duration_ms": 515,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "290px",
+      "result": "scrolled",
+      "duration_ms": 316,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_create_button",
+      "target": "create button",
+      "result": "not found",
+      "duration_ms": 22,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_project_list",
+      "target": "projects",
+      "result": "found",
+      "duration_ms": 3271,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_filters",
+      "target": "0 filters",
+      "result": "found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 7 tests passed on 2 pages"
+}

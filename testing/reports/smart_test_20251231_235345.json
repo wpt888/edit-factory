@@ -1,0 +1,47 @@
+{
+  "session_id": "20251231_235345",
+  "timestamp": "2025-12-31T23:53:45.431108",
+  "duration_seconds": 18,
+  "pages_visited": [
+    "/segments",
+    "/"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_video_player",
+      "target": "video player",
+      "result": "not found",
+      "duration_ms": 41,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_list",
+      "target": "2 video elements",
+      "result": "found",
+      "duration_ms": 1019,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_responsive",
+      "target": "{'width': 1366, 'height': 768}",
+      "result": "ok",
+      "duration_ms": 11,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "navigate_tabs",
+      "target": "3 tabs",
+      "result": "clicked random tab",
+      "duration_ms": 2034,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 4 tests passed on 2 pages"
+}

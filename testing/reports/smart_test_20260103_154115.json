@@ -1,0 +1,86 @@
+{
+  "session_id": "20260103_154115",
+  "timestamp": "2026-01-03T15:41:15.804249",
+  "duration_seconds": 17,
+  "pages_visited": [
+    "/library",
+    "/",
+    "/usage"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_project_list",
+      "target": "projects",
+      "result": "empty",
+      "duration_ms": 1023,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_create_button",
+      "target": "create button",
+      "result": "not found",
+      "duration_ms": 34,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "navigate_tabs",
+      "target": "tabs",
+      "result": "no tabs found",
+      "duration_ms": 20,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_sliders",
+      "target": "sliders",
+      "result": "none found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_buttons",
+      "target": "0 buttons",
+      "result": "found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_upload_area",
+      "target": "file input",
+      "result": "not found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": "No file input found"
+    },
+    {
+      "action_type": "check_stats",
+      "target": "0 stat elements",
+      "result": "found",
+      "duration_ms": 529,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "225px",
+      "result": "scrolled",
+      "duration_ms": 317,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [
+    "Home/check_upload_area: No file input found"
+  ],
+  "console_errors": [
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)"
+  ],
+  "summary": "\u274c 3 errors, 1 warnings in 8 tests"
+}

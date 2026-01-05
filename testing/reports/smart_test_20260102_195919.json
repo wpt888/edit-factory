@@ -1,0 +1,38 @@
+{
+  "session_id": "20260102_195919",
+  "timestamp": "2026-01-02T19:59:19.739624",
+  "duration_seconds": 13,
+  "pages_visited": [
+    "/library"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_create_button",
+      "target": "create button",
+      "result": "not found",
+      "duration_ms": 37,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_filters",
+      "target": "0 filters",
+      "result": "found",
+      "duration_ms": 9,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_project_list",
+      "target": "projects",
+      "result": "found",
+      "duration_ms": 1020,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 3 tests passed on 1 pages"
+}

@@ -1,0 +1,64 @@
+{
+  "session_id": "20260102_000039",
+  "timestamp": "2026-01-02T00:00:39.178707",
+  "duration_seconds": 19,
+  "pages_visited": [
+    "/segments",
+    "/library",
+    "/usage"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_video_player",
+      "target": "video player",
+      "result": "not found",
+      "duration_ms": 37,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_list",
+      "target": "2 video elements",
+      "result": "found",
+      "duration_ms": 1015,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_project_list",
+      "target": "projects",
+      "result": "found",
+      "duration_ms": 1020,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "391px",
+      "result": "scrolled",
+      "duration_ms": 316,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_stats",
+      "target": "9 stat elements",
+      "result": "found",
+      "duration_ms": 527,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_charts",
+      "target": "20 chart elements",
+      "result": "found",
+      "duration_ms": 9,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 6 tests passed on 3 pages"
+}

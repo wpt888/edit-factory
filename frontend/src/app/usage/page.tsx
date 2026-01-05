@@ -25,10 +25,13 @@ import {
   AlertCircle,
   CheckCircle2,
   Settings,
+  ExternalLink,
+  XCircle,
+  Loader2,
 } from "lucide-react";
 import Link from "next/link";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001/api/v1";
 
 interface CostSummary {
   source: string;
@@ -58,26 +61,56 @@ interface CostEntry {
 
 interface UsageStats {
   elevenlabs?: {
-    character_count: number;
-    character_limit: number;
+    characters_used: number;
+    characters_limit: number;
     characters_remaining: number;
+    usage_percent: number;
     tier: string;
     estimated_cost_usd: number;
   };
   gemini?: {
-    status: string;
+    configured: boolean;
+    model: string;
+    note: string;
     estimated_cost_per_video: number;
   };
   errors: string[];
 }
 
+interface GeminiStatus {
+  configured: boolean;
+  connected: boolean;
+  model: string | null;
+  error: string | null;
+  test_response?: string;
+  balance_url: string;
+  billing_url: string;
+}
+
 export default function UsagePage() {
   const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
+  const [geminiStatus, setGeminiStatus] = useState<GeminiStatus | null>(null);
   const [allEntries, setAllEntries] = useState<CostEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [testingGemini, setTestingGemini] = useState(false);
   const [budget, setBudget] = useState<number>(50); // Default $50 budget
   const [showAllEntries, setShowAllEntries] = useState(false);
+
+  const fetchGeminiStatus = useCallback(async () => {
+    setTestingGemini(true);
+    try {
+      const res = await fetch(`${API_URL}/gemini/status`);
+      if (res.ok) {
+        const data = await res.json();
+        setGeminiStatus(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch Gemini status:", error);
+    } finally {
+      setTestingGemini(false);
+    }
+  }, []);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -96,12 +129,15 @@ export default function UsagePage() {
         const usageData = await usageRes.json();
         setUsageStats(usageData);
       }
+
+      // Also fetch Gemini status
+      await fetchGeminiStatus();
     } catch (error) {
       console.error("Failed to fetch usage data:", error);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchGeminiStatus]);
 
   const fetchAllEntries = async () => {
     try {
@@ -289,23 +325,19 @@ export default function UsagePage() {
                       <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">Characters Used:</span>
                         <span className="text-foreground">
-                          {usageStats.elevenlabs.character_count.toLocaleString()} /{" "}
-                          {usageStats.elevenlabs.character_limit.toLocaleString()}
+                          {usageStats.elevenlabs.characters_used?.toLocaleString() || 0} /{" "}
+                          {usageStats.elevenlabs.characters_limit?.toLocaleString() || 0}
                         </span>
                       </div>
                       <Progress
-                        value={
-                          (usageStats.elevenlabs.character_count /
-                            usageStats.elevenlabs.character_limit) *
-                          100
-                        }
+                        value={usageStats.elevenlabs.usage_percent || 0}
                         className="h-2"
                       />
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Remaining:</span>
                       <span className="text-green-500 font-medium">
-                        {usageStats.elevenlabs.characters_remaining.toLocaleString()} chars
+                        {usageStats.elevenlabs.characters_remaining?.toLocaleString() || 0} chars
                       </span>
                     </div>
                     <Badge variant="outline">
@@ -344,19 +376,87 @@ export default function UsagePage() {
                   <span className="text-muted-foreground">Est. per Video:</span>
                   <span className="text-foreground">~$1.20 (60 frames)</span>
                 </div>
-                {usageStats?.gemini && (
-                  <Badge
+
+                {/* Gemini Status - real-time check */}
+                <div className="pt-2 border-t border-border">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-muted-foreground">Status:</span>
+                    {testingGemini ? (
+                      <Badge variant="outline" className="border-yellow-500 text-yellow-500">
+                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        Testing...
+                      </Badge>
+                    ) : geminiStatus?.connected ? (
+                      <Badge variant="outline" className="border-green-500 text-green-500">
+                        <CheckCircle2 className="h-3 w-3 mr-1" />
+                        Connected
+                      </Badge>
+                    ) : geminiStatus?.configured ? (
+                      <Badge variant="outline" className="border-yellow-500 text-yellow-500">
+                        <AlertCircle className="h-3 w-3 mr-1" />
+                        {geminiStatus.error || "Not connected"}
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="border-destructive text-destructive">
+                        <XCircle className="h-3 w-3 mr-1" />
+                        Not configured
+                      </Badge>
+                    )}
+                  </div>
+
+                  {geminiStatus?.model && (
+                    <div className="flex justify-between text-sm mb-2">
+                      <span className="text-muted-foreground">Model:</span>
+                      <span className="text-foreground font-mono text-xs">{geminiStatus.model}</span>
+                    </div>
+                  )}
+
+                  <Button
                     variant="outline"
-                    className={
-                      usageStats.gemini.status === "active"
-                        ? "border-green-500 text-green-500"
-                        : "border-destructive text-destructive"
-                    }
+                    size="sm"
+                    className="w-full mt-2"
+                    onClick={fetchGeminiStatus}
+                    disabled={testingGemini}
                   >
-                    <CheckCircle2 className="h-3 w-3 mr-1" />
-                    {usageStats.gemini.status}
-                  </Badge>
-                )}
+                    {testingGemini ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                    )}
+                    Test Connection
+                  </Button>
+                </div>
+
+                {/* Links to check balance */}
+                <div className="pt-2 border-t border-border space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    Check your Gemini credit balance:
+                  </p>
+                  <div className="flex gap-2">
+                    <a
+                      href={geminiStatus?.balance_url || "https://aistudio.google.com/apikey"}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1"
+                    >
+                      <Button variant="outline" size="sm" className="w-full text-xs">
+                        <ExternalLink className="h-3 w-3 mr-1" />
+                        AI Studio
+                      </Button>
+                    </a>
+                    <a
+                      href={geminiStatus?.billing_url || "https://console.cloud.google.com/billing"}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1"
+                    >
+                      <Button variant="outline" size="sm" className="w-full text-xs">
+                        <ExternalLink className="h-3 w-3 mr-1" />
+                        Cloud Billing
+                      </Button>
+                    </a>
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>

@@ -1,0 +1,88 @@
+{
+  "session_id": "20260102_171647",
+  "timestamp": "2026-01-02T17:16:47.698356",
+  "duration_seconds": 19,
+  "pages_visited": [
+    "/segments",
+    "/library",
+    "/"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_segment_controls",
+      "target": "10 controls",
+      "result": "found",
+      "duration_ms": 35,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_list",
+      "target": "2 video elements",
+      "result": "found",
+      "duration_ms": 1017,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_player",
+      "target": "video player",
+      "result": "not found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_timeline",
+      "target": "timeline",
+      "result": "not found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_filters",
+      "target": "0 filters",
+      "result": "found",
+      "duration_ms": 22,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "392px",
+      "result": "scrolled",
+      "duration_ms": 315,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_inputs",
+      "target": "7 inputs",
+      "result": "found",
+      "duration_ms": 19,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_responsive",
+      "target": "{'width': 1920, 'height': 1080}",
+      "result": "ok",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_upload_area",
+      "target": "file input",
+      "result": "found",
+      "duration_ms": 7,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 9 tests passed on 3 pages"
+}

@@ -1,0 +1,46 @@
+{
+  "session_id": "20260102_225858",
+  "timestamp": "2026-01-02T22:58:58.516925",
+  "duration_seconds": 12,
+  "pages_visited": [
+    "/"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_buttons",
+      "target": "6 buttons",
+      "result": "found",
+      "duration_ms": 35,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "348px",
+      "result": "scrolled",
+      "duration_ms": 317,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_sliders",
+      "target": "sliders",
+      "result": "none found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_inputs",
+      "target": "7 inputs",
+      "result": "found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 4 tests passed on 1 pages"
+}

@@ -1,0 +1,63 @@
+{
+  "session_id": "20260102_172224",
+  "timestamp": "2026-01-02T17:22:24.298361",
+  "duration_seconds": 16,
+  "pages_visited": [
+    "/",
+    "/segments"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "navigate_tabs",
+      "target": "3 tabs",
+      "result": "clicked random tab",
+      "duration_ms": 584,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_sliders",
+      "target": "sliders",
+      "result": "none found",
+      "duration_ms": 7,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_buttons",
+      "target": "6 buttons",
+      "result": "found",
+      "duration_ms": 7,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_player",
+      "target": "video player",
+      "result": "not found",
+      "duration_ms": 22,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_segment_controls",
+      "target": "10 controls",
+      "result": "found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_timeline",
+      "target": "timeline",
+      "result": "not found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 6 tests passed on 2 pages"
+}

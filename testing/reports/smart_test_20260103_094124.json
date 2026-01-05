@@ -1,0 +1,55 @@
+{
+  "session_id": "20260103_094124",
+  "timestamp": "2026-01-03T09:41:24.334497",
+  "duration_seconds": 16,
+  "pages_visited": [
+    "/",
+    "/segments"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_responsive",
+      "target": "{'width': 1920, 'height': 1080}",
+      "result": "ok",
+      "duration_ms": 11,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "navigate_tabs",
+      "target": "3 tabs",
+      "result": "clicked random tab",
+      "duration_ms": 609,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_buttons",
+      "target": "6 buttons",
+      "result": "found",
+      "duration_ms": 9,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_segment_controls",
+      "target": "10 controls",
+      "result": "found",
+      "duration_ms": 23,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_timeline",
+      "target": "timeline",
+      "result": "not found",
+      "duration_ms": 9,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 5 tests passed on 2 pages"
+}

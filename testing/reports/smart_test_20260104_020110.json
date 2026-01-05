@@ -1,0 +1,55 @@
+{
+  "session_id": "20260104_020110",
+  "timestamp": "2026-01-04T02:01:10.487161",
+  "duration_seconds": 18,
+  "pages_visited": [
+    "/segments",
+    "/"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_timeline",
+      "target": "timeline",
+      "result": "not found",
+      "duration_ms": 39,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_player",
+      "target": "video player",
+      "result": "not found",
+      "duration_ms": 9,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_buttons",
+      "target": "6 buttons",
+      "result": "found",
+      "duration_ms": 23,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_upload_area",
+      "target": "file input",
+      "result": "found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "navigate_tabs",
+      "target": "3 tabs",
+      "result": "clicked random tab",
+      "duration_ms": 683,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 5 tests passed on 2 pages"
+}

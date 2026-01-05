@@ -1,0 +1,63 @@
+{
+  "session_id": "20260103_104148",
+  "timestamp": "2026-01-03T10:41:48.918335",
+  "duration_seconds": 20,
+  "pages_visited": [
+    "/library",
+    "/segments"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "scroll_page",
+      "target": "597px",
+      "result": "scrolled",
+      "duration_ms": 321,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_project_list",
+      "target": "projects",
+      "result": "found",
+      "duration_ms": 1026,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_segment_controls",
+      "target": "10 controls",
+      "result": "found",
+      "duration_ms": 42,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_player",
+      "target": "video player",
+      "result": "not found",
+      "duration_ms": 9,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_timeline",
+      "target": "timeline",
+      "result": "not found",
+      "duration_ms": 10,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_list",
+      "target": "2 video elements",
+      "result": "found",
+      "duration_ms": 1936,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 6 tests passed on 2 pages"
+}

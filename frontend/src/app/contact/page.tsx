@@ -1,54 +1,12 @@
-import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
-const navLinks = [
-  { label: "Functionalitati", href: "/functionalitati" },
-  { label: "Cum functioneaza", href: "/cum-functioneaza" },
-  { label: "Preturi", href: "/preturi" },
-  { label: "Testimoniale", href: "/testimoniale" },
-  { label: "Contact", href: "/contact" },
-];
-
 export default function ContactPage() {
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <nav className="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-md border-b border-border">
-        <div className="w-full max-w-[1400px] mx-auto px-6 md:px-10 lg:px-16">
-          <div className="flex items-center justify-between h-16">
-            <Link href="/statsai" className="text-xl md:text-2xl font-bold text-primary">
-              EditAI
-            </Link>
-
-            <div className="hidden lg:flex items-center gap-1">
-              {navLinks.map((link) => (
-                <Link
-                  key={link.label}
-                  href={link.href}
-                  className={`px-4 py-2 text-sm font-medium transition-colors rounded-md hover:bg-accent ${
-                    link.href === "/contact" ? "text-foreground" : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {link.label}
-                </Link>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-3">
-              <Button variant="ghost" size="sm" className="hidden sm:inline-flex text-muted-foreground hover:text-foreground">
-                Autentificare
-              </Button>
-              <Button size="sm" className="font-semibold">
-                Inscrie-te
-              </Button>
-            </div>
-          </div>
-        </div>
-      </nav>
-
       <main className="pt-24 pb-16">
         <div className="w-full max-w-[1000px] mx-auto px-6 md:px-10 lg:px-16">
           <div className="text-center mb-12">

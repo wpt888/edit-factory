@@ -1,0 +1,63 @@
+{
+  "session_id": "20260103_194730",
+  "timestamp": "2026-01-03T19:47:30.965291",
+  "duration_seconds": 19,
+  "pages_visited": [
+    "/usage",
+    "/library"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_charts",
+      "target": "20 chart elements",
+      "result": "found",
+      "duration_ms": 40,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "246px",
+      "result": "scrolled",
+      "duration_ms": 320,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_stats",
+      "target": "9 stat elements",
+      "result": "found",
+      "duration_ms": 519,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_project_list",
+      "target": "projects",
+      "result": "found",
+      "duration_ms": 1026,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "541px",
+      "result": "scrolled",
+      "duration_ms": 319,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_create_button",
+      "target": "create button",
+      "result": "not found",
+      "duration_ms": 27,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 6 tests passed on 2 pages"
+}

@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # Supabase
     supabase_url: str = ""
     supabase_key: str = ""
+    supabase_jwt_secret: str = ""  # JWT secret for token verification
+    supabase_service_role_key: str = ""  # Service role key for admin operations
+
+    # Security
+    allowed_origins: str = "http://localhost:3000,http://localhost:3001,https://editai.obsid.ro"
 
     class Config:
         env_file = ".env"

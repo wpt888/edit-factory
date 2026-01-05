@@ -1,0 +1,74 @@
+{
+  "session_id": "20260102_144434",
+  "timestamp": "2026-01-02T14:44:34.788429",
+  "duration_seconds": 21,
+  "pages_visited": [
+    "/library",
+    "/usage",
+    "/"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "scroll_page",
+      "target": "689px",
+      "result": "scrolled",
+      "duration_ms": 322,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_filters",
+      "target": "0 filters",
+      "result": "found",
+      "duration_ms": 41,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_stats",
+      "target": "9 stat elements",
+      "result": "found",
+      "duration_ms": 532,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_charts",
+      "target": "20 chart elements",
+      "result": "found",
+      "duration_ms": 9,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "navigate_tabs",
+      "target": "3 tabs",
+      "result": "clicked random tab",
+      "duration_ms": 678,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_upload_area",
+      "target": "file input",
+      "result": "not found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": "No file input found"
+    },
+    {
+      "action_type": "check_sliders",
+      "target": "3 sliders",
+      "result": "interacted",
+      "duration_ms": 40,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [
+    "Home/check_upload_area: No file input found"
+  ],
+  "console_errors": [],
+  "summary": "\u26a0\ufe0f 1 warnings in 7 tests (no critical errors)"
+}

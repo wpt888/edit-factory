@@ -12,11 +12,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Depends
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.config import get_settings
+from app.api.auth import get_current_user, get_optional_user, AuthUser
 
 import logging
 
@@ -181,8 +182,11 @@ async def serve_file(file_path: str, download: bool = Query(default=False)):
 # ============== PROJECTS ==============
 
 @router.post("/projects", response_model=ProjectResponse)
-async def create_project(project: ProjectCreate):
-    """Creează un proiect nou."""
+async def create_project(
+    project: ProjectCreate,
+    current_user: AuthUser = Depends(get_current_user)
+):
+    """Creează un proiect nou pentru utilizatorul autentificat."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -193,7 +197,8 @@ async def create_project(project: ProjectCreate):
             "description": project.description,
             "target_duration": project.target_duration,
             "context_text": project.context_text,
-            "status": "draft"
+            "status": "draft",
+            "user_id": current_user.id  # Associate project with user
         }).execute()
 
         if result.data:
@@ -217,14 +222,17 @@ async def create_project(project: ProjectCreate):
 
 
 @router.get("/projects")
-async def list_projects(status: Optional[str] = None):
-    """Listează toate proiectele."""
+async def list_projects(
+    status: Optional[str] = None,
+    current_user: AuthUser = Depends(get_current_user)
+):
+    """Listează proiectele utilizatorului autentificat."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        query = supabase.table("editai_projects").select("*").order("created_at", desc=True)
+        query = supabase.table("editai_projects").select("*").eq("user_id", current_user.id).order("created_at", desc=True)
         if status:
             query = query.eq("status", status)
         result = query.execute()
@@ -1089,17 +1097,18 @@ async def list_project_clips(project_id: str, include_deleted: bool = False):
 
 
 @router.get("/all-clips")
-async def list_all_clips():
-    """Listează toate clipurile din toate proiectele pentru librărie."""
+async def list_all_clips(current_user: AuthUser = Depends(get_current_user)):
+    """Listează toate clipurile din proiectele utilizatorului pentru librărie."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        # Get all clips with project info
+        # Get all clips with project info, filtered by user's projects
         clips_result = supabase.table("editai_clips")\
-            .select("*, editai_projects(name)")\
+            .select("*, editai_projects!inner(name, user_id)")\
             .eq("is_deleted", False)\
+            .eq("editai_projects.user_id", current_user.id)\
             .order("created_at", desc=True)\
             .execute()
 
@@ -1124,6 +1133,10 @@ async def list_all_clips():
             content = content_map.get(clip["id"], {})
             project_data = clip.get("editai_projects", {})
 
+            # Check if audio was removed (filename contains _noaudio)
+            video_path = clip.get("final_video_path") or clip["raw_video_path"]
+            has_audio = "_noaudio" not in video_path
+
             clips_with_info.append({
                 "id": clip["id"],
                 "project_id": clip["project_id"],
@@ -1141,6 +1154,7 @@ async def list_all_clips():
                 "postiz_scheduled_at": clip.get("postiz_scheduled_at"),
                 "has_subtitles": bool(content.get("srt_content")),
                 "has_voiceover": bool(content.get("tts_audio_path")),
+                "has_audio": has_audio,
             })
 
         return {"clips": clips_with_info}
@@ -1264,6 +1278,80 @@ async def bulk_select_clips(clip_ids: List[str], selected: bool):
         return {"status": "updated", "count": len(clip_ids), "is_selected": selected}
     except Exception as e:
         logger.error(f"Error bulk selecting clips: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/clips/{clip_id}/remove-audio")
+async def remove_clip_audio(clip_id: str, background_tasks: BackgroundTasks):
+    """
+    Elimină definitiv pista audio dintr-un videoclip.
+    Creează o versiune nouă a videoclipului fără sunet.
+    """
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        # Get clip info
+        clip_result = supabase.table("editai_clips").select("*").eq("id", clip_id).execute()
+        if not clip_result.data:
+            raise HTTPException(status_code=404, detail="Clip not found")
+
+        clip = clip_result.data[0]
+        video_path = Path(clip.get("final_video_path") or clip.get("raw_video_path"))
+
+        if not video_path.exists():
+            raise HTTPException(status_code=404, detail=f"Video file not found: {video_path}")
+
+        # Create output path for video without audio
+        output_dir = video_path.parent
+        output_filename = f"{video_path.stem}_noaudio{video_path.suffix}"
+        output_path = output_dir / output_filename
+
+        # FFmpeg command to remove audio
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(video_path),
+            "-c:v", "copy",  # Copy video stream without re-encoding
+            "-an",  # Remove audio
+            str(output_path)
+        ]
+
+        logger.info(f"Removing audio from clip {clip_id}: {video_path} -> {output_path}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            logger.error(f"FFmpeg error: {result.stderr}")
+            raise HTTPException(status_code=500, detail=f"Failed to remove audio: {result.stderr}")
+
+        # Update database with new video path
+        update_data = {
+            "raw_video_path": str(output_path),
+            "updated_at": datetime.now().isoformat()
+        }
+
+        # If there was a final_video_path, clear it since we've modified the source
+        if clip.get("final_video_path"):
+            update_data["final_video_path"] = str(output_path)
+
+        supabase.table("editai_clips").update(update_data).eq("id", clip_id).execute()
+
+        # Optionally delete old file (keeping it for now as backup)
+        # if video_path != output_path and video_path.exists():
+        #     video_path.unlink()
+
+        logger.info(f"Audio removed successfully for clip {clip_id}")
+        return {
+            "status": "success",
+            "clip_id": clip_id,
+            "video_path": str(output_path),
+            "message": "Audio removed successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error removing audio from clip {clip_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

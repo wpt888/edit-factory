@@ -1,0 +1,70 @@
+{
+  "session_id": "20260103_165503",
+  "timestamp": "2026-01-03T16:55:03.047991",
+  "duration_seconds": 15,
+  "pages_visited": [
+    "/usage",
+    "/",
+    "/segments"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_stats",
+      "target": "0 stat elements",
+      "result": "found",
+      "duration_ms": 546,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_charts",
+      "target": "0 chart elements",
+      "result": "found",
+      "duration_ms": 9,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_upload_area",
+      "target": "file input",
+      "result": "not found",
+      "duration_ms": 19,
+      "screenshot": null,
+      "error": "No file input found"
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "700px",
+      "result": "scrolled",
+      "duration_ms": 315,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_player",
+      "target": "video player",
+      "result": "not found",
+      "duration_ms": 22,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_timeline",
+      "target": "timeline",
+      "result": "not found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [
+    "Home/check_upload_area: No file input found"
+  ],
+  "console_errors": [
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)"
+  ],
+  "summary": "\u274c 3 errors, 1 warnings in 6 tests"
+}

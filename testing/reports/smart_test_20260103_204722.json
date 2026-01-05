@@ -1,0 +1,79 @@
+{
+  "session_id": "20260103_204722",
+  "timestamp": "2026-01-03T20:47:22.949769",
+  "duration_seconds": 17,
+  "pages_visited": [
+    "/",
+    "/library"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_inputs",
+      "target": "7 inputs",
+      "result": "found",
+      "duration_ms": 38,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_upload_area",
+      "target": "file input",
+      "result": "found",
+      "duration_ms": 9,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_responsive",
+      "target": "{'width': 1366, 'height': 768}",
+      "result": "ok",
+      "duration_ms": 10,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "navigate_tabs",
+      "target": "3 tabs",
+      "result": "clicked random tab",
+      "duration_ms": 674,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "512px",
+      "result": "scrolled",
+      "duration_ms": 316,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_filters",
+      "target": "0 filters",
+      "result": "found",
+      "duration_ms": 21,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_create_button",
+      "target": "create button",
+      "result": "not found",
+      "duration_ms": 9,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_project_list",
+      "target": "projects",
+      "result": "found",
+      "duration_ms": 1019,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 8 tests passed on 2 pages"
+}

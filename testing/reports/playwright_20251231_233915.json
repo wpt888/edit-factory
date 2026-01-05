@@ -1,0 +1,109 @@
+{
+  "timestamp": "2025-12-31T23:39:15.387602",
+  "summary": {
+    "total": 14,
+    "passed": 14,
+    "failed": 0,
+    "success_rate": 100.0
+  },
+  "results": [
+    {
+      "name": "Home Page Loads",
+      "status": "pass",
+      "duration_ms": 887,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Library Page Loads",
+      "status": "pass",
+      "duration_ms": 11719,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Segments Page Loads",
+      "status": "pass",
+      "duration_ms": 1222,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Usage Page Loads",
+      "status": "pass",
+      "duration_ms": 3743,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "File Upload Area Exists",
+      "status": "pass",
+      "duration_ms": 763,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Tabs Navigation",
+      "status": "pass",
+      "duration_ms": 1959,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Slider Controls",
+      "status": "pass",
+      "duration_ms": 768,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Variant Count Slider",
+      "status": "pass",
+      "duration_ms": 749,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Library Project List",
+      "status": "pass",
+      "duration_ms": 2019,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Library Create Project Button",
+      "status": "pass",
+      "duration_ms": 1000,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Segments Video List",
+      "status": "pass",
+      "duration_ms": 2004,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Segments Video Player",
+      "status": "pass",
+      "duration_ms": 1947,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "Mobile Viewport",
+      "status": "pass",
+      "duration_ms": 1099,
+      "error": null,
+      "screenshot": null
+    },
+    {
+      "name": "No Console Errors",
+      "status": "pass",
+      "duration_ms": 2843,
+      "error": null,
+      "screenshot": null
+    }
+  ]
+}

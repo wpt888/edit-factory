@@ -1,0 +1,30 @@
+{
+  "session_id": "20260102_003907",
+  "timestamp": "2026-01-02T00:39:07.250184",
+  "duration_seconds": 13,
+  "pages_visited": [
+    "/segments"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_timeline",
+      "target": "timeline",
+      "result": "not found",
+      "duration_ms": 33,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_list",
+      "target": "2 video elements",
+      "result": "found",
+      "duration_ms": 1014,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 2 tests passed on 1 pages"
+}

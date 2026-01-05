@@ -1,0 +1,30 @@
+{
+  "session_id": "20260101_024756",
+  "timestamp": "2026-01-01T02:47:56.994519",
+  "duration_seconds": 11,
+  "pages_visited": [
+    "/"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_upload_area",
+      "target": "file input",
+      "result": "found",
+      "duration_ms": 39,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_buttons",
+      "target": "6 buttons",
+      "result": "found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 2 tests passed on 1 pages"
+}

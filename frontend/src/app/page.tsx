@@ -43,7 +43,23 @@ import {
 } from "@/components/ui/popover";
 import { DollarSign } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+// Shared components
+import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
+import { TTSPanel } from "@/components/video-processing/tts-panel";
+import { SecondaryVideosForm } from "@/components/video-processing/secondary-videos-form";
+import { ProgressTracker } from "@/components/video-processing/progress-tracker";
+import { VariantTriage } from "@/components/video-processing/variant-triage";
+import {
+  SubtitleSettings as SharedSubtitleSettings,
+  SubtitleLine as SharedSubtitleLine,
+  Variant,
+  SecondaryVideo,
+  DEFAULT_SUBTITLE_SETTINGS,
+  FONT_OPTIONS,
+  COLOR_PRESETS,
+} from "@/types/video-processing";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001/api/v1";
 
 interface Job {
   job_id: string;
@@ -158,6 +174,13 @@ function generateSRT(lines: SubtitleLine[]): string {
 }
 
 export default function AppPage() {
+  // Active tab state - synced with URL
+  const [activeTab, setActiveTab] = useState<string>("upload");
+
+  // Processing time tracking for ETA
+  const [processingStartTime, setProcessingStartTime] = useState<number | null>(null);
+  const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<string>("");
+
   // Flag pentru a preveni suprascrierea localStorage la mount
   const isInitialMount = useRef(true);
 
@@ -201,6 +224,7 @@ export default function AppPage() {
   ]);
   const [secondarySegmentDuration, setSecondarySegmentDuration] = useState(2.0);
   const [generateAudio, setGenerateAudio] = useState(false); // Default: generate without audio first
+  const [muteSourceVoice, setMuteSourceVoice] = useState(true); // Mute voice from source video (keep effects)
   const [generatedVariants, setGeneratedVariants] = useState<Array<{
     variant_index: number;
     variant_name: string;
@@ -237,6 +261,38 @@ export default function AppPage() {
   const [error, setError] = useState<string | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+
+  // Sync tab state with URL params on mount and URL changes
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tabFromUrl = params.get("tab");
+    if (tabFromUrl && ["upload", "subtitles", "export"].includes(tabFromUrl)) {
+      setActiveTab(tabFromUrl);
+    }
+
+    // Also listen for popstate (back/forward navigation)
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const tab = params.get("tab");
+      if (tab && ["upload", "subtitles", "export"].includes(tab)) {
+        setActiveTab(tab);
+      } else {
+        setActiveTab("upload");
+      }
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  // Handle tab change - update URL immediately
+  const handleTabChange = (newTab: string) => {
+    setActiveTab(newTab);
+    const params = new URLSearchParams(window.location.search);
+    params.set("tab", newTab);
+    const newUrl = `${window.location.pathname}?${params.toString()}`;
+    window.history.pushState({ tab: newTab }, "", newUrl);
+  };
 
   // Load saved values from localStorage on mount
   useEffect(() => {
@@ -352,7 +408,26 @@ export default function AppPage() {
         setStatusText(job.progress || job.status);
 
         if (job.status === "processing" || job.status === "pending") {
-          setProgress(job.status === "pending" ? 10 : 50);
+          const newProgress = job.status === "pending" ? 10 : 50;
+          setProgress(newProgress);
+
+          // Calculate ETA based on elapsed time and progress
+          if (processingStartTime && newProgress > 10) {
+            const elapsed = (Date.now() - processingStartTime) / 1000; // seconds
+            const progressDone = newProgress - 10; // Progress made since start
+            const progressRemaining = 100 - newProgress;
+            const timePerPercent = elapsed / progressDone;
+            const eta = Math.round(timePerPercent * progressRemaining);
+
+            if (eta > 60) {
+              const minutes = Math.floor(eta / 60);
+              const seconds = eta % 60;
+              setEstimatedTimeRemaining(`~${minutes}m ${seconds}s ramas`);
+            } else if (eta > 0) {
+              setEstimatedTimeRemaining(`~${eta}s ramas`);
+            }
+          }
+
           setTimeout(poll, 2000);
         } else if (job.status === "completed") {
           setProgress(100);
@@ -386,7 +461,7 @@ export default function AppPage() {
 
     // Return cleanup function
     return () => { isCancelled = true; };
-  }, [refreshJobs]);
+  }, [refreshJobs, processingStartTime]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -407,6 +482,8 @@ export default function AppPage() {
 
     setIsProcessing(true);
     setProgress(10);
+    setProcessingStartTime(Date.now());
+    setEstimatedTimeRemaining("");
     setError(null);
     setResult(null);
     setGeneratedVariants([]); // Reset variants from previous job
@@ -464,6 +541,8 @@ export default function AppPage() {
 
     // Add generate_audio flag
     formData.append("generate_audio", generateAudio.toString());
+    // Add mute_source_voice flag
+    formData.append("mute_source_voice", muteSourceVoice.toString());
 
     try {
       // Use multi-video endpoint if we have secondary videos
@@ -681,7 +760,7 @@ export default function AppPage() {
                     )}
                   </div>
 
-                  <Tabs defaultValue="upload" className="w-full">
+                  <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
                     <TabsList className="grid w-full grid-cols-3 mb-6">
                       <TabsTrigger value="upload">1. Fisiere</TabsTrigger>
                       <TabsTrigger value="subtitles">2. Subtitrari</TabsTrigger>
@@ -1168,6 +1247,25 @@ export default function AppPage() {
                           </p>
                         </div>
 
+                        {/* Mute Source Voice Option */}
+                        <div className="flex items-center justify-between p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                          <div className="flex-1">
+                            <Label htmlFor="mute-voice" className="text-sm font-medium cursor-pointer">
+                              Elimina vocea din sursa
+                            </Label>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              Detecteaza si muta vocile din video-ul original (pastreaza efectele sonore si muzica).
+                            </p>
+                          </div>
+                          <input
+                            type="checkbox"
+                            id="mute-voice"
+                            checked={muteSourceVoice}
+                            onChange={(e) => setMuteSourceVoice(e.target.checked)}
+                            className="h-5 w-5 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
+                          />
+                        </div>
+
                         <Separator />
 
                         {/* Secondary Videos with Keywords */}
@@ -1303,7 +1401,13 @@ export default function AppPage() {
                   {/* Progress Section */}
                   {isProcessing && (
                     <div className="mt-6 space-y-3">
-                      <Progress value={progress} className="h-2" />
+                      <div className="flex items-center justify-between text-sm mb-1">
+                        <span className="text-muted-foreground">{progress}%</span>
+                        {estimatedTimeRemaining && (
+                          <span className="text-primary font-medium">{estimatedTimeRemaining}</span>
+                        )}
+                      </div>
+                      <Progress value={progress} className="h-3" />
                       <p className="text-sm text-muted-foreground">{statusText}</p>
                     </div>
                   )}

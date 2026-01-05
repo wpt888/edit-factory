@@ -1,0 +1,71 @@
+{
+  "session_id": "20260102_115920",
+  "timestamp": "2026-01-02T11:59:20.997533",
+  "duration_seconds": 18,
+  "pages_visited": [
+    "/",
+    "/segments"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_responsive",
+      "target": "{'width': 375, 'height': 812}",
+      "result": "ok",
+      "duration_ms": 10,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_sliders",
+      "target": "sliders",
+      "result": "none found",
+      "duration_ms": 37,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "406px",
+      "result": "scrolled",
+      "duration_ms": 316,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "navigate_tabs",
+      "target": "3 tabs",
+      "result": "clicked random tab",
+      "duration_ms": 559,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_list",
+      "target": "2 video elements",
+      "result": "found",
+      "duration_ms": 1031,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_segment_controls",
+      "target": "10 controls",
+      "result": "found",
+      "duration_ms": 9,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_player",
+      "target": "video player",
+      "result": "not found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 7 tests passed on 2 pages"
+}

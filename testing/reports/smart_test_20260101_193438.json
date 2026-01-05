@@ -1,0 +1,38 @@
+{
+  "session_id": "20260101_193438",
+  "timestamp": "2026-01-01T19:34:38.875234",
+  "duration_seconds": 14,
+  "pages_visited": [
+    "/segments"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_timeline",
+      "target": "timeline",
+      "result": "not found",
+      "duration_ms": 38,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_video_list",
+      "target": "2 video elements",
+      "result": "found",
+      "duration_ms": 1016,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_segment_controls",
+      "target": "10 controls",
+      "result": "found",
+      "duration_ms": 8,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 3 tests passed on 1 pages"
+}

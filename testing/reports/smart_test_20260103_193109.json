@@ -1,0 +1,55 @@
+{
+  "session_id": "20260103_193109",
+  "timestamp": "2026-01-03T19:31:09.356956",
+  "duration_seconds": 18,
+  "pages_visited": [
+    "/",
+    "/library"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "navigate_tabs",
+      "target": "3 tabs",
+      "result": "clicked random tab",
+      "duration_ms": 737,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_inputs",
+      "target": "1 inputs",
+      "result": "found",
+      "duration_ms": 11,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_filters",
+      "target": "0 filters",
+      "result": "found",
+      "duration_ms": 23,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_project_list",
+      "target": "projects",
+      "result": "found",
+      "duration_ms": 1023,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "scroll_page",
+      "target": "531px",
+      "result": "scrolled",
+      "duration_ms": 321,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 5 tests passed on 2 pages"
+}

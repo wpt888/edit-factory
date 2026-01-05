@@ -1,0 +1,30 @@
+{
+  "session_id": "20260102_215137",
+  "timestamp": "2026-01-02T21:51:37.241371",
+  "duration_seconds": 15,
+  "pages_visited": [
+    "/library"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_create_button",
+      "target": "create button",
+      "result": "not found",
+      "duration_ms": 35,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_project_list",
+      "target": "projects",
+      "result": "found",
+      "duration_ms": 1019,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [],
+  "summary": "\u2705 All 2 tests passed on 1 pages"
+}

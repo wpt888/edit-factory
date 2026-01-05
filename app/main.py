@@ -27,6 +27,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Get settings
+settings = get_settings()
+
 # Cream aplicatia
 app = FastAPI(
     title="Edit Factory",
@@ -34,13 +37,18 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS - permitem toate originile pentru development
+# CORS - configurat din environment variables
+# În producție: ALLOWED_ORIGINS=https://editai.obsid.ro
+allowed_origins = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()]
+logger.info(f"CORS allowed origins: {allowed_origins}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
+    expose_headers=["Content-Disposition"],
 )
 
 # Include API routes
@@ -58,7 +66,6 @@ if static_path.exists():
 @app.on_event("startup")
 async def startup_event():
     """Initialize on startup."""
-    settings = get_settings()
     settings.ensure_dirs()
     logger.info("Edit Factory started")
     logger.info(f"  Input dir: {settings.input_dir.absolute()}")

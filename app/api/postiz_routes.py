@@ -28,6 +28,11 @@ class PostizIntegrationResponse(BaseModel):
     disabled: bool = False
 
 
+class UploadRequest(BaseModel):
+    clip_id: str
+    video_path: str
+
+
 class PublishRequest(BaseModel):
     clip_id: str
     caption: str
@@ -162,6 +167,63 @@ async def get_integrations():
 
     except Exception as e:
         logger.error(f"Failed to get integrations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/upload")
+async def upload_to_postiz(request: UploadRequest):
+    """
+    Upload a video directly to Postiz library without creating a post.
+    Just uploads the file - scheduling/posting is done in n8n.
+    """
+    settings = get_settings()
+
+    if not settings.postiz_api_url or not settings.postiz_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Postiz not configured. Set POSTIZ_API_URL and POSTIZ_API_KEY."
+        )
+
+    # Resolve video path
+    video_path = Path(request.video_path)
+    if not video_path.exists():
+        # Try with output directory prefix
+        video_path = settings.output_dir / request.video_path
+        if not video_path.exists():
+            # Try base directory
+            video_path = settings.base_dir / request.video_path
+            if not video_path.exists():
+                raise HTTPException(status_code=404, detail=f"Video file not found: {request.video_path}")
+
+    try:
+        from app.services.postiz_service import get_postiz_publisher
+        publisher = get_postiz_publisher()
+
+        # Just upload the video to Postiz library
+        logger.info(f"Uploading video to Postiz: {video_path}")
+        media = await publisher.upload_video(video_path)
+
+        # Update clip status in database
+        supabase = get_supabase()
+        if supabase:
+            try:
+                supabase.table("editai_clips").update({
+                    "postiz_status": "sent",
+                    "updated_at": datetime.now().isoformat()
+                }).eq("id", request.clip_id).execute()
+            except Exception as e:
+                logger.warning(f"Failed to update clip status: {e}")
+
+        logger.info(f"Video uploaded to Postiz successfully: media_id={media.id}")
+        return {
+            "status": "success",
+            "media_id": media.id,
+            "media_path": media.path,
+            "message": "Video uploaded to Postiz library"
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to upload to Postiz: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

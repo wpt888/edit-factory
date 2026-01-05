@@ -1,0 +1,30 @@
+# Edit Factory - Production Docker Compose Override
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+version: '3.8'
+
+services:
+  backend:
+    environment:
+      - DEBUG=false
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+  frontend:
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=https://api.editai.obsid.ro/api/v1
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M

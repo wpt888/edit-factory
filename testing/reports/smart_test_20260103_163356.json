@@ -1,0 +1,50 @@
+{
+  "session_id": "20260103_163356",
+  "timestamp": "2026-01-03T16:33:56.886911",
+  "duration_seconds": 15,
+  "pages_visited": [
+    "/",
+    "/usage"
+  ],
+  "actions_performed": [
+    {
+      "action_type": "check_responsive",
+      "target": "{'width': 375, 'height': 812}",
+      "result": "ok",
+      "duration_ms": 23,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_sliders",
+      "target": "sliders",
+      "result": "none found",
+      "duration_ms": 43,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_charts",
+      "target": "0 chart elements",
+      "result": "found",
+      "duration_ms": 22,
+      "screenshot": null,
+      "error": null
+    },
+    {
+      "action_type": "check_stats",
+      "target": "0 stat elements",
+      "result": "found",
+      "duration_ms": 516,
+      "screenshot": null,
+      "error": null
+    }
+  ],
+  "errors_found": [],
+  "warnings": [],
+  "console_errors": [
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)"
+  ],
+  "summary": "\u274c 2 errors, 0 warnings in 4 tests"
+}
