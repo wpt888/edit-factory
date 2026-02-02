@@ -31,10 +31,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Default profile created and all existing data assigned to it
   4. User can query their profile's data via RLS without seeing other profiles
   5. Database queries filtered by profile_id complete in under 50ms (indexed)
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 01-01: TBD
+- [ ] 01-01-PLAN.md — SQL migrations: profiles table, profile_id columns, data backfill, RLS policy update
 
 ### Phase 2: Backend Profile Context
 **Goal**: Retrofit API layer and service methods to inject profile context
@@ -115,11 +115,11 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Database Foundation | 0/TBD | Not started | - |
+| 1. Database Foundation | 0/1 | Planned | - |
 | 2. Backend Profile Context | 0/TBD | Not started | - |
 | 3. Frontend Profile UI | 0/TBD | Not started | - |
 | 4. TTS Provider Selection | 0/TBD | Not started | - |
