@@ -60,27 +60,28 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PROF-01 | — | Pending |
-| PROF-02 | — | Pending |
-| PROF-03 | — | Pending |
-| PROF-04 | — | Pending |
-| PROF-05 | — | Pending |
-| PROF-06 | — | Pending |
-| PROF-07 | — | Pending |
-| TTS-01 | — | Pending |
-| TTS-02 | — | Pending |
-| TTS-03 | — | Pending |
-| TTS-04 | — | Pending |
-| TTS-05 | — | Pending |
-| TTS-06 | — | Pending |
-| DX-01 | — | Pending |
-| DX-02 | — | Pending |
+| PROF-01 | Phase 1, Phase 2 | Pending |
+| PROF-02 | Phase 3 | Pending |
+| PROF-03 | Phase 3 | Pending |
+| PROF-04 | Phase 1 | Pending |
+| PROF-05 | Phase 2, Phase 5 | Pending |
+| PROF-06 | Phase 3 | Pending |
+| PROF-07 | Phase 1 | Pending |
+| TTS-01 | Phase 4 | Pending |
+| TTS-02 | Phase 4 | Pending |
+| TTS-03 | Phase 4 | Pending |
+| TTS-04 | Phase 4 | Pending |
+| TTS-05 | Phase 4 | Pending |
+| TTS-06 | Phase 4 | Pending |
+| DX-01 | Phase 6 | Pending |
+| DX-02 | Phase 6 | Pending |
 
 **Coverage:**
 - v1 requirements: 15 total
-- Mapped to phases: 0
-- Unmapped: 15
+- Mapped to phases: 15
+- Unmapped: 0
+- Coverage: 100%
 
 ---
 *Requirements defined: 2026-02-03*
-*Last updated: 2026-02-03 after initial definition*
+*Last updated: 2026-02-03 after roadmap creation*
