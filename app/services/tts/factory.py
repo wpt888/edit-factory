@@ -38,38 +38,30 @@ def get_tts_service(
     provider = provider.lower()
 
     if provider == "elevenlabs":
-        try:
-            from .elevenlabs import ElevenLabsTTSService
-            return ElevenLabsTTSService(output_dir=output_dir, voice_id=voice_id)
-        except ImportError:
-            raise NotImplementedError(
-                "ElevenLabs TTS implementation not yet available (will be added in 04-02)"
-            )
+        from .elevenlabs import ElevenLabsTTSService
+        return ElevenLabsTTSService(output_dir=output_dir, voice_id=voice_id)
 
     elif provider == "edge":
-        try:
-            from .edge import EdgeTTSService as EdgeService
-            return EdgeService(output_dir=output_dir)
-        except ImportError:
-            raise NotImplementedError(
-                "Edge TTS implementation not yet available (will be added in 04-02)"
-            )
+        from .edge import EdgeTTSService
+        return EdgeTTSService(output_dir=output_dir)
 
     elif provider == "coqui":
-        # Lazy import to avoid loading PyTorch at module import time
-        from .coqui import CoquiTTSService
-        return CoquiTTSService(
-            output_dir=output_dir,
-            model_name="tts_models/multilingual/multi-dataset/xtts_v2",
-            use_gpu=True
-        )
+        try:
+            from .coqui import CoquiTTSService
+            return CoquiTTSService(output_dir=output_dir)
+        except ImportError:
+            raise NotImplementedError(
+                "Coqui TTS implementation not yet available (will be added in 04-03)"
+            )
 
     elif provider == "kokoro":
-        from .kokoro import KokoroTTSService
-        return KokoroTTSService(
-            output_dir=output_dir,
-            default_voice=voice_id or "af"
-        )
+        try:
+            from .kokoro import KokoroTTSService
+            return KokoroTTSService(output_dir=output_dir)
+        except ImportError:
+            raise NotImplementedError(
+                "Kokoro TTS implementation not yet available (will be added in 04-04)"
+            )
 
     else:
         raise ValueError(
