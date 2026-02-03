@@ -60,13 +60,13 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PROF-01 | Phase 1, Phase 2 | Pending |
+| PROF-01 | Phase 1, Phase 2 | Partial (DB ready, API pending) |
 | PROF-02 | Phase 3 | Pending |
 | PROF-03 | Phase 3 | Pending |
-| PROF-04 | Phase 1 | Pending |
+| PROF-04 | Phase 1 | Complete |
 | PROF-05 | Phase 2, Phase 5 | Pending |
 | PROF-06 | Phase 3 | Pending |
-| PROF-07 | Phase 1 | Pending |
+| PROF-07 | Phase 1 | Complete |
 | TTS-01 | Phase 4 | Pending |
 | TTS-02 | Phase 4 | Pending |
 | TTS-03 | Phase 4 | Pending |
