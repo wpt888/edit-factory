@@ -27,6 +27,13 @@ httpx>=0.25.0
 aiofiles>=23.0.0
 edge-tts>=6.1.0
 
+# TTS - Coqui XTTS (voice cloning, 17 languages)
+# Note: PyTorch is a transitive dependency. For NVIDIA GPU support, install PyTorch with CUDA:
+# pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+TTS>=0.22.0
+librosa>=0.10.0
+pydub>=0.25.0
+
 # TTS - Kokoro (lightweight, fast, requires espeak-ng system dependency)
 # IMPORTANT: Kokoro requires espeak-ng system dependency
 # Linux: apt-get install espeak-ng
