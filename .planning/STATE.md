@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 4 of 6 (TTS Provider Selection)
-Plan: 4 of 7
+Plan: 5 of 7
 Status: In progress
-Last activity: 2026-02-03 — Completed 04-02-PLAN.md
+Last activity: 2026-02-03 — Completed 04-05-PLAN.md
 
-Progress: [██████░░░░] 60%
+Progress: [███████░░░] 70%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 13
-- Average duration: 7 min
-- Total execution time: 1.93 hours
+- Total plans completed: 14
+- Average duration: 6.4 min
+- Total execution time: 1.95 hours
 
 **By Phase:**
 
@@ -30,10 +30,10 @@ Progress: [██████░░░░] 60%
 | 01-database-foundation | 1 | 30 min | 30 min |
 | 02-backend-profile-context | 5 | 60 min | 12 min |
 | 03-frontend-profile-ui | 3 | 6 min | 2 min |
-| 04-tts-provider-selection | 4 | 9 min | 2.3 min |
+| 04-tts-provider-selection | 5 | 11 min | 2.2 min |
 
 **Recent Trend:**
-- Last 5 plans: 03-03 (2m), 04-01 (3m), 04-04 (2m), 04-03 (2m), 04-02 (2m)
+- Last 5 plans: 04-01 (3m), 04-04 (2m), 04-03 (2m), 04-02 (2m), 04-05 (2m)
 - Trend: Exceptional velocity continues - sub-3min average maintained
 
 *Updated after each plan completion*
@@ -87,6 +87,11 @@ Recent decisions affecting current work:
 - **04-04**: Constructor espeak-ng validation for Kokoro TTS (fail fast with clear installation instructions)
 - **04-04**: Lazy import for optional dependencies (graceful degradation if kokoro not installed)
 - **04-04**: Preset voice configuration (5 hardcoded voices for Kokoro, no dynamic discovery)
+- **04-05**: Public /providers endpoint (no auth required for discovery, allows frontend to show options before login)
+- **04-05**: Background job pattern for /generate (async processing with job_id polling, consistent with video workflow)
+- **04-05**: 6-second minimum for voice cloning with librosa validation (XTTS v2 quality threshold enforced at API layer)
+- **04-05**: 10MB max file size for voice samples (balance between audio quality and upload time)
+- **04-05**: Cost logging only for non-zero costs (reduces database noise for free providers)
 
 ### Pending Todos
 
@@ -112,8 +117,8 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 04-02-PLAN.md (ElevenLabs and Edge TTS Adapters)
-Next action: Execute 04-05-PLAN.md (Voice Cloning) or 04-06-PLAN.md (TTS API Endpoints)
+Stopped at: Completed 04-05-PLAN.md (TTS API Routes)
+Next action: Execute 04-06-PLAN.md or 04-07-PLAN.md (remaining Wave 3 plans)
 Resume file: None
 
 **Phase 3 Complete Summary:**
@@ -158,16 +163,26 @@ Resume file: None
   - Lazy import pattern for optional dependencies
   - Zero-cost provider for cost-conscious workflows
 
+- 04-05: TTS API routes ✅ (2 min)
+  - Four REST endpoints: /providers, /voices, /generate, /clone-voice
+  - Provider availability checks (API keys, system dependencies)
+  - Background job pattern for async generation
+  - Voice cloning with audio validation (MIME, size, duration)
+  - Profile-scoped temp directories for voice samples
+  - Cost logging for paid providers
+
 **Provider Implementation Status:**
 - 04-02: ElevenLabs adapter (premium API, $0.22/1k chars) ✅
 - 04-02: Edge adapter (free Microsoft voices) ✅
 - 04-03: Coqui adapter (local, voice cloning, GPU) ✅
 - 04-04: Kokoro adapter (lightweight local engine) ✅
+- 04-05: TTS API routes (REST interface) ✅
 
-**Next Plan (04-05 or 04-06) Prerequisites:**
+**Next Plan (04-06 or 04-07) Prerequisites:**
 - ✅ TTSService interface defined
 - ✅ Factory function ready with all 4 providers
 - ✅ Voice cloning capability available (Coqui)
 - ✅ Cost tracking integrated (ElevenLabs)
 - ✅ Free alternatives available (Edge, Coqui, Kokoro)
-- Ready for voice cloning API or TTS API routes
+- ✅ REST API endpoints functional
+- Ready for frontend TTS UI or provider preference storage
