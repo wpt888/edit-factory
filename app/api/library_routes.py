@@ -384,7 +384,8 @@ async def generate_raw_clips(
     project_id: str,
     video: UploadFile = File(default=None),
     video_path: str = Form(default=None),
-    variant_count: int = Form(default=3)
+    variant_count: int = Form(default=3),
+    profile: ProfileContext = Depends(get_profile_context)
 ):
     """
     Generează clipuri RAW (fără audio, fără subtitrări) pentru triaj.
@@ -401,13 +402,9 @@ async def generate_raw_clips(
     settings = get_settings()
     settings.ensure_dirs()
 
-    # Verificăm că proiectul există
-    try:
-        project = supabase.table("editai_projects").select("*").eq("id", project_id).single().execute()
-    except Exception:
-        raise HTTPException(status_code=404, detail="Project not found")
-    if not project.data:
-        raise HTTPException(status_code=404, detail="Project not found")
+    # Verificăm că proiectul există și aparține profilului
+    project_data = verify_project_ownership(supabase, project_id, profile.profile_id)
+    project = type('obj', (object,), {'data': project_data})()
 
     # Determine video source: uploaded file or local path
     if video and video.filename:
@@ -438,7 +435,7 @@ async def generate_raw_clips(
         "source_video_height": video_info.get("height", 1920),
         "status": "generating",
         "updated_at": datetime.now().isoformat()
-    }).eq("id", project_id).execute()
+    }).eq("id", project_id).eq("profile_id", profile.profile_id).execute()
 
     # Limitări
     variant_count = max(1, min(10, variant_count))
@@ -447,6 +444,7 @@ async def generate_raw_clips(
     background_tasks.add_task(
         _generate_raw_clips_task,
         project_id=project_id,
+        profile_id=profile.profile_id,
         video_path=str(final_video_path),
         variant_count=variant_count,
         target_duration=project.data["target_duration"],
@@ -610,13 +608,9 @@ async def generate_from_segments(
     settings = get_settings()
     settings.ensure_dirs()
 
-    # Verificăm că proiectul există
-    try:
-        project = supabase.table("editai_projects").select("*").eq("id", project_id).single().execute()
-    except Exception:
-        raise HTTPException(status_code=404, detail="Project not found")
-    if not project.data:
-        raise HTTPException(status_code=404, detail="Project not found")
+    # Verificăm că proiectul există și aparține profilului
+    project_data = verify_project_ownership(supabase, project_id, profile.profile_id)
+    project = type('obj', (object,), {'data': project_data})()
 
     # Obținem segmentele asignate proiectului
     segments_result = supabase.table("editai_project_segments")\
@@ -2206,15 +2200,19 @@ def _extend_video_with_segments(
         return False
 
 
-def cleanup_orphaned_temp_files(max_age_hours: int = 24):
+def cleanup_orphaned_temp_files(max_age_hours: int = 24, profile_id: Optional[str] = None):
     """
     Cleanup orphaned temp files older than max_age_hours.
     Called periodically or on startup to prevent temp dir from growing.
+
+    Args:
+        max_age_hours: Maximum age in hours for temp files before deletion
+        profile_id: If provided, only clean this profile's temp directory. If None, clean all profiles.
     """
     try:
         settings = get_settings()
-        temp_dir = settings.base_dir / "temp"
-        if not temp_dir.exists():
+        temp_base_dir = settings.base_dir / "temp"
+        if not temp_base_dir.exists():
             return 0
 
         from datetime import timedelta
@@ -2223,15 +2221,29 @@ def cleanup_orphaned_temp_files(max_age_hours: int = 24):
         cutoff_time = time.time() - (max_age_hours * 3600)
         deleted_count = 0
 
-        for temp_file in temp_dir.iterdir():
-            if temp_file.is_file():
-                try:
-                    if temp_file.stat().st_mtime < cutoff_time:
-                        temp_file.unlink()
-                        deleted_count += 1
-                        logger.debug(f"Cleaned up orphaned temp file: {temp_file.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to cleanup {temp_file}: {e}")
+        # Determine which directories to clean
+        if profile_id:
+            # Clean only specific profile's temp directory
+            temp_dirs = [temp_base_dir / profile_id]
+        else:
+            # Clean all profile temp directories
+            temp_dirs = [d for d in temp_base_dir.iterdir() if d.is_dir()]
+            # Also include flat files in temp root (legacy)
+            temp_dirs.append(temp_base_dir)
+
+        for temp_dir in temp_dirs:
+            if not temp_dir.exists():
+                continue
+
+            for temp_file in temp_dir.iterdir():
+                if temp_file.is_file():
+                    try:
+                        if temp_file.stat().st_mtime < cutoff_time:
+                            temp_file.unlink()
+                            deleted_count += 1
+                            logger.debug(f"Cleaned up orphaned temp file: {temp_file.name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to cleanup {temp_file}: {e}")
 
         if deleted_count > 0:
             logger.info(f"Cleaned up {deleted_count} orphaned temp files")
