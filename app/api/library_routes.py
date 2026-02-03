@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.config import get_settings
-from app.api.auth import get_current_user, get_optional_user, AuthUser
+from app.api.auth import ProfileContext, get_profile_context
 
 import logging
 
@@ -134,6 +134,28 @@ class ExportPresetResponse(BaseModel):
 
 
 
+# ============== HELPER FUNCTIONS ==============
+
+def verify_project_ownership(supabase, project_id: str, profile_id: str) -> dict:
+    """Verify project exists and belongs to profile. Returns project or raises 404."""
+    try:
+        result = supabase.table("editai_projects")\
+            .select("*")\
+            .eq("id", project_id)\
+            .eq("profile_id", profile_id)\
+            .single()\
+            .execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        return result.data
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error verifying project ownership: {{e}}")
+        raise HTTPException(status_code=404, detail="Project not found")
+
 
 # ============== FILE SERVING ==============
 
@@ -184,9 +206,9 @@ async def serve_file(file_path: str, download: bool = Query(default=False)):
 @router.post("/projects", response_model=ProjectResponse)
 async def create_project(
     project: ProjectCreate,
-    current_user: AuthUser = Depends(get_current_user)
+    profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Creează un proiect nou pentru utilizatorul autentificat."""
+    """Creează un proiect nou."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -198,11 +220,12 @@ async def create_project(
             "target_duration": project.target_duration,
             "context_text": project.context_text,
             "status": "draft",
-            "user_id": current_user.id  # Associate project with user
+            "profile_id": profile.profile_id
         }).execute()
 
         if result.data:
             proj = result.data[0]
+            logger.info(f"[Profile {profile.profile_id}] Created project: {proj['id']}")
             return ProjectResponse(
                 id=proj["id"],
                 name=proj["name"],
@@ -224,15 +247,15 @@ async def create_project(
 @router.get("/projects")
 async def list_projects(
     status: Optional[str] = None,
-    current_user: AuthUser = Depends(get_current_user)
+    profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Listează proiectele utilizatorului autentificat."""
+    """Listează toate proiectele."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        query = supabase.table("editai_projects").select("*").eq("user_id", current_user.id).order("created_at", desc=True)
+        query = supabase.table("editai_projects").select("*").eq("profile_id", profile.profile_id).order("created_at", desc=True)
         if status:
             query = query.eq("status", status)
         result = query.execute()
@@ -243,14 +266,17 @@ async def list_projects(
 
 
 @router.get("/projects/{project_id}", response_model=ProjectResponse)
-async def get_project(project_id: str):
+async def get_project(
+    project_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Obține detaliile unui proiect."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        result = supabase.table("editai_projects").select("*").eq("id", project_id).single().execute()
+        result = supabase.table("editai_projects").select("*").eq("id", project_id).eq("profile_id", profile.profile_id).single().execute()
         if result.data:
             proj = result.data
             return ProjectResponse(
@@ -272,7 +298,10 @@ async def get_project(project_id: str):
 
 
 @router.get("/projects/{project_id}/progress")
-async def get_project_progress(project_id: str):
+async def get_project_progress(
+    project_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Obține progresul generării pentru un proiect."""
     progress = get_generation_progress(project_id)
     if progress:
@@ -281,7 +310,10 @@ async def get_project_progress(project_id: str):
     # If no progress tracked, check project status
     supabase = get_supabase()
     if supabase:
-        result = supabase.table("editai_projects").select("status").eq("id", project_id).single().execute()
+        try:
+            result = supabase.table("editai_projects").select("status").eq("id", project_id).eq("profile_id", profile.profile_id).single().execute()
+        except Exception:
+            return {"percentage": 0, "current_step": "Proiect negăsit", "estimated_remaining": None}
         if result.data:
             status = result.data.get("status")
             if status == "generating":
@@ -295,7 +327,11 @@ async def get_project_progress(project_id: str):
 
 
 @router.patch("/projects/{project_id}")
-async def update_project(project_id: str, updates: dict):
+async def update_project(
+    project_id: str,
+    updates: dict,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Actualizează un proiect."""
     supabase = get_supabase()
     if not supabase:
@@ -306,7 +342,7 @@ async def update_project(project_id: str, updates: dict):
     filtered_updates["updated_at"] = datetime.now().isoformat()
 
     try:
-        result = supabase.table("editai_projects").update(filtered_updates).eq("id", project_id).execute()
+        result = supabase.table("editai_projects").update(filtered_updates).eq("id", project_id).eq("profile_id", profile.profile_id).execute()
         if result.data:
             return {"status": "updated", "project": result.data[0]}
         raise HTTPException(status_code=404, detail="Project not found")
@@ -316,7 +352,10 @@ async def update_project(project_id: str, updates: dict):
 
 
 @router.delete("/projects/{project_id}")
-async def delete_project(project_id: str):
+async def delete_project(
+    project_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Șterge un proiect și toate clipurile asociate."""
     supabase = get_supabase()
     if not supabase:
@@ -325,12 +364,12 @@ async def delete_project(project_id: str):
     try:
         # Ștergem mai întâi clipurile (CASCADE ar trebui să facă asta automat)
         # Dar ștergem și fișierele fizice
-        clips = supabase.table("editai_clips").select("*").eq("project_id", project_id).execute()
+        clips = supabase.table("editai_clips").select("*").eq("project_id", project_id).eq("profile_id", profile.profile_id).execute()
         for clip in clips.data or []:
             _delete_clip_files(clip)
 
         # Ștergem proiectul
-        result = supabase.table("editai_projects").delete().eq("id", project_id).execute()
+        result = supabase.table("editai_projects").delete().eq("id", project_id).eq("profile_id", profile.profile_id).execute()
         return {"status": "deleted", "project_id": project_id}
     except Exception as e:
         logger.error(f"Error deleting project: {e}")
@@ -363,7 +402,10 @@ async def generate_raw_clips(
     settings.ensure_dirs()
 
     # Verificăm că proiectul există
-    project = supabase.table("editai_projects").select("*").eq("id", project_id).single().execute()
+    try:
+        project = supabase.table("editai_projects").select("*").eq("id", project_id).single().execute()
+    except Exception:
+        raise HTTPException(status_code=404, detail="Project not found")
     if not project.data:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -424,7 +466,8 @@ async def _generate_raw_clips_task(
     video_path: str,
     variant_count: int,
     target_duration: int,
-    context_text: Optional[str]
+    context_text: Optional[str],
+    profile_id: Optional[str] = "default"
 ):
     """Task pentru generarea clipurilor raw în background."""
     from app.services.video_processor import VideoProcessorService
@@ -443,10 +486,14 @@ async def _generate_raw_clips_task(
         return
 
     try:
+        # Profile-scoped temp directory to prevent cross-profile file collisions
+        temp_dir = settings.base_dir / "temp" / profile_id
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
         processor = VideoProcessorService(
             input_dir=settings.input_dir,
             output_dir=settings.output_dir,
-            temp_dir=settings.base_dir / "temp"
+            temp_dir=temp_dir
         )
 
         # Generăm clipuri RAW (fără audio, fără subtitrări)
@@ -564,7 +611,10 @@ async def generate_from_segments(
     settings.ensure_dirs()
 
     # Verificăm că proiectul există
-    project = supabase.table("editai_projects").select("*").eq("id", project_id).single().execute()
+    try:
+        project = supabase.table("editai_projects").select("*").eq("id", project_id).single().execute()
+    except Exception:
+        raise HTTPException(status_code=404, detail="Project not found")
     if not project.data:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -779,7 +829,8 @@ async def _generate_from_segments_task(
     target_duration: int,
     tts_text: Optional[str],
     mute_source_voice: bool,
-    start_variant_index: int = 1
+    start_variant_index: int = 1,
+    profile_id: Optional[str] = "default"
 ):
     """Task pentru generarea clipurilor din segmente în background."""
     import subprocess
@@ -920,13 +971,14 @@ async def _generate_from_segments_task(
                 output_path = settings.output_dir / output_filename
 
                 # Construim lista de fișiere pentru concat
-                concat_list_path = settings.base_dir / "temp" / f"concat_{project_id}_{variant_idx}.txt"
+                # Profile-scoped temp directory to prevent cross-profile file collisions
+                concat_list_path = settings.base_dir / "temp" / profile_id / f"concat_{project_id}_{variant_idx}.txt"
                 concat_list_path.parent.mkdir(parents=True, exist_ok=True)
 
                 with open(concat_list_path, "w") as f:
                     for seg in segments_for_variant:
                         # Extragem segmentul din video sursă
-                        segment_output = settings.base_dir / "temp" / f"seg_{project_id}_{variant_idx}_{seg['id'][:8]}.mp4"
+                        segment_output = settings.base_dir / "temp" / profile_id / f"seg_{project_id}_{variant_idx}_{seg['id'][:8]}.mp4"
 
                         # ============== VOICE MUTING: Construim filtrul audio dacă e necesar ==============
                         audio_filter_args = []
@@ -1097,18 +1149,17 @@ async def list_project_clips(project_id: str, include_deleted: bool = False):
 
 
 @router.get("/all-clips")
-async def list_all_clips(current_user: AuthUser = Depends(get_current_user)):
-    """Listează toate clipurile din proiectele utilizatorului pentru librărie."""
+async def list_all_clips():
+    """Listează toate clipurile pentru librărie."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        # Get all clips with project info, filtered by user's projects
+        # Get all clips with project info
         clips_result = supabase.table("editai_clips")\
-            .select("*, editai_projects!inner(name, user_id)")\
+            .select("*, editai_projects!inner(name)")\
             .eq("is_deleted", False)\
-            .eq("editai_projects.user_id", current_user.id)\
             .order("created_at", desc=True)\
             .execute()
 
@@ -1356,31 +1407,70 @@ async def remove_clip_audio(clip_id: str, background_tasks: BackgroundTasks):
 
 
 @router.delete("/clips/{clip_id}")
-async def delete_clip(clip_id: str, hard_delete: bool = False):
-    """Șterge un clip (soft delete sau hard delete)."""
+async def delete_clip(clip_id: str):
+    """Șterge un clip complet (fișiere + DB)."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        if hard_delete:
-            # Ștergem fișierele și din DB
-            clip = supabase.table("editai_clips").select("*").eq("id", clip_id).single().execute()
-            if clip.data:
-                _delete_clip_files(clip.data)
-                supabase.table("editai_clips").delete().eq("id", clip_id).execute()
-        else:
-            # Soft delete
-            supabase.table("editai_clips").update({
-                "is_deleted": True,
-                "is_selected": False,
-                "updated_at": datetime.now().isoformat()
-            }).eq("id", clip_id).execute()
+        # Get clip data first
+        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).single().execute()
+        if clip.data:
+            # Delete physical files
+            _delete_clip_files(clip.data)
+            # Delete from database
+            supabase.table("editai_clips").delete().eq("id", clip_id).execute()
+            # Also delete associated clip content
+            supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
+            logger.info(f"Deleted clip {clip_id} and associated files")
 
         return {"status": "deleted", "clip_id": clip_id}
     except Exception as e:
         logger.error(f"Error deleting clip: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class BulkDeleteRequest(BaseModel):
+    clip_ids: List[str]
+
+
+@router.post("/clips/bulk-delete")
+async def bulk_delete_clips(request: BulkDeleteRequest):
+    """Șterge mai multe clipuri simultan (fișiere + DB)."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    deleted = []
+    failed = []
+
+    for clip_id in request.clip_ids:
+        try:
+            # Get clip data first
+            clip = supabase.table("editai_clips").select("*").eq("id", clip_id).single().execute()
+            if clip.data:
+                # Delete physical files
+                _delete_clip_files(clip.data)
+                # Delete from database
+                supabase.table("editai_clips").delete().eq("id", clip_id).execute()
+                # Also delete associated clip content
+                supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
+                deleted.append(clip_id)
+                logger.info(f"Bulk delete: deleted clip {clip_id}")
+            else:
+                failed.append({"id": clip_id, "error": "Not found"})
+        except Exception as e:
+            logger.error(f"Error deleting clip {clip_id}: {e}")
+            failed.append({"id": clip_id, "error": str(e)})
+
+    return {
+        "status": "completed",
+        "deleted_count": len(deleted),
+        "deleted": deleted,
+        "failed_count": len(failed),
+        "failed": failed
+    }
 
 
 # ============== CLIP CONTENT (TTS + SUBTITLES) ==============
@@ -1544,7 +1634,8 @@ async def _render_final_clip_task(
     clip_id: str,
     clip_data: dict,
     content_data: Optional[dict],
-    preset_data: dict
+    preset_data: dict,
+    profile_id: Optional[str] = "default"
 ):
     """
     Task pentru randarea finală în background.
@@ -1580,7 +1671,10 @@ async def _render_final_clip_task(
     audio_path = None
     srt_path = None
     adjusted_video_path = None
-    temp_dir = settings.base_dir / "temp"
+
+    # Profile-scoped temp directory to prevent cross-profile file collisions
+    temp_dir = settings.base_dir / "temp" / profile_id
+    temp_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         raw_video_path = Path(clip_data["raw_video_path"])
@@ -1590,7 +1684,6 @@ async def _render_final_clip_task(
         # Directorul pentru output
         output_dir = settings.output_dir / "finals"
         output_dir.mkdir(parents=True, exist_ok=True)
-        temp_dir.mkdir(parents=True, exist_ok=True)
 
         video_duration = _get_video_duration(raw_video_path)
         audio_duration = None
@@ -1644,7 +1737,8 @@ async def _render_final_clip_task(
                     target_duration=audio_duration,
                     project_id=project_id,
                     output_path=adjusted_video_path,
-                    supabase=supabase
+                    supabase=supabase,
+                    profile_id=profile_id
                 )
 
                 if extended and adjusted_video_path.exists():
@@ -1821,7 +1915,7 @@ def _get_video_duration(video_path: Path) -> float:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             return float(result.stdout.strip())
-    except:
+    except Exception:
         pass
     return 0.0
 
@@ -1858,7 +1952,7 @@ def _delete_clip_files(clip: dict):
         if clip.get(key):
             try:
                 Path(clip[key]).unlink(missing_ok=True)
-            except:
+            except Exception:
                 pass
 
 
@@ -1972,7 +2066,8 @@ def _extend_video_with_segments(
     target_duration: float,
     project_id: str,
     output_path: Path,
-    supabase
+    supabase,
+    profile_id: Optional[str] = "default"
 ) -> bool:
     """
     Extinde video-ul cu segmente adiționale din proiect pentru a atinge durata țintă.
@@ -2038,7 +2133,8 @@ def _extend_video_with_segments(
             return False
 
         settings = get_settings()
-        temp_dir = settings.base_dir / "temp" / f"extend_{project_id[:8]}"
+        # Profile-scoped temp directory to prevent cross-profile file collisions
+        temp_dir = settings.base_dir / "temp" / profile_id / f"extend_{project_id[:8]}"
         temp_dir.mkdir(parents=True, exist_ok=True)
 
         try:
