@@ -78,9 +78,12 @@ class PostizPublisher:
 
         logger.info(f"PostizPublisher initialized with URL: {self.api_url}")
 
-    async def get_integrations(self) -> List[PostizIntegration]:
+    async def get_integrations(self, profile_id: Optional[str] = None) -> List[PostizIntegration]:
         """
         Fetch all connected social media accounts from Postiz.
+
+        Args:
+            profile_id: Optional profile ID for logging context
 
         Returns:
             List of PostizIntegration objects representing connected platforms
@@ -110,15 +113,19 @@ class PostizPublisher:
                     disabled=item.get("disabled", False)
                 ))
 
-            logger.info(f"Fetched {len(integrations)} integrations from Postiz")
+            if profile_id:
+                logger.info(f"[Profile {profile_id}] Fetched {len(integrations)} integrations from Postiz")
+            else:
+                logger.info(f"Fetched {len(integrations)} integrations from Postiz")
             return integrations
 
-    async def upload_video(self, video_path: Path) -> PostizMedia:
+    async def upload_video(self, video_path: Path, profile_id: Optional[str] = None) -> PostizMedia:
         """
         Upload a video file to Postiz.
 
         Args:
             video_path: Path to the video file
+            profile_id: Optional profile ID for logging context
 
         Returns:
             PostizMedia object with id and path for use in create_post
@@ -127,28 +134,63 @@ class PostizPublisher:
             raise FileNotFoundError(f"Video file not found: {video_path}")
 
         file_size = video_path.stat().st_size
-        logger.info(f"Uploading video to Postiz: {video_path.name} ({file_size / 1024 / 1024:.2f} MB)")
+        upload_url = f"{self.api_url}/upload"
+        if profile_id:
+            logger.info(f"[Profile {profile_id}] Uploading video to Postiz: {video_path.name} ({file_size / 1024 / 1024:.2f} MB)")
+        else:
+            logger.info(f"Uploading video to Postiz: {video_path.name} ({file_size / 1024 / 1024:.2f} MB)")
+        logger.info(f"Upload URL: {upload_url}")
+
+        # Determine content type based on file extension
+        ext = video_path.suffix.lower()
+        content_type_map = {
+            ".mp4": "video/mp4",
+            ".mov": "video/quicktime",
+            ".avi": "video/x-msvideo",
+            ".webm": "video/webm",
+            ".mkv": "video/x-matroska",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".gif": "image/gif",
+        }
+        content_type = content_type_map.get(ext, "video/mp4")
 
         async with httpx.AsyncClient(timeout=300.0) as client:  # 5 min timeout for upload
             with open(video_path, "rb") as f:
-                files = {"file": (video_path.name, f, "video/mp4")}
+                files = {"file": (video_path.name, f, content_type)}
+                # Use Authorization header with Bearer prefix if needed
+                headers = {"Authorization": self.api_key}
+
+                logger.info(f"Sending request to Postiz with content-type: {content_type}")
+
                 response = await client.post(
-                    f"{self.api_url}/upload",
-                    headers={"Authorization": self.api_key},
+                    upload_url,
+                    headers=headers,
                     files=files
                 )
 
-            if response.status_code != 200:
-                logger.error(f"Failed to upload video: {response.status_code} - {response.text}")
-                raise Exception(f"Postiz upload error: {response.status_code}")
+            logger.info(f"Postiz response status: {response.status_code}")
 
-            data = response.json()
+            if response.status_code not in [200, 201]:
+                logger.error(f"Failed to upload video: {response.status_code} - {response.text}")
+                raise Exception(f"Postiz upload error: {response.status_code} - {response.text[:500]}")
+
+            try:
+                data = response.json()
+            except Exception as e:
+                logger.error(f"Failed to parse Postiz response: {e}, raw: {response.text[:500]}")
+                raise Exception(f"Invalid Postiz response: {response.text[:200]}")
+
             media = PostizMedia(
-                id=data.get("id"),
-                path=data.get("path")
+                id=data.get("id", ""),
+                path=data.get("path", "")
             )
 
-            logger.info(f"Uploaded video to Postiz: {media.id}")
+            if profile_id:
+                logger.info(f"[Profile {profile_id}] Uploaded video to Postiz: id={media.id}")
+            else:
+                logger.info(f"Uploaded video to Postiz: id={media.id}, path={media.path}")
             return media
 
     def _get_platform_settings(self, platform_type: str) -> Dict[str, Any]:
@@ -175,7 +217,8 @@ class PostizPublisher:
         caption: str,
         integration_ids: List[str],
         schedule_date: Optional[datetime] = None,
-        integrations_info: Optional[Dict[str, str]] = None
+        integrations_info: Optional[Dict[str, str]] = None,
+        profile_id: Optional[str] = None
     ) -> PublishResult:
         """
         Create a post on selected platforms.
@@ -187,6 +230,7 @@ class PostizPublisher:
             integration_ids: List of integration IDs to post to
             schedule_date: Optional datetime to schedule post (None = post now)
             integrations_info: Dict mapping integration_id to platform type for settings
+            profile_id: Optional profile ID for logging context
 
         Returns:
             PublishResult with success status and post details
@@ -222,7 +266,10 @@ class PostizPublisher:
         if schedule_date:
             body["date"] = schedule_date.isoformat()
 
-        logger.info(f"Creating Postiz post for {len(integration_ids)} platforms, scheduled: {schedule_date}")
+        if profile_id:
+            logger.info(f"[Profile {profile_id}] Creating Postiz post for {len(integration_ids)} platforms")
+        else:
+            logger.info(f"Creating Postiz post for {len(integration_ids)} platforms, scheduled: {schedule_date}")
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
@@ -232,7 +279,10 @@ class PostizPublisher:
             )
 
             if response.status_code not in [200, 201]:
-                logger.error(f"Failed to create post: {response.status_code} - {response.text}")
+                if profile_id:
+                    logger.error(f"[Profile {profile_id}] Failed to create post: {response.status_code} - {response.text}")
+                else:
+                    logger.error(f"Failed to create post: {response.status_code} - {response.text}")
                 return PublishResult(
                     success=False,
                     error=f"Postiz API error: {response.status_code} - {response.text[:200]}"
@@ -240,7 +290,10 @@ class PostizPublisher:
 
             data = response.json()
 
-            logger.info(f"Created Postiz post successfully: {data}")
+            if profile_id:
+                logger.info(f"[Profile {profile_id}] Created Postiz post: {data.get('id')}")
+            else:
+                logger.info(f"Created Postiz post successfully: {data}")
             return PublishResult(
                 success=True,
                 post_id=data.get("id"),
