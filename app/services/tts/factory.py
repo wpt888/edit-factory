@@ -65,13 +65,11 @@ def get_tts_service(
             )
 
     elif provider == "kokoro":
-        try:
-            from .kokoro import KokoroTTSService
-            return KokoroTTSService(output_dir=output_dir)
-        except ImportError:
-            raise NotImplementedError(
-                "Kokoro TTS implementation not yet available (will be added in 04-04)"
-            )
+        from .kokoro import KokoroTTSService
+        return KokoroTTSService(
+            output_dir=output_dir,
+            default_voice=voice_id or "af"
+        )
 
     else:
         raise ValueError(
