@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 4 of 6 (TTS Provider Selection)
-Plan: 7 of 7 (Phase Complete)
+Plan: 8 of 8 (Phase Complete)
 Status: Phase complete
-Last activity: 2026-02-03 — Completed 04-07-PLAN.md (Visual Verification)
+Last activity: 2026-02-03 — Completed 04-08-PLAN.md (Gap Closure - 6 API Bug Fixes)
 
-Progress: [████████████████░░░░] 80%
+Progress: [████████████████░░░░] 85%
 
 ## Performance Metrics
 
@@ -30,11 +30,11 @@ Progress: [████████████████░░░░] 80%
 | 01-database-foundation | 1 | 30 min | 30 min |
 | 02-backend-profile-context | 5 | 60 min | 12 min |
 | 03-frontend-profile-ui | 3 | 6 min | 2 min |
-| 04-tts-provider-selection | 7 | 30 min | 4.3 min |
+| 04-tts-provider-selection | 8 | 35 min | 4.4 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-03 (2m), 04-04 (2m), 04-05 (2m), 04-06 (19m), 04-07 (<1m)
-- Trend: 04-07 was verification-only (user approval checkpoint)
+- Last 5 plans: 04-04 (2m), 04-05 (2m), 04-06 (19m), 04-07 (<1m), 04-08 (5m)
+- Trend: 04-08 was gap closure (6 API bug fixes discovered in verification)
 
 *Updated after each plan completion*
 
@@ -97,6 +97,7 @@ Recent decisions affecting current work:
 - **04-06**: Alert-based notifications instead of toast (toast hook not available, consistent with library page)
 - **04-06**: Settings page profile-aware (each profile can have different TTS provider/voice preferences)
 - **04-07**: Verification-only plan pattern for user acceptance testing (no code changes)
+- **04-08**: Gap closure plan pattern: verification reveals bugs, dedicated plan fixes them atomically
 
 ### Pending Todos
 
@@ -111,7 +112,7 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 04-07-PLAN.md (Visual Verification Checkpoint)
+Stopped at: Completed 04-08-PLAN.md (Gap Closure - 6 API Bug Fixes)
 Next action: Plan Phase 5 (Per-Profile Postiz)
 Resume file: None
 
@@ -123,15 +124,17 @@ Resume file: None
 - 04-05: TTS API routes (2 min)
 - 04-06: Frontend TTS UI components (19 min)
 - 04-07: Visual verification checkpoint (<1 min, user approved)
+- 04-08: Gap closure - 6 API bug fixes (5 min)
 
 **Phase 4 Achievements:**
-- Total duration: ~30 minutes (7 plans)
+- Total duration: ~35 minutes (8 plans)
 - TTS service abstraction with factory pattern
 - 4 providers: ElevenLabs, Edge TTS, Coqui XTTS, Kokoro
 - Voice cloning capability (Coqui)
 - REST API for all TTS operations
 - Settings page with provider selector and voice cloning UI
 - Visual verification passed - user-approved functionality
+- Gap closure: 6 API bugs fixed (navbar link, voice_id, generate_audio, duration_seconds, audio_file, voice_name)
 
 **All Phase 4 Requirements Met:**
 - TTS-01: User can select TTS provider from UI
