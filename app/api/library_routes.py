@@ -470,9 +470,11 @@ async def _generate_raw_clips_task(
     """Task pentru generarea clipurilor raw în background."""
     from app.services.video_processor import VideoProcessorService
 
+    logger.info(f"[Profile {profile_id}] Starting raw clip generation for project {project_id}")
+
     supabase = get_supabase()
     if not supabase:
-        logger.error("Supabase not available for raw clips generation")
+        logger.error(f"[Profile {profile_id}] Supabase not available for raw clips generation")
         return
 
     settings = get_settings()
@@ -530,6 +532,7 @@ async def _generate_raw_clips_task(
                 # Inserăm în DB
                 supabase.table("editai_clips").insert({
                     "project_id": project_id,
+                    "profile_id": profile_id,
                     "variant_index": variant["variant_index"],
                     "variant_name": variant["variant_name"],
                     "raw_video_path": str(video_file),
@@ -545,7 +548,7 @@ async def _generate_raw_clips_task(
                 "status": "ready_for_triage",
                 "variants_count": len(variants),
                 "updated_at": datetime.now().isoformat()
-            }).eq("id", project_id).execute()
+            }).eq("id", project_id).eq("profile_id", profile_id).execute()
 
             logger.info(f"Generated {len(variants)} raw clips for project {project_id}")
         else:
@@ -553,7 +556,7 @@ async def _generate_raw_clips_task(
             supabase.table("editai_projects").update({
                 "status": "failed",
                 "updated_at": datetime.now().isoformat()
-            }).eq("id", project_id).execute()
+            }).eq("id", project_id).eq("profile_id", profile_id).execute()
             logger.error(f"Failed to generate clips for project {project_id}: {result.get('error')}")
 
     except Exception as e:
@@ -832,9 +835,11 @@ async def _generate_from_segments_task(
     import subprocess
     import random
 
+    logger.info(f"[Profile {profile_id}] Starting clip generation from segments for project {project_id}")
+
     supabase = get_supabase()
     if not supabase:
-        logger.error("Supabase not available for segment generation")
+        logger.error(f"[Profile {profile_id}] Supabase not available for segment generation")
         return
 
     settings = get_settings()
@@ -1059,6 +1064,7 @@ async def _generate_from_segments_task(
                 # Salvăm în DB
                 supabase.table("editai_clips").insert({
                     "project_id": project_id,
+                    "profile_id": profile_id,
                     "variant_index": variant_idx,
                     "variant_name": f"variant_{variant_idx}",
                     "raw_video_path": str(output_path),
@@ -1108,7 +1114,7 @@ async def _generate_from_segments_task(
             supabase.table("editai_projects").update({
                 "status": "failed",
                 "updated_at": datetime.now().isoformat()
-            }).eq("id", project_id).execute()
+            }).eq("id", project_id).eq("profile_id", profile_id).execute()
             logger.error(f"Failed to generate any clips for project {project_id}")
 
     except Exception as e:
@@ -1116,7 +1122,7 @@ async def _generate_from_segments_task(
         supabase.table("editai_projects").update({
             "status": "failed",
             "updated_at": datetime.now().isoformat()
-        }).eq("id", project_id).execute()
+        }).eq("id", project_id).eq("profile_id", profile_id).execute()
     finally:
         lock.release()
         cleanup_project_lock(project_id)
@@ -1668,10 +1674,11 @@ async def render_final_clip(
 
 async def _render_final_clip_task(
     clip_id: str,
+    project_id: str,
+    profile_id: str,
     clip_data: dict,
     content_data: Optional[dict],
-    preset_data: dict,
-    profile_id: Optional[str] = "default"
+    preset_data: dict
 ):
     """
     Task pentru randarea finală în background.
@@ -1685,13 +1692,14 @@ async def _render_final_clip_task(
     """
     from app.services.elevenlabs_tts import get_elevenlabs_tts
 
+    logger.info(f"[Profile {profile_id}] Starting final render for clip {clip_id} in project {project_id}")
+
     supabase = get_supabase()
     if not supabase:
-        logger.error("Supabase not available for render")
+        logger.error(f"[Profile {profile_id}] Supabase not available for render")
         return
 
     settings = get_settings()
-    project_id = clip_data.get("project_id")
 
     # Acquire project lock to prevent concurrent operations on same project
     lock = get_project_lock(project_id) if project_id else None
@@ -1700,7 +1708,7 @@ async def _render_final_clip_task(
         supabase.table("editai_clips").update({
             "final_status": "failed",
             "updated_at": datetime.now().isoformat()
-        }).eq("id", clip_id).execute()
+        }).eq("id", clip_id).eq("profile_id", profile_id).execute()
         return
 
     # Initialize temp file paths for cleanup in finally block
@@ -1809,7 +1817,7 @@ async def _render_final_clip_task(
             "final_video_path": str(output_path),
             "final_status": "completed",
             "updated_at": datetime.now().isoformat()
-        }).eq("id", clip_id).execute()
+        }).eq("id", clip_id).eq("profile_id", profile_id).execute()
 
         # Salvăm exportul
         supabase.table("editai_exports").insert({
@@ -1831,7 +1839,7 @@ async def _render_final_clip_task(
         supabase.table("editai_clips").update({
             "final_status": "failed",
             "updated_at": datetime.now().isoformat()
-        }).eq("id", clip_id).execute()
+        }).eq("id", clip_id).eq("profile_id", profile_id).execute()
     finally:
         # Always cleanup temp files (even on error)
         try:
