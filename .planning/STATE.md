@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 4 of 6 (TTS Provider Selection)
-Plan: 1 of 7
+Plan: 4 of 7
 Status: In progress
-Last activity: 2026-02-03 — Completed 04-01-PLAN.md
+Last activity: 2026-02-03 — Completed 04-04-PLAN.md
 
-Progress: [█████░░░░░] 50%
+Progress: [█████░░░░░] 55%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 10
-- Average duration: 9 min
-- Total execution time: 1.85 hours
+- Total plans completed: 11
+- Average duration: 8 min
+- Total execution time: 1.88 hours
 
 **By Phase:**
 
@@ -30,11 +30,11 @@ Progress: [█████░░░░░] 50%
 | 01-database-foundation | 1 | 30 min | 30 min |
 | 02-backend-profile-context | 5 | 60 min | 12 min |
 | 03-frontend-profile-ui | 3 | 6 min | 2 min |
-| 04-tts-provider-selection | 1 | 3 min | 3 min |
+| 04-tts-provider-selection | 2 | 5 min | 2.5 min |
 
 **Recent Trend:**
-- Last 5 plans: 02-05 (5m), 03-01 (2m), 03-02 (2m), 03-03 (2m), 04-01 (3m)
-- Trend: Maintaining exceptional velocity - foundation phases executing rapidly
+- Last 5 plans: 03-01 (2m), 03-02 (2m), 03-03 (2m), 04-01 (3m), 04-04 (2m)
+- Trend: Exceptional velocity continues - sub-3min average for recent plans
 
 *Updated after each plan completion*
 
@@ -76,6 +76,9 @@ Recent decisions affecting current work:
 - **04-01**: JSONB tts_settings column allows flexible per-provider configuration without schema changes
 - **04-01**: Profile-scoped TTS directories output/tts/{profile_id}/{provider}/ prevent file collisions
 - **04-01**: Optional clone_voice() method with NotImplementedError default for graceful degradation
+- **04-04**: Constructor espeak-ng validation for Kokoro TTS (fail fast with clear installation instructions)
+- **04-04**: Lazy import for optional dependencies (graceful degradation if kokoro not installed)
+- **04-04**: Preset voice configuration (5 hardcoded voices for Kokoro, no dynamic discovery)
 
 ### Pending Todos
 
@@ -101,8 +104,8 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 04-01-PLAN.md (TTS Service Foundation)
-Next action: Execute 04-02-PLAN.md (ElevenLabs and Edge adapters)
+Stopped at: Completed 04-04-PLAN.md (Kokoro TTS Service)
+Next action: Execute 04-05-PLAN.md (TTS API routes)
 Resume file: None
 
 **Phase 3 Complete Summary:**
@@ -119,14 +122,25 @@ Resume file: None
 
 **Phase 4 Progress (TTS Provider Selection):**
 - 04-01: TTS service abstraction + database schema ✅ (3 min)
-- Abstract base class with 5 enforced methods
-- JSONB schema for flexible provider settings
-- Profile-scoped output directories established
-- Factory pattern ready for provider implementations
+  - Abstract base class with 5 enforced methods
+  - JSONB schema for flexible provider settings
+  - Profile-scoped output directories established
+  - Factory pattern ready for provider implementations
 
-**Next Plan (04-02) Prerequisites:**
+- 04-04: Kokoro TTS service implementation ✅ (2 min)
+  - Lightweight, fast, free local TTS engine
+  - espeak-ng validation with clear error messages
+  - 5 preset voices (American/British, Male/Female)
+  - Lazy import pattern for optional dependencies
+  - Zero-cost provider for cost-conscious workflows
+
+**Wave 2 Providers Status:**
+- 04-02: ElevenLabs adapter (premium, voice cloning) - SKIPPED (noted in plan)
+- 04-03: Coqui adapter (local, voice cloning, GPU) - SKIPPED (noted in plan)
+- 04-04: Kokoro service ✅
+
+**Next Plan (04-05) Prerequisites:**
 - ✅ TTSService interface defined
 - ✅ Factory function ready
-- ✅ Database schema for TTS settings
-- ✅ Profile-scoped directories established
-- Ready to wrap existing elevenlabs_tts.py and edge_tts_service.py as adapters
+- ✅ At least one TTS provider implemented (Kokoro)
+- Ready to create unified TTS API routes
