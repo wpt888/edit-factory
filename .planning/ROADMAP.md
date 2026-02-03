@@ -65,10 +65,12 @@ Plans:
   3. Active profile name always visible in navbar
   4. Library page shows only current profile's projects and clips
   5. Last-used profile auto-selected on login (no blank screen)
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 03-01: TBD
+- [ ] 03-01-PLAN.md — ProfileProvider context + API header injection (foundation)
+- [ ] 03-02-PLAN.md — ProfileSwitcher dropdown + CreateProfileDialog components
+- [ ] 03-03-PLAN.md — Layout/Navbar/Library integration + visual verification
 
 ### Phase 4: TTS Provider Selection
 **Goal**: Integrate free TTS alternatives and provide clear provider choice in UI
@@ -125,7 +127,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 |-------|----------------|--------|-----------|
 | 1. Database Foundation | 1/1 | ✓ Complete | 2026-02-03 |
 | 2. Backend Profile Context | 5/5 | ✓ Complete | 2026-02-03 |
-| 3. Frontend Profile UI | 0/TBD | Not started | - |
+| 3. Frontend Profile UI | 0/3 | Ready for execution | - |
 | 4. TTS Provider Selection | 0/TBD | Not started | - |
 | 5. Per-Profile Postiz | 0/TBD | Not started | - |
 | 6. Developer Experience | 0/TBD | Not started | - |
