@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** One-click video production workflow: upload a product video, get a social-media-ready clip with voiceover and captions, publish to the right store's social accounts.
-**Current focus:** Phase 3 - Frontend Profile UI
+**Current focus:** Phase 4 - TTS Provider Selection
 
 ## Current Position
 
-Phase: 3 of 6 (Frontend Profile UI)
-Plan: 3 of 3
-Status: Phase complete
-Last activity: 2026-02-03 — Completed 03-03-PLAN.md
+Phase: 4 of 6 (TTS Provider Selection)
+Plan: 1 of 7
+Status: In progress
+Last activity: 2026-02-03 — Completed 04-01-PLAN.md
 
-Progress: [█████░░░░░] 45%
+Progress: [█████░░░░░] 50%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
-- Average duration: 10 min
-- Total execution time: 1.8 hours
+- Total plans completed: 10
+- Average duration: 9 min
+- Total execution time: 1.85 hours
 
 **By Phase:**
 
@@ -30,10 +30,11 @@ Progress: [█████░░░░░] 45%
 | 01-database-foundation | 1 | 30 min | 30 min |
 | 02-backend-profile-context | 5 | 60 min | 12 min |
 | 03-frontend-profile-ui | 3 | 6 min | 2 min |
+| 04-tts-provider-selection | 1 | 3 min | 3 min |
 
 **Recent Trend:**
-- Last 5 plans: 02-04 (5m), 02-05 (5m), 03-01 (2m), 03-02 (2m), 03-03 (2m)
-- Trend: Exceptional velocity - Phase 3 completed in 6 minutes total with visual verification
+- Last 5 plans: 02-05 (5m), 03-01 (2m), 03-02 (2m), 03-03 (2m), 04-01 (3m)
+- Trend: Maintaining exceptional velocity - foundation phases executing rapidly
 
 *Updated after each plan completion*
 
@@ -71,6 +72,10 @@ Recent decisions affecting current work:
 - **03-03**: Library page waits for both profileLoading AND currentProfile before fetching clips
 - **03-03**: Empty state provides clear guidance pointing user to navbar dropdown for profile creation
 - **03-03**: Combined loading state: if (profileLoading || loading) for dual-phase initialization
+- **04-01**: TTS abstraction layer uses abstract base class with factory pattern for pluggable providers
+- **04-01**: JSONB tts_settings column allows flexible per-provider configuration without schema changes
+- **04-01**: Profile-scoped TTS directories output/tts/{profile_id}/{provider}/ prevent file collisions
+- **04-01**: Optional clone_voice() method with NotImplementedError default for graceful degradation
 
 ### Pending Todos
 
@@ -96,8 +101,8 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed Phase 3 (Frontend Profile UI) - 03-03-PLAN.md
-Next action: Plan Phase 4 (TTS Integration with profile-scoped voice management)
+Stopped at: Completed 04-01-PLAN.md (TTS Service Foundation)
+Next action: Execute 04-02-PLAN.md (ElevenLabs and Edge adapters)
 Resume file: None
 
 **Phase 3 Complete Summary:**
@@ -112,8 +117,16 @@ Resume file: None
 - Visual verification passed - user-approved functionality
 - Foundation ready for Phase 4 TTS integration
 
-**Next Phase (04-tts-integration) Prerequisites:**
-- Python version check (<3.13 required for Kokoro)
-- Voice cloning workflow (6-second sample validation)
-- Per-profile voice configuration storage
-- Integration with existing temp/{profile_id}/ directory structure
+**Phase 4 Progress (TTS Provider Selection):**
+- 04-01: TTS service abstraction + database schema ✅ (3 min)
+- Abstract base class with 5 enforced methods
+- JSONB schema for flexible provider settings
+- Profile-scoped output directories established
+- Factory pattern ready for provider implementations
+
+**Next Plan (04-02) Prerequisites:**
+- ✅ TTSService interface defined
+- ✅ Factory function ready
+- ✅ Database schema for TTS settings
+- ✅ Profile-scoped directories established
+- Ready to wrap existing elevenlabs_tts.py and edge_tts_service.py as adapters
