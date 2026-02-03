@@ -609,7 +609,8 @@ async def create_job(
     subtitle_settings: Optional[str] = Form(default=None),
     variant_count: int = Form(default=1),
     generate_audio: str = Form(default="true"),  # String to handle "true"/"false" from frontend
-    mute_source_voice: str = Form(default="false")  # Mute voice from source video (keep effects)
+    mute_source_voice: str = Form(default="false")  # Mute voice from source video (keep effects),
+    profile: ProfileContext = Depends(get_profile_context)
 ):
     """
     Creeaza un job de procesare video.
@@ -1051,7 +1052,8 @@ async def generate_tts(
     text: str = Form(...),
     remove_silence: str = Form(default="true"),
     min_silence_duration: float = Form(default=0.3, ge=0.1, le=2.0),
-    silence_padding: float = Form(default=0.08, ge=0.02, le=0.3)
+    silence_padding: float = Form(default=0.08, ge=0.02, le=0.3),
+    profile: ProfileContext = Depends(get_profile_context)
 ):
     """
     Generate TTS audio from text using ElevenLabs API.
