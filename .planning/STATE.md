@@ -10,29 +10,29 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 2 of 6 (Backend Profile Context)
-Plan: 2 of 3 in phase complete
+Plan: 3 of 5 in phase complete
 Status: In progress
-Last activity: 2026-02-03 — Completed 02-02-PLAN.md (Service Layer Profile Support)
+Last activity: 2026-02-03 — Completed 02-05-PLAN.md (FFmpeg Temp Directory Profile Scoping)
 
-Progress: [██░░░░░░░░] 20%
+Progress: [███░░░░░░░] 30%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
-- Average duration: 12 min
-- Total execution time: 0.58 hours
+- Total plans completed: 4
+- Average duration: 10 min
+- Total execution time: 0.67 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-database-foundation | 1 | 30 min | 30 min |
-| 02-backend-profile-context | 2 | 5 min | 2.5 min |
+| 02-backend-profile-context | 3 | 12 min | 4 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (30m), 02-01 (2m), 02-02 (3m)
-- Trend: Rapid velocity on backend implementation
+- Last 5 plans: 01-01 (30m), 02-01 (2m), 02-02 (3m), 02-05 (7m)
+- Trend: Consistent rapid velocity on backend tasks
 
 *Updated after each plan completion*
 
@@ -56,6 +56,9 @@ Recent decisions affecting current work:
 - **02-02**: Store profile_id in both table column and JSONB data field for job_storage fallback
 - **02-02**: Phase 2 only adds logging to Postiz - full per-profile credentials deferred to Phase 5
 - **02-02**: Filter costs by profile_id in details dict for local JSON fallback
+- **02-05**: Default profile_id='default' for backward compatibility while preparing for profile context injection
+- **02-05**: Cleanup functions scope operations by profile_id (per-profile cleanup) or clean all when None (admin cleanup)
+- **02-05**: Legacy flat temp/ files cleaned alongside profile subdirectories for gradual migration
 
 ### Pending Todos
 
@@ -67,7 +70,8 @@ None yet.
 - ~~Backend service role assumption: Current FastAPI backend uses service role key (bypasses RLS). Service layer modifications needed to pass profile_id to Supabase queries.~~ RESOLVED in 02-02
 - ~~jobs/api_costs profile tracking: Profile_id on these tables is nullable. Backend must populate profile_id explicitly for new records when profile context is available.~~ RESOLVED in 02-02
 - ~~Background task isolation: Jobs spawned via BackgroundTasks need profile_id preserved in job data JSONB (not just in-memory context).~~ RESOLVED in 02-02 (profile_id stored in JSONB)
-- API routes integration: Next phase (02-03) must extract profile_id from auth context and pass to service methods.
+- ~~FFmpeg temp directory isolation: Multiple profiles processing video concurrently can have file name collisions in shared temp/ directory.~~ RESOLVED in 02-05 (profile-scoped subdirectories)
+- API routes integration: Next plans (02-03, 02-04) must extract profile_id from auth context and pass to background tasks and service methods.
 
 **Phase 4 considerations:**
 - Python version compatibility: If running Python 3.13+, venv downgrade to 3.11 required before Kokoro installation
@@ -81,6 +85,6 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03 (plan execution)
-Stopped at: Completed 02-02-PLAN.md - Service Layer Profile Support
-Next action: Continue Phase 2 execution (02-03-PLAN.md if it exists, or complete Phase 2)
+Stopped at: Completed 02-05-PLAN.md - FFmpeg Temp Directory Profile Scoping
+Next action: Continue Phase 2 execution (02-03-PLAN.md and 02-04-PLAN.md for route profile injection)
 Resume file: None
