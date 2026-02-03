@@ -33,7 +33,7 @@ def _check_kokoro_available() -> bool:
             timeout=5
         )
         return result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError):
         return False
 
 

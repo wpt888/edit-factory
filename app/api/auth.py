@@ -214,6 +214,14 @@ async def get_profile_context(
     - Invalid profile_id: 404 Not Found
     - Profile belongs to different user: 403 Forbidden
     """
+    settings = get_settings()
+
+    # Development mode bypass - return dev profile without database query
+    if settings.auth_disabled:
+        profile_id = x_profile_id if x_profile_id else "dev-profile-default"
+        logger.warning(f"⚠️ Using dev profile: {profile_id} (AUTH_DISABLED=true)")
+        return ProfileContext(profile_id=profile_id, user_id=current_user.id)
+
     supabase = _get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
