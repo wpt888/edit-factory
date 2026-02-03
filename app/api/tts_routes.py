@@ -181,10 +181,14 @@ async def _generate_tts_background(
             voice_id=voice_id
         )
 
+        # Generate output path
+        output_path = Path(tts_service.output_dir) / f"tts_{job_id}.mp3"
+
         # Generate audio
-        result = await tts_service.generate(
+        result = await tts_service.generate_audio(
             text=text,
             voice_id=voice_id,
+            output_path=output_path,
             language=language
         )
 
@@ -199,7 +203,7 @@ async def _generate_tts_background(
                 metadata={
                     "text_length": len(text),
                     "voice_id": voice_id,
-                    "duration": result.duration,
+                    "duration": result.duration_seconds,
                     "audio_path": str(result.audio_path)
                 },
                 profile_id=profile_id
@@ -213,7 +217,7 @@ async def _generate_tts_background(
             progress="Completed",
             result={
                 "audio_path": str(result.audio_path),
-                "duration": result.duration,
+                "duration": result.duration_seconds,
                 "cost": result.cost
             }
         )
