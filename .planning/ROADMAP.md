@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Database Foundation** - Profile tables with RLS and migration
 - [x] **Phase 2: Backend Profile Context** - API endpoints and service layer isolation
-- [ ] **Phase 3: Frontend Profile UI** - Profile switcher and context propagation
+- [x] **Phase 3: Frontend Profile UI** - Profile switcher and context propagation
 - [ ] **Phase 4: TTS Provider Selection** - Free TTS integration and voice presets
 - [ ] **Phase 5: Per-Profile Postiz** - Publishing configuration per store
 - [ ] **Phase 6: Developer Experience** - Start script and deployment automation
@@ -68,9 +68,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 03-01-PLAN.md — ProfileProvider context + API header injection (foundation)
-- [ ] 03-02-PLAN.md — ProfileSwitcher dropdown + CreateProfileDialog components
-- [ ] 03-03-PLAN.md — Layout/Navbar/Library integration + visual verification
+- [x] 03-01-PLAN.md — ProfileProvider context + API header injection (foundation)
+- [x] 03-02-PLAN.md — ProfileSwitcher dropdown + CreateProfileDialog components
+- [x] 03-03-PLAN.md — Layout/Navbar/Library integration + visual verification
 
 ### Phase 4: TTS Provider Selection
 **Goal**: Integrate free TTS alternatives and provide clear provider choice in UI
@@ -127,7 +127,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 |-------|----------------|--------|-----------|
 | 1. Database Foundation | 1/1 | ✓ Complete | 2026-02-03 |
 | 2. Backend Profile Context | 5/5 | ✓ Complete | 2026-02-03 |
-| 3. Frontend Profile UI | 0/3 | Ready for execution | - |
+| 3. Frontend Profile UI | 3/3 | ✓ Complete | 2026-02-03 |
 | 4. TTS Provider Selection | 0/TBD | Not started | - |
 | 5. Per-Profile Postiz | 0/TBD | Not started | - |
 | 6. Developer Experience | 0/TBD | Not started | - |

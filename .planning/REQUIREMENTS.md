@@ -7,13 +7,13 @@
 
 ### Profiles
 
-- [ ] **PROF-01**: User can create a profile with name and description for each store
-- [ ] **PROF-02**: User can switch between profiles via dropdown in navbar
-- [ ] **PROF-03**: Active profile indicator always visible in navbar (name + visual distinction)
-- [ ] **PROF-04**: Each profile has its own isolated library (projects and clips not visible across profiles)
+- [x] **PROF-01**: User can create a profile with name and description for each store
+- [x] **PROF-02**: User can switch between profiles via dropdown in navbar
+- [x] **PROF-03**: Active profile indicator always visible in navbar (name + visual distinction)
+- [x] **PROF-04**: Each profile has its own isolated library (projects and clips not visible across profiles)
 - [ ] **PROF-05**: Each profile has its own Postiz API credentials for social media publishing
-- [ ] **PROF-06**: Default profile auto-selected on login (last used or marked as default)
-- [ ] **PROF-07**: Existing projects and clips migrated to a default profile during setup
+- [x] **PROF-06**: Default profile auto-selected on login (last used or marked as default)
+- [x] **PROF-07**: Existing projects and clips migrated to a default profile during setup
 
 ### TTS
 
@@ -60,12 +60,12 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PROF-01 | Phase 1, Phase 2 | Partial (DB ready, API pending) |
-| PROF-02 | Phase 3 | Pending |
-| PROF-03 | Phase 3 | Pending |
+| PROF-01 | Phase 1, Phase 2, Phase 3 | Complete |
+| PROF-02 | Phase 3 | Complete |
+| PROF-03 | Phase 3 | Complete |
 | PROF-04 | Phase 1 | Complete |
 | PROF-05 | Phase 2, Phase 5 | Pending |
-| PROF-06 | Phase 3 | Pending |
+| PROF-06 | Phase 3 | Complete |
 | PROF-07 | Phase 1 | Complete |
 | TTS-01 | Phase 4 | Pending |
 | TTS-02 | Phase 4 | Pending |
