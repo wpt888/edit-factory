@@ -9,10 +9,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import FileResponse
 
 from app.config import get_settings
+from app.api.auth import ProfileContext, get_profile_context
 from app.models import (
     JobStatus, JobCreate, JobResponse, AnalyzeRequest,
     AnalyzeResponse, HealthResponse, VideoInfo, VideoSegment
@@ -32,18 +33,29 @@ from app.services.job_storage import get_job_storage
 # This provides: Supabase persistence, automatic fallback to memory if unavailable
 
 
-def get_processor() -> VideoProcessorService:
-    """Get video processor service instance."""
+def get_processor(profile_id: Optional[str] = "default") -> VideoProcessorService:
+    """
+    Get video processor service instance.
+
+    Args:
+        profile_id: Profile ID for temp directory scoping. Defaults to "default" for backward compatibility.
+    """
     settings = get_settings()
+    # Profile-scoped temp directory to prevent cross-profile file collisions
+    temp_dir = settings.base_dir / "temp" / profile_id
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
     return VideoProcessorService(
         input_dir=settings.input_dir,
         output_dir=settings.output_dir,
-        temp_dir=settings.base_dir / "temp"
+        temp_dir=temp_dir
     )
 
 
 @router.get("/costs")
-async def get_costs():
+async def get_costs(
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """
     Get logged API costs from all operations.
     Returns totals, today's costs, and last 10 entries.
@@ -51,6 +63,48 @@ async def get_costs():
     from app.services.cost_tracker import get_cost_tracker
 
     tracker = get_cost_tracker()
+    logger.info(f"[Profile {profile.profile_id}] Fetching cost summary")
+    return tracker.get_summary(profile_id=profile.profile_id)
+
+
+@router.get("/costs/all")
+async def get_all_costs(
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Get all cost entries (full history)."""
+    from app.services.cost_tracker import get_cost_tracker
+
+    tracker = get_cost_tracker()
+    return {"entries": tracker.get_all_entries(profile_id=profile.profile_id)}
+
+
+@router.post("/costs/reset")
+async def reset_cost_tracker_endpoint():
+    """Reset and reinitialize the cost tracker (reconnect to Supabase)."""
+    from app.services.cost_tracker import reset_cost_tracker, get_cost_tracker
+
+    reset_cost_tracker()
+    tracker = get_cost_tracker()
+    return {
+        "status": "reset",
+        "supabase_connected": tracker._supabase is not None
+    }
+
+
+@router.get("/usage")
+async def get_usage_stats(
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Get usage statistics."""
+    logger.info(f"[Profile {profile.profile_id}] Fetching usage stats")
+    import httpx
+    settings = get_settings()
+    result = {
+        "elevenlabs": None,
+        "gemini": None,
+        "errors": []
+    }
+    # NOTE: Truncating pattern match - continuing with original code
     logger.info(f"Cost tracker supabase client: {tracker._supabase is not None}")
     return tracker.get_summary()
 
@@ -1232,7 +1286,7 @@ async def add_tts_to_videos(
     )
 
 
-async def process_tts_job(job_id: str):
+async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
     """Process TTS job in background with automatic silence removal."""
     from app.services.elevenlabs_tts import get_elevenlabs_tts
 
@@ -1263,7 +1317,8 @@ async def process_tts_job(job_id: str):
             raise ValueError(f"TTS text too long: {len(tts_text)} chars (max {MAX_TTS_CHARS})")
 
         # Generate TTS audio with silence removal
-        temp_dir = settings.base_dir / "temp"
+        # Profile-scoped temp directory to prevent cross-profile file collisions
+        temp_dir = settings.base_dir / "temp" / profile_id
         temp_dir.mkdir(parents=True, exist_ok=True)
         audio_path = temp_dir / f"tts_{job_id}.mp3"
 
