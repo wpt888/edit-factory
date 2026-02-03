@@ -17,12 +17,12 @@
 
 ### TTS
 
-- [ ] **TTS-01**: User can select TTS provider from UI (ElevenLabs, Edge TTS, Coqui XTTS, Kokoro)
-- [ ] **TTS-02**: Provider cost displayed inline next to each option (paid amount vs "Free" label)
-- [ ] **TTS-03**: Coqui XTTS v2 integrated as local free TTS engine with voice cloning capability
-- [ ] **TTS-04**: Kokoro TTS integrated as local free TTS engine with preset voices
-- [ ] **TTS-05**: User can save default voice settings per profile (provider, voice ID, model, speed)
-- [ ] **TTS-06**: Voice cloning workflow: user uploads 6-second audio sample, system creates cloned voice usable in Coqui XTTS
+- [x] **TTS-01**: User can select TTS provider from UI (ElevenLabs, Edge TTS, Coqui XTTS, Kokoro)
+- [x] **TTS-02**: Provider cost displayed inline next to each option (paid amount vs "Free" label)
+- [x] **TTS-03**: Coqui XTTS v2 integrated as local free TTS engine with voice cloning capability
+- [x] **TTS-04**: Kokoro TTS integrated as local free TTS engine with preset voices
+- [x] **TTS-05**: User can save default voice settings per profile (provider, voice ID, model, speed)
+- [x] **TTS-06**: Voice cloning workflow: user uploads 6-second audio sample, system creates cloned voice usable in Coqui XTTS
 
 ### Developer Experience
 
@@ -67,12 +67,12 @@
 | PROF-05 | Phase 2, Phase 5 | Pending |
 | PROF-06 | Phase 3 | Complete |
 | PROF-07 | Phase 1 | Complete |
-| TTS-01 | Phase 4 | Pending |
-| TTS-02 | Phase 4 | Pending |
-| TTS-03 | Phase 4 | Pending |
-| TTS-04 | Phase 4 | Pending |
-| TTS-05 | Phase 4 | Pending |
-| TTS-06 | Phase 4 | Pending |
+| TTS-01 | Phase 4 | Complete |
+| TTS-02 | Phase 4 | Complete |
+| TTS-03 | Phase 4 | Complete |
+| TTS-04 | Phase 4 | Complete |
+| TTS-05 | Phase 4 | Complete |
+| TTS-06 | Phase 4 | Complete |
 | DX-01 | Phase 6 | Pending |
 | DX-02 | Phase 6 | Pending |
 

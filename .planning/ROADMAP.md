@@ -135,6 +135,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 1. Database Foundation | 1/1 | Complete | 2026-02-03 |
 | 2. Backend Profile Context | 5/5 | Complete | 2026-02-03 |
 | 3. Frontend Profile UI | 3/3 | Complete | 2026-02-03 |
-| 4. TTS Provider Selection | 8/8 | Complete | 2026-02-03 |
+| 4. TTS Provider Selection | 8/8 | ✓ Complete | 2026-02-04 |
 | 5. Per-Profile Postiz | 0/TBD | Not started | - |
 | 6. Developer Experience | 0/TBD | Not started | - |
