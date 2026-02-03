@@ -9,11 +9,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Depends
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.config import get_settings
+from app.api.auth import ProfileContext, get_profile_context
 
 import logging
 
@@ -199,12 +200,15 @@ def _sanitize_filename(filename: str) -> str:
 async def upload_source_video(
     video: UploadFile = File(...),
     name: str = Form(...),
-    description: Optional[str] = Form(default=None)
+    description: Optional[str] = Form(default=None),
+    profile: ProfileContext = Depends(get_profile_context)
 ):
     """Upload a source video for segment extraction."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
+
+    logger.info(f"[Profile {profile.profile_id}] Uploading source video: {name}")
 
     settings = get_settings()
     settings.ensure_dirs()
@@ -269,11 +273,15 @@ async def upload_source_video(
 
 
 @router.get("/source-videos", response_model=List[SourceVideoResponse])
-async def list_source_videos():
+async def list_source_videos(
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """List all source videos."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
+
+    logger.info(f"[Profile {profile.profile_id}] Listing source videos")
 
     result = supabase.table("editai_source_videos")\
         .select("*")\
@@ -300,7 +308,10 @@ async def list_source_videos():
 
 
 @router.get("/source-videos/{video_id}", response_model=SourceVideoResponse)
-async def get_source_video(video_id: str):
+async def get_source_video(
+    video_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Get source video details."""
     supabase = get_supabase()
     if not supabase:
@@ -332,8 +343,12 @@ async def get_source_video(video_id: str):
 
 
 @router.delete("/source-videos/{video_id}")
-async def delete_source_video(video_id: str):
+async def delete_source_video(
+    video_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Delete source video and all its segments."""
+    logger.info(f"[Profile {profile.profile_id}] Deleting source video: {video_id}")
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -375,7 +390,10 @@ async def delete_source_video(video_id: str):
 
 
 @router.get("/source-videos/{video_id}/stream")
-async def stream_source_video(video_id: str):
+async def stream_source_video(
+    video_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Stream source video for playback."""
     supabase = get_supabase()
     if not supabase:
@@ -405,9 +423,11 @@ async def stream_source_video(video_id: str):
 @router.post("/source-videos/{video_id}/segments", response_model=SegmentResponse)
 async def create_segment(
     video_id: str,
-    segment: SegmentCreate
+    segment: SegmentCreate,
+    profile: ProfileContext = Depends(get_profile_context)
 ):
     """Create a new segment for a source video."""
+    logger.info(f"[Profile {profile.profile_id}] Creating segment for source video: {video_id}")
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -474,7 +494,10 @@ async def create_segment(
 
 
 @router.get("/source-videos/{video_id}/segments", response_model=List[SegmentResponse])
-async def list_video_segments(video_id: str):
+async def list_video_segments(
+    video_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """List all segments for a source video."""
     supabase = get_supabase()
     if not supabase:
@@ -512,7 +535,8 @@ async def list_all_segments(
     source_video_id: Optional[str] = Query(default=None, description="Filter by source video"),
     favorites_only: bool = Query(default=False, description="Only show favorites"),
     min_duration: Optional[float] = Query(default=None, description="Minimum duration in seconds"),
-    max_duration: Optional[float] = Query(default=None, description="Maximum duration in seconds")
+    max_duration: Optional[float] = Query(default=None, description="Maximum duration in seconds"),
+    profile: ProfileContext = Depends(get_profile_context)
 ):
     """List all segments (library view) with optional filters."""
     supabase = get_supabase()
@@ -564,7 +588,10 @@ async def list_all_segments(
 
 
 @router.get("/{segment_id}", response_model=SegmentResponse)
-async def get_segment(segment_id: str):
+async def get_segment(
+    segment_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Get segment details."""
     supabase = get_supabase()
     if not supabase:
@@ -597,7 +624,11 @@ async def get_segment(segment_id: str):
 
 
 @router.patch("/{segment_id}", response_model=SegmentResponse)
-async def update_segment(segment_id: str, update: SegmentUpdate):
+async def update_segment(
+    segment_id: str,
+    update: SegmentUpdate,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Update segment (keywords, times, notes)."""
     supabase = get_supabase()
     if not supabase:
@@ -633,8 +664,12 @@ async def update_segment(segment_id: str, update: SegmentUpdate):
 
 
 @router.delete("/{segment_id}")
-async def delete_segment(segment_id: str):
+async def delete_segment(
+    segment_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Delete a segment."""
+    logger.info(f"[Profile {profile.profile_id}] Deleting segment: {segment_id}")
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -663,7 +698,10 @@ async def delete_segment(segment_id: str):
 
 
 @router.post("/{segment_id}/favorite")
-async def toggle_favorite(segment_id: str):
+async def toggle_favorite(
+    segment_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Toggle favorite status for a segment."""
     supabase = get_supabase()
     if not supabase:
@@ -690,8 +728,13 @@ async def toggle_favorite(segment_id: str):
 
 
 @router.post("/{segment_id}/extract")
-async def extract_segment(segment_id: str, background_tasks: BackgroundTasks):
+async def extract_segment(
+    segment_id: str,
+    background_tasks: BackgroundTasks,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Extract segment to a separate video file."""
+    logger.info(f"[Profile {profile.profile_id}] Extracting segment: {segment_id}")
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -719,6 +762,7 @@ async def extract_segment(segment_id: str, background_tasks: BackgroundTasks):
 
     # Extract in background
     def do_extract():
+        logger.info(f"[Profile {profile.profile_id}] Background extraction started for segment: {segment_id}")
         success = _extract_segment_video(
             source_path,
             output_path,
@@ -740,7 +784,10 @@ async def extract_segment(segment_id: str, background_tasks: BackgroundTasks):
 
 
 @router.get("/{segment_id}/stream")
-async def stream_segment(segment_id: str):
+async def stream_segment(
+    segment_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Stream a segment (extracted or from source)."""
     supabase = get_supabase()
     if not supabase:
@@ -774,7 +821,10 @@ async def stream_segment(segment_id: str):
 # ============== SRT MATCHING ==============
 
 @router.post("/match-srt", response_model=List[SegmentMatch])
-async def match_segments_to_srt(request: SRTMatchRequest):
+async def match_segments_to_srt(
+    request: SRTMatchRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Match segments to SRT content based on keywords."""
     supabase = get_supabase()
     if not supabase:
@@ -865,17 +915,20 @@ def _srt_time_to_seconds(time_str: str) -> float:
 @router.post("/projects/{project_id}/assign")
 async def assign_segments_to_project(
     project_id: str,
-    segment_ids: List[str] = Form(...)
+    segment_ids: List[str] = Form(...),
+    profile: ProfileContext = Depends(get_profile_context)
 ):
     """Assign segments to a project."""
+    logger.info(f"[Profile {profile.profile_id}] Assigning {len(segment_ids)} segments to project: {project_id}")
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    # Verify project exists
+    # Verify project exists and belongs to profile
     project = supabase.table("editai_projects")\
         .select("id")\
         .eq("id", project_id)\
+        .eq("profile_id", profile.profile_id)\
         .execute()
 
     if not project.data:
@@ -904,11 +957,24 @@ async def assign_segments_to_project(
 
 
 @router.get("/projects/{project_id}/segments", response_model=List[SegmentResponse])
-async def get_project_segments(project_id: str):
+async def get_project_segments(
+    project_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Get segments assigned to a project."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
+
+    # Verify project belongs to profile
+    project = supabase.table("editai_projects")\
+        .select("id")\
+        .eq("id", project_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
+
+    if not project.data:
+        raise HTTPException(status_code=404, detail="Project not found")
 
     result = supabase.table("editai_project_segments")\
         .select("*, editai_segments(*, editai_source_videos(name))")\
