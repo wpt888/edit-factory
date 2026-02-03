@@ -1,9 +1,6 @@
 /**
- * API client with authentication support.
- * Automatically adds Authorization header from Supabase session.
+ * Simple API client for local development.
  */
-
-import { createClient } from "@/lib/supabase/client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
@@ -12,43 +9,26 @@ interface FetchOptions extends RequestInit {
 }
 
 /**
- * Get the current session's access token.
- */
-async function getAccessToken(): Promise<string | null> {
-  try {
-    const supabase = createClient();
-    const { data: { session } } = await supabase.auth.getSession();
-    return session?.access_token ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Make an authenticated API request.
- *
- * @param endpoint - API endpoint (e.g., "/library/projects")
- * @param options - Fetch options (method, body, etc.)
- * @returns Response from the API
+ * Make an API request.
+ * Automatically injects X-Profile-Id header from localStorage if available.
  */
 export async function apiFetch(
   endpoint: string,
   options: FetchOptions = {}
 ): Promise<Response> {
-  const { skipAuth = false, headers: customHeaders, ...restOptions } = options;
+  const { headers: customHeaders, ...restOptions } = options;
+
+  // Auto-inject profile ID from localStorage (SSR-safe)
+  const profileId =
+    typeof window !== "undefined"
+      ? localStorage.getItem("editai_current_profile_id")
+      : null;
 
   const headers: HeadersInit = {
     "Content-Type": "application/json",
-    ...customHeaders,
+    ...(profileId && { "X-Profile-Id": profileId }),
+    ...customHeaders, // Custom headers can override
   };
-
-  // Add auth header if not skipped
-  if (!skipAuth) {
-    const token = await getAccessToken();
-    if (token) {
-      (headers as Record<string, string>)["Authorization"] = `Bearer ${token}`;
-    }
-  }
 
   const url = endpoint.startsWith("http") ? endpoint : `${API_URL}${endpoint}`;
 
@@ -59,7 +39,7 @@ export async function apiFetch(
 }
 
 /**
- * Make an authenticated GET request.
+ * Make a GET request.
  */
 export async function apiGet(
   endpoint: string,
@@ -69,7 +49,7 @@ export async function apiGet(
 }
 
 /**
- * Make an authenticated POST request.
+ * Make a POST request.
  */
 export async function apiPost<T = unknown>(
   endpoint: string,
@@ -84,7 +64,7 @@ export async function apiPost<T = unknown>(
 }
 
 /**
- * Make an authenticated PATCH request.
+ * Make a PATCH request.
  */
 export async function apiPatch<T = unknown>(
   endpoint: string,
@@ -99,7 +79,7 @@ export async function apiPatch<T = unknown>(
 }
 
 /**
- * Make an authenticated PUT request.
+ * Make a PUT request.
  */
 export async function apiPut<T = unknown>(
   endpoint: string,
@@ -114,7 +94,7 @@ export async function apiPut<T = unknown>(
 }
 
 /**
- * Make an authenticated DELETE request.
+ * Make a DELETE request.
  */
 export async function apiDelete(
   endpoint: string,
