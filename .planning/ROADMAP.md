@@ -12,7 +12,7 @@ This roadmap transforms Edit Factory from a single-library video production tool
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Database Foundation** - Profile tables with RLS and migration
+- [x] **Phase 1: Database Foundation** - Profile tables with RLS and migration
 - [ ] **Phase 2: Backend Profile Context** - API endpoints and service layer isolation
 - [ ] **Phase 3: Frontend Profile UI** - Profile switcher and context propagation
 - [ ] **Phase 4: TTS Provider Selection** - Free TTS integration and voice presets
@@ -34,7 +34,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 1 plan
 
 Plans:
-- [ ] 01-01-PLAN.md — SQL migrations: profiles table, profile_id columns, data backfill, RLS policy update
+- [x] 01-01-PLAN.md — SQL migrations: profiles table, profile_id columns, data backfill, RLS policy update
 
 ### Phase 2: Backend Profile Context
 **Goal**: Retrofit API layer and service methods to inject profile context
@@ -119,7 +119,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Database Foundation | 0/1 | Planned | - |
+| 1. Database Foundation | 1/1 | ✓ Complete | 2026-02-03 |
 | 2. Backend Profile Context | 0/TBD | Not started | - |
 | 3. Frontend Profile UI | 0/TBD | Not started | - |
 | 4. TTS Provider Selection | 0/TBD | Not started | - |
