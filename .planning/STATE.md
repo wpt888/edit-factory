@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 4 of 6 (TTS Provider Selection)
-Plan: 5 of 7
+Plan: 4 of 7
 Status: In progress
-Last activity: 2026-02-03 — Completed 04-03-PLAN.md
+Last activity: 2026-02-03 — Completed 04-02-PLAN.md
 
 Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 12
-- Average duration: 8 min
-- Total execution time: 1.90 hours
+- Total plans completed: 13
+- Average duration: 7 min
+- Total execution time: 1.93 hours
 
 **By Phase:**
 
@@ -30,10 +30,10 @@ Progress: [██████░░░░] 60%
 | 01-database-foundation | 1 | 30 min | 30 min |
 | 02-backend-profile-context | 5 | 60 min | 12 min |
 | 03-frontend-profile-ui | 3 | 6 min | 2 min |
-| 04-tts-provider-selection | 3 | 7 min | 2.3 min |
+| 04-tts-provider-selection | 4 | 9 min | 2.3 min |
 
 **Recent Trend:**
-- Last 5 plans: 03-02 (2m), 03-03 (2m), 04-01 (3m), 04-04 (2m), 04-03 (2m)
+- Last 5 plans: 03-03 (2m), 04-01 (3m), 04-04 (2m), 04-03 (2m), 04-02 (2m)
 - Trend: Exceptional velocity continues - sub-3min average maintained
 
 *Updated after each plan completion*
@@ -76,6 +76,10 @@ Recent decisions affecting current work:
 - **04-01**: JSONB tts_settings column allows flexible per-provider configuration without schema changes
 - **04-01**: Profile-scoped TTS directories output/tts/{profile_id}/{provider}/ prevent file collisions
 - **04-01**: Optional clone_voice() method with NotImplementedError default for graceful degradation
+- **04-02**: Async HTTP wrapper for ElevenLabs (convert sync httpx.Client to async for unified interface)
+- **04-02**: Voice caching for Edge TTS (350+ voices cached after first list_voices call)
+- **04-02**: Librosa for audio duration calculation (consistent across providers without FFmpeg probing)
+- **04-02**: Preserve original services intact (video_processor.py still uses elevenlabs_tts.py directly)
 - **04-03**: Lazy import CoquiTTSService in factory to avoid PyTorch loading at startup (large dependency)
 - **04-03**: Class-level model cache shared across CoquiTTSService instances (XTTS v2 model ~2GB)
 - **04-03**: Automatic GPU/CPU fallback with torch.cuda.is_available() check for broad compatibility
@@ -108,8 +112,8 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 04-03-PLAN.md (Coqui XTTS Implementation)
-Next action: Execute 04-02-PLAN.md or 04-05-PLAN.md (Wave 2 providers or API routes)
+Stopped at: Completed 04-02-PLAN.md (ElevenLabs and Edge TTS Adapters)
+Next action: Execute 04-05-PLAN.md (Voice Cloning) or 04-06-PLAN.md (TTS API Endpoints)
 Resume file: None
 
 **Phase 3 Complete Summary:**
@@ -131,6 +135,14 @@ Resume file: None
   - Profile-scoped output directories established
   - Factory pattern ready for provider implementations
 
+- 04-02: ElevenLabs and Edge TTS adapters ✅ (2 min)
+  - Wrapped existing services with TTSService interface
+  - Async HTTP for ElevenLabs (converted from sync)
+  - Voice caching for Edge TTS (350+ voices)
+  - Librosa duration calculation for both providers
+  - Backward compatibility maintained (original services intact)
+  - Cost tracking integrated (ElevenLabs $0.22/1k chars, Edge free)
+
 - 04-03: Coqui XTTS service implementation ✅ (2 min)
   - Voice cloning from 6+ second audio samples
   - 17-language multilingual TTS support
@@ -146,14 +158,16 @@ Resume file: None
   - Lazy import pattern for optional dependencies
   - Zero-cost provider for cost-conscious workflows
 
-**Wave 2 Providers Status:**
-- 04-02: ElevenLabs adapter (premium, voice cloning) - PENDING
+**Provider Implementation Status:**
+- 04-02: ElevenLabs adapter (premium API, $0.22/1k chars) ✅
+- 04-02: Edge adapter (free Microsoft voices) ✅
 - 04-03: Coqui adapter (local, voice cloning, GPU) ✅
-- 04-04: Kokoro service ✅
+- 04-04: Kokoro adapter (lightweight local engine) ✅
 
-**Next Plan (04-05) Prerequisites:**
+**Next Plan (04-05 or 04-06) Prerequisites:**
 - ✅ TTSService interface defined
-- ✅ Factory function ready
-- ✅ Two TTS providers implemented (Coqui, Kokoro)
+- ✅ Factory function ready with all 4 providers
 - ✅ Voice cloning capability available (Coqui)
-- Ready to create unified TTS API routes
+- ✅ Cost tracking integrated (ElevenLabs)
+- ✅ Free alternatives available (Edge, Coqui, Kokoro)
+- Ready for voice cloning API or TTS API routes
