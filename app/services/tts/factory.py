@@ -56,13 +56,13 @@ def get_tts_service(
             )
 
     elif provider == "coqui":
-        try:
-            from .coqui import CoquiTTSService
-            return CoquiTTSService(output_dir=output_dir)
-        except ImportError:
-            raise NotImplementedError(
-                "Coqui TTS implementation not yet available (will be added in 04-03)"
-            )
+        # Lazy import to avoid loading PyTorch at module import time
+        from .coqui import CoquiTTSService
+        return CoquiTTSService(
+            output_dir=output_dir,
+            model_name="tts_models/multilingual/multi-dataset/xtts_v2",
+            use_gpu=True
+        )
 
     elif provider == "kokoro":
         from .kokoro import KokoroTTSService
