@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Montserrat, Roboto, Open_Sans, Oswald, Bebas_Neue } from "next/font/google";
 import "./globals.css";
-import { AuthProvider } from "@/components/auth-provider";
-import { NavBarWrapper } from "@/components/navbar-wrapper";
+import { NavBar } from "@/components/navbar";
+import { Toaster } from "sonner";
+import { ProfileProvider } from "@/contexts/profile-context";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -60,10 +61,16 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} ${montserrat.variable} ${roboto.variable} ${openSans.variable} ${oswald.variable} ${bebasNeue.variable} antialiased`}
       >
-        <AuthProvider>
-          <NavBarWrapper />
+        <ProfileProvider>
+          <NavBar />
           {children}
-        </AuthProvider>
+        </ProfileProvider>
+        <Toaster
+          position="top-right"
+          richColors
+          closeButton
+          theme="dark"
+        />
       </body>
     </html>
   );
