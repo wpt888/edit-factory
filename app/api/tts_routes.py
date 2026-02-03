@@ -128,7 +128,7 @@ async def list_voices(
             "provider": provider,
             "voices": [
                 {
-                    "id": voice.id,
+                    "voice_id": voice.id,
                     "name": voice.name,
                     "language": voice.language,
                     "gender": voice.gender
