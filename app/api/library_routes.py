@@ -583,7 +583,8 @@ class GenerateFromSegmentsRequest(BaseModel):
 async def generate_from_segments(
     background_tasks: BackgroundTasks,
     project_id: str,
-    request: GenerateFromSegmentsRequest = GenerateFromSegmentsRequest()
+    request: GenerateFromSegmentsRequest = GenerateFromSegmentsRequest(),
+    profile: ProfileContext = Depends(get_profile_context)
 ):
     """
     Generează clipuri din segmentele pre-selectate ale proiectului.
@@ -623,7 +624,7 @@ async def generate_from_segments(
         raise HTTPException(status_code=400, detail="No segments assigned to this project")
 
     # Găsim cel mai mare variant_index existent pentru a continua de acolo
-    existing_clips = supabase.table("editai_clips").select("variant_index").eq("project_id", project_id).eq("is_deleted", False).execute()
+    existing_clips = supabase.table("editai_clips").select("variant_index").eq("project_id", project_id).eq("profile_id", profile.profile_id).eq("is_deleted", False).execute()
     start_variant_index = 1
     if existing_clips.data:
         max_index = max(clip.get("variant_index", 0) for clip in existing_clips.data)
@@ -635,7 +636,7 @@ async def generate_from_segments(
         "status": "generating",
         "target_duration": request.target_duration,
         "updated_at": datetime.now().isoformat()
-    }).eq("id", project_id).execute()
+    }).eq("id", project_id).eq("profile_id", profile.profile_id).execute()
 
     # Limitări
     variant_count = max(1, min(10, request.variant_count))
@@ -644,6 +645,7 @@ async def generate_from_segments(
     background_tasks.add_task(
         _generate_from_segments_task,
         project_id=project_id,
+        profile_id=profile.profile_id,
         segments=segments_result.data,
         variant_count=variant_count,
         selection_mode=request.selection_mode,
@@ -1125,14 +1127,21 @@ async def _generate_from_segments_task(
 # ============== CLIPS (LIBRARY) ==============
 
 @router.get("/projects/{project_id}/clips")
-async def list_project_clips(project_id: str, include_deleted: bool = False):
+async def list_project_clips(
+    project_id: str,
+    include_deleted: bool = False,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Listează toate clipurile unui proiect (pentru galerie/triaj)."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
+    # Verify project ownership
+    verify_project_ownership(supabase, project_id, profile.profile_id)
+
     try:
-        query = supabase.table("editai_clips").select("*").eq("project_id", project_id)
+        query = supabase.table("editai_clips").select("*").eq("project_id", project_id).eq("profile_id", profile.profile_id)
         if not include_deleted:
             query = query.eq("is_deleted", False)
         result = query.order("variant_index").execute()
@@ -1143,7 +1152,7 @@ async def list_project_clips(project_id: str, include_deleted: bool = False):
 
 
 @router.get("/all-clips")
-async def list_all_clips():
+async def list_all_clips(profile: ProfileContext = Depends(get_profile_context)):
     """Listează toate clipurile pentru librărie."""
     supabase = get_supabase()
     if not supabase:
@@ -1154,6 +1163,7 @@ async def list_all_clips():
         clips_result = supabase.table("editai_clips")\
             .select("*, editai_projects!inner(name)")\
             .eq("is_deleted", False)\
+            .eq("profile_id", profile.profile_id)\
             .order("created_at", desc=True)\
             .execute()
 
@@ -1209,15 +1219,18 @@ async def list_all_clips():
 
 
 @router.get("/clips/{clip_id}")
-async def get_clip(clip_id: str):
+async def get_clip(
+    clip_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Obține detaliile unui clip, inclusiv conținutul asociat."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        # Clip
-        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).single().execute()
+        # Clip with profile ownership check
+        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
         if not clip.data:
             raise HTTPException(status_code=404, detail="Clip not found")
 
@@ -1242,7 +1255,11 @@ class ClipUpdateRequest(BaseModel):
 
 
 @router.patch("/clips/{clip_id}")
-async def update_clip(clip_id: str, request: ClipUpdateRequest):
+async def update_clip(
+    clip_id: str,
+    request: ClipUpdateRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Actualizează un clip (nume, selecție, status Postiz)."""
     supabase = get_supabase()
     if not supabase:
@@ -1262,7 +1279,7 @@ async def update_clip(clip_id: str, request: ClipUpdateRequest):
         if request.postiz_scheduled_at is not None:
             update_data["postiz_scheduled_at"] = request.postiz_scheduled_at
 
-        result = supabase.table("editai_clips").update(update_data).eq("id", clip_id).execute()
+        result = supabase.table("editai_clips").update(update_data).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
 
         if result.data:
             clip = result.data[0]
@@ -1276,7 +1293,11 @@ async def update_clip(clip_id: str, request: ClipUpdateRequest):
 
 
 @router.patch("/clips/{clip_id}/select")
-async def toggle_clip_selection(clip_id: str, selected: bool):
+async def toggle_clip_selection(
+    clip_id: str,
+    selected: bool,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Selectează/deselectează un clip pentru procesare ulterioară."""
     supabase = get_supabase()
     if not supabase:
@@ -1286,7 +1307,7 @@ async def toggle_clip_selection(clip_id: str, selected: bool):
         result = supabase.table("editai_clips").update({
             "is_selected": selected,
             "updated_at": datetime.now().isoformat()
-        }).eq("id", clip_id).execute()
+        }).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
 
         if result.data:
             clip = result.data[0]
@@ -1300,7 +1321,11 @@ async def toggle_clip_selection(clip_id: str, selected: bool):
 
 
 @router.post("/clips/bulk-select")
-async def bulk_select_clips(clip_ids: List[str], selected: bool):
+async def bulk_select_clips(
+    clip_ids: List[str],
+    selected: bool,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Selectează/deselectează mai multe clipuri odată."""
     supabase = get_supabase()
     if not supabase:
@@ -1312,7 +1337,7 @@ async def bulk_select_clips(clip_ids: List[str], selected: bool):
             result = supabase.table("editai_clips").update({
                 "is_selected": selected,
                 "updated_at": datetime.now().isoformat()
-            }).eq("id", clip_id).execute()
+            }).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
             if result.data:
                 project_ids.add(result.data[0]["project_id"])
 
@@ -1327,7 +1352,11 @@ async def bulk_select_clips(clip_ids: List[str], selected: bool):
 
 
 @router.post("/clips/{clip_id}/remove-audio")
-async def remove_clip_audio(clip_id: str, background_tasks: BackgroundTasks):
+async def remove_clip_audio(
+    clip_id: str,
+    background_tasks: BackgroundTasks,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """
     Elimină definitiv pista audio dintr-un videoclip.
     Creează o versiune nouă a videoclipului fără sunet.
@@ -1338,7 +1367,7 @@ async def remove_clip_audio(clip_id: str, background_tasks: BackgroundTasks):
 
     try:
         # Get clip info
-        clip_result = supabase.table("editai_clips").select("*").eq("id", clip_id).execute()
+        clip_result = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
         if not clip_result.data:
             raise HTTPException(status_code=404, detail="Clip not found")
 
@@ -1401,7 +1430,10 @@ async def remove_clip_audio(clip_id: str, background_tasks: BackgroundTasks):
 
 
 @router.delete("/clips/{clip_id}")
-async def delete_clip(clip_id: str):
+async def delete_clip(
+    clip_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Șterge un clip complet (fișiere + DB)."""
     supabase = get_supabase()
     if not supabase:
@@ -1409,7 +1441,7 @@ async def delete_clip(clip_id: str):
 
     try:
         # Get clip data first
-        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).single().execute()
+        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
         if clip.data:
             # Delete physical files
             _delete_clip_files(clip.data)
@@ -1430,7 +1462,10 @@ class BulkDeleteRequest(BaseModel):
 
 
 @router.post("/clips/bulk-delete")
-async def bulk_delete_clips(request: BulkDeleteRequest):
+async def bulk_delete_clips(
+    request: BulkDeleteRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Șterge mai multe clipuri simultan (fișiere + DB)."""
     supabase = get_supabase()
     if not supabase:
@@ -1442,7 +1477,7 @@ async def bulk_delete_clips(request: BulkDeleteRequest):
     for clip_id in request.clip_ids:
         try:
             # Get clip data first
-            clip = supabase.table("editai_clips").select("*").eq("id", clip_id).single().execute()
+            clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
             if clip.data:
                 # Delete physical files
                 _delete_clip_files(clip.data)
@@ -1470,7 +1505,11 @@ async def bulk_delete_clips(request: BulkDeleteRequest):
 # ============== CLIP CONTENT (TTS + SUBTITLES) ==============
 
 @router.put("/clips/{clip_id}/content")
-async def update_clip_content(clip_id: str, content: ClipContentUpdate):
+async def update_clip_content(
+    clip_id: str,
+    content: ClipContentUpdate,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Actualizează conținutul asociat unui clip (TTS text, SRT, stil)."""
     supabase = get_supabase()
     if not supabase:
@@ -1575,7 +1614,8 @@ async def cleanup_temp_files(max_age_hours: int = 24):
 async def render_final_clip(
     background_tasks: BackgroundTasks,
     clip_id: str,
-    preset_name: str = Form(default="instagram_reels")
+    preset_name: str = Form(default="instagram_reels"),
+    profile: ProfileContext = Depends(get_profile_context)
 ):
     """
     Randează clipul final cu TTS și subtitrări.
@@ -1587,7 +1627,7 @@ async def render_final_clip(
 
     try:
         # Obținem clipul și conținutul
-        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).single().execute()
+        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
         if not clip.data:
             raise HTTPException(status_code=404, detail="Clip not found")
 
@@ -1608,6 +1648,8 @@ async def render_final_clip(
         background_tasks.add_task(
             _render_final_clip_task,
             clip_id=clip_id,
+            project_id=clip.data["project_id"],
+            profile_id=profile.profile_id,
             clip_data=clip.data,
             content_data=content.data[0] if content.data else None,
             preset_data=preset.data
@@ -1817,7 +1859,8 @@ async def _render_final_clip_task(
 async def bulk_render_clips(
     background_tasks: BackgroundTasks,
     clip_ids: List[str],
-    preset_name: str = "instagram_reels"
+    preset_name: str = "instagram_reels",
+    profile: ProfileContext = Depends(get_profile_context)
 ):
     """Randează mai multe clipuri selectate cu același preset."""
     for clip_id in clip_ids:
