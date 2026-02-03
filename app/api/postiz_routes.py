@@ -8,10 +8,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
 
 from app.config import get_settings
+from app.api.auth import ProfileContext, get_profile_context
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/postiz", tags=["postiz"])
@@ -31,6 +32,10 @@ class PostizIntegrationResponse(BaseModel):
 class UploadRequest(BaseModel):
     clip_id: str
     video_path: str
+
+
+class BulkUploadRequest(BaseModel):
+    clips: List[dict]  # List of {clip_id: str, video_path: str}
 
 
 class PublishRequest(BaseModel):
@@ -97,11 +102,14 @@ def get_supabase():
 # ============== ENDPOINTS ==============
 
 @router.get("/status", response_model=PostizStatusResponse)
-async def get_postiz_status():
+async def get_postiz_status(
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """
     Check Postiz API connectivity and configuration.
     Returns connection status and available integrations count.
     """
+    logger.info(f"[Profile {profile.profile_id}] Checking Postiz status")
     settings = get_settings()
 
     result = PostizStatusResponse(
@@ -122,7 +130,7 @@ async def get_postiz_status():
     try:
         from app.services.postiz_service import get_postiz_publisher
         publisher = get_postiz_publisher()
-        integrations = await publisher.get_integrations()
+        integrations = await publisher.get_integrations(profile_id=profile.profile_id)
 
         result.connected = True
         result.integrations_count = len(integrations)
@@ -135,11 +143,14 @@ async def get_postiz_status():
 
 
 @router.get("/integrations", response_model=List[PostizIntegrationResponse])
-async def get_integrations():
+async def get_integrations(
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """
     Get all connected social media accounts from Postiz.
     Returns list of platforms user can publish to.
     """
+    logger.info(f"[Profile {profile.profile_id}] Fetching Postiz integrations")
     settings = get_settings()
 
     if not settings.postiz_api_url or not settings.postiz_api_key:
@@ -151,7 +162,7 @@ async def get_integrations():
     try:
         from app.services.postiz_service import get_postiz_publisher
         publisher = get_postiz_publisher()
-        integrations = await publisher.get_integrations()
+        integrations = await publisher.get_integrations(profile_id=profile.profile_id)
 
         # Filter out disabled integrations
         active = [i for i in integrations if not i.disabled]
@@ -171,11 +182,15 @@ async def get_integrations():
 
 
 @router.post("/upload")
-async def upload_to_postiz(request: UploadRequest):
+async def upload_to_postiz(
+    request: UploadRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """
     Upload a video directly to Postiz library without creating a post.
     Just uploads the file - scheduling/posting is done in n8n.
     """
+    logger.info(f"[Profile {profile.profile_id}] Uploading clip {request.clip_id} to Postiz")
     settings = get_settings()
 
     if not settings.postiz_api_url or not settings.postiz_api_key:
@@ -201,7 +216,7 @@ async def upload_to_postiz(request: UploadRequest):
 
         # Just upload the video to Postiz library
         logger.info(f"Uploading video to Postiz: {video_path}")
-        media = await publisher.upload_video(video_path)
+        media = await publisher.upload_video(video_path, profile_id=profile.profile_id)
 
         # Update clip status in database
         supabase = get_supabase()
@@ -227,10 +242,91 @@ async def upload_to_postiz(request: UploadRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/bulk-upload")
+async def bulk_upload_to_postiz(
+    request: BulkUploadRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Upload multiple videos to Postiz library without creating posts.
+    Just uploads the files - scheduling/posting is done separately.
+    """
+    logger.info(f"[Profile {profile.profile_id}] Bulk uploading {len(request.clips)} clips to Postiz")
+    settings = get_settings()
+
+    if not settings.postiz_api_url or not settings.postiz_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Postiz not configured. Set POSTIZ_API_URL and POSTIZ_API_KEY."
+        )
+
+    if not request.clips:
+        raise HTTPException(status_code=400, detail="No clips provided")
+
+    from app.services.postiz_service import get_postiz_publisher
+    publisher = get_postiz_publisher()
+
+    uploaded = []
+    failed = []
+    supabase = get_supabase()
+
+    for clip_info in request.clips:
+        clip_id = clip_info.get("clip_id")
+        video_path_str = clip_info.get("video_path")
+
+        if not clip_id or not video_path_str:
+            failed.append({"clip_id": clip_id, "error": "Missing clip_id or video_path"})
+            continue
+
+        # Resolve video path
+        video_path = Path(video_path_str)
+        if not video_path.exists():
+            video_path = settings.output_dir / video_path_str
+            if not video_path.exists():
+                video_path = settings.base_dir / video_path_str
+                if not video_path.exists():
+                    failed.append({"clip_id": clip_id, "error": f"Video file not found: {video_path_str}"})
+                    continue
+
+        try:
+            logger.info(f"Bulk upload: uploading {video_path} to Postiz")
+            media = await publisher.upload_video(video_path, profile_id=profile.profile_id)
+
+            # Update clip status in database
+            if supabase:
+                try:
+                    supabase.table("editai_clips").update({
+                        "postiz_status": "sent",
+                        "updated_at": datetime.now().isoformat()
+                    }).eq("id", clip_id).execute()
+                except Exception as e:
+                    logger.warning(f"Failed to update clip {clip_id} status: {e}")
+
+            uploaded.append({
+                "clip_id": clip_id,
+                "media_id": media.id,
+                "media_path": media.path
+            })
+            logger.info(f"Bulk upload: successfully uploaded clip {clip_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to upload clip {clip_id} to Postiz: {e}")
+            failed.append({"clip_id": clip_id, "error": str(e)})
+
+    return {
+        "status": "completed",
+        "uploaded_count": len(uploaded),
+        "uploaded": uploaded,
+        "failed_count": len(failed),
+        "failed": failed
+    }
+
+
 @router.post("/publish", response_model=PublishResponse)
 async def publish_clip(
     background_tasks: BackgroundTasks,
-    request: PublishRequest
+    request: PublishRequest,
+    profile: ProfileContext = Depends(get_profile_context)
 ):
     """
     Publish a rendered clip to selected social media platforms.
@@ -241,16 +337,28 @@ async def publish_clip(
 
     Returns job_id for progress tracking.
     """
+    logger.info(f"[Profile {profile.profile_id}] Publishing clip {request.clip_id} to {len(request.integration_ids)} platforms")
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    # Verify clip exists and has final_video_path
-    result = supabase.table("editai_clips").select("*").eq("id", request.clip_id).single().execute()
+    # Verify clip exists, has final_video_path, and belongs to profile (via project)
+    try:
+        result = supabase.table("editai_clips")\
+            .select("*, editai_projects!inner(profile_id)")\
+            .eq("id", request.clip_id)\
+            .single()\
+            .execute()
+    except Exception:
+        raise HTTPException(status_code=404, detail="Clip not found")
     if not result.data:
         raise HTTPException(status_code=404, detail="Clip not found")
 
     clip = result.data
+
+    # Verify ownership
+    if clip["editai_projects"]["profile_id"] != profile.profile_id:
+        raise HTTPException(status_code=404, detail="Clip not found")
 
     if not clip.get("final_video_path"):
         raise HTTPException(
@@ -285,6 +393,7 @@ async def publish_clip(
         _publish_clip_task,
         job_id=job_id,
         clip_id=request.clip_id,
+        profile_id=profile.profile_id,
         video_path=str(video_path),
         caption=request.caption,
         integration_ids=request.integration_ids,
@@ -301,7 +410,8 @@ async def publish_clip(
 @router.post("/bulk-publish", response_model=PublishResponse)
 async def bulk_publish_clips(
     background_tasks: BackgroundTasks,
-    request: BulkPublishRequest
+    request: BulkPublishRequest,
+    profile: ProfileContext = Depends(get_profile_context)
 ):
     """
     Publish multiple clips to selected platforms.
@@ -309,17 +419,28 @@ async def bulk_publish_clips(
     If schedule_date is provided, posts will be scheduled at intervals
     (schedule_interval_minutes apart) starting from schedule_date.
     """
+    logger.info(f"[Profile {profile.profile_id}] Bulk publishing {len(request.clip_ids)} clips")
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
     settings = get_settings()
 
-    # Verify all clips exist and have final_video_path
+    # Verify all clips exist, have final_video_path, and belong to profile
     valid_clips = []
     for clip_id in request.clip_ids:
-        result = supabase.table("editai_clips").select("*").eq("id", clip_id).single().execute()
+        try:
+            result = supabase.table("editai_clips")\
+                .select("*, editai_projects!inner(profile_id)")\
+                .eq("id", clip_id)\
+                .single()\
+                .execute()
+        except Exception:
+            continue
         if result.data and result.data.get("final_video_path"):
+            # Verify ownership
+            if result.data["editai_projects"]["profile_id"] != profile.profile_id:
+                continue
             video_path = Path(result.data["final_video_path"])
             if not video_path.exists():
                 video_path = settings.output_dir / result.data["final_video_path"]
@@ -348,6 +469,7 @@ async def bulk_publish_clips(
     background_tasks.add_task(
         _bulk_publish_task,
         job_id=job_id,
+        profile_id=profile.profile_id,
         clips=valid_clips,
         caption=request.caption,
         integration_ids=request.integration_ids,
@@ -376,6 +498,7 @@ async def get_publish_job_progress(job_id: str):
 async def _publish_clip_task(
     job_id: str,
     clip_id: str,
+    profile_id: str,
     video_path: str,
     caption: str,
     integration_ids: List[str],
@@ -384,6 +507,7 @@ async def _publish_clip_task(
     """Background task to publish a single clip."""
     from app.services.postiz_service import get_postiz_publisher
 
+    logger.info(f"[Profile {profile_id}] Publishing clip {clip_id} (job {job_id})")
     update_publish_progress(job_id, "Initializing...", 0)
 
     try:
@@ -391,12 +515,12 @@ async def _publish_clip_task(
 
         # Get integrations info for platform-specific settings
         update_publish_progress(job_id, "Fetching platform info...", 10)
-        integrations = await publisher.get_integrations()
+        integrations = await publisher.get_integrations(profile_id=profile_id)
         integrations_info = {i.id: i.type for i in integrations}
 
         # Upload video
         update_publish_progress(job_id, "Uploading video to Postiz...", 20)
-        media = await publisher.upload_video(Path(video_path))
+        media = await publisher.upload_video(Path(video_path), profile_id=profile_id)
 
         update_publish_progress(job_id, "Creating post...", 70)
 
@@ -407,7 +531,8 @@ async def _publish_clip_task(
             caption=caption,
             integration_ids=integration_ids,
             schedule_date=schedule_date,
-            integrations_info=integrations_info
+            integrations_info=integrations_info,
+            profile_id=profile_id
         )
 
         if result.success:
@@ -443,6 +568,7 @@ async def _publish_clip_task(
 
 async def _bulk_publish_task(
     job_id: str,
+    profile_id: str,
     clips: List[dict],
     caption: str,
     integration_ids: List[str],
@@ -452,13 +578,14 @@ async def _bulk_publish_task(
     """Background task to publish multiple clips."""
     from app.services.postiz_service import get_postiz_publisher
 
+    logger.info(f"[Profile {profile_id}] Bulk publishing {len(clips)} clips (job {job_id})")
     update_publish_progress(job_id, "Starting bulk publish...", 0)
 
     try:
         publisher = get_postiz_publisher()
 
         # Get integrations info
-        integrations = await publisher.get_integrations()
+        integrations = await publisher.get_integrations(profile_id=profile_id)
         integrations_info = {i.id: i.type for i in integrations}
 
         total = len(clips)
@@ -475,7 +602,7 @@ async def _bulk_publish_task(
 
             try:
                 # Upload video
-                media = await publisher.upload_video(Path(clip["video_path"]))
+                media = await publisher.upload_video(Path(clip["video_path"]), profile_id=profile_id)
 
                 # Calculate schedule time for this clip
                 clip_schedule = None
@@ -489,7 +616,8 @@ async def _bulk_publish_task(
                     caption=caption,
                     integration_ids=integration_ids,
                     schedule_date=clip_schedule,
-                    integrations_info=integrations_info
+                    integrations_info=integrations_info,
+                    profile_id=profile_id
                 )
 
                 if result.success:
