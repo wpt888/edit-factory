@@ -5,22 +5,22 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** One-click video production workflow: upload a product video, get a social-media-ready clip with voiceover and captions, publish to the right store's social accounts.
-**Current focus:** Phase 4 - TTS Provider Selection
+**Current focus:** Phase 5 - Per-Profile Postiz (next)
 
 ## Current Position
 
 Phase: 4 of 6 (TTS Provider Selection)
-Plan: 6 of 7
-Status: In progress
-Last activity: 2026-02-03 — Completed 04-06-PLAN.md
+Plan: 7 of 7 (Phase Complete)
+Status: Phase complete
+Last activity: 2026-02-03 — Completed 04-07-PLAN.md (Visual Verification)
 
-Progress: [████████░░] 75%
+Progress: [████████████████░░░░] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 15
-- Average duration: 7.5 min
+- Total plans completed: 16
+- Average duration: 7.4 min
 - Total execution time: 2.25 hours
 
 **By Phase:**
@@ -30,11 +30,11 @@ Progress: [████████░░] 75%
 | 01-database-foundation | 1 | 30 min | 30 min |
 | 02-backend-profile-context | 5 | 60 min | 12 min |
 | 03-frontend-profile-ui | 3 | 6 min | 2 min |
-| 04-tts-provider-selection | 6 | 30 min | 5 min |
+| 04-tts-provider-selection | 7 | 30 min | 4.3 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-04 (2m), 04-03 (2m), 04-02 (2m), 04-05 (2m), 04-06 (19m)
-- Trend: 04-06 took longer due to frontend UI components (build verification, testing)
+- Last 5 plans: 04-03 (2m), 04-04 (2m), 04-05 (2m), 04-06 (19m), 04-07 (<1m)
+- Trend: 04-07 was verification-only (user approval checkpoint)
 
 *Updated after each plan completion*
 
@@ -45,9 +45,9 @@ Progress: [████████░░] 75%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- Roadmap creation: Six-phase structure following database → backend → frontend → TTS → Postiz → DX dependency chain
+- Roadmap creation: Six-phase structure following database -> backend -> frontend -> TTS -> Postiz -> DX dependency chain
 - Phase 4 flagged for research: TTS integration has complex installation requirements (Kokoro, Coqui, Piper system dependencies)
-- **01-01**: Profile cascade delete - profiles.id → editai_projects.profile_id uses ON DELETE CASCADE (deleting profile deletes all projects)
+- **01-01**: Profile cascade delete - profiles.id -> editai_projects.profile_id uses ON DELETE CASCADE (deleting profile deletes all projects)
 - **01-01**: jobs and api_costs have nullable profile_id with SET NULL on delete (preserve records even if profile deleted)
 - **01-01**: Manual migration application - migrations applied via Supabase Dashboard SQL Editor (not CLI) for control over timing
 - **02-01**: Missing X-Profile-Id header auto-selects default profile (no 400 error for convenience)
@@ -62,7 +62,7 @@ Recent decisions affecting current work:
 - **02-03**: Explicit background task parameters - profile_id passed explicitly rather than extracted from data
 - **02-03**: Profile-scoped temp directories - temp/{profile_id}/ prevents file collisions
 - **03-01**: Global header injection in apiFetch over hook pattern (simpler DX, acceptable coupling for core feature)
-- **03-01**: Two-phase hydration: localStorage first (instant UI) → API fetch (fresh data) for best UX
+- **03-01**: Two-phase hydration: localStorage first (instant UI) -> API fetch (fresh data) for best UX
 - **03-01**: Auto-selection cascade: stored ID > default profile > first profile (respects user choice, graceful fallback)
 - **03-01**: Memoize context value to prevent unnecessary re-renders when functions recreated
 - **03-02**: Character count display (50 char limit) provides immediate user feedback on profile name validation
@@ -96,6 +96,7 @@ Recent decisions affecting current work:
 - **04-06**: Client-side audio validation using Audio element (immediate feedback, prevents unnecessary uploads)
 - **04-06**: Alert-based notifications instead of toast (toast hook not available, consistent with library page)
 - **04-06**: Settings page profile-aware (each profile can have different TTS provider/voice preferences)
+- **04-07**: Verification-only plan pattern for user acceptance testing (no code changes)
 
 ### Pending Todos
 
@@ -103,100 +104,45 @@ None yet.
 
 ### Blockers/Concerns
 
-**Phase 3 considerations:**
-- React Context + localStorage hybrid pattern for profile state (from RESEARCH.md)
-- SSR hydration: Only access localStorage in useEffect, show loading skeleton until hydrated
-- API header injection: Modified api.ts auto-injects X-Profile-Id from localStorage
-- Profile refetch: Library page must refetch when profile changes
-
-**Phase 4 considerations:**
-- Python version compatibility: If running Python 3.13+, venv downgrade to 3.11 required before Kokoro installation
-- Coqui XTTS requires PyTorch (large dependency)
-- Kokoro requires espeak-ng system dependency
-- Voice cloning workflow needs 6-second sample validation
-
 **Phase 5 considerations:**
 - Verify Postiz service supports multiple API configurations (currently uses global singleton)
+- Per-profile Postiz credentials storage in profiles.tts_settings JSONB or new column
 
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 04-06-PLAN.md (Frontend TTS UI Components)
-Next action: Execute 04-07-PLAN.md (final Wave 4 plan)
+Stopped at: Completed 04-07-PLAN.md (Visual Verification Checkpoint)
+Next action: Plan Phase 5 (Per-Profile Postiz)
 Resume file: None
 
-**Phase 3 Complete Summary:**
-- 03-01: ProfileProvider context + API header injection (foundation) ✅
-- 03-02: ProfileSwitcher dropdown + CreateProfileDialog components ✅
-- 03-03: Layout/Navbar/Library integration + visual verification checkpoint ✅
+**Phase 4 Complete Summary:**
+- 04-01: TTS service abstraction + database schema (3 min)
+- 04-02: ElevenLabs and Edge TTS adapters (2 min)
+- 04-03: Coqui XTTS service implementation (2 min)
+- 04-04: Kokoro TTS service implementation (2 min)
+- 04-05: TTS API routes (2 min)
+- 04-06: Frontend TTS UI components (19 min)
+- 04-07: Visual verification checkpoint (<1 min, user approved)
 
-**Phase 3 Achievements:**
-- Total duration: 6 minutes (2min per plan)
-- Profile context available throughout application
-- API calls automatically scoped to current profile
+**Phase 4 Achievements:**
+- Total duration: ~30 minutes (7 plans)
+- TTS service abstraction with factory pattern
+- 4 providers: ElevenLabs, Edge TTS, Coqui XTTS, Kokoro
+- Voice cloning capability (Coqui)
+- REST API for all TTS operations
+- Settings page with provider selector and voice cloning UI
 - Visual verification passed - user-approved functionality
-- Foundation ready for Phase 4 TTS integration
 
-**Phase 4 Progress (TTS Provider Selection):**
-- 04-01: TTS service abstraction + database schema ✅ (3 min)
-  - Abstract base class with 5 enforced methods
-  - JSONB schema for flexible provider settings
-  - Profile-scoped output directories established
-  - Factory pattern ready for provider implementations
+**All Phase 4 Requirements Met:**
+- TTS-01: User can select TTS provider from UI
+- TTS-02: Cost displayed inline next to each provider option
+- TTS-03: Coqui XTTS generates audio with voice cloning
+- TTS-04: Kokoro TTS generates audio with preset voices
+- TTS-05: User can save default voice settings per profile
+- TTS-06: Voice cloning workflow allows sample upload
 
-- 04-02: ElevenLabs and Edge TTS adapters ✅ (2 min)
-  - Wrapped existing services with TTSService interface
-  - Async HTTP for ElevenLabs (converted from sync)
-  - Voice caching for Edge TTS (350+ voices)
-  - Librosa duration calculation for both providers
-  - Backward compatibility maintained (original services intact)
-  - Cost tracking integrated (ElevenLabs $0.22/1k chars, Edge free)
-
-- 04-03: Coqui XTTS service implementation ✅ (2 min)
-  - Voice cloning from 6+ second audio samples
-  - 17-language multilingual TTS support
-  - GPU acceleration with CPU fallback
-  - Lazy model loading (avoid 2GB startup cost)
-  - Class-level model caching (singleton pattern)
-  - Free local TTS alternative to ElevenLabs
-
-- 04-04: Kokoro TTS service implementation ✅ (2 min)
-  - Lightweight, fast, free local TTS engine
-  - espeak-ng validation with clear error messages
-  - 5 preset voices (American/British, Male/Female)
-  - Lazy import pattern for optional dependencies
-  - Zero-cost provider for cost-conscious workflows
-
-- 04-05: TTS API routes ✅ (2 min)
-  - Four REST endpoints: /providers, /voices, /generate, /clone-voice
-  - Provider availability checks (API keys, system dependencies)
-  - Background job pattern for async generation
-  - Voice cloning with audio validation (MIME, size, duration)
-  - Profile-scoped temp directories for voice samples
-  - Cost logging for paid providers
-
-- 04-06: Frontend TTS UI components ✅ (19 min)
-  - RadioGroup component via Shadcn CLI
-  - ProviderSelector with card-based layout and cost badges
-  - VoiceCloningUpload with client-side duration validation
-  - Settings page with profile-aware TTS configuration
-  - 4 providers displayed: ElevenLabs, Edge TTS, Coqui, Kokoro
-  - Build verified, no TypeScript errors
-
-**Provider Implementation Status:**
-- 04-02: ElevenLabs adapter (premium API, $0.22/1k chars) ✅
-- 04-02: Edge adapter (free Microsoft voices) ✅
-- 04-03: Coqui adapter (local, voice cloning, GPU) ✅
-- 04-04: Kokoro adapter (lightweight local engine) ✅
-- 04-05: TTS API routes (REST interface) ✅
-- 04-06: TTS UI components (Settings page, provider selector) ✅
-
-**Next Plan (04-07) Prerequisites:**
-- ✅ TTSService interface defined
-- ✅ Factory function ready with all 4 providers
-- ✅ Voice cloning capability available (Coqui)
-- ✅ Cost tracking integrated (ElevenLabs)
-- ✅ Free alternatives available (Edge, Coqui, Kokoro)
-- ✅ REST API endpoints functional
-- ✅ Settings page for user configuration
-- Ready for TTS integration into video processing workflow
+**Ready for Phase 5: Per-Profile Postiz**
+- Enable separate publishing configuration per store profile
+- Per-profile Postiz API credentials
+- Cost quota enforcement per profile
+- Profile activity dashboard
