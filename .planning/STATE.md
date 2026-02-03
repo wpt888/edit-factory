@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 4 of 6 (TTS Provider Selection)
-Plan: 5 of 7
+Plan: 6 of 7
 Status: In progress
-Last activity: 2026-02-03 — Completed 04-05-PLAN.md
+Last activity: 2026-02-03 — Completed 04-06-PLAN.md
 
-Progress: [███████░░░] 70%
+Progress: [████████░░] 75%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 14
-- Average duration: 6.4 min
-- Total execution time: 1.95 hours
+- Total plans completed: 15
+- Average duration: 7.5 min
+- Total execution time: 2.25 hours
 
 **By Phase:**
 
@@ -30,11 +30,11 @@ Progress: [███████░░░] 70%
 | 01-database-foundation | 1 | 30 min | 30 min |
 | 02-backend-profile-context | 5 | 60 min | 12 min |
 | 03-frontend-profile-ui | 3 | 6 min | 2 min |
-| 04-tts-provider-selection | 5 | 11 min | 2.2 min |
+| 04-tts-provider-selection | 6 | 30 min | 5 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-01 (3m), 04-04 (2m), 04-03 (2m), 04-02 (2m), 04-05 (2m)
-- Trend: Exceptional velocity continues - sub-3min average maintained
+- Last 5 plans: 04-04 (2m), 04-03 (2m), 04-02 (2m), 04-05 (2m), 04-06 (19m)
+- Trend: 04-06 took longer due to frontend UI components (build verification, testing)
 
 *Updated after each plan completion*
 
@@ -92,6 +92,10 @@ Recent decisions affecting current work:
 - **04-05**: 6-second minimum for voice cloning with librosa validation (XTTS v2 quality threshold enforced at API layer)
 - **04-05**: 10MB max file size for voice samples (balance between audio quality and upload time)
 - **04-05**: Cost logging only for non-zero costs (reduces database noise for free providers)
+- **04-06**: Card-based provider selection instead of simple radio list (better UX for displaying provider details)
+- **04-06**: Client-side audio validation using Audio element (immediate feedback, prevents unnecessary uploads)
+- **04-06**: Alert-based notifications instead of toast (toast hook not available, consistent with library page)
+- **04-06**: Settings page profile-aware (each profile can have different TTS provider/voice preferences)
 
 ### Pending Todos
 
@@ -117,8 +121,8 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 04-05-PLAN.md (TTS API Routes)
-Next action: Execute 04-06-PLAN.md or 04-07-PLAN.md (remaining Wave 3 plans)
+Stopped at: Completed 04-06-PLAN.md (Frontend TTS UI Components)
+Next action: Execute 04-07-PLAN.md (final Wave 4 plan)
 Resume file: None
 
 **Phase 3 Complete Summary:**
@@ -171,18 +175,28 @@ Resume file: None
   - Profile-scoped temp directories for voice samples
   - Cost logging for paid providers
 
+- 04-06: Frontend TTS UI components ✅ (19 min)
+  - RadioGroup component via Shadcn CLI
+  - ProviderSelector with card-based layout and cost badges
+  - VoiceCloningUpload with client-side duration validation
+  - Settings page with profile-aware TTS configuration
+  - 4 providers displayed: ElevenLabs, Edge TTS, Coqui, Kokoro
+  - Build verified, no TypeScript errors
+
 **Provider Implementation Status:**
 - 04-02: ElevenLabs adapter (premium API, $0.22/1k chars) ✅
 - 04-02: Edge adapter (free Microsoft voices) ✅
 - 04-03: Coqui adapter (local, voice cloning, GPU) ✅
 - 04-04: Kokoro adapter (lightweight local engine) ✅
 - 04-05: TTS API routes (REST interface) ✅
+- 04-06: TTS UI components (Settings page, provider selector) ✅
 
-**Next Plan (04-06 or 04-07) Prerequisites:**
+**Next Plan (04-07) Prerequisites:**
 - ✅ TTSService interface defined
 - ✅ Factory function ready with all 4 providers
 - ✅ Voice cloning capability available (Coqui)
 - ✅ Cost tracking integrated (ElevenLabs)
 - ✅ Free alternatives available (Edge, Coqui, Kokoro)
 - ✅ REST API endpoints functional
-- Ready for frontend TTS UI or provider preference storage
+- ✅ Settings page for user configuration
+- Ready for TTS integration into video processing workflow
