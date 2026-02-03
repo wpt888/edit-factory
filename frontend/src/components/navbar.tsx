@@ -10,6 +10,7 @@ const navLinks = [
   { label: "Export", href: "/library" },
   { label: "Segments", href: "/segments" },
   { label: "Usage", href: "/usage" },
+  { label: "Settings", href: "/settings" },
 ];
 
 export function NavBar() {
