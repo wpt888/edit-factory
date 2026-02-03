@@ -299,9 +299,9 @@ async def generate_tts(
 
 
 @router.post("/clone-voice")
-async def clone_voice(
+async def clone_voice_endpoint(
     voice_name: str = Form(...),
-    audio_sample: UploadFile = File(...),
+    audio_file: UploadFile = File(...),
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """
@@ -311,11 +311,11 @@ async def clone_voice(
 
     Args:
         voice_name: Name for the cloned voice
-        audio_sample: Audio file (WAV, MP3, OGG, M4A) - minimum 6 seconds
+        audio_file: Audio file (WAV, MP3, OGG, M4A) - minimum 6 seconds
         profile: Profile context (auto-injected)
 
     Returns:
-        {"voice_id": str, "duration": float, "warnings": []}
+        {"voice_id": str, "voice_name": str, "duration": float, "warnings": []}
     """
     logger.info(f"[Profile {profile.profile_id}] Voice cloning request: {voice_name}")
 
@@ -328,10 +328,10 @@ async def clone_voice(
         "audio/mp4"  # M4A
     ]
 
-    if audio_sample.content_type not in allowed_types:
+    if audio_file.content_type not in allowed_types:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid audio format: {audio_sample.content_type}. Allowed: WAV, MP3, OGG, M4A"
+            detail=f"Invalid audio format: {audio_file.content_type}. Allowed: WAV, MP3, OGG, M4A"
         )
 
     # Validate file size (max 10MB)
@@ -340,11 +340,11 @@ async def clone_voice(
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     # Save to temp file
-    temp_path = temp_dir / f"voice_sample_{uuid.uuid4()}.{audio_sample.filename.split('.')[-1]}"
+    temp_path = temp_dir / f"voice_sample_{uuid.uuid4()}.{audio_file.filename.split('.')[-1]}"
 
     try:
         # Read and validate size
-        content = await audio_sample.read()
+        content = await audio_file.read()
         if len(content) > 10 * 1024 * 1024:  # 10MB
             raise HTTPException(status_code=400, detail="Audio file too large (max 10MB)")
 
@@ -373,22 +373,23 @@ async def clone_voice(
                 profile_id=profile.profile_id
             )
 
-            voice_id = await coqui_service.clone_voice(
-                audio_path=temp_path,
+            cloned_voice = await coqui_service.clone_voice(
+                sample_audio_path=temp_path,
                 voice_name=voice_name
             )
 
             # Store metadata in profile's cloned_voices JSONB via Supabase
             # This will be implemented when we add the profiles table integration
             # For now, just log it
-            logger.info(f"[Profile {profile.profile_id}] Cloned voice '{voice_name}' with ID: {voice_id}")
+            logger.info(f"[Profile {profile.profile_id}] Cloned voice '{cloned_voice.name}' with ID: {cloned_voice.id}")
 
             warnings = []
             if duration < 10.0:
                 warnings.append(f"Short sample ({duration:.1f}s). Longer samples (10-30s) produce better results.")
 
             return {
-                "voice_id": voice_id,
+                "voice_id": cloned_voice.id,
+                "voice_name": cloned_voice.name,
                 "duration": duration,
                 "warnings": warnings
             }
