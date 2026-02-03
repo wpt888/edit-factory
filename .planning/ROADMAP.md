@@ -83,10 +83,16 @@ Plans:
   4. Kokoro TTS generates audio with preset voices
   5. User can save default voice settings per profile (persists across sessions)
   6. Voice cloning workflow allows user to upload sample and create cloned voice
-**Plans**: TBD
+**Plans**: 7 plans
 
 Plans:
-- [ ] 04-01: TBD
+- [ ] 04-01-PLAN.md — TTS foundation: database migration + service abstraction layer
+- [ ] 04-02-PLAN.md — Refactor ElevenLabs and Edge TTS to new interface
+- [ ] 04-03-PLAN.md — Coqui XTTS integration with voice cloning
+- [ ] 04-04-PLAN.md — Kokoro TTS integration with preset voices
+- [ ] 04-05-PLAN.md — TTS API routes (/providers, /voices, /generate, /clone-voice)
+- [ ] 04-06-PLAN.md — Frontend TTS UI: provider selector, voice cloning, settings page
+- [ ] 04-07-PLAN.md — Visual verification checkpoint
 
 ### Phase 5: Per-Profile Postiz
 **Goal**: Enable separate publishing configuration per store profile
@@ -128,6 +134,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 1. Database Foundation | 1/1 | ✓ Complete | 2026-02-03 |
 | 2. Backend Profile Context | 5/5 | ✓ Complete | 2026-02-03 |
 | 3. Frontend Profile UI | 3/3 | ✓ Complete | 2026-02-03 |
-| 4. TTS Provider Selection | 0/TBD | Not started | - |
+| 4. TTS Provider Selection | 0/7 | Planned | - |
 | 5. Per-Profile Postiz | 0/TBD | Not started | - |
 | 6. Developer Experience | 0/TBD | Not started | - |
