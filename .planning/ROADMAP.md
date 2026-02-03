@@ -46,10 +46,13 @@ Plans:
   3. JobStorage, CostTracker, PostizPublisher accept profile_id parameter in all methods
   4. Background tasks preserve profile context (no data leakage across profiles)
   5. FFmpeg temp directories scoped by profile_id to prevent file collisions
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 02-01: TBD
+- [ ] 02-01-PLAN.md — Profile CRUD API + get_profile_context auth dependency
+- [ ] 02-02-PLAN.md — Service layer updates (JobStorage, CostTracker, PostizPublisher)
+- [ ] 02-03-PLAN.md — library_routes.py profile context injection
+- [ ] 02-04-PLAN.md — segments/postiz/main routes profile context injection
 
 ### Phase 3: Frontend Profile UI
 **Goal**: Enable users to create, switch, and manage profiles from UI
@@ -120,7 +123,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Database Foundation | 1/1 | ✓ Complete | 2026-02-03 |
-| 2. Backend Profile Context | 0/TBD | Not started | - |
+| 2. Backend Profile Context | 0/4 | Not started | - |
 | 3. Frontend Profile UI | 0/TBD | Not started | - |
 | 4. TTS Provider Selection | 0/TBD | Not started | - |
 | 5. Per-Profile Postiz | 0/TBD | Not started | - |
