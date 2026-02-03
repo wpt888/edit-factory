@@ -37,12 +37,13 @@ class JobStorage:
             logger.error(f"JobStorage: Failed to initialize Supabase: {e}")
             self._supabase = None
 
-    def create_job(self, job_data: dict) -> dict:
+    def create_job(self, job_data: dict, profile_id: Optional[str] = None) -> dict:
         """
         Create a new job.
 
         Args:
             job_data: Dict with job fields (job_id, job_type, status, etc.)
+            profile_id: Optional profile ID for multi-tenant isolation
 
         Returns:
             Created job data
@@ -55,6 +56,10 @@ class JobStorage:
         job_data["created_at"] = datetime.now().isoformat()
         job_data["updated_at"] = datetime.now().isoformat()
 
+        # Store profile_id in job_data for memory fallback
+        if profile_id:
+            job_data["profile_id"] = profile_id
+
         if self._supabase:
             try:
                 # Insert into Supabase
@@ -63,12 +68,16 @@ class JobStorage:
                     "job_type": job_data.get("job_type", "video_processing"),
                     "status": job_data.get("status", "pending"),
                     "progress": job_data.get("progress", "Queued"),
+                    "profile_id": profile_id,  # Add profile_id for multi-tenant tracking
                     "data": job_data,  # Store full job data as JSON
                     "created_at": job_data["created_at"],
                     "updated_at": job_data["updated_at"]
                 }).execute()
 
-                logger.info(f"JobStorage: Created job {job_id} in Supabase")
+                if profile_id:
+                    logger.info(f"[Profile {profile_id}] JobStorage: Created job {job_id} in Supabase")
+                else:
+                    logger.info(f"JobStorage: Created job {job_id} in Supabase (no profile)")
                 return job_data
             except Exception as e:
                 logger.error(f"JobStorage: Failed to create job in Supabase: {e}, using memory")
@@ -78,7 +87,10 @@ class JobStorage:
         else:
             # In-memory storage
             self._memory_store[job_id] = job_data
-            logger.debug(f"JobStorage: Created job {job_id} in memory")
+            if profile_id:
+                logger.debug(f"[Profile {profile_id}] JobStorage: Created job {job_id} in memory")
+            else:
+                logger.debug(f"JobStorage: Created job {job_id} in memory (no profile)")
             return job_data
 
     def get_job(self, job_id: str) -> Optional[dict]:
@@ -103,13 +115,14 @@ class JobStorage:
         # Fallback to memory
         return self._memory_store.get(job_id)
 
-    def update_job(self, job_id: str, updates: dict) -> Optional[dict]:
+    def update_job(self, job_id: str, updates: dict, profile_id: Optional[str] = None) -> Optional[dict]:
         """
         Update job fields.
 
         Args:
             job_id: Job ID
             updates: Dict with fields to update
+            profile_id: Optional profile ID for logging context
 
         Returns:
             Updated job data or None if not found
@@ -126,15 +139,24 @@ class JobStorage:
 
         if self._supabase:
             try:
-                # Update in Supabase
-                self._supabase.table("jobs").update({
+                # Build update data
+                update_data = {
                     "status": job.get("status"),
                     "progress": job.get("progress"),
                     "data": job,
                     "updated_at": job["updated_at"]
-                }).eq("id", job_id).execute()
+                }
+                # Include profile_id if provided
+                if profile_id:
+                    update_data["profile_id"] = profile_id
 
-                logger.debug(f"JobStorage: Updated job {job_id} in Supabase")
+                # Update in Supabase
+                self._supabase.table("jobs").update(update_data).eq("id", job_id).execute()
+
+                if profile_id:
+                    logger.debug(f"[Profile {profile_id}] JobStorage: Updated job {job_id} in Supabase")
+                else:
+                    logger.debug(f"JobStorage: Updated job {job_id} in Supabase")
                 return job
             except Exception as e:
                 logger.error(f"JobStorage: Failed to update job in Supabase: {e}, using memory")
@@ -146,12 +168,13 @@ class JobStorage:
             self._memory_store[job_id] = job
             return job
 
-    def list_jobs(self, status: Optional[str] = None, limit: int = 100) -> list:
+    def list_jobs(self, status: Optional[str] = None, profile_id: Optional[str] = None, limit: int = 100) -> list:
         """
         List jobs.
 
         Args:
             status: Filter by status (optional)
+            profile_id: Filter by profile ID (optional)
             limit: Max number of jobs to return
 
         Returns:
@@ -162,6 +185,8 @@ class JobStorage:
                 query = self._supabase.table("jobs").select("*").order("created_at", desc=True).limit(limit)
                 if status:
                     query = query.eq("status", status)
+                if profile_id:
+                    query = query.eq("profile_id", profile_id)
 
                 result = query.execute()
                 # Extract job data from JSONB
@@ -173,6 +198,8 @@ class JobStorage:
         jobs = list(self._memory_store.values())
         if status:
             jobs = [j for j in jobs if j.get("status") == status]
+        if profile_id:
+            jobs = [j for j in jobs if j.get("profile_id") == profile_id]
 
         # Sort by created_at desc
         jobs.sort(key=lambda j: j.get("created_at", ""), reverse=True)
