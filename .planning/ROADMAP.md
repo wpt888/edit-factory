@@ -13,7 +13,7 @@ This roadmap transforms Edit Factory from a single-library video production tool
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Database Foundation** - Profile tables with RLS and migration
-- [ ] **Phase 2: Backend Profile Context** - API endpoints and service layer isolation
+- [x] **Phase 2: Backend Profile Context** - API endpoints and service layer isolation
 - [ ] **Phase 3: Frontend Profile UI** - Profile switcher and context propagation
 - [ ] **Phase 4: TTS Provider Selection** - Free TTS integration and voice presets
 - [ ] **Phase 5: Per-Profile Postiz** - Publishing configuration per store
@@ -49,11 +49,11 @@ Plans:
 **Plans**: 5 plans
 
 Plans:
-- [ ] 02-01-PLAN.md — Profile CRUD API + get_profile_context auth dependency
-- [ ] 02-02-PLAN.md — Service layer updates (JobStorage, CostTracker, PostizPublisher)
-- [ ] 02-03-PLAN.md — library_routes.py profile context injection
-- [ ] 02-04-PLAN.md — segments/postiz/main routes profile context injection
-- [ ] 02-05-PLAN.md — FFmpeg temp directory profile scoping
+- [x] 02-01-PLAN.md — Profile CRUD API + get_profile_context auth dependency
+- [x] 02-02-PLAN.md — Service layer updates (JobStorage, CostTracker, PostizPublisher)
+- [x] 02-03-PLAN.md — library_routes.py profile context injection
+- [x] 02-04-PLAN.md — segments/postiz/main routes profile context injection
+- [x] 02-05-PLAN.md — FFmpeg temp directory profile scoping
 
 ### Phase 3: Frontend Profile UI
 **Goal**: Enable users to create, switch, and manage profiles from UI
@@ -124,7 +124,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Database Foundation | 1/1 | ✓ Complete | 2026-02-03 |
-| 2. Backend Profile Context | 0/5 | Not started | - |
+| 2. Backend Profile Context | 5/5 | ✓ Complete | 2026-02-03 |
 | 3. Frontend Profile UI | 0/TBD | Not started | - |
 | 4. TTS Provider Selection | 0/TBD | Not started | - |
 | 5. Per-Profile Postiz | 0/TBD | Not started | - |
