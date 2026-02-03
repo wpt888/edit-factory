@@ -4,6 +4,7 @@ Handles JWT verification and user extraction from Supabase tokens.
 """
 import logging
 from typing import Optional
+from dataclasses import dataclass
 from fastapi import Depends, HTTPException, Header, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
@@ -23,6 +24,13 @@ class AuthUser:
         self.id = user_id
         self.email = email
         self.role = role
+
+
+@dataclass
+class ProfileContext:
+    """Profile context for request."""
+    profile_id: str
+    user_id: str
 
 
 def verify_jwt_token(token: str) -> dict:
@@ -96,6 +104,17 @@ async def get_current_user(
     Raises:
         HTTPException: If no token provided or token is invalid
     """
+    settings = get_settings()
+
+    # Development mode bypass - WARNING: Only use for local development!
+    if settings.auth_disabled:
+        logger.warning("⚠️ Authentication is DISABLED - development mode only!")
+        return AuthUser(
+            user_id="dev-user-local",
+            email="dev@localhost",
+            role="authenticated"
+        )
+
     # Try to get token from credentials (HTTPBearer) first
     token = None
     if credentials:
@@ -165,3 +184,74 @@ def require_role(required_role: str):
             )
         return user
     return role_checker
+
+
+# Supabase client for profile context queries
+_supabase_client = None
+
+def _get_supabase():
+    """Get Supabase client for auth queries."""
+    global _supabase_client
+    if _supabase_client is None:
+        try:
+            from supabase import create_client
+            settings = get_settings()
+            if settings.supabase_url and settings.supabase_key:
+                _supabase_client = create_client(settings.supabase_url, settings.supabase_key)
+        except Exception as e:
+            logger.error(f"Failed to init Supabase in auth: {e}")
+    return _supabase_client
+
+
+async def get_profile_context(
+    current_user: AuthUser = Depends(get_current_user),
+    x_profile_id: Optional[str] = Header(None, alias="X-Profile-Id")
+) -> ProfileContext:
+    """
+    Extract and validate profile context from request.
+
+    - Missing X-Profile-Id: Auto-select user's default profile
+    - Invalid profile_id: 404 Not Found
+    - Profile belongs to different user: 403 Forbidden
+    """
+    supabase = _get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    if not x_profile_id:
+        # Auto-select default profile
+        result = supabase.table("profiles")\
+            .select("id")\
+            .eq("user_id", current_user.id)\
+            .eq("is_default", True)\
+            .single()\
+            .execute()
+
+        if not result.data:
+            # This indicates a data inconsistency - user should always have a default profile
+            # Return 503 Service Unavailable with actionable message
+            raise HTTPException(
+                status_code=503,
+                detail="Account misconfigured: no default profile exists. Please contact support or re-run account setup."
+            )
+
+        profile_id = result.data["id"]
+        logger.info(f"[Profile {profile_id}] Auto-selected default for user {current_user.id}")
+    else:
+        profile_id = x_profile_id
+
+        # Validate profile exists
+        result = supabase.table("profiles")\
+            .select("id, user_id")\
+            .eq("id", profile_id)\
+            .single()\
+            .execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Profile not found")
+
+        # Check ownership
+        if result.data["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+
+    return ProfileContext(profile_id=profile_id, user_id=current_user.id)
