@@ -69,7 +69,7 @@ class CostTracker:
         try:
             with open(self.log_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except:
+        except Exception:
             return {"entries": [], "totals": {"elevenlabs": 0, "gemini": 0}}
 
     def _save_log(self, data: Dict):
@@ -77,7 +77,7 @@ class CostTracker:
         with open(self.log_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
-    def _save_to_supabase(self, entry: CostEntry) -> bool:
+    def _save_to_supabase(self, entry: CostEntry, profile_id: Optional[str] = None) -> bool:
         """Save entry to Supabase."""
         if not self._supabase:
             return False
@@ -89,11 +89,15 @@ class CostTracker:
                 "operation": entry.operation,
                 "units": entry.input_units,
                 "estimated_cost": entry.cost_usd,
+                "profile_id": profile_id,  # Add profile_id column
                 "details": entry.details
             }
 
             result = self._supabase.table("api_costs").insert(data).execute()
-            logger.info(f"Cost saved to Supabase: {entry.service} - ${entry.cost_usd}")
+            if profile_id:
+                logger.info(f"[Profile {profile_id}] Cost saved: {entry.service} - ${entry.cost_usd}")
+            else:
+                logger.info(f"Cost saved to Supabase: {entry.service} - ${entry.cost_usd}")
             return True
         except Exception as e:
             logger.error(f"Failed to save to Supabase: {e}")
@@ -103,6 +107,7 @@ class CostTracker:
         self,
         job_id: str,
         characters: int,
+        profile_id: Optional[str] = None,
         text_preview: str = ""
     ) -> CostEntry:
         """Log ElevenLabs TTS cost."""
@@ -116,20 +121,25 @@ class CostTracker:
             input_units=characters,
             cost_usd=round(cost, 6),
             details={
+                "profile_id": profile_id,  # Include in details
                 "text_preview": text_preview[:100] + "..." if len(text_preview) > 100 else text_preview,
                 "rate": f"${ELEVENLABS_COST_PER_CHAR * 1000:.2f}/1000 chars"
             }
         )
 
         self._add_entry(entry)
-        self._save_to_supabase(entry)
-        logger.info(f"Cost logged: ElevenLabs TTS - {characters} chars = ${cost:.4f}")
+        self._save_to_supabase(entry, profile_id=profile_id)  # Pass profile_id
+        if profile_id:
+            logger.info(f"[Profile {profile_id}] Cost logged: ElevenLabs TTS - {characters} chars = ${cost:.4f}")
+        else:
+            logger.info(f"Cost logged: ElevenLabs TTS - {characters} chars = ${cost:.4f}")
         return entry
 
     def log_gemini_analysis(
         self,
         job_id: str,
         frames_analyzed: int,
+        profile_id: Optional[str] = None,
         video_duration: float = 0
     ) -> CostEntry:
         """Log Gemini video analysis cost."""
@@ -147,6 +157,7 @@ class CostTracker:
             input_units=frames_analyzed,
             cost_usd=round(total_cost, 6),
             details={
+                "profile_id": profile_id,  # Include in details
                 "video_duration_sec": video_duration,
                 "frames_analyzed": frames_analyzed,
                 "image_cost": round(image_cost, 4),
@@ -156,8 +167,11 @@ class CostTracker:
         )
 
         self._add_entry(entry)
-        self._save_to_supabase(entry)
-        logger.info(f"Cost logged: Gemini Analysis - {frames_analyzed} frames = ${total_cost:.4f}")
+        self._save_to_supabase(entry, profile_id=profile_id)  # Pass profile_id
+        if profile_id:
+            logger.info(f"[Profile {profile_id}] Cost logged: Gemini Analysis - {frames_analyzed} frames = ${total_cost:.4f}")
+        else:
+            logger.info(f"Cost logged: Gemini Analysis - {frames_analyzed} frames = ${total_cost:.4f}")
         return entry
 
     def _add_entry(self, entry: CostEntry):
@@ -169,23 +183,26 @@ class CostTracker:
         )
         self._save_log(data)
 
-    def get_summary(self) -> Dict:
+    def get_summary(self, profile_id: Optional[str] = None) -> Dict:
         """Get cost summary from Supabase or local."""
         # Try Supabase first
         if self._supabase:
             try:
-                return self._get_summary_from_supabase()
+                return self._get_summary_from_supabase(profile_id=profile_id)
             except Exception as e:
                 logger.warning(f"Failed to get summary from Supabase: {e}, falling back to local")
 
-        return self._get_summary_from_local()
+        return self._get_summary_from_local(profile_id=profile_id)
 
-    def _get_summary_from_supabase(self) -> Dict:
+    def _get_summary_from_supabase(self, profile_id: Optional[str] = None) -> Dict:
         """Get summary from Supabase."""
         today = datetime.now().date().isoformat()
 
-        # Get totals
-        all_costs = self._supabase.table("api_costs").select("service, estimated_cost").execute()
+        # Get totals - filter by profile if provided
+        query = self._supabase.table("api_costs").select("service, estimated_cost")
+        if profile_id:
+            query = query.eq("profile_id", profile_id)
+        all_costs = query.execute()
 
         totals = {"elevenlabs": 0, "gemini": 0}
         for row in all_costs.data:
@@ -194,10 +211,12 @@ class CostTracker:
                 totals[service] += float(row["estimated_cost"] or 0)
 
         # Get today's costs
-        today_costs = self._supabase.table("api_costs")\
+        today_query = self._supabase.table("api_costs")\
             .select("service, estimated_cost")\
-            .gte("created_at", f"{today}T00:00:00")\
-            .execute()
+            .gte("created_at", f"{today}T00:00:00")
+        if profile_id:
+            today_query = today_query.eq("profile_id", profile_id)
+        today_costs = today_query.execute()
 
         today_totals = {"elevenlabs": 0, "gemini": 0}
         for row in today_costs.data:
@@ -206,14 +225,19 @@ class CostTracker:
                 today_totals[service] += float(row["estimated_cost"] or 0)
 
         # Get last 10 entries
-        last_entries = self._supabase.table("api_costs")\
+        last_query = self._supabase.table("api_costs")\
             .select("*")\
             .order("created_at", desc=True)\
-            .limit(10)\
-            .execute()
+            .limit(10)
+        if profile_id:
+            last_query = last_query.eq("profile_id", profile_id)
+        last_entries = last_query.execute()
 
         # Count total entries
-        count_result = self._supabase.table("api_costs").select("id", count="exact").execute()
+        count_query = self._supabase.table("api_costs").select("id", count="exact")
+        if profile_id:
+            count_query = count_query.eq("profile_id", profile_id)
+        count_result = count_query.execute()
 
         return {
             "source": "supabase",
@@ -224,18 +248,29 @@ class CostTracker:
             "last_entries": last_entries.data
         }
 
-    def _get_summary_from_local(self) -> Dict:
+    def _get_summary_from_local(self, profile_id: Optional[str] = None) -> Dict:
         """Get summary from local JSON."""
         data = self._load_log()
         entries = data.get("entries", [])
 
+        # Filter by profile_id if provided (check in details dict)
+        if profile_id:
+            entries = [e for e in entries if e.get("details", {}).get("profile_id") == profile_id]
+
         today = datetime.now().date().isoformat()
         today_entries = [e for e in entries if e["timestamp"].startswith(today)]
 
+        # Recalculate totals from filtered entries
+        totals = {"elevenlabs": 0, "gemini": 0}
+        for e in entries:
+            service = e.get("service")
+            if service in totals:
+                totals[service] += e.get("cost_usd", 0)
+
         return {
             "source": "local",
-            "totals": data.get("totals", {}),
-            "total_all": round(sum(data.get("totals", {}).values()), 4),
+            "totals": {k: round(v, 4) for k, v in totals.items()},
+            "total_all": round(sum(totals.values()), 4),
             "today": {
                 "elevenlabs": round(sum(e["cost_usd"] for e in today_entries if e["service"] == "elevenlabs"), 4),
                 "gemini": round(sum(e["cost_usd"] for e in today_entries if e["service"] == "gemini"), 4),
