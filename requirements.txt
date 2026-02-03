@@ -27,6 +27,14 @@ httpx>=0.25.0
 aiofiles>=23.0.0
 edge-tts>=6.1.0
 
+# TTS - Kokoro (lightweight, fast, requires espeak-ng system dependency)
+# IMPORTANT: Kokoro requires espeak-ng system dependency
+# Linux: apt-get install espeak-ng
+# macOS: brew install espeak-ng
+# Windows: https://github.com/espeak-ng/espeak-ng/releases
+kokoro>=0.9.4
+soundfile>=0.12.1
+
 # Voice Activity Detection (VAD) - pentru detectarea și mutarea vocilor din video
 # Silero VAD necesită PyTorch
 torch>=2.0.0
