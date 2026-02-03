@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -31,8 +31,15 @@ import {
   X,
   VolumeX,
   Loader2,
+  Trash2,
+  CheckSquare,
+  XCircle,
+  User,
 } from "lucide-react";
-import { apiGet, apiPost, apiPatch, API_URL } from "@/lib/api";
+import { Checkbox } from "@/components/ui/checkbox";
+import { apiGet, apiPost, apiPatch, apiDelete, API_URL } from "@/lib/api";
+import { toast } from "sonner";
+import { useProfile } from "@/contexts/profile-context";
 
 interface ClipWithProject {
   id: string;
@@ -55,9 +62,10 @@ interface ClipWithProject {
 }
 
 
-export default function LibrariePage() {
+function LibrarieContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { currentProfile, isLoading: profileLoading } = useProfile();
 
   // State
   const [clips, setClips] = useState<ClipWithProject[]>([]);
@@ -83,9 +91,17 @@ export default function LibrariePage() {
   // Audio removal state
   const [removingAudioClipId, setRemovingAudioClipId] = useState<string | null>(null);
 
+  // Delete state
+  const [deletingClipId, setDeletingClipId] = useState<string | null>(null);
+
   // Postiz upload state (simplified - just upload, no scheduling)
   const [postizClip, setPostizClip] = useState<ClipWithProject | null>(null);
   const [publishing, setPublishing] = useState(false);
+
+  // Multi-select state
+  const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkUploading, setBulkUploading] = useState(false);
 
   // Update URL with filters
   const updateURL = useCallback(
@@ -159,10 +175,12 @@ export default function LibrariePage() {
     setFilteredClips(result);
   }, [clips, searchQuery, filterSubtitles, filterVoiceover, filterPostiz]);
 
-  // Initial fetch
+  // Initial fetch - profile-aware
   useEffect(() => {
+    if (profileLoading) return; // Wait for profile context
+    if (!currentProfile) return; // No profile selected
     fetchAllClips();
-  }, []);
+  }, [profileLoading, currentProfile?.id]);
 
   // Handle filter changes with URL update
   const handleSearchChange = (value: string) => {
@@ -233,14 +251,14 @@ export default function LibrariePage() {
             c.id === clip.id ? { ...c, postiz_status: "sent" as const } : c
           )
         );
-        alert("Video trimis în librăria Postiz!");
+        toast.success("Video trimis în librăria Postiz!");
       } else {
         const error = await res.json();
-        alert(`Eroare: ${error.detail || "Upload eșuat"}`);
+        toast.error(`Eroare: ${error.detail || "Upload eșuat"}`);
       }
     } catch (error) {
       console.error("Failed to upload to Postiz:", error);
-      alert("Eroare la upload");
+      toast.error("Eroare la upload");
     } finally {
       setPublishing(false);
       setPostizClip(null);
@@ -266,9 +284,14 @@ export default function LibrariePage() {
           )
         );
         setRenameClipId(null);
+      } else {
+        toast.error("Nu s-a putut redenumi clipul.");
+        setRenameClipId(null);
       }
     } catch (error) {
       console.error("Failed to rename clip:", error);
+      toast.error("Eroare la redenumirea clipului.");
+      setRenameClipId(null);
     }
   };
 
@@ -290,18 +313,162 @@ export default function LibrariePage() {
             c.id === clip.id ? { ...c, has_audio: false, raw_video_path: data.video_path } : c
           )
         );
-        alert("Sunetul a fost eliminat cu succes!");
+        toast.success("Sunetul a fost eliminat cu succes!");
       } else {
         const error = await res.json();
-        alert(`Eroare: ${error.detail || "Nu s-a putut elimina sunetul"}`);
+        toast.error(`Eroare: ${error.detail || "Nu s-a putut elimina sunetul"}`);
       }
     } catch (error) {
       console.error("Failed to remove audio:", error);
-      alert("Eroare la eliminarea sunetului");
+      toast.error("Eroare la eliminarea sunetului");
     } finally {
       setRemovingAudioClipId(null);
     }
   };
+
+  // Delete clip permanently
+  const deleteClip = async (clip: ClipWithProject) => {
+    if (!confirm(`Sigur vrei să ștergi definitiv "${clip.variant_name || `Varianta ${clip.variant_index}`}"? Această acțiune nu poate fi anulată.`)) {
+      return;
+    }
+
+    setDeletingClipId(clip.id);
+    try {
+      const res = await apiDelete(`/library/clips/${clip.id}`);
+
+      if (res.ok) {
+        // Remove from local state
+        setClips((prev) => prev.filter((c) => c.id !== clip.id));
+        toast.success("Clipul a fost șters cu succes!");
+      } else {
+        const error = await res.json();
+        toast.error(`Eroare: ${error.detail || "Nu s-a putut șterge clipul"}`);
+      }
+    } catch (error) {
+      console.error("Failed to delete clip:", error);
+      toast.error("Eroare la ștergerea clipului");
+    } finally {
+      setDeletingClipId(null);
+    }
+  };
+
+  // Multi-select handlers
+  const toggleClipSelection = (clipId: string) => {
+    setSelectedClipIds((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(clipId)) {
+        newSet.delete(clipId);
+      } else {
+        newSet.add(clipId);
+      }
+      return newSet;
+    });
+  };
+
+  const selectAllVisible = () => {
+    const allIds = filteredClips.map((c) => c.id);
+    setSelectedClipIds(new Set(allIds));
+  };
+
+  const clearSelection = () => {
+    setSelectedClipIds(new Set());
+  };
+
+  // Bulk delete selected clips
+  const bulkDeleteSelected = async () => {
+    if (selectedClipIds.size === 0) return;
+
+    if (!confirm(`Sigur vrei să ștergi definitiv ${selectedClipIds.size} clipuri selectate? Această acțiune nu poate fi anulată.`)) {
+      return;
+    }
+
+    setBulkDeleting(true);
+    try {
+      const res = await apiPost("/library/clips/bulk-delete", {
+        clip_ids: Array.from(selectedClipIds),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        // Remove deleted clips from local state
+        setClips((prev) => prev.filter((c) => !selectedClipIds.has(c.id)));
+        setSelectedClipIds(new Set());
+        toast.success(`${data.deleted_count} clipuri au fost șterse cu succes!${data.failed_count > 0 ? ` ${data.failed_count} au eșuat.` : ""}`);
+      } else {
+        const error = await res.json();
+        toast.error(`Eroare: ${error.detail || "Nu s-au putut șterge clipurile"}`);
+      }
+    } catch (error) {
+      console.error("Failed to bulk delete clips:", error);
+      toast.error("Eroare la ștergerea clipurilor");
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  // Bulk upload to Postiz
+  const bulkUploadToPostiz = async () => {
+    if (selectedClipIds.size === 0) return;
+
+    if (!confirm(`Sigur vrei să trimiți ${selectedClipIds.size} clipuri selectate către Postiz?`)) {
+      return;
+    }
+
+    setBulkUploading(true);
+    try {
+      // Prepare clips data
+      const selectedClips = clips.filter((c) => selectedClipIds.has(c.id));
+      const clipsData = selectedClips.map((clip) => ({
+        clip_id: clip.id,
+        video_path: clip.final_video_path || clip.raw_video_path,
+      }));
+
+      const res = await apiPost("/postiz/bulk-upload", {
+        clips: clipsData,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        // Update postiz_status locally for uploaded clips
+        const uploadedIds = new Set(data.uploaded.map((u: { clip_id: string }) => u.clip_id));
+        setClips((prev) =>
+          prev.map((c) =>
+            uploadedIds.has(c.id) ? { ...c, postiz_status: "sent" as const } : c
+          )
+        );
+        setSelectedClipIds(new Set());
+        toast.success(`${data.uploaded_count} clipuri au fost trimise către Postiz!${data.failed_count > 0 ? ` ${data.failed_count} au eșuat.` : ""}`);
+      } else {
+        const error = await res.json();
+        toast.error(`Eroare: ${error.detail || "Nu s-au putut trimite clipurile"}`);
+      }
+    } catch (error) {
+      console.error("Failed to bulk upload to Postiz:", error);
+      toast.error("Eroare la trimiterea clipurilor către Postiz");
+    } finally {
+      setBulkUploading(false);
+    }
+  };
+
+  // Handle no profile selected
+  if (!profileLoading && !currentProfile) {
+    return (
+      <div className="min-h-screen bg-background">
+        <main className="w-full max-w-[1400px] mx-auto px-6 py-8">
+          <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+            <User className="h-16 w-16 text-muted-foreground mb-4" />
+            <h3 className="text-lg font-semibold mb-2">No Profile Selected</h3>
+            <p className="text-muted-foreground mb-4 max-w-md">
+              Create a profile to get started. Use the profile dropdown in the navbar to create your first profile.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Look for the profile dropdown in the top navigation bar
+            </p>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -403,8 +570,70 @@ export default function LibrariePage() {
           </CardContent>
         </Card>
 
+        {/* Selection Toolbar - appears when clips are selected */}
+        {selectedClipIds.size > 0 && (
+          <Card className="mb-6 border-primary bg-primary/5">
+            <CardContent className="py-3">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div className="flex items-center gap-3">
+                  <CheckSquare className="h-5 w-5 text-primary" />
+                  <span className="font-medium">
+                    {selectedClipIds.size} {selectedClipIds.size === 1 ? "clip selectat" : "clipuri selectate"}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={selectAllVisible}
+                    disabled={selectedClipIds.size === filteredClips.length}
+                  >
+                    <CheckSquare className="h-4 w-4 mr-2" />
+                    Selectează toate ({filteredClips.length})
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={clearSelection}
+                  >
+                    <XCircle className="h-4 w-4 mr-2" />
+                    Deselectează
+                  </Button>
+                  <div className="w-px h-6 bg-border mx-2" />
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={bulkDeleteSelected}
+                    disabled={bulkDeleting || bulkUploading}
+                  >
+                    {bulkDeleting ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4 mr-2" />
+                    )}
+                    Șterge selectate
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
+                    onClick={bulkUploadToPostiz}
+                    disabled={bulkDeleting || bulkUploading}
+                  >
+                    {bulkUploading ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Share2 className="h-4 w-4 mr-2" />
+                    )}
+                    Trimite la Postiz
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Clips grid */}
-        {loading ? (
+        {(profileLoading || loading) ? (
           <div className="flex items-center justify-center py-20">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
           </div>
@@ -427,7 +656,10 @@ export default function LibrariePage() {
               return (
                 <Card
                   key={clip.id}
-                  className="overflow-hidden hover:ring-2 hover:ring-primary/50 transition-all cursor-pointer"
+                  className={`overflow-hidden hover:ring-2 hover:ring-primary/50 transition-all cursor-pointer ${
+                    selectedClipIds.has(clip.id) ? "ring-2 ring-primary" : ""
+                  }`}
+                  onClick={() => toggleClipSelection(clip.id)}
                 >
                   {/* Thumbnail */}
                   <div className="aspect-[9/16] bg-muted relative group">
@@ -443,6 +675,20 @@ export default function LibrariePage() {
                       </div>
                     )}
 
+                    {/* Selection checkbox */}
+                    <div
+                      className={`absolute top-2 left-2 z-10 transition-opacity ${
+                        selectedClipIds.has(clip.id) ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                      }`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Checkbox
+                        checked={selectedClipIds.has(clip.id)}
+                        onCheckedChange={() => toggleClipSelection(clip.id)}
+                        className="h-5 w-5 bg-background/80 border-2"
+                      />
+                    </div>
+
                     {/* Postiz badge */}
                     <Badge
                       className={`absolute top-2 right-2 ${postizBadge.color}`}
@@ -451,8 +697,8 @@ export default function LibrariePage() {
                       {postizBadge.label}
                     </Badge>
 
-                    {/* Feature badges */}
-                    <div className="absolute top-2 left-2 flex flex-col gap-1">
+                    {/* Feature badges - positioned below checkbox */}
+                    <div className="absolute top-10 left-2 flex flex-col gap-1">
                       {clip.has_subtitles && (
                         <Badge variant="secondary" className="text-xs">
                           <Subtitles className="h-3 w-3" />
@@ -546,6 +792,24 @@ export default function LibrariePage() {
                           </>
                         )}
                       </Button>
+                      {/* Delete button */}
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        disabled={deletingClipId === clip.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteClip(clip);
+                        }}
+                        className="text-xs"
+                        title="Șterge clipul definitiv"
+                      >
+                        {deletingClipId === clip.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3 w-3" />
+                        )}
+                      </Button>
                     </div>
                   </div>
 
@@ -614,5 +878,17 @@ export default function LibrariePage() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function LibrariePage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </div>
+    }>
+      <LibrarieContent />
+    </Suspense>
   );
 }
