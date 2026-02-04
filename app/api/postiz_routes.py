@@ -108,9 +108,9 @@ async def get_postiz_status(
     """
     Check Postiz API connectivity and configuration.
     Returns connection status and available integrations count.
+    Uses profile-specific Postiz credentials if configured.
     """
     logger.info(f"[Profile {profile.profile_id}] Checking Postiz status")
-    settings = get_settings()
 
     result = PostizStatusResponse(
         configured=False,
@@ -120,24 +120,31 @@ async def get_postiz_status(
         error=None
     )
 
-    if not settings.postiz_api_url or not settings.postiz_api_key:
-        result.error = "Postiz API credentials not configured"
-        return result
-
-    result.configured = True
-    result.api_url = settings.postiz_api_url
-
     try:
-        from app.services.postiz_service import get_postiz_publisher
-        publisher = get_postiz_publisher()
+        from app.services.postiz_service import get_postiz_publisher, is_postiz_configured
+
+        # Check if Postiz is configured for this profile (or globally)
+        if not is_postiz_configured(profile.profile_id):
+            result.error = "Postiz API credentials not configured for this profile"
+            return result
+
+        result.configured = True
+
+        # Try to get publisher and connect
+        publisher = get_postiz_publisher(profile.profile_id)
+        result.api_url = publisher.api_url
         integrations = await publisher.get_integrations(profile_id=profile.profile_id)
 
         result.connected = True
         result.integrations_count = len(integrations)
 
+    except ValueError as e:
+        # No credentials configured
+        result.error = str(e)
+        logger.warning(f"[Profile {profile.profile_id}] Postiz not configured: {e}")
     except Exception as e:
         result.error = str(e)
-        logger.error(f"Failed to connect to Postiz: {e}")
+        logger.error(f"[Profile {profile.profile_id}] Failed to connect to Postiz: {e}")
 
     return result
 
@@ -149,19 +156,13 @@ async def get_integrations(
     """
     Get all connected social media accounts from Postiz.
     Returns list of platforms user can publish to.
+    Uses profile-specific Postiz credentials.
     """
     logger.info(f"[Profile {profile.profile_id}] Fetching Postiz integrations")
-    settings = get_settings()
-
-    if not settings.postiz_api_url or not settings.postiz_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="Postiz not configured. Set POSTIZ_API_URL and POSTIZ_API_KEY."
-        )
 
     try:
         from app.services.postiz_service import get_postiz_publisher
-        publisher = get_postiz_publisher()
+        publisher = get_postiz_publisher(profile.profile_id)
         integrations = await publisher.get_integrations(profile_id=profile.profile_id)
 
         # Filter out disabled integrations
@@ -176,8 +177,11 @@ async def get_integrations(
             disabled=i.disabled
         ) for i in active]
 
+    except ValueError as e:
+        logger.warning(f"[Profile {profile.profile_id}] Postiz not configured: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Failed to get integrations: {e}")
+        logger.error(f"[Profile {profile.profile_id}] Failed to get integrations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -189,15 +193,10 @@ async def upload_to_postiz(
     """
     Upload a video directly to Postiz library without creating a post.
     Just uploads the file - scheduling/posting is done in n8n.
+    Uses profile-specific Postiz credentials.
     """
     logger.info(f"[Profile {profile.profile_id}] Uploading clip {request.clip_id} to Postiz")
     settings = get_settings()
-
-    if not settings.postiz_api_url or not settings.postiz_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="Postiz not configured. Set POSTIZ_API_URL and POSTIZ_API_KEY."
-        )
 
     # Resolve video path
     video_path = Path(request.video_path)
@@ -212,10 +211,10 @@ async def upload_to_postiz(
 
     try:
         from app.services.postiz_service import get_postiz_publisher
-        publisher = get_postiz_publisher()
+        publisher = get_postiz_publisher(profile.profile_id)
 
         # Just upload the video to Postiz library
-        logger.info(f"Uploading video to Postiz: {video_path}")
+        logger.info(f"[Profile {profile.profile_id}] Uploading video to Postiz: {video_path}")
         media = await publisher.upload_video(video_path, profile_id=profile.profile_id)
 
         # Update clip status in database
@@ -229,7 +228,7 @@ async def upload_to_postiz(
             except Exception as e:
                 logger.warning(f"Failed to update clip status: {e}")
 
-        logger.info(f"Video uploaded to Postiz successfully: media_id={media.id}")
+        logger.info(f"[Profile {profile.profile_id}] Video uploaded to Postiz successfully: media_id={media.id}")
         return {
             "status": "success",
             "media_id": media.id,
@@ -237,8 +236,11 @@ async def upload_to_postiz(
             "message": "Video uploaded to Postiz library"
         }
 
+    except ValueError as e:
+        logger.warning(f"[Profile {profile.profile_id}] Postiz not configured: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Failed to upload to Postiz: {e}")
+        logger.error(f"[Profile {profile.profile_id}] Failed to upload to Postiz: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -250,21 +252,20 @@ async def bulk_upload_to_postiz(
     """
     Upload multiple videos to Postiz library without creating posts.
     Just uploads the files - scheduling/posting is done separately.
+    Uses profile-specific Postiz credentials.
     """
     logger.info(f"[Profile {profile.profile_id}] Bulk uploading {len(request.clips)} clips to Postiz")
     settings = get_settings()
 
-    if not settings.postiz_api_url or not settings.postiz_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="Postiz not configured. Set POSTIZ_API_URL and POSTIZ_API_KEY."
-        )
-
     if not request.clips:
         raise HTTPException(status_code=400, detail="No clips provided")
 
-    from app.services.postiz_service import get_postiz_publisher
-    publisher = get_postiz_publisher()
+    try:
+        from app.services.postiz_service import get_postiz_publisher
+        publisher = get_postiz_publisher(profile.profile_id)
+    except ValueError as e:
+        logger.warning(f"[Profile {profile.profile_id}] Postiz not configured: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
     uploaded = []
     failed = []
@@ -504,14 +505,14 @@ async def _publish_clip_task(
     integration_ids: List[str],
     schedule_date: Optional[datetime]
 ):
-    """Background task to publish a single clip."""
+    """Background task to publish a single clip using profile-specific Postiz."""
     from app.services.postiz_service import get_postiz_publisher
 
     logger.info(f"[Profile {profile_id}] Publishing clip {clip_id} (job {job_id})")
     update_publish_progress(job_id, "Initializing...", 0)
 
     try:
-        publisher = get_postiz_publisher()
+        publisher = get_postiz_publisher(profile_id)
 
         # Get integrations info for platform-specific settings
         update_publish_progress(job_id, "Fetching platform info...", 10)
@@ -575,14 +576,14 @@ async def _bulk_publish_task(
     schedule_start: Optional[datetime],
     interval_minutes: int
 ):
-    """Background task to publish multiple clips."""
+    """Background task to publish multiple clips using profile-specific Postiz."""
     from app.services.postiz_service import get_postiz_publisher
 
     logger.info(f"[Profile {profile_id}] Bulk publishing {len(clips)} clips (job {job_id})")
     update_publish_progress(job_id, "Starting bulk publish...", 0)
 
     try:
-        publisher = get_postiz_publisher()
+        publisher = get_postiz_publisher(profile_id)
 
         # Get integrations info
         integrations = await publisher.get_integrations(profile_id=profile_id)
