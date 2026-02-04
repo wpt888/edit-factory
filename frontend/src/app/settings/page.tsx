@@ -72,6 +72,9 @@ export default function SettingsPage() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null)
   const [dashboardLoading, setDashboardLoading] = useState(true)
 
+  // Quota state
+  const [monthlyQuota, setMonthlyQuota] = useState<string>("")
+
   // Load current profile TTS settings
   useEffect(() => {
     if (profileLoading || !currentProfile) return
@@ -96,6 +99,11 @@ export default function SettingsPage() {
         setPostizUrl(postizSettings.api_url || "")
         setPostizKey(postizSettings.api_key || "")
         setPostizEnabled(postizSettings.enabled || false)
+
+        // Load monthly quota
+        if (data.monthly_quota_usd !== undefined && data.monthly_quota_usd !== null) {
+          setMonthlyQuota(data.monthly_quota_usd.toString())
+        }
       } catch (error) {
         console.error("Failed to load settings:", error)
       } finally {
@@ -181,9 +189,18 @@ export default function SettingsPage() {
         ttsSettings.voice_name = selectedVoice.name
       }
 
-      const response = await apiPatch(`/profiles/${currentProfile.id}`, {
+      // Build update payload
+      const updates: Record<string, unknown> = {
         tts_settings: ttsSettings,
-      })
+      }
+
+      // Add quota if entered
+      const quotaValue = parseFloat(monthlyQuota)
+      if (!isNaN(quotaValue) && quotaValue >= 0) {
+        updates.monthly_quota_usd = quotaValue
+      }
+
+      const response = await apiPatch(`/profiles/${currentProfile.id}`, updates)
 
       if (!response.ok) throw new Error("Failed to save settings")
 
@@ -508,6 +525,36 @@ export default function SettingsPage() {
               </span>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Usage Limits</CardTitle>
+          <CardDescription>
+            Set monthly spending limits for API usage
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Monthly Cost Quota (USD)</label>
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground">$</span>
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                value={monthlyQuota}
+                onChange={(e) => setMonthlyQuota(e.target.value)}
+                placeholder="0.00"
+                className="w-32"
+                disabled={saving}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Set to 0 for unlimited. TTS generation will be blocked when quota is exceeded.
+            </p>
+          </div>
         </CardContent>
       </Card>
 
