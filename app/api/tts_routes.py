@@ -233,6 +233,18 @@ async def _generate_tts_background(
         )
 
 
+def _get_supabase():
+    """Get Supabase client for quota checking."""
+    try:
+        from supabase import create_client
+        settings = get_settings()
+        if settings.supabase_url and settings.supabase_key:
+            return create_client(settings.supabase_url, settings.supabase_key)
+    except Exception as e:
+        logger.warning(f"Failed to get Supabase client: {e}")
+    return None
+
+
 @router.post("/generate")
 async def generate_tts(
     background_tasks: BackgroundTasks,
@@ -256,6 +268,40 @@ async def generate_tts(
         {"job_id": str, "status": "processing", "estimated_time_seconds": float}
     """
     logger.info(f"[Profile {profile.profile_id}] TTS generation request: provider={provider}, voice={voice_id}, text_len={len(text)}")
+
+    # Check quota if profile has one set
+    supabase = _get_supabase()
+    if supabase:
+        try:
+            profile_data = supabase.table("profiles")\
+                .select("monthly_quota_usd")\
+                .eq("id", profile.profile_id)\
+                .single()\
+                .execute()
+
+            monthly_quota = float(profile_data.data.get("monthly_quota_usd", 0) or 0)
+
+            if monthly_quota > 0:
+                from app.services.cost_tracker import get_cost_tracker
+                tracker = get_cost_tracker()
+                exceeded, current, quota = tracker.check_quota(profile.profile_id, monthly_quota)
+
+                if exceeded:
+                    logger.warning(f"[Profile {profile.profile_id}] Quota exceeded: ${current:.2f} / ${quota:.2f}")
+                    raise HTTPException(
+                        status_code=402,  # Payment Required
+                        detail={
+                            "error": "quota_exceeded",
+                            "message": f"Monthly quota exceeded. Current: ${current:.2f}, Quota: ${quota:.2f}",
+                            "current_costs": current,
+                            "monthly_quota": quota
+                        }
+                    )
+        except HTTPException:
+            raise  # Re-raise quota exception
+        except Exception as e:
+            logger.warning(f"[Profile {profile.profile_id}] Failed to check quota: {e}")
+            # Continue without quota check on error (graceful degradation)
 
     # Create job
     job_id = str(uuid.uuid4())
