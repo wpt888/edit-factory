@@ -3,7 +3,7 @@ Profile Management Routes
 Handles CRUD operations for user profiles.
 """
 import logging
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -44,6 +44,12 @@ class ProfileCreate(BaseModel):
 class ProfileUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+
+class ProfileSettingsUpdate(BaseModel):
+    """Model for PATCH endpoint - supports partial updates including tts_settings."""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    tts_settings: Optional[Dict[str, Any]] = None
 
 class ProfileResponse(BaseModel):
     id: str
@@ -216,6 +222,77 @@ async def update_profile(
         raise
     except Exception as e:
         logger.error(f"Failed to update profile {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update profile")
+
+
+@router.patch("/{profile_id}")
+async def patch_profile(
+    profile_id: str,
+    updates: ProfileSettingsUpdate,
+    current_user: AuthUser = Depends(get_current_user)
+):
+    """
+    Partially update a profile including tts_settings.
+    Invalidates Postiz publisher cache when tts_settings change.
+    Returns 404 if not found, 403 if belongs to another user.
+    """
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        # First check ownership
+        result = supabase.table("profiles")\
+            .select("id, user_id")\
+            .eq("id", profile_id)\
+            .single()\
+            .execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Profile not found")
+
+        if result.data["user_id"] != current_user.id:
+            logger.warning(f"[Profile {profile_id}] PATCH denied for user {current_user.id}")
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+
+        # Build update data from non-None fields
+        update_data = {"updated_at": datetime.utcnow().isoformat()}
+        tts_settings_updated = False
+
+        if updates.name is not None:
+            update_data["name"] = updates.name
+        if updates.description is not None:
+            update_data["description"] = updates.description
+        if updates.tts_settings is not None:
+            update_data["tts_settings"] = updates.tts_settings
+            tts_settings_updated = True
+
+        # Update profile
+        result = supabase.table("profiles")\
+            .update(update_data)\
+            .eq("id", profile_id)\
+            .execute()
+
+        if not result.data:
+            raise HTTPException(status_code=500, detail="Failed to update profile")
+
+        # Invalidate Postiz cache if tts_settings changed
+        if tts_settings_updated:
+            try:
+                from app.services.postiz_service import reset_postiz_publisher
+                reset_postiz_publisher(profile_id)
+                logger.info(f"[Profile {profile_id}] Reset Postiz publisher cache after settings update")
+            except Exception as e:
+                logger.warning(f"[Profile {profile_id}] Failed to reset Postiz cache: {e}")
+
+        updated_profile = result.data[0]
+        logger.info(f"[Profile {profile_id}] PATCH by user {current_user.id}, tts_settings_updated={tts_settings_updated}")
+        return updated_profile
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to patch profile {profile_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to update profile")
 
 
