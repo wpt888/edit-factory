@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** One-click video production workflow: upload a product video, get a social-media-ready clip with voiceover and captions, publish to the right store's social accounts.
-**Current focus:** Phase 5 - Per-Profile Postiz (complete)
+**Current focus:** Phase 6 - Developer Experience (in progress)
 
 ## Current Position
 
-Phase: 5 of 6 (Per-Profile Postiz)
-Plan: 5 of 5 (Visual Verification Checkpoint)
-Status: Phase complete
-Last activity: 2026-02-04 - Completed 05-05-PLAN.md
+Phase: 6 of 6 (Developer Experience)
+Plan: 1 of 1 (Development Start Scripts)
+Status: Plan complete
+Last activity: 2026-02-04 - Completed 06-01-PLAN.md
 
 Progress: [████████████████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 20
-- Average duration: 6.5 min
-- Total execution time: 2.6 hours
+- Total plans completed: 21
+- Average duration: 6.3 min
+- Total execution time: 2.7 hours
 
 **By Phase:**
 
@@ -32,10 +32,11 @@ Progress: [████████████████████] 100%
 | 03-frontend-profile-ui | 3 | 6 min | 2 min |
 | 04-tts-provider-selection | 8 | 35 min | 4.4 min |
 | 05-per-profile-postiz | 4 | 16 min | 4 min |
+| 06-developer-experience | 1 | 4 min | 4 min |
 
 **Recent Trend:**
-- Last 5 plans: 05-01 (3m), 05-02 (7m), 05-03 (3m), 05-04 (3m)
-- Trend: Phase 5 plans consistently fast, averaging 4 minutes
+- Last 5 plans: 05-02 (7m), 05-03 (3m), 05-04 (3m), 05-05 (verify), 06-01 (4m)
+- Trend: Consistent 3-4 minute execution for straightforward plans
 
 *Updated after each plan completion*
 
@@ -117,44 +118,35 @@ Recent decisions affecting current work:
 - **05-04**: 4-column grid for stats (responsive to 2 columns on mobile)
 - **05-04**: Color-coded quota progress bar (green/yellow/red thresholds at 70%/90%)
 - **05-04**: Quota input in separate Usage Limits card (separation of concerns)
+- **06-01**: PID file approach for process tracking (enables clean shutdown)
+- **06-01**: Interactive port conflict resolution (kill or abort)
+- **06-01**: WSL detection via /proc/version for browser opening
 
 ### Pending Todos
 
-None yet.
+None.
 
 ### Blockers/Concerns
 
-**Phase 5 considerations (resolved in 05-01):**
-- ~~Verify Postiz service supports multiple API configurations (currently uses global singleton)~~ RESOLVED: Refactored to profile-aware factory
-- ~~Per-profile Postiz credentials storage in profiles.tts_settings JSONB or new column~~ RESOLVED: Using tts_settings.postiz
-
-**Remaining Phase 5 work:**
-- ~~Frontend Postiz settings UI (05-02)~~ COMPLETE
-- ~~Cost quota and dashboard API (05-03)~~ COMPLETE
-- ~~Frontend quota UI display (05-04)~~ COMPLETE
-- ~~Final verification (05-05)~~ COMPLETE - User approved
+None - all phases complete.
 
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed 05-05-PLAN.md (Visual Verification Checkpoint)
-Next action: Begin Phase 6 (Developer Experience)
+Stopped at: Completed 06-01-PLAN.md (Development Start Scripts)
+Next action: Milestone complete - all 6 phases finished
 Resume file: None
 
-**Phase 5 Progress:**
-- 05-01: Backend profile-aware Postiz factory (3 min) - COMPLETE
-- 05-02: Frontend Postiz configuration UI (7 min) - COMPLETE
-- 05-03: Cost quota and dashboard API (3 min) - COMPLETE
-- 05-04: Frontend dashboard and quota UI (3 min) - COMPLETE
-- 05-05: Final verification - COMPLETE (User approved)
+**Phase 6 Progress:**
+- 06-01: Development start scripts (4 min) - COMPLETE
 
-**Phase 5 Complete:**
-- Per-profile Postiz credentials and publishing
-- Cost tracking and quota enforcement
-- Profile activity dashboard with real-time stats
-- All features verified and approved by user
+**Milestone Complete:**
+- Phase 1: Database foundation (profiles table, foreign keys)
+- Phase 2: Backend profile context (middleware, scoping)
+- Phase 3: Frontend profile UI (context, selector, integration)
+- Phase 4: TTS provider selection (abstraction, providers, API, UI)
+- Phase 5: Per-profile Postiz (credentials, quota, dashboard)
+- Phase 6: Developer experience (start scripts)
 
-**Ready for Phase 6: Developer Experience**
-- Phase 5 fully complete
-- All major functionality implemented (Phases 1-5)
-- Phase 6 focuses on DX improvements
+All 21 plans executed successfully across 6 phases.
+Total execution time: ~2.7 hours.
