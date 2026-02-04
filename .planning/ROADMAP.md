@@ -138,9 +138,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 07-01-PLAN.md — Encoding presets service: Pydantic model + platform preset definitions
-- [ ] 07-02-PLAN.md — Integration: keyframe controls in render pipeline + database preset updates
-- [ ] 07-03-PLAN.md — Frontend: Platform selector dropdown in library export UI
+- [x] 07-01-PLAN.md — Encoding presets service: Pydantic model + platform preset definitions
+- [x] 07-02-PLAN.md — Integration: keyframe controls in render pipeline + database preset updates
+- [x] 07-03-PLAN.md — Frontend: Platform selector dropdown in library export UI
 
 **Manual UAT Note**: Success criterion 3 (platform validation) requires manual testing by uploading to actual platforms. This is documented in 07-02-PLAN.md.
 
@@ -217,7 +217,7 @@ Phases execute in numeric order: 7 -> 8 -> 9 -> 10 -> 11
 | 4. TTS Provider Selection | v2 | 8/8 | Complete | 2026-02-04 |
 | 5. Per-Profile Postiz | v2 | 5/5 | Complete | 2026-02-04 |
 | 6. Developer Experience | v2 | 1/1 | Complete | 2026-02-04 |
-| 7. Platform Export Presets | v3 | 0/3 | Planned | - |
+| 7. Platform Export Presets | v3 | 3/3 | Complete | 2026-02-04 |
 | 8. Audio Normalization | v3 | 0/? | Not started | - |
 | 9. Video Enhancement Filters | v3 | 0/? | Not started | - |
 | 10. Segment Scoring Enhancement | v3 | 0/? | Not started | - |
