@@ -36,9 +36,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -52,7 +50,6 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
@@ -68,23 +65,16 @@ import {
   Mic,
   Type,
   Settings,
-  ChevronLeft,
-  ChevronDown,
-  ChevronUp,
   Upload,
   Loader2,
   CheckCircle2,
-  XCircle,
   Clock,
   Instagram,
   Youtube,
-  DollarSign,
   Scissors,
   Tag,
   Video,
   Pencil,
-  Send,
-  Star,
   Share2,
   Calendar,
   Volume2,
@@ -98,9 +88,9 @@ import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { VideoSegmentPlayer } from "@/components/video-segment-player";
 import { SimpleSegmentPopup } from "@/components/simple-segment-popup";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
-import { SubtitleSettings as SharedSubtitleSettings, DEFAULT_SUBTITLE_SETTINGS } from "@/types/video-processing";
+import { DEFAULT_SUBTITLE_SETTINGS } from "@/types/video-processing";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001/api/v1";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
 // Types
 interface Project {
@@ -363,6 +353,7 @@ function LibraryPageContent() {
   }, [searchParams, pathname, router]);
 
   // Sync URL when selectedProject changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!urlInitialized.current) return;
     updateUrl({
@@ -372,6 +363,7 @@ function LibraryPageContent() {
   }, [selectedProject?.id]);
 
   // Sync URL when selectedClip changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!urlInitialized.current) return;
     if (selectedClip) {
@@ -380,6 +372,7 @@ function LibraryPageContent() {
   }, [selectedClip?.id]);
 
   // Sync URL when generationMode changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!urlInitialized.current) return;
     updateUrl({ mode: generationMode });
@@ -2298,6 +2291,42 @@ Text subtitrare..."
                       />
                     </TabsContent>
                   </Tabs>
+
+                  {/* Platform Selector */}
+                  <div className="mb-4">
+                    <Label className="text-sm mb-2 block">Export for:</Label>
+                    <Select value={selectedPreset} onValueChange={setSelectedPreset}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select platform" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="tiktok">
+                          <span className="flex items-center gap-2">
+                            <Video className="h-4 w-4" />
+                            TikTok
+                          </span>
+                        </SelectItem>
+                        <SelectItem value="instagram_reels">
+                          <span className="flex items-center gap-2">
+                            <Instagram className="h-4 w-4" />
+                            Instagram Reels
+                          </span>
+                        </SelectItem>
+                        <SelectItem value="youtube_shorts">
+                          <span className="flex items-center gap-2">
+                            <Youtube className="h-4 w-4" />
+                            YouTube Shorts
+                          </span>
+                        </SelectItem>
+                        <SelectItem value="generic">
+                          <span className="flex items-center gap-2">
+                            <Film className="h-4 w-4" />
+                            Generic
+                          </span>
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
 
                   <div className="flex gap-2">
                     <Button onClick={saveClipContent} className="flex-1" variant="secondary">
