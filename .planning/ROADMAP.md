@@ -135,10 +135,11 @@ Plans:
   3. Exported video passes platform validation (no upload rejection for encoding issues)
   4. Audio encoded at 192k bitrate (upgraded from 128k)
   5. Encoding preset configuration is data-driven (new presets can be added without code changes)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 07-01: TBD
+- [ ] 07-01-PLAN.md — Encoding presets service: Pydantic model + platform preset definitions
+- [ ] 07-02-PLAN.md — Integration: keyframe controls in render pipeline + database preset updates
 
 #### Phase 8: Audio Normalization
 **Goal**: Consistent audio loudness at -14 LUFS for social media standards
@@ -213,7 +214,7 @@ Phases execute in numeric order: 7 -> 8 -> 9 -> 10 -> 11
 | 4. TTS Provider Selection | v2 | 8/8 | Complete | 2026-02-04 |
 | 5. Per-Profile Postiz | v2 | 5/5 | Complete | 2026-02-04 |
 | 6. Developer Experience | v2 | 1/1 | Complete | 2026-02-04 |
-| 7. Platform Export Presets | v3 | 0/? | Not started | - |
+| 7. Platform Export Presets | v3 | 0/2 | Planned | - |
 | 8. Audio Normalization | v3 | 0/? | Not started | - |
 | 9. Video Enhancement Filters | v3 | 0/? | Not started | - |
 | 10. Segment Scoring Enhancement | v3 | 0/? | Not started | - |
