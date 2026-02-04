@@ -11,7 +11,7 @@
 - [x] **PROF-02**: User can switch between profiles via dropdown in navbar
 - [x] **PROF-03**: Active profile indicator always visible in navbar (name + visual distinction)
 - [x] **PROF-04**: Each profile has its own isolated library (projects and clips not visible across profiles)
-- [ ] **PROF-05**: Each profile has its own Postiz API credentials for social media publishing
+- [x] **PROF-05**: Each profile has its own Postiz API credentials for social media publishing
 - [x] **PROF-06**: Default profile auto-selected on login (last used or marked as default)
 - [x] **PROF-07**: Existing projects and clips migrated to a default profile during setup
 
@@ -64,7 +64,7 @@
 | PROF-02 | Phase 3 | Complete |
 | PROF-03 | Phase 3 | Complete |
 | PROF-04 | Phase 1 | Complete |
-| PROF-05 | Phase 2, Phase 5 | Pending |
+| PROF-05 | Phase 2, Phase 5 | Complete |
 | PROF-06 | Phase 3 | Complete |
 | PROF-07 | Phase 1 | Complete |
 | TTS-01 | Phase 4 | Complete |
