@@ -105,10 +105,14 @@ Plans:
   3. Publishing from Profile B uses Profile B's Postiz account (no cross-posting)
   4. Cost quota enforcement prevents TTS calls when profile quota exceeded
   5. Profile activity dashboard shows video count and API costs per profile
-**Plans**: TBD
+**Plans**: 5 plans
 
 Plans:
-- [ ] 05-01: TBD
+- [ ] 05-01-PLAN.md — Backend: Profile-aware Postiz service factory with cache invalidation
+- [ ] 05-02-PLAN.md — Frontend: Postiz configuration section in Settings page
+- [ ] 05-03-PLAN.md — Backend: Quota enforcement and profile dashboard API
+- [ ] 05-04-PLAN.md — Frontend: Profile activity dashboard and quota configuration
+- [ ] 05-05-PLAN.md — Visual verification checkpoint
 
 ### Phase 6: Developer Experience
 **Goal**: Single-command launch script for backend + frontend + browser
@@ -135,6 +139,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 1. Database Foundation | 1/1 | Complete | 2026-02-03 |
 | 2. Backend Profile Context | 5/5 | Complete | 2026-02-03 |
 | 3. Frontend Profile UI | 3/3 | Complete | 2026-02-03 |
-| 4. TTS Provider Selection | 8/8 | ✓ Complete | 2026-02-04 |
-| 5. Per-Profile Postiz | 0/TBD | Not started | - |
+| 4. TTS Provider Selection | 8/8 | Complete | 2026-02-04 |
+| 5. Per-Profile Postiz | 0/5 | Planned | - |
 | 6. Developer Experience | 0/TBD | Not started | - |
