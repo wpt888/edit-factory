@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 5 of 6 (Per-Profile Postiz)
-Plan: 3 of 5 (Cost Quota and Dashboard API)
+Plan: 4 of 5 (Frontend Dashboard and Quota UI)
 Status: In progress
-Last activity: 2026-02-04 - Completed 05-03-PLAN.md
+Last activity: 2026-02-04 - Completed 05-04-PLAN.md
 
-Progress: [███████████████████░] 92%
+Progress: [███████████████████░] 96%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 19
-- Average duration: 6.8 min
-- Total execution time: 2.5 hours
+- Total plans completed: 20
+- Average duration: 6.5 min
+- Total execution time: 2.6 hours
 
 **By Phase:**
 
@@ -31,11 +31,11 @@ Progress: [███████████████████░] 92%
 | 02-backend-profile-context | 5 | 60 min | 12 min |
 | 03-frontend-profile-ui | 3 | 6 min | 2 min |
 | 04-tts-provider-selection | 8 | 35 min | 4.4 min |
-| 05-per-profile-postiz | 3 | 13 min | 4.3 min |
+| 05-per-profile-postiz | 4 | 16 min | 4 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-08 (5m), 05-01 (3m), 05-02 (7m), 05-03 (3m)
-- Trend: Backend-only plans consistently faster than frontend UI work
+- Last 5 plans: 05-01 (3m), 05-02 (7m), 05-03 (3m), 05-04 (3m)
+- Trend: Phase 5 plans consistently fast, averaging 4 minutes
 
 *Updated after each plan completion*
 
@@ -113,6 +113,10 @@ Recent decisions affecting current work:
 - **05-03**: Quota check uses calendar month (1st to end of month) for predictable billing cycles
 - **05-03**: Dashboard endpoint supports time_range query parameter (7d/30d/90d/all)
 - **05-03**: quota_remaining: null when quota is 0 (unlimited) - frontend can detect unlimited vs exhausted
+- **05-04**: Dashboard at top of Settings page (highest visibility)
+- **05-04**: 4-column grid for stats (responsive to 2 columns on mobile)
+- **05-04**: Color-coded quota progress bar (green/yellow/red thresholds at 70%/90%)
+- **05-04**: Quota input in separate Usage Limits card (separation of concerns)
 
 ### Pending Todos
 
@@ -127,31 +131,32 @@ None yet.
 **Remaining Phase 5 work:**
 - ~~Frontend Postiz settings UI (05-02)~~ COMPLETE
 - ~~Cost quota and dashboard API (05-03)~~ COMPLETE
-- Frontend quota UI display (05-04)
+- ~~Frontend quota UI display (05-04)~~ COMPLETE
 - Final verification (05-05)
 
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed 05-03-PLAN.md (Cost Quota and Dashboard API)
-Next action: Execute 05-04-PLAN.md (Frontend Quota UI)
+Stopped at: Completed 05-04-PLAN.md (Frontend Dashboard and Quota UI)
+Next action: Execute 05-05-PLAN.md (Final Verification)
 Resume file: None
 
 **Phase 5 Progress:**
 - 05-01: Backend profile-aware Postiz factory (3 min) - COMPLETE
 - 05-02: Frontend Postiz configuration UI (7 min) - COMPLETE
 - 05-03: Cost quota and dashboard API (3 min) - COMPLETE
-- 05-04: Frontend quota UI - PENDING
+- 05-04: Frontend dashboard and quota UI (3 min) - COMPLETE
 - 05-05: Final verification - PENDING
 
-**05-03 Achievements:**
-- CostTracker.get_monthly_costs() calculates calendar month costs
-- CostTracker.check_quota() provides exceeded/current/quota tuple
-- TTS /generate returns HTTP 402 when quota exceeded
-- Dashboard endpoint returns project/clip counts and cost breakdown
-- Time range filtering (7d/30d/90d/all) for dashboard stats
+**05-04 Achievements:**
+- Profile Activity dashboard card at top of Settings page
+- Stats grid showing projects, clips, rendered, monthly costs
+- Color-coded quota progress bar with threshold indicators
+- Cost breakdown by service (ElevenLabs, Gemini)
+- Usage Limits card with monthly quota USD input
+- Quota saved alongside TTS/Postiz settings
 
-**Ready for 05-04: Frontend Quota UI**
-- Backend quota enforcement working
-- Dashboard API provides all needed stats
-- Frontend needs to display quota status and handle 402 errors
+**Ready for 05-05: Final Verification**
+- All Phase 5 implementation complete
+- Need to verify end-to-end flow works
+- Test profile switching, quota enforcement, dashboard updates
