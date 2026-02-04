@@ -10,7 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Loader2, Save, Settings as SettingsIcon, Eye, EyeOff } from "lucide-react"
+import { Loader2, Save, Settings as SettingsIcon, Eye, EyeOff, BarChart3 } from "lucide-react"
 import { apiGet, apiPatch } from "@/lib/api"
 import { Input } from "@/components/ui/input"
 import { ProviderSelector } from "@/components/tts/provider-selector"
@@ -34,6 +34,22 @@ interface TTSSettings {
   }
 }
 
+interface DashboardData {
+  stats: {
+    projects_count: number
+    clips_count: number
+    rendered_count: number
+  }
+  costs: {
+    elevenlabs: number
+    gemini: number
+    total: number
+    monthly: number
+    monthly_quota: number | null
+    quota_remaining: number | null
+  }
+}
+
 export default function SettingsPage() {
   const { currentProfile, isLoading: profileLoading } = useProfile()
 
@@ -51,6 +67,10 @@ export default function SettingsPage() {
   const [testingConnection, setTestingConnection] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "success" | "error">("idle")
   const [showApiKey, setShowApiKey] = useState(false)
+
+  // Dashboard state
+  const [dashboard, setDashboard] = useState<DashboardData | null>(null)
+  const [dashboardLoading, setDashboardLoading] = useState(true)
 
   // Load current profile TTS settings
   useEffect(() => {
@@ -84,6 +104,28 @@ export default function SettingsPage() {
     }
 
     loadSettings()
+  }, [currentProfile, profileLoading])
+
+  // Load dashboard data
+  useEffect(() => {
+    if (profileLoading || !currentProfile) return
+
+    const loadDashboard = async () => {
+      setDashboardLoading(true)
+      try {
+        const response = await apiGet(`/profiles/${currentProfile.id}/dashboard?time_range=30d`)
+        if (!response.ok) throw new Error("Failed to load dashboard")
+
+        const data = await response.json()
+        setDashboard(data)
+      } catch (error) {
+        console.error("Failed to load dashboard:", error)
+      } finally {
+        setDashboardLoading(false)
+      }
+    }
+
+    loadDashboard()
   }, [currentProfile, profileLoading])
 
   // Load voices when provider changes
@@ -237,6 +279,105 @@ export default function SettingsPage() {
           </p>
         </div>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <BarChart3 className="h-5 w-5" />
+            Profile Activity
+          </CardTitle>
+          <CardDescription>
+            Video production and API usage for {currentProfile.name} (last 30 days)
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {dashboardLoading ? (
+            <div className="flex items-center justify-center h-24">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : dashboard ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {/* Projects */}
+              <div className="p-4 bg-muted rounded-lg">
+                <div className="text-2xl font-bold">{dashboard.stats.projects_count}</div>
+                <div className="text-sm text-muted-foreground">Projects</div>
+              </div>
+
+              {/* Clips */}
+              <div className="p-4 bg-muted rounded-lg">
+                <div className="text-2xl font-bold">{dashboard.stats.clips_count}</div>
+                <div className="text-sm text-muted-foreground">Clips Generated</div>
+              </div>
+
+              {/* Rendered */}
+              <div className="p-4 bg-muted rounded-lg">
+                <div className="text-2xl font-bold">{dashboard.stats.rendered_count}</div>
+                <div className="text-sm text-muted-foreground">Clips Rendered</div>
+              </div>
+
+              {/* Monthly Costs */}
+              <div className="p-4 bg-muted rounded-lg">
+                <div className="text-2xl font-bold">${dashboard.costs.monthly.toFixed(2)}</div>
+                <div className="text-sm text-muted-foreground">This Month</div>
+              </div>
+            </div>
+          ) : (
+            <p className="text-center text-muted-foreground">Failed to load dashboard data</p>
+          )}
+
+          {/* Quota Progress (if quota set) */}
+          {dashboard && dashboard.costs.monthly_quota && dashboard.costs.monthly_quota > 0 && (
+            <div className="mt-4 pt-4 border-t">
+              <div className="flex justify-between text-sm mb-2">
+                <span>Monthly Quota Usage</span>
+                <span>
+                  ${dashboard.costs.monthly.toFixed(2)} / ${dashboard.costs.monthly_quota.toFixed(2)}
+                </span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
+                <div
+                  className={`h-2.5 rounded-full ${
+                    (dashboard.costs.monthly / dashboard.costs.monthly_quota) > 0.9
+                      ? 'bg-red-500'
+                      : (dashboard.costs.monthly / dashboard.costs.monthly_quota) > 0.7
+                        ? 'bg-yellow-500'
+                        : 'bg-green-500'
+                  }`}
+                  style={{
+                    width: `${Math.min(100, (dashboard.costs.monthly / dashboard.costs.monthly_quota) * 100)}%`
+                  }}
+                />
+              </div>
+              {dashboard.costs.quota_remaining !== null && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  ${dashboard.costs.quota_remaining.toFixed(2)} remaining this month
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Cost Breakdown */}
+          {dashboard && dashboard.costs.total > 0 && (
+            <div className="mt-4 pt-4 border-t">
+              <h4 className="text-sm font-medium mb-2">Cost Breakdown (All Time)</h4>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">ElevenLabs TTS:</span>
+                  <span>${dashboard.costs.elevenlabs.toFixed(4)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Gemini Vision:</span>
+                  <span>${dashboard.costs.gemini.toFixed(4)}</span>
+                </div>
+              </div>
+              <div className="flex justify-between font-medium mt-2 pt-2 border-t">
+                <span>Total:</span>
+                <span>${dashboard.costs.total.toFixed(4)}</span>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
