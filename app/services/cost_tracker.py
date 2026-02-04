@@ -279,20 +279,86 @@ class CostTracker:
             "last_entries": entries[-10:][::-1]
         }
 
-    def get_all_entries(self) -> List[Dict]:
-        """Get all cost entries."""
+    def get_all_entries(self, profile_id: Optional[str] = None) -> List[Dict]:
+        """Get all cost entries, optionally filtered by profile."""
         if self._supabase:
             try:
-                result = self._supabase.table("api_costs")\
+                query = self._supabase.table("api_costs")\
                     .select("*")\
-                    .order("created_at", desc=True)\
-                    .execute()
+                    .order("created_at", desc=True)
+                if profile_id:
+                    query = query.eq("profile_id", profile_id)
+                result = query.execute()
                 return result.data
             except Exception as e:
                 logger.warning(f"Failed to get entries from Supabase: {e}")
 
         data = self._load_log()
-        return data.get("entries", [])
+        entries = data.get("entries", [])
+        # Filter by profile_id if provided (check in details dict)
+        if profile_id:
+            entries = [e for e in entries if e.get("details", {}).get("profile_id") == profile_id]
+        return entries
+
+    def get_monthly_costs(self, profile_id: str) -> float:
+        """
+        Get current calendar month's total costs for a profile.
+
+        Args:
+            profile_id: Profile UUID
+
+        Returns:
+            Total cost in USD for current month
+        """
+        # Get first day of current month
+        now = datetime.now()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        if self._supabase:
+            try:
+                result = self._supabase.table("api_costs")\
+                    .select("estimated_cost")\
+                    .eq("profile_id", profile_id)\
+                    .gte("created_at", month_start.isoformat())\
+                    .execute()
+
+                total = sum(float(row.get("estimated_cost", 0) or 0) for row in result.data)
+                return round(total, 4)
+            except Exception as e:
+                logger.warning(f"Failed to get monthly costs from Supabase: {e}")
+
+        # Fallback to local log
+        data = self._load_log()
+        entries = data.get("entries", [])
+
+        # Filter by profile and current month
+        month_prefix = month_start.strftime("%Y-%m")
+        monthly_entries = [
+            e for e in entries
+            if e.get("details", {}).get("profile_id") == profile_id
+            and e.get("timestamp", "").startswith(month_prefix)
+        ]
+
+        total = sum(e.get("cost_usd", 0) for e in monthly_entries)
+        return round(total, 4)
+
+    def check_quota(self, profile_id: str, monthly_quota: float) -> tuple:
+        """
+        Check if profile has exceeded quota.
+
+        Args:
+            profile_id: Profile UUID
+            monthly_quota: Monthly quota in USD (0 = unlimited)
+
+        Returns:
+            Tuple of (exceeded: bool, current_costs: float, quota: float)
+        """
+        if monthly_quota <= 0:
+            return False, 0.0, 0.0  # Unlimited
+
+        current = self.get_monthly_costs(profile_id)
+        exceeded = current >= monthly_quota
+        return exceeded, current, monthly_quota
 
 
 # Singleton instance
