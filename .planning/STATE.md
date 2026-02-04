@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 5 of 6 (Per-Profile Postiz)
-Plan: 1 of 5 (Backend Profile-Aware Postiz Factory)
+Plan: 2 of 5 (Frontend Postiz Configuration UI)
 Status: In progress
-Last activity: 2026-02-04 - Completed 05-01-PLAN.md
+Last activity: 2026-02-04 - Completed 05-02-PLAN.md
 
-Progress: [█████████████████░░░] 86%
+Progress: [██████████████████░░] 88%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 17
-- Average duration: 7.2 min
-- Total execution time: 2.3 hours
+- Total plans completed: 18
+- Average duration: 7.1 min
+- Total execution time: 2.4 hours
 
 **By Phase:**
 
@@ -31,11 +31,11 @@ Progress: [█████████████████░░░] 86%
 | 02-backend-profile-context | 5 | 60 min | 12 min |
 | 03-frontend-profile-ui | 3 | 6 min | 2 min |
 | 04-tts-provider-selection | 8 | 35 min | 4.4 min |
-| 05-per-profile-postiz | 1 | 3 min | 3 min |
+| 05-per-profile-postiz | 2 | 10 min | 5 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-06 (19m), 04-07 (<1m), 04-08 (5m), 05-01 (3m)
-- Trend: 05-01 was pure backend refactoring (no UI), quick execution
+- Last 5 plans: 04-07 (<1m), 04-08 (5m), 05-01 (3m), 05-02 (7m)
+- Trend: Frontend UI additions taking slightly longer due to multiple state variables
 
 *Updated after each plan completion*
 
@@ -105,6 +105,10 @@ Recent decisions affecting current work:
 - **05-01**: ValueError for missing credentials (routes return 400 with helpful message)
 - **05-01**: PATCH endpoint added to profile_routes.py for tts_settings updates
 - **05-01**: Cache invalidation via reset_postiz_publisher(profile_id) on settings change
+- **05-02**: Store postiz under tts_settings (reuses existing JSONB column, no schema change)
+- **05-02**: Show/hide API key toggle (security UX - default masked, optional reveal)
+- **05-02**: Test uses /postiz/status (existing backend endpoint for validation)
+- **05-02**: Single Save button (saves both TTS and Postiz settings at once)
 
 ### Pending Todos
 
@@ -117,35 +121,34 @@ None yet.
 - ~~Per-profile Postiz credentials storage in profiles.tts_settings JSONB or new column~~ RESOLVED: Using tts_settings.postiz
 
 **Remaining Phase 5 work:**
-- Frontend Postiz settings UI (05-02)
-- Frontend credential validation UI (05-03)
+- ~~Frontend Postiz settings UI (05-02)~~ COMPLETE
+- Backend credential validation endpoint (05-03)
 - Cost quota enforcement (05-04)
 - Profile activity dashboard (05-05)
 
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed 05-01-PLAN.md (Backend Profile-Aware Postiz Factory)
-Next action: Execute 05-02-PLAN.md (Frontend Postiz Settings UI)
+Stopped at: Completed 05-02-PLAN.md (Frontend Postiz Configuration UI)
+Next action: Execute 05-03-PLAN.md (Backend Credential Validation)
 Resume file: None
 
 **Phase 5 Progress:**
 - 05-01: Backend profile-aware Postiz factory (3 min) - COMPLETE
-- 05-02: Frontend Postiz settings UI - PENDING
-- 05-03: Frontend credential validation - PENDING
+- 05-02: Frontend Postiz configuration UI (7 min) - COMPLETE
+- 05-03: Backend credential validation - PENDING
 - 05-04: Cost quota enforcement - PENDING
 - 05-05: Profile activity dashboard - PENDING
 
-**05-01 Achievements:**
-- Postiz service refactored from singleton to profile-aware factory
-- Instance caching with Dict[str, PostizPublisher]
-- Database lookup from profiles.tts_settings.postiz
-- Environment variable fallback for backward compatibility
-- Cache invalidation on profile settings change
-- All 6 Postiz route endpoints updated to pass profile_id
-- PATCH endpoint added to profile_routes.py
+**05-02 Achievements:**
+- Settings page extended with Postiz Publishing card
+- URL and API key inputs with show/hide toggle (Eye icons)
+- Test Connection button with loading state
+- Connection status indicator (green/yellow dot)
+- Credentials saved to profile.tts_settings.postiz
+- Single Save button for both TTS and Postiz settings
 
-**Ready for 05-02: Frontend Postiz Settings UI**
-- Backend accepts Postiz credentials via PATCH /profiles/{id}
-- Settings page needs new section for Postiz configuration
-- Form fields: api_url, api_key, enabled toggle
+**Ready for 05-03: Backend Credential Validation**
+- Frontend can capture Postiz credentials
+- Need backend endpoint to validate credentials before saving
+- Current Test Connection uses /postiz/status (needs profile credentials first)
