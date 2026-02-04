@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
+from app.services.encoding_presets import get_preset, EncodingPreset
 
 import logging
 
@@ -2376,40 +2377,60 @@ def _render_with_preset(
     if filters:
         cmd.extend(["-vf", ",".join(filters)])
 
-    # Video encoding (optimized for social media)
-    cmd.extend([
-        "-c:v", preset.get("video_codec", "libx264"),
-        "-profile:v", preset.get("video_profile", "high"),
-        "-level:v", preset.get("video_level", "4.0"),
-        
-        "-crf", str(preset.get("crf", 18)),
-        "-maxrate", preset.get("video_bitrate", "10M"),
-        "-bufsize", str(int(preset.get("video_bitrate", "10M").replace("M", "")) * 2) + "M",
-        "-preset", "slow",  # Better compression
-        "-r", str(preset.get("fps", 30))
-    ])
+    # Get encoding preset parameters
+    # Map database preset name to platform key
+    preset_name = preset.get("name", "Generic")
+    platform_map = {
+        "TikTok": "tiktok",
+        "Instagram Reels": "reels",
+        "YouTube Shorts": "youtube_shorts",
+        "Generic": "generic"
+    }
+    platform_key = platform_map.get(preset_name, "generic")
 
-    # Audio encoding
+    # Get EncodingPreset object and generate FFmpeg params
+    encoding_preset = get_preset(platform_key)
+    logger.info(f"Using encoding preset: {encoding_preset.name} (platform: {encoding_preset.platform})")
+
+    # Get encoding parameters (use_gpu=False for CPU encoding)
+    encoding_params = encoding_preset.to_ffmpeg_params(use_gpu=False)
+
+    # Extract audio bitrate from encoding params for comparison
+    preset_audio_bitrate = encoding_preset.audio_bitrate
+
+    # Override audio bitrate if database preset has higher value
+    db_audio_bitrate = preset.get("audio_bitrate", "192k")
+    if db_audio_bitrate and db_audio_bitrate != preset_audio_bitrate:
+        # Parse bitrates for comparison (e.g., "320k" -> 320)
+        db_bitrate_val = int(db_audio_bitrate.replace("k", ""))
+        preset_bitrate_val = int(preset_audio_bitrate.replace("k", ""))
+        if db_bitrate_val > preset_bitrate_val:
+            logger.info(f"Database audio bitrate {db_audio_bitrate} higher than preset {preset_audio_bitrate}, using database value")
+            # Update audio bitrate in encoding params
+            for i, param in enumerate(encoding_params):
+                if param == "-b:a":
+                    encoding_params[i+1] = db_audio_bitrate
+                    break
+
+    # Add FPS setting (from database preset)
+    cmd.extend(["-r", str(preset.get("fps", 30))])
+
+    # Add encoding parameters from EncodingPreset
+    cmd.extend(encoding_params)
+
+    # Audio mapping
     if audio_path and audio_path.exists():
         cmd.extend([
-            "-c:a", preset.get("audio_codec", "aac"),
-            "-b:a", preset.get("audio_bitrate", "320k"),
-            "-ar", str(preset.get("audio_sample_rate", 48000)),
             "-map", "0:v:0",
             "-map", "1:a:0"
         ])
     else:
         # Silent audio - map video from 0, audio from lavfi 1
         cmd.extend([
-            "-c:a", "aac",
-            "-b:a", "128k",
             "-map", "0:v:0",
             "-map", "1:a:0",
             "-shortest"
         ])
-
-    # Pixel format
-    cmd.extend(["-pix_fmt", preset.get("pixel_format", "yuv420p")])
 
     # Extra flags for social media compatibility
     extra_flags = preset.get("extra_flags", "-movflags +faststart")
