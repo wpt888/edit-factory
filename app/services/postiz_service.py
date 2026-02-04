@@ -302,26 +302,133 @@ class PostizPublisher:
             )
 
 
-# Factory function following existing pattern
-_postiz_publisher: Optional[PostizPublisher] = None
+# Profile-aware factory pattern with instance caching
+_postiz_instances: Dict[str, PostizPublisher] = {}
 
 
-def get_postiz_publisher() -> PostizPublisher:
-    """Factory function to get PostizPublisher instance."""
-    global _postiz_publisher
-    if _postiz_publisher is None:
-        _postiz_publisher = PostizPublisher()
-    return _postiz_publisher
+def _get_supabase():
+    """Get Supabase client from library_routes."""
+    try:
+        from app.api.library_routes import get_supabase
+        return get_supabase()
+    except Exception as e:
+        logger.error(f"Failed to get Supabase client: {e}")
+        return None
 
 
-def reset_postiz_publisher():
-    """Reset publisher instance (for config changes)."""
-    global _postiz_publisher
-    _postiz_publisher = None
+def get_postiz_publisher(profile_id: str) -> PostizPublisher:
+    """
+    Get Postiz publisher instance for specific profile.
+
+    Args:
+        profile_id: Profile UUID to load credentials for
+
+    Returns:
+        PostizPublisher configured with profile's Postiz credentials
+
+    Raises:
+        ValueError: If profile has no Postiz credentials configured
+    """
+    global _postiz_instances
+
+    # Return cached instance if exists
+    if profile_id in _postiz_instances:
+        return _postiz_instances[profile_id]
+
+    # Load profile's Postiz settings from database
+    supabase = _get_supabase()
+    api_url = None
+    api_key = None
+
+    if supabase:
+        try:
+            result = supabase.table("profiles")\
+                .select("tts_settings")\
+                .eq("id", profile_id)\
+                .single()\
+                .execute()
+
+            if result.data:
+                tts_settings = result.data.get("tts_settings") or {}
+                postiz_config = tts_settings.get("postiz") or {}
+                api_url = postiz_config.get("api_url")
+                api_key = postiz_config.get("api_key")
+                logger.info(f"[Profile {profile_id}] Loaded Postiz config from database")
+        except Exception as e:
+            logger.warning(f"[Profile {profile_id}] Failed to load Postiz config: {e}")
+
+    # Fallback to global env vars if profile doesn't have Postiz configured
+    if not api_url:
+        api_url = os.getenv("POSTIZ_API_URL")
+    if not api_key:
+        api_key = os.getenv("POSTIZ_API_KEY")
+
+    if not api_url or not api_key:
+        raise ValueError(
+            f"Profile {profile_id} has no Postiz credentials configured. "
+            "Configure in Settings page or set POSTIZ_API_URL and POSTIZ_API_KEY environment variables."
+        )
+
+    # Create and cache instance
+    publisher = PostizPublisher(api_url=api_url, api_key=api_key)
+    _postiz_instances[profile_id] = publisher
+    logger.info(f"[Profile {profile_id}] Created Postiz publisher instance")
+
+    return publisher
 
 
-def is_postiz_configured() -> bool:
-    """Check if Postiz credentials are configured."""
+def reset_postiz_publisher(profile_id: Optional[str] = None):
+    """
+    Reset cached publisher instance(s).
+    Call this when profile's Postiz credentials change.
+
+    Args:
+        profile_id: Reset specific profile's instance, or None to reset all
+    """
+    global _postiz_instances
+    if profile_id:
+        if profile_id in _postiz_instances:
+            del _postiz_instances[profile_id]
+            logger.info(f"[Profile {profile_id}] Reset Postiz publisher cache")
+    else:
+        _postiz_instances = {}
+        logger.info("Reset all Postiz publisher caches")
+
+
+def is_postiz_configured(profile_id: Optional[str] = None) -> bool:
+    """
+    Check if Postiz credentials are configured.
+
+    Args:
+        profile_id: Check specific profile's config, or None for global env vars
+
+    Returns:
+        True if Postiz API URL and key are configured
+    """
+    if profile_id:
+        # Check profile's tts_settings.postiz
+        supabase = _get_supabase()
+        if supabase:
+            try:
+                result = supabase.table("profiles")\
+                    .select("tts_settings")\
+                    .eq("id", profile_id)\
+                    .single()\
+                    .execute()
+
+                if result.data:
+                    tts_settings = result.data.get("tts_settings") or {}
+                    postiz_config = tts_settings.get("postiz") or {}
+                    api_url = postiz_config.get("api_url")
+                    api_key = postiz_config.get("api_key")
+                    if api_url and api_key:
+                        return True
+            except Exception:
+                pass
+
+        # Fall through to check global env vars
+
+    # Check global env vars
     api_url = os.getenv("POSTIZ_API_URL", "")
     api_key = os.getenv("POSTIZ_API_KEY", "")
     return bool(api_url and api_key)
