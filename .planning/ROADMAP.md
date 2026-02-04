@@ -2,14 +2,14 @@
 
 ## Milestones
 
-- ✅ **v1.0 MVP** - Phases 1-0 (video processing core, shipped ~2024)
-- ✅ **v2 Profile System** - Phases 1-6 (profile isolation, TTS providers, shipped 2026-02-04)
-- 🚧 **v3 Video Quality Enhancement** - Phases 7-11 (encoding optimization, in progress)
+- **v1.0 MVP** - Phases 1-0 (video processing core, shipped ~2024)
+- **v2 Profile System** - Phases 1-6 (profile isolation, TTS providers, shipped 2026-02-04)
+- **v3 Video Quality Enhancement** - Phases 7-11 (encoding optimization, in progress)
 
 ## Phases
 
 <details>
-<summary>✅ v2 Profile System (Phases 1-6) - SHIPPED 2026-02-04</summary>
+<summary>v2 Profile System (Phases 1-6) - SHIPPED 2026-02-04</summary>
 
 ### Phase 1: Database Foundation
 **Goal**: Establish profile-based data isolation at database level with Supabase RLS
@@ -121,7 +121,7 @@ Plans:
 
 </details>
 
-### 🚧 v3 Video Quality Enhancement (In Progress)
+### v3 Video Quality Enhancement (In Progress)
 
 **Milestone Goal:** Professional-grade video output with platform-optimized encoding, audio normalization, and enhanced visual quality
 
@@ -135,11 +135,14 @@ Plans:
   3. Exported video passes platform validation (no upload rejection for encoding issues)
   4. Audio encoded at 192k bitrate (upgraded from 128k)
   5. Encoding preset configuration is data-driven (new presets can be added without code changes)
-**Plans**: 2 plans
+**Plans**: 3 plans
 
 Plans:
 - [ ] 07-01-PLAN.md — Encoding presets service: Pydantic model + platform preset definitions
 - [ ] 07-02-PLAN.md — Integration: keyframe controls in render pipeline + database preset updates
+- [ ] 07-03-PLAN.md — Frontend: Platform selector dropdown in library export UI
+
+**Manual UAT Note**: Success criterion 3 (platform validation) requires manual testing by uploading to actual platforms. This is documented in 07-02-PLAN.md.
 
 #### Phase 8: Audio Normalization
 **Goal**: Consistent audio loudness at -14 LUFS for social media standards
@@ -164,7 +167,7 @@ Plans:
   1. User can enable denoising filter for low-light footage (reduces grain/noise)
   2. User can enable sharpening filter for soft footage (improves clarity without halos)
   3. User can adjust color correction (brightness, contrast, saturation sliders)
-  4. Filters applied in correct order (denoise → sharpen → color correct) without breaking GPU acceleration
+  4. Filters applied in correct order (denoise -> sharpen -> color correct) without breaking GPU acceleration
   5. Filter processing adds less than 20% overhead (vs no-filter baseline)
 **Plans**: TBD
 
@@ -214,7 +217,7 @@ Phases execute in numeric order: 7 -> 8 -> 9 -> 10 -> 11
 | 4. TTS Provider Selection | v2 | 8/8 | Complete | 2026-02-04 |
 | 5. Per-Profile Postiz | v2 | 5/5 | Complete | 2026-02-04 |
 | 6. Developer Experience | v2 | 1/1 | Complete | 2026-02-04 |
-| 7. Platform Export Presets | v3 | 0/2 | Planned | - |
+| 7. Platform Export Presets | v3 | 0/3 | Planned | - |
 | 8. Audio Normalization | v3 | 0/? | Not started | - |
 | 9. Video Enhancement Filters | v3 | 0/? | Not started | - |
 | 10. Segment Scoring Enhancement | v3 | 0/? | Not started | - |
