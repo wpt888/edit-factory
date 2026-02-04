@@ -26,8 +26,8 @@
 
 ### Developer Experience
 
-- [ ] **DX-01**: Start script (.bat for Windows, .sh for WSL) launches backend + frontend + opens browser with single execution
-- [ ] **DX-02**: Start script handles venv activation, port availability, and graceful shutdown
+- [x] **DX-01**: Start script (.bat for Windows, .sh for WSL) launches backend + frontend + opens browser with single execution
+- [x] **DX-02**: Start script handles venv activation, port availability, and graceful shutdown
 
 ## v2 Requirements
 
@@ -73,8 +73,8 @@
 | TTS-04 | Phase 4 | Complete |
 | TTS-05 | Phase 4 | Complete |
 | TTS-06 | Phase 4 | Complete |
-| DX-01 | Phase 6 | Pending |
-| DX-02 | Phase 6 | Pending |
+| DX-01 | Phase 6 | Complete |
+| DX-02 | Phase 6 | Complete |
 
 **Coverage:**
 - v1 requirements: 15 total

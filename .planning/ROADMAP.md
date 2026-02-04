@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Frontend Profile UI** - Profile switcher and context propagation
 - [x] **Phase 4: TTS Provider Selection** - Free TTS integration and voice presets
 - [x] **Phase 5: Per-Profile Postiz** - Publishing configuration per store
-- [ ] **Phase 6: Developer Experience** - Start script and deployment automation
+- [x] **Phase 6: Developer Experience** - Start script and deployment automation
 
 ## Phase Details
 
@@ -127,7 +127,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 06-01-PLAN.md — Development start scripts for Windows and WSL/Linux
+- [x] 06-01-PLAN.md — Development start scripts for Windows and WSL/Linux
 
 ## Progress
 
@@ -141,4 +141,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 3. Frontend Profile UI | 3/3 | Complete | 2026-02-03 |
 | 4. TTS Provider Selection | 8/8 | Complete | 2026-02-04 |
 | 5. Per-Profile Postiz | 5/5 | Complete | 2026-02-04 |
-| 6. Developer Experience | 0/1 | In Progress | - |
+| 6. Developer Experience | 1/1 | Complete | 2026-02-04 |
