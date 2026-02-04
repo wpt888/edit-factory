@@ -10,8 +10,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Loader2, Save, Settings as SettingsIcon } from "lucide-react"
+import { Loader2, Save, Settings as SettingsIcon, Eye, EyeOff } from "lucide-react"
 import { apiGet, apiPatch } from "@/lib/api"
+import { Input } from "@/components/ui/input"
 import { ProviderSelector } from "@/components/tts/provider-selector"
 import { VoiceCloningUpload } from "@/components/tts/voice-cloning-upload"
 import { useProfile } from "@/contexts/profile-context"
@@ -26,6 +27,11 @@ interface TTSSettings {
   provider: string
   voice_id: string
   voice_name?: string
+  postiz?: {
+    api_url: string
+    api_key: string
+    enabled: boolean
+  }
 }
 
 export default function SettingsPage() {
@@ -37,6 +43,14 @@ export default function SettingsPage() {
   const [loadingVoices, setLoadingVoices] = useState(false)
   const [saving, setSaving] = useState(false)
   const [initialLoad, setInitialLoad] = useState(true)
+
+  // Postiz settings state
+  const [postizUrl, setPostizUrl] = useState("")
+  const [postizKey, setPostizKey] = useState("")
+  const [postizEnabled, setPostizEnabled] = useState(false)
+  const [testingConnection, setTestingConnection] = useState(false)
+  const [connectionStatus, setConnectionStatus] = useState<"idle" | "success" | "error">("idle")
+  const [showApiKey, setShowApiKey] = useState(false)
 
   // Load current profile TTS settings
   useEffect(() => {
@@ -56,6 +70,12 @@ export default function SettingsPage() {
         if (ttsSettings.voice_id) {
           setVoiceId(ttsSettings.voice_id)
         }
+
+        // Load Postiz settings
+        const postizSettings = ttsSettings.postiz || {}
+        setPostizUrl(postizSettings.api_url || "")
+        setPostizKey(postizSettings.api_key || "")
+        setPostizEnabled(postizSettings.enabled || false)
       } catch (error) {
         console.error("Failed to load settings:", error)
       } finally {
@@ -106,6 +126,11 @@ export default function SettingsPage() {
       const ttsSettings: TTSSettings = {
         provider,
         voice_id: voiceId,
+        postiz: {
+          api_url: postizUrl,
+          api_key: postizKey,
+          enabled: postizEnabled,
+        },
       }
 
       // Add voice name if available
@@ -120,7 +145,7 @@ export default function SettingsPage() {
 
       if (!response.ok) throw new Error("Failed to save settings")
 
-      alert("TTS settings saved successfully")
+      alert("Settings saved successfully (TTS and Postiz)")
     } catch (error) {
       alert(error instanceof Error ? error.message : "Failed to save settings")
     } finally {
@@ -144,6 +169,36 @@ export default function SettingsPage() {
       console.error("Failed to reload voices:", error)
     } finally {
       setLoadingVoices(false)
+    }
+  }
+
+  const handleTestConnection = async () => {
+    if (!postizUrl || !postizKey) {
+      alert("Please enter Postiz API URL and API Key first")
+      return
+    }
+
+    setTestingConnection(true)
+    setConnectionStatus("idle")
+
+    try {
+      // Test using the current profile's credentials (will use saved or env fallback)
+      const response = await apiGet("/postiz/status")
+      if (!response.ok) throw new Error("Connection failed")
+
+      const data = await response.json()
+      if (data.connected) {
+        setConnectionStatus("success")
+        alert(`Connected successfully! Found ${data.integrations_count} social media accounts.`)
+      } else {
+        setConnectionStatus("error")
+        alert(`Connection failed: ${data.error || "Unknown error"}`)
+      }
+    } catch (error) {
+      setConnectionStatus("error")
+      alert(error instanceof Error ? error.message : "Connection test failed")
+    } finally {
+      setTestingConnection(false)
     }
   }
 
@@ -230,27 +285,109 @@ export default function SettingsPage() {
               <VoiceCloningUpload onVoiceCloned={handleVoiceCloned} />
             </div>
           )}
-
-          <div className="flex justify-end pt-4">
-            <Button
-              onClick={handleSave}
-              disabled={saving || !voiceId}
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Save className="mr-2 h-4 w-4" />
-                  Save Settings
-                </>
-              )}
-            </Button>
-          </div>
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Postiz Publishing</CardTitle>
+          <CardDescription>
+            Configure social media publishing credentials for {currentProfile.name}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Postiz API URL</label>
+            <Input
+              value={postizUrl}
+              onChange={(e) => setPostizUrl(e.target.value)}
+              placeholder="https://api.postiz.com"
+              disabled={saving}
+            />
+            <p className="text-xs text-muted-foreground">
+              The URL of your Postiz API server
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Postiz API Key</label>
+            <div className="flex gap-2">
+              <Input
+                type={showApiKey ? "text" : "password"}
+                value={postizKey}
+                onChange={(e) => setPostizKey(e.target.value)}
+                placeholder="pk_live_..."
+                disabled={saving}
+                className="flex-1"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowApiKey(!showApiKey)}
+              >
+                {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Your Postiz API key (found in Postiz settings)
+            </p>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <Button
+              variant="outline"
+              onClick={handleTestConnection}
+              disabled={testingConnection || !postizUrl || !postizKey}
+            >
+              {testingConnection ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Testing...
+                </>
+              ) : (
+                "Test Connection"
+              )}
+            </Button>
+            {connectionStatus === "success" && (
+              <span className="text-sm text-green-600">Connected</span>
+            )}
+            {connectionStatus === "error" && (
+              <span className="text-sm text-red-600">Connection failed</span>
+            )}
+          </div>
+
+          {postizUrl && postizKey && (
+            <div className="flex items-center gap-2 p-3 bg-muted rounded-md">
+              <div className={`w-2 h-2 rounded-full ${connectionStatus === "success" ? "bg-green-500" : "bg-yellow-500"}`} />
+              <span className="text-sm">
+                {connectionStatus === "success"
+                  ? "Credentials configured and verified"
+                  : "Credentials configured (not yet verified)"}
+              </span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="flex justify-end">
+        <Button
+          onClick={handleSave}
+          disabled={saving || !voiceId}
+        >
+          {saving ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Saving...
+            </>
+          ) : (
+            <>
+              <Save className="mr-2 h-4 w-4" />
+              Save Settings
+            </>
+          )}
+        </Button>
+      </div>
     </div>
   )
 }
