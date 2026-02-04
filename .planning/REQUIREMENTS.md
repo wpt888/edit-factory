@@ -1,87 +1,101 @@
-# Requirements: Edit Factory v2
+# Requirements: Edit Factory v3
 
-**Defined:** 2026-02-03
-**Core Value:** One-click video production workflow with profile isolation for multiple online stores
+**Defined:** 2026-02-04
+**Core Value:** Professional-grade video output with platform-optimized encoding and enhanced visual quality
 
-## v1 Requirements
+## v3 Requirements
 
-### Profiles
+Requirements for video quality enhancement milestone. Each maps to roadmap phases.
 
-- [x] **PROF-01**: User can create a profile with name and description for each store
-- [x] **PROF-02**: User can switch between profiles via dropdown in navbar
-- [x] **PROF-03**: Active profile indicator always visible in navbar (name + visual distinction)
-- [x] **PROF-04**: Each profile has its own isolated library (projects and clips not visible across profiles)
-- [x] **PROF-05**: Each profile has its own Postiz API credentials for social media publishing
-- [x] **PROF-06**: Default profile auto-selected on login (last used or marked as default)
-- [x] **PROF-07**: Existing projects and clips migrated to a default profile during setup
+### Encoding
 
-### TTS
+- [ ] **ENC-01**: System applies platform-specific encoding presets (TikTok, Reels, YouTube Shorts) during export
+- [ ] **ENC-02**: System uses professional encoding settings (CRF 18-20, preset medium/slow)
+- [ ] **ENC-03**: System adds keyframe controls (-g 120, -keyint_min 120) for platform compatibility
+- [ ] **ENC-04**: System encodes audio at 192k bitrate (upgrade from 128k)
 
-- [x] **TTS-01**: User can select TTS provider from UI (ElevenLabs, Edge TTS, Coqui XTTS, Kokoro)
-- [x] **TTS-02**: Provider cost displayed inline next to each option (paid amount vs "Free" label)
-- [x] **TTS-03**: Coqui XTTS v2 integrated as local free TTS engine with voice cloning capability
-- [x] **TTS-04**: Kokoro TTS integrated as local free TTS engine with preset voices
-- [x] **TTS-05**: User can save default voice settings per profile (provider, voice ID, model, speed)
-- [x] **TTS-06**: Voice cloning workflow: user uploads 6-second audio sample, system creates cloned voice usable in Coqui XTTS
+### Audio Normalization
 
-### Developer Experience
+- [ ] **AUD-01**: System normalizes audio to -14 LUFS using two-pass loudnorm filter
+- [ ] **AUD-02**: System applies true peak limiting (-1.5 dBTP) to prevent clipping
 
-- [x] **DX-01**: Start script (.bat for Windows, .sh for WSL) launches backend + frontend + opens browser with single execution
-- [x] **DX-02**: Start script handles venv activation, port availability, and graceful shutdown
+### Video Filters
 
-## v2 Requirements
+- [ ] **FLT-01**: User can enable denoising filter (hqdn3d) for low-light footage
+- [ ] **FLT-02**: User can enable sharpening filter (unsharp) for soft footage
+- [ ] **FLT-03**: User can adjust color correction (brightness, contrast, saturation)
+- [ ] **FLT-04**: System applies filters in correct order (denoise → sharpen → color correct)
 
-### TTS Enhancements
+### Segment Scoring
 
-- **TTS-07**: Piper TTS integrated as fast preview TTS engine (lower quality, faster generation)
-- **TTS-08**: Voice preview button to test voice with sample text before full generation
-- **TTS-09**: Automatic TTS failover (ElevenLabs quota exceeded -> fall back to free provider)
+- [ ] **SCR-01**: System calculates blur score using Laplacian variance for each segment
+- [ ] **SCR-02**: System penalizes blurry segments in combined scoring algorithm
 
-### Profile Enhancements
+### Subtitles
 
-- **PROF-08**: Cross-profile project copying (clone project from Store A to Store B)
-- **PROF-09**: Profile activity dashboard (video count, API costs, last activity per profile)
-- **PROF-10**: Per-profile cost quota with enforcement (reject TTS if quota exceeded)
+- [ ] **SUB-01**: User can enable shadow effects on subtitles with configurable depth
+- [ ] **SUB-02**: User can enable glow/outline effects on subtitle text
+- [ ] **SUB-03**: System automatically adjusts font size based on text length (adaptive sizing)
+
+## Future Requirements
+
+Deferred to v4 or later milestone.
+
+### Advanced Quality
+
+- **QUAL-01**: System calculates VMAF score for quality validation
+- **QUAL-02**: User receives quality warnings before platform upload
+- **QUAL-03**: System supports adaptive bitrate encoding (target VMAF instead of fixed CRF)
+
+### Audio Enhancement
+
+- **AUDE-01**: System applies noise reduction to voice recordings
+- **AUDE-02**: System applies EQ enhancement for voice clarity
+- **AUDE-03**: System applies compression for consistent volume
+
+### Advanced Subtitles
+
+- **SUBE-01**: System highlights current word during playback (CapCut style)
+- **SUBE-02**: User can add subtitle animations (fade in, scale)
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Desktop app (Electron/Tauri) | Unnecessary overhead for single-user constant-upgrade workflow |
-| Team collaboration / multi-user | Single user manages both stores |
-| Profile permissions / RBAC | Meaningless for one person |
-| Profile templates / marketplace | Two profiles, manual setup is 2 minutes |
-| Mobile app | Web-first, personal use |
-| Real-time chat/notifications | Not relevant to video production workflow |
-| Per-profile FFmpeg settings | Video output format same for both stores (social media standards) |
-| Profile-specific UI themes | Visual customization adds no value, only name/icon differ |
+| AI video upscaling | Compute-intensive, artifacts common, 1080p sufficient for social media |
+| Real-time preview | Complex infrastructure, preview never matches final output |
+| Video stabilization | Compute-heavy, most phone footage already stabilized |
+| Lossless export (ProRes) | Massive files, platforms compress heavily anyway |
+| nlmeans denoising | 10-30x slower than hqdn3d, overkill for social video |
+| Multi-track audio | Users who need this use DAWs, out of scope |
+| Broadcast captions compliance | Social media doesn't require FCC/BBC standards |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PROF-01 | Phase 1, Phase 2, Phase 3 | Complete |
-| PROF-02 | Phase 3 | Complete |
-| PROF-03 | Phase 3 | Complete |
-| PROF-04 | Phase 1 | Complete |
-| PROF-05 | Phase 2, Phase 5 | Complete |
-| PROF-06 | Phase 3 | Complete |
-| PROF-07 | Phase 1 | Complete |
-| TTS-01 | Phase 4 | Complete |
-| TTS-02 | Phase 4 | Complete |
-| TTS-03 | Phase 4 | Complete |
-| TTS-04 | Phase 4 | Complete |
-| TTS-05 | Phase 4 | Complete |
-| TTS-06 | Phase 4 | Complete |
-| DX-01 | Phase 6 | Complete |
-| DX-02 | Phase 6 | Complete |
+| ENC-01 | Phase 7 | Pending |
+| ENC-02 | Phase 7 | Pending |
+| ENC-03 | Phase 7 | Pending |
+| ENC-04 | Phase 7 | Pending |
+| AUD-01 | Phase 8 | Pending |
+| AUD-02 | Phase 8 | Pending |
+| FLT-01 | Phase 9 | Pending |
+| FLT-02 | Phase 9 | Pending |
+| FLT-03 | Phase 9 | Pending |
+| FLT-04 | Phase 9 | Pending |
+| SCR-01 | Phase 10 | Pending |
+| SCR-02 | Phase 10 | Pending |
+| SUB-01 | Phase 11 | Pending |
+| SUB-02 | Phase 11 | Pending |
+| SUB-03 | Phase 11 | Pending |
 
 **Coverage:**
-- v1 requirements: 15 total
+- v3 requirements: 15 total
 - Mapped to phases: 15
 - Unmapped: 0
 - Coverage: 100%
 
 ---
-*Requirements defined: 2026-02-03*
-*Last updated: 2026-02-03 after roadmap creation*
+*Requirements defined: 2026-02-04*
+*Last updated: 2026-02-05 (roadmap created)*

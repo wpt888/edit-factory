@@ -1,25 +1,15 @@
-# Roadmap: Edit Factory v2
+# Roadmap: Edit Factory
 
-## Overview
+## Milestones
 
-This roadmap transforms Edit Factory from a single-library video production tool into a profile-isolated platform supporting multiple online stores. The journey establishes database-level tenant isolation, retrofits API and service layers with profile context, builds profile management UI, integrates free TTS alternatives, and completes per-profile publishing configuration. The result is one-click video production with clear store separation and cost-effective voice options.
+- ✅ **v1.0 MVP** - Phases 1-0 (video processing core, shipped ~2024)
+- ✅ **v2 Profile System** - Phases 1-6 (profile isolation, TTS providers, shipped 2026-02-04)
+- 🚧 **v3 Video Quality Enhancement** - Phases 7-11 (encoding optimization, in progress)
 
 ## Phases
 
-**Phase Numbering:**
-- Integer phases (1, 2, 3, 4, 5, 6): Planned milestone work
-- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
-
-Decimal phases appear between their surrounding integers in numeric order.
-
-- [x] **Phase 1: Database Foundation** - Profile tables with RLS and migration
-- [x] **Phase 2: Backend Profile Context** - API endpoints and service layer isolation
-- [x] **Phase 3: Frontend Profile UI** - Profile switcher and context propagation
-- [x] **Phase 4: TTS Provider Selection** - Free TTS integration and voice presets
-- [x] **Phase 5: Per-Profile Postiz** - Publishing configuration per store
-- [x] **Phase 6: Developer Experience** - Start script and deployment automation
-
-## Phase Details
+<details>
+<summary>✅ v2 Profile System (Phases 1-6) - SHIPPED 2026-02-04</summary>
 
 ### Phase 1: Database Foundation
 **Goal**: Establish profile-based data isolation at database level with Supabase RLS
@@ -129,16 +119,102 @@ Plans:
 Plans:
 - [x] 06-01-PLAN.md — Development start scripts for Windows and WSL/Linux
 
+</details>
+
+### 🚧 v3 Video Quality Enhancement (In Progress)
+
+**Milestone Goal:** Professional-grade video output with platform-optimized encoding, audio normalization, and enhanced visual quality
+
+#### Phase 7: Platform Export Presets
+**Goal**: Professional encoding with platform-specific presets for TikTok, Reels, YouTube Shorts
+**Depends on**: Nothing (first phase of v3)
+**Requirements**: ENC-01, ENC-02, ENC-03, ENC-04
+**Success Criteria** (what must be TRUE):
+  1. User can select export platform (TikTok, Instagram Reels, YouTube Shorts) before rendering
+  2. System applies platform-specific encoding (correct CRF, maxrate, GOP, audio bitrate)
+  3. Exported video passes platform validation (no upload rejection for encoding issues)
+  4. Audio encoded at 192k bitrate (upgraded from 128k)
+  5. Encoding preset configuration is data-driven (new presets can be added without code changes)
+**Plans**: TBD
+
+Plans:
+- [ ] 07-01: TBD
+
+#### Phase 8: Audio Normalization
+**Goal**: Consistent audio loudness at -14 LUFS for social media standards
+**Depends on**: Phase 7 (encoding foundation must be in place)
+**Requirements**: AUD-01, AUD-02
+**Success Criteria** (what must be TRUE):
+  1. All exported videos have audio normalized to -14 LUFS (matches Instagram/TikTok/YouTube)
+  2. Audio has true peak limiting at -1.5 dBTP (no clipping or distortion)
+  3. Two-pass normalization used (analyze, then apply with measured parameters)
+  4. Loudness normalization applies to concatenated segments (consistent across multi-variant clips)
+  5. User hears consistent volume across different videos (no jarring volume changes)
+**Plans**: TBD
+
+Plans:
+- [ ] 08-01: TBD
+
+#### Phase 9: Video Enhancement Filters
+**Goal**: Optional quality filters (denoise, sharpen, color correction) for user-generated content
+**Depends on**: Phase 7 (filter chain must respect encoding architecture)
+**Requirements**: FLT-01, FLT-02, FLT-03, FLT-04
+**Success Criteria** (what must be TRUE):
+  1. User can enable denoising filter for low-light footage (reduces grain/noise)
+  2. User can enable sharpening filter for soft footage (improves clarity without halos)
+  3. User can adjust color correction (brightness, contrast, saturation sliders)
+  4. Filters applied in correct order (denoise → sharpen → color correct) without breaking GPU acceleration
+  5. Filter processing adds less than 20% overhead (vs no-filter baseline)
+**Plans**: TBD
+
+Plans:
+- [ ] 09-01: TBD
+
+#### Phase 10: Segment Scoring Enhancement
+**Goal**: Improved segment selection with blur detection and contrast analysis
+**Depends on**: Nothing (independent scoring enhancement, can run parallel to Phase 7-9)
+**Requirements**: SCR-01, SCR-02
+**Success Criteria** (what must be TRUE):
+  1. System calculates blur score using Laplacian variance for each segment
+  2. Blurry segments penalized in combined scoring (threshold: variance < 100 = reject)
+  3. Segment scoring balances motion, variance, blur, contrast, brightness (no single factor dominates)
+  4. Selected segments visibly sharper and more aesthetically pleasing than motion-only selection
+  5. Scoring runs without significant performance impact (< 5% overhead vs current)
+**Plans**: TBD
+
+Plans:
+- [ ] 10-01: TBD
+
+#### Phase 11: Subtitle Enhancement
+**Goal**: Professional subtitle styling with shadow, glow, and adaptive sizing
+**Depends on**: Phase 7 (subtitle rendering must respect encoding pipeline)
+**Requirements**: SUB-01, SUB-02, SUB-03
+**Success Criteria** (what must be TRUE):
+  1. User can enable shadow effects on subtitles with configurable depth (improves visibility)
+  2. User can enable glow/outline effects on subtitle text (high-contrast backgrounds)
+  3. System automatically adjusts font size based on text length (long text = smaller font)
+  4. Subtitles remain readable on all background types (dark, bright, busy)
+  5. Subtitle rendering preserves existing CPU-only pattern (no GPU pipeline breakage)
+**Plans**: TBD
+
+Plans:
+- [ ] 11-01: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
+Phases execute in numeric order: 7 -> 8 -> 9 -> 10 -> 11
 
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 1. Database Foundation | 1/1 | Complete | 2026-02-03 |
-| 2. Backend Profile Context | 5/5 | Complete | 2026-02-03 |
-| 3. Frontend Profile UI | 3/3 | Complete | 2026-02-03 |
-| 4. TTS Provider Selection | 8/8 | Complete | 2026-02-04 |
-| 5. Per-Profile Postiz | 5/5 | Complete | 2026-02-04 |
-| 6. Developer Experience | 1/1 | Complete | 2026-02-04 |
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 1. Database Foundation | v2 | 1/1 | Complete | 2026-02-03 |
+| 2. Backend Profile Context | v2 | 5/5 | Complete | 2026-02-03 |
+| 3. Frontend Profile UI | v2 | 3/3 | Complete | 2026-02-03 |
+| 4. TTS Provider Selection | v2 | 8/8 | Complete | 2026-02-04 |
+| 5. Per-Profile Postiz | v2 | 5/5 | Complete | 2026-02-04 |
+| 6. Developer Experience | v2 | 1/1 | Complete | 2026-02-04 |
+| 7. Platform Export Presets | v3 | 0/? | Not started | - |
+| 8. Audio Normalization | v3 | 0/? | Not started | - |
+| 9. Video Enhancement Filters | v3 | 0/? | Not started | - |
+| 10. Segment Scoring Enhancement | v3 | 0/? | Not started | - |
+| 11. Subtitle Enhancement | v3 | 0/? | Not started | - |
