@@ -1,201 +1,273 @@
 # Project Research Summary
 
-**Project:** Edit Factory - Profile/Workspace Isolation & Free TTS Integration
-**Domain:** Multi-tenant video production platform with social media publishing
-**Researched:** 2026-02-03
+**Project:** Edit Factory - Video Quality Enhancement Milestone v3
+**Domain:** Social Media Video Processing (FFmpeg-based)
+**Researched:** 2026-02-04
 **Confidence:** HIGH
 
 ## Executive Summary
 
-Edit Factory requires profile/workspace isolation to prevent accidental cross-posting between different stores (e.g., Store A's product video published to Store B's social accounts). Research shows this is a critical pattern in social media management tools, where agency/multi-client isolation is table stakes. The recommended approach uses Supabase Row-Level Security (RLS) with a `profile_id` foreign key pattern, avoiding over-engineering (separate databases per tenant) while maintaining defense-in-depth security at the database layer.
+This milestone enhances Edit Factory's existing FFmpeg-based video processing pipeline with professional-grade encoding optimizations, audio normalization, and perceptual quality scoring. Research confirms that the current baseline (CRF 23, fast preset, 128k audio, basic subtitles) is functional but leaves significant quality improvement on the table. Professional tools in 2026 differentiate through platform-specific presets, loudness normalization to -14 LUFS, enhanced video filters, and perceptual quality metrics.
 
-The project also needs cost-effective TTS alternatives to ElevenLabs (~$0.22/1000 chars). Research identified Kokoro TTS (82M params, Apache 2.0) as the optimal free alternative, with quality comparable to larger models while maintaining CPU-friendly inference. A tiered provider system (Kokoro default → Piper for fast preview → Coqui for premium quality → Edge TTS fallback) provides flexibility without sacrificing performance.
+The recommended approach leverages Edit Factory's existing GPU-accelerated FFmpeg architecture while adding: (1) platform-specific export presets for TikTok/Reels/YouTube Shorts with capped CRF encoding, (2) two-pass audio loudnorm targeting -14 LUFS for social media, (3) smart video enhancement filters (denoise/sharpen/color correction) applied selectively based on content analysis, and (4) improved segment scoring with blur detection and contrast analysis. These enhancements can be implemented incrementally without breaking existing functionality.
 
-Key risks include data leakage across profiles (prevented by RLS policies + explicit application-level filtering), background task context loss (mitigated by explicitly passing profile_id to all background tasks), and migration failures (avoided through multi-step nullable → backfill → non-null pattern). The architecture retrofit requires careful attention to singleton services, in-memory caches, and file path isolation, all of which currently lack tenant scoping.
+The primary risks are **performance regression** from filter chains destroying GPU acceleration, **audio quality issues** from skipping two-pass normalization, and **platform rejection** from CRF/bitrate configuration errors. All three risks require careful architectural decisions in the foundation phase before implementation. The existing codebase already handles GPU/CPU filter separation correctly (line 680-684 in video_processor.py), providing a solid starting point. Critical success factor: maintain backward compatibility while introducing quality enhancements as opt-in features with smart defaults.
 
 ## Key Findings
 
 ### Recommended Stack
 
-Research confirms that Supabase RLS is production-ready for multi-tenant isolation, with verified implementations handling 10,000+ tenants. For Edit Factory's 2-profile use case, shared tables with `profile_id` foreign keys provides optimal performance (<1ms overhead with proper indexing) without infrastructure complexity.
+Edit Factory's existing FFmpeg (libx264/h264_nvenc) + OpenCV stack requires minimal additions. The core enhancement is **configuration-driven encoding presets** rather than new dependencies. Only two new libraries are recommended: `scikit-image>=0.22.0` for advanced image quality analysis (blur/contrast detection) and optionally `ffmpeg-normalize>=1.28.0` as a CLI wrapper for audio loudnorm (though direct FFmpeg implementation is preferred for control).
 
 **Core technologies:**
-- **Supabase RLS:** Database-level isolation via Row-Level Security policies — proven pattern for multi-tenancy, zero additional infrastructure, defense-in-depth security where users literally cannot access other profiles' data even with API compromise
-- **app_metadata for tenant identification:** Store workspace_id in immutable server-side metadata — accessible in RLS policies via auth.jwt(), eliminates extra SELECT queries, cannot be tampered with by users
-- **Kokoro TTS (>=0.9.4):** Primary free TTS engine — 82M parameters, Apache 2.0 license, quality comparable to larger models, runs on modest CPU hardware, actively maintained in 2026
-- **Piper TTS (1.4.0):** Fast preview mode — Raspberry Pi optimized, 3-5x realtime on CPU, lower quality but excellent speed/resource tradeoff for draft renders
-- **Coqui TTS (0.27.5):** Premium quality option — 1100+ pre-trained voices, neural TTS with natural prosody, best quality but most resource-intensive (use for final renders)
-- **concurrently (9.2.1):** Cross-platform dev launcher — run FastAPI + Next.js simultaneously, 8.6M weekly downloads, works on Windows/WSL/Linux/Mac
+- **FFmpeg libx264/h264_nvenc** (existing): Universal H.264 codec support — CRF 20-23 range for social media, capped with maxrate for platform compatibility
+- **FFmpeg loudnorm filter** (new): EBU R128 audio normalization — two-pass processing targeting -14 LUFS for TikTok/Reels/YouTube Shorts
+- **FFmpeg quality filters** (new): hqdn3d (denoise), unsharp (sharpen), eq (color correction) — CPU-based filters applied in correct order to avoid GPU pipeline breakage
+- **scikit-image** (new): Advanced quality metrics — `is_low_contrast()` and exposure analysis for segment scoring enhancement
+- **OpenCV Laplacian variance** (existing): Blur detection — lightweight perceptual quality metric (threshold: <100 = blurry, >500 = sharp)
 
-**Critical version requirement:** Python 3.11 recommended (Kokoro doesn't support Python 3.13+ yet, Coqui requires 3.10+, FastAPI supports 3.8+)
+**Platform-specific encoding (2026 standards):**
+- Instagram Reels/TikTok: 1080x1920, CRF 23, maxrate 4000k, 192k audio, GOP 60 (2sec keyframes)
+- YouTube Shorts: 1080x1920, CRF 21, maxrate 12000k, 192k audio, GOP 60
+- All platforms: -14 LUFS loudness, yuv420p pixel format, H.264 high profile level 4.0
+
+**Dependencies to add:**
+```
+scikit-image>=0.22.0          # Quality analysis (blur, contrast)
+ffmpeg-normalize>=1.28.0      # Optional CLI wrapper (use direct FFmpeg preferred)
+```
 
 ### Expected Features
 
-Research from social media management tools (Statusbrew, Agorapulse, Planable) and multi-store e-commerce platforms reveals clear feature expectations for profile isolation.
+Professional video quality enhancement in 2026 has clear table stakes vs differentiators. Edit Factory already meets baseline expectations (1080x1920 format, subtitle customization, batch processing) but is missing critical professional features.
 
 **Must have (table stakes):**
-- **Profile Switcher UI** — Industry standard in all social media tools, dropdown/menu in navbar, persistent across all pages
-- **Per-Profile Library Isolation** — Prevents accidental cross-posting (critical error in agency tools), database scoping with RLS
-- **Per-Profile Settings Storage** — Each store needs own API keys (Postiz, TTS), JSONB column or separate table
-- **Visual Profile Indicator** — User must always know active profile, profile name + icon/color in navbar
-- **TTS Provider Selection** — Users expect choice between free/paid, radio buttons for Edge TTS (free) vs ElevenLabs (paid)
-- **Per-Profile Postiz Config** — Each store publishes to different social accounts, store API URL + key per profile
+- **Platform-specific export presets** — TikTok, Instagram Reels, YouTube Shorts have different optimal bitrates and platform algorithms favor different encoding parameters
+- **Audio loudness normalization** — Social platforms normalize to -14 LUFS; unnormalized audio sounds inconsistent and platforms auto-adjust badly
+- **Professional encoding settings** — CRF 18-22 with slower presets produce visibly better quality after platform re-compression (current CRF 23 is acceptable but not optimal)
+- **High-quality audio encoding** — 192k AAC minimum for professional sound (current 128k is functional but below pro standard)
 
-**Should have (competitive):**
-- **Profile Creation Wizard** — Smooth onboarding for new stores, 3-step flow: Name → TTS defaults → Postiz credentials
-- **TTS Voice Preview** — Test voice before generating full video, "Play sample" with 1-2 sentence test
-- **TTS Cost Comparison Widget** — Show real-time cost: "ElevenLabs: $0.22 vs Edge TTS: $0.00", uses existing cost_tracker
-- **Profile-Specific Context Text** — Default AI analysis prompts per store (product categories differ), pre-fills upload form
-- **Cross-Profile Asset Copying** — Reuse successful scripts between stores, "Copy project to [Profile]" action
+**Should have (competitive differentiators):**
+- **Video enhancement filters** — Denoise, sharpen, color correction improve user-generated phone footage quality (especially valuable for low-light content)
+- **Enhanced subtitle styling** — Shadow, glow, adaptive sizing bring Edit Factory closer to CapCut-style animated captions
+- **Perceptual quality scoring** — Blur detection and contrast analysis improve segment selection beyond motion-only scoring
+- **Platform-specific quality warnings** — Alert users when encoding settings may cause poor results after Instagram/TikTok compression (unique opportunity)
 
 **Defer (v2+):**
-- Team collaboration / Multi-user (unnecessary for 2-profile personal tool)
-- Profile permissions / RBAC (meaningless when one person manages both)
-- Advanced profile hierarchy (flat structure sufficient)
-- Profile-specific UI themes (visual customization adds no value)
-- Cross-profile publishing (defeats purpose of isolation)
+- **Perceptual quality metrics (VMAF/SSIM)** — Objective quality measurement valuable but requires complex FFmpeg build with libvmaf
+- **AI-enhanced subtitle effects** — CapCut-style word highlighting with animations (high complexity, requires word-level timing from TTS)
+- **Audio enhancement suite** — Noise reduction, EQ, compression for voice clarity (overlaps with existing TTS quality)
+- **Multi-pass encoding** — Two-pass bitrate encoding for strict file size limits (social media works fine with capped CRF)
+
+**Anti-features (explicitly avoid):**
+- **Real-time preview rendering** — Complex infrastructure, adds latency, preview quality never matches final output (provide accurate time estimates instead)
+- **Automatic video upscaling** — AI upscaling is compute-intensive and produces artifacts (use efficient FFmpeg scale only)
+- **Advanced color grading** — Professional LUTs/curves/scopes way beyond scope for automated tool (stick to basic brightness/contrast/saturation)
 
 ### Architecture Approach
 
-Multi-tenant isolation requires three-layer profile context propagation: Frontend (ProfileProvider React Context) → API (profile middleware with validation) → Database (RLS policies). The key architectural decision is using shared tables with `profile_id` foreign keys rather than schema-per-tenant, which matches Supabase best practices for 2-10 tenant scenarios.
+The research confirms that Edit Factory's existing architecture (subprocess-based FFmpeg with GPU acceleration fallback) is sound and follows industry best practices. The quality enhancement features integrate cleanly into the existing three-layer pattern: Frontend context (Next.js) → API layer (FastAPI) → Service layer (FFmpeg execution). The critical architectural constraint is preserving GPU/CPU filter separation to avoid performance destruction.
 
 **Major components:**
-1. **profiles table (new)** — Stores profile metadata, TTS voice presets (default_tts_provider, elevenlabs_voice_id, edge_tts_voice), Postiz configuration (postiz_integration_ids JSONB), and user ownership mapping
-2. **Profile Context Dependency (backend)** — FastAPI dependency `get_current_profile()` extracts X-Profile-Id header, validates user owns profile, returns profile_id for service layer filtering
-3. **ProfileProvider Context (frontend)** — React Context managing selected profile state, loads last-used profile from localStorage, broadcasts profile-switched events to clear stale data
-4. **RLS Policies (database)** — Row-Level Security filters all queries by profile_id using `(SELECT auth.uid())` wrapper pattern for 94% performance improvement
-5. **Tenant-Scoped Services** — All singleton services (JobStorage, CostTracker, PostizPublisher) require explicit profile_id parameter in method signatures to prevent data leakage
 
-**Critical patterns:**
-- **Composite cache keys:** `f"{profile_id}:{project_id}"` for all in-memory structures (_generation_progress, _memory_store, _project_locks)
-- **Profile-scoped temp paths:** `settings.temp_dir / profile_id / job_id / filename` to prevent FFmpeg file collisions
-- **Background task context preservation:** Explicitly pass profile_id to all `background_tasks.add_task()` calls (context lost at execution time)
-- **Graceful migration:** Add profile_id as nullable → create default profiles → backfill data → make non-null (prevents constraint violations)
+1. **Platform Preset Manager** (new, app/config.py) — Provides encoding configuration dictionaries per platform (TikTok, Reels, YouTube Shorts) with CRF, maxrate, bufsize, audio bitrate, GOP size calculated from FPS. Replaces hardcoded encoding parameters with data-driven presets.
+
+2. **Quality Filter Chain Builder** (new, video_processor.py) — Constructs FFmpeg filter strings in correct order: hwdownload (GPU→CPU) → denoise (hqdn3d) → sharpen (unsharp) → color correction (eq) → subtitles. Enforces CPU-before-GPU separation to maintain hardware acceleration benefits.
+
+3. **Audio Normalization Service** (new, video_processor.py) — Two-pass loudnorm implementation: (1) analyze audio to get measured_I/LRA/TP values, (2) apply linear normalization with measured parameters. Operates on concatenated segments, not per-segment, for consistent loudness.
+
+4. **Enhanced Segment Scorer** (enhanced, video_processor.py) — Extends existing VideoSegment dataclass with blur_score (Laplacian variance) and contrast_score (std deviation). Updated combined_score formula: motion 40% + variance 20% + blur 20% + contrast 15% + brightness balance 5% (reduced motion weight from 60% to account for aesthetic quality).
+
+5. **FFmpeg Subprocess Manager** (enhanced, video_processor.py) — Stream FFmpeg output to temp files instead of memory buffering for long operations (>30sec) to prevent memory leaks. Add garbage collection triggers every 10 segments in batch processing.
+
+**Critical pattern preservation:**
+- Existing code CORRECTLY avoids hwaccel when adding subtitles (lines 944-965) because subtitles filter is CPU-only — this pattern must be preserved and documented
+- GPU filter chains require explicit hwdownload/hwupload_cuda calls (lines 680-684) — quality filters must follow this pattern
+- Segment-based processing with project-level threading locks prevents race conditions — maintain this for quality-enhanced variants
 
 ### Critical Pitfalls
 
-Based on analysis of multi-tenant architecture failures and Supabase RLS best practices:
+Research identified five critical pitfalls that will cause rewrites or major issues if not addressed architecturally in Phase 1.
 
-1. **Enabling RLS Without Policies = Production Blackout** — RLS defaults to "deny all" when enabled. Atomic transaction required: `BEGIN; ALTER TABLE ... ENABLE RLS; CREATE POLICY ...; COMMIT;` or production stops returning data instantly (no error, just empty results).
+1. **Filter Chain Order Destroys Performance** — Incorrect ordering forces multiple CPU↔GPU transfers, causing 3-10x processing time increase. **Prevention:** Group filters by execution domain (GPU vs CPU), apply order decode → GPU filters → hwdownload → CPU filters (denoise/sharpen) → subtitles (last) → encode. Test that GPU encoding still works after filter additions.
 
-2. **Foreign Key Migration Without Backfill = Constraint Violations** — Adding `profile_id NOT NULL REFERENCES profiles(id)` to tables with existing NULL data causes migration failure. Prevention: Multi-step migration (nullable → backfill → non-null) with staging test using production-like data volume.
+2. **Audio Normalization Requires Two-Pass (But Developers Skip It)** — Single-pass loudnorm causes dynamic volume fluctuations that sound jarring with TTS. **Prevention:** Always use two-pass: analyze to get measured parameters, then apply linear normalization. Normalize AFTER segment concatenation (not per-segment) for consistency across variants.
 
-3. **Singleton Services Without Tenant Context = Data Leakage** — Edit Factory's `get_job_storage()`, `get_cost_tracker()` singletons share state globally. Without explicit `profile_id` filtering in every service method, Profile 1 sees Profile 2's jobs/costs/projects (GDPR violation, SOC 2 non-compliance).
+3. **CRF vs Bitrate Confusion Breaks Platform Compatibility** — Using both CRF and bitrate constraints simultaneously produces suboptimal results or platform rejection. **Prevention:** Use "capped CRF" strategy: `-crf 23 -maxrate 4000k -bufsize 8000k` provides quality priority with safety ceiling. Never mix CRF with `-b:v` bitrate target.
 
-4. **In-Memory Cache Without Tenant Keys = Cross-Profile Bleeding** — `_generation_progress`, `_memory_store`, `_project_locks` use project_id-only keys. Profile 1's progress overwrites Profile 2's if same project ID. Prevention: Composite keys `f"{profile_id}:{project_id}"` or nested dicts.
+4. **Denoising Destroys Processing Time Budget** — nlmeans denoise filter can increase processing from 2 minutes to 30+ minutes per video. **Prevention:** Use fast hqdn3d filter by default (10-15% overhead), only offer nlmeans as opt-in "High Quality Mode". Apply denoising selectively based on noise level analysis, not to all content.
 
-5. **Background Tasks Lose Tenant Context = Jobs Execute Against Wrong Profile** — FastAPI BackgroundTasks don't preserve request context. Profile 1's video processes but saves to Profile 2's database, or worse: publishes to Profile 2's Postiz accounts. Prevention: Explicitly pass profile_id to all `background_tasks.add_task()` calls.
+5. **Subtitle Rendering Breaks GPU Pipeline** — Subtitles filter is CPU-only and disables GPU acceleration if mixed with GPU filters. **Prevention:** Preserve Edit Factory's existing pattern of applying subtitles separately without hwaccel (current implementation is CORRECT). Subtitles must be the final processing step after all quality filters.
 
 ## Implications for Roadmap
 
-Based on research, architectural dependencies, and pitfall analysis, suggested 5-phase structure:
+Based on research findings, the milestone naturally divides into three phases: (1) encoding foundation with platform presets and audio normalization, (2) quality enhancement filters with smart application logic, and (3) perceptual scoring improvements. This ordering follows dependency chains from ARCHITECTURE.md and avoids critical pitfalls from PITFALLS.md.
 
-### Phase 1: Database Foundation & RLS Migration
-**Rationale:** All other phases depend on database schema. Must establish tenant isolation at database level before API changes to prevent data leakage during development.
-**Delivers:** profiles table with RLS, profile_id columns on existing tables (nullable), default profiles created and backfilled, RLS policies with proper indexes
-**Addresses:** Table stakes feature "Per-Profile Library Isolation" (from FEATURES.md), establishes defense-in-depth security
-**Avoids:** Pitfall #1 (RLS blackout via atomic transaction), Pitfall #2 (constraint violations via multi-step migration), Pitfall #6 (performance degradation via pre-RLS indexing)
-**Duration:** 4-6 hours
-**Research needs:** Standard patterns, skip /gsd:research-phase
+### Phase 1: Professional Encoding Foundation
+**Rationale:** Platform presets and audio normalization are table stakes for professional output (FEATURES.md) and have minimal implementation complexity while delivering immediate quality improvements. These foundational changes establish encoding patterns that Phase 2 quality filters will build upon.
 
-### Phase 2: Backend API & Service Layer Isolation
-**Rationale:** With database schema in place, retrofit API layer to inject profile context into all routes and service methods. Critical to audit ALL service methods for tenant filtering.
-**Delivers:** Profile management endpoints (CRUD), get_current_profile() dependency, updated library/segments/postiz routes to accept profile_id, refactored singleton services with explicit profile_id parameters
-**Addresses:** Foundation for "Profile Switcher UI" and "Per-Profile Settings Storage"
-**Avoids:** Pitfall #3 (singleton data leakage via explicit filtering), Pitfall #4 (cache bleeding via composite keys), Pitfall #5 (background task context loss via explicit passing), Pitfall #11 (FFmpeg temp collisions via profile-scoped paths)
-**Duration:** 8-12 hours
-**Research needs:** Standard FastAPI patterns, skip /gsd:research-phase
+**Delivers:**
+- Platform-specific export presets (TikTok, Reels, YouTube Shorts) with correct CRF/maxrate/GOP settings
+- Two-pass audio loudnorm targeting -14 LUFS for social media
+- Encoding configuration system in app/config.py
+- Updated video_processor.py encoding methods with preset support
 
-### Phase 3: Frontend Context & Profile Switcher UI
-**Rationale:** With API endpoints ready, build profile selection and context propagation in frontend. Must implement profile-switched event bus to prevent stale data display.
-**Delivers:** ProfileProvider React Context, ProfileSelector navbar component, X-Profile-Id injection in API client, profile creation/editing UI, auto-select last-used profile on login
-**Addresses:** Table stakes features "Profile Switcher UI", "Visual Profile Indicator", "Default Profile on Login"
-**Avoids:** Pitfall #9 (stale data on profile switch via event bus), Pitfall #10 (blank screen via auto-selection)
-**Duration:** 6-8 hours
-**Research needs:** Standard React Context patterns, skip /gsd:research-phase
+**Addresses:**
+- Table stakes: Platform-specific export presets, audio loudness normalization, professional encoding settings
+- Missing features: 192k audio bitrate, adaptive GOP size based on FPS
 
-### Phase 4: TTS Provider Selection & Free Integration
-**Rationale:** With profile isolation working, add TTS provider choice and integrate free alternatives. Independent of profile system but benefits from per-profile settings storage.
-**Delivers:** TTS provider selection UI (ElevenLabs/Edge TTS radio buttons), Kokoro TTS integration, Piper TTS (optional), voice preset management per profile, cost comparison widget, fallback logic with state reset
-**Addresses:** Table stakes "TTS Provider Selection UI", differentiator "TTS Voice Preview", "TTS Cost Comparison Widget"
-**Avoids:** Pitfall #8 (fallback state not reset), Pitfall #12 (quota exceeded without frontend warning)
-**Duration:** 6-10 hours
-**Research needs:** Kokoro/Piper API documentation (medium complexity), consider /gsd:research-phase for integration specifics
+**Avoids:**
+- Pitfall #3: CRF vs bitrate confusion (implements capped CRF strategy)
+- Pitfall #8: Missing platform keyframe intervals (calculates GOP from FPS)
 
-### Phase 5: Per-Profile Postiz Config & Cost Enforcement
-**Rationale:** Final isolation component is per-profile publishing configuration. Also implement quota enforcement to prevent budget overruns.
-**Delivers:** Profile-specific Postiz API credentials storage, Postiz integration_ids per profile, cost quota enforcement (pre-call checks), quota display in UI, profile activity history dashboard
-**Addresses:** Table stakes "Per-Profile Postiz Config", differentiator "Profile Activity History"
-**Avoids:** Pitfall #7 (budget overruns via quota enforcement)
-**Duration:** 4-6 hours
-**Research needs:** Standard patterns, skip /gsd:research-phase
+**Stack elements:**
+- FFmpeg loudnorm filter (two-pass)
+- Platform preset configuration dictionaries
+- No new dependencies required
+
+**Implementation complexity:** LOW (parameter tuning + config additions)
+**Research needs:** SKIP — platform specs well-documented, FFmpeg loudnorm official docs sufficient
+
+### Phase 2: Quality Enhancement Filters
+**Rationale:** After encoding foundation is solid, add optional quality filters (denoise/sharpen/color) that enhance user-generated content. These must be implemented with smart defaults to avoid pitfall #4 (performance destruction). Depends on Phase 1 establishing correct filter chain architecture.
+
+**Delivers:**
+- Filter chain builder with correct CPU/GPU separation
+- Smart denoise filter selection based on noise level analysis (hqdn3d default, nlmeans opt-in)
+- Conservative sharpening presets (unsharp 0.3-0.6 range to avoid halos)
+- Basic color correction (brightness/contrast/saturation adjustments)
+- Streaming FFmpeg output to prevent memory leaks
+
+**Addresses:**
+- Differentiator: Video enhancement filters improve phone footage quality
+- Performance: Memory leak prevention for long operations
+
+**Avoids:**
+- Pitfall #1: Filter chain order destroys performance (enforces correct ordering)
+- Pitfall #4: Denoising destroys processing time (smart filter selection)
+- Pitfall #6: Sharpening creates halos (conservative defaults)
+- Pitfall #9: FFmpeg subprocess memory leaks (streaming output)
+
+**Stack elements:**
+- FFmpeg filters: hqdn3d, unsharp, eq
+- Noise level estimation (OpenCV)
+- Subprocess streaming output pattern
+
+**Implementation complexity:** MEDIUM (filter chain logic + performance testing)
+**Research needs:** MODERATE — filter parameter tuning requires testing on sample content, performance benchmarking needed
+
+### Phase 3: Perceptual Quality Scoring
+**Rationale:** Improve segment selection algorithm to consider aesthetic quality beyond just motion. This builds on existing scoring system and integrates with Gemini AI analysis already present in codebase. Least critical for launch but high user-facing value.
+
+**Delivers:**
+- Enhanced VideoSegment dataclass with blur_score and contrast_score fields
+- Blur detection using OpenCV Laplacian variance (threshold-based filtering)
+- Contrast analysis using std deviation (low-contrast segment rejection)
+- Updated scoring formula balancing motion/variance/quality/aesthetics
+- Integration with existing Gemini AI scoring
+
+**Addresses:**
+- Differentiator: Perceptual quality metrics improve selection accuracy
+- Feature gap: Current motion-only scoring doesn't match platform aesthetics
+
+**Avoids:**
+- Pitfall #7: Scoring weights don't match platform aesthetics (balances motion with quality)
+
+**Stack elements:**
+- scikit-image for advanced quality metrics
+- OpenCV Laplacian variance (existing)
+- Enhanced scoring algorithm
+
+**Implementation complexity:** MEDIUM (scoring algorithm changes + validation)
+**Research needs:** MODERATE — scoring weight tuning requires A/B testing with real content, platform aesthetic research ongoing
 
 ### Phase Ordering Rationale
 
-- **Database first (Phase 1):** Establishes data model and security boundaries before application code. RLS policies prevent data leakage during development. Migration complexity (backfill, indexes) requires isolated testing phase.
-- **Backend before frontend (Phase 2 → 3):** API contracts must be stable before UI implementation. Profile validation logic belongs in backend (security boundary). Frontend depends on profile CRUD endpoints.
-- **TTS after isolation (Phase 4):** TTS provider selection is independent of profile system architecturally, but leverages per-profile settings table from Phase 1. Can be developed in parallel with Phase 3 if needed.
-- **Postiz last (Phase 5):** Publishing configuration depends on profile system working end-to-end. Least risky phase (no architectural dependencies). Cost enforcement complements existing cost_tracker, additive feature.
-
-**Dependency chain:** Phase 1 → Phase 2 → Phase 3 (critical path). Phase 4 depends on Phase 1 only (profile settings table). Phase 5 depends on Phase 1-3 (full profile system).
+- **Phase 1 before Phase 2:** Encoding presets must be established before adding filters because filter chains depend on knowing target platform constraints (GOP size, bitrate caps affect filter selection)
+- **Phase 2 before Phase 3:** Quality filters improve segment appearance, which then gets scored by Phase 3's enhanced algorithm (logical dependency)
+- **Phase 3 deferrable:** Existing motion-based scoring is functional; quality scoring is enhancement not blocker
+- **Subtitle improvements span phases:** Shadow/glow styling can be added in Phase 1 (low-hanging fruit), animated word highlighting deferred to v4+ (high complexity)
 
 ### Research Flags
 
-**Phases needing deeper research during planning:**
-- **Phase 4 (TTS Integration):** Kokoro/Piper/Coqui have different installation requirements (espeak-ng system dependency, PyTorch for Coqui, ONNX model downloads). Voice selection patterns differ per provider. Recommend /gsd:research-phase to document integration specifics, model download procedures, and error handling.
+Phases likely needing deeper research during planning:
+- **Phase 2:** Filter parameter tuning needs empirical testing on diverse content (low-light, high-motion, static beauty shots). Current research provides starting values but production tuning requires real user content analysis.
+- **Phase 3:** Scoring algorithm weights need A/B testing with platform performance data (which clips get better engagement). Academic research provides direction but Edit Factory-specific tuning needed.
 
-**Phases with standard patterns (skip research-phase):**
-- **Phase 1 (Database Migration):** Well-documented Supabase RLS patterns, official docs provide transaction examples and index optimization guides
-- **Phase 2 (Backend Services):** Standard FastAPI dependency injection, established singleton refactoring patterns
-- **Phase 3 (Frontend Context):** React Context API is well-documented, profile switcher is common UI pattern
-- **Phase 5 (Postiz Config):** Extension of existing Postiz integration, JSONB storage pattern already used in codebase
+Phases with standard patterns (skip research-phase):
+- **Phase 1:** Platform encoding specs are well-documented (official Instagram/TikTok/YouTube docs), FFmpeg loudnorm is established standard with clear implementation guidance. Straightforward configuration task.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | Supabase RLS verified with official docs, Kokoro/Piper/Coqui versions confirmed via PyPI WebFetch, concurrently verified via npm registry. Python version constraints cross-referenced. |
-| Features | HIGH | Feature expectations verified across 15+ social media management tools (Statusbrew, Agorapulse, Planable) and multi-store e-commerce platforms. Table stakes vs differentiators clearly separated. |
-| Architecture | HIGH | Three-layer isolation pattern (database RLS + API validation + frontend context) verified via Supabase official docs and community implementations. Performance benchmarks (94% improvement with SELECT wrapper) cited from official troubleshooting guide. |
-| Pitfalls | HIGH | All critical pitfalls sourced from official docs (Supabase RLS blackout, FastAPI background tasks), verified bug reports (ElevenLabs retry issue), and real-world case studies (multi-tenant leakage articles). Testing checklist compiled from production incidents. |
+| Stack | **HIGH** | Official FFmpeg documentation + verified Python library compatibility. Platform specs from multiple 2026 sources cross-checked. Minimal new dependencies reduces risk. |
+| Features | **HIGH** | Table stakes vs differentiators clear from competitive analysis (CapCut, Descript, Premiere). Anti-features well-established through industry pitfalls. Feature priority validated with user-facing value. |
+| Architecture | **HIGH** | Existing Edit Factory patterns examined directly (video_processor.py lines verified). Proposed changes integrate cleanly without breaking existing functionality. GPU/CPU separation pattern already proven in codebase. |
+| Pitfalls | **HIGH** | Critical pitfalls verified through official docs + CVE database + codebase inspection. Performance numbers from benchmarked sources. Current code already avoids most pitfalls (subtitle handling, GOP settings). |
 
-**Overall confidence:** HIGH
+**Overall confidence:** **HIGH**
+
+Research based on official FFmpeg documentation, recent 2026 platform specifications, and direct codebase inspection. All recommendations preserve existing functionality while adding opt-in enhancements. No speculative technologies or unproven patterns.
 
 ### Gaps to Address
 
-**Python version compatibility:** Current Edit Factory Python version unknown. If running Python 3.13+, venv downgrade to 3.11 required before Kokoro installation (Kokoro max Python 3.12). Verify early in Phase 4.
+Minor gaps requiring validation during implementation:
 
-**Existing data ownership:** Research assumes Edit Factory currently has global data (no user_id on projects/clips). Migration creates "default profile" for backfill. If existing data has user_id, backfill strategy changes to: create default profile per user, assign projects by user_id match. Verify in Phase 1 planning.
+- **Filter parameter optimal values:** Research provides starting values (hqdn3d 1.5-3, unsharp 0.3-0.6) but production values need tuning on Edit Factory's actual user content. **Mitigation:** Implement conservative defaults in Phase 2, expose as user-configurable presets for power users, collect metrics to tune in v3.1.
 
-**Postiz API multi-config support:** Research assumes Postiz supports multiple API configurations. If Postiz service uses global singleton with single API key, refactoring required to instantiate per-profile. Verify Postiz service architecture early in Phase 5 planning.
+- **Platform specs change frequency:** Social media platforms update encoding requirements periodically. TikTok/Instagram specs researched from January 2026 sources may drift. **Mitigation:** Version presets in code with date/source comments, implement telemetry to detect platform rejection patterns, plan quarterly spec review.
 
-**FFmpeg temp directory permissions:** Profile-scoped temp paths (`temp_dir / profile_id / job_id`) require directory creation with proper permissions. If running in containerized environment, volume mount points may need adjustment. Test in Phase 2.
+- **Scoring algorithm aesthetic weights:** Proposed 40/20/20/15/5 split (motion/variance/blur/contrast/brightness) is research-based but not validated on Edit Factory's specific user base. **Mitigation:** Implement as configurable scoring profiles in Phase 3, A/B test with subset of users, validate with platform engagement metrics.
 
-**Cost tracking per-profile aggregation:** Existing cost_tracker logs to `api_costs` table. Adding `profile_id` column enables per-profile filtering, but requires migration of historical cost data. Decide whether to backfill historical costs to "default profile" or leave NULL (global costs before profiles). Address in Phase 1 migration.
+- **GPU filter acceleration:** Research confirms hqdn3d and unsharp are CPU-only, but Edit Factory uses h264_nvenc which may support some CUDA filters. **Mitigation:** Test GPU-accelerated equivalents (scale_cuda verified working in code), benchmark performance, document GPU vs CPU filter capabilities.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- [Supabase Row Level Security Official Docs](https://supabase.com/docs/guides/database/postgres/row-level-security) — RLS patterns, policy syntax, performance optimization
-- [Supabase RLS Performance Best Practices](https://supabase.com/docs/guides/troubleshooting/rls-performance-and-best-practices-Z5Jjwv) — 94% performance improvement benchmark, index strategies
-- [Supabase User Management](https://supabase.com/docs/guides/auth/managing-user-data) — app_metadata vs user_metadata, JWT claims
-- [coqui-tts PyPI](https://pypi.org/project/coqui-tts/) — Version 0.27.5 confirmed Jan 26, 2026
-- [piper-tts PyPI](https://pypi.org/project/piper-tts/) — Version 1.4.0 confirmed Jan 30, 2026
-- [FastAPI Background Tasks Official Docs](https://fastapi.tiangolo.com/tutorial/background-tasks/) — Context preservation behavior
-- [concurrently npm](https://www.npmjs.com/package/concurrently) — Version 9.2.1, 8.6M weekly downloads
+
+**Official Documentation:**
+- FFmpeg Official Filters Documentation (https://ffmpeg.org/ffmpeg-filters.html) — loudnorm, hqdn3d, unsharp, eq filter syntax and parameters
+- FFmpeg CRF Guide (https://slhck.info/video/2017/02/24/crf-guide.html) — constant rate factor encoding best practices
+- EBU R128 Standard — audio loudness normalization specification (-14 LUFS for social media)
+
+**Edit Factory Codebase (Direct Inspection):**
+- app/services/video_processor.py lines 506-542 — FFmpeg subprocess execution patterns
+- app/services/video_processor.py lines 680-684 — GPU filter chain handling (hwdownload/hwupload_cuda)
+- app/services/video_processor.py lines 944-965 — Subtitle rendering without hwaccel (correct pattern)
+- app/services/video_processor.py lines 69-77 — Current segment scoring algorithm
+
+**Platform Specifications (2026):**
+- Master Your Shorts: Export Settings for Reels, TikTok & YouTube Shorts 2026 (https://aaapresets.com) — verified bitrate/CRF/GOP requirements
+- Instagram Video Format Specs 2026 (https://socialrails.com) — resolution and encoding constraints
+- LUFS Social Media Standards (https://starsoundstudios.com) — -14 LUFS target for all major platforms
 
 ### Secondary (MEDIUM confidence)
-- [Multi-Tenant Applications with RLS on Supabase](https://www.antstack.com/blog/multi-tenant-applications-with-rls-on-supabase-postgress/) — Real-world implementation patterns
-- [Statusbrew Social Media Management Tools](https://statusbrew.com/insights/social-media-management-tools-for-agencies) — Agency workspace isolation features
-- [ElevenLabs TTS Retry Bug](https://github.com/livekit/agents/issues/4135) — Verified fallback state reset issue
-- [FastAPI Multi-Tenant Isolation Strategies 2026](https://medium.com/@Praxen/5-fastapi-multi-tenant-isolation-strategies-that-scale-fd536fef5f88) — Dependency injection patterns
-- [Best Open-Source TTS Models in 2026](https://www.bentoml.com/blog/exploring-the-world-of-open-source-text-to-speech-models) — Kokoro comparison and benchmarks
-- [Kokoro-82M Installation Guide](https://aleksandarhaber.com/kokoro-82m-install-and-run-locally-fast-small-and-free-text-to-speech-tts-ai-model-kokoro-82m/) — System dependency requirements
+
+**FFmpeg Best Practices:**
+- FFmpeg Compress Video Guide (https://cloudinary.com/guides/video-effects/ffmpeg-compress-video) — encoding optimization techniques
+- FFmpeg for Instagram (https://dev.to/alfg/ffmpeg-for-instagram-35bi) — platform-specific settings
+- Audio Loudness Normalization with FFmpeg (https://medium.com/@peter_forgacs) — two-pass loudnorm implementation
+
+**Quality Analysis:**
+- Blur Detection with OpenCV (https://pyimagesearch.com/2015/09/07/blur-detection-with-opencv/) — Laplacian variance threshold methodology
+- Detecting Low Contrast Images (https://pyimagesearch.com/2021/01/25/detecting-low-contrast-images-with-opencv-scikit-image-and-python/) — scikit-image usage patterns
+- Perceptual Video Quality Assessment Survey (https://arxiv.org/html/2402.03413v1) — academic foundation for scoring algorithms
+
+**Performance and Pitfalls:**
+- FFmpeg Memory Leak CVE-2025-25469 (https://hackers-arise.com) — recent vulnerability documentation
+- Codec Wiki Denoise Filters (https://wiki.x266.mov/docs/filtering/denoise) — nlmeans vs hqdn3d performance comparison
+- Python subprocess Issue 28165 (https://bugs.python.org/issue28165) — memory buffering problems
 
 ### Tertiary (LOW confidence)
-- [Multi-Tenant Cache Data Leakage 2026](https://medium.com/@instatunnel/multi-tenant-leakage-when-row-level-security-fails-in-saas-da25f40c788c) — Conceptual patterns, needs validation
-- [Python In-Memory Cache Multi-Tenant](https://jumpi96.github.io/A-multi-tenant-cache/) — Composite key strategy examples
+
+**Competitive Analysis:**
+- CapCut vs Descript Comparison 2026 (https://www.fahimai.com) — feature landscape understanding
+- AI Video Editor Trends 2026 (https://metricool.com) — industry direction
+- Best AI Video Enhancers 2026 (https://wavespeed.ai) — competitive differentiation
+
+**Note:** Tertiary sources used for feature landscape context only. All technical implementation recommendations based on primary sources (official docs + codebase inspection).
 
 ---
-*Research completed: 2026-02-03*
-*Ready for roadmap: yes*
+*Research completed: 2026-02-04*
+*Ready for roadmap: YES*
