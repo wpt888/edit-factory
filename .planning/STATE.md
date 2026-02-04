@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** One-click video production workflow: upload a product video, get a social-media-ready clip with voiceover and captions, publish to the right store's social accounts.
-**Current focus:** Phase 5 - Per-Profile Postiz (next)
+**Current focus:** Phase 5 - Per-Profile Postiz (in progress)
 
 ## Current Position
 
-Phase: 4 of 6 (TTS Provider Selection)
-Plan: 8 of 8 (Phase Complete)
-Status: Phase complete
-Last activity: 2026-02-03 — Completed 04-08-PLAN.md (Gap Closure - 6 API Bug Fixes)
+Phase: 5 of 6 (Per-Profile Postiz)
+Plan: 1 of 5 (Backend Profile-Aware Postiz Factory)
+Status: In progress
+Last activity: 2026-02-04 - Completed 05-01-PLAN.md
 
-Progress: [████████████████░░░░] 85%
+Progress: [█████████████████░░░] 86%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 16
-- Average duration: 7.4 min
-- Total execution time: 2.25 hours
+- Total plans completed: 17
+- Average duration: 7.2 min
+- Total execution time: 2.3 hours
 
 **By Phase:**
 
@@ -31,10 +31,11 @@ Progress: [████████████████░░░░] 85%
 | 02-backend-profile-context | 5 | 60 min | 12 min |
 | 03-frontend-profile-ui | 3 | 6 min | 2 min |
 | 04-tts-provider-selection | 8 | 35 min | 4.4 min |
+| 05-per-profile-postiz | 1 | 3 min | 3 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-04 (2m), 04-05 (2m), 04-06 (19m), 04-07 (<1m), 04-08 (5m)
-- Trend: 04-08 was gap closure (6 API bug fixes discovered in verification)
+- Last 5 plans: 04-06 (19m), 04-07 (<1m), 04-08 (5m), 05-01 (3m)
+- Trend: 05-01 was pure backend refactoring (no UI), quick execution
 
 *Updated after each plan completion*
 
@@ -98,6 +99,12 @@ Recent decisions affecting current work:
 - **04-06**: Settings page profile-aware (each profile can have different TTS provider/voice preferences)
 - **04-07**: Verification-only plan pattern for user acceptance testing (no code changes)
 - **04-08**: Gap closure plan pattern: verification reveals bugs, dedicated plan fixes them atomically
+- **05-01**: Profile-aware Postiz factory with instance caching (Dict keyed by profile_id)
+- **05-01**: Database credential lookup from profiles.tts_settings.postiz JSONB
+- **05-01**: Environment variable fallback if profile has no Postiz config
+- **05-01**: ValueError for missing credentials (routes return 400 with helpful message)
+- **05-01**: PATCH endpoint added to profile_routes.py for tts_settings updates
+- **05-01**: Cache invalidation via reset_postiz_publisher(profile_id) on settings change
 
 ### Pending Todos
 
@@ -105,47 +112,40 @@ None yet.
 
 ### Blockers/Concerns
 
-**Phase 5 considerations:**
-- Verify Postiz service supports multiple API configurations (currently uses global singleton)
-- Per-profile Postiz credentials storage in profiles.tts_settings JSONB or new column
+**Phase 5 considerations (resolved in 05-01):**
+- ~~Verify Postiz service supports multiple API configurations (currently uses global singleton)~~ RESOLVED: Refactored to profile-aware factory
+- ~~Per-profile Postiz credentials storage in profiles.tts_settings JSONB or new column~~ RESOLVED: Using tts_settings.postiz
+
+**Remaining Phase 5 work:**
+- Frontend Postiz settings UI (05-02)
+- Frontend credential validation UI (05-03)
+- Cost quota enforcement (05-04)
+- Profile activity dashboard (05-05)
 
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Phase 4 complete - verification passed (6/6 must-haves)
-Next action: Plan Phase 5 (Per-Profile Postiz)
+Stopped at: Completed 05-01-PLAN.md (Backend Profile-Aware Postiz Factory)
+Next action: Execute 05-02-PLAN.md (Frontend Postiz Settings UI)
 Resume file: None
 
-**Phase 4 Complete Summary:**
-- 04-01: TTS service abstraction + database schema (3 min)
-- 04-02: ElevenLabs and Edge TTS adapters (2 min)
-- 04-03: Coqui XTTS service implementation (2 min)
-- 04-04: Kokoro TTS service implementation (2 min)
-- 04-05: TTS API routes (2 min)
-- 04-06: Frontend TTS UI components (19 min)
-- 04-07: Visual verification checkpoint (<1 min, user approved)
-- 04-08: Gap closure - 6 API bug fixes (5 min)
+**Phase 5 Progress:**
+- 05-01: Backend profile-aware Postiz factory (3 min) - COMPLETE
+- 05-02: Frontend Postiz settings UI - PENDING
+- 05-03: Frontend credential validation - PENDING
+- 05-04: Cost quota enforcement - PENDING
+- 05-05: Profile activity dashboard - PENDING
 
-**Phase 4 Achievements:**
-- Total duration: ~35 minutes (8 plans)
-- TTS service abstraction with factory pattern
-- 4 providers: ElevenLabs, Edge TTS, Coqui XTTS, Kokoro
-- Voice cloning capability (Coqui)
-- REST API for all TTS operations
-- Settings page with provider selector and voice cloning UI
-- Visual verification passed - user-approved functionality
-- Gap closure: 6 API bugs fixed (navbar link, voice_id, generate_audio, duration_seconds, audio_file, voice_name)
+**05-01 Achievements:**
+- Postiz service refactored from singleton to profile-aware factory
+- Instance caching with Dict[str, PostizPublisher]
+- Database lookup from profiles.tts_settings.postiz
+- Environment variable fallback for backward compatibility
+- Cache invalidation on profile settings change
+- All 6 Postiz route endpoints updated to pass profile_id
+- PATCH endpoint added to profile_routes.py
 
-**All Phase 4 Requirements Met:**
-- TTS-01: User can select TTS provider from UI
-- TTS-02: Cost displayed inline next to each provider option
-- TTS-03: Coqui XTTS generates audio with voice cloning
-- TTS-04: Kokoro TTS generates audio with preset voices
-- TTS-05: User can save default voice settings per profile
-- TTS-06: Voice cloning workflow allows sample upload
-
-**Ready for Phase 5: Per-Profile Postiz**
-- Enable separate publishing configuration per store profile
-- Per-profile Postiz API credentials
-- Cost quota enforcement per profile
-- Profile activity dashboard
+**Ready for 05-02: Frontend Postiz Settings UI**
+- Backend accepts Postiz credentials via PATCH /profiles/{id}
+- Settings page needs new section for Postiz configuration
+- Form fields: api_url, api_key, enabled toggle
