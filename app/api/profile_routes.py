@@ -4,9 +4,9 @@ Handles CRUD operations for user profiles.
 """
 import logging
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
 
 from app.api.auth import get_current_user, AuthUser
@@ -402,3 +402,106 @@ async def set_default_profile(
     except Exception as e:
         logger.error(f"Failed to set default profile {profile_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to set default profile")
+
+
+@router.get("/{profile_id}/dashboard")
+async def get_profile_dashboard(
+    profile_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+    time_range: str = Query(default="30d", pattern="^(7d|30d|90d|all)$")
+):
+    """
+    Get profile activity dashboard data.
+    Returns video counts, API costs, and recent activity.
+
+    Args:
+        profile_id: Profile ID
+        time_range: Time range filter (7d, 30d, 90d, all)
+
+    Returns:
+        Profile stats including project/clip counts and cost breakdown
+    """
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        # Verify ownership
+        profile_result = supabase.table("profiles")\
+            .select("user_id, monthly_quota_usd")\
+            .eq("id", profile_id)\
+            .single()\
+            .execute()
+
+        if not profile_result.data:
+            raise HTTPException(status_code=404, detail="Profile not found")
+
+        if profile_result.data["user_id"] != current_user.id:
+            logger.warning(f"[Profile {profile_id}] Dashboard access denied for user {current_user.id}")
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+
+        monthly_quota = float(profile_result.data.get("monthly_quota_usd", 0) or 0)
+
+        # Calculate date filter
+        now = datetime.now()
+        if time_range == "7d":
+            start_date = now - timedelta(days=7)
+        elif time_range == "30d":
+            start_date = now - timedelta(days=30)
+        elif time_range == "90d":
+            start_date = now - timedelta(days=90)
+        else:
+            start_date = None  # All time
+
+        # Project count
+        projects_query = supabase.table("editai_projects")\
+            .select("id", count="exact")\
+            .eq("profile_id", profile_id)
+        if start_date:
+            projects_query = projects_query.gte("created_at", start_date.isoformat())
+        projects_result = projects_query.execute()
+
+        # Clip count
+        clips_query = supabase.table("editai_clips")\
+            .select("id, final_status", count="exact")\
+            .eq("profile_id", profile_id)
+        if start_date:
+            clips_query = clips_query.gte("created_at", start_date.isoformat())
+        clips_result = clips_query.execute()
+
+        # Count rendered clips (final_status = 'completed')
+        rendered_count = sum(1 for c in clips_result.data if c.get("final_status") == "completed")
+
+        # Get costs summary
+        from app.services.cost_tracker import get_cost_tracker
+        tracker = get_cost_tracker()
+        costs = tracker.get_summary(profile_id=profile_id)
+
+        # Get monthly costs for quota display
+        monthly_costs = tracker.get_monthly_costs(profile_id)
+
+        logger.info(f"[Profile {profile_id}] Dashboard retrieved: {projects_result.count} projects, {clips_result.count} clips")
+
+        return {
+            "profile_id": profile_id,
+            "time_range": time_range,
+            "stats": {
+                "projects_count": projects_result.count or 0,
+                "clips_count": clips_result.count or 0,
+                "rendered_count": rendered_count
+            },
+            "costs": {
+                "elevenlabs": costs.get("totals", {}).get("elevenlabs", 0),
+                "gemini": costs.get("totals", {}).get("gemini", 0),
+                "total": costs.get("total_all", 0),
+                "monthly": monthly_costs,
+                "monthly_quota": monthly_quota,
+                "quota_remaining": max(0, monthly_quota - monthly_costs) if monthly_quota > 0 else None
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get dashboard for profile {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch dashboard data")
