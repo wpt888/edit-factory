@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 5 of 6 (Per-Profile Postiz)
-Plan: 2 of 5 (Frontend Postiz Configuration UI)
+Plan: 3 of 5 (Cost Quota and Dashboard API)
 Status: In progress
-Last activity: 2026-02-04 - Completed 05-02-PLAN.md
+Last activity: 2026-02-04 - Completed 05-03-PLAN.md
 
-Progress: [██████████████████░░] 88%
+Progress: [███████████████████░] 92%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 18
-- Average duration: 7.1 min
-- Total execution time: 2.4 hours
+- Total plans completed: 19
+- Average duration: 6.8 min
+- Total execution time: 2.5 hours
 
 **By Phase:**
 
@@ -31,11 +31,11 @@ Progress: [██████████████████░░] 88%
 | 02-backend-profile-context | 5 | 60 min | 12 min |
 | 03-frontend-profile-ui | 3 | 6 min | 2 min |
 | 04-tts-provider-selection | 8 | 35 min | 4.4 min |
-| 05-per-profile-postiz | 2 | 10 min | 5 min |
+| 05-per-profile-postiz | 3 | 13 min | 4.3 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-07 (<1m), 04-08 (5m), 05-01 (3m), 05-02 (7m)
-- Trend: Frontend UI additions taking slightly longer due to multiple state variables
+- Last 5 plans: 04-08 (5m), 05-01 (3m), 05-02 (7m), 05-03 (3m)
+- Trend: Backend-only plans consistently faster than frontend UI work
 
 *Updated after each plan completion*
 
@@ -109,6 +109,10 @@ Recent decisions affecting current work:
 - **05-02**: Show/hide API key toggle (security UX - default masked, optional reveal)
 - **05-02**: Test uses /postiz/status (existing backend endpoint for validation)
 - **05-02**: Single Save button (saves both TTS and Postiz settings at once)
+- **05-03**: HTTP 402 (Payment Required) for quota exceeded - distinct from 403 (auth) and 400 (validation)
+- **05-03**: Quota check uses calendar month (1st to end of month) for predictable billing cycles
+- **05-03**: Dashboard endpoint supports time_range query parameter (7d/30d/90d/all)
+- **05-03**: quota_remaining: null when quota is 0 (unlimited) - frontend can detect unlimited vs exhausted
 
 ### Pending Todos
 
@@ -122,33 +126,32 @@ None yet.
 
 **Remaining Phase 5 work:**
 - ~~Frontend Postiz settings UI (05-02)~~ COMPLETE
-- Backend credential validation endpoint (05-03)
-- Cost quota enforcement (05-04)
-- Profile activity dashboard (05-05)
+- ~~Cost quota and dashboard API (05-03)~~ COMPLETE
+- Frontend quota UI display (05-04)
+- Final verification (05-05)
 
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed 05-02-PLAN.md (Frontend Postiz Configuration UI)
-Next action: Execute 05-03-PLAN.md (Backend Credential Validation)
+Stopped at: Completed 05-03-PLAN.md (Cost Quota and Dashboard API)
+Next action: Execute 05-04-PLAN.md (Frontend Quota UI)
 Resume file: None
 
 **Phase 5 Progress:**
 - 05-01: Backend profile-aware Postiz factory (3 min) - COMPLETE
 - 05-02: Frontend Postiz configuration UI (7 min) - COMPLETE
-- 05-03: Backend credential validation - PENDING
-- 05-04: Cost quota enforcement - PENDING
-- 05-05: Profile activity dashboard - PENDING
+- 05-03: Cost quota and dashboard API (3 min) - COMPLETE
+- 05-04: Frontend quota UI - PENDING
+- 05-05: Final verification - PENDING
 
-**05-02 Achievements:**
-- Settings page extended with Postiz Publishing card
-- URL and API key inputs with show/hide toggle (Eye icons)
-- Test Connection button with loading state
-- Connection status indicator (green/yellow dot)
-- Credentials saved to profile.tts_settings.postiz
-- Single Save button for both TTS and Postiz settings
+**05-03 Achievements:**
+- CostTracker.get_monthly_costs() calculates calendar month costs
+- CostTracker.check_quota() provides exceeded/current/quota tuple
+- TTS /generate returns HTTP 402 when quota exceeded
+- Dashboard endpoint returns project/clip counts and cost breakdown
+- Time range filtering (7d/30d/90d/all) for dashboard stats
 
-**Ready for 05-03: Backend Credential Validation**
-- Frontend can capture Postiz credentials
-- Need backend endpoint to validate credentials before saving
-- Current Test Connection uses /postiz/status (needs profile credentials first)
+**Ready for 05-04: Frontend Quota UI**
+- Backend quota enforcement working
+- Dashboard API provides all needed stats
+- Frontend needs to display quota status and handle 402 errors
