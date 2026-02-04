@@ -1,659 +1,791 @@
-# Domain Pitfalls: Multi-Tenant Isolation & TTS Integration
+# Domain Pitfalls: Video Quality Enhancement
 
-**Domain:** Video processing platform retrofitting profile/workspace isolation
-**Researched:** 2026-02-03
-**Confidence:** HIGH (verified with official docs, recent 2026 sources, and codebase analysis)
+**Domain:** Adding video quality enhancement to FFmpeg-based video processing
+**Researched:** 2026-02-04
+**Context:** Edit Factory milestone - enhancing existing video processing pipeline
+
+## Executive Summary
+
+Adding video quality enhancement features to an existing FFmpeg-based pipeline is deceptively complex. The primary risks are **performance regression** (filters compound processing time), **quality vs file size tradeoffs** (platform requirements conflict with quality goals), and **platform compatibility** (social media platforms have strict encoding requirements that can conflict with quality settings).
+
+**Critical insight from Edit Factory codebase:** The system already uses subprocess-based FFmpeg calls with GPU acceleration fallback patterns. Any quality enhancement must preserve this architecture while avoiding memory leaks and maintaining real-time processing expectations.
 
 ---
 
 ## Critical Pitfalls
 
-Mistakes that cause rewrites, data breaches, or major system failures.
+Mistakes that cause rewrites, major performance issues, or platform rejection.
 
-### Pitfall 1: Enabling RLS Without Policies = Production Blackout
+### Pitfall 1: Filter Chain Order Destroys Performance
 
 **What goes wrong:**
-Enabling Row Level Security on existing Supabase tables without simultaneously deploying policies **immediately blocks all API access** for the `anon` key. Your app stops working instantly.
+Incorrect filter chain ordering causes unnecessary re-encoding or prevents GPU acceleration. For example, applying CPU-based filters (like `subtitles`) before GPU filters forces data transfer between CPU/GPU multiple times, destroying performance.
 
 **Why it happens:**
-RLS defaults to "deny all" when enabled. Developers assume enabling RLS and creating policies are separate steps, but they must be atomic in production.
+FFmpeg filter graphs have implicit data flow, and mixing GPU/CPU filters requires explicit `hwdownload` and `hwupload` calls. Developers often add filters linearly without understanding the performance implications.
+
+**Evidence from Edit Factory:**
+Lines 680-684 in `video_processor.py` show explicit handling:
+```python
+# Pentru GPU: trebuie să descărcăm din CUDA înainte de filtru video
+if video_filter:
+    cmd.extend(["-vf", f"hwdownload,format=nv12,{video_filter},hwupload_cuda"])
+```
 
 **Consequences:**
-- All frontend queries return 0 rows (silent data loss from user perspective)
-- Background jobs fail to read/write data
-- Production outage until policies are deployed
-- No error message, just empty results
+- 3-10x processing time increase
+- Memory pressure from multiple CPU↔GPU transfers
+- Potential NVENC errors when filters conflict
+- System becomes unusable for real-time processing
 
 **Prevention:**
-```sql
--- WRONG: Two separate operations
-ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
--- (gap where production is broken)
-CREATE POLICY "users_read_own" ON projects FOR SELECT USING (auth.uid() = user_id);
+1. **Group filters by execution domain** (CPU vs GPU)
+2. **Apply order: decode → GPU filters → download (if needed) → CPU filters → encode**
+3. **For quality enhancement filters:**
+   - Denoising (hqdn3d, nlmeans): CPU-based, apply BEFORE subtitle rendering
+   - Sharpening (unsharp): CPU-based, apply AFTER denoising
+   - Scale/crop: GPU-accelerated if using `scale_cuda`
+   - Subtitles: CPU-only, always apply LAST before final encode
 
--- RIGHT: Transaction with both operations
-BEGIN;
-  ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
-  CREATE POLICY "users_read_own" ON projects FOR SELECT USING (auth.uid() = user_id);
-  CREATE POLICY "users_write_own" ON projects FOR INSERT WITH CHECK (auth.uid() = user_id);
-  -- etc. for all policies
-COMMIT;
+4. **Test filter combinations explicitly:**
+```python
+# CORRECT order for quality + subtitles
+filters = []
+if use_gpu:
+    filters.append("hwdownload,format=nv12")
+if denoise:
+    filters.append("hqdn3d=1.5:1.5:6:6")  # CPU denoise
+if sharpen:
+    filters.append("unsharp=5:5:0.8")     # CPU sharpen
+# Subtitle filter happens separately in add_subtitles()
 ```
 
 **Detection:**
-- Staging environment query returns 0 rows when using `anon` key
-- Supabase logs show `insufficient_privilege` errors
-- Frontend shows empty states despite database having data
+- FFmpeg warnings about "filtergraph" errors
+- GPU encoding fails but CPU succeeds
+- Processing time >5x slower than expected
+- `nvidia-smi` shows GPU idle during filter application
 
-**Phase impact:** Phase 1 (Database Migration) - Test the FULL migration (RLS + policies) in staging with real frontend calls before production.
-
-**Sources:**
-- [Supabase RLS Documentation](https://supabase.com/docs/guides/database/postgres/row-level-security)
-- [Supabase RLS Best Practices 2026](https://vibeappscanner.com/supabase-row-level-security)
+**Phase to address:** Phase 1 (Architecture design) - establish filter chain patterns
 
 ---
 
-### Pitfall 2: Foreign Key Migration Without Data Backfill = Constraint Violations
+### Pitfall 2: Audio Normalization Requires Two-Pass (But You Skip It)
 
 **What goes wrong:**
-Adding `profile_id` foreign key constraint to tables with existing NULL data causes migration failure. Existing projects/clips/jobs have no profile assigned, violating NOT NULL constraint.
+Using FFmpeg's `loudnorm` filter in single-pass mode causes dynamic volume fluctuations that sound jarring when combined with TTS. The audio loudness jumps unexpectedly between segments, creating poor user experience.
 
 **Why it happens:**
-Edit Factory currently has global data (no user_id). Adding `profile_id REFERENCES profiles(id) NOT NULL` to tables with existing rows violates referential integrity.
+Two-pass loudnorm requires:
+1. First pass to analyze audio characteristics
+2. Second pass to apply normalization with analyzed parameters
+
+Developers skip the first pass thinking "normalization is normalization" and use single-pass mode for speed, not realizing single-pass produces worse results.
+
+**Evidence from research:**
+- "Single-pass mode introduces dynamic fluctuations to the audio, particularly problematic for music content"
+- "Single-pass is ideal for live normalization but produces worse results"
+- Source: [Audio Normalization with FFmpeg](https://wiki.tnonline.net/w/Blog/Audio_normalization_with_FFmpeg)
 
 **Consequences:**
-- Migration fails mid-execution, database in inconsistent state
-- Rollback required, downtime extended
-- Existing data becomes inaccessible (orphaned records)
-- Production data corruption if migration partially succeeds
+- Jarring volume changes between video segments
+- TTS audio doesn't blend with background video audio
+- Platform rejection due to audio quality issues
+- User complaints about "unprofessional sound"
 
 **Prevention:**
-Multi-step migration approach:
+1. **Always use two-pass loudnorm for post-processing:**
+```python
+# Pass 1: Analyze
+ffmpeg -i input.mp4 -af loudnorm=print_format=json -f null -
 
-```sql
--- Step 1: Add nullable column (migration N.M)
-ALTER TABLE projects ADD COLUMN profile_id UUID REFERENCES profiles(id);
-CREATE INDEX idx_projects_profile_id ON projects(profile_id);
-
--- Step 2: Backfill existing data (migration N.M or data script)
--- Assign existing projects to default profile
-UPDATE projects SET profile_id = 'default-profile-uuid' WHERE profile_id IS NULL;
-UPDATE clips SET profile_id = (SELECT profile_id FROM projects WHERE projects.id = clips.project_id);
-UPDATE jobs SET profile_id = 'default-profile-uuid' WHERE profile_id IS NULL;
-UPDATE api_costs SET profile_id = 'default-profile-uuid' WHERE profile_id IS NULL;
-
--- Step 3: Add NOT NULL constraint (migration N.M+1)
-ALTER TABLE projects ALTER COLUMN profile_id SET NOT NULL;
+# Parse JSON output to get measured_I, measured_LRA, measured_TP
+# Pass 2: Apply with linear mode
+ffmpeg -i input.mp4 -af loudnorm=linear=true:measured_I=-16.0:measured_LRA=11.0:measured_TP=-2.0 output.mp4
 ```
 
+2. **For Edit Factory's segment-based architecture:**
+   - Normalize AFTER concatenation, not per-segment
+   - Store normalization parameters per project
+   - Apply consistent normalization to all variants
+
+3. **Target loudness for social media:**
+   - Instagram Reels: -14 LUFS (integrated loudness)
+   - TikTok: -14 to -16 LUFS
+   - YouTube Shorts: -14 LUFS
+   - Never exceed -1.0 dBTP (true peak)
+
+4. **Handle the resampling issue:**
+   - loudnorm resamples to 192kHz internally
+   - Explicitly resample back to 48kHz after normalization: `-ar 48000`
+
 **Detection:**
-- Migration dry-run fails with "violates foreign key constraint"
-- Constraint validation error: "column contains null values"
-- Row count mismatch: `SELECT COUNT(*) WHERE profile_id IS NULL` shows orphans
+- Audio sounds "pumping" (volume goes up and down)
+- TTS is much louder than video background audio
+- FFmpeg output shows "switching to dynamic normalization"
+- Output audio sample rate is 192kHz instead of 48kHz
 
-**Phase impact:** Phase 1 (Database Migration) - CRITICAL. Require staging migration test with production-like data volume.
-
-**Sources:**
-- [GitLab Foreign Key Migration Best Practices](https://docs.gitlab.com/development/database/foreign_keys/)
-- [Supabase Data Migration Guide 2026](https://copyright-certificate.byu.edu/news/supabase-data-migration-guide)
-- [Postgres Foreign Key Migration Risks](https://iifx.dev/en/articles/221306173)
+**Phase to address:** Phase 2 (Audio normalization implementation)
 
 ---
 
-### Pitfall 3: Singleton Services Without Tenant Context = Data Leakage Across Profiles
+### Pitfall 3: CRF vs Bitrate Confusion Breaks Platform Compatibility
 
 **What goes wrong:**
-Edit Factory's singleton service pattern (`get_job_storage()`, `get_cost_tracker()`) stores global state. When adding profiles, singletons share data across tenants, causing Job A (Profile 1) to appear in Job B (Profile 2) queries.
+Using both CRF (quality-based encoding) AND bitrate constraints simultaneously creates conflicting encoding goals. For social media platforms with strict file size limits, this results in either quality degradation or upload rejection.
 
 **Why it happens:**
-Singletons are created once per process. Without tenant-scoped filtering at the service layer, all queries return global data. Background jobs lose tenant context because it's not propagated to service methods.
+Developers see platform specs like "bitrate: 3,500–4,500 kbps" and think "I'll set bitrate AND use CRF 23 for quality." FFmpeg then tries to satisfy both constraints, producing suboptimal results.
+
+**Evidence from research:**
+- "Mixing incompatible rate control methods: using `-b` bitrate option together with CRF... doesn't make sense to specify both"
+- "CRF targets quality and adjusts bitrate. `-b` targets bitrate."
+- Platform specs (Instagram Reels: 3,500-4,500 kbps; TikTok: 2,000-4,000 kbps; YouTube Shorts: 8,000-15,000 kbps)
+- Sources: [FFmpeg Best Quality](https://www.baeldung.com/linux/ffmpeg-best-quality-conversion), [Social Media Video Sizes 2026](https://recurpost.com/blog/the-up-to-date-video-sizes-guide-for-social-media/)
+
+**Edit Factory context:**
+Current code uses CRF 23 for both CPU and GPU encoding (lines 411, 416, 715, 962). No bitrate capping means files may exceed platform limits.
 
 **Consequences:**
-- Profile 1 sees Profile 2's projects/jobs/costs (data breach)
-- Cost tracking leaks: Profile 1's API costs charged to Profile 2
-- Job status confusion: Profile 1 sees progress for Profile 2's uploads
-- Compliance violation (GDPR, SOC 2)
+- Upload rejection: "File too large" (Instagram limit: depends on duration)
+- Quality varies unpredictably across content types
+- Complex scenes blow up file size
+- Simple scenes waste bitrate budget
 
 **Prevention:**
 
-**Option A: Inject profile_id into all service methods**
-```python
-# WRONG: Global singleton without context
-def get_job_storage() -> JobStorage:
-    global _job_storage
-    if _job_storage is None:
-        _job_storage = JobStorage()
-    return _job_storage
+1. **Choose encoding strategy based on use case:**
 
-# RIGHT: Pass profile_id explicitly
-class JobStorage:
-    def get_job(self, job_id: str, profile_id: str) -> Optional[dict]:
-        # Filter by profile_id
-        if self._supabase:
-            result = self._supabase.table("jobs")\
-                .select("*")\
-                .eq("id", job_id)\
-                .eq("profile_id", profile_id)\  # CRITICAL
-                .single().execute()
+   **Option A: CRF-only (Edit Factory current approach)**
+   - Use when: Quality matters more than file size
+   - Platform: YouTube Shorts (large file limits)
+   - Setting: CRF 20-23
+   - Pros: Consistent quality, simple
+   - Cons: Unpredictable file size
+
+   **Option B: Capped CRF (RECOMMENDED for social media)**
+   - Use when: Need quality + file size guarantee
+   - Platform: Instagram Reels, TikTok
+   - Settings:
+   ```python
+   "-crf", "23",
+   "-maxrate", "4000k",  # Platform max bitrate
+   "-bufsize", "8000k",  # 2x maxrate
+   ```
+   - Pros: Quality priority with safety ceiling
+   - Cons: Slightly more complex
+
+   **Option C: Two-pass bitrate (for strict limits)**
+   - Use when: Platform has hard file size limits
+   - Settings: Target bitrate based on duration
+   ```python
+   # Pass 1
+   ffmpeg -i input.mp4 -c:v libx264 -b:v 3500k -pass 1 -f null -
+   # Pass 2
+   ffmpeg -i input.mp4 -c:v libx264 -b:v 3500k -pass 2 output.mp4
+   ```
+   - Pros: Predictable file size
+   - Cons: 2x encoding time, lower quality
+
+2. **Platform-specific presets for Edit Factory:**
+
+```python
+PLATFORM_PRESETS = {
+    "instagram_reels": {
+        "resolution": "1080x1920",
+        "crf": 23,
+        "maxrate": "4000k",
+        "bufsize": "8000k",
+        "audio_bitrate": "192k",
+        "gop_size": 60  # 2sec at 30fps
+    },
+    "tiktok": {
+        "resolution": "1080x1920",
+        "crf": 24,  # Slightly lower quality for smaller files
+        "maxrate": "3500k",
+        "bufsize": "7000k",
+        "audio_bitrate": "128k",
+        "gop_size": 60
+    },
+    "youtube_shorts": {
+        "resolution": "1080x1920",  # Can use 2160x3840 for 4K
+        "crf": 20,  # Higher quality allowed
+        "maxrate": "12000k",
+        "bufsize": "24000k",
+        "audio_bitrate": "192k",
+        "gop_size": 60
+    }
+}
 ```
 
-**Option B: Use dependency injection with request-scoped context**
-```python
-# Store profile_id in request state (FastAPI dependency)
-async def get_current_profile(user: User = Depends(get_current_user)) -> str:
-    return user.active_profile_id
-
-# Inject into routes
-@router.get("/jobs/{job_id}")
-async def get_job(
-    job_id: str,
-    profile_id: str = Depends(get_current_profile),
-    storage: JobStorage = Depends(get_job_storage)
-):
-    return storage.get_job(job_id, profile_id)  # Explicit filtering
-```
+3. **CRF guidelines by resolution:**
+   - 1080p (Reels/TikTok): CRF 23-24
+   - 4K/2160p (YouTube Shorts): CRF 20-21
+   - Rule: +6 CRF = ~half file size, -6 CRF = ~double file size
 
 **Detection:**
-- Manual test: Login as Profile 1, create project. Login as Profile 2, see if project appears.
-- Check API response: `GET /library/projects` returns projects with different profile_ids
-- Inspect singleton state: `_memory_store` contains jobs from multiple profiles
+- Platform rejects uploads: "File exceeds size limit"
+- File sizes vary wildly (500MB for 60sec then 50MB for similar video)
+- Encoding time takes 2x-3x longer (sign of conflicting constraints)
+- FFmpeg warnings about rate control
 
-**Phase impact:** Phase 2 (Backend Services) - Audit ALL service methods. Every Supabase query needs `.eq("profile_id", profile_id)`.
-
-**Sources:**
-- [Multi-Tenant Singleton Context Loss](https://medium.com/@systemdesignwithsage/isolation-in-multi-tenancy-and-the-lessons-we-learned-the-hard-way-3335801aa754)
-- [Python Singleton Multi-Tenant Pitfalls](https://learn.microsoft.com/en-us/ef/core/miscellaneous/multitenancy)
-- [FastAPI Multi-Tenant Isolation Strategies 2026](https://medium.com/@Praxen/5-fastapi-multi-tenant-isolation-strategies-that-scale-fd536fef5f88)
+**Phase to address:** Phase 1 (Platform presets) + Phase 3 (Export settings)
 
 ---
 
-### Pitfall 4: In-Memory Cache Without Tenant Keys = Cross-Profile Data Bleeding
+### Pitfall 4: Denoising Destroys Processing Time Budget
 
 **What goes wrong:**
-Edit Factory's in-memory structures (`_generation_progress`, `_memory_store`, `_project_locks`) don't include profile_id in keys. Profile 1's progress update overwrites Profile 2's progress if projects have same ID.
+Adding `nlmeans` (Non-Local Means) denoising to improve quality increases processing time from 2 minutes to 30+ minutes per video. Users expect near-real-time processing, but denoising makes it unusable.
 
 **Why it happens:**
-Cache keys use project_id/job_id only. Without tenant prefix, async operations race to write the same key.
+nlmeans is CPU-only and doesn't parallelize well. A single 60-second 1080p video can take 10-30 minutes to denoise on modern hardware. Developers add it thinking "more filters = better quality" without benchmarking.
+
+**Evidence from research:**
+- "nlmeans filter is rather slow and doesn't parallelize well; only use it in cases the video contains a lot of noise"
+- "nlmeans provides the best quality but requires 10-30 minutes per hour of video"
+- "hqdn3d is a fast, high quality 3D denoising filter"
+- Sources: [FFmpeg Filters](https://www.ffmpeg.media/articles/ffmpeg-filters-scale-crop-rotate-sharpen), [Codec Wiki Denoise](https://wiki.x266.mov/docs/filtering/denoise)
+
+**Edit Factory context:**
+Current processing pipeline (lines 622-775) extracts segments then processes each individually. Adding denoising multiplies processing time by segment count.
 
 **Consequences:**
-- Profile 1 sees Profile 2's generation progress (confused UI state)
-- File path collisions: `/tmp/project-123/` used by both profiles simultaneously
-- Lock contention: Profile 1's upload blocks Profile 2's unrelated upload
-- Data corruption: Profile 1's final video overwrites Profile 2's video at same path
+- 10-30x processing time increase
+- Background jobs timeout
+- System becomes unusable for multi-variant processing
+- Server resource exhaustion with parallel jobs
+- Users abandon uploads
 
 **Prevention:**
 
+1. **Filter selection based on content analysis:**
+
 ```python
-# WRONG: Global cache key
-_generation_progress: Dict[str, dict] = {}
-def update_generation_progress(project_id: str, percentage: int):
-    _generation_progress[project_id] = {"percentage": percentage}
+def select_denoising_filter(video_path: Path, noise_threshold: float = 0.02) -> Optional[str]:
+    """
+    Analyze video noise level and select appropriate filter.
+    Only denoise if actually needed.
+    """
+    # Sample frames to detect noise
+    noise_level = estimate_noise_level(video_path)
 
-# RIGHT: Composite key with profile_id
-_generation_progress: Dict[str, dict] = {}
-def update_generation_progress(profile_id: str, project_id: str, percentage: int):
-    cache_key = f"{profile_id}:{project_id}"
-    _generation_progress[cache_key] = {"percentage": percentage}
-
-# OR: Nested dict
-_generation_progress: Dict[str, Dict[str, dict]] = {}
-def update_generation_progress(profile_id: str, project_id: str, percentage: int):
-    if profile_id not in _generation_progress:
-        _generation_progress[profile_id] = {}
-    _generation_progress[profile_id][project_id] = {"percentage": percentage}
+    if noise_level < noise_threshold:
+        return None  # Clean video, no denoising needed
+    elif noise_level < 0.05:
+        return "hqdn3d=1.5:1.5:6:6"  # Fast denoise (10% time overhead)
+    elif noise_level < 0.10:
+        return "hqdn3d=3:3:6:6"  # Stronger fast denoise
+    else:
+        # Very noisy - offer user choice: fast or quality
+        # Default to fast for real-time processing
+        return "atadenoise=0.02:s=9"  # Hybrid approach (50% time overhead)
 ```
 
-**File path isolation:**
-```python
-# WRONG: Shared temp directory
-temp_dir = settings.temp_dir / project_id
+2. **Never use nlmeans by default:**
+   - Only offer as "High Quality Mode" with explicit warning
+   - Show estimated processing time before starting
+   - Not available for multi-variant processing
+   - Only for single-video exports where quality >> speed
 
-# RIGHT: Profile-scoped temp directory
-temp_dir = settings.temp_dir / profile_id / project_id
+3. **Recommended denoise settings:**
+
+```python
+DENOISE_PRESETS = {
+    "none": None,
+    "light": "hqdn3d=1.5:1.5:6:6",           # +10% time, mild noise reduction
+    "moderate": "hqdn3d=3:3:6:6",            # +15% time, visible improvement
+    "strong": "atadenoise=0.02:s=9",         # +50% time, aggressive
+    "maximum": "nlmeans=3:7:5:21:21:0"       # +1000% time, best quality (opt-in only)
+}
 ```
+
+4. **Apply denoising selectively:**
+   - Analyze segments BEFORE selecting for inclusion
+   - Only denoise selected segments (not entire source video)
+   - Cache denoised segments for variant reuse
+
+5. **Edit Factory integration point:**
+   - Add denoise option to `extract_segments()` method
+   - Apply in filter chain between scale and sharpen
+   - Track processing time per segment
 
 **Detection:**
-- Concurrent upload test: Two profiles upload simultaneously, check progress API
-- Inspect cache: `_generation_progress` contains keys without tenant prefix
-- File system check: `/tmp/` contains project folders without profile namespace
+- Processing time >>5x longer than without filter
+- CPU usage at 100% for extended periods
+- Background jobs timing out
+- Server runs out of disk space (temp files accumulate)
 
-**Phase impact:** Phase 2 (Backend Services) - Audit all in-memory dicts and temp file paths.
-
-**Sources:**
-- [Multi-Tenant Cache Data Leakage 2026](https://medium.com/@instatunnel/multi-tenant-leakage-when-row-level-security-fails-in-saas-da25f40c788c)
-- [Python In-Memory Cache Multi-Tenant](https://jumpi96.github.io/A-multi-tenant-cache/)
+**Phase to address:** Phase 2 (Filter implementation) - must implement smart filter selection
 
 ---
 
-### Pitfall 5: Background Tasks Lose Tenant Context = Jobs Execute Against Wrong Profile
+### Pitfall 5: Subtitle Rendering Breaks GPU Pipeline
 
 **What goes wrong:**
-FastAPI `BackgroundTasks` evaluate dependencies at task creation time, not execution time. Profile context from request is lost when task runs after response.
+FFmpeg's `subtitles` filter is CPU-only and requires `libass`. Adding subtitles to a GPU-accelerated pipeline forces video decoding to CPU, destroying the performance benefit of GPU encoding.
 
 **Why it happens:**
-Background tasks execute in separate threads without request context. The `profile_id` from the original request is not automatically passed to service methods called inside the task.
+The subtitles filter doesn't support CUDA/hardware frames. When developers add `-vf subtitles=file.srt` to a GPU command, FFmpeg silently falls back to CPU decoding.
+
+**Evidence from research:**
+- "To use the libass library for subtitle rendering, you need to have libass enabled at compile time"
+- "Adding soft subtitles won't re-encode the entire file and is faster than hardcoding subtitles"
+- Edit Factory code (lines 942-969) already handles this correctly by NOT using hwaccel with subtitles
+- Sources: [FFmpeg Subtitles](https://cloudinary.com/guides/video-effects/ffmpeg-subtitles), [Bannerbear FFmpeg Subtitles](https://www.bannerbear.com/blog/how-to-add-subtitles-to-a-video-file-using-ffmpeg/)
+
+**Edit Factory context:**
+Current implementation CORRECTLY avoids hwaccel when adding subtitles (line 944-965), but doesn't document WHY. This pattern must be preserved when adding quality filters.
 
 **Consequences:**
-- Job processes Profile 1's video but saves results to Profile 2's database
-- Cost tracking logs Profile 1's ElevenLabs usage to Profile 2's quota
-- Postiz publishes Profile 1's video to Profile 2's social accounts (nightmare scenario)
+- GPU encoding disabled when subtitles present
+- Processing time increases 3-5x
+- Wasted GPU resources
+- "GPU acceleration" setting becomes misleading
 
 **Prevention:**
 
+1. **Architecture: Separate subtitle rendering from quality enhancement:**
+
 ```python
-# WRONG: Dependency not passed to background task
-@router.post("/library/projects/{project_id}/generate-variants")
-async def generate_variants(
-    project_id: str,
-    background_tasks: BackgroundTasks,
-    profile_id: str = Depends(get_current_profile)
-):
-    background_tasks.add_task(process_variants, project_id)
-    # profile_id is lost when task runs!
-
-# RIGHT: Explicitly pass profile_id to task
-@router.post("/library/projects/{project_id}/generate-variants")
-async def generate_variants(
-    project_id: str,
-    background_tasks: BackgroundTasks,
-    profile_id: str = Depends(get_current_profile)
-):
-    background_tasks.add_task(
-        process_variants,
-        project_id,
-        profile_id  # CRITICAL: Must pass explicitly
-    )
-
-# Task function receives profile_id
-def process_variants(project_id: str, profile_id: str):
-    storage = get_job_storage()
-    job = storage.get_job(job_id, profile_id)  # Filter by profile
-    # ... rest of processing
+# CORRECT pattern (preserve Edit Factory's current approach)
+def add_subtitles(video_path, srt_path, output_path, use_gpu=True):
+    """
+    Subtitles filter is CPU-only.
+    Decode on CPU, apply subtitles, encode with GPU if available.
+    """
+    cmd = [
+        "ffmpeg", "-y",
+        # NO -hwaccel here - subtitles filter needs CPU frames
+        "-i", str(video_path),
+        "-vf", f"subtitles='{srt_path_escaped}':force_style='{style}'",
+        "-c:v", "h264_nvenc" if use_gpu else "libx264",  # Can still GPU encode
+        "-preset", "p4" if use_gpu else "fast",
+        "-c:a", "copy",
+        str(output_path)
+    ]
 ```
 
+2. **Performance optimization order:**
+   - Apply ALL quality filters BEFORE subtitles
+   - Subtitles should be THE LAST video processing step
+   - Never mix subtitle rendering with GPU filter chains
+
+3. **For Edit Factory's multi-step pipeline:**
+   ```
+   Step 1: extract_segments() - GPU accelerated, no subtitles
+   Step 2: add_audio() - stream copy when possible
+   Step 3: [NEW] apply_quality_filters() - GPU denoise/sharpen if available
+   Step 4: add_subtitles() - CPU rendering, GPU encoding output
+   ```
+
+4. **Document the limitation:**
+   - UI should show "Subtitles use CPU rendering (normal behavior)"
+   - Don't let users think GPU acceleration is broken
+   - Provide ETA that accounts for CPU subtitle rendering
+
 **Detection:**
-- Background task test: Trigger upload for Profile 1, check if results appear in Profile 2
-- Log inspection: Background task logs show wrong profile_id or missing profile_id
-- Database query: Check if job results have mismatched profile_id vs user_id
+- `nvidia-smi` shows 0% GPU usage during subtitle rendering
+- FFmpeg output shows "Incompatible pixel format" warnings
+- Processing slower than expected even with GPU enabled
+- Filtergraph errors mentioning "cuda" and "subtitles"
 
-**Phase impact:** Phase 2 (Backend Services) - Audit ALL `background_tasks.add_task()` calls.
-
-**Sources:**
-- [FastAPI Background Tasks Dependency Injection 2026](https://thelinuxcode.com/dependency-injection-in-fastapi-2026-playbook-for-modular-testable-apis/)
-- [FastAPI Background Tasks Multi-Tenant](https://medium.com/techtrends-digest/high-performance-fastapi-dependency-injection-the-power-of-scoped-background-tasks-2025-f15250c53574)
-- [FastAPI BackgroundTasks Official Docs](https://fastapi.tiangolo.com/tutorial/background-tasks/)
+**Phase to address:** Phase 3 (Quality filters) - must document and preserve correct patterns
 
 ---
 
 ## Moderate Pitfalls
 
-Mistakes that cause delays, technical debt, or user confusion.
+Mistakes that cause delays, technical debt, or quality issues.
 
-### Pitfall 6: RLS Performance Degradation on Large Tables Without Indexes
+### Pitfall 6: Sharpening Creates Halos and Artifacts
 
 **What goes wrong:**
-RLS policies on `projects`, `clips`, `jobs`, `api_costs` tables add `WHERE profile_id = X` filter to every query. Without index on `profile_id`, queries scan entire table (full table scan).
+Oversharpening with `unsharp` filter creates visible halos around edges and amplifies compression artifacts. Videos look "crunchy" and artificial, especially after platform re-encoding.
 
 **Why it happens:**
-Supabase RLS works by adding policy conditions to queries. Without index, Postgres evaluates policy for every row.
+Developers crank up unsharp values thinking "more sharpening = better quality." The filter is actually an unsharpen mask that boosts edge contrast, and too much creates artifacts.
 
-**Consequences:**
-- Query time increases from 50ms to 5000ms on tables with 10K+ rows
-- API timeouts under load
-- Database CPU spikes
-- Poor user experience (slow page loads)
+**Evidence from research:**
+- "Counter-sharpening (unsharp) to restore detail can introduce halos and artifacts if overused; use unsharp values between 0.3-1.0"
+- Source: [FFmpeg Video Sharpening](https://www.cloudacm.com/?p=3016)
 
 **Prevention:**
+1. **Conservative unsharp values:**
+   ```python
+   # Light sharpening (barely visible, safe)
+   "unsharp=5:5:0.3:5:5:0.0"
 
-```sql
--- CRITICAL: Add indexes BEFORE enabling RLS
-CREATE INDEX idx_projects_profile_id ON projects(profile_id);
-CREATE INDEX idx_clips_profile_id ON clips(profile_id);
-CREATE INDEX idx_jobs_profile_id ON jobs(profile_id);
-CREATE INDEX idx_api_costs_profile_id ON api_costs(profile_id);
+   # Moderate sharpening (recommended default)
+   "unsharp=5:5:0.6:5:5:0.0"
 
--- Composite indexes for common query patterns
-CREATE INDEX idx_projects_profile_status ON projects(profile_id, status);
-CREATE INDEX idx_jobs_profile_created ON jobs(profile_id, created_at DESC);
-```
+   # Strong sharpening (risk of artifacts, use sparingly)
+   "unsharp=5:5:1.0:5:5:0.0"
+   ```
+
+2. **Never sharpen if denoising was skipped:**
+   - Sharpening amplifies noise
+   - Order: denoise → sharpen (if both enabled)
+
+3. **Test with platform re-encoding:**
+   - Instagram/TikTok re-encode uploads
+   - Sharpening + platform encoding = double artifacts
+   - Use lighter sharpening for social media
+
+4. **Adaptive sharpening:**
+   ```python
+   def select_sharpen_amount(video_resolution: str, denoise_applied: bool) -> str:
+       """Lower sharpening for lower resolutions and when denoising was applied."""
+       if video_resolution <= (720, 1280):
+           amount = 0.4  # Light for low-res
+       elif denoise_applied:
+           amount = 0.6  # Moderate after denoise
+       else:
+           amount = 0.5  # Conservative default
+
+       return f"unsharp=5:5:{amount}:5:5:0.0"
+   ```
 
 **Detection:**
-- Query performance test: Run `EXPLAIN ANALYZE` on queries with RLS enabled
-- Monitoring: Database slow query log shows sequential scans
-- Symptom: API response time increases proportional to table size
-
-**Phase impact:** Phase 1 (Database Migration) - Add indexes in same migration as RLS policies.
-
-**Sources:**
-- [Supabase RLS Performance Best Practices 2026](https://supabase.com/docs/guides/troubleshooting/rls-performance-and-best-practices-Z5Jjwv)
-- [Supabase RLS Performance Guide](https://www.leanware.co/insights/supabase-best-practices)
+- Visible white/dark halos around text or edges
+- Video looks "over-processed" or "HDR-like"
+- Compression artifacts more visible than original
+- User feedback: "looks fake" or "too sharp"
 
 ---
 
-### Pitfall 7: Cost Tracking Per-Profile Without Quota Enforcement = Budget Overruns
+### Pitfall 7: Segment Scoring Weights Don't Match Platform Aesthetics
 
 **What goes wrong:**
-Adding `profile_id` to `api_costs` table tracks costs per profile but doesn't prevent Profile 1 from consuming $100 in ElevenLabs credits when they have $10 quota.
+Edit Factory's current scoring formula `(motion * 0.6) + (variance * 0.3) + (brightness * 0.1)` prioritizes motion, but Instagram Reels/TikTok algorithms favor aesthetic quality and composition over pure motion.
 
 **Why it happens:**
-Cost tracking is retroactive (logs after API call). Without pre-call quota check, profile can exceed budget.
+The scoring algorithm was designed for "dynamic" clips but doesn't account for perceptual quality factors like facial detection, composition rules, or platform-specific trends.
 
-**Consequences:**
-- Profile 1 uses $500 in ElevenLabs, company eats the cost
-- No warning when approaching quota limit
-- Billing disputes with customers
-- Manual intervention required to block over-quota profiles
+**Evidence from research:**
+- "Perceptual quality assessment algorithms... measure quality as perceived by humans"
+- "Motion-intensive macroblocks are identified by comparing their motion intensity against the average"
+- "VQA models have evolved... explicitly designed for user-generated content (UGC)"
+- Current Edit Factory formula (line 69-77) focuses purely on motion/variance
+- Sources: [Perceptual Video Quality](https://www.frontiersin.org/journals/signal-processing/articles/10.3389/frsip.2023.1193523/full), [Netflix VMAF](https://netflixtechblog.com/toward-a-practical-perceptual-video-quality-metric-653f208b9652)
 
 **Prevention:**
+
+1. **Enhanced scoring for social media:**
 
 ```python
-class CostTracker:
-    def check_quota_before_tts(
-        self,
-        profile_id: str,
-        estimated_characters: int
-    ) -> tuple[bool, str]:
-        """Check if profile has quota for operation."""
-        estimated_cost = estimated_characters * ELEVENLABS_COST_PER_CHAR
+@property
+def combined_score_v2(self) -> float:
+    """
+    Enhanced scoring that considers aesthetic quality.
+    Weights tuned for Instagram Reels / TikTok content.
+    """
+    # Motion (dynamic content)
+    motion_component = self.motion_score * 0.4  # Reduced from 0.6
 
-        # Get profile quota and current usage
-        profile = get_profile(profile_id)
-        current_usage = self.get_profile_total(profile_id)
+    # Variance (scene changes)
+    variance_component = self.variance_score * 0.3  # Same
 
-        if current_usage + estimated_cost > profile.monthly_quota:
-            return False, f"Quota exceeded. Used ${current_usage:.2f} of ${profile.monthly_quota:.2f}"
+    # Brightness (avoid too dark/bright)
+    # Optimal brightness around 0.4-0.6 (not too dark, not blown out)
+    brightness_penalty = abs(self.avg_brightness - 0.5)
+    brightness_component = (1 - brightness_penalty * 2) * 0.1  # Same weight
 
-        return True, "OK"
+    # NEW: Aesthetic boost (faces, composition, color)
+    aesthetic_component = self.get_aesthetic_score() * 0.2  # NEW
 
-# In TTS route
-@router.post("/tts/generate")
-async def generate_tts(
-    text: str,
-    profile_id: str = Depends(get_current_profile)
-):
-    # Pre-flight quota check
-    allowed, message = cost_tracker.check_quota_before_tts(
-        profile_id,
-        len(text)
-    )
-    if not allowed:
-        raise HTTPException(status_code=429, detail=message)
+    return (motion_component + variance_component +
+            brightness_component + aesthetic_component)
 
-    # Proceed with TTS call
-    audio = await elevenlabs_tts(text)
-    cost_tracker.log_elevenlabs_tts(profile_id, len(text))
+def get_aesthetic_score(self) -> float:
+    """
+    Calculate aesthetic quality score.
+    Factors: face detection, rule of thirds, color saturation.
+    """
+    # Placeholder - should integrate actual analysis
+    # Could use: face detection, scene classification, color analysis
+    return 0.5  # Default neutral score
 ```
 
-**Detection:**
-- Manual test: Set low quota, trigger TTS that exceeds it, verify rejection
-- Monitoring: Alert when profile usage > 80% of quota
-- Cost report: Check if any profile has costs > quota without rejection
-
-**Phase impact:** Phase 3 (Cost Management) - Implement quota checks before API calls.
-
-**Sources:**
-- [TokenTrail LLM Cost Tracking 2026](https://tokentrailapp.com/)
-- [Multi-Tenant Cost Attribution](https://www.moesif.com/blog/monitoring/Monitoring-Cost-and-Consumption-of-AI-APIs-and-Apps/)
-- [Per-Tenant Quota Billing SaaS 2026](https://aws.amazon.com/blogs/machine-learning/build-an-internal-saas-service-with-cost-and-usage-tracking-for-foundation-models-on-amazon-bedrock/)
-
----
-
-### Pitfall 8: TTS Provider Fallback Without State Reset = Silent Failures
-
-**What goes wrong:**
-ElevenLabs fails (quota exceeded), system falls back to Edge TTS, but retry logic doesn't reset tokenizer stream and context buffers from first attempt. Second attempt sends empty audio or corrupted data.
-
-**Why it happens:**
-ElevenLabs plugin drains input channel on first try. When websocket closes or times out, retry runs with empty channel. Per-attempt state (tokenizer stream, alignment buffers, context id) isn't reset.
-
-**Consequences:**
-- User sees "TTS completed" but audio file is empty or truncated
-- No error message (fallback succeeded but produced garbage)
-- Debugging nightmare: logs show success but output is broken
-- User re-uploads video multiple times (wastes quota)
-
-**Prevention:**
+2. **Platform-specific scoring profiles:**
 
 ```python
-class TTSService:
-    def generate_with_fallback(self, text: str, profile_id: str) -> Path:
-        """Try ElevenLabs, fallback to Edge TTS if failed."""
-
-        # Attempt 1: ElevenLabs
-        try:
-            return self._generate_elevenlabs(text, profile_id)
-        except ElevenLabsQuotaExceeded as e:
-            logger.warning(f"ElevenLabs quota exceeded for profile {profile_id}, falling back to Edge TTS")
-        except Exception as e:
-            logger.error(f"ElevenLabs failed: {e}, falling back to Edge TTS")
-
-        # CRITICAL: Reset state before fallback
-        self._reset_tts_state()
-
-        # Attempt 2: Edge TTS (free)
-        return self._generate_edge_tts(text, profile_id)
-
-    def _reset_tts_state(self):
-        """Reset any cached state from previous TTS attempt."""
-        self._tokenizer_stream = None
-        self._context_id = None
-        self._alignment_buffers = []
-        # Re-initialize input channel, etc.
-```
-
-**Detection:**
-- Test: Force ElevenLabs failure, check Edge TTS output file is valid audio
-- Validation: Check audio file size > 0 and duration matches text length
-- Symptom: User reports "TTS completed but no sound"
-
-**Phase impact:** Phase 4 (TTS Integration) - Add state reset and output validation.
-
-**Sources:**
-- [ElevenLabs TTS Retry Bug 2026](https://github.com/livekit/agents/issues/4135)
-- [ElevenLabs Integration Feature Request](https://github.com/BerriAI/litellm/issues/13616)
-
----
-
-### Pitfall 9: Profile Switching Without Clearing Frontend State = Stale Data Display
-
-**What goes wrong:**
-User switches from Profile A to Profile B. Frontend React state still holds Profile A's projects/jobs. User sees Profile A's data in UI but API returns Profile B's data (mismatch).
-
-**Why it happens:**
-Frontend uses `useState` for local caching. Profile switch updates `activeProfileId` but doesn't clear cached project list. Next render shows stale state until component re-mounts.
-
-**Consequences:**
-- UI shows Profile A's project list when viewing Profile B
-- Click on project → 404 (project belongs to Profile A, not accessible)
-- User confusion: "Where did my projects go?"
-- Data integrity concerns: User thinks data was deleted
-
-**Prevention:**
-
-```typescript
-// ProfileContext.tsx
-export function ProfileProvider({ children }) {
-  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
-
-  const switchProfile = (newProfileId: string) => {
-    // CRITICAL: Broadcast profile switch event
-    setActiveProfileId(newProfileId);
-    window.dispatchEvent(new CustomEvent('profile-switched', {
-      detail: { newProfileId }
-    }));
-  };
-
-  return (
-    <ProfileContext.Provider value={{ activeProfileId, switchProfile }}>
-      {children}
-    </ProfileContext.Provider>
-  );
-}
-
-// LibraryPage.tsx
-export default function LibraryPage() {
-  const [projects, setProjects] = useState([]);
-  const { activeProfileId } = useProfile();
-
-  useEffect(() => {
-    // Listen for profile switch event
-    const handleProfileSwitch = () => {
-      setProjects([]);  // Clear stale data
-      fetchProjects();  // Re-fetch for new profile
-    };
-
-    window.addEventListener('profile-switched', handleProfileSwitch);
-    return () => window.removeEventListener('profile-switched', handleProfileSwitch);
-  }, []);
-
-  useEffect(() => {
-    if (activeProfileId) {
-      fetchProjects();
+SCORING_PROFILES = {
+    "motion_priority": {  # Current Edit Factory default
+        "motion": 0.6,
+        "variance": 0.3,
+        "brightness": 0.1,
+        "aesthetic": 0.0
+    },
+    "balanced": {  # Recommended for mixed content
+        "motion": 0.4,
+        "variance": 0.3,
+        "brightness": 0.1,
+        "aesthetic": 0.2
+    },
+    "aesthetic_priority": {  # For beauty/lifestyle content
+        "motion": 0.2,
+        "variance": 0.2,
+        "brightness": 0.1,
+        "aesthetic": 0.5
     }
-  }, [activeProfileId]);
 }
 ```
 
-**Detection:**
-- Manual test: Create project in Profile A, switch to Profile B, check UI is empty
-- DevTools: Inspect React state, verify it clears on profile switch
-- Symptom: User reports seeing other profile's data
+3. **Integrate with Gemini AI scoring:**
+   - Edit Factory already has Gemini integration (lines 1051-1108)
+   - Gemini provides context-aware scoring
+   - Combine motion-based + AI-based scores
 
-**Phase impact:** Phase 5 (Frontend Integration) - Implement profile switch event bus.
+**Detection:**
+- Generated clips feel "jumpy" or "chaotic"
+- Beautiful static shots are excluded
+- Clips don't match platform content style
+- User feedback: "Doesn't feel like Reels content"
+
+---
+
+### Pitfall 8: Missing Platform-Specific Keyframe Intervals
+
+**What goes wrong:**
+Using FFmpeg's default keyframe settings causes platforms to re-encode uploaded videos, reducing quality. Edit Factory's current settings (GOP 60 for 30fps = 2sec) are correct but not documented or adaptive.
+
+**Why it happens:**
+Developers don't realize that platforms like Instagram require specific keyframe intervals. If not provided, the platform re-encodes to meet their requirements, degrading quality.
+
+**Evidence:**
+- Edit Factory code (line 689, 716, 1988, 2009) uses `-g 60` for 30fps = 2 second GOP
+- Platform requirements: keyframes every 2 seconds (Instagram, TikTok)
+- Source: [Instagram Reels Export Settings](https://aaapresets.com/blogs/premiere-pro-blog-series-editing-tips-transitions-luts-guide/master-your-shorts-the-ultimate-guide-to-export-settings-for-instagram-reels-tiktok-youtube-shorts-in-2025-extended-edition)
+
+**Prevention:**
+
+1. **Calculate GOP based on FPS:**
+```python
+def calculate_gop_size(fps: float, keyframe_interval_seconds: float = 2.0) -> int:
+    """
+    Calculate GOP (Group of Pictures) size for platform requirements.
+    Most social platforms require keyframes every 2 seconds.
+    """
+    return int(fps * keyframe_interval_seconds)
+
+# Usage
+gop_size = calculate_gop_size(fps=30)  # Returns 60
+gop_size = calculate_gop_size(fps=60)  # Returns 120 (for 60fps Shorts)
+```
+
+2. **Platform-specific GOP settings:**
+```python
+PLATFORM_GOP_REQUIREMENTS = {
+    "instagram_reels": {
+        "keyframe_interval": 2.0,  # seconds
+        "min_keyframe_interval": 2.0,  # -keyint_min
+        "scene_change_threshold": 0  # -sc_threshold (disable scene detection)
+    },
+    "tiktok": {
+        "keyframe_interval": 2.0,
+        "min_keyframe_interval": 2.0,
+        "scene_change_threshold": 0
+    },
+    "youtube_shorts": {
+        "keyframe_interval": 2.0,
+        "min_keyframe_interval": 2.0,
+        "scene_change_threshold": 0
+    }
+}
+```
+
+3. **Document Edit Factory's current correct approach:**
+   - Add comments explaining WHY `-g 60` is used
+   - Make it adaptive to detected FPS
+   - Ensure consistent across all encoding points
+
+**Detection:**
+- Platform shows "Processing video" for longer than upload time
+- Visual quality degradation after upload
+- File size changes significantly post-upload
+- Platform notification: "Video was re-encoded"
+
+---
+
+### Pitfall 9: FFmpeg Subprocess Memory Leaks
+
+**What goes wrong:**
+Long-running video processing jobs accumulate memory from FFmpeg subprocess calls. Python's subprocess management doesn't release memory properly, leading to crashes or OOM kills.
+
+**Why it happens:**
+Python subprocess with `capture_output=True` buffers stdout/stderr in memory. For long FFmpeg processes with verbose output, this buffer grows to hundreds of MB. Multiple parallel jobs compound the issue.
+
+**Evidence from research:**
+- "Memory leaks have been identified in the ffmpeg adapter when using subprocess.Popen"
+- "Old FFMPEG processes... remain in memory even after the write is finished"
+- "FFmpeg processes can start using extreme amounts of memory (up to 21GB reported)"
+- CVE-2025-25469: Memory leak in FFmpeg libavutil (recent vulnerability)
+- Sources: [Python Issue 28165](https://bugs.python.org/issue28165), [FFmpeg Memory Leak CVE](https://hackers-arise.com/how-to-dos-a-media-server-the-memory-leak-vulnerability-in-ffmpeg-cve-2025-25469/)
+
+**Edit Factory context:**
+Current `_run_ffmpeg()` method (line 506-542) uses `subprocess.run(capture_output=True)`, which is correct for short commands but risky for long processing.
+
+**Prevention:**
+
+1. **Stream FFmpeg output instead of buffering:**
+
+```python
+def _run_ffmpeg_streaming(self, cmd: list, operation: str) -> subprocess.CompletedProcess:
+    """
+    Execute FFmpeg with streaming output to avoid memory accumulation.
+    Use for long-running operations (>30 seconds).
+    """
+    logger.debug(f"FFmpeg command ({operation}): {' '.join(cmd)}")
+
+    # Stream to temporary files instead of memory
+    with tempfile.NamedTemporaryFile(mode='w+', delete=False) as stdout_f, \
+         tempfile.NamedTemporaryFile(mode='w+', delete=False) as stderr_f:
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=stdout_f,
+            stderr=stderr_f,
+            text=True
+        )
+
+        returncode = process.wait()
+
+        # Read only on error
+        if returncode != 0:
+            stderr_f.seek(0)
+            stderr = stderr_f.read()
+            stdout_f.seek(0)
+            stdout = stdout_f.read()
+
+            # Parse errors
+            error_lines = [line for line in stderr.split('\n')
+                          if 'error' in line.lower()]
+            logger.error(f"FFmpeg {operation} failed: {error_lines[0] if error_lines else stderr[-500:]}")
+
+            raise RuntimeError(f"FFmpeg {operation} failed")
+
+        # Cleanup temp files
+        os.unlink(stdout_f.name)
+        os.unlink(stderr_f.name)
+
+    return subprocess.CompletedProcess(cmd, returncode, "", "")
+```
+
+2. **Explicit cleanup for segment processing:**
+
+```python
+def extract_segments(self, ...):
+    # ... existing code ...
+
+    for i, seg in enumerate(segments):
+        # Process segment
+        self._run_ffmpeg(cmd, f"extract segment {i+1}")
+
+        # Force garbage collection every N segments
+        if i % 10 == 0:
+            import gc
+            gc.collect()
+```
+
+3. **Monitor memory usage:**
+
+```python
+import psutil
+
+def check_memory_pressure() -> bool:
+    """Check if system is under memory pressure."""
+    memory = psutil.virtual_memory()
+    return memory.percent > 85  # Above 85% usage
+
+# Before starting heavy processing
+if check_memory_pressure():
+    logger.warning("System memory pressure detected, will process segments sequentially")
+    use_parallel = False
+```
+
+4. **Process limits for parallel jobs:**
+   - Limit concurrent FFmpeg processes
+   - Queue jobs when memory pressure detected
+   - Implement job throttling in library_routes.py
+
+**Detection:**
+- Python process memory grows continuously
+- System OOM killer terminates processes
+- "Out of memory" errors in logs
+- `ps aux` shows orphaned ffmpeg processes
+- Server swap usage increases
 
 ---
 
 ## Minor Pitfalls
 
-Mistakes that cause annoyance but are fixable without major refactoring.
+Mistakes that cause annoyance but are fixable.
 
-### Pitfall 10: Profile Selection UI Without Default Profile = Blank Screen on Login
-
-**What goes wrong:**
-User logs in. No profile is selected by default. All API calls have `profile_id=null`, RLS policies reject all queries, UI shows empty states.
-
-**Why it happens:**
-Multi-profile system requires explicit profile selection, but UX doesn't auto-select first/last-used profile.
-
-**Consequences:**
-- Confusing first-time experience ("Why is everything empty?")
-- Support tickets: "I logged in but can't see my projects"
-- Extra click required (poor UX)
-
-**Prevention:**
-
-```typescript
-// Auto-select last-used or first profile on login
-export function ProfileProvider({ children }) {
-  const { user } = useAuth();
-  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (user) {
-      // Get last-used profile from localStorage
-      const lastProfile = localStorage.getItem(`last-profile-${user.id}`);
-
-      if (lastProfile) {
-        setActiveProfileId(lastProfile);
-      } else {
-        // Fallback: fetch user's profiles and select first
-        api.getProfiles().then(profiles => {
-          if (profiles.length > 0) {
-            setActiveProfileId(profiles[0].id);
-          }
-        });
-      }
-    }
-  }, [user]);
-
-  const switchProfile = (newProfileId: string) => {
-    setActiveProfileId(newProfileId);
-    localStorage.setItem(`last-profile-${user.id}`, newProfileId);
-  };
-}
-```
-
-**Detection:**
-- Test: Login as new user, verify profile is auto-selected
-- UX test: Check if UI loads data immediately after login
-
-**Phase impact:** Phase 5 (Frontend Integration) - Implement auto-selection logic.
-
----
-
-### Pitfall 11: FFmpeg Temp Files Without Profile Namespace = Concurrent Processing Conflicts
+### Pitfall 10: Hardcoded Font Paths Break Subtitle Rendering
 
 **What goes wrong:**
-Profile 1 and Profile 2 both upload video named `wedding.mp4`. FFmpeg writes to `/tmp/wedding.mp4` for both. Race condition: first upload gets overwritten by second.
-
-**Why it happens:**
-FFmpeg temp paths don't include profile_id or unique job_id. Concurrent processing uses same file path.
-
-**Consequences:**
-- Video corruption: Profile 1's output contains Profile 2's footage
-- Processing errors: FFmpeg fails "file in use"
-- Difficult to debug: appears intermittent, only happens with concurrent uploads
+Subtitle rendering fails on different systems because font paths are hardcoded or fonts aren't available. FFmpeg's `subtitles` filter uses system fonts, but availability varies by platform.
 
 **Prevention:**
-
 ```python
-# WRONG: Global temp path
-temp_path = settings.temp_dir / f"{video_filename}"
+# Check font availability before rendering
+def validate_font(font_family: str) -> str:
+    """Fallback to available fonts if requested font missing."""
+    system_fonts = get_system_fonts()  # Use fc-list on Linux, registry on Windows
+    if font_family in system_fonts:
+        return font_family
 
-# RIGHT: Profile and job scoped temp path
-temp_path = settings.temp_dir / profile_id / job_id / video_filename
+    # Fallback chain
+    fallbacks = ["Arial", "DejaVu Sans", "Liberation Sans"]
+    for fallback in fallbacks:
+        if fallback in system_fonts:
+            logger.warning(f"Font {font_family} not found, using {fallback}")
+            return fallback
 
-# OR: UUID-based unique path
-temp_path = settings.temp_dir / f"{uuid.uuid4()}_{video_filename}"
+    return "sans-serif"  # Last resort
 ```
 
 **Detection:**
-- Concurrent test: Two profiles upload same filename simultaneously
-- File system inspection: Check for collisions in `/tmp/`
-
-**Phase impact:** Phase 2 (Backend Services) - Update all temp file path generation.
+- Subtitles don't appear in output
+- FFmpeg errors mentioning "font not found"
+- Subtitles render with wrong font
 
 ---
 
-### Pitfall 12: ElevenLabs Character Quota Without Frontend Warning = Surprise Failures
+### Pitfall 11: Encoding Settings Not Preserved Across Pipeline Steps
 
 **What goes wrong:**
-Profile has 10,000 character quota. User queues 15,000 character TTS job. Job succeeds partially then fails at 10K mark. User sees "completed" status but output is truncated.
-
-**Why it happens:**
-Frontend doesn't check quota before submit. Backend starts processing, quota runs out mid-job.
-
-**Consequences:**
-- User frustration: "Why did it stop working?"
-- Wasted processing time (partial job is useless)
-- Support burden: User doesn't understand quota system
+Video characteristics change between extraction → audio → subtitles steps because encoding settings aren't consistent. Color space, pixel format, or SAR changes cause quality loss or compatibility issues.
 
 **Prevention:**
-
-```typescript
-// Frontend quota check before submit
-async function handleGenerateAudio(text: string) {
-  const estimatedCost = text.length * 0.00022;
-  const usage = await api.getProfileUsage(profileId);
-
-  if (usage.current + estimatedCost > usage.quota) {
-    toast.error(
-      `Insufficient quota. This text requires ${text.length} characters, ` +
-      `but you only have ${usage.remaining} remaining.`
-    );
-    return;
-  }
-
-  // Proceed with TTS
-  await api.generateTTS(text, profileId);
+```python
+# Define consistent encoding profile
+ENCODING_PROFILE = {
+    "pix_fmt": "yuv420p",    # Compatible with all platforms
+    "color_space": "bt709",   # Standard HD color space
+    "color_primaries": "bt709",
+    "color_trc": "bt709",
+    "sar": "1:1"              # Square pixels
 }
+
+# Apply to ALL encoding steps
+def get_encoding_params(use_gpu: bool) -> list:
+    """Get consistent encoding parameters."""
+    params = [
+        "-pix_fmt", ENCODING_PROFILE["pix_fmt"],
+        "-colorspace", ENCODING_PROFILE["color_space"],
+        "-color_primaries", ENCODING_PROFILE["color_primaries"],
+        "-color_trc", ENCODING_PROFILE["color_trc"],
+        "-sar", ENCODING_PROFILE["sar"]
+    ]
+    return params
 ```
 
 **Detection:**
-- Test: Set low quota, try to exceed it, verify frontend warning
-- UX: Check if quota display updates in real-time
-
-**Phase impact:** Phase 5 (Frontend Integration) - Add quota display and pre-submit checks.
+- Color shift between segments
+- Aspect ratio changes unexpectedly
+- Platform shows compatibility warnings
 
 ---
 
@@ -661,102 +793,74 @@ async function handleGenerateAudio(text: string) {
 
 | Phase Topic | Likely Pitfall | Mitigation |
 |-------------|---------------|------------|
-| Phase 1: Database Migration | RLS enabled without policies (Pitfall 1) | Transaction-based migration, staging test with frontend |
-| Phase 1: Database Migration | Foreign key constraint violations (Pitfall 2) | Multi-step migration, data backfill before NOT NULL |
-| Phase 1: Database Migration | Missing indexes on profile_id (Pitfall 6) | Add indexes before enabling RLS |
-| Phase 2: Backend Services | Singleton services without tenant filtering (Pitfall 3) | Audit all service methods, add profile_id parameter |
-| Phase 2: Backend Services | In-memory cache without tenant keys (Pitfall 4) | Prefix cache keys with profile_id |
-| Phase 2: Backend Services | Background tasks lose context (Pitfall 5) | Explicitly pass profile_id to all background tasks |
-| Phase 2: Backend Services | FFmpeg temp file collisions (Pitfall 11) | Profile-scoped temp directories |
-| Phase 3: Cost Management | No quota enforcement (Pitfall 7) | Pre-call quota checks, reject over-quota requests |
-| Phase 4: TTS Integration | Fallback state not reset (Pitfall 8) | Reset buffers/streams before fallback attempt |
-| Phase 4: TTS Integration | Quota exceeded without warning (Pitfall 12) | Frontend quota display, pre-submit validation |
-| Phase 5: Frontend Integration | Profile switch doesn't clear state (Pitfall 9) | Event bus for profile switch, clear local state |
-| Phase 5: Frontend Integration | No default profile on login (Pitfall 10) | Auto-select last-used profile from localStorage |
+| Platform presets implementation | CRF vs bitrate confusion (#3) | Implement capped CRF for all social media presets |
+| Audio normalization | Skipping two-pass loudnorm (#2) | Mandate two-pass for quality, document clearly |
+| Quality filter addition | Filter chain order destroys performance (#1) | Establish filter chain architecture doc |
+| Denoising implementation | nlmeans destroys processing time (#4) | Smart filter selection based on noise analysis |
+| Sharpening implementation | Halos and artifacts (#6) | Conservative defaults, user testing |
+| Subtitle quality enhancement | Breaking GPU pipeline (#5) | Preserve current CPU-render pattern |
+| Export settings UI | Missing platform GOP settings (#8) | Calculate adaptive GOP based on FPS |
+| Concurrent processing | FFmpeg subprocess memory leaks (#9) | Implement streaming output, memory monitoring |
+| Scoring algorithm enhancement | Weights don't match aesthetics (#7) | A/B test scoring profiles with users |
 
 ---
 
-## Testing Checklist for Multi-Tenant Isolation
+## Quick Reference: Do's and Don'ts
 
-Before deploying to production, verify:
+### DO:
+✓ Use two-pass loudnorm for audio normalization
+✓ Implement capped CRF for social media exports
+✓ Keep filter chains separated by CPU/GPU domain
+✓ Use fast denoising (hqdn3d) by default, nlmeans opt-in only
+✓ Apply subtitles as THE LAST processing step
+✓ Calculate GOP size based on detected FPS
+✓ Monitor memory usage during batch processing
+✓ Test with actual platform uploads
+✓ Document WHY encoding settings are used
 
-- [ ] **RLS lockout test:** Enable RLS in staging, verify all queries still work
-- [ ] **Data isolation test:** Login as Profile 1, create project. Login as Profile 2, verify project not visible
-- [ ] **Migration dry-run:** Run migration on staging with production data snapshot
-- [ ] **Concurrent upload test:** Two profiles upload simultaneously, verify no cross-contamination
-- [ ] **Background job context test:** Trigger job for Profile 1, verify results don't appear in Profile 2
-- [ ] **Quota enforcement test:** Set low quota, exceed it, verify rejection
-- [ ] **Fallback test:** Force ElevenLabs failure, verify Edge TTS produces valid output
-- [ ] **Profile switch test:** Switch profiles in UI, verify all data clears and re-fetches
-- [ ] **Cost tracking test:** Trigger API calls for Profile 1, verify costs logged to Profile 1 only
-- [ ] **Index performance test:** Run EXPLAIN ANALYZE on queries, verify index usage
-
----
-
-## Critical Architecture Review Questions
-
-Before retrofitting multi-tenancy, answer these:
-
-1. **Is every Supabase query filtered by profile_id?**
-   - Check: `grep -r "supabase.table" app/` → every query must have `.eq("profile_id", X)`
-
-2. **Are all in-memory caches tenant-scoped?**
-   - Check: `grep -r "_.*store.*Dict" app/` → keys must include profile_id
-
-3. **Do background tasks receive profile_id explicitly?**
-   - Check: `grep -r "background_tasks.add_task" app/` → verify profile_id in args
-
-4. **Are temp file paths profile-scoped?**
-   - Check: `grep -r "temp_dir" app/` → paths must include profile_id or unique job_id
-
-5. **Does cost tracking prevent over-quota operations?**
-   - Check: Before `elevenlabs_tts()` call, is there quota check with rejection?
-
-6. **Is RLS migration tested with real data volume?**
-   - Check: Staging has >10K rows, migration succeeds without timeout
-
-7. **Are indexes added before enabling RLS?**
-   - Check: Migration has `CREATE INDEX` before `ALTER TABLE ENABLE ROW LEVEL SECURITY`
+### DON'T:
+✗ Mix CRF and bitrate constraints without maxrate
+✗ Use single-pass loudnorm for final output
+✗ Apply CPU filters in GPU pipelines without hwdownload
+✗ Enable nlmeans denoising by default
+✗ Sharpen with values >1.0 (causes halos)
+✗ Assume platform specs are optional guidelines
+✗ Buffer large FFmpeg output in memory
+✗ Hardcode font paths or assume font availability
+✗ Skip testing encoding parameter consistency
 
 ---
 
 ## Sources
 
-### Multi-Tenant Architecture
-- [Approaches to Multi-Tenancy in SaaS](https://developers.redhat.com/articles/2022/05/09/approaches-implementing-multi-tenancy-saas-applications)
-- [WorkOS Developer's Guide to Multi-Tenant Architecture](https://workos.com/blog/developers-guide-saas-multi-tenant-architecture)
-- [Multi-Tenant Architecture Guide 2026](https://www.future-processing.com/blog/multi-tenant-architecture/)
-- [Frontegg Multi-Tenant Guide](https://frontegg.com/guides/multi-tenant-architecture)
-- [Multi-Tenant Leakage: When RLS Fails](https://medium.com/@instatunnel/multi-tenant-leakage-when-row-level-security-fails-in-saas-da25f40c788c)
-- [Six Shades of Multi-Tenant Mayhem](https://borabastab.medium.com/six-shades-of-multi-tenant-mayhem-the-invisible-vulnerabilities-hiding-in-plain-sight-182e9ad538b5)
-- [Isolation in Multi-Tenancy: Lessons Learned](https://medium.com/@systemdesignwithsage/isolation-in-multi-tenancy-and-the-lessons-we-learned-the-hard-way-3335801aa754)
+**HIGH Confidence (Verified with official documentation or multiple sources):**
+- [FFmpeg Best Quality Conversion](https://www.baeldung.com/linux/ffmpeg-best-quality-conversion) - CRF vs bitrate guidance
+- [Audio Normalization with FFmpeg](https://wiki.tnonline.net/w/Blog/Audio_normalization_with_FFmpeg) - Two-pass loudnorm requirements
+- [Social Media Video Sizes 2026](https://recurpost.com/blog/the-up-to-date-video-sizes-guide-for-social-media/) - Platform specifications
+- [Instagram Reels Export Settings](https://aaapresets.com/blogs/premiere-pro-blog-series-editing-tips-transitions-luts-guide/master-your-shorts-the-ultimate-guide-to-export-settings-for-instagram-reels-tiktok-youtube-shorts-in-2025-extended-edition) - GOP requirements
+- [FFmpeg Filters Documentation](https://www.ffmpeg.media/articles/ffmpeg-filters-scale-crop-rotate-sharpen) - Filter performance characteristics
+- [Codec Wiki Denoise](https://wiki.x266.mov/docs/filtering/denoise) - Denoising filter comparison
+- [Python subprocess memory leak](https://bugs.python.org/issue28165) - Subprocess management issues
+- [FFmpeg Memory Leak CVE-2025-25469](https://hackers-arise.com/how-to-dos-a-media-server-the-memory-leak-vulnerability-in-ffmpeg-cve-2025-25469/) - Recent vulnerability
 
-### Supabase RLS
-- [Supabase RLS Documentation](https://supabase.com/docs/guides/database/postgres/row-level-security)
-- [Supabase RLS Complete Guide 2026](https://vibeappscanner.com/supabase-row-level-security)
-- [Supabase Best Practices](https://www.leanware.co/insights/supabase-best-practices)
-- [Supabase RLS Performance Best Practices 2026](https://supabase.com/docs/guides/troubleshooting/rls-performance-and-best-practices-Z5Jjwv)
+**MEDIUM Confidence (Single credible source or community consensus):**
+- [FFmpeg Video Sharpening](https://www.cloudacm.com/?p=3016) - Unsharp filter best practices
+- [Perceptual Video Quality Assessment](https://www.frontiersin.org/journals/signal-processing/articles/10.3389/frsip.2023.1193523/full) - Scoring algorithm research
+- [Netflix VMAF](https://netflixtechblog.com/toward-a-practical-perceptual-video-quality-metric-653f208b9652) - Perceptual quality metrics
+- [FFmpeg Subtitles Guide](https://cloudinary.com/guides/video-effects/ffmpeg-subtitles) - Subtitle rendering limitations
 
-### Database Migration
-- [GitLab Foreign Keys Guide](https://docs.gitlab.com/development/database/foreign_keys/)
-- [Advanced PostgreSQL Migration Techniques](https://iifx.dev/en/articles/221306173)
-- [Data Migration Risks and Fixes](https://www.datafold.com/blog/common-data-migration-risks)
-- [Supabase Data Migration Guide](https://copyright-certificate.byu.edu/news/supabase-data-migration-guide)
+**Edit Factory Codebase (Direct inspection):**
+- `app/services/video_processor.py` - Current FFmpeg command patterns, GPU handling, filter chains
+- Verified correct patterns: GOP settings, hwaccel handling with subtitles, segment processing
 
-### FastAPI Multi-Tenant
-- [FastAPI Multi-Tenant Isolation Strategies 2026](https://medium.com/@Praxen/5-fastapi-multi-tenant-isolation-strategies-that-scale-fd536fef5f88)
-- [FastAPI Dependency Injection 2026 Playbook](https://thelinuxcode.com/dependency-injection-in-fastapi-2026-playbook-for-modular-testable-apis/)
-- [FastAPI Background Tasks Documentation](https://fastapi.tiangolo.com/tutorial/background-tasks/)
-- [High-Performance FastAPI Scoped Background Tasks 2025](https://medium.com/techtrends-digest/high-performance-fastapi-dependency-injection-the-power-of-scoped-background-tasks-2025-f15250c53574)
+---
 
-### Cost Tracking & TTS
-- [TokenTrail LLM Cost Tracking](https://tokentrailapp.com/)
-- [Multi-Tenant Cost Attribution (Moesif)](https://www.moesif.com/blog/monitoring/Monitoring-Cost-and-Consumption-of-AI-APIs-and-Apps/)
-- [AWS Multi-Tenant Cost Tracking](https://aws.amazon.com/blogs/machine-learning/build-an-internal-saas-service-with-cost-and-usage-tracking-for-foundation-models-on-amazon-bedrock/)
-- [ElevenLabs Pricing Breakdown 2026](https://flexprice.io/blog/elevenlabs-pricing-breakdown)
-- [ElevenLabs TTS Retry Bug](https://github.com/livekit/agents/issues/4135)
-- [ElevenLabs Fallback Feature Request](https://github.com/BerriAI/litellm/issues/13616)
+## Summary: Most Critical Risks
 
-### Caching & State Management
-- [Multi-Tenant Cache Solution with Python](https://jumpi96.github.io/A-multi-tenant-cache/)
-- [Python Singleton Multi-Tenant (EF Core)](https://learn.microsoft.com/en-us/ef/core/miscellaneous/multitenancy)
+For Edit Factory's video quality enhancement milestone, prioritize these three:
+
+1. **Filter Chain Order (#1)** - Will break GPU acceleration if done wrong
+2. **Audio Normalization (#2)** - Will produce poor audio quality if skipped
+3. **CRF vs Bitrate (#3)** - Will cause platform rejection if misconfigured
+
+All three require architectural decisions in Phase 1 before implementation begins.

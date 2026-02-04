@@ -1,527 +1,767 @@
-# Technology Stack: Profile/Workspace Isolation & Free TTS Integration
+# Technology Stack - Video Quality Enhancement
 
-**Project:** Edit Factory - Profile/Workspace Isolation Milestone
-**Researched:** February 3, 2026
-**Focus Areas:** Multi-tenant architecture, free TTS providers, developer experience tooling
+**Project:** Edit Factory - Video Quality Enhancement Milestone
+**Researched:** 2026-02-04
+**Confidence:** HIGH (FFmpeg official docs + 2026 social media standards)
 
-## Recommended Stack
+## Executive Summary
 
-### Multi-Tenant Architecture
+This research covers FFmpeg-based video quality enhancements for social media platforms (TikTok, Instagram Reels, YouTube Shorts). All recommendations are based on current 2026 best practices verified through official FFmpeg documentation and recent industry sources.
 
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| Supabase RLS | Current | Workspace data isolation | Native PostgreSQL Row-Level Security provides defense-in-depth isolation at database level. Zero additional infrastructure required. |
-| Auth app_metadata | Current | Tenant/workspace identification | Store `workspace_id` in `raw_app_meta_data` (immutable by users) rather than `user_metadata`. Accessible in RLS policies via `auth.jwt()`. |
-| PostgreSQL workspace_id column | Current | Tenant scoping | Add `workspace_id UUID` to all tenant-scoped tables (projects, clips, api_costs, etc.). Use as final column in composite indexes for query performance. |
+**Key Finding:** Current setup (CRF 23, preset "fast", 128k audio) is adequate but not optimized for 2026 social media standards. Specific improvements needed for:
 
-**Confidence:** HIGH (verified via official Supabase RLS documentation)
+1. Platform-specific encoding (CRF/bitrate optimization)
+2. Audio loudness normalization (EBU R128 / -14 LUFS for social)
+3. Video filters (denoising, sharpening, color correction)
+4. Enhanced subtitle styling (shadow, glow, adaptive sizing)
+5. Quality-aware segment scoring (blur detection, contrast analysis)
 
-**Rationale:**
-- Supabase RLS is production-tested for multi-tenancy with active community patterns in 2026
-- No additional services required (Redis, separate databases, application-level filtering)
-- Performance: RLS policies execute at database level with proper indexing
-- Security: Users literally cannot access other workspaces' data, even with API key compromise
-- DX: Setup takes ~2 hours with templates, integrates seamlessly with existing Supabase auth
+---
 
-**Implementation Pattern:**
+## Core Technology Stack
+
+### Video Encoding
+
+| Component | Current | Recommended | Why |
+|-----------|---------|-------------|-----|
+| **Codec** | libx264 / h264_nvenc | libx264 (CPU) / h264_nvenc (GPU) | Universal compatibility, H.264 remains standard for social media in 2026 |
+| **CRF (CPU)** | 23 | 22-23 (quality), 23-25 (balanced) | CRF 22-23 is optimal for social media quality/filesize balance |
+| **Preset** | fast | fast (speed), medium (quality) | "fast" is good for production; "medium" for higher quality when time permits |
+| **Profile** | Not specified | high | Better compression, supported by all modern devices |
+| **Level** | Not specified | 4.0 | Ensures compatibility with mobile devices |
+| **Keyframes** | -g 60 | -g 60 -keyint_min 60 -sc_threshold 0 | Fixed keyframe interval prevents platform recompression |
+
+### Audio Encoding
+
+| Component | Current | Recommended | Why |
+|-----------|---------|-------------|-----|
+| **Codec** | AAC | AAC (libfdk_aac if available) | AAC is universal standard |
+| **Bitrate** | 128k | 128k-192k | 128k sufficient for voice, 192k for music |
+| **Sample Rate** | 48000 | 48000 Hz | Industry standard for video |
+| **Channels** | 2 (stereo) | 2 (stereo) | Stereo expected by platforms |
+| **Loudness** | Not normalized | -14 LUFS (social media) | Critical for consistent volume across platforms |
+
+---
+
+## Platform-Specific Presets (2026 Standards)
+
+### Instagram Reels & TikTok
+
+**Resolution:** 1080x1920 (9:16 portrait)
+**Frame Rate:** 30 fps (standard), 60 fps (optional for high-motion)
+**Video Bitrate:** 3,500-4,500 kbps target
+**Audio:** 128-192 kbps AAC
+
+```bash
+ffmpeg -i input.mp4 \
+  -vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2" \
+  -c:v libx264 \
+  -profile:v high \
+  -level:v 4.0 \
+  -crf 23 \
+  -preset fast \
+  -g 60 -keyint_min 60 -sc_threshold 0 \
+  -bf 2 \
+  -c:a aac -b:a 128k -ar 48000 -ac 2 \
+  -pix_fmt yuv420p \
+  output.mp4
+```
+
+**GPU (NVENC) variant:**
+```bash
+ffmpeg -hwaccel cuda -hwaccel_output_format cuda -i input.mp4 \
+  -vf "scale_cuda=1080:1920:force_original_aspect_ratio=decrease" \
+  -c:v h264_nvenc \
+  -preset p4 \
+  -cq 23 \
+  -g 60 -bf 2 \
+  -c:a aac -b:a 128k -ar 48000 -ac 2 \
+  -pix_fmt yuv420p \
+  output.mp4
+```
+
+### YouTube Shorts
+
+**Resolution:** 1080x1920 (9:16 portrait) or 2160x3840 (4K optional)
+**Frame Rate:** 30 fps (standard), 60 fps (high-motion content)
+**Video Bitrate:** 8,000-15,000 kbps for 1080p
+**Audio:** 128-192 kbps AAC
+
+```bash
+# 1080p Shorts
+ffmpeg -i input.mp4 \
+  -vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2" \
+  -c:v libx264 \
+  -profile:v high \
+  -level:v 4.2 \
+  -crf 21 \
+  -preset medium \
+  -g 60 -keyint_min 60 -sc_threshold 0 \
+  -bf 2 \
+  -c:a aac -b:a 192k -ar 48000 -ac 2 \
+  -pix_fmt yuv420p \
+  output.mp4
+
+# 4K Shorts (optional, for high-quality content)
+ffmpeg -i input.mp4 \
+  -vf "scale=2160:3840:force_original_aspect_ratio=decrease,pad=2160:3840:(ow-iw)/2:(oh-ih)/2" \
+  -c:v libx264 \
+  -profile:v high \
+  -level:v 5.2 \
+  -crf 20 \
+  -preset slow \
+  -g 120 -keyint_min 120 -sc_threshold 0 \
+  -bf 2 \
+  -c:a aac -b:a 192k -ar 48000 -ac 2 \
+  -pix_fmt yuv420p \
+  output_4k.mp4
+```
+
+---
+
+## Video Quality Filters
+
+### Denoising (hqdn3d)
+
+Reduces noise/grain in video, especially useful for low-light footage.
+
+**Syntax:**
+```bash
+-vf "hqdn3d=luma_spatial:chroma_spatial:luma_tmp:chroma_tmp"
+```
+
+**Recommended presets:**
+- **Light:** `hqdn3d=1.5:1.5:6:6` - Subtle noise reduction
+- **Medium:** `hqdn3d=3:3:6:6` - Standard noise reduction
+- **Heavy:** `hqdn3d=5:5:10:10` - Aggressive (may soften detail)
+
+**Parameters:**
+- `luma_spatial` (0-10): Spatial noise reduction for brightness
+- `chroma_spatial` (0-10): Spatial noise reduction for color
+- `luma_tmp` (0-20): Temporal noise reduction for brightness (across frames)
+- `chroma_tmp` (0-20): Temporal noise reduction for color
+
+**Use case:** Apply BEFORE sharpening to avoid amplifying noise.
+
+### Sharpening (unsharp)
+
+Enhances edges and details.
+
+**Syntax:**
+```bash
+-vf "unsharp=luma_msize_x:luma_msize_y:luma_amount:chroma_msize_x:chroma_msize_y:chroma_amount"
+```
+
+**Recommended presets:**
+- **Light:** `unsharp=5:5:0.5:5:5:0.0` - Subtle sharpening
+- **Medium:** `unsharp=5:5:1.0:5:5:0.0` - Standard sharpening
+- **Heavy:** `unsharp=7:7:1.5:7:7:0.5` - Strong sharpening (risk of artifacts)
+
+**Simplified syntax (common):**
+```bash
+-vf "unsharp=5:5:1.0"  # Matrix size 5x5, strength 1.0
+```
+
+**Parameters:**
+- `luma_msize_x/y` (3-23, odd): Matrix size for luma (larger = stronger)
+- `luma_amount` (-2.0 to 5.0): Sharpening strength (negative = blur)
+- `chroma_msize_x/y`: Matrix size for chroma
+- `chroma_amount`: Chroma sharpening strength
+
+**Use case:** Apply AFTER denoising for best results.
+
+### Color Correction (eq)
+
+Adjusts brightness, contrast, saturation, gamma.
+
+**Syntax:**
+```bash
+-vf "eq=brightness:contrast:saturation:gamma"
+```
+
+**Examples:**
+- **Brighten:** `eq=brightness=0.1` (+10% brightness)
+- **Increase contrast:** `eq=contrast=1.2` (20% more contrast)
+- **Boost saturation:** `eq=saturation=1.3` (30% more saturation)
+- **Combined:** `eq=brightness=0.05:contrast=1.15:saturation=1.2`
+
+**Parameters:**
+- `brightness` (-1.0 to 1.0): Brightness adjustment (0 = no change)
+- `contrast` (0.0 to 3.0): Contrast multiplier (1.0 = no change)
+- `saturation` (0.0 to 3.0): Saturation multiplier (1.0 = no change)
+- `gamma` (0.1 to 10.0): Gamma correction (1.0 = no change)
+
+**Use case:** Correct exposure issues or create visual style.
+
+### Filter Chaining
+
+Combine multiple filters with commas (order matters):
+
+```bash
+# Denoise → Sharpen → Color correct
+-vf "hqdn3d=3:3:6:6,unsharp=5:5:1.0,eq=brightness=0.05:contrast=1.15:saturation=1.2"
+```
+
+**Best practice order:**
+1. Scale/crop (if needed)
+2. Denoise (hqdn3d)
+3. Sharpen (unsharp)
+4. Color correction (eq)
+5. Subtitles (if burning in)
+
+---
+
+## Audio Loudness Normalization
+
+### EBU R128 Standard (loudnorm filter)
+
+**Target levels for 2026:**
+- **Broadcasting / YouTube:** -23 LUFS (EBU R128 standard)
+- **Social Media (TikTok, Reels):** -14 LUFS (louder for mobile)
+- **Podcasts:** -16 LUFS
+
+**Two-pass loudnorm (most accurate):**
+
+```bash
+# Pass 1: Analyze
+ffmpeg -i input.mp4 -af loudnorm=I=-14:LRA=7:TP=-2:print_format=json -f null -
+
+# Expected JSON output with measured_I, measured_LRA, measured_TP, measured_thresh
+
+# Pass 2: Normalize with measured values
+ffmpeg -i input.mp4 \
+  -af loudnorm=I=-14:LRA=7:TP=-2:measured_I=-18.5:measured_LRA=11.2:measured_TP=-3.5:measured_thresh=-28.5:offset=0.5:linear=true \
+  -c:v copy -c:a aac -b:a 192k \
+  output.mp4
+```
+
+**Single-pass loudnorm (faster, less accurate):**
+
+```bash
+ffmpeg -i input.mp4 \
+  -af "loudnorm=I=-14:LRA=7:TP=-2" \
+  -c:v copy -c:a aac -b:a 192k \
+  output.mp4
+```
+
+**Parameters:**
+- `I` (Integrated loudness target): -23 LUFS (broadcast), -14 LUFS (social)
+- `LRA` (Loudness Range target): 7 LU (tight), 11 LU (moderate)
+- `TP` (True Peak limit): -2 dBTP (prevents clipping on mobile devices)
+
+**Python library:**
+- `ffmpeg-normalize` (PyPI): Automated two-pass normalization wrapper
+- Install: `pip install ffmpeg-normalize`
+- Usage: `ffmpeg-normalize input.mp4 -c:a aac -b:a 192k -o output.mp4 -t -14`
+
+---
+
+## Enhanced Subtitle Styling
+
+### Advanced ASS/SSA Styling
+
+Current implementation uses `force_style` parameter. Enhanced options:
+
+**Current (working):**
+```bash
+-vf "subtitles='input.srt':force_style='FontName=Arial,FontSize=48,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=100'"
+```
+
+**Enhanced with shadow/glow:**
+
+```bash
+# Shadow (drop shadow behind text)
+force_style='FontName=Arial,FontSize=48,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=3,Alignment=2,MarginV=100,Bold=1'
+
+# Glow (outline + background box)
+force_style='FontName=Arial,FontSize=48,PrimaryColour=&H00FFFFFF,OutlineColour=&H00FFFF00,BackColour=&H80000000,Outline=2,BorderStyle=3,Shadow=0,Alignment=2,MarginV=100,Bold=1'
+
+# Adaptive sizing with PlayResX/PlayResY
+force_style='PlayResX=1080,PlayResY=1920,FontName=Arial,FontSize=48,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=100,Bold=1'
+```
+
+**Key ASS/SSA Parameters:**
+- `FontSize` (16-200): Font size in pixels (scales with PlayResX/PlayResY)
+- `Outline` (0-4): Outline width in pixels
+- `Shadow` (0-4): Shadow depth in pixels (0 = no shadow, higher = deeper)
+- `BorderStyle`:
+  - `1`: Outline + drop shadow (standard)
+  - `3`: Opaque box background
+- `PrimaryColour`: Text color in `&H00BBGGRR` format (hex BGR)
+- `OutlineColour`: Outline color
+- `BackColour`: Background/shadow color (with alpha: `&HAA` prefix for transparency)
+- `Alignment`: 1-9 (numpad layout: 1=bottom-left, 2=bottom-center, 8=top-center, etc.)
+- `MarginV`: Vertical margin in pixels from edge
+- `PlayResX/PlayResY`: Resolution reference (critical for portrait videos 1080x1920)
+
+**Color format conversion (Python helper):**
 ```python
-# Store workspace_id during signup
-await supabase.auth.sign_up({
-    "email": email,
-    "password": password,
-    "options": {
-        "app_metadata": {"workspace_id": workspace_id}
+def hex_to_ass(hex_color: str) -> str:
+    """Convert #RRGGBB to &H00BBGGRR"""
+    hex_color = hex_color.lstrip('#')
+    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    return f"&H00{b:02X}{g:02X}{r:02X}"
+
+def hex_to_ass_with_alpha(hex_color: str, alpha: int = 0) -> str:
+    """Convert #RRGGBB with alpha (0-255, 0=opaque, 255=transparent)"""
+    hex_color = hex_color.lstrip('#')
+    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    return f"&H{alpha:02X}{b:02X}{g:02X}{r:02X}"
+```
+
+---
+
+## Video Quality Analysis (for improved segment scoring)
+
+### Python Libraries
+
+#### OpenCV (already installed)
+**Current:** `opencv-python-headless>=4.8.0`
+**Use:** Frame extraction, basic quality metrics
+
+```python
+import cv2
+import numpy as np
+
+# Blur detection (Laplacian variance method)
+def detect_blur(frame: np.ndarray) -> float:
+    """Returns blur score (higher = sharper, lower = blurrier)"""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    return laplacian_var
+
+# Threshold: < 100 = blurry, > 500 = sharp
+
+# Contrast detection
+def detect_contrast(frame: np.ndarray) -> float:
+    """Returns contrast score (0-1, higher = more contrast)"""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    contrast = gray.std() / 255.0
+    return contrast
+
+# Threshold: < 0.15 = low contrast, > 0.3 = high contrast
+```
+
+#### scikit-image (NEW - recommended)
+**Install:** `pip install scikit-image>=0.22.0`
+**Use:** Advanced quality metrics
+
+```python
+from skimage import exposure
+
+# Low contrast detection (built-in)
+def is_low_contrast_image(frame: np.ndarray, fraction_threshold: float = 0.05) -> bool:
+    """Built-in method from scikit-image"""
+    from skimage.exposure import is_low_contrast
+    return is_low_contrast(frame, fraction_threshold=fraction_threshold)
+```
+
+#### BRISQUE (NEW - optional)
+**Install:** Already available via OpenCV: `cv2.quality.QualityBRISQUE_create()`
+**Use:** No-reference image quality assessment (0-100, lower = better quality)
+
+```python
+import cv2
+
+# BRISQUE quality scoring
+def score_brisque(frame: np.ndarray, model_path: str, range_path: str) -> float:
+    """Returns BRISQUE score (0-100, lower is better)"""
+    brisque = cv2.quality.QualityBRISQUE_create(model_path, range_path)
+    score = brisque.compute(frame)[0]
+    return score
+
+# Requires pre-trained model files (download from OpenCV contrib)
+# Threshold: < 30 = good quality, > 50 = poor quality
+```
+
+### FFmpeg Quality Metrics (NEW - optional)
+
+#### ffmpeg-quality-metrics (Python wrapper)
+**Install:** `pip install ffmpeg-quality-metrics>=3.11.0`
+**Use:** PSNR, SSIM, VMAF comparison between videos
+**Latest:** v3.11.2 released January 20, 2026
+
+```python
+from ffmpeg_quality_metrics import FfmpegQualityMetrics
+
+# Compare two videos
+metrics = FfmpegQualityMetrics("reference.mp4", "processed.mp4")
+results = metrics.calculate(["ssim", "psnr"])
+# Returns per-frame and global statistics
+```
+
+**Use case:** Compare before/after quality when applying filters.
+
+### Recommended Stack Additions
+
+```txt
+# Add to requirements.txt
+
+# Video Quality Analysis
+scikit-image>=0.22.0          # Low contrast detection, exposure analysis
+ffmpeg-quality-metrics>=3.11.0 # PSNR, SSIM, VMAF (optional, for validation)
+```
+
+---
+
+## Improved Segment Scoring Algorithm
+
+### Current Scoring
+```python
+combined_score = (motion * 0.6) + (variance * 0.3) + (brightness * 0.1)
+```
+
+### Enhanced Scoring (Proposed)
+
+```python
+import cv2
+import numpy as np
+from dataclasses import dataclass
+
+@dataclass
+class EnhancedVideoSegment:
+    start_time: float
+    end_time: float
+    motion_score: float       # 0-1 (existing)
+    variance_score: float     # 0-1 (existing)
+    avg_brightness: float     # 0-1 (existing)
+    blur_score: float         # NEW: Laplacian variance (higher = sharper)
+    contrast_score: float     # NEW: Std dev of luminance (0-1)
+
+    @property
+    def quality_score(self) -> float:
+        """Enhanced quality scoring with blur and contrast"""
+        # Normalize blur score (threshold-based)
+        blur_normalized = min(self.blur_score / 500.0, 1.0)  # 500 = sharp threshold
+
+        # Combined score prioritizes motion + sharpness + contrast
+        return (
+            self.motion_score * 0.40 +      # Motion (most important for engagement)
+            self.variance_score * 0.20 +    # Scene variety
+            blur_normalized * 0.20 +        # Sharpness (NEW)
+            self.contrast_score * 0.15 +    # Contrast (NEW)
+            (1 - abs(self.avg_brightness - 0.5)) * 0.05  # Brightness balance
+        )
+
+def analyze_frame_quality(frame: np.ndarray) -> tuple[float, float]:
+    """Returns (blur_score, contrast_score)"""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Blur detection (Laplacian variance)
+    blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+    # Contrast detection (standard deviation)
+    contrast_score = gray.std() / 255.0
+
+    return blur_score, contrast_score
+```
+
+**Integration:**
+- Sample 3-5 frames per segment
+- Average blur_score and contrast_score
+- Update `VideoSegment.combined_score` property to use enhanced scoring
+- Filter out segments with `blur_score < 100` (too blurry)
+- Filter out segments with `contrast_score < 0.15` (too flat)
+
+---
+
+## Two-Pass Encoding (Optional)
+
+### When to Use
+- Precise bitrate control required (file size limits)
+- Highest quality at target bitrate
+- Broadcasting / professional delivery
+
+### When NOT to Use
+- Social media uploads (CRF is faster and sufficient)
+- Quick turnaround needed
+- No strict bitrate requirements
+
+### Single-Pass CRF (Recommended for Social Media)
+```bash
+# Current approach - KEEP THIS
+ffmpeg -i input.mp4 -c:v libx264 -crf 23 -preset fast output.mp4
+```
+
+**Advantages:**
+- Faster (1x encoding pass)
+- Variable bitrate optimizes per-scene
+- Sufficient for TikTok/Reels/Shorts
+
+### Two-Pass (Only if bitrate control needed)
+
+```bash
+# Pass 1: Analysis
+ffmpeg -i input.mp4 -c:v libx264 -preset medium -b:v 4000k -pass 1 -an -f null /dev/null
+
+# Pass 2: Encoding
+ffmpeg -i input.mp4 -c:v libx264 -preset medium -b:v 4000k -pass 2 -c:a aac -b:a 192k output.mp4
+
+# Cleanup
+rm ffmpeg2pass-0.log ffmpeg2pass-0.log.mbtree
+```
+
+**Note:** Research shows two-pass encoding for x265 takes ~2x longer with "no meaningful overall quality difference" compared to single-pass. For x264 and social media, stick with CRF.
+
+---
+
+## Implementation Priority
+
+### Phase 1: Critical (Immediate Impact)
+1. **Audio loudness normalization** - Consistent volume across all videos
+   - Add `ffmpeg-normalize` to requirements.txt OR implement two-pass loudnorm
+   - Target: -14 LUFS for social media
+2. **Platform-specific presets** - TikTok, Reels, YouTube Shorts
+   - Add preset parameter to rendering functions
+   - Map platform → CRF/bitrate/resolution
+3. **Enhanced subtitle styling** - Shadow and adaptive sizing
+   - Update `add_subtitles()` method with shadow parameter
+   - Already has PlayResX/PlayResY support
+
+### Phase 2: Quality Improvements (High Value)
+4. **Video filters (denoise, sharpen, color)** - Visual enhancement
+   - Add filter chain builder function
+   - Expose as optional parameters in rendering
+5. **Blur/contrast detection** - Better segment selection
+   - Update `VideoSegment` dataclass with quality metrics
+   - Integrate into `analyze_frame_quality()` sampling
+   - Filter low-quality segments before selection
+
+### Phase 3: Advanced (Nice to Have)
+6. **VMAF quality validation** - Compare before/after
+   - Optional post-processing validation
+   - Log quality metrics for monitoring
+
+---
+
+## Configuration Recommendations
+
+### Add to `app/config.py`:
+
+```python
+from enum import Enum
+
+class Platform(str, Enum):
+    TIKTOK = "tiktok"
+    REELS = "reels"
+    YOUTUBE_SHORTS = "youtube_shorts"
+    GENERIC = "generic"
+
+class VideoQualitySettings:
+    """Platform-specific encoding settings"""
+
+    PRESETS = {
+        Platform.TIKTOK: {
+            "resolution": (1080, 1920),
+            "fps": 30,
+            "crf": 23,
+            "preset": "fast",
+            "video_bitrate": "4000k",
+            "audio_bitrate": "128k",
+            "loudness_target": -14,  # LUFS
+        },
+        Platform.REELS: {
+            "resolution": (1080, 1920),
+            "fps": 30,
+            "crf": 23,
+            "preset": "fast",
+            "video_bitrate": "4000k",
+            "audio_bitrate": "128k",
+            "loudness_target": -14,  # LUFS
+        },
+        Platform.YOUTUBE_SHORTS: {
+            "resolution": (1080, 1920),
+            "fps": 30,
+            "crf": 21,  # Slightly higher quality
+            "preset": "medium",
+            "video_bitrate": "8000k",
+            "audio_bitrate": "192k",
+            "loudness_target": -14,  # LUFS (social standard, not -23)
+        },
+        Platform.GENERIC: {
+            "resolution": (1080, 1920),
+            "fps": 30,
+            "crf": 23,
+            "preset": "fast",
+            "video_bitrate": "5000k",
+            "audio_bitrate": "192k",
+            "loudness_target": -14,  # LUFS
+        }
     }
-})
 
-# RLS policy example
-CREATE POLICY "Users can only access their workspace projects"
-ON projects
-FOR ALL
-USING (workspace_id = (auth.jwt() -> 'app_metadata' ->> 'workspace_id')::uuid);
+class VideoFilters:
+    """Video filter presets"""
+
+    DENOISE_PRESETS = {
+        "light": "hqdn3d=1.5:1.5:6:6",
+        "medium": "hqdn3d=3:3:6:6",
+        "heavy": "hqdn3d=5:5:10:10",
+    }
+
+    SHARPEN_PRESETS = {
+        "light": "unsharp=5:5:0.5",
+        "medium": "unsharp=5:5:1.0",
+        "heavy": "unsharp=7:7:1.5",
+    }
+
+    COLOR_PRESETS = {
+        "brighten": "eq=brightness=0.1:contrast=1.1",
+        "vibrant": "eq=contrast=1.15:saturation=1.2",
+        "balanced": "eq=brightness=0.05:contrast=1.15:saturation=1.1",
+    }
 ```
 
-### Free TTS Providers
+---
 
-| Library | Version | Purpose | Why |
-|---------|---------|---------|-----|
-| Kokoro TTS | >=0.9.4 | Primary free TTS engine | 82M parameters, Apache 2.0 license, quality comparable to larger models, runs on modest hardware. ONNX format for CPU inference. Actively maintained in 2026. |
-| piper-tts | 1.4.0 | Edge device TTS | Fastest inference on limited hardware (Raspberry Pi optimized). Lower quality than Kokoro but excellent speed/resource tradeoff. Good for preview/draft mode. |
-| Coqui TTS | 0.27.5 | High-quality neural TTS | Pre-trained voices in 1100+ languages. Best quality but most resource-intensive. Use for premium/final renders when quality critical. |
-| edge-tts | Current (via RealtimeTTS) | Existing fallback | Already integrated. Keep as zero-setup fallback option. |
-| RealtimeTTS | Latest | Unified TTS interface | Abstraction layer supporting all engines above. Install with `pip install realtimetts[all]` for unified API. |
+## Testing & Validation
 
-**Confidence:** HIGH for Kokoro/Piper/Coqui (verified via PyPI, GitHub, official docs), MEDIUM for RealtimeTTS (verified via GitHub)
+### Quality Thresholds
 
-**Installation Priority:**
+```python
+# Blur detection threshold
+BLUR_THRESHOLD_MIN = 100.0  # Below this = reject segment (too blurry)
+BLUR_THRESHOLD_GOOD = 500.0  # Above this = excellent sharpness
 
-1. **Kokoro (Recommended Default):**
-```bash
-pip install kokoro>=0.9.4 soundfile
-# System dependency
-apt-get install espeak-ng  # Linux
-brew install espeak        # macOS
-```
-**Python:** 3.9-3.12 (not 3.13+)
-**Models:** Download `kokoro-v1.0.onnx` and `voices-v1.0.bin` (auto-downloaded or manual)
+# Contrast detection threshold
+CONTRAST_THRESHOLD_MIN = 0.15  # Below this = reject segment (too flat)
+CONTRAST_THRESHOLD_GOOD = 0.30  # Above this = excellent contrast
 
-2. **Piper (Fast Preview Mode):**
-```bash
-pip install piper-tts==1.4.0
-```
-**Python:** 3.9+
-**Models:** Auto-downloads on first use
-
-3. **Coqui (Premium Quality):**
-```bash
-# Install PyTorch first (required since 0.27.4)
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-pip install coqui-tts==0.27.5
-```
-**Python:** 3.10-3.14
-**Models:** 1100+ pre-trained voices, downloaded on demand
-
-4. **RealtimeTTS (Optional Abstraction):**
-```bash
-pip install realtimetts[all]
-```
-**Python:** 3.9-3.12
-**Note:** Includes all engines above via extras, but heavier install
-
-### Developer Experience: One-Click Launch
-
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| concurrently | 9.2.1 | Cross-platform parallel execution | Run FastAPI + Next.js dev servers simultaneously. Works on Windows/WSL/Linux/Mac. 8.6M weekly downloads, actively maintained. |
-| Windows .bat script | N/A | Windows native launcher | For users running from Windows (not WSL). Activates venv, starts backend, opens frontend. |
-| Bash .sh script | N/A | WSL/Linux/Mac launcher | For WSL/Unix environments. Uses `concurrently` or background processes. |
-
-**Confidence:** HIGH (concurrently verified via npm registry, batch/bash patterns verified via community implementations)
-
-**Recommended Approach: Dual Scripts**
-
-**Option A: npm-based (Recommended for existing Node.js project):**
-
-Add to `package.json` in project root:
-```json
-{
-  "scripts": {
-    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\" --names \"API,UI\" --prefix-colors \"blue,green\"",
-    "dev:backend": "cd .. && venv/Scripts/python.exe -m uvicorn app.main:app --reload --port 8000",
-    "dev:frontend": "cd frontend && npm run dev"
-  },
-  "devDependencies": {
-    "concurrently": "^9.2.1"
-  }
-}
+# Brightness range
+BRIGHTNESS_MIN = 0.08  # Below this = too dark (already implemented)
+BRIGHTNESS_MAX = 0.95  # Above this = overexposed
 ```
 
-**Usage:** `npm run dev` from project root
+### Validation Workflow
 
-**Option B: Windows Batch File** (`start-dev.bat`):
+1. **Before enhancement:** Analyze sample segment with OpenCV
+2. **Apply filters:** Denoise → Sharpen → Color correct
+3. **After enhancement:** Re-analyze with SSIM/PSNR (optional)
+4. **Log metrics:** Track quality improvements per filter preset
+5. **User testing:** A/B test with real uploads to platforms
 
-```batch
-@echo off
-echo Starting Edit Factory Development Environment...
-
-REM Start backend in new window
-start "Edit Factory Backend" cmd /k "cd /d %~dp0 && venv\Scripts\activate.bat && python -m uvicorn app.main:app --reload --port 8000"
-
-REM Wait 2 seconds for backend to initialize
-timeout /t 2 /nobreak >nul
-
-REM Start frontend in new window
-start "Edit Factory Frontend" cmd /k "cd /d %~dp0\frontend && npm run dev"
-
-echo Both servers started in separate windows.
-echo Backend: http://localhost:8000
-echo Frontend: http://localhost:3000
-pause
-```
-
-**Usage:** Double-click `start-dev.bat` from Windows Explorer or run from PowerShell
-
-**Option C: WSL Bash Script** (`start-dev.sh`):
-
-```bash
-#!/bin/bash
-set -e
-
-echo "Starting Edit Factory Development Environment..."
-
-# Activate venv and start backend in background
-source venv/bin/activate
-uvicorn app.main:app --reload --port 8000 &
-BACKEND_PID=$!
-
-# Start frontend in background
-cd frontend
-npm run dev &
-FRONTEND_PID=$!
-
-echo "Both servers started:"
-echo "  Backend (PID $BACKEND_PID): http://localhost:8000"
-echo "  Frontend (PID $FRONTEND_PID): http://localhost:3000"
-echo ""
-echo "Press Ctrl+C to stop both servers..."
-
-# Wait for Ctrl+C
-trap "kill $BACKEND_PID $FRONTEND_PID; exit" INT
-wait
-```
-
-**Usage:** `chmod +x start-dev.sh && ./start-dev.sh`
+---
 
 ## Alternatives Considered
 
 | Category | Recommended | Alternative | Why Not |
 |----------|-------------|-------------|---------|
-| Multi-Tenancy | Supabase RLS | Separate databases per tenant | Over-engineering for 2-10 workspaces. Adds complexity, backup/migration overhead. RLS is simpler and secure. |
-| Multi-Tenancy | app_metadata | Custom tenants_to_users table | Extra SELECT on every query. app_metadata is in JWT, zero additional lookups. |
-| Multi-Tenancy | RLS policies | Application-level filtering | Security risk if forgotten in any query. RLS is defense-in-depth at DB level. |
-| Free TTS | Kokoro | Bark | Bark (Suno AI) is 890M params, 10x larger. Slower inference, higher memory. Kokoro has better speed/quality ratio. |
-| Free TTS | Kokoro | StyleTTS2 | StyleTTS2 requires complex voice cloning setup. Overkill for preset voices use case. |
-| Free TTS | Coqui | pyttsx3 | pyttsx3 uses system voices (robotic quality). Coqui is neural TTS with natural prosody. |
-| Free TTS | RealtimeTTS | Individual engine integrations | RealtimeTTS adds abstraction overhead. Direct integration gives more control. Use RealtimeTTS if switching engines frequently. |
-| Launch Script | concurrently | tmux/screen | tmux/screen not standard on Windows. concurrently is cross-platform npm package. |
-| Launch Script | Batch + Bash scripts | Docker Compose | Docker adds container overhead for local dev. Native processes are faster, simpler for single-user dev environment. |
-| Launch Script | npm scripts | Python invoke/fabric | invoke/fabric are Python task runners but frontend is Node.js. Mixing task runners is confusing. npm is already required for frontend. |
+| Video Codec | H.264 (libx264) | H.265 (HEVC) | HEVC ~50% better compression but limited mobile support, licensing concerns |
+| Video Codec | H.264 (libx264) | AV1 | AV1 best compression but extremely slow encoding without hardware acceleration |
+| Audio Codec | AAC | Opus | Opus not universally supported in MP4 containers by social platforms |
+| Loudness Std | -14 LUFS | -23 LUFS (EBU R128) | -23 LUFS is for broadcast TV; social media uses -14 LUFS for mobile listening |
+| Encoding Mode | Single-pass CRF | Two-pass bitrate | Two-pass takes 2x longer with minimal quality benefit for social media |
+| Quality Metrics | OpenCV Laplacian | BRISQUE | BRISQUE requires model files (330MB+), Laplacian is lightweight and sufficient |
+| Python Library | scikit-image | PIL/Pillow | scikit-image has more advanced exposure/contrast tools optimized for analysis |
 
-## Installation Sequences
+---
 
-### Workspace Isolation (Backend)
+## Installation
 
-**No new dependencies required.** Uses existing Supabase client and PostgreSQL.
-
-**Migration Steps:**
-1. Add `workspace_id UUID` column to tenant-scoped tables
-2. Create RLS policies for each table
-3. Add workspace_id to composite indexes
-4. Update signup flow to set app_metadata
-5. Create workspace management endpoints
-
-**Estimated Time:** 4-6 hours for full migration
-
-### Free TTS Integration (Backend)
-
-**Recommended: Start with Kokoro only**
-
-```bash
-# From project root
-source venv/bin/activate  # or venv\Scripts\activate.bat on Windows
-
-# Install Kokoro
-pip install kokoro>=0.9.4 soundfile
-
-# Install system dependency (Linux/WSL)
-sudo apt-get install espeak-ng
-
-# Verify installation
-python -c "import kokoro; print('Kokoro installed successfully')"
+### Current Dependencies (no changes needed)
+```txt
+opencv-python-headless>=4.8.0  # Already installed
+numpy>=1.24.0                  # Already installed
+scipy>=1.11.0                  # Already installed
 ```
 
-**Add to requirements.txt:**
-```
-kokoro>=0.9.4
-soundfile>=0.12.1
-```
+### New Dependencies (Phase 1 - Critical)
+```txt
+# Audio loudness normalization (optional, CLI wrapper)
+ffmpeg-normalize>=1.28.0
 
-**Later: Add Piper for fast preview**
-```bash
-pip install piper-tts==1.4.0
+# Alternative: Implement loudnorm directly with subprocess (no new dependency)
 ```
 
-**Later: Add Coqui for premium quality**
-```bash
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-pip install coqui-tts==0.27.5
+### New Dependencies (Phase 2 - Quality Analysis)
+```txt
+# Advanced image quality analysis
+scikit-image>=0.22.0
+
+# Optional: Video quality metrics (SSIM, PSNR, VMAF)
+ffmpeg-quality-metrics>=3.11.0
 ```
 
-### One-Click Launch (Developer Experience)
+---
 
-**Option 1: npm-based (Recommended)**
+## Sources & References
 
-```bash
-# From project root
-npm install --save-dev concurrently@^9.2.1
+**FFmpeg Encoding Best Practices:**
+- [FFmpeg Compress Video Guide | Cloudinary](https://cloudinary.com/guides/video-effects/ffmpeg-compress-video)
+- [FFmpeg for Instagram - DEV Community](https://dev.to/alfg/ffmpeg-for-instagram-35bi)
+- [How To Optimize FFmpeg For Fast Video Encoding - Muvi](https://www.muvi.com/blogs/optimize-ffmpeg-for-fast-video-encoding/)
+- [FFmpeg - Ultimate Guide | IMG.LY Blog](https://img.ly/blog/ultimate-guide-to-ffmpeg/)
 
-# Add scripts to package.json (see above)
+**Platform-Specific Settings:**
+- [Master Your Shorts: Export Settings for Reels, TikTok & YouTube 2026 | aaapresets](https://aaapresets.com/blogs/premiere-pro-blog-series-editing-tips-transitions-luts-guide/master-your-shorts-the-ultimate-guide-to-export-settings-for-instagram-reels-tiktok-youtube-shorts-in-2025-extended-edition)
+- [CRF Guide (Constant Rate Factor) | slhck](https://slhck.info/video/2017/02/24/crf-guide.html)
+- [Transcoding with FFmpeg: CRF vs Bitrate | FFmpeg Media](https://www.ffmpeg.media/articles/transcoding-crf-vs-bitrate-codecs-presets)
 
-# Test
-npm run dev
-```
+**Audio Loudness Normalization:**
+- [LUFS: The Key to Consistent Audio in Streaming Era | MediaStream](https://www.mediastream.co/blog-es/lufs-the-key-to-consistent-audio-in-the-streaming-era)
+- [Audio Loudness Normalization With FFmpeg | Peter Forgacs](https://medium.com/@peter_forgacs/audio-loudness-normalization-with-ffmpeg-1ce7f8567053)
+- [ffmpeg-normalize · PyPI](https://pypi.org/project/ffmpeg-normalize/)
+- [GitHub - slhck/ffmpeg-normalize](https://github.com/slhck/ffmpeg-normalize)
 
-**Option 2: Standalone Scripts**
+**Video Filters:**
+- [FFmpeg Filters Documentation](https://ffmpeg.org/ffmpeg-filters.html)
+- [FFmpeg: Enhance Video Quality | Freddy Ho](https://www.freddyho.com/2024/12/ffmpeg-enhance-video-quality.html)
+- [FFmpeg Filters and Effects | videoscompress.com](https://www.videoscompress.com/blog/FFmpeg-Filters-and-Effects-Enhance-Your-Videos-with-Advanced-Techniques)
 
-Create `start-dev.bat` and/or `start-dev.sh` in project root (see templates above).
+**Subtitle Styling:**
+- [How to Add Subtitles to a Video with FFmpeg | Bannerbear](https://www.bannerbear.com/blog/how-to-add-subtitles-to-a-video-with-ffmpeg-5-different-styles/)
+- [How to change the appearances of subtitles with FFmpeg | Abyssale](https://www.abyssale.com/blog/how-to-change-the-appearances-of-subtitles-with-ffmpeg)
 
-**Windows:**
-```cmd
-REM Just double-click start-dev.bat
-start-dev.bat
-```
+**Video Quality Analysis:**
+- [Blur detection with OpenCV | PyImageSearch](https://pyimagesearch.com/2015/09/07/blur-detection-with-opencv/)
+- [Detecting low contrast images with OpenCV | PyImageSearch](https://pyimagesearch.com/2021/01/25/detecting-low-contrast-images-with-opencv-scikit-image-and-python/)
+- [GitHub - slhck/ffmpeg-quality-metrics](https://github.com/slhck/ffmpeg-quality-metrics)
+- [Image Quality Assessment: BRISQUE | LearnOpenCV](https://learnopencv.com/image-quality-assessment-brisque/)
 
-**WSL/Linux/Mac:**
-```bash
-chmod +x start-dev.sh
-./start-dev.sh
-```
+**Two-Pass Encoding:**
+- [FFMPEG Tutorial: 2-Pass & CRF in x264 & x265 | GitHub Gist](https://gist.github.com/hsab/7c9219c4d57e13a42e06bf1cab90cd44)
+- [Two-Pass encoding with FFmpeg | Martin Riedl](https://www.martin-riedl.de/2022/01/09/two-pass-encoding-with-ffmpeg/)
+- [Three Things to Know About 2-Pass x265 Encoding | Streaming Learning Center](https://streaminglearningcenter.com/encoding/three-things-to-know-about-2-pass-x265-encoding.html)
 
-## Architecture Integration Notes
+---
 
-### Workspace Isolation Architecture
+## Confidence Assessment
 
-**Database Layer:**
-- Add `workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE` to:
-  - `projects`
-  - `clips`
-  - `api_costs`
-  - `jobs` (if persisted to DB)
-  - New `workspace_postiz_configs` table (per-workspace Postiz API keys)
-  - New `workspace_tts_presets` table (per-workspace voice settings)
+| Area | Level | Rationale |
+|------|-------|-----------|
+| FFmpeg flags & syntax | HIGH | Official FFmpeg documentation + multiple verified sources |
+| Platform-specific settings (2026) | HIGH | Recent industry guides (2025-2026) with verified CRF/bitrate values |
+| Audio loudness standards | HIGH | EBU R128 standard confirmed, -14 LUFS for social media verified |
+| Filter syntax (hqdn3d, unsharp, eq) | HIGH | Official FFmpeg filter documentation |
+| Python libraries (OpenCV, scikit-image) | HIGH | Established libraries with PyPI verification |
+| Quality metrics (BRISQUE, VMAF) | MEDIUM | OpenCV contrib feature, requires model files |
+| Two-pass encoding value | HIGH | Multiple sources confirm single-pass CRF sufficient for social media |
 
-**RLS Policy Pattern:**
-```sql
--- Enable RLS on table
-ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
+---
 
--- Create policy
-CREATE POLICY "workspace_isolation_policy" ON projects
-FOR ALL
-USING (workspace_id = (auth.jwt() -> 'app_metadata' ->> 'workspace_id')::uuid);
-```
+## Next Steps for Implementation
 
-**Auth Flow:**
-1. User signs up → assign to workspace (or create new workspace)
-2. Set `app_metadata.workspace_id` during signup
-3. All queries automatically filtered by RLS
-4. User can switch workspaces → update JWT → new app_metadata
+1. **Update requirements.txt** with new dependencies (Phase 2):
+   ```txt
+   scikit-image>=0.22.0
+   ffmpeg-normalize>=1.28.0  # Optional
+   ```
 
-**Frontend State:**
-- Add workspace context provider
-- Show workspace switcher in navbar
-- Filter client-side state by current workspace (optimistic updates)
+2. **Extend `VideoEditor` class** with:
+   - Platform preset support
+   - Filter chain builder method
+   - Loudness normalization integration (add_audio method)
 
-### Free TTS Integration Architecture
+3. **Enhance `VideoSegment` scoring** with:
+   - Add blur_score and contrast_score fields
+   - Implement analyze_frame_quality() helper
+   - Update combined_score formula
 
-**Service Layer Pattern:**
+4. **Add configuration** in `config.py`:
+   - Platform enum and presets dictionary
+   - VideoFilters class with preset strings
+   - Quality threshold constants
 
-```python
-# app/services/tts_manager.py
-from enum import Enum
-from typing import Protocol
-
-class TTSEngine(Enum):
-    KOKORO = "kokoro"
-    PIPER = "piper"
-    COQUI = "coqui"
-    EDGE = "edge"  # existing fallback
-
-class TTSProvider(Protocol):
-    async def synthesize(self, text: str, voice: str) -> bytes:
-        ...
-
-class KokoroTTS:
-    async def synthesize(self, text: str, voice: str) -> bytes:
-        # Implementation using kokoro library
-        pass
-
-class TTSManager:
-    def __init__(self):
-        self.providers = {
-            TTSEngine.KOKORO: KokoroTTS(),
-            TTSEngine.PIPER: PiperTTS(),
-            TTSEngine.EDGE: EdgeTTS(),
-            # COQUI added later
-        }
-
-    async def get_audio(
-        self,
-        text: str,
-        engine: TTSEngine,
-        voice: str,
-        workspace_id: str  # for per-workspace presets
-    ) -> bytes:
-        provider = self.providers[engine]
-        return await provider.synthesize(text, voice)
-```
-
-**API Changes:**
-- Add `tts_engine` parameter to TTS endpoints (default: "kokoro")
-- Add workspace-scoped voice presets endpoint
-- Cost tracking per engine (Kokoro/Piper are free → $0.00 cost)
-
-**Migration Strategy:**
-1. Phase 1: Add Kokoro as optional engine, keep Edge-TTS default
-2. Phase 2: Make Kokoro default, Edge-TTS fallback
-3. Phase 3: Add Piper for fast preview mode
-4. Phase 4: Add Coqui for premium quality
-
-### Launch Script Integration
-
-**Project Structure:**
-```
-edit_factory/
-├── start-dev.bat          # Windows launcher
-├── start-dev.sh           # WSL/Unix launcher
-├── package.json           # Contains concurrently scripts
-├── venv/                  # Python virtual environment
-├── app/                   # FastAPI backend
-├── frontend/              # Next.js frontend
-│   └── package.json       # Frontend dependencies
-└── .env                   # Environment variables
-```
-
-**Deployment Note:**
-These scripts are for **local development only**. Production uses:
-- Backend: `uvicorn app.main:app --host 0.0.0.0 --port 8000` (or gunicorn)
-- Frontend: `npm run build && npm start` (Next.js production server)
-
-## Python Version Compatibility Matrix
-
-| Library | Min Python | Max Python | Notes |
-|---------|------------|------------|-------|
-| FastAPI | 3.8+ | 3.12+ | Existing backend |
-| Kokoro | 3.9 | 3.12 | **Blocker: No Python 3.13 support yet** |
-| Piper | 3.9 | 3.14 | Most permissive |
-| Coqui | 3.10 | 3.14 | Requires PyTorch 2.2+ |
-| RealtimeTTS | 3.9 | 3.12 | Same as Kokoro (uses Coqui internally) |
-
-**Recommendation:** Use Python 3.11 (sweet spot for all libraries)
-
-**Current Project:** Check `python --version` in venv. If Python 3.13+, downgrade venv to 3.11 for TTS compatibility.
-
-## Cost Analysis
-
-| Component | Setup Cost | Runtime Cost | Notes |
-|-----------|------------|--------------|-------|
-| Supabase RLS | 2-4 hours dev time | $0 | No additional infrastructure |
-| Kokoro TTS | 1 hour integration | $0 | Open-source, runs locally |
-| Piper TTS | 30 min integration | $0 | Open-source, runs locally |
-| Coqui TTS | 1 hour integration + model download | $0 | Open-source, 1-5GB model storage |
-| Edge TTS | Already integrated | $0 | Free Microsoft service (existing) |
-| concurrently | 15 min setup | $0 | npm package |
-| Launch scripts | 30 min creation | $0 | One-time setup |
-
-**Total Cost:** ~6-8 hours developer time, $0 infrastructure cost
-
-**Comparison to Paid TTS:**
-- ElevenLabs: ~$0.22 per 1000 characters
-- For 100,000 character/month usage: $22/month savings with free TTS
-- For multi-workspace setup: $22/month × number of workspaces
-
-## Performance Considerations
-
-### Workspace Isolation Performance
-
-**Query Performance:**
-- RLS adds WHERE clause to every query: `workspace_id = 'user-workspace-id'`
-- **Mitigation:** Add `workspace_id` as final column in composite indexes
-- Example: `CREATE INDEX idx_projects_workspace ON projects(workspace_id, created_at DESC);`
-- **Impact:** Negligible with proper indexing (<1ms overhead per query)
-
-**Scaling:**
-- RLS scales to 10,000+ tenants (proven in production Supabase apps)
-- For 2-10 workspaces (user's use case): zero performance concern
-
-### TTS Performance
-
-| Engine | Inference Speed (RTX) | CPU Inference | Model Size | Quality |
-|--------|----------------------|---------------|------------|---------|
-| Kokoro | ~2-3x realtime | ~1-1.5x realtime | 82M params (~330MB) | High |
-| Piper | ~5-10x realtime | ~3-5x realtime | Small (~10-50MB/voice) | Medium |
-| Coqui | ~1-2x realtime | ~0.5-1x realtime | 200M-890M params (1-5GB) | Highest |
-| Edge-TTS | Network dependent | N/A (cloud API) | N/A | Medium-High |
-
-**RTX = Real-Time Factor** (1x = generates 1 second of audio per 1 second of processing)
-
-**Recommendation for Edit Factory:**
-- **Default:** Kokoro (good quality, fast on CPU, small model)
-- **Fast Preview:** Piper (when speed > quality, e.g., draft review)
-- **Premium:** Coqui (final renders when quality critical)
-- **Fallback:** Edge-TTS (if local engines fail or unavailable)
-
-**Hardware Requirements:**
-- Kokoro: 4GB RAM, CPU inference acceptable
-- Piper: 2GB RAM, runs on Raspberry Pi
-- Coqui: 8GB RAM recommended, GPU optional (2-4x faster with CUDA)
-
-## Security Considerations
-
-### Workspace Isolation Security
-
-**Defense-in-Depth:**
-1. **Database Level (RLS):** Primary security boundary
-2. **Application Level (FastAPI):** Validate workspace_id in endpoints
-3. **Frontend Level (Next.js):** Filter UI state by workspace
-
-**Critical Pattern:**
-```python
-# WRONG: Application-level filtering only
-@router.get("/projects")
-async def list_projects(user: User = Depends(get_current_user)):
-    # If we forget .filter(workspace_id=...), data leak!
-    return await db.projects.find_all()
-
-# RIGHT: RLS enforces at DB level
-@router.get("/projects")
-async def list_projects(user: User = Depends(get_current_user)):
-    # Even if we forget to filter, RLS prevents leak
-    return await db.projects.find_all()  # RLS auto-filters
-```
-
-**app_metadata vs user_metadata:**
-- **app_metadata:** Server-side only, immutable by users. Store workspace_id here.
-- **user_metadata:** User can modify via API. Never trust for access control.
-
-### TTS Security
-
-**Local TTS (Kokoro/Piper/Coqui):**
-- No network calls → no data leakage
-- Models run on local server → privacy-friendly
-- No API keys to manage → reduced attack surface
-
-**Edge-TTS:**
-- Sends text to Microsoft servers → not GDPR-safe for sensitive content
-- Use local engines for content with PII/confidential data
-
-## Sources
-
-### Supabase Multi-Tenancy & RLS
-- [Row Level Security | Supabase Docs](https://supabase.com/docs/guides/database/postgres/row-level-security) - HIGH confidence (official docs)
-- [User Management | Supabase Docs](https://supabase.com/docs/guides/auth/managing-user-data) - HIGH confidence (official docs)
-- [Multi-Tenant Applications with RLS on Supabase](https://www.antstack.com/blog/multi-tenant-applications-with-rls-on-supabase-postgress/) - MEDIUM confidence (verified implementation)
-- [Enforcing Row Level Security in Supabase: A Deep Dive](https://dev.to/blackie360/-enforcing-row-level-security-in-supabase-a-deep-dive-into-lockins-multi-tenant-architecture-4hd2) - MEDIUM confidence (real-world case study)
-- [Supabase Multi Tenancy - Simple and Fast](https://roughlywritten.substack.com/p/supabase-multi-tenancy-simple-and) - MEDIUM confidence (app_metadata pattern)
-
-### Free TTS Providers
-- [The Best Open-Source Text-to-Speech Models in 2026](https://www.bentoml.com/blog/exploring-the-world-of-open-source-text-to-speech-models) - HIGH confidence (comprehensive 2026 comparison)
-- [Best open source text-to-speech models and how to run them](https://northflank.com/blog/best-open-source-text-to-speech-models-and-how-to-run-them) - MEDIUM confidence (technical details)
-- [Top Python Packages for Realistic Text-to-Speech Solutions](https://smallest.ai/blog/python-packages-realistic-text-to-speech) - MEDIUM confidence (Python integration)
-- [Best ElevenLabs Alternatives 2026: Open-Source TTS Comparison](https://ocdevel.com/blog/20250720-tts) - MEDIUM confidence (comparison)
-- [GitHub - KoljaB/RealtimeTTS](https://github.com/KoljaB/RealtimeTTS) - HIGH confidence (official repo, verified via WebFetch)
-- [GitHub - nazdridoy/kokoro-tts](https://github.com/nazdridoy/kokoro-tts) - HIGH confidence (official CLI tool, verified via WebFetch)
-- [coqui-tts · PyPI](https://pypi.org/project/coqui-tts/) - HIGH confidence (verified version 0.27.5, Jan 26, 2026)
-- [piper-tts · PyPI](https://pypi.org/project/piper-tts/) - HIGH confidence (verified version 1.4.0, Jan 30, 2026)
-- [Kokoro-82M: Install and Run Locally](https://aleksandarhaber.com/kokoro-82m-install-and-run-locally-fast-small-and-free-text-to-speech-tts-ai-model-kokoro-82m/) - MEDIUM confidence (installation guide)
-
-### Launch Scripts & Developer Experience
-- [concurrently - npm](https://www.npmjs.com/package/concurrently) - HIGH confidence (attempted WebFetch, verified via search for version 9.2.1)
-- [How to run npm scripts concurrently?](https://dev.to/przemyslawjanbeigert/how-to-run-npm-scripts-concurrently-2l4c) - MEDIUM confidence (usage patterns)
-- [GitHub - open-cli-tools/concurrently](https://github.com/open-cli-tools/concurrently) - HIGH confidence (official repo)
-- [Windows batch script to run a Python program within virtual environment](https://gist.github.com/nmpowell/d444820b58f10568b15a082ee4f591cf) - MEDIUM confidence (batch file pattern)
-- [Activating Python Virtual Environment with Custom Batch Script](https://medium.com/@sawlemon/activating-python-virtual-environment-with-custom-batch-script-9a86492447df) - MEDIUM confidence (Windows venv activation)
-- [Set up Node.js on WSL 2 | Microsoft Learn](https://learn.microsoft.com/en-us/windows/dev-environment/javascript/nodejs-on-wsl) - HIGH confidence (official Microsoft docs)
-- [Install Next.js on Windows | Microsoft Learn](https://learn.microsoft.com/en-us/windows/dev-environment/javascript/nextjs-on-wsl) - HIGH confidence (official Microsoft docs)
-
-## Version Verification Status
-
-| Component | Verified Source | Verification Date | Confidence |
-|-----------|----------------|-------------------|------------|
-| Supabase RLS patterns | Official docs | Feb 3, 2026 | HIGH |
-| Kokoro TTS | GitHub + community | Feb 3, 2026 | HIGH |
-| Piper TTS 1.4.0 | PyPI search | Feb 3, 2026 | HIGH |
-| Coqui TTS 0.27.5 | PyPI WebFetch | Feb 3, 2026 | HIGH |
-| concurrently 9.2.1 | npm search | Feb 3, 2026 | HIGH |
-| app_metadata pattern | Supabase docs + community | Feb 3, 2026 | HIGH |
-| Python version constraints | PyPI package metadata | Feb 3, 2026 | HIGH |
+5. **Create utility functions**:
+   - `build_filter_chain(denoise, sharpen, color)` → returns FFmpeg filter string
+   - `normalize_audio_loudness(audio_path, target_lufs)` → returns normalized audio path
+   - `analyze_segment_quality(video_path, start, end)` → returns quality metrics dict

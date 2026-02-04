@@ -1,273 +1,311 @@
-# Feature Landscape: Multi-Profile Video Production Platform
+# Feature Landscape: Video Quality Enhancement
 
-**Domain:** Video content creation with workspace isolation and TTS management
-**Researched:** 2026-02-03
+**Domain:** Social media video processing (TikTok, Instagram Reels, YouTube Shorts)
+**Researched:** 2026-02-04
 **Confidence:** HIGH
+
+## Executive Summary
+
+Video quality enhancement for social media creators in 2026 focuses on three pillars: **professional encoding settings**, **audio normalization**, and **enhanced subtitle rendering**. The current Edit Factory baseline (CRF 23, fast preset, 128k audio) is functional but represents basic consumer-grade output. Professional tools differentiate through platform-specific optimizations, perceptual quality metrics, and advanced FFmpeg filters.
+
+**Current baseline (Edit Factory v2.2):**
+- Video: CRF 23, preset "fast", H.264
+- Audio: AAC 128k bitrate, no normalization
+- Subtitles: ASS-rendered SRT with basic styling
+
+**Gap to professional tools:**
+- Missing platform-specific export presets (TikTok, Reels, YouTube Shorts)
+- No audio loudness normalization (LUFS targeting)
+- Basic subtitle rendering (no word-level highlighting, no CapCut-style effects)
+- No video enhancement filters (denoise, sharpen, color correction)
+- No perceptual quality scoring (VMAF, SSIM)
+
+---
 
 ## Table Stakes
 
-Features users expect from multi-profile content creation tools. Missing any of these = product feels incomplete.
+Features users expect from professional video quality tools. Missing any of these makes the product feel incomplete.
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| Profile Switcher UI | Industry standard in all social media management tools (Statusbrew, Agorapulse, Planable) | Low | Dropdown/menu in navbar. Must be persistent across all pages. |
-| Per-Profile Library Isolation | Prevents accidental cross-posting (critical error in agency tools) | Medium | Database scoping: `WHERE profile_id = ?` on all queries. Supabase RLS ideal but optional. |
-| Per-Profile Settings Storage | Each store needs its own API keys (Postiz, TTS) | Low | JSONB column or separate `profile_settings` table. |
-| Visual Profile Indicator | User must always know which profile is active | Low | Profile name + icon/color in navbar. "Store A" vs "Store B". |
-| Profile-Scoped Assets | Projects and clips belong to one profile only | Medium | Add `profile_id` foreign key to `projects` and `clips` tables. |
-| Default Profile on Login | Reduces friction for primary use case | Low | User preference or "last active profile". |
-| TTS Provider Selection | Users expect choice between free/paid options | Low | Radio buttons or toggle. Edge TTS (free) vs ElevenLabs (paid). |
-| Voice Preset Management | Voice settings must persist per-provider, per-profile | Medium | Store: provider, voice_id, model, speed, stability. Per-profile defaults. |
-| Per-Profile Postiz Config | Each store publishes to different social accounts | Medium | Store API URL + API key per profile. Override global settings. |
+| Feature | Why Expected | Complexity | Current Status | Notes |
+|---------|--------------|------------|----------------|-------|
+| **Platform-Specific Export Presets** | Different platforms have different compression algorithms; creators need optimized settings | Medium | ❌ Missing | TikTok, Instagram, YouTube have different optimal bitrates and encoding params |
+| **Audio Loudness Normalization** | Social platforms normalize to -14 LUFS; unnormalized audio sounds inconsistent | Medium | ❌ Missing | Critical for professional output; platforms auto-adjust badly normalized audio |
+| **Professional Encoding Settings** | CRF 18-20, slower presets produce visibly better quality after platform re-compression | Low | ⚠️ Partial | Current CRF 23 is acceptable but not optimal; preset "fast" leaves quality on table |
+| **Subtitle Customization** | Creators expect font choice, colors, positioning, outline control | Low | ✅ Present | Already implemented with hex colors, font size scaling, outline |
+| **Video Format Consistency** | 1080x1920 (9:16), 30fps, H.264 for vertical social video | Low | ✅ Present | Edit Factory already handles vertical video correctly |
+| **High-Quality Audio Encoding** | 192k AAC minimum for professional sound | Low | ⚠️ Partial | Current 128k is acceptable; 192k is standard for pro tools |
+| **Batch Processing** | Process multiple variants with consistent quality | Medium | ✅ Present | Already supports 1-10 variants per upload |
+
+---
 
 ## Differentiators
 
-Features that set the product apart. Not expected, but provide clear value.
+Features that set professional tools apart. Not universally expected, but highly valued by power users.
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| Profile Creation Wizard | Smooth onboarding for new stores | Low | 3-step: Name → TTS defaults → Postiz credentials. Optional on setup. |
-| Cross-Profile Asset Copying | Reuse successful video scripts between stores | Medium | "Copy project to [Profile]" action in library. Clones project + settings but not rendered clips. |
-| Profile Activity History | Track which store generated how many videos | Low | Dashboard showing video count, API costs, last activity per profile. Builds on existing cost_tracker. |
-| TTS Voice Preview | Test voice before generating full video | Medium | "Play sample" button with 1-2 sentence test. Calls TTS API with short text. |
-| Multi-Provider Failover | Automatic fallback: ElevenLabs → Edge TTS if quota exceeded | High | Error handling in TTS service. Graceful degradation already exists but not explicitly user-facing. |
-| Voice Library Organization | Categorize saved voices (energetic, calm, professional) | Medium | Tags/labels on voice presets. ElevenLabs pattern: 200K+ voices with categories. |
-| Bulk Profile Actions | Apply same TTS settings to all profiles | Low | "Save as default for all profiles" checkbox in settings. |
-| Profile-Specific Context Text | Default AI analysis prompts per store (product category differences) | Low | Profile setting: `default_context_text`. Pre-fills video upload form. |
-| TTS Cost Comparison Widget | Show real-time cost: "ElevenLabs: $0.22 vs Edge TTS: $0" | Low | Label under provider selection. Uses existing cost_tracker data. |
-| Postiz Account Previewer | Show connected social accounts before publishing | Medium | Fetch integrations on profile load. Display: "Instagram @store_a, TikTok @store_a_official". |
+| Feature | Value Proposition | Complexity | Competition | Notes |
+|---------|-------------------|------------|-------------|-------|
+| **Perceptual Quality Metrics (VMAF/SSIM)** | Objective measurement of video quality; helps validate encoding settings | High | Netflix (VMAF inventor), FastPix, Probe.dev | Enables "quality score" for segments; helps auto-tune encoding |
+| **AI-Enhanced Subtitle Styling** | CapCut-style word highlighting, animated effects, auto-sizing | High | CapCut, Descript, VEED | Major UX differentiator; current trend in 2026 |
+| **Video Enhancement Filters** | Denoise, sharpen, color correction improve user-generated content quality | Medium | Adobe Premiere, CapCut, Topaz Video AI | Especially valuable for phone-shot footage |
+| **Adaptive Bitrate Encoding** | Quality-based encoding (target VMAF score vs fixed CRF) | High | Professional encoders only | Ensures consistent perceptual quality across content |
+| **Platform-Specific Quality Warnings** | "This video may look poor after Instagram compression" alerts | Medium | None (unique opportunity) | Helps creators avoid common mistakes |
+| **Audio Enhancement Suite** | Noise reduction, EQ, compression for voice clarity | High | Descript (Studio Sound), Adobe Podcast | Elevates low-quality recordings |
+| **Multi-Pass Encoding** | Slower but higher quality two-pass encoding option | Low | Professional tools | Trade speed for quality; good for final exports |
+| **Custom Quality Presets** | User-defined encoding profiles for different use cases | Medium | Adobe, DaVinci Resolve | Power user feature |
+
+---
 
 ## Anti-Features
 
-Features to explicitly NOT build. Common mistakes in this domain for a 2-profile personal tool.
+Features to explicitly NOT build. Common mistakes or scope creep in this domain.
 
 | Anti-Feature | Why Avoid | What to Do Instead |
 |--------------|-----------|-------------------|
-| Team Collaboration / Multi-User | Adds complexity for zero benefit (single user, 2 stores) | Keep single-user architecture. Auth exists but no sharing. |
-| Profile Permissions / RBAC | Meaningless when one person manages both profiles | Equal access to both profiles. No permission checks. |
-| Profile Invitation System | No need to share profiles with others | — |
-| Workspace-Level Billing | Overcomplicated for personal use | Track costs globally, show breakdown by profile in dashboard. |
-| Profile Templates / Marketplace | Feature creep for 2-profile use case | Manual setup is 2 minutes per profile. |
-| Advanced Profile Hierarchy | Parent/child workspaces unnecessary | Flat structure: Profile A, Profile B. No nesting. |
-| Profile-Specific UI Themes | Visual customization adds no value | Consistent UI across profiles. Only name/icon differ. |
-| Cross-Profile Publishing | Publishing to wrong store is the error we're preventing | Hard isolation. Must switch profiles to publish. |
-| Profile Analytics Dashboard | Feature exists in Postiz already | Link to external analytics. Don't duplicate. |
-| Per-Profile FFmpeg Settings | Video output format same for both stores (social media standards) | Global FFmpeg config. Profile independence is content/accounts, not encoding. |
-| Desktop App Profile Sync | Browser-based tool doesn't need desktop sync | Web-first architecture remains. Supabase handles state. |
-| Profile Backup/Export | Overkill for 2 profiles with shared database | Supabase backup covers both profiles. |
+| **Automatic Video Upscaling** | AI upscaling is compute-intensive and often produces artifacts; social media content is already 1080p | Use FFmpeg's efficient scale filter only for dimension adjustments, not quality enhancement |
+| **Real-Time Preview Rendering** | Requires complex infrastructure; adds latency; preview quality never matches final output | Provide accurate time estimates and progress tracking instead |
+| **Unlimited Export Formats** | Social media creators need 3 platforms max (TikTok, Instagram, YouTube); supporting 20+ formats adds complexity without value | Focus on the big 3 platforms with perfect presets |
+| **Advanced Color Grading** | Professional color grading requires LUTs, curves, scopes; way beyond scope for automated tool | Stick to basic color correction filters (brightness, contrast, saturation) |
+| **Multi-Track Audio Editing** | Users who need this use DAWs; out of scope for automated video processor | Keep single audio track with normalization and basic enhancement |
+| **Built-In Video Stabilization** | Computationally expensive; most phone footage is already stabilized by device | Skip stabilization filters; focus on encoding quality |
+| **Closed Captions Compliance** | Broadcasting standards (BBC, Netflix, FCC) are irrelevant for social media | Implement stylish, readable subtitles for social platforms, not broadcast compliance |
+| **Lossless Export Options** | Massive files (gigabytes for 60s video); social platforms reject or heavily compress anyway | Stick to high-quality H.264; no ProRes, no lossless codecs |
+
+---
 
 ## Feature Dependencies
 
 ```
-Profile System Foundation (database schema)
-  ↓
-Profile Switcher UI (selection mechanism)
-  ↓
-Profile-Scoped Data Loading (library isolation)
-  ↓
-├─→ Per-Profile Settings (TTS, Postiz)
-├─→ TTS Provider Selection UI
-├─→ Voice Preset Management
-└─→ Postiz Config Per-Profile
+Video Quality Enhancement
+├── Platform Presets
+│   ├── Requires: FFmpeg encoding parameter research
+│   └── Enables: Optimal quality per platform
+│
+├── Audio Normalization
+│   ├── Requires: FFmpeg loudnorm filter, LUFS measurement
+│   └── Enables: Professional audio consistency
+│
+├── Enhanced Subtitle Rendering
+│   ├── Requires: ASS subtitle styling (already present)
+│   ├── Optional: Word-level timing from TTS services
+│   └── Enables: CapCut-style animated captions
+│
+├── Video Enhancement Filters
+│   ├── Requires: FFmpeg filter chains (hqdn3d, unsharp, eq)
+│   ├── Depends on: Video analysis (motion, brightness already present)
+│   └── Enables: Improved segment quality
+│
+└── Perceptual Quality Scoring
+    ├── Requires: FFmpeg with libvmaf (complex build)
+    ├── Depends on: Reference video for comparison
+    └── Enables: Objective quality validation
 ```
 
-**Critical Path:**
-1. Database schema changes (add `profile_id` to tables)
-2. Profile switcher UI (navbar component)
-3. Data scoping (filter queries by active profile)
-4. Settings storage (per-profile configurations)
+**Critical Path for MVP:**
+1. Platform Presets (unlocks immediate quality improvement)
+2. Audio Normalization (table stakes for professional output)
+3. Professional Encoding Settings (quick win: adjust CRF + preset)
+4. Enhanced Subtitle Styling (differentiator, leverages existing TTS word timing)
 
-**Independent Features (can be built in parallel):**
-- TTS provider selection UI (works without profiles)
-- Voice preset management (can be profile-scoped later)
-- TTS cost comparison widget (informational only)
+**Defer to Post-MVP:**
+- Perceptual Quality Metrics (complex, requires FFmpeg rebuild)
+- Video Enhancement Filters (valuable but not critical path)
+- Audio Enhancement Suite (complex, overlaps with existing TTS quality)
+
+---
 
 ## MVP Recommendation
 
-**For initial profile system implementation, prioritize:**
+For video quality enhancement MVP, prioritize features that deliver maximum quality improvement with minimum complexity:
 
-1. **Profile Switcher UI** (table stakes, low complexity)
-   - Dropdown in navbar showing "Store A" / "Store B"
-   - Persists selection in localStorage or user preferences
-   - Visual indicator always visible
+### Phase 1: Professional Encoding Baseline (Quick Wins)
+**Priority: CRITICAL**
+1. **Adjust encoding defaults**
+   - CRF 23 → CRF 20 (better quality)
+   - preset "fast" → preset "medium" (better compression efficiency)
+   - Audio bitrate 128k → 192k (professional standard)
+   - **Complexity: LOW** (single-digit parameter changes)
 
-2. **Per-Profile Library Isolation** (table stakes, medium complexity)
-   - Add `profile_id` to projects/clips tables
-   - Filter all library queries by active profile
-   - Migration: assign existing data to default profile
+2. **Audio loudness normalization**
+   - Implement FFmpeg loudnorm filter targeting -14 LUFS
+   - Two-pass normalization (measure → normalize)
+   - **Complexity: MEDIUM** (requires two-pass processing)
+   - **Impact: HIGH** (professional audio is non-negotiable)
 
-3. **Per-Profile Postiz Config** (table stakes, medium complexity)
-   - Store Postiz API URL + key per profile
-   - Override global settings when active
-   - Fallback to global if profile config missing
+### Phase 2: Platform-Specific Optimization (Differentiation)
+**Priority: HIGH**
+3. **Platform export presets**
+   - TikTok: 1080x1920, 30fps, 3500-4500 kbps, -b:a 192k
+   - Instagram Reels: Same as TikTok + profile:v main level:v 3.1
+   - YouTube Shorts: Higher bitrate (5000-6000 kbps) for less aggressive platform compression
+   - **Complexity: MEDIUM** (research-intensive, implementation straightforward)
+   - **Impact: HIGH** (creators notice quality difference post-upload)
 
-4. **TTS Provider Selection UI** (table stakes, low complexity)
-   - Radio buttons: "ElevenLabs (paid)" vs "Edge TTS (free)"
-   - Show costs inline: "$0.22/1000 chars" vs "Free"
-   - Surfaces existing Edge TTS integration
+4. **Enhanced subtitle rendering**
+   - Leverage existing word-level timing from EdgeTTS
+   - Implement word highlighting (CapCut style)
+   - Add subtitle animation options (fade in, scale)
+   - **Complexity: MEDIUM** (requires ASS advanced features)
+   - **Impact: HIGH** (major visual differentiator)
 
-**Defer to post-MVP:**
+### Phase 3: Quality Enhancement (Advanced Features)
+**Priority: MEDIUM** (defer to post-MVP)
+5. **Video enhancement filters**
+   - Denoise filter (hqdn3d) for low-light footage
+   - Sharpening (unsharp) for soft footage
+   - Auto-apply based on segment quality scores
+   - **Complexity: MEDIUM** (FFmpeg filter chains)
 
-- **Voice Preset Management**: Can manually configure voices per-upload initially. Presets are convenience, not blocker.
-- **Profile Creation Wizard**: Two profiles can be set up manually via settings page.
-- **TTS Voice Preview**: Nice-to-have. Users can iterate on full clips.
-- **Cross-Profile Asset Copying**: Edge case for later optimization.
-- **Profile Activity History**: Informational dashboard feature, not workflow-critical.
+6. **Perceptual quality metrics**
+   - Integrate VMAF scoring for segment selection
+   - Quality warnings ("segment quality: 78/100")
+   - **Complexity: HIGH** (requires libvmaf compilation)
 
-## TTS Provider Selection: UX Patterns
+---
 
-Based on research from ElevenLabs documentation and industry standards:
+## User Experience Patterns from Professional Tools
 
-### Expected UI Elements
+### CapCut (Market Leader for Social Media)
+**What makes it popular:**
+- **Templates and trends**: Pre-configured effects that go viral
+- **One-tap operations**: "Auto captions", "Beat sync", "Remove background"
+- **Mobile-first UX**: Every feature optimized for phone creators
+- **Speed over perfection**: "Good enough in 2 minutes" beats "perfect in 20 minutes"
 
-| Element | Purpose | Edit Factory Implementation |
-|---------|---------|---------------------------|
-| Provider Toggle | Switch between paid/free | Radio group: ElevenLabs / Edge TTS |
-| Cost Display | Show pricing inline | "~$0.22 per 1000 characters" vs "Free (Microsoft)" |
-| Voice Selection | Choose specific voice | Dropdown with voice names. ElevenLabs uses voice library pattern. |
-| Voice Preview | Test voice before use | "Play sample" button (differentiator, not MVP) |
-| Provider Badge | Visual indicator of active provider | Badge in TTS panel: "Premium" (ElevenLabs) or "Free" (Edge TTS) |
+**Lessons for Edit Factory:**
+- Automate everything by default (no manual encoding parameter selection)
+- Provide "quality presets" not "technical settings"
+- Speed matters: Platform presets should not significantly increase processing time
 
-### Current State Analysis
+### Descript (Professional Editor)
+**What makes it popular:**
+- **Text-based editing**: Edit video by editing transcript
+- **Studio Sound**: One-click audio enhancement
+- **Word-level precision**: Captions are word-timed, not sentence-timed
 
-Edit Factory's `tts-panel.tsx` currently:
-- ✓ Labels as "ElevenLabs" explicitly
-- ✓ Shows "Premium" badge
-- ✗ No provider selection (ElevenLabs hardcoded in UI)
-- ✗ Edge TTS exists in backend but hidden from user
+**Lessons for Edit Factory:**
+- Word-level subtitle timing is table stakes (EdgeTTS already provides this)
+- Audio quality enhancement should be automatic, not manual
+- Transcript-first workflow aligns with Edit Factory's TTS approach
 
-**Gap:** Users can't choose between free/paid TTS providers in the UI. Edge TTS fallback is invisible.
+### Adobe Premiere Pro (Industry Standard)
+**What professionals expect:**
+- **Custom export presets**: Save encoding configurations
+- **Quality validation**: Preview before final export
+- **Batch consistency**: Same settings across multiple videos
 
-### Recommended UX Pattern
+**Lessons for Edit Factory:**
+- Platform presets should be named clearly ("TikTok Optimal", not "H.264 3500kbps")
+- Batch processing must maintain quality consistency (already implemented)
+- Progress reporting should include quality indicators, not just time remaining
 
-```
-┌─────────────────────────────────────────┐
-│ Text-to-Speech Provider                 │
-│ ○ ElevenLabs (~$0.22/1000 chars) [Premium]│
-│ ● Edge TTS (Free)                       │
-│                                         │
-│ Voice: [Rachel (en-US)        ▼]       │
-│ [Play sample]                          │
-│                                         │
-│ [Textarea for script...]               │
-└─────────────────────────────────────────┘
-```
+---
 
-**Key Decisions:**
-1. Default to **Edge TTS (free)** for new profiles → minimizes costs
-2. Show provider selection **above voice selection** → hierarchy matters
-3. Display **inline costs** → informed decision without clicking help text
-4. **No automatic failover UI** → fallback is silent backend behavior
-5. **Per-profile default** → Store A uses ElevenLabs, Store B uses Edge TTS
+## 2026 Industry Trends
 
-## Voice Preset Management Patterns
+### AI-Powered Features (Current State)
+- **Auto-captions**: Universally expected (Edit Factory has this via Whisper/TTS)
+- **Background removal**: Common in CapCut, VEED (not in scope for Edit Factory)
+- **Voice cloning**: Emerging (Edit Factory exploring this)
+- **Beat sync**: Auto-align cuts to music beats (not in scope)
 
-Research from ElevenLabs docs and social media tools:
+### Quality Standards Evolution
+- **1080p is baseline**: 4K for social media is overkill (platforms compress heavily)
+- **30fps standard**: 60fps for gaming content only
+- **Vertical format dominance**: 9:16 is now primary, 16:9 is secondary
+- **Audio quality matters more**: Bad audio fails faster than mediocre video
 
-### Industry Standard Features
+### Platform-Specific Compression
+All platforms re-encode uploads aggressively:
+- **Instagram**: Most aggressive compression; creators pre-sharpen content
+- **TikTok**: Moderate compression; honors higher bitrates
+- **YouTube Shorts**: Least aggressive; closest to source quality
 
-| Feature | Found In | Edit Factory Need |
-|---------|----------|-------------------|
-| Voice library with 200K+ options | ElevenLabs, Speechmatics | Overkill for 2-profile personal tool |
-| Voice categorization (narrator, companion, actor) | ElevenLabs | Unnecessary |
-| Emotion profiles (calm, energetic, serious) | Fish Audio TTS 2026 | Unnecessary for product videos |
-| Multi-voice management (up to 8 voices per bank) | ComfyUI-Qwen-TTS | Edge case |
-| Named voice registries | Multiple TTS platforms | **Useful: "Store A Default Voice"** |
-| Auto-load pre-computed features | Industry best practice | **Useful: Save voice_id + settings** |
+**Implication:** Platform presets should encode slightly higher quality than necessary to survive re-compression. "Pre-sharpening" strategy common among pros.
 
-### Recommended Scope for Edit Factory
-
-**Store per-profile:**
-- Provider (elevenlabs / edge_tts)
-- Voice ID (e.g., "Rachel", ElevenLabs voice ID)
-- Model (e.g., "eleven_multilingual_v2")
-- Speed (optional fine-tuning)
-- Stability (ElevenLabs-specific)
-
-**Do NOT build:**
-- Voice cloning (feature exists in ElevenLabs but unnecessary)
-- Voice design from prompts (overkill)
-- Emotion control sliders (product videos have consistent tone)
-- Multi-voice dialogue (single narrator per video)
-
-**Storage Pattern:**
-
-```json
-{
-  "profile_id": "store_a",
-  "tts_provider": "edge_tts",
-  "tts_voice_id": "en-US-RachelNeural",
-  "tts_model": null,
-  "tts_settings": {
-    "speed": 1.0
-  }
-}
-```
-
-## Workspace Isolation Patterns (Reference)
-
-Research from social media management tools (Statusbrew, Agorapulse, Planable):
-
-### Common Isolation Mechanisms
-
-| Pattern | Description | Edit Factory Applicability |
-|---------|-------------|---------------------------|
-| **Separate Workspaces** | Complete data isolation, each client/brand has independent environment | ✓ **Use this**: Each store is a workspace |
-| **Profile Groups** | Organize multiple social accounts under one client with shared permissions | ✗ Not needed (no multi-account per store) |
-| **User Groups** | Control team member access to specific profiles | ✗ Single user |
-| **Approval Workflows** | Per-client content review before publishing | ✗ Instant publish for personal use |
-| **Workspace Pricing** | $39/month per workspace (Planable) | ✗ Personal tool, free concept |
-
-### Key Takeaway for Edit Factory
-
-The critical pattern is **preventing accidental cross-posting**. In agency tools, this means posting Client A's content to Client B's Instagram. In Edit Factory, this means posting Store A's product video to Store B's TikTok account.
-
-**Solution:** Hard isolation via profile switcher. Must explicitly switch profiles to access different store's library and Postiz credentials.
+---
 
 ## Complexity Assessment
 
-| Feature Category | Estimated Effort | Risk Level |
-|-----------------|------------------|------------|
-| Profile switcher UI | 2-4 hours | Low |
-| Database schema (add profile_id) | 1-2 hours | Low (additive change) |
-| Data scoping (query filters) | 4-6 hours | Medium (must update all queries) |
-| Per-profile settings storage | 2-3 hours | Low |
-| TTS provider selection UI | 3-4 hours | Low |
-| Voice preset management | 4-6 hours | Low-Medium |
-| Per-profile Postiz config | 3-5 hours | Medium (service instantiation change) |
-| Profile creation wizard | 4-6 hours | Low (nice-to-have) |
+| Feature Category | Implementation Complexity | Value Delivered | Recommended Priority |
+|------------------|--------------------------|-----------------|---------------------|
+| Professional Encoding Defaults | LOW (parameter tuning) | HIGH (immediate quality improvement) | **P0 - Must Have** |
+| Audio Normalization | MEDIUM (two-pass processing) | HIGH (professional standard) | **P0 - Must Have** |
+| Platform Export Presets | MEDIUM (research + config) | HIGH (competitive necessity) | **P0 - Must Have** |
+| Enhanced Subtitle Styling | MEDIUM (ASS advanced features) | HIGH (visual differentiator) | **P1 - Should Have** |
+| Video Enhancement Filters | MEDIUM (filter chains) | MEDIUM (quality improvement) | **P2 - Nice to Have** |
+| Perceptual Quality Metrics | HIGH (FFmpeg rebuild) | MEDIUM (validation tool) | **P3 - Future** |
+| Audio Enhancement Suite | HIGH (signal processing) | MEDIUM (overlaps with TTS) | **P3 - Future** |
+| Adaptive Bitrate Encoding | HIGH (complex algorithm) | LOW (marginal improvement) | **P4 - Skip** |
 
-**Total MVP Estimate:** 16-24 hours for core profile system + TTS improvements
+---
+
+## Known Edge Cases and Pitfalls
+
+### Audio Normalization Pitfalls
+**Problem:** Over-normalization causes clipping and distortion
+**Prevention:** Always use two-pass loudnorm with true peak limiting (-1.5 dBTP)
+**Detection:** Monitor for clipping warnings in FFmpeg output
+
+### Platform Preset Pitfalls
+**Problem:** Platform specs change; presets become outdated
+**Prevention:** Version presets and document source of spec (date, URL)
+**Detection:** User reports of quality degradation post-upload
+
+### Subtitle Rendering Pitfalls
+**Problem:** ASS styling breaks with certain FFmpeg builds or filter chains
+**Prevention:** Validate subtitle rendering in CI/CD pipeline
+**Detection:** Test renders on each platform's recommended settings
+
+### FFmpeg Filter Chain Pitfalls
+**Problem:** Filter order matters; wrong order degrades quality
+**Prevention:** Always denoise → sharpen → color correct (in that order)
+**Detection:** VMAF scoring lower than baseline after filter application
+
+### Performance Pitfalls
+**Problem:** Slower presets + enhancement filters = 10x longer processing
+**Prevention:** Benchmark encoding times; warn users of time estimates
+**Detection:** User complaints about slow processing
+
+---
 
 ## Sources
 
-### Workspace Isolation Research
-- [Top 10 Social Media Management Tools for Agencies in 2026](https://statusbrew.com/insights/social-media-management-tools-for-agencies)
-- [15 social media management tools for cross-functional teams in 2026](https://monday.com/blog/project-management/social-media-management-tools/)
-- [Best Social Media Manager Tools in 2026: Complete Comparison Guide](https://fedica.com/blog/best-social-media-manager-tools-comparison-guide/)
-- [Best 20 social media management tools in 2026](https://contentstudio.io/blog/social-media-management-tools)
-- [Best AI Content Creation Tools for Enterprises (2026)](https://ltx.studio/blog/best-ai-content-creation-tools-for-enterprises)
-- [15 best content creation tools for marketing teams in 2026](https://planable.io/blog/content-creation-tools/)
+**Video Quality Tools and Trends:**
+- [6 Best AI Video Tools for Social Media in 2026](https://www.capcut.com/resource/6-best-AI-video-tools-for-social-media)
+- [Best AI Video Enhancers in 2026](https://wavespeed.ai/blog/posts/best-ai-video-enhancers-2026/)
+- [AI Video Editor Trends in 2026](https://metricool.com/ai-video-editor-trends/)
 
-### TTS Provider Management
-- [Text to Speech (product guide) | ElevenLabs Documentation](https://elevenlabs.io/docs/creative-platform/playground/text-to-speech) (MEDIUM confidence - verified via WebFetch)
-- [Voices | ElevenLabs Documentation](https://elevenlabs.io/docs/overview/capabilities/voices)
-- [Voice UI Design: Best Practices, Examples & Inspiration (2026)](https://www.eleken.co/blog-posts/voice-ui-design)
-- [Best TTS APIs for Real-Time Voice Agents (2026 Benchmarks)](https://inworld.ai/resources/best-voice-ai-tts-apis-for-real-time-voice-agents-2026-benchmarks)
-- [Best TTS APIs in 2026: Top 12 Text-to-Speech services for developers](https://www.speechmatics.com/company/articles-and-news/best-tts-apis-in-2025-top-12-text-to-speech-services-for-developers)
-- [AI Text-to-Speech Tool Recommendations: 2026's Best Free TTS Solutions](https://fish.audio/blog/free-text-to-speech-guide-2026/)
+**FFmpeg Professional Settings:**
+- [Master Your Shorts: Export Settings for Instagram Reels, TikTok & YouTube Shorts](https://aaapresets.com/blogs/premiere-pro-blog-series-editing-tips-transitions-luts-guide/master-your-shorts-the-ultimate-guide-to-export-settings-for-instagram-reels-tiktok-youtube-shorts-in-2025-extended-edition)
+- [FFmpeg for Instagram](https://dev.to/alfg/ffmpeg-for-instagram-35bi)
+- [Instagram Video Size & Format Specs 2026](https://socialrails.com/blog/instagram-video-size-format-specifications-guide)
 
-### Multi-Store E-commerce Patterns
-- [How Social Commerce is Reshaping Ecommerce & Retail (2026)](https://www.bigcommerce.com/articles/omnichannel-retail/social-commerce/)
-- [How to use social media ecommerce effectively in 2026](https://sproutsocial.com/insights/social-media-ecommerce/)
-- [Top 14 Paid Social Media Management Tools for E-commerce](https://madgicx.com/blog/paid-social-media-management-tool)
+**Audio Normalization:**
+- [LUFS Social Media Platform Standards](https://starsoundstudios.com/blog/lufs-social-media-platform-standards-mastering-music)
+- [The Ultimate Guide to Streaming Loudness (LUFS Table 2026)](https://soundplate.com/streaming-loudness-lufs-table/)
+- [10 Best Loudness Normalizers for Social Video](https://www.opus.pro/blog/best-loudness-normalizers)
 
-### Video Editing Workspace Features
-- [DaVinci Resolve | Blackmagic Design](https://www.blackmagicdesign.com/products/davinciresolve/)
-- [17 Best Video Editing Platforms for 2026](https://www.youngurbanproject.com/video-editing-platforms/)
-- [The Future of Video Editing: Trends and Predictions in 2026](https://filmora.wondershare.com/trending-topic/the-future-of-video-editing-trends-and-predictions.html)
+**Subtitle Rendering:**
+- [Best 5 subtitle generators in 2026](https://www.happyscribe.com/blog/best-subtitle-generators-top-5)
+- [YouTube Shorts Caption & Subtitle Best Practices in 2026](https://www.opus.pro/blog/youtube-shorts-caption-subtitle-best-practices)
+- [Burn subtitles into video: pro tools and tips](https://www.yuzzit.video/en/resources/how-burn-subtitles-into-video)
 
-### Personal vs Team Workspace Patterns
-- [Teams & Workspaces | AI Studios Collaboration](https://www.aistudios.com/features/workspace)
-- [Top 10 Digital Workspace Platforms in 2026](https://www.udext.com/blog/digital-workspace-platform-features)
-- [20 Best AI Tools for Business Reviewed in 2026](https://peoplemanagingpeople.com/tools/best-ai-tools-for-business/)
+**FFmpeg Filters:**
+- [FFmpeg Filters Documentation](https://ffmpeg.org/ffmpeg-filters.html) (official)
+- [Recommendations about FFmpeg filters to enhance video quality](https://forum.videohelp.com/threads/402021-Recommendations-about-FFmpeg-filters-to-enhance-video-quality-or-fixes)
+- [Video Stabilization and Enhancement Using FFmpeg](https://www.cincopa.com/learn/video-stabilization-and-enhancement-using-ffmpeg)
+
+**Perceptual Quality Metrics:**
+- [VMAF vs. PSNR vs. SSIM: Understanding Video Quality Metrics](https://www.fastpix.io/blog/understanding-vmaf-psnr-and-ssim-full-reference-video-quality-metrics)
+- [GitHub - Netflix/vmaf](https://github.com/Netflix/vmaf) (official)
+- [Perceptual Video Quality Assessment: A Survey](https://arxiv.org/html/2402.03413v1)
+
+**Professional Video Editing Best Practices:**
+- [Five common video editing mistakes and how to avoid them](https://www.wacom.com/en-us/discover/film-animation/common-video-editing-mistakes)
+- [Common Video Editing Mistakes and How to Avoid Them](https://lwks.com/blog/common-video-editing-mistakes-and-how-to-avoid-them-part-one)
+
+**Competitive Analysis:**
+- [CapCut vs Descript: Which Video Editor is Right for You in 2026?](https://www.fahimai.com/capcut-vs-descript)
+- [CapCut Review 2026: Is This Free AI Video Editor Worth It?](https://max-productive.ai/ai-tools/capcut/)
+
+**Confidence:** HIGH for table stakes and differentiators (verified with official FFmpeg docs and multiple 2026 sources), MEDIUM for specific platform bitrate recommendations (WebSearch-based, should verify with platform documentation when implementing)
