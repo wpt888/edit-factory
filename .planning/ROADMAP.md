@@ -124,10 +124,10 @@ Plans:
   3. Start script activates venv automatically
   4. Start script checks port availability and reports conflicts
   5. Browser opens to http://localhost:3000 after services ready
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 06-01: TBD
+- [ ] 06-01-PLAN.md — Development start scripts for Windows and WSL/Linux
 
 ## Progress
 
@@ -140,5 +140,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 2. Backend Profile Context | 5/5 | Complete | 2026-02-03 |
 | 3. Frontend Profile UI | 3/3 | Complete | 2026-02-03 |
 | 4. TTS Provider Selection | 8/8 | Complete | 2026-02-04 |
-| 5. Per-Profile Postiz | 5/5 | ✓ Complete | 2026-02-04 |
-| 6. Developer Experience | 0/TBD | Not started | - |
+| 5. Per-Profile Postiz | 5/5 | Complete | 2026-02-04 |
+| 6. Developer Experience | 0/1 | In Progress | - |
