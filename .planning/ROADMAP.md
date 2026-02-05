@@ -190,7 +190,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 10-01-PLAN.md — Blur/contrast scoring: Laplacian variance + std dev metrics, 5-factor weight rebalancing, blur rejection threshold
+- [x] 10-01-PLAN.md — Blur/contrast scoring: Laplacian variance + std dev metrics, 5-factor weight rebalancing, blur rejection threshold
 
 #### Phase 11: Subtitle Enhancement
 **Goal**: Professional subtitle styling with shadow, glow, and adaptive sizing
@@ -223,5 +223,5 @@ Phases execute in numeric order: 7 -> 8 -> 9 -> 10 -> 11
 | 7. Platform Export Presets | v3 | 3/3 | Complete | 2026-02-04 |
 | 8. Audio Normalization | v3 | 2/2 | Complete | 2026-02-05 |
 | 9. Video Enhancement Filters | v3 | 3/3 | Complete | 2026-02-05 |
-| 10. Segment Scoring Enhancement | v3 | 0/1 | Not started | - |
+| 10. Segment Scoring Enhancement | v3 | 1/1 | Complete | 2026-02-05 |
 | 11. Subtitle Enhancement | v3 | 0/? | Not started | - |

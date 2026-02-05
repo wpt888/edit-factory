@@ -28,8 +28,8 @@ Requirements for video quality enhancement milestone. Each maps to roadmap phase
 
 ### Segment Scoring
 
-- [ ] **SCR-01**: System calculates blur score using Laplacian variance for each segment
-- [ ] **SCR-02**: System penalizes blurry segments in combined scoring algorithm
+- [x] **SCR-01**: System calculates blur score using Laplacian variance for each segment
+- [x] **SCR-02**: System penalizes blurry segments in combined scoring algorithm
 
 ### Subtitles
 
@@ -84,8 +84,8 @@ Deferred to v4 or later milestone.
 | FLT-02 | Phase 9 | Complete |
 | FLT-03 | Phase 9 | Complete |
 | FLT-04 | Phase 9 | Complete |
-| SCR-01 | Phase 10 | Pending |
-| SCR-02 | Phase 10 | Pending |
+| SCR-01 | Phase 10 | Complete |
+| SCR-02 | Phase 10 | Complete |
 | SUB-01 | Phase 11 | Pending |
 | SUB-02 | Phase 11 | Pending |
 | SUB-03 | Phase 11 | Pending |
@@ -98,4 +98,4 @@ Deferred to v4 or later milestone.
 
 ---
 *Requirements defined: 2026-02-04*
-*Last updated: 2026-02-05 (Phase 9 complete - FLT-01, FLT-02, FLT-03, FLT-04)*
+*Last updated: 2026-02-05 (Phase 10 complete - SCR-01, SCR-02)*
