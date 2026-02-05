@@ -16,8 +16,8 @@ Requirements for video quality enhancement milestone. Each maps to roadmap phase
 
 ### Audio Normalization
 
-- [ ] **AUD-01**: System normalizes audio to -14 LUFS using two-pass loudnorm filter
-- [ ] **AUD-02**: System applies true peak limiting (-1.5 dBTP) to prevent clipping
+- [x] **AUD-01**: System normalizes audio to -14 LUFS using two-pass loudnorm filter
+- [x] **AUD-02**: System applies true peak limiting (-1.5 dBTP) to prevent clipping
 
 ### Video Filters
 
@@ -78,8 +78,8 @@ Deferred to v4 or later milestone.
 | ENC-02 | Phase 7 | Complete |
 | ENC-03 | Phase 7 | Complete |
 | ENC-04 | Phase 7 | Complete |
-| AUD-01 | Phase 8 | Pending |
-| AUD-02 | Phase 8 | Pending |
+| AUD-01 | Phase 8 | Complete |
+| AUD-02 | Phase 8 | Complete |
 | FLT-01 | Phase 9 | Pending |
 | FLT-02 | Phase 9 | Pending |
 | FLT-03 | Phase 9 | Pending |
@@ -98,4 +98,4 @@ Deferred to v4 or later milestone.
 
 ---
 *Requirements defined: 2026-02-04*
-*Last updated: 2026-02-05 (Phase 7 complete - ENC-01 to ENC-04)*
+*Last updated: 2026-02-05 (Phase 8 complete - AUD-01, AUD-02)*
