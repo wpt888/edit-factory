@@ -59,6 +59,8 @@ class VideoSegment:
     motion_score: float       # Cat de multa miscare e in segment (0-1)
     variance_score: float     # Cat de variate sunt frame-urile (0-1)
     avg_brightness: float     # Luminozitate medie (0-1)
+    blur_score: float = 1.0       # Sharpness: 1.0 = sharp, 0.0 = blurry (Laplacian variance normalized)
+    contrast_score: float = 0.5   # Contrast level: 0-1 (std dev normalized)
     visual_hashes: List[np.ndarray] = None
 
     @property
@@ -67,13 +69,13 @@ class VideoSegment:
 
     @property
     def combined_score(self) -> float:
-        """Scor combinat - prioritizeaza miscarea si variatia."""
-        # Motion e cel mai important (evita zonele moarte)
-        # Variance asigura ca nu e acelasi lucru repetat
+        """Enhanced scoring: motion, variance, blur, contrast, brightness."""
         return (
-            self.motion_score * 0.6 +
-            self.variance_score * 0.3 +
-            (1 - abs(self.avg_brightness - 0.5)) * 0.1
+            self.motion_score * 0.40 +
+            self.variance_score * 0.20 +
+            self.blur_score * 0.20 +
+            self.contrast_score * 0.15 +
+            (1 - abs(self.avg_brightness - 0.5)) * 0.05
         )
 
     def is_visually_similar(self, other: 'VideoSegment', threshold: int = 12) -> bool:
@@ -100,6 +102,8 @@ class VideoSegment:
             "duration": self.duration,
             "motion_score": round(self.motion_score, 4),
             "variance_score": round(self.variance_score, 4),
+            "blur_score": round(self.blur_score, 4),
+            "contrast_score": round(self.contrast_score, 4),
             "combined_score": round(self.combined_score, 4)
         }
 
@@ -169,24 +173,78 @@ class VideoAnalyzer:
         ret, frame = self.cap.read()
         return frame if ret else None
 
+    def _calculate_blur_score(self, frame: np.ndarray) -> float:
+        """
+        Calculate blur score using Laplacian variance.
+        Higher variance = sharper image, lower variance = blurrier.
+
+        Args:
+            frame: Raw grayscale frame (NOT blurred - we measure sharpness)
+
+        Returns:
+            Normalized score: 0.0 = very blurry, 1.0 = sharp
+        """
+        # Convert to grayscale if needed
+        if len(frame.shape) == 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = frame
+
+        # Calculate Laplacian variance (measure of edge sharpness)
+        laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+        # Normalize: typical values range 0-500+, we normalize to 0-1
+        # 500 = sharp, 100 = blurry, 50 = very blurry
+        normalized_score = min(laplacian_var / 500.0, 1.0)
+
+        return normalized_score
+
+    def _calculate_contrast_score(self, frame: np.ndarray) -> float:
+        """
+        Calculate contrast score using standard deviation.
+        Higher std dev = more contrast, lower = flat/washed out.
+
+        Args:
+            frame: Raw grayscale frame
+
+        Returns:
+            Normalized score: 0.0 = no contrast, 1.0 = high contrast
+        """
+        # Convert to grayscale if needed
+        if len(frame.shape) == 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = frame
+
+        # Calculate standard deviation (measure of contrast)
+        contrast = np.std(gray)
+
+        # Normalize: typical values range 0-80+, we normalize to 0-1
+        # 80+ = high contrast, 40 = medium, 20 = low
+        normalized_score = min(contrast / 80.0, 1.0)
+
+        return normalized_score
+
     def _calculate_motion_for_interval(
         self,
         start_frame: int,
         end_frame: int,
         sample_count: int = 15  # Optimized: 15 samples sufficient for motion detection (was 30)
-    ) -> Tuple[float, float]:
+    ) -> Tuple[float, float, float, float]:
         """
         Calculeaza scorul de miscare pentru un interval, sampling uniform.
-        Returneaza (motion_score, variance_score).
+        Returneaza (motion_score, variance_score, blur_score, contrast_score).
         """
         if end_frame <= start_frame:
-            return 0.0, 0.0
+            return 0.0, 0.0, 1.0, 0.5
 
         # Sample frames uniform pe interval
         frame_indices = np.linspace(start_frame, end_frame - 1, min(sample_count, end_frame - start_frame), dtype=int)
 
         motion_scores = []
         frames_gray = []
+        blur_scores = []
+        contrast_scores = []
         prev_gray = None
 
         for idx in frame_indices:
@@ -195,6 +253,12 @@ class VideoAnalyzer:
                 continue
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+            # Blur/contrast on first 3 frames only (performance: <5% overhead)
+            if len(blur_scores) < 3:
+                blur_scores.append(self._calculate_blur_score(gray))
+                contrast_scores.append(self._calculate_contrast_score(gray))
+
             gray = cv2.GaussianBlur(gray, (21, 21), 0)
             frames_gray.append(gray)
 
@@ -223,7 +287,10 @@ class VideoAnalyzer:
 
             variance_score = (diff1 + diff2 + diff3) / 3.0
 
-        return motion_score, variance_score
+        blur_score = np.mean(blur_scores) if blur_scores else 1.0
+        contrast_score = np.mean(contrast_scores) if contrast_scores else 0.5
+
+        return motion_score, variance_score, blur_score, contrast_score
 
     def analyze_full_video(
         self,
@@ -261,7 +328,7 @@ class VideoAnalyzer:
             end_frame = int(end_time * self.fps)
 
             # Calculam scorurile
-            motion_score, variance_score = self._calculate_motion_for_interval(start_frame, end_frame)
+            motion_score, variance_score, blur_score, contrast_score = self._calculate_motion_for_interval(start_frame, end_frame)
 
             # Calculam hash-uri pentru mid-point (optimized: was 3 positions [0.1, 0.5, 0.9])
             # Single mid-point is sufficient for duplicate detection while reducing CPU usage by 66%
@@ -282,14 +349,18 @@ class VideoAnalyzer:
             # Brightness < 0.05 = aproape negru (12.75/255)
             # Brightness < 0.10 = foarte întunecat
             MIN_BRIGHTNESS_THRESHOLD = 0.08  # ~20/255
+            MIN_BLUR_THRESHOLD = 0.2  # Reject very blurry segments (Laplacian variance < 100)
 
             is_too_dark = min_brightness < MIN_BRIGHTNESS_THRESHOLD
             is_too_static = motion_score < min_motion_threshold
+            is_too_blurry = blur_score < MIN_BLUR_THRESHOLD
 
             if is_too_dark:
                 logger.debug(f"Skipped BLACK FRAME: {start_time:.1f}s - {end_time:.1f}s (brightness: {min_brightness:.3f})")
             elif is_too_static:
                 logger.debug(f"Skipped dead zone: {start_time:.1f}s - {end_time:.1f}s (motion: {motion_score:.4f})")
+            elif is_too_blurry:
+                logger.debug(f"Skipped BLURRY segment: {start_time:.1f}s - {end_time:.1f}s (blur: {blur_score:.3f})")
             else:
                 segment = VideoSegment(
                     start_time=start_time,
@@ -297,6 +368,8 @@ class VideoAnalyzer:
                     motion_score=motion_score,
                     variance_score=variance_score,
                     avg_brightness=avg_brightness,
+                    blur_score=blur_score,
+                    contrast_score=contrast_score,
                     visual_hashes=visual_hashes if visual_hashes else None
                 )
                 segments.append(segment)
@@ -1278,7 +1351,7 @@ class VideoProcessorService:
                 if f.name not in final_videos:
                     try:
                         f.unlink()
-                    except:
+                    except Exception:
                         pass
 
             report_progress("Cleaning up intermediate files", "completed")
@@ -1840,7 +1913,7 @@ class VideoProcessorService:
                 if f.name not in final_videos:
                     try:
                         f.unlink()
-                    except:
+                    except Exception:
                         pass
 
             report_progress("Cleaning up intermediate files", "completed")
