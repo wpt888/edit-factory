@@ -21,6 +21,8 @@ class VideoSegment(BaseModel):
     motion_score: float
     variance_score: Optional[float] = None
     combined_score: float
+    blur_score: Optional[float] = None
+    contrast_score: Optional[float] = None
 
 
 class VideoInfo(BaseModel):
