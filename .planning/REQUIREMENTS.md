@@ -9,10 +9,10 @@ Requirements for video quality enhancement milestone. Each maps to roadmap phase
 
 ### Encoding
 
-- [ ] **ENC-01**: System applies platform-specific encoding presets (TikTok, Reels, YouTube Shorts) during export
-- [ ] **ENC-02**: System uses professional encoding settings (CRF 18-20, preset medium/slow)
-- [ ] **ENC-03**: System adds keyframe controls (-g 120, -keyint_min 120) for platform compatibility
-- [ ] **ENC-04**: System encodes audio at 192k bitrate (upgrade from 128k)
+- [x] **ENC-01**: System applies platform-specific encoding presets (TikTok, Reels, YouTube Shorts) during export
+- [x] **ENC-02**: System uses professional encoding settings (CRF 18-20, preset medium/slow)
+- [x] **ENC-03**: System adds keyframe controls (-g 60, -keyint_min 60) for platform compatibility
+- [x] **ENC-04**: System encodes audio at 192k bitrate (upgrade from 128k)
 
 ### Audio Normalization
 
@@ -74,10 +74,10 @@ Deferred to v4 or later milestone.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ENC-01 | Phase 7 | Pending |
-| ENC-02 | Phase 7 | Pending |
-| ENC-03 | Phase 7 | Pending |
-| ENC-04 | Phase 7 | Pending |
+| ENC-01 | Phase 7 | Complete |
+| ENC-02 | Phase 7 | Complete |
+| ENC-03 | Phase 7 | Complete |
+| ENC-04 | Phase 7 | Complete |
 | AUD-01 | Phase 8 | Pending |
 | AUD-02 | Phase 8 | Pending |
 | FLT-01 | Phase 9 | Pending |
@@ -98,4 +98,4 @@ Deferred to v4 or later milestone.
 
 ---
 *Requirements defined: 2026-02-04*
-*Last updated: 2026-02-05 (roadmap created)*
+*Last updated: 2026-02-05 (Phase 7 complete - ENC-01 to ENC-04)*
