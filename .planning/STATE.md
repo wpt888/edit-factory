@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 ## Current Position
 
 Phase: 9 of 11 (Video Enhancement Filters)
-Plan: 1 of 4 in current phase
+Plan: 2 of 4 in current phase
 Status: In progress
-Last activity: 2026-02-05 — Completed 09-01-PLAN.md
+Last activity: 2026-02-05 — Completed 09-02-PLAN.md
 
-Progress: [████████████████░░░░] 78% (29/37 total plans across all milestones)
+Progress: [████████████████░░░░] 81% (30/37 total plans across all milestones)
 
 ## Performance Metrics
 
@@ -45,6 +45,7 @@ Progress: [████████████████░░░░] 78% (29
 - 08-01: 3 min (audio normalization foundation)
 - 08-02: 5 min (render integration with two-pass loudnorm)
 - 09-01: 2 min (video filter configuration service)
+- 09-02: 2 min (render endpoint filter integration)
 
 ## Accumulated Context
 
@@ -72,6 +73,8 @@ Recent decisions affecting current work:
 - stdlib dataclass over Pydantic for filter configs (09-01: simpler, no validation overhead for nested configs)
 - chroma_amount locked at 0.0 in SharpenConfig (09-01: never sharpen chroma to prevent color artifacts)
 - Conservative filter defaults: hqdn3d luma_spatial=2.0, unsharp luma_amount=0.5 (09-01: lower than FFmpeg defaults)
+- Filter parameters passed per-render (not stored in database) (09-02: flexibility for A/B testing)
+- Filter order locked: denoise -> sharpen -> color (09-02: prevent sharpening noise)
 
 **v2 milestone context (for reference):**
 - Profile system over separate deployments (two stores share same codebase)
@@ -98,10 +101,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 09-01-PLAN.md (Video Filter Foundation)
+Stopped at: Completed 09-02-PLAN.md (Render Integration)
 Resume file: None
 
-**Next step:** Continue Phase 09 with 09-02-PLAN.md (Render Integration) to integrate video filters into _render_with_preset().
+**Next step:** Continue Phase 09 with 09-03-PLAN.md (Filter UI) to add filter controls to the frontend render dialog.
 
 **v3 Milestone Summary:**
 - Total phases: 5 (Phases 7-11)
