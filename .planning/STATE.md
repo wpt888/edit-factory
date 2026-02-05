@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-04)
 
 **Core value:** One-click video production workflow: upload a product video, get a social-media-ready clip with voiceover and captions, publish to the right store's social accounts.
-**Current focus:** Phase 10 - Segment Scoring Enhancement (next)
+**Current focus:** Phase 10 - Segment Scoring Enhancement (in progress)
 
 ## Current Position
 
-Phase: 9 of 11 (Video Enhancement Filters) — COMPLETE
-Plan: 3 of 3 in current phase
-Status: Complete
-Last activity: 2026-02-05 — Completed Phase 9 (all 3 plans + verification)
+Phase: 10 of 11 (Segment Scoring Enhancement) — IN PROGRESS
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-05 — Completed 10-01-PLAN.md (blur/contrast scoring)
 
-Progress: [██████████████████░░] 89% (33/37 total plans across all milestones)
+Progress: [███████████████████░] 92% (34/37 total plans across all milestones)
 
 ## Performance Metrics
 
@@ -35,8 +35,8 @@ Progress: [██████████████████░░] 89% (33
 | 06-developer-experience | 1 | 4 min | 4 min |
 
 **Recent Trend:**
-- Last 5 plans: 08-02 (5m), 09-01 (2m), 09-02 (2m), 09-03 (3m), 09-verify
-- Trend: Stable (2-5 minute execution for straightforward plans)
+- Last 5 plans: 09-01 (2m), 09-02 (2m), 09-03 (3m), 09-verify, 10-01 (3m)
+- Trend: Stable (2-3 minute execution for straightforward plans)
 
 **v3 milestone progress:**
 - 07-01: 3 min (encoding presets service)
@@ -47,6 +47,7 @@ Progress: [██████████████████░░] 89% (33
 - 09-01: 2 min (video filter configuration service)
 - 09-02: 2 min (render endpoint filter integration)
 - 09-03: 3 min (filter UI component + library integration)
+- 10-01: 3 min (blur/contrast scoring for segment analysis)
 
 ## Accumulated Context
 
@@ -79,6 +80,11 @@ Recent decisions affecting current work:
 - Sliders only visible when checkbox enabled (09-03: reduces visual clutter)
 - Conservative slider ranges to prevent over-processing (09-03)
 - Filter controls positioned above platform selector in export panel (09-03)
+- Laplacian variance for blur detection (10-01: industry standard, single-pass, fast)
+- Sample 3 frames for blur/contrast scoring (10-01: <5% overhead, sufficient statistical sample)
+- Conservative blur threshold 0.2 (10-01: rejects only severely blurry segments, Laplacian variance < 100)
+- Contrast normalization at std dev 80 (10-01: maps well-contrasted scenes to 0.6-1.0)
+- 5-factor scoring weights 40/20/20/15/5 (10-01: motion/variance/blur/contrast/brightness, no single factor dominates)
 
 **v2 milestone context (for reference):**
 - Profile system over separate deployments (two stores share same codebase)
@@ -99,15 +105,15 @@ None yet.
 - Application will work (falls back to EncodingPreset hardcoded values) but won't store keyframe params in DB
 
 **Research flags for planning:**
-- Phase 10 (Segment Scoring): Scoring algorithm weights need A/B testing with platform performance data (proposed 40/20/20/15/5 split unvalidated)
+- Phase 10 (Segment Scoring): Scoring algorithm weights (40/20/20/15/5) need A/B testing with platform performance data to validate effectiveness vs 3-factor baseline
 
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed Phase 9 (Video Enhancement Filters)
+Stopped at: Completed 10-01-PLAN.md (blur/contrast scoring)
 Resume file: None
 
-**Next step:** Plan and execute Phase 10 (Segment Scoring Enhancement) — blur detection and contrast analysis for better segment selection.
+**Next step:** Execute 10-02-PLAN.md (temporal consistency scoring) to complete Phase 10.
 
 **v3 Milestone Summary:**
 - Total phases: 5 (Phases 7-11)
@@ -116,5 +122,5 @@ Resume file: None
 - Phase 7: Platform Export Presets (ENC-01 to ENC-04) ✓
 - Phase 8: Audio Normalization (AUD-01 to AUD-02) ✓
 - Phase 9: Video Enhancement Filters (FLT-01 to FLT-04) ✓
-- Phase 10: Segment Scoring Enhancement (SCR-01 to SCR-02)
+- Phase 10: Segment Scoring Enhancement (SCR-01 to SCR-02) — 1/2 complete
 - Phase 11: Subtitle Enhancement (SUB-01 to SUB-03)
