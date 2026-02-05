@@ -202,10 +202,12 @@ Plans:
   3. System automatically adjusts font size based on text length (long text = smaller font)
   4. Subtitles remain readable on all background types (dark, bright, busy)
   5. Subtitle rendering preserves existing CPU-only pattern (no GPU pipeline breakage)
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 11-01: TBD
+- [ ] 11-01-PLAN.md — Backend subtitle styling service: SubtitleStyleConfig, adaptive font sizing, filter builder
+- [ ] 11-02-PLAN.md — Render pipeline integration: subtitle enhancement Form params, build_subtitle_filter() refactor
+- [ ] 11-03-PLAN.md — Frontend subtitle enhancement controls: shadow/glow/adaptive UI + library page integration
 
 ## Progress
 
@@ -224,4 +226,4 @@ Phases execute in numeric order: 7 -> 8 -> 9 -> 10 -> 11
 | 8. Audio Normalization | v3 | 2/2 | Complete | 2026-02-05 |
 | 9. Video Enhancement Filters | v3 | 3/3 | Complete | 2026-02-05 |
 | 10. Segment Scoring Enhancement | v3 | 1/1 | Complete | 2026-02-05 |
-| 11. Subtitle Enhancement | v3 | 0/? | Not started | - |
+| 11. Subtitle Enhancement | v3 | 0/3 | Not started | - |
