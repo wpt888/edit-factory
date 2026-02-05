@@ -21,10 +21,10 @@ Requirements for video quality enhancement milestone. Each maps to roadmap phase
 
 ### Video Filters
 
-- [ ] **FLT-01**: User can enable denoising filter (hqdn3d) for low-light footage
-- [ ] **FLT-02**: User can enable sharpening filter (unsharp) for soft footage
-- [ ] **FLT-03**: User can adjust color correction (brightness, contrast, saturation)
-- [ ] **FLT-04**: System applies filters in correct order (denoise → sharpen → color correct)
+- [x] **FLT-01**: User can enable denoising filter (hqdn3d) for low-light footage
+- [x] **FLT-02**: User can enable sharpening filter (unsharp) for soft footage
+- [x] **FLT-03**: User can adjust color correction (brightness, contrast, saturation)
+- [x] **FLT-04**: System applies filters in correct order (denoise → sharpen → color correct)
 
 ### Segment Scoring
 
@@ -80,10 +80,10 @@ Deferred to v4 or later milestone.
 | ENC-04 | Phase 7 | Complete |
 | AUD-01 | Phase 8 | Complete |
 | AUD-02 | Phase 8 | Complete |
-| FLT-01 | Phase 9 | Pending |
-| FLT-02 | Phase 9 | Pending |
-| FLT-03 | Phase 9 | Pending |
-| FLT-04 | Phase 9 | Pending |
+| FLT-01 | Phase 9 | Complete |
+| FLT-02 | Phase 9 | Complete |
+| FLT-03 | Phase 9 | Complete |
+| FLT-04 | Phase 9 | Complete |
 | SCR-01 | Phase 10 | Pending |
 | SCR-02 | Phase 10 | Pending |
 | SUB-01 | Phase 11 | Pending |
@@ -98,4 +98,4 @@ Deferred to v4 or later milestone.
 
 ---
 *Requirements defined: 2026-02-04*
-*Last updated: 2026-02-05 (Phase 8 complete - AUD-01, AUD-02)*
+*Last updated: 2026-02-05 (Phase 9 complete - FLT-01, FLT-02, FLT-03, FLT-04)*

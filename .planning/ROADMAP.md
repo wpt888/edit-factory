@@ -173,9 +173,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 09-01-PLAN.md — Backend filter foundation: video_filters.py service + EncodingPreset integration
-- [ ] 09-02-PLAN.md — Render pipeline integration: filter parameters + FFmpeg filter chain
-- [ ] 09-03-PLAN.md — Frontend filter UI: VideoEnhancementControls component + library page integration
+- [x] 09-01-PLAN.md — Backend filter foundation: video_filters.py service + EncodingPreset integration
+- [x] 09-02-PLAN.md — Render pipeline integration: filter parameters + FFmpeg filter chain
+- [x] 09-03-PLAN.md — Frontend filter UI: VideoEnhancementControls component + library page integration
 
 #### Phase 10: Segment Scoring Enhancement
 **Goal**: Improved segment selection with blur detection and contrast analysis
@@ -222,6 +222,6 @@ Phases execute in numeric order: 7 -> 8 -> 9 -> 10 -> 11
 | 6. Developer Experience | v2 | 1/1 | Complete | 2026-02-04 |
 | 7. Platform Export Presets | v3 | 3/3 | Complete | 2026-02-04 |
 | 8. Audio Normalization | v3 | 2/2 | Complete | 2026-02-05 |
-| 9. Video Enhancement Filters | v3 | 0/3 | Not started | - |
+| 9. Video Enhancement Filters | v3 | 3/3 | Complete | 2026-02-05 |
 | 10. Segment Scoring Enhancement | v3 | 0/? | Not started | - |
 | 11. Subtitle Enhancement | v3 | 0/? | Not started | - |
