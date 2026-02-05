@@ -1,11 +1,19 @@
+# Requirements Archive: v3 Video Quality Enhancement
+
+**Archived:** 2026-02-06
+**Status:** SHIPPED
+
+This is the archived requirements specification for v3.
+For current requirements, see `.planning/REQUIREMENTS.md` (created for next milestone).
+
+---
+
 # Requirements: Edit Factory v3
 
 **Defined:** 2026-02-04
 **Core Value:** Professional-grade video output with platform-optimized encoding and enhanced visual quality
 
 ## v3 Requirements
-
-Requirements for video quality enhancement milestone. Each maps to roadmap phases.
 
 ### Encoding
 
@@ -24,7 +32,7 @@ Requirements for video quality enhancement milestone. Each maps to roadmap phase
 - [x] **FLT-01**: User can enable denoising filter (hqdn3d) for low-light footage
 - [x] **FLT-02**: User can enable sharpening filter (unsharp) for soft footage
 - [x] **FLT-03**: User can adjust color correction (brightness, contrast, saturation)
-- [x] **FLT-04**: System applies filters in correct order (denoise → sharpen → color correct)
+- [x] **FLT-04**: System applies filters in correct order (denoise -> sharpen -> color correct)
 
 ### Segment Scoring
 
@@ -36,39 +44,6 @@ Requirements for video quality enhancement milestone. Each maps to roadmap phase
 - [x] **SUB-01**: User can enable shadow effects on subtitles with configurable depth
 - [x] **SUB-02**: User can enable glow/outline effects on subtitle text
 - [x] **SUB-03**: System automatically adjusts font size based on text length (adaptive sizing)
-
-## Future Requirements
-
-Deferred to v4 or later milestone.
-
-### Advanced Quality
-
-- **QUAL-01**: System calculates VMAF score for quality validation
-- **QUAL-02**: User receives quality warnings before platform upload
-- **QUAL-03**: System supports adaptive bitrate encoding (target VMAF instead of fixed CRF)
-
-### Audio Enhancement
-
-- **AUDE-01**: System applies noise reduction to voice recordings
-- **AUDE-02**: System applies EQ enhancement for voice clarity
-- **AUDE-03**: System applies compression for consistent volume
-
-### Advanced Subtitles
-
-- **SUBE-01**: System highlights current word during playback (CapCut style)
-- **SUBE-02**: User can add subtitle animations (fade in, scale)
-
-## Out of Scope
-
-| Feature | Reason |
-|---------|--------|
-| AI video upscaling | Compute-intensive, artifacts common, 1080p sufficient for social media |
-| Real-time preview | Complex infrastructure, preview never matches final output |
-| Video stabilization | Compute-heavy, most phone footage already stabilized |
-| Lossless export (ProRes) | Massive files, platforms compress heavily anyway |
-| nlmeans denoising | 10-30x slower than hqdn3d, overkill for social video |
-| Multi-track audio | Users who need this use DAWs, out of scope |
-| Broadcast captions compliance | Social media doesn't require FCC/BBC standards |
 
 ## Traceability
 
@@ -90,12 +65,15 @@ Deferred to v4 or later milestone.
 | SUB-02 | Phase 11 | Complete |
 | SUB-03 | Phase 11 | Complete |
 
-**Coverage:**
-- v3 requirements: 15 total
-- Mapped to phases: 15
-- Unmapped: 0
-- Coverage: 100%
+**Coverage:** 15/15 (100%)
 
 ---
-*Requirements defined: 2026-02-04*
-*Last updated: 2026-02-06 (Phase 11 complete - SUB-01, SUB-02, SUB-03 — v3 milestone complete)*
+
+## Milestone Summary
+
+**Shipped:** 15 of 15 v3 requirements
+**Adjusted:** None — all requirements delivered as specified
+**Dropped:** None
+
+---
+*Archived: 2026-02-06 as part of v3 milestone completion*

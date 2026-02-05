@@ -1,24 +1,12 @@
-# Edit Factory v3
+# Edit Factory
 
 ## What This Is
 
-Edit Factory is a video processing platform for social media content creators (reels, TikTok, YouTube Shorts). It automates video production by combining Gemini AI video analysis, TTS voice generation, Whisper AI captions, and Postiz social media publishing. The platform is used personally to create videos for two online stores, each with its own library and social media accounts.
+Edit Factory is a video processing platform for social media content creators (reels, TikTok, YouTube Shorts). It automates video production by combining Gemini AI video analysis, TTS voice generation, Whisper AI captions, and Postiz social media publishing. The platform produces professional-grade output with platform-optimized encoding, audio normalization, video filters, and enhanced subtitles. Used personally to create videos for two online stores, each with its own library and social media accounts.
 
 ## Core Value
 
 One-click video production workflow: upload a product video, get a social-media-ready clip with voiceover and captions, publish to the right store's social accounts.
-
-## Current Milestone: v3 Video Quality Enhancement
-
-**Goal:** Professional-grade video output with platform-optimized encoding, audio normalization, and enhanced visual quality.
-
-**Target features:**
-- Platform-specific export presets (TikTok, Reels, YouTube Shorts)
-- Professional encoding settings (CRF 18-20, slower presets, keyframes)
-- Audio loudness normalization (-14 LUFS)
-- Video enhancement filters (denoise, sharpen, color correction)
-- Improved segment scoring with blur detection
-- Enhanced subtitle rendering (shadow, glow, adaptive sizing)
 
 ## Requirements
 
@@ -42,20 +30,21 @@ One-click video production workflow: upload a product video, get a social-media-
 - ✓ Per-profile Postiz configuration — v2
 - ✓ Per-profile TTS voice presets — v2
 - ✓ Start script for Windows/WSL — v2
+- ✓ Platform export presets (TikTok, Reels, YouTube Shorts) — v3
+- ✓ Professional encoding (CRF 18-20, medium preset, keyframe controls) — v3
+- ✓ Audio 192k bitrate — v3
+- ✓ Two-pass audio normalization (-14 LUFS) — v3
+- ✓ Denoising filter (hqdn3d) — v3
+- ✓ Sharpening filter (unsharp) — v3
+- ✓ Color correction (brightness, contrast, saturation) — v3
+- ✓ Blur detection scoring (Laplacian variance) — v3
+- ✓ Subtitle shadow effects — v3
+- ✓ Subtitle glow/outline — v3
+- ✓ Adaptive subtitle sizing — v3
 
 ### Active
 
-- [ ] Platform export presets — TikTok, Reels, YouTube Shorts with optimized encoding
-- [ ] Professional encoding — CRF 18-20, preset medium/slow, keyframe controls
-- [ ] Audio 192k bitrate — upgrade from 128k to professional standard
-- [ ] Two-pass audio normalization — -14 LUFS for social media consistency
-- [ ] Denoising filter — hqdn3d for low-light footage
-- [ ] Sharpening filter — unsharp for soft footage
-- [ ] Color correction — brightness, contrast, saturation adjustment
-- [ ] Blur detection scoring — Laplacian variance for segment quality
-- [ ] Subtitle shadow effects — shadow depth for visibility
-- [ ] Subtitle glow/outline — glow effect around text
-- [ ] Adaptive subtitle sizing — font size based on text length
+(None — next milestone requirements TBD)
 
 ### Out of Scope
 
@@ -74,9 +63,10 @@ One-click video production workflow: upload a product video, get a social-media-
 - Used personally to create videos for two online stores (separate brands)
 - Runs on Windows/WSL development machine
 - Constant iteration — code changes frequently
-- Existing codebase: FastAPI backend (Python), Next.js frontend (TypeScript), Supabase DB
-- Current baseline: CRF 23, preset "fast", 128k audio, basic subtitles
-- Target: Professional encoding matching CapCut/Descript output quality
+- Tech stack: FastAPI backend (Python), Next.js frontend (TypeScript), Supabase DB, FFmpeg
+- v3 baseline: CRF 18-20, preset medium, 192k audio, -14 LUFS normalization, video filters, enhanced subtitles
+- 4 backend services: encoding_presets, audio_normalizer, video_filters, subtitle_styler
+- 908 LOC in new v3 Python services, 366 LOC in new v3 TypeScript components
 
 ## Constraints
 
@@ -93,9 +83,16 @@ One-click video production workflow: upload a product video, get a social-media-
 | Browser + start script over desktop app | Constant upgrades need zero build overhead | ✓ Good |
 | Profile system over separate deployments | Two stores share same codebase | ✓ Good |
 | Edge TTS as primary free option | Already integrated, zero cost, decent quality | ✓ Good |
-| -14 LUFS for audio normalization | Social media platform standard (YouTube, Instagram, TikTok) | — Pending |
-| Platform presets over manual encoding | Users shouldn't configure technical settings | — Pending |
-| hqdn3d over nlmeans for denoising | nlmeans is 10-30x slower, hqdn3d is sufficient for social video | — Pending |
+| -14 LUFS for audio normalization | Social media platform standard (YouTube, Instagram, TikTok) | ✓ Good |
+| Platform presets over manual encoding | Users shouldn't configure technical settings | ✓ Good |
+| hqdn3d over nlmeans for denoising | nlmeans is 10-30x slower, hqdn3d sufficient for social video | ✓ Good |
+| Two-pass loudnorm workflow | Measure first, apply linear normalization second for precision | ✓ Good |
+| stdlib dataclass over Pydantic for filters | Simpler, no validation overhead for nested configs | ✓ Good |
+| Filter order: denoise -> sharpen -> color | Prevent sharpening noise artifacts | ✓ Good |
+| Checkbox+slider UI pattern | Reduces visual clutter, sliders only visible when enabled | ✓ Good |
+| Laplacian variance for blur detection | Industry standard, single-pass, fast | ✓ Good |
+| 5-factor scoring weights 40/20/20/15/5 | Balanced scoring, no single factor dominates | — Pending A/B testing |
+| Subtitle params per-render (not DB) | Flexibility for A/B testing, consistent with filter approach | ✓ Good |
 
 ---
-*Last updated: 2026-02-04 after milestone v3 initialization*
+*Last updated: 2026-02-06 after v3 Video Quality Enhancement milestone*
