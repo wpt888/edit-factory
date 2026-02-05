@@ -27,6 +27,13 @@ class EncodingPreset(BaseModel):
     audio_bitrate: str = Field(pattern=r"^\d+k$", default="192k")
     audio_codec: str = "aac"
     audio_sample_rate: int = 48000
+
+    # Audio normalization (Phase 8)
+    normalize_audio: bool = True
+    target_lufs: float = Field(ge=-70.0, le=-5.0, default=-14.0, description="Target integrated loudness (LUFS)")
+    target_tp: float = Field(ge=-9.0, le=0.0, default=-1.5, description="Target true peak (dBTP)")
+    target_lra: float = Field(ge=1.0, le=50.0, default=7.0, description="Target loudness range (LU)")
+
     target_bitrate_mbps: float = Field(gt=0, default=5.0)  # Informational
     max_file_size_mb: Optional[int] = None  # Platform limit (informational)
 
@@ -85,12 +92,16 @@ class EncodingPreset(BaseModel):
 PRESET_TIKTOK = EncodingPreset(
     name="TikTok",
     platform="tiktok",
-    description="Optimized for TikTok (9:16, CRF 20, 500MB max)",
+    description="Optimized for TikTok (9:16, CRF 20, -14 LUFS audio)",
     crf=20,
     preset="medium",
     gop_size=60,
     keyint_min=60,
     audio_bitrate="192k",
+    normalize_audio=True,
+    target_lufs=-14.0,
+    target_tp=-1.5,
+    target_lra=7.0,
     target_bitrate_mbps=5.0,
     max_file_size_mb=500,
 )
@@ -98,12 +109,16 @@ PRESET_TIKTOK = EncodingPreset(
 PRESET_REELS = EncodingPreset(
     name="Instagram Reels",
     platform="reels",
-    description="Optimized for Instagram Reels (9:16, CRF 18, 4GB max)",
+    description="Optimized for Instagram Reels (9:16, CRF 18, -14 LUFS audio)",
     crf=18,  # Higher quality for Instagram
     preset="slow",  # Better quality encoding
     gop_size=60,
     keyint_min=60,
     audio_bitrate="192k",
+    normalize_audio=True,
+    target_lufs=-14.0,
+    target_tp=-1.5,
+    target_lra=7.0,
     target_bitrate_mbps=6.0,
     max_file_size_mb=4000,
 )
@@ -111,12 +126,16 @@ PRESET_REELS = EncodingPreset(
 PRESET_YOUTUBE_SHORTS = EncodingPreset(
     name="YouTube Shorts",
     platform="youtube_shorts",
-    description="Optimized for YouTube Shorts (9:16, CRF 18, no size limit)",
+    description="Optimized for YouTube Shorts (9:16, CRF 18, -14 LUFS audio)",
     crf=18,  # High quality for YouTube
     preset="slow",  # Better quality encoding
     gop_size=60,
     keyint_min=60,
     audio_bitrate="192k",
+    normalize_audio=True,
+    target_lufs=-14.0,
+    target_tp=-1.5,
+    target_lra=7.0,
     target_bitrate_mbps=8.0,
     max_file_size_mb=None,  # No explicit limit
 )
@@ -124,12 +143,16 @@ PRESET_YOUTUBE_SHORTS = EncodingPreset(
 PRESET_GENERIC = EncodingPreset(
     name="Generic",
     platform="generic",
-    description="Balanced settings for any platform (CRF 20)",
+    description="Balanced settings for any platform (CRF 20, -14 LUFS audio)",
     crf=20,
     preset="medium",
     gop_size=60,
     keyint_min=60,
     audio_bitrate="192k",
+    normalize_audio=True,
+    target_lufs=-14.0,
+    target_tp=-1.5,
+    target_lra=7.0,
     target_bitrate_mbps=5.0,
     max_file_size_mb=None,
 )
@@ -180,6 +203,8 @@ def list_presets() -> list[dict]:
             "description": preset.description,
             "crf": preset.crf,
             "audio_bitrate": preset.audio_bitrate,
+            "normalize_audio": preset.normalize_audio,
+            "target_lufs": preset.target_lufs,
             "max_file_size_mb": preset.max_file_size_mb,
         })
 
