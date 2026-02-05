@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-02-04)
 
 **Core value:** One-click video production workflow: upload a product video, get a social-media-ready clip with voiceover and captions, publish to the right store's social accounts.
-**Current focus:** Phase 7 - Platform Export Presets (v3 milestone start)
+**Current focus:** Phase 9 - Video Enhancement Filters (ready to plan)
 
 ## Current Position
 
