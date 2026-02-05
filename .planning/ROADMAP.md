@@ -205,9 +205,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 11-01-PLAN.md — Backend subtitle styling service: SubtitleStyleConfig, adaptive font sizing, filter builder
-- [ ] 11-02-PLAN.md — Render pipeline integration: subtitle enhancement Form params, build_subtitle_filter() refactor
-- [ ] 11-03-PLAN.md — Frontend subtitle enhancement controls: shadow/glow/adaptive UI + library page integration
+- [x] 11-01-PLAN.md — Backend subtitle styling service: SubtitleStyleConfig, adaptive font sizing, filter builder
+- [x] 11-02-PLAN.md — Render pipeline integration: subtitle enhancement Form params, build_subtitle_filter() refactor
+- [x] 11-03-PLAN.md — Frontend subtitle enhancement controls: shadow/glow/adaptive UI + library page integration
 
 ## Progress
 
@@ -226,4 +226,4 @@ Phases execute in numeric order: 7 -> 8 -> 9 -> 10 -> 11
 | 8. Audio Normalization | v3 | 2/2 | Complete | 2026-02-05 |
 | 9. Video Enhancement Filters | v3 | 3/3 | Complete | 2026-02-05 |
 | 10. Segment Scoring Enhancement | v3 | 1/1 | Complete | 2026-02-05 |
-| 11. Subtitle Enhancement | v3 | 0/3 | Not started | - |
+| 11. Subtitle Enhancement | v3 | 3/3 | Complete | 2026-02-06 |
