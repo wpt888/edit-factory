@@ -89,6 +89,11 @@ import { VideoSegmentPlayer } from "@/components/video-segment-player";
 import { SimpleSegmentPopup } from "@/components/simple-segment-popup";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { DEFAULT_SUBTITLE_SETTINGS } from "@/types/video-processing";
+import {
+  VideoEnhancementControls,
+  VideoFilters,
+  defaultVideoFilters,
+} from "@/components/video-enhancement-controls";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
@@ -209,6 +214,7 @@ function LibraryPageContent() {
   const [clipContent, setClipContent] = useState<ClipContent | null>(null);
   const [presets, setPresets] = useState<ExportPreset[]>([]);
   const [selectedPreset, setSelectedPreset] = useState<string>("instagram_reels");
+  const [videoFilters, setVideoFilters] = useState<VideoFilters>(defaultVideoFilters);
 
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -843,6 +849,16 @@ function LibraryPageContent() {
     try {
       const formData = new FormData();
       formData.append("preset_name", selectedPreset);
+
+      // Video enhancement filters (Phase 9)
+      formData.append("enable_denoise", videoFilters.enableDenoise.toString());
+      formData.append("denoise_strength", videoFilters.denoiseStrength.toString());
+      formData.append("enable_sharpen", videoFilters.enableSharpen.toString());
+      formData.append("sharpen_amount", videoFilters.sharpenAmount.toString());
+      formData.append("enable_color", videoFilters.enableColor.toString());
+      formData.append("brightness", videoFilters.brightness.toString());
+      formData.append("contrast", videoFilters.contrast.toString());
+      formData.append("saturation", videoFilters.saturation.toString());
 
       const res = await fetch(`${API_URL}/library/clips/${clipId}/render`, {
         method: "POST",
@@ -1758,6 +1774,7 @@ function LibraryPageContent() {
                           onClick={() => {
                             setSelectedClip(clip);
                             fetchClipContent(clip.id);
+                            setVideoFilters(defaultVideoFilters); // Reset filters when selecting new clip
                           }}
                           className={`relative rounded-lg overflow-hidden cursor-pointer transition-all ${
                             selectedClip?.id === clip.id
@@ -2291,6 +2308,16 @@ Text subtitrare..."
                       />
                     </TabsContent>
                   </Tabs>
+
+                  {/* Video Enhancement Filters */}
+                  <div className="mb-4">
+                    <Label className="text-sm mb-2 block">Video Enhancement (optional):</Label>
+                    <VideoEnhancementControls
+                      filters={videoFilters}
+                      onFilterChange={setVideoFilters}
+                      disabled={rendering}
+                    />
+                  </div>
 
                   {/* Platform Selector */}
                   <div className="mb-4">
