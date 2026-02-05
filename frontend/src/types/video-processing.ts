@@ -9,6 +9,18 @@ export interface SubtitleSettings {
   positionY: number;
   position?: "top" | "center" | "bottom";
   marginV?: number;
+
+  // Shadow effects (Phase 11 - SUB-01)
+  shadowDepth?: number;        // 0-4, default 0 (disabled)
+  shadowColor?: string;         // Hex color, default "#000000"
+  borderStyle?: number;         // 1=outline+shadow, 3=box, default 1
+
+  // Glow effects (Phase 11 - SUB-02)
+  enableGlow?: boolean;         // Default false
+  glowBlur?: number;            // 0-10, default 0 (disabled)
+
+  // Adaptive sizing (Phase 11 - SUB-03)
+  adaptiveSizing?: boolean;     // Default false
 }
 
 export interface SubtitleLine {
@@ -115,6 +127,14 @@ export const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
   positionY: 85,
   position: "bottom",
   marginV: 30,
+
+  // Phase 11 defaults
+  shadowDepth: 0,
+  shadowColor: "#000000",
+  borderStyle: 1,
+  enableGlow: false,
+  glowBlur: 0,
+  adaptiveSizing: false,
 };
 
 export const FONT_OPTIONS = [
