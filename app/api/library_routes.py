@@ -21,6 +21,7 @@ from app.api.auth import ProfileContext, get_profile_context
 from app.services.encoding_presets import get_preset, EncodingPreset
 from app.services.audio_normalizer import measure_loudness, build_loudnorm_filter
 from app.services.video_filters import VideoFilters, DenoiseConfig, SharpenConfig, ColorConfig
+from app.services.subtitle_styler import build_subtitle_filter
 
 import logging
 
@@ -1633,6 +1634,11 @@ async def render_final_clip(
     brightness: float = Form(default=0.0),
     contrast: float = Form(default=1.0),
     saturation: float = Form(default=1.0),
+    # Subtitle enhancement (Phase 11)
+    shadow_depth: int = Form(default=0),
+    enable_glow: str = Form(default="false"),
+    glow_blur: int = Form(default=0),
+    adaptive_sizing: str = Form(default="false"),
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """
@@ -1647,6 +1653,8 @@ async def render_final_clip(
     enable_denoise_bool = enable_denoise.lower() in ("true", "1", "yes", "on")
     enable_sharpen_bool = enable_sharpen.lower() in ("true", "1", "yes", "on")
     enable_color_bool = enable_color.lower() in ("true", "1", "yes", "on")
+    enable_glow_bool = enable_glow.lower() in ("true", "1", "yes", "on")
+    adaptive_sizing_bool = adaptive_sizing.lower() in ("true", "1", "yes", "on")
 
     try:
         # Obținem clipul și conținutul
@@ -1684,7 +1692,12 @@ async def render_final_clip(
             enable_color=enable_color_bool,
             brightness=brightness,
             contrast=contrast,
-            saturation=saturation
+            saturation=saturation,
+            # Subtitle enhancement (Phase 11)
+            shadow_depth=shadow_depth,
+            enable_glow=enable_glow_bool,
+            glow_blur=glow_blur,
+            adaptive_sizing=adaptive_sizing_bool
         )
 
         return {
@@ -1713,7 +1726,12 @@ async def _render_final_clip_task(
     enable_color: bool = False,
     brightness: float = 0.0,
     contrast: float = 1.0,
-    saturation: float = 1.0
+    saturation: float = 1.0,
+    # Subtitle enhancement (Phase 11)
+    shadow_depth: int = 0,
+    enable_glow: bool = False,
+    glow_blur: int = 0,
+    adaptive_sizing: bool = False
 ):
     """
     Task pentru randarea finală în background.
@@ -1834,6 +1852,13 @@ async def _render_final_clip_task(
             srt_path = temp_dir / f"srt_{clip_id}.srt"
             with open(srt_path, "w", encoding="utf-8") as f:
                 f.write(content_data["srt_content"])
+
+        # Inject Phase 11 subtitle enhancement settings into subtitle_settings dict
+        if content_data and content_data.get("subtitle_settings"):
+            content_data["subtitle_settings"]["shadowDepth"] = shadow_depth
+            content_data["subtitle_settings"]["enableGlow"] = enable_glow
+            content_data["subtitle_settings"]["glowBlur"] = glow_blur
+            content_data["subtitle_settings"]["adaptiveSizing"] = adaptive_sizing
 
         # 4. Randăm cu FFmpeg folosind preset-ul
         output_path = output_dir / f"final_{clip_id}_{preset_data['name']}.mp4"
