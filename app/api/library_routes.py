@@ -2363,10 +2363,22 @@ def _render_with_preset(
     srt_path: Optional[Path],
     subtitle_settings: Optional[dict],
     preset: dict,
-    output_path: Path
+    output_path: Path,
+    # Video enhancement filters (Phase 9)
+    enable_denoise: bool = False,
+    denoise_strength: float = 2.0,
+    enable_sharpen: bool = False,
+    sharpen_amount: float = 0.5,
+    enable_color: bool = False,
+    brightness: float = 0.0,
+    contrast: float = 1.0,
+    saturation: float = 1.0
 ):
     """
     Randează video-ul final cu preset optimizat pentru social media.
+
+    Video enhancement filters (Phase 9) are applied AFTER scale/crop, BEFORE subtitles.
+    Filter order is locked: denoise -> sharpen -> color (don't sharpen noise).
     """
     # Build FFmpeg command
     cmd = ["ffmpeg", "-y", "-i", str(video_path)]
@@ -2387,6 +2399,38 @@ def _render_with_preset(
     # increase = scale up to fill entire frame, then crop to exact size
     filters.append(f"scale={preset['width']}:{preset['height']}:force_original_aspect_ratio=increase")
     filters.append(f"crop={preset['width']}:{preset['height']}")
+
+    # Video enhancement filters (Phase 9) - apply AFTER scale/crop, BEFORE subtitles
+    # Order is locked: denoise -> sharpen -> color (don't sharpen noise)
+    if enable_denoise:
+        # hqdn3d filter: luma_spatial:chroma_spatial:luma_temporal:chroma_temporal
+        # Auto-derive chroma/temporal from luma_spatial
+        chroma_spatial = denoise_strength * 0.75
+        luma_temporal = denoise_strength * 1.5
+        chroma_temporal = chroma_spatial * 1.5
+        filters.append(f"hqdn3d={denoise_strength:.1f}:{chroma_spatial:.2f}:{luma_temporal:.1f}:{chroma_temporal:.2f}")
+        logger.info(f"Applying denoise filter: luma_spatial={denoise_strength}")
+
+    if enable_sharpen:
+        # unsharp filter: luma_msize_x:luma_msize_y:luma_amount:chroma_msize_x:chroma_msize_y:chroma_amount
+        # NEVER sharpen chroma (chroma_amount=0.0) - prevents color artifacts
+        matrix_size = 5  # Standard 5x5 kernel
+        filters.append(f"unsharp={matrix_size}:{matrix_size}:{sharpen_amount:.2f}:{matrix_size}:{matrix_size}:0.0")
+        logger.info(f"Applying sharpen filter: luma_amount={sharpen_amount}")
+
+    if enable_color:
+        # eq filter: only include non-default parameters
+        color_params = []
+        if abs(brightness) > 0.001:
+            color_params.append(f"brightness={brightness:.2f}")
+        if abs(contrast - 1.0) > 0.001:
+            color_params.append(f"contrast={contrast:.2f}")
+        if abs(saturation - 1.0) > 0.001:
+            color_params.append(f"saturation={saturation:.2f}")
+
+        if color_params:
+            filters.append(f"eq={':'.join(color_params)}")
+            logger.info(f"Applying color correction: {', '.join(color_params)}")
 
     # Add subtitles if available
     if srt_path and srt_path.exists() and subtitle_settings:
