@@ -2457,33 +2457,16 @@ def _render_with_preset(
             filters.append(f"eq={':'.join(color_params)}")
             logger.info(f"Applying color correction: {', '.join(color_params)}")
 
-    # Add subtitles if available
+    # Add subtitles if available (Phase 11: uses subtitle_styler service for shadow/glow/adaptive)
     if srt_path and srt_path.exists() and subtitle_settings:
-        # Build ASS style from settings
-        font_size = subtitle_settings.get("fontSize", 48)
-        font_family = subtitle_settings.get("fontFamily", "Montserrat").split(",")[0].strip()
-        text_color = _hex_to_ass_color(subtitle_settings.get("textColor", "#FFFFFF"))
-        outline_color = _hex_to_ass_color(subtitle_settings.get("outlineColor", "#000000"))
-        outline_width = subtitle_settings.get("outlineWidth", 3)
-        position_y = subtitle_settings.get("positionY", 85)
-
-        # Convert position Y to margin
-        margin_v = int((100 - position_y) / 100 * preset['height'] * 0.5)
-
-        # Escape path for Windows
-        srt_escaped = str(srt_path).replace("\\", "/").replace(":", "\\:")
-
-        subtitles_filter = (
-            f"subtitles='{srt_escaped}':"
-            f"force_style='FontName={font_family},"
-            f"FontSize={font_size},"
-            f"PrimaryColour={text_color},"
-            f"OutlineColour={outline_color},"
-            f"Outline={outline_width},"
-            f"MarginV={margin_v},"
-            f"Alignment=2'"
+        subtitles_filter = build_subtitle_filter(
+            srt_path=srt_path,
+            subtitle_settings=subtitle_settings,
+            video_width=preset.get('width', 1080),
+            video_height=preset.get('height', 1920)
         )
         filters.append(subtitles_filter)
+        logger.info(f"Added subtitle filter with enhancement settings")
 
     # Apply filters
     if filters:
