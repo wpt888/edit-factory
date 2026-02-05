@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 ## Current Position
 
 Phase: 11 of 11 (Subtitle Enhancement) — IN PROGRESS
-Plan: 1/3 complete
+Plan: 2/3 complete
 Status: In progress
-Last activity: 2026-02-05 — Completed 11-01-PLAN.md (subtitle styling service)
+Last activity: 2026-02-05 — Completed 11-02-PLAN.md (render pipeline integration)
 
-Progress: [███████████████████░] 97% (36/37 total plans across all milestones)
+Progress: [███████████████████░] 97% (37/38 total plans across all milestones)
 
 ## Performance Metrics
 
@@ -49,6 +49,7 @@ Progress: [███████████████████░] 97% (36
 - 09-03: 3 min (filter UI component + library integration)
 - 10-01: 3 min (blur/contrast scoring for segment analysis)
 - 11-01: 2 min (subtitle styling service with shadow/glow/adaptive sizing)
+- 11-02: 2 min (render pipeline integration with subtitle enhancement params)
 
 ## Accumulated Context
 
@@ -86,6 +87,9 @@ Recent decisions affecting current work:
 - Conservative blur threshold 0.2 (10-01: rejects only severely blurry segments, Laplacian variance < 100)
 - Contrast normalization at std dev 80 (10-01: maps well-contrasted scenes to 0.6-1.0)
 - 5-factor scoring weights 40/20/20/15/5 (10-01: motion/variance/blur/contrast/brightness, no single factor dominates)
+- Subtitle enhancement params passed per-render as Form fields (11-02: consistent with Phase 9 filter approach, not stored in DB)
+- Boolean subtitle params use string parsing pattern (11-02: enable_glow/adaptive_sizing as strings, same as enable_denoise)
+- Inject enhancement settings into subtitle_settings dict before render (11-02: allows build_subtitle_filter to receive complete settings)
 
 **v2 milestone context (for reference):**
 - Profile system over separate deployments (two stores share same codebase)
@@ -111,10 +115,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 11-01-PLAN.md
+Stopped at: Completed 11-02-PLAN.md
 Resume file: None
 
-**Next step:** Execute Plan 11-02 (Render Pipeline Integration) and Plan 11-03 (Frontend Controls) to complete v3 milestone.
+**Next step:** Execute Plan 11-03 (Frontend Controls) to complete v3 milestone.
 
 **v3 Milestone Summary:**
 - Total phases: 5 (Phases 7-11)
