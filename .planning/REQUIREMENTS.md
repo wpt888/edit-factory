@@ -33,9 +33,9 @@ Requirements for video quality enhancement milestone. Each maps to roadmap phase
 
 ### Subtitles
 
-- [ ] **SUB-01**: User can enable shadow effects on subtitles with configurable depth
-- [ ] **SUB-02**: User can enable glow/outline effects on subtitle text
-- [ ] **SUB-03**: System automatically adjusts font size based on text length (adaptive sizing)
+- [x] **SUB-01**: User can enable shadow effects on subtitles with configurable depth
+- [x] **SUB-02**: User can enable glow/outline effects on subtitle text
+- [x] **SUB-03**: System automatically adjusts font size based on text length (adaptive sizing)
 
 ## Future Requirements
 
@@ -86,9 +86,9 @@ Deferred to v4 or later milestone.
 | FLT-04 | Phase 9 | Complete |
 | SCR-01 | Phase 10 | Complete |
 | SCR-02 | Phase 10 | Complete |
-| SUB-01 | Phase 11 | Pending |
-| SUB-02 | Phase 11 | Pending |
-| SUB-03 | Phase 11 | Pending |
+| SUB-01 | Phase 11 | Complete |
+| SUB-02 | Phase 11 | Complete |
+| SUB-03 | Phase 11 | Complete |
 
 **Coverage:**
 - v3 requirements: 15 total
@@ -98,4 +98,4 @@ Deferred to v4 or later milestone.
 
 ---
 *Requirements defined: 2026-02-04*
-*Last updated: 2026-02-05 (Phase 10 complete - SCR-01, SCR-02)*
+*Last updated: 2026-02-06 (Phase 11 complete - SUB-01, SUB-02, SUB-03 — v3 milestone complete)*
