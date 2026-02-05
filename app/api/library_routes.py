@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
 from app.services.encoding_presets import get_preset, EncodingPreset
+from app.services.audio_normalizer import measure_loudness, build_loudnorm_filter
 
 import logging
 
@@ -2376,6 +2377,49 @@ def _render_with_preset(
     # Apply filters
     if filters:
         cmd.extend(["-vf", ",".join(filters)])
+
+    # Audio normalization (two-pass loudnorm)
+    audio_filters = []
+
+    if has_audio and audio_path:  # Only normalize real audio, not silent
+        # Get encoding preset to check if normalization is enabled
+        preset_name = preset.get("name", "Generic")
+        platform_map = {
+            "TikTok": "tiktok",
+            "Instagram Reels": "reels",
+            "YouTube Shorts": "youtube_shorts",
+            "Generic": "generic"
+        }
+        platform_key = platform_map.get(preset_name, "generic")
+        encoding_preset = get_preset(platform_key)
+
+        if encoding_preset.normalize_audio:
+            logger.info(f"Performing two-pass audio normalization (target: {encoding_preset.target_lufs} LUFS)")
+
+            # First pass: Measure loudness
+            measurement = measure_loudness(
+                audio_path,
+                target_lufs=encoding_preset.target_lufs,
+                target_tp=encoding_preset.target_tp,
+                target_lra=encoding_preset.target_lra
+            )
+
+            if measurement:
+                # Second pass: Build normalization filter
+                loudnorm_filter = build_loudnorm_filter(
+                    measurement,
+                    target_lufs=encoding_preset.target_lufs,
+                    target_tp=encoding_preset.target_tp,
+                    target_lra=encoding_preset.target_lra
+                )
+                audio_filters.append(loudnorm_filter)
+                logger.info(f"Audio normalization: {measurement.input_i:.1f} LUFS -> {encoding_preset.target_lufs} LUFS")
+            else:
+                logger.warning("Audio normalization measurement failed, rendering without normalization")
+
+    # Apply audio filters if any
+    if audio_filters:
+        cmd.extend(["-af", ",".join(audio_filters)])
 
     # Get encoding preset parameters
     # Map database preset name to platform key
