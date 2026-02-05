@@ -5,6 +5,7 @@ Provides platform-specific video encoding configurations with Pydantic validatio
 import logging
 from typing import Literal, Optional
 from pydantic import BaseModel, Field
+from app.services.video_filters import VideoFilters
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,9 @@ class EncodingPreset(BaseModel):
     target_lufs: float = Field(ge=-70.0, le=-5.0, default=-14.0, description="Target integrated loudness (LUFS)")
     target_tp: float = Field(ge=-9.0, le=0.0, default=-1.5, description="Target true peak (dBTP)")
     target_lra: float = Field(ge=1.0, le=50.0, default=7.0, description="Target loudness range (LU)")
+
+    # Video enhancement filters (Phase 9)
+    video_filters: VideoFilters = Field(default_factory=VideoFilters)
 
     target_bitrate_mbps: float = Field(gt=0, default=5.0)  # Informational
     max_file_size_mb: Optional[int] = None  # Platform limit (informational)
@@ -206,6 +210,7 @@ def list_presets() -> list[dict]:
             "normalize_audio": preset.normalize_audio,
             "target_lufs": preset.target_lufs,
             "max_file_size_mb": preset.max_file_size_mb,
+            "video_filters_enabled": preset.video_filters.has_any_enabled(),
         })
 
     return presets_list
