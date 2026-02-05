@@ -20,6 +20,7 @@ from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
 from app.services.encoding_presets import get_preset, EncodingPreset
 from app.services.audio_normalizer import measure_loudness, build_loudnorm_filter
+from app.services.video_filters import VideoFilters, DenoiseConfig, SharpenConfig, ColorConfig
 
 import logging
 
@@ -1623,6 +1624,15 @@ async def render_final_clip(
     background_tasks: BackgroundTasks,
     clip_id: str,
     preset_name: str = Form(default="instagram_reels"),
+    # Video enhancement filters (Phase 9)
+    enable_denoise: str = Form(default="false"),
+    denoise_strength: float = Form(default=2.0),
+    enable_sharpen: str = Form(default="false"),
+    sharpen_amount: float = Form(default=0.5),
+    enable_color: str = Form(default="false"),
+    brightness: float = Form(default=0.0),
+    contrast: float = Form(default=1.0),
+    saturation: float = Form(default=1.0),
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """
@@ -1632,6 +1642,11 @@ async def render_final_clip(
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
+
+    # Parse boolean strings (HTML forms send strings)
+    enable_denoise_bool = enable_denoise.lower() in ("true", "1", "yes", "on")
+    enable_sharpen_bool = enable_sharpen.lower() in ("true", "1", "yes", "on")
+    enable_color_bool = enable_color.lower() in ("true", "1", "yes", "on")
 
     try:
         # Obținem clipul și conținutul
@@ -1660,7 +1675,16 @@ async def render_final_clip(
             profile_id=profile.profile_id,
             clip_data=clip.data,
             content_data=content.data[0] if content.data else None,
-            preset_data=preset.data
+            preset_data=preset.data,
+            # Video enhancement filters (Phase 9)
+            enable_denoise=enable_denoise_bool,
+            denoise_strength=denoise_strength,
+            enable_sharpen=enable_sharpen_bool,
+            sharpen_amount=sharpen_amount,
+            enable_color=enable_color_bool,
+            brightness=brightness,
+            contrast=contrast,
+            saturation=saturation
         )
 
         return {
@@ -1680,7 +1704,16 @@ async def _render_final_clip_task(
     profile_id: str,
     clip_data: dict,
     content_data: Optional[dict],
-    preset_data: dict
+    preset_data: dict,
+    # Video enhancement filters (Phase 9)
+    enable_denoise: bool = False,
+    denoise_strength: float = 2.0,
+    enable_sharpen: bool = False,
+    sharpen_amount: float = 0.5,
+    enable_color: bool = False,
+    brightness: float = 0.0,
+    contrast: float = 1.0,
+    saturation: float = 1.0
 ):
     """
     Task pentru randarea finală în background.
@@ -1811,7 +1844,16 @@ async def _render_final_clip_task(
             srt_path=srt_path,
             subtitle_settings=content_data.get("subtitle_settings") if content_data else None,
             preset=preset_data,
-            output_path=output_path
+            output_path=output_path,
+            # Video enhancement filters (Phase 9)
+            enable_denoise=enable_denoise,
+            denoise_strength=denoise_strength,
+            enable_sharpen=enable_sharpen,
+            sharpen_amount=sharpen_amount,
+            enable_color=enable_color,
+            brightness=brightness,
+            contrast=contrast,
+            saturation=saturation
         )
 
         # Actualizăm clipul
