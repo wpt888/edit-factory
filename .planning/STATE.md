@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-04)
 
 **Core value:** One-click video production workflow: upload a product video, get a social-media-ready clip with voiceover and captions, publish to the right store's social accounts.
-**Current focus:** Phase 9 - Video Enhancement Filters (ready to plan)
+**Current focus:** Phase 9 - Video Enhancement Filters (in progress)
 
 ## Current Position
 
-Phase: 8 of 11 (Audio Normalization)
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-05 — Completed 08-02-PLAN.md
+Phase: 9 of 11 (Video Enhancement Filters)
+Plan: 1 of 4 in current phase
+Status: In progress
+Last activity: 2026-02-05 — Completed 09-01-PLAN.md
 
-Progress: [███████████████░░░░░] 76% (28/37 total plans across all milestones)
+Progress: [████████████████░░░░] 78% (29/37 total plans across all milestones)
 
 ## Performance Metrics
 
@@ -44,6 +44,7 @@ Progress: [███████████████░░░░░] 76% (28
 - 07-03: 5 min (platform selector UI)
 - 08-01: 3 min (audio normalization foundation)
 - 08-02: 5 min (render integration with two-pass loudnorm)
+- 09-01: 2 min (video filter configuration service)
 
 ## Accumulated Context
 
@@ -68,6 +69,9 @@ Recent decisions affecting current work:
 - Preserve database audio_bitrate override if higher than EncodingPreset default (quality preference)
 - Platform selector positioned above render buttons for visibility (07-03)
 - Show platform icons for visual recognition (Instagram, YouTube, Video/Film icons) (07-03)
+- stdlib dataclass over Pydantic for filter configs (09-01: simpler, no validation overhead for nested configs)
+- chroma_amount locked at 0.0 in SharpenConfig (09-01: never sharpen chroma to prevent color artifacts)
+- Conservative filter defaults: hqdn3d luma_spatial=2.0, unsharp luma_amount=0.5 (09-01: lower than FFmpeg defaults)
 
 **v2 milestone context (for reference):**
 - Profile system over separate deployments (two stores share same codebase)
@@ -94,10 +98,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 08-02-PLAN.md (Phase 08 complete)
+Stopped at: Completed 09-01-PLAN.md (Video Filter Foundation)
 Resume file: None
 
-**Next step:** Phase 08 (Audio Normalization) is complete. Ready to begin Phase 09 (Video Enhancement Filters) or continue with other v3 milestone work.
+**Next step:** Continue Phase 09 with 09-02-PLAN.md (Render Integration) to integrate video filters into _render_with_preset().
 
 **v3 Milestone Summary:**
 - Total phases: 5 (Phases 7-11)
