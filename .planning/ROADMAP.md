@@ -154,10 +154,11 @@ Plans:
   3. Two-pass normalization used (analyze, then apply with measured parameters)
   4. Loudness normalization applies to concatenated segments (consistent across multi-variant clips)
   5. User hears consistent volume across different videos (no jarring volume changes)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 08-01: TBD
+- [ ] 08-01-PLAN.md — Audio normalizer service + EncodingPreset normalization fields
+- [ ] 08-02-PLAN.md — Render pipeline integration + visual verification
 
 #### Phase 9: Video Enhancement Filters
 **Goal**: Optional quality filters (denoise, sharpen, color correction) for user-generated content
@@ -218,7 +219,7 @@ Phases execute in numeric order: 7 -> 8 -> 9 -> 10 -> 11
 | 5. Per-Profile Postiz | v2 | 5/5 | Complete | 2026-02-04 |
 | 6. Developer Experience | v2 | 1/1 | Complete | 2026-02-04 |
 | 7. Platform Export Presets | v3 | 3/3 | Complete | 2026-02-04 |
-| 8. Audio Normalization | v3 | 0/? | Not started | - |
+| 8. Audio Normalization | v3 | 0/2 | Not started | - |
 | 9. Video Enhancement Filters | v3 | 0/? | Not started | - |
 | 10. Segment Scoring Enhancement | v3 | 0/? | Not started | - |
 | 11. Subtitle Enhancement | v3 | 0/? | Not started | - |
