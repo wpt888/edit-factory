@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-02-04)
 
 ## Current Position
 
-Phase: 11 of 11 (Subtitle Enhancement) — IN PROGRESS
-Plan: 2/3 complete
-Status: In progress
-Last activity: 2026-02-05 — Completed 11-02-PLAN.md (render pipeline integration)
+Phase: 11 of 11 (Subtitle Enhancement) — COMPLETE
+Plan: 3/3 complete
+Status: Phase complete
+Last activity: 2026-02-05 — Completed 11-03-PLAN.md (frontend controls)
 
-Progress: [███████████████████░] 97% (37/38 total plans across all milestones)
+Progress: [████████████████████] 100% (38/38 total plans across all milestones)
 
 ## Performance Metrics
 
@@ -50,6 +50,7 @@ Progress: [███████████████████░] 97% (37
 - 10-01: 3 min (blur/contrast scoring for segment analysis)
 - 11-01: 2 min (subtitle styling service with shadow/glow/adaptive sizing)
 - 11-02: 2 min (render pipeline integration with subtitle enhancement params)
+- 11-03: 3 min (frontend subtitle enhancement controls) ✓ COMPLETE
 
 ## Accumulated Context
 
@@ -90,6 +91,8 @@ Recent decisions affecting current work:
 - Subtitle enhancement params passed per-render as Form fields (11-02: consistent with Phase 9 filter approach, not stored in DB)
 - Boolean subtitle params use string parsing pattern (11-02: enable_glow/adaptive_sizing as strings, same as enable_denoise)
 - Inject enhancement settings into subtitle_settings dict before render (11-02: allows build_subtitle_filter to receive complete settings)
+- Subtitle enhancement controls follow checkbox+slider pattern (11-03: Shadow depth 1-4px, Glow blur 1-10, Auto-size checkbox)
+- Position subtitle controls between subtitle tabs and video enhancement (11-03: logical flow from text → subtitle → video → platform)
 
 **v2 milestone context (for reference):**
 - Profile system over separate deployments (two stores share same codebase)
@@ -115,17 +118,27 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 11-02-PLAN.md
+Stopped at: Completed 11-03-PLAN.md (Frontend Controls)
 Resume file: None
 
-**Next step:** Execute Plan 11-03 (Frontend Controls) to complete v3 milestone.
+**Status:** v3 milestone COMPLETE - All planned features delivered.
 
 **v3 Milestone Summary:**
 - Total phases: 5 (Phases 7-11)
+- Total plans: 13
 - Total requirements: 15
 - Coverage: 100%
 - Phase 7: Platform Export Presets (ENC-01 to ENC-04) ✓
 - Phase 8: Audio Normalization (AUD-01 to AUD-02) ✓
 - Phase 9: Video Enhancement Filters (FLT-01 to FLT-04) ✓
 - Phase 10: Segment Scoring Enhancement (SCR-01 to SCR-02) ✓
-- Phase 11: Subtitle Enhancement (SUB-01 to SUB-03)
+- Phase 11: Subtitle Enhancement (SUB-01 to SUB-03) ✓
+
+**System Capabilities (v3):**
+- Platform-specific encoding presets (TikTok, Instagram Reels, YouTube Shorts, Generic)
+- Two-pass audio normalization to -14 LUFS with -1.5 dBTP true peak limiting
+- Video enhancement filters (denoise with hqdn3d, sharpen with unsharp, color adjustment)
+- 5-factor segment scoring (motion 40%, variance 20%, blur 20%, contrast 15%, brightness 5%)
+- Subtitle styling (shadow depth 1-4px, glow/outline blur 1-10, adaptive text sizing)
+
+**Production Status:** All features integrated end-to-end with graceful degradation and backward compatibility.
