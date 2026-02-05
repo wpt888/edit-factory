@@ -94,6 +94,7 @@ import {
   VideoFilters,
   defaultVideoFilters,
 } from "@/components/video-enhancement-controls";
+import { SubtitleEnhancementControls } from "@/components/subtitle-enhancement-controls";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
@@ -145,6 +146,18 @@ interface SubtitleSettings {
   outlineColor: string;
   outlineWidth: number;
   positionY: number;
+
+  // Shadow effects (Phase 11 - SUB-01)
+  shadowDepth?: number;
+  shadowColor?: string;
+  borderStyle?: number;
+
+  // Glow effects (Phase 11 - SUB-02)
+  enableGlow?: boolean;
+  glowBlur?: number;
+
+  // Adaptive sizing (Phase 11 - SUB-03)
+  adaptiveSizing?: boolean;
 }
 
 interface ExportPreset {
@@ -859,6 +872,12 @@ function LibraryPageContent() {
       formData.append("brightness", videoFilters.brightness.toString());
       formData.append("contrast", videoFilters.contrast.toString());
       formData.append("saturation", videoFilters.saturation.toString());
+
+      // Subtitle enhancement (Phase 11)
+      formData.append("shadow_depth", (editingSubtitleSettings.shadowDepth ?? 0).toString());
+      formData.append("enable_glow", (editingSubtitleSettings.enableGlow ?? false).toString());
+      formData.append("glow_blur", (editingSubtitleSettings.glowBlur ?? 0).toString());
+      formData.append("adaptive_sizing", (editingSubtitleSettings.adaptiveSizing ?? false).toString());
 
       const res = await fetch(`${API_URL}/library/clips/${clipId}/render`, {
         method: "POST",
@@ -2308,6 +2327,18 @@ Text subtitrare..."
                       />
                     </TabsContent>
                   </Tabs>
+
+                  {/* Subtitle Enhancement (Phase 11) */}
+                  <div className="mb-4">
+                    <Label className="text-sm mb-2 block">Subtitle Enhancement (optional):</Label>
+                    <SubtitleEnhancementControls
+                      settings={editingSubtitleSettings}
+                      onSettingsChange={(updates) => {
+                        setEditingSubtitleSettings(prev => ({ ...prev, ...updates }));
+                      }}
+                      disabled={rendering}
+                    />
+                  </div>
 
                   {/* Video Enhancement Filters */}
                   <div className="mb-4">
