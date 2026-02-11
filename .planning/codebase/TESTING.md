@@ -1,393 +1,355 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-02-03
+**Analysis Date:** 2026-02-12
 
 ## Test Framework
 
 **Runner:**
-- Playwright (E2E testing)
-- Version: ^1.57.0 (from `frontend/package.json`)
+- Playwright v1.57.0
 - Config: `frontend/playwright.config.ts`
 
 **Assertion Library:**
-- Playwright built-in: `expect()` from '@playwright/test'
+- Playwright built-in assertions (`expect()`, `.toBeVisible()`, `.toContainText()`, etc.)
 
 **Run Commands:**
 ```bash
-# Run all tests
-npm run test                # from frontend/
-npx playwright test
-
-# Watch/interactive mode
-npm run test:ui             # UI mode for debugging
-
-# Run with visible browser
-npm run test:headed         # See browser actions
-
-# Run specific test file
-npx playwright test tests/test-librarie-page.spec.ts
-
-# Run tests matching pattern
-npx playwright test -g "librarie"
+cd frontend
+npm run test              # Run all Playwright tests
+npm run test:ui          # Open Playwright UI for interactive testing
+npm run test:headed      # Run tests with visible browser (non-headless)
+npx playwright test tests/library.spec.ts              # Run single test file
+npx playwright test -g "library page"                  # Run tests matching pattern
 ```
 
 ## Test File Organization
 
 **Location:**
-- All tests in `frontend/tests/` directory
-- Co-located with source code conceptually (in separate tests folder)
-- No backend tests (Python) found in repo
+- All tests co-located in `frontend/tests/` directory (separate from source)
+- Not integrated with source tree
 
 **Naming:**
-- Pattern: `test-<feature>.spec.ts` or `<action>-<target>.spec.ts`
-- Examples:
-  - `test-librarie-page.spec.ts`
-  - `test-voice-muting.spec.ts`
-  - `test-toast-only.spec.ts`
-  - `debug-page-structure.spec.ts`
-  - `verify-librarie-delete.spec.ts`
+- Pattern: `{feature}.spec.ts` or `debug-{task}.spec.ts`
+- Examples: `debug-page-structure.spec.ts`, `verify-librarie-delete.spec.ts`, `test-multi-select.spec.ts`
 
 **Directory Structure:**
 ```
 frontend/
 ├── tests/
-│   ├── test-librarie-page.spec.ts
-│   ├── test-voice-muting.spec.ts
-│   ├── test-toast-only.spec.ts
-│   ├── debug-*.spec.ts              # Debug/investigation tests
-│   ├── verify-*.spec.ts             # Verification tests
-│   └── ...                          # 44+ test files
-└── screenshots/                      # Generated screenshots from tests
+│   ├── debug-page-structure.spec.ts
+│   ├── debug-all-logs.spec.ts
+│   ├── debug-segments-v2.spec.ts
+│   ├── test-delete-click.spec.ts
+│   ├── verify-librarie-delete.spec.ts
+│   ├── verify-subtitle-enhancement.spec.ts
+│   └── ... (12+ test files)
+└── screenshots/
+    └── (test artifacts)
 ```
 
 ## Test Structure
 
 **Suite Organization:**
 ```typescript
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
-test('Test name describing what is being verified', async ({ page }) => {
-  // Setup: Navigate and wait
-  // Action: Interact with UI
-  // Assert: Verify results
-  // Screenshot: Capture state for manual review
+test('descriptive test name', async ({ page }) => {
+  // 1. Navigate to page
+  // 2. Wait for content to load
+  // 3. Perform interactions
+  // 4. Verify expectations
+  // 5. Screenshot if needed
 });
 ```
 
 **Patterns:**
+- Single `test()` call per file (monolithic test files)
+- Navigation: `await page.goto('/librarie')`
+- Wait for load: `await page.waitForLoadState('networkidle')`
+- Locator queries: `await page.locator(selector)`
+- Take screenshots: `await page.screenshot({ path: '...', fullPage: true })`
 
-**1. Navigation and Setup:**
+**Setup/Teardown:**
+- Minimal setup - tests access application state directly
+- Teardown: browser closes automatically after each test
+- No fixtures or test data factories observed
+
+## Test Type Classification
+
+**Playwright Tests (Frontend E2E):**
+- Location: `frontend/tests/*.spec.ts`
+- Scope: End-to-end UI testing - navigates real app, interacts with components
+- Approach: Browser-driven, waits for DOM elements, captures visual state
+
+Example from `frontend/tests/debug-page-structure.spec.ts`:
 ```typescript
-test('Test librarie page loads', async ({ page }) => {
-  await page.goto('http://localhost:3001/librarie');
+test('debug page structure', async ({ page }) => {
+  await page.goto('/librarie');
   await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(2000);  // Additional wait for dynamic content
+  await page.waitForTimeout(3000);
+
+  // Query and count elements
+  const clipCardsCount = await page.locator('[class*="Card"]').count();
+  console.log('Cards with "Card" class:', clipCardsCount);
+
+  // Test selectors
+  const selectors = [
+    '.aspect-video',
+    '[class*="aspect-video"]',
+    'button:has(.lucide-trash)',
+  ];
+
+  for (const sel of selectors) {
+    const count = await page.locator(sel).count();
+    if (count > 0) {
+      console.log(`Selector "${sel}": ${count} elements`);
+    }
+  }
+
+  // Take screenshot
+  await page.screenshot({
+    path: 'screenshots/debug-structure.png',
+    fullPage: true
+  });
+
+  // Interactive testing
+  const firstImg = page.locator('img[src*="thumbnail"]').first();
+  if (await firstImg.count() > 0) {
+    await firstImg.hover();
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: 'screenshots/debug-after-hover.png', fullPage: true });
+  }
 });
 ```
 
-**2. Visibility Assertions:**
-```typescript
-const title = page.locator('h1');
-await expect(title).toHaveText('Librărie');
-console.log('✓ Page title is "Librărie"');
-
-const searchInput = page.locator('input[placeholder*="Caută"]');
-await expect(searchInput).toBeVisible();
-```
-
-**3. Element Counting:**
-```typescript
-const clipCount = await page.locator('img[src*="thumbnail"]').count();
-console.log('Clips found:', clipCount);
-
-if (clipCount === 0) {
-  console.log('No clips to test with');
-  return;
-}
-```
-
-**4. Interaction Pattern:**
-```typescript
-// Hover to reveal elements
-const firstThumbnail = page.locator('img[src*="thumbnail"]').first();
-await firstThumbnail.hover({ force: true });
-await page.waitForTimeout(300);
-
-// Click element
-const firstCheckbox = page.locator('[role="checkbox"]').first();
-await firstCheckbox.click({ force: true });
-await page.waitForTimeout(500);
-```
-
-**5. Dialog/Alert Handling:**
-```typescript
-let alertCount = 0;
-page.on('dialog', async dialog => {
-  console.log('Dialog type:', dialog.type(), '- message:', dialog.message());
-  alertCount++;
-  await dialog.accept();
-});
-
-// Trigger action that shows dialog
-const deleteBtn = page.locator('button:has-text("Șterge selectate")');
-await deleteBtn.click();
-```
-
-**6. Screenshot for Visual Verification:**
-```typescript
-await page.screenshot({
-  path: 'screenshots/librarie-01-initial.png',
-  fullPage: true
-});
-
-// Or single viewport
-await page.screenshot({
-  path: 'screenshots/voice-mute-test-1-project-selected.png',
-  fullPage: false
-});
-```
-
-**7. Logging with Console:**
-```typescript
-console.log('1. Navigating to library...');
-console.log('✓ Page title is "Librărie"');
-console.log(`Found ${clipCount} clips in library`);
-```
+**Python Backend Tests:**
+- No automated test framework detected (no pytest.ini, no test files in `app/`)
+- Backend testing done manually or in GSD phases
 
 ## Playwright Configuration
 
-**File:** `frontend/playwright.config.ts`
-
-```typescript
-export default defineConfig({
-  testDir: './tests',
-  fullyParallel: false,              // Run tests sequentially (not in parallel)
-  forbidOnly: !!process.env.CI,      // Fail if .only exists in CI
-  retries: process.env.CI ? 2 : 0,   // 2 retries in CI, none locally
-  workers: 1,                        // Single worker (sequential)
-  reporter: 'html',                  // HTML report generation
-  timeout: 60000,                    // 60 second per-test timeout
-  use: {
-    baseURL: 'http://localhost:3000',
-    trace: 'on-first-retry',         // Trace failed tests
-    screenshot: 'only-on-failure',   // Screenshot only on failure
-    video: 'retain-on-failure',      // Video recording on failure
-  },
-  projects: [
-    {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
-    },
-  ],
-  webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:3000',
-    reuseExistingServer: true,       // Reuse running Next.js server
-    timeout: 120000,
-  },
-});
-```
+**Config File:** `frontend/playwright.config.ts`
 
 **Key Settings:**
-- Sequential execution (not parallel) due to `fullyParallel: false`
-- Single worker due to UI state conflicts
-- Chromium only (no Firefox/Safari)
-- Screenshots only on failure to reduce disk usage
-- HTML report for debugging
+- `testDir: './tests'` - Test discovery directory
+- `fullyParallel: false` - Tests run sequentially (single worker)
+- `workers: 1` - Force single browser instance
+- `forbidOnly: !!process.env.CI` - Enforce `.only` removal in CI
+- `retries: process.env.CI ? 2 : 0` - Retry failed tests in CI only
+- `timeout: 60000` - Per-test timeout: 60 seconds
+- `reporter: 'html'` - Generate HTML report on `playwright-report/`
+- `trace: 'on-first-retry'` - Record trace (WebKit debugging) on first retry
+- `screenshot: 'only-on-failure'` - Capture screenshots only when test fails
+- `video: 'retain-on-failure'` - Record video only when test fails
 
-## Mocking
+**Browser:**
+- Single project: Chromium (Desktop Chrome)
+- No Firefox or Safari testing configured
 
-**Framework:** Not explicitly mocked in test files
-
-**Approach:**
-- Tests hit real API endpoints (`http://localhost:8000/api/v1`)
-- No Playwright mock interceptor patterns observed
-- No MSW (Mock Service Worker) detected
-- Tests are integration tests, not unit tests
-
-**What's NOT Mocked:**
-- API responses (real backend calls)
-- Database (real Supabase calls via backend)
-- External services (Gemini, ElevenLabs, Postiz)
-
-**What COULD Be Mocked (but isn't):**
-- Browser dialogs (handled with `page.on('dialog')`)
-- Network requests via `page.route()`
-- System time
-
-## Fixtures and Factories
-
-**Test Data:**
-- No explicit factory pattern
-- Tests assume data exists (projects, clips, etc.)
-- Hard-coded project names used: `"Armaf Bliss"`, `"Librărie"`
-
-**Example from `test-voice-muting.spec.ts`:**
+**Web Server:**
 ```typescript
-// Assumes project exists
-const projectItem = page.locator('text=Armaf Bliss');
-await expect(projectItem).toBeVisible({ timeout: 10000 });
-await projectItem.click();
-```
-
-**Location:**
-- No fixtures directory
-- Setup happens inline in each test
-- Database state assumed to exist (manual setup required)
-
-## Coverage
-
-**Requirements:** None enforced
-
-**View Coverage:**
-- No coverage tool configured for frontend
-- Backend (Python) has no test suite
-
-## Test Types
-
-**E2E Tests:**
-- **Scope:** Full user workflows (navigate, click, verify)
-- **Approach:** Browser automation via Playwright
-- **Examples:**
-  - Library page load and clip display
-  - Clip multi-select and deletion
-  - Audio removal (mute source voice)
-  - Postiz publishing
-  - Rename operations
-
-**No Unit Tests:**
-- JavaScript/TypeScript: No Jest, Vitest, or similar configured
-- Python: No pytest or unittest configured
-
-**No Integration Tests (Isolated):**
-- All frontend tests are E2E (full stack)
-
-## Common Patterns
-
-**Async Testing:**
-```typescript
-test('Test async operation', async ({ page }) => {
-  // All operations are async with await
-  await page.goto('/librarie');
-  await page.waitForLoadState('networkidle');
-
-  const res = await apiGet("/library/all-clips");  // Not in tests, but pattern
-  const data = await res.json();
-});
-```
-
-**Waiting Patterns:**
-```typescript
-// Network wait
-await page.waitForLoadState('networkidle');
-
-// Fixed delay
-await page.waitForTimeout(2000);
-
-// Element visibility
-await expect(element).toBeVisible({ timeout: 10000 });
-
-// Element exists
-const element = page.locator('selector');
-if (await element.isVisible()) { ... }
-```
-
-**Error/Failure Testing:**
-Not explicitly tested in current test suite
-
-**Long-Running Operations:**
-Tests use extended timeouts for generation/processing:
-```typescript
-test('Test voice muting in segment generation', async ({ page }) => {
-  test.setTimeout(120000); // 2 minutes timeout for generation
-  // ... test code ...
-});
-```
-
-## Test Execution Context
-
-**Base URL:**
-- Default: `http://localhost:3000` (from `playwright.config.ts`)
-- Can override: `PLAYWRIGHT_BASE_URL` env var
-
-**Server Startup:**
-- Playwright auto-starts Next.js dev server via `webServer` config
-- Backend must be running separately at `http://localhost:8000`
-- Tests require both frontend (3000) and backend (8000) running
-
-**Database:**
-- Tests hit real Supabase instance
-- Data persists between test runs
-- Manual cleanup required or tests need to handle existing data
-
-## Common Test Patterns
-
-**Loading State Check:**
-```typescript
-const clipCount = await page.locator('img[src*="thumbnail"]').count();
-console.log(`Found ${clipCount} clips in library`);
-
-if (clipCount > 0) {
-  // Test with existing clips
+webServer: {
+  command: 'npm run dev',              // Start dev server before tests
+  url: 'http://localhost:3000',
+  reuseExistingServer: true,           // Reuse if already running
+  timeout: 120000,                     // Allow 2 minutes for startup
 }
 ```
 
-**Form Interaction:**
+**Base URL:**
 ```typescript
-// Select dropdown option
-const subtitlesSelect = page.locator('[data-slot="trigger"]').nth(0);
-await subtitlesSelect.click();
-await page.waitForTimeout(500);
-const optionWith = page.locator('text=Cu subtitrări');
-await optionWith.click();
+use: {
+  baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000',
+}
 ```
 
-**Text Content Extraction:**
+Override with env var: `PLAYWRIGHT_BASE_URL=http://example.com npm run test`
+
+## Common Testing Patterns
+
+**Navigation Pattern:**
 ```typescript
-const badgeText = await badge.textContent();
-console.log(`First clip Postiz status: "${badgeText}"`);
+// Navigate and wait for page load
+await page.goto('/librarie');
+await page.waitForLoadState('networkidle');  // Wait for network idle
+await page.waitForTimeout(3000);              // Extra buffer for app initialization
 ```
 
-**Page Content Inspection:**
+**Element Querying Pattern:**
 ```typescript
-const pageHTML = await page.content();
-const hasToast = pageHTML.includes('data-sonner') || pageHTML.includes('sonner-toast');
-console.log('Has sonner toast elements in HTML:', hasToast);
+// Count elements
+const count = await page.locator('selector').count();
+
+// Get first element
+const el = page.locator('selector').first();
+
+// Check visibility
+await page.locator('button').isVisible();
+
+// Get text content
+const text = await page.locator('h1').innerText();
+
+// Get attribute
+const title = await page.locator('button').getAttribute('title');
 ```
+
+**Interaction Pattern:**
+```typescript
+// Click element
+await page.locator('button').click();
+
+// Fill input
+await page.locator('input').fill('text');
+
+// Hover
+await page.locator('img').hover();
+
+// Type with delay
+await page.locator('input').type('slow text', { delay: 100 });
+```
+
+**Async Error Handling Pattern:**
+```typescript
+// Suppress error in single operation
+const text = await btn.innerText().catch(() => '');
+
+// Try-catch for complex flows
+try {
+  await page.locator('selector').click();
+} catch (error) {
+  console.error("Click failed:", error);
+}
+```
+
+**Debugging Pattern:**
+```typescript
+// Log to console (visible with --reporter=list)
+console.log('Debug info:', value);
+
+// Take screenshot for inspection
+await page.screenshot({
+  path: 'screenshots/debug-state.png',
+  fullPage: true
+});
+
+// Print HTML snippet
+const html = await page.locator('main').innerHTML();
+console.log("Main content:", html.substring(0, 500));
+```
+
+## Visual Testing Workflow
+
+**Standard Pattern (from CLAUDE.md):**
+
+1. **Take screenshot after UI change:**
+   ```typescript
+   test('Verify UI change', async ({ page }) => {
+     await page.goto('/library');
+     await page.waitForLoadState('networkidle');
+     await page.waitForTimeout(1000);
+     await page.screenshot({ path: 'screenshots/verify-feature.png', fullPage: true });
+   });
+   ```
+
+2. **Run with visible reporter:**
+   ```bash
+   cd frontend && npx playwright test tests/screenshot-workflow.spec.ts --reporter=list
+   ```
+
+3. **Screenshot saved to:** `frontend/screenshots/{name}.png`
+
+4. **Show screenshot to user for validation**
+
+## Coverage
+
+**Requirements:** Not enforced
+
+**Current State:**
+- Manual testing via Playwright
+- Focus on E2E user flows (navigation, interaction, visual verification)
+- No code coverage metrics configured
+- No unit tests for frontend components
+
+## Test Execution Environment
+
+**Prerequisites:**
+- Node.js 18+ (ESLint v9 requires this)
+- Dev server must be running: `npm run dev` (port 3000)
+- Playwright auto-launches with test runner
+
+**Execution Process:**
+1. Playwright starts Next.js dev server via `webServer` config
+2. Browser opens (Chromium)
+3. Tests run sequentially (workers: 1)
+4. Screenshots captured on failure
+5. Video recorded on first retry in CI
+6. HTML report generated to `playwright-report/`
+
+**CI/Production Mode:**
+- `forbidOnly: !!process.env.CI` - Prevents `.only` in CI
+- `retries: process.env.CI ? 2 : 0` - Auto-retry failed tests
+- Traces and videos retained for debugging
+
+## Debugging Tests
+
+**Open UI Mode:**
+```bash
+npm run test:ui
+# or
+npx playwright test --ui
+```
+- Visual test runner with step-by-step debugging
+- Time-travel through test execution
+
+**Run with Browser Visible:**
+```bash
+npm run test:headed
+# or
+npx playwright test --headed
+```
+
+**Show Console Output:**
+```bash
+npx playwright test --reporter=list
+```
+
+**Generate Report:**
+```bash
+npx playwright show-report
+```
+
+## Common Test Selectors
+
+**By Class:**
+- `.aspect-video` - Video container with aspect ratio
+- `[class*="Card"]` - Any element with Card class
+- `.lucide-trash-2` - Lucide trash icon
+
+**By Attribute:**
+- `img[src*="thumbnail"]` - Image with thumbnail in src
+- `button[title*="Șterge"]` - Button with delete (Romanian)
+- `button:has(.lucide-trash)` - Button containing trash icon
+
+**By Content:**
+- `text=Rendered Video` - Element with exact text
+- `button:has(text)` - Compound selectors
 
 ## Test Maintenance
 
-**Current State:**
-- 44+ test files in `frontend/tests/`
-- Mix of:
-  - Feature tests: `test-librarie-page.spec.ts`, `test-voice-muting.spec.ts`
-  - Debug tests: `debug-page-structure.spec.ts`, `debug-segments.spec.ts`
-  - Verification tests: `verify-librarie-delete.spec.ts`, `verify-ui-improvements.spec.ts`
+**No Fixtures:**
+- Tests access application state directly (localStorage, DB)
+- No test data setup factories
+- Each test must be independent
 
-**Test Naming Convention:**
-- Tests often prefixed with intent:
-  - `test-`: Main functionality tests
-  - `verify-`: Verification/assertion focused tests
-  - `debug-`: Investigative tests (may be temporary)
+**Flakiness:**
+- Use `waitForLoadState()` for network operations
+- Use `waitForTimeout()` for app-specific delays (e.g., 3000ms for library page)
+- Retry logic in CI handles transient failures
 
-**No Cleanup Between Tests:**
-- Tests assume independent execution
-- Database state may accumulate
-- No teardown/beforeEach patterns observed
-
-## Debugging
-
-**Available Tools:**
-- `npx playwright test --ui`: Opens Playwright Inspector (step through, inspect DOM)
-- `npx playwright test --headed`: Run with visible browser
-- Screenshots auto-saved to `screenshots/` on failure
-- HTML report available after run
-
-**Debug Information:**
-- Test output includes `console.log()` statements
-- Playwright trace saved on first retry
-- Video recorded on failure
+**Selector Strategy:**
+- Prefer semantic selectors (data-testid would be better, not used)
+- Accept class-based selectors for component discovery
+- Use CSS custom selectors and pseudo-selectors
 
 ---
 
-*Testing analysis: 2026-02-03*
+*Testing analysis: 2026-02-12*

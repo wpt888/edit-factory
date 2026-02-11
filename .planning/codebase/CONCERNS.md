@@ -1,290 +1,288 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-02-03
+**Analysis Date:** 2026-02-12
 
 ## Tech Debt
 
-**Overly Broad Exception Handling:**
-- Issue: 109 instances of bare `except Exception:` clauses that swallow all errors without differentiation
-- Files: `app/api/library_routes.py` (primary), `app/services/video_processor.py`, `app/api/routes.py`, `app/api/segments_routes.py`, `app/services/*.py`
-- Impact: Difficult to debug failures, mask programming errors, swallow timeout/memory errors equally
-- Fix approach: Categorize exceptions by type (httpx.TimeoutException, FileNotFoundError, etc.) and handle specifically; use logging with full traceback
+**Large Monolithic Route Files:**
+- Issue: `app/api/library_routes.py` contains 2,587 lines with mixed concerns (CRUD, rendering, progress tracking, file management). Similar overloading in `app/api/routes.py` (1,447 lines).
+- Files: `app/api/library_routes.py`, `app/api/routes.py`, `app/api/segments_routes.py` (1,085 lines)
+- Impact: Difficult to test, high cognitive load, increased risk of bugs during maintenance, unclear separation of concerns
+- Fix approach: Refactor into smaller services by concern (e.g., separate rendering service, progress tracking service, file cleanup service). Consider moving rendering logic to `app/services/render_pipeline.py`.
 
-**Global State Management via Bare Globals:**
-- Issue: Multiple singleton patterns using bare `global` keywords for cache/singletons (job storage, cost tracker, Postiz publisher, Supabase clients)
-- Files: `app/services/job_storage.py` (lines 234-243), `app/services/cost_tracker.py` (lines 269-282), `app/api/library_routes.py` (lines 68-80), `app/api/segments_routes.py` (lines 28), `app/services/postiz_service.py` (lines 287-295)
-- Impact: Race conditions in concurrent requests, difficult to test, state leaks between requests, hard to reset state
-- Fix approach: Migrate to FastAPI dependency injection (Depends), use context managers, or thread-safe factory functions
+**In-Memory State Without Persistence on Restart:**
+- Issue: Progress tracking (`_generation_progress` dict), project locks (`_project_locks`), and publish progress (`_publish_progress`) stored in module-level globals in `app/api/library_routes.py` and `app/api/postiz_routes.py`. Lost on server restart.
+- Files: `app/api/library_routes.py` (lines 49, 32-33), `app/api/postiz_routes.py` (line 72)
+- Impact: Long-running jobs lose progress state; clients see progress reset if server restarts mid-task. Users may re-submit jobs thinking they failed.
+- Fix approach: Migrate progress tracking to Supabase `jobs` table with real-time polling. Lock management could use Redis or distributed locking via database. Phase this change after stabilizing current job storage pattern.
 
-**Project Locking with Threading Locks:**
-- Issue: In-memory project locks in `app/api/library_routes.py` (lines 27-41) will not work in multi-worker setups
-- Files: `app/api/library_routes.py`
-- Impact: Race conditions when running with multiple Uvicorn workers or Gunicorn; locks only prevent races within single process
-- Fix approach: Use database-level locks via Supabase (SELECT FOR UPDATE), Redis locking, or move to async mutex per project
+**Global Singleton Initialization Pattern:**
+- Issue: Supabase clients initialized lazily in multiple places (`app/api/library_routes.py`, `app/api/auth.py`, `app/api/profile_routes.py`, `app/services/job_storage.py`) with duplicated null-check and init logic.
+- Files: `app/api/library_routes.py` (lines 69-85), `app/api/auth.py` (lines 190-203), `app/api/profile_routes.py` (lines 20-41), `app/services/job_storage.py` (lines 24-38)
+- Impact: Scattered initialization makes it hard to ensure Supabase is ready before use; harder to mock for testing; initialization errors not centralized.
+- Fix approach: Create `app/services/database.py` with single `get_supabase()` factory. Replace all local get_supabase implementations with calls to this central factory.
 
-**In-Memory Progress Tracking:**
-- Issue: Generation progress stored in `_generation_progress` dict in `app/api/library_routes.py` (lines 44-61)
-- Files: `app/api/library_routes.py`
-- Impact: Progress lost on restart, not accessible across workers, no persistence
-- Fix approach: Store in Supabase or Redis with TTL
-
-**Fallback Pattern Fragility:**
-- Issue: JobStorage and CostTracker fall back to in-memory storage when Supabase unavailable (job_storage.py, cost_tracker.py)
-- Files: `app/services/job_storage.py`, `app/services/cost_tracker.py`
-- Impact: No warning when fallback occurs, data lost on restart, inconsistent state between multiple services
-- Fix approach: Add explicit monitoring/alerting, implement retry logic with exponential backoff, ensure Supabase connection is established at startup (fail fast)
-
-**Manual Supabase Client Initialization:**
-- Issue: Supabase clients initialized in multiple routes and services with copy-paste code (get_supabase() in library_routes.py, segments_routes.py)
-- Files: `app/api/library_routes.py` (lines 66-80), `app/api/segments_routes.py` (similar pattern)
-- Impact: Inconsistent initialization, duplicate connection handling logic, versioning mismatches
-- Fix approach: Create single `app/services/supabase_client.py` with shared initialization
-
----
+**Inline TTS Service Selection Logic:**
+- Issue: TTS provider selection (ElevenLabs vs Edge vs Coqui vs Kokoro) embedded as string matching in route handlers instead of unified service factory.
+- Files: `app/api/routes.py`, `app/api/tts_routes.py` - provider selection logic scattered
+- Impact: Adding new TTS provider requires changes in multiple places; provider fallback logic unclear; testing difficult.
+- Fix approach: Consolidate all TTS provider selection in `app/services/tts/factory.py`. All routes should call `get_tts_service(provider_name)` instead of direct service instantiation.
 
 ## Known Bugs
 
-**Supabase Error on Missing JWT Secret:**
-- Symptoms: `verify_jwt_token()` in `app/api/auth.py` (line 43-48) returns 500 error if JWT_SECRET not configured instead of failing gracefully
-- Files: `app/api/auth.py` (lines 43-48)
-- Trigger: Running with `auth_disabled=False` but no `SUPABASE_JWT_SECRET` in env
-- Workaround: Always set `auth_disabled=True` for development or configure JWT_SECRET
+**Background Task Lock Leak on Non-Blocking Acquisition Failure:**
+- Symptoms: If `get_project_lock(project_id).acquire(blocking=False)` returns False in `_generate_from_segments_task` (line 853), function returns early without logging sufficient context. If a job acquisition fails silently, users see no feedback.
+- Files: `app/api/library_routes.py` (lines 852-855)
+- Trigger: Submit two clip generation requests for same project simultaneously
+- Workaround: Wait and retry, or refresh page and resubmit
+- Fix: Log detailed warning with timestamp and job_id; consider adding "locked" status to progress endpoint
 
-**Cost Tracker Bare Except:**
-- Symptoms: `_load_log()` in `app/services/cost_tracker.py` (line 72) catches all exceptions silently including JSON decode errors
-- Files: `app/services/cost_tracker.py` (line 72)
-- Trigger: Corrupted cost_log.json file
-- Workaround: Manually delete cost_log.json to reset
+**FFmpeg Command Construction Concatenation Safety:**
+- Symptoms: FFmpeg concat filter using unsafe file list writes. While paths use `str()` conversion, there's no validation that file paths don't contain newlines or special concat syntax.
+- Files: `app/api/library_routes.py` (line 1040: `f.write(f"file '{segment_output}'\n"`)
+- Trigger: Video files with special characters in path (unlikely in production but possible)
+- Workaround: Rename files to remove special characters before processing
+- Fix: Escape/validate file paths in concat list; use FFmpeg's built-in path sanitization or generate absolute paths only
 
-**Demucs Vocal Removal Hanging:**
-- Symptoms: `vocal_remover.py` subprocess calls can hang indefinitely if Demucs model downloads or gets stuck
-- Files: `app/services/vocal_remover.py` (lines 87-91)
-- Trigger: First run with new Demucs model, network issues during download
-- Workaround: Set subprocess timeout or pre-download models
+**Incomplete Error Context in Broad Exception Handlers:**
+- Symptoms: Multiple `except Exception as e` blocks log only `str(e)` which may be truncated or lack traceback for complex errors.
+- Files: `app/api/library_routes.py` (lines 159, 246, 267, 299, etc.), `app/api/routes.py` (lines 221, 232)
+- Trigger: Complex failures during video processing
+- Workaround: Check server logs with traceback
+- Fix: Use `logger.exception()` instead of `logger.error()` to auto-include tracebacks. Consider structured logging with context (project_id, user_id, phase).
 
----
+**Bare Exception Silencing in Helper Functions:**
+- Symptoms: `_delete_clip_files()` and `_get_video_duration()` use bare `except Exception: pass` without logging (lines 2033, 2069-2070).
+- Files: `app/api/library_routes.py` (lines 2020-2034, 2063-2070)
+- Trigger: Filesystem errors, permission issues, or corrupted files
+- Workaround: None - silent failures make debugging very difficult
+- Fix: Replace `pass` with `logger.warning()` to surface issues. At minimum: `except Exception as e: logger.warning(f"_delete_clip_files failed: {e}")`
+
+**Race Condition: Project Lock Cleanup Not Guaranteed:**
+- Symptoms: If `_generate_from_segments_task()` crashes hard (OOM, segfault), `cleanup_project_lock()` at line 1131 may not execute, leaving lock in `_project_locks` dict forever.
+- Files: `app/api/library_routes.py` (lines 1127-1132, particularly the finally block at 1127)
+- Trigger: Out-of-memory during rendering or system crash
+- Workaround: Restart backend server
+- Fix: Use context manager pattern: `with acquire_lock(project_id):` to guarantee cleanup even on crash
 
 ## Security Considerations
 
-**JWT Token Verification Missing Expiry Check:**
-- Risk: If token validation skipped, expired tokens accepted
-- Files: `app/api/auth.py` (line 50-57)
-- Current mitigation: PyJWT checks expiry, but `auth_disabled` flag bypasses all auth
-- Recommendations: Never ship with `auth_disabled=True` in production; implement token refresh logic; add token blacklist for logout
+**Supabase JWT Validation Disabled in Development:**
+- Risk: When `auth_disabled=true` (intended for local dev), all authentication is bypassed. If `.env` with `auth_disabled=true` is accidentally deployed to production, entire system is open.
+- Files: `app/config.py` (line 52), `app/api/auth.py` (lines 220-240)
+- Current mitigation: Documentation in CLAUDE.md warns this is dev-only. Config defaults to `False`.
+- Recommendations:
+  - Add explicit environment variable validation at startup: fail fast if `auth_disabled=true` and `ENV=production`
+  - Add warning log when server starts with `auth_disabled=true`
+  - Consider moving `auth_disabled` to a separate config file NOT checked into git
 
-**Development Mode Auth Bypass:**
-- Risk: `auth_disabled` flag in config allows unauthenticated access to all endpoints
-- Files: `app/config.py` (line 52), `app/api/auth.py` (lines 102-108)
-- Current mitigation: Warning log message
-- Recommendations: Enforce auth_disabled=False in production via environment validation; restrict to localhost only; add rate limiting
+**File Path Traversal Prevention Exists But Incomplete:**
+- Risk: `_sanitize_filename()` (lines 242-255 in routes.py) prevents path traversal for uploaded file names, but raw segment file paths from database (`seg["file_path"]`) in `_generate_from_segments_task()` are used directly in FFmpeg commands without validation.
+- Files: `app/api/routes.py` (lines 242-255), `app/api/library_routes.py` (lines 1023, 1046)
+- Current mitigation: Database values assumed trusted (come from previous uploads), but no runtime validation
+- Recommendations:
+  - Add path validation in `_generate_from_segments_task()`: ensure all file paths are within expected `output_dir` or `input_dir`
+  - Use `Path.resolve()` and `.is_relative_to()` to enforce sandbox
+  - Validate before passing to FFmpeg: `if not Path(seg["file_path"]).resolve().is_relative_to(settings.base_dir): raise ValueError()`
 
-**File Path Traversal in File Serving:**
-- Risk: `/library/files/{file_path:path}` endpoint sanitizes paths but uses resolve() which is not bulletproof
-- Files: `app/api/library_routes.py` (lines 139-179)
-- Current mitigation: Checks against allowed directories
-- Recommendations: Use pathlib.Path validation more strictly; reject paths with `..` explicitly; validate file ownership
+**Profile ID Validation Is Opt-in Per Route:**
+- Risk: Routes that don't use `Depends(get_profile_context)` have no profile isolation. Users could potentially access other users' data if they know the IDs.
+- Files: `app/api/library_routes.py` - most endpoints properly validate, but some older endpoints might be missing checks
+- Current mitigation: Most library routes check `profile.profile_id` in queries
+- Recommendations:
+  - Create a fixture/middleware that enforces profile context on all routes (or whitelelist public routes explicitly)
+  - Add automated test: "GET /api/v1/library/projects with different profile ID should return 403"
 
-**API Key Exposure:**
-- Risk: ElevenLabs and Gemini keys passed in environment variables, cost tracker logs operation details
-- Files: `app/services/elevenlabs_tts.py`, `app/services/gemini_analyzer.py`, `app/services/cost_tracker.py` (lines 119-121)
-- Current mitigation: Keys not logged directly
-- Recommendations: Add secret masking to logs; use Key Management Service (KMS); rotate keys regularly; never log full API responses
+**Subprocess Command Injection Not Fully Mitigated:**
+- Risk: While FFmpeg commands use list-based invocation (safe from shell injection), custom filter expressions built as f-strings could be vulnerable if user input reaches them.
+- Files: `app/api/library_routes.py` (lines 806-824 audio filter construction uses user-provided data)
+- Current mitigation: Filter parameters come from preset config or form inputs, validated with type hints
+- Recommendations:
+  - Audit filter construction: ensure user inputs (e.g., voice detection thresholds, volume levels) are numeric and range-validated BEFORE building filter strings
+  - Example: `shadow_depth: int = Form(default=0)` should validate `0 <= shadow_depth <= 10` not just at type level
 
-**Subprocess Command Injection Risk:**
-- Risk: FFmpeg/Demucs commands built with string concatenation, though no shell=True used
-- Files: `app/services/video_processor.py`, `app/services/vocal_remover.py`, `app/services/voice_detector.py`
-- Current mitigation: subprocess.run without shell=True prevents injection
-- Recommendations: Validate all file paths before passing to subprocess; use pathlib for path operations; consider sandboxing FFmpeg
-
----
+**Secrets in Environment Variables Not Validated at Startup:**
+- Risk: Missing critical env vars (GEMINI_API_KEY, SUPABASE_KEY) fail silently with graceful degradation. Code continues but features silently don't work, users see vague errors.
+- Files: `app/config.py` (lines 36-46), `app/services/gemini_analyzer.py` (lines 22-31)
+- Current mitigation: Graceful degradation by design (features work without APIs)
+- Recommendations:
+  - At server startup, validate which secrets are required vs optional
+  - Log which features are disabled due to missing secrets
+  - Add `/api/v1/health` endpoint that reports which critical features are unavailable
 
 ## Performance Bottlenecks
 
-**Large File Operations Without Streaming:**
-- Problem: Video uploads/downloads handled in memory or with large buffer reads
-- Files: `app/services/postiz_service.py` (line 149-150: open entire file into memory), `app/api/library_routes.py` (line 179: FileResponse should handle streaming)
-- Cause: FileResponse is streaming but upload_video reads entire file
-- Improvement path: Use chunked uploads for large files, implement progress callbacks, add multipart upload support
+**Synchronous FFmpeg Calls in Background Tasks:**
+- Problem: `subprocess.run()` calls for FFmpeg are synchronous and blocking. Multiple concurrent render tasks consume threads from FastAPI's default thread pool, potentially blocking other requests.
+- Files: `app/api/library_routes.py` (lines 1035, 1052, multiple FFmpeg calls within `_render_final_clip_task` and `_generate_from_segments_task`)
+- Cause: Each video processing step (extract segment, concat, add audio, add subtitles) runs sequentially via `subprocess.run()`. No parallelization within a single render.
+- Improvement path:
+  1. Short-term: Add max concurrency limit (e.g., only 2 concurrent renders) via semaphore or queue
+  2. Medium-term: Move video processing to async subprocess with `asyncio.create_subprocess_exec()`
+  3. Long-term: Use GPU acceleration (FFmpeg CUDA/HW encoding) for faster encoding
 
-**Gemini API Batch Processing Inefficient:**
-- Problem: Frames sent to Gemini in batches of 30, causing many API calls for long videos
-- Files: `app/services/gemini_analyzer.py` (lines 46, max_frames_per_batch=30)
-- Cause: API limits and design choice
-- Improvement path: Increase batch size if API allows; implement frame deduplication; cache similar frames
+**Unnecessary Database Queries in Loops:**
+- Problem: `_update_project_counts()` (line 2073) queries ALL clips for a project to count variants/selected/exported. Called after each clip modification. If project has 100 clips, this is 100+ queries per operation.
+- Files: `app/api/library_routes.py` (lines 2073-2094)
+- Cause: No denormalized counters; recalculated every time
+- Improvement path:
+  1. Add `variants_count`, `selected_count`, `exported_count` columns to `editai_projects` table (denormalized)
+  2. Update counters incrementally when clip state changes instead of recalculating
+  3. Add index on `(project_id, is_deleted)` for faster filtering
 
-**Video Processing Single-Threaded:**
-- Problem: `VideoProcessorService` processes videos sequentially despite heavy I/O
-- Files: `app/services/video_processor.py`
-- Cause: OpenCV operations are CPU-bound but I/O to disk/network not parallelized
-- Improvement path: Use asyncio for I/O-bound operations, multiprocessing for frame extraction, queue-based job system
+**Full-Page Clip Fetches Without Pagination:**
+- Problem: Library page fetches all clips for a project without limit. If project has 1000 clips, request becomes very large, slow parsing/rendering.
+- Files: `frontend/src/app/library/page.tsx` (likely fetches all via `/api/v1/library/projects/{id}/clips`), `app/api/library_routes.py` (lines 1154+ get clips endpoint)
+- Cause: No pagination or lazy-loading implemented
+- Improvement path:
+  1. Implement cursor-based pagination: `GET /api/v1/library/clips?project_id=X&limit=50&offset=0`
+  2. Frontend loads first 50, implements infinite scroll or "Load More"
+  3. Add `order_by(created_at desc)` and `limit()` to database query
 
-**Cost Tracker JSON I/O on Every Log:**
-- Problem: Cost log written to disk synchronously on every API call
-- Files: `app/services/cost_tracker.py` (line 77, _save_log on every entry)
-- Cause: Immediate persistence, no batching
-- Improvement path: Batch writes, use async file operations, or defer to periodic flush
-
-**Frontend Component Re-renders:**
-- Problem: Library page uses inline functions in map() causing component re-creation on every render
-- Files: `frontend/src/app/librarie/page.tsx` (large component with useState and useCallback)
-- Cause: No memoization, inline event handlers, missing keys in lists
-- Improvement path: Split into smaller components, use React.memo(), extract event handlers outside render
-
----
+**Voice Detection Runs for Every Segment Generation:**
+- Problem: If user generates 5 variants with `mute_source_voice=true`, voice detection runs 5 times on same source videos (lines 886-912).
+- Files: `app/api/library_routes.py` (lines 883-912)
+- Cause: Voice segments not cached; recomputed per request
+- Improvement path:
+  1. Cache voice detection results in database: `editai_voice_detections(video_id, voice_segments, detected_at)`
+  2. Check cache before detecting; invalidate on video re-upload
+  3. Only re-detect if cache is older than 7 days or user explicitly requests refresh
 
 ## Fragile Areas
 
-**Video Processing Pipeline:**
-- Files: `app/services/video_processor.py` (2039 lines), `app/api/routes.py`, `app/api/library_routes.py`
-- Why fragile: Complex state machine with multiple services (TTS, voice detection, silence removal, Gemini), many fallback paths, error recovery undefined
-- Safe modification: Add comprehensive logging at each step; create test fixtures for different video formats; document expected outputs at each stage
-- Test coverage: Minimal integration tests, no end-to-end test for full pipeline
+**Video Rendering Pipeline Without Atomic Operations:**
+- Files: `app/api/library_routes.py` (lines 1623-1932 `_render_final_clip_task`)
+- Why fragile: Multi-step process (extract audio, generate SRT, apply filters, encode) with database updates after each step. If step 3 fails but step 2 committed, clip is left in inconsistent state (partial video + partial metadata).
+- Safe modification: Wrap entire pipeline in a database transaction (if Supabase supports) or create a staging area and atomic rename at end. Use a "rendering" status that's only promoted to "completed" after ALL steps succeed.
+- Test coverage: Need integration tests that inject failures at each step (e.g., mock FFmpeg to fail on audio extraction) and verify rollback behavior.
 
-**Library Routes Monolith:**
-- Files: `app/api/library_routes.py` (2299 lines)
-- Why fragile: Single file handles projects, clips, exports, rendering, deletion, publishing; intertwined concerns
-- Safe modification: Extract concerns into separate files (project_routes.py, clip_routes.py, export_routes.py); create service layer; add validation models
-- Test coverage: No unit tests found
+**Global Lock Management Without Expiration:**
+- Files: `app/api/library_routes.py` (lines 32-46, 851-855, 1927-1931)
+- Why fragile: `_project_locks` dict grows unbounded (new project creates new lock, never cleaned). After weeks of use, dict could have millions of stale locks. No TTL or cleanup.
+- Safe modification: Implement lock cleanup: after `cleanup_project_lock()` is called, OR auto-expire locks older than 24h via a maintenance task.
+- Test coverage: Test that lock is released after task completion (use mock background task).
 
-**Database Schema Synchronization:**
-- Files: `app/services/job_storage.py`, `app/services/cost_tracker.py`, Supabase schema
-- Why fragile: Schema defined in Supabase UI, no migrations, schema drift not detected
-- Safe modification: Use Supabase migrations, document all tables in README, validate schema at startup
-- Test coverage: Untested
+**Concat File Paths Without Atomic Writes:**
+- Files: `app/api/library_routes.py` (lines 983-1040, concat file written line-by-line)
+- Why fragile: If process crashes mid-write, concat file is corrupted. Next FFmpeg command fails with unclear error.
+- Safe modification: Write to temp file, then atomic rename: `Path(temp_concat).rename(concat_list_path)` after full write completes successfully.
+- Test coverage: Test with very large segment lists (1000+) to ensure concat file is complete.
 
-**Authentication Dependency Injection:**
-- Files: `app/api/auth.py` (Depends(security)), many routes using Depends(get_current_user)
-- Why fragile: auth_disabled flag globally disables auth; optional user dependency not enforced at route level
-- Safe modification: Remove auth_disabled flag in production; create protected/unprotected route groups; add type hints for optional vs required auth
-- Test coverage: No unit tests for auth logic
-
----
+**Supabase Connection Fallback Logic Unclear:**
+- Files: `app/services/job_storage.py` (lines 24-38, 63-86), `app/api/library_routes.py` (lines 71-85)
+- Why fragile: If Supabase fails to initialize, code silently falls back to in-memory storage. Then if Supabase comes back online, data is inconsistent (jobs stored locally not in DB). No way to know which store was used.
+- Safe modification: Log clearly which store is active (Supabase or memory). At startup, if Supabase is expected (by env var), FAIL FAST rather than silently degrading. Only allow memory fallback if Supabase is explicitly optional in config.
+- Test coverage: Test both scenarios: with Supabase available and with Supabase unavailable (mocked exception).
 
 ## Scaling Limits
 
-**In-Memory State (Project Locks, Progress):**
-- Current capacity: Single process, ~100 concurrent projects
-- Limit: Breaks when scaling to multiple workers
-- Scaling path: Move locks/progress to Supabase or Redis
+**In-Memory Progress Dict Unlimited Growth:**
+- Current capacity: Limited by available RAM. Could grow to GB+ over days if many projects are tracked.
+- Limit: On instance with 4GB RAM, could track ~100k projects before memory pressure
+- Scaling path:
+  1. Implement TTL: auto-expire progress entries after 24h of no updates
+  2. Move to Redis: `SETEX project:progress:${projectId} 86400 {...}` (1-day TTL built-in)
+  3. Switch to database: store in Supabase jobs table with indexed `project_id` for real-time polling
 
-**Supabase Fallback Memory Store:**
-- Current capacity: JobStorage._memory_store holds all jobs in RAM
-- Limit: OOM after ~10,000 jobs (rough estimate)
-- Scaling path: Implement job cleanup (cleanup_old_jobs exists but not triggered), use pagination, archive old jobs
+**Synchronous subprocess Limits Concurrent Renders:**
+- Current capacity: If FastAPI has default 10-worker thread pool, ~2-3 concurrent video renders max (each uses ~3-4 threads)
+- Limit: Beyond 50 concurrent user requests, render queue backs up
+- Scaling path:
+  1. Move rendering to async queue (Celery + Redis)
+  2. Dedicated render worker processes (separate from API)
+  3. Batch GPU renders on powerful compute instance
 
-**FFmpeg Parallel Processing:**
-- Current capacity: Single-threaded, 1 video at a time
-- Limit: Bottleneck on compute-heavy operations (vocal removal, silence detection)
-- Scaling path: Implement job queue (Celery configured but not used), add worker pool, use container orchestration
-
-**API Cost Tracking:**
-- Current capacity: JSON file writes on every operation
-- Limit: Disk I/O bottleneck at ~100 requests/sec
-- Scaling path: Use Supabase exclusively, batch writes, async logging
-
-**Frontend File Download:**
-- Current capacity: Single file served via FileResponse
-- Limit: Large videos (>500MB) may timeout or exhaust memory
-- Scaling path: Implement resumable downloads, chunked transfer encoding, CDN caching
-
----
+**Single FFmpeg Process Per Clip:**
+- Current capacity: Each clip render is one FFmpeg invocation. No parallelization within clip (e.g., can't encode audio and video in parallel)
+- Limit: 1080p 60fps video encode takes 30-60s per clip on typical CPU
+- Scaling path:
+  1. Use FFmpeg HW acceleration: `-hwaccel cuda` (requires GPU)
+  2. Parallel segment extraction: submit all segment extracts concurrently, then concat (currently sequential)
+  3. Profile to find slowest step and optimize
 
 ## Dependencies at Risk
 
-**OpenAI Whisper (Large Model Download):**
-- Risk: ~1.5GB model auto-downloaded on first use, network failure blocks execution
-- Impact: First run takes 10+ minutes, no retry logic
-- Migration plan: Pre-download models to Docker image, use smaller `base` model by default, cache in shared volume
+**Deprecated OpenVoice Voice Cloning Service:**
+- Risk: `app/services/voice_cloning_service.py` imports OpenVoice which may not be maintained. No fallback if OpenVoice breaks.
+- Impact: Voice cloning feature silently fails if import breaks; no graceful degradation
+- Migration plan:
+  1. Evaluate ElevenLabs voice cloning API as replacement
+  2. Create voice cloning provider abstraction (similar to TTS factory pattern)
+  3. Move OpenVoice to optional, add try/except at import
 
-**PyTorch/Silero VAD (GPU Optional):**
-- Risk: Large dependency (2GB+), optional but imported unconditionally
-- Impact: Increases Docker image size, memory footprint on CPU-only systems
-- Migration plan: Make conditional import, lazy loading, separate GPU container
+**Coqui TTS Model Caching Unbounded:**
+- Risk: `app/services/tts/coqui.py` has `_model_cache: Dict[str, 'TTS'] = {}` that grows unbounded. Models are large (100-500MB each). Multiple models loaded = multiple GB.
+- Impact: Memory exhaustion if multiple voice IDs used across sessions
+- Migration plan:
+  1. Add `maxsize` parameter to cache (e.g., keep only 3 most-recent models)
+  2. Implement LRU eviction
+  3. Load models on-demand and unload after inference (slower but memory-safe)
 
-**Google Genai SDK Versioning:**
-- Risk: `google-genai>=0.2.0` allows major version changes with breaking changes
-- Impact: API changes not caught until runtime
-- Migration plan: Pin to exact version (e.g., `google-genai==0.3.0`), test upgrades in CI before merging
-
-**Supabase Client Versioning:**
-- Risk: `supabase>=2.0.0` similar version constraint, breaking changes possible
-- Impact: Connection failures, schema mismatches
-- Migration plan: Pin to exact version, maintain compatibility layer for schema changes
-
-**FFmpeg Binary:**
-- Risk: Local FFmpeg at `ffmpeg/ffmpeg-master-latest-win64-gpl/bin/` may not exist
-- Impact: Video processing fails with unclear error
-- Migration plan: Make system FFmpeg fallback primary, bundle as Docker layer, validate at startup
-
----
+**FFmpeg Version Compatibility:**
+- Risk: Code uses specific FFmpeg flags (e.g., `-afftdn` for audio denoising, `concat demuxer`) that may not exist in all FFmpeg versions.
+- Impact: If system FFmpeg is too old, rendering silently fails with "option not found" error
+- Migration plan:
+  1. At startup, probe FFmpeg version: `ffmpeg -version`, cache supported codecs/filters
+  2. Warn if version is too old (e.g., < 4.4)
+  3. Fallback to simpler filters if advanced filters unavailable
 
 ## Missing Critical Features
 
-**No API Rate Limiting:**
-- Problem: Cost tracking exists but no rate limits on expensive operations (Gemini, ElevenLabs)
-- Blocks: Can run out of API budget without notice
-- Fix: Implement token bucket or sliding window rate limiter per user/endpoint
+**No Request Deduplication for Duplicate Submits:**
+- Problem: If frontend network hiccups and user clicks submit twice, two render tasks are queued. User gets two identical outputs; resources wasted.
+- Files: No deduplication logic in `render_final_clip` endpoint (line 1623)
+- Workaround: User manually deletes duplicate
+- Improvement: Add idempotency key to requests (client generates UUID, includes in POST body). Server checks if key already processed in last hour; returns cached result.
 
-**No Request Validation:**
-- Problem: Pydantic models defined but not used consistently
-- Blocks: Invalid inputs reach business logic without validation
-- Fix: Add request body validation, file size checks, duration limits
+**No Rate Limiting on Video Processing Endpoints:**
+- Problem: Malicious actor could spam `/render` endpoints, consuming all server resources.
+- Files: All rendering endpoints in `app/api/library_routes.py` lack rate limiting
+- Workaround: Proxy-level rate limiting (nginx/CloudFlare)
+- Improvement: Add per-user rate limit (e.g., 5 renders per hour per profile) via decorator on endpoints
 
-**No Graceful Error Recovery:**
-- Problem: On video processing failure, state left inconsistent
-- Blocks: Manual cleanup required, retries not possible
-- Fix: Implement state machine with defined transitions, automatic retry with backoff
+**No Automatic Cleanup of Orphaned Files:**
+- Problem: If render fails mid-way, temp files (`/temp/{profile_id}/*.mp4`) left behind accumulate over time.
+- Files: Manual cleanup endpoint exists (`/maintenance/cleanup-temp` line 1611) but never called automatically
+- Workaround: Manual call to cleanup endpoint or cron job outside app
+- Improvement: Auto-run cleanup on server startup and hourly; add metrics tracking orphaned files
 
-**No Audit Logging:**
-- Problem: No record of who published what, when deletions occurred
-- Blocks: Cannot investigate data loss or track user actions
-- Fix: Add audit table, log all mutations, implement retention policy
-
-**No Background Job Monitoring:**
-- Problem: Celery configured but not used, jobs stored in Supabase with manual polling
-- Blocks: No visibility into job progress, no recovery mechanism
-- Fix: Implement WebSocket progress updates, use job queue with monitoring dashboard
-
----
+**No Render Output Compression/Optimization Options:**
+- Problem: All renders use same preset. No option for lower-bitrate for mobile, higher-quality for archive.
+- Files: `app/api/library_routes.py` line 1627 preset hardcoded per clip; presets in DB but limited customization
+- Improvement: Add form options for bitrate, codec selection in render dialog
 
 ## Test Coverage Gaps
 
-**Backend Unit Tests Missing:**
-- What's not tested: Cost tracker, job storage, video processor scoring algorithm, Gemini analyzer frame extraction
-- Files: `app/services/*.py` (no test files found)
-- Risk: Business logic changes break without notice
-- Priority: High
+**Voice Muting Logic Not Covered:**
+- What's not tested: Voice segment detection and overlap calculation (`_get_overlapping_voice_mutes`, voice detection accuracy)
+- Files: `app/api/library_routes.py` (lines 993-1000, 883-912), `app/services/voice_detector.py`
+- Risk: Mute filter could apply wrong intervals, cutting off speech or not muting properly. Users won't notice until they publish.
+- Priority: High - affects output quality
 
-**API Integration Tests Missing:**
-- What's not tested: Project creation → clip upload → export workflow, error cases
-- Files: `app/api/*.py`
-- Risk: E2E failures caught by users, not CI
-- Priority: High
+**Concat File Generation Edge Cases:**
+- What's not tested: Concat with very large segment lists (1000+), special characters in file paths, disk space exhaustion during temp file writes
+- Files: `app/api/library_routes.py` (lines 983-1052)
+- Risk: Unknown failure modes; could crash silently or produce corrupted output
+- Priority: High - affects reliability
 
-**Auth Flow Tests Missing:**
-- What's not tested: JWT verification, expired tokens, missing JWT_SECRET, auth_disabled behavior
-- Files: `app/api/auth.py`
-- Risk: Auth bypass or lockout in production
-- Priority: Critical
+**Parallel Render Task Collision:**
+- What's not tested: Two concurrent render requests for same clip should either queue or fail gracefully. Currently untested.
+- Files: `app/api/library_routes.py` (lines 1623-1932), no test for concurrent access
+- Risk: Race condition could produce corrupted output or silent failure
+- Priority: High - affects correctness
 
-**Database Schema Tests Missing:**
-- What's not tested: Supabase table structure, migrations, cascading deletes
-- Files: None (schema only in Supabase UI)
-- Risk: Data integrity issues, orphaned records
-- Priority: High
+**Profile Isolation Enforcement:**
+- What's not tested: Authenticated user A should not be able to access/modify user B's profiles or clips via API
+- Files: `app/api/auth.py` (profile validation), all library endpoints
+- Risk: Security breach; user data leakage
+- Priority: Critical - security issue
 
-**Frontend Component Tests Incomplete:**
-- What's not tested: Most component logic (only E2E/Playwright tests exist)
-- Files: `frontend/src/app/librarie/page.tsx` and others have no unit tests
-- Risk: UI bugs, state management issues not caught
-- Priority: Medium
-
-**Video Processing Edge Cases:**
-- What's not tested: Corrupt videos, non-standard formats, very long/short videos, silent videos, videos without audio
-- Files: `app/services/video_processor.py`, `app/services/voice_detector.py`
-- Risk: Silent failures, incomplete processing
-- Priority: Medium
+**FFmpeg Command Failures:**
+- What's not tested: What happens if FFmpeg exits with error during extract/concat/encode? Current code logs but doesn't retry or provide user feedback.
+- Files: `app/api/library_routes.py` (lines 1035-1038, 1052-1055, etc. - error handling is minimal)
+- Risk: Silent failures; users see "processing" forever
+- Priority: Medium - affects UX
 
 ---
 
-*Concerns audit: 2026-02-03*
+*Concerns audit: 2026-02-12*
