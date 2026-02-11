@@ -2,11 +2,11 @@
 
 ## What This Is
 
-Edit Factory is a video processing platform for social media content creators (reels, TikTok, YouTube Shorts). It automates video production by combining Gemini AI video analysis, TTS voice generation, Whisper AI captions, and Postiz social media publishing. The platform produces professional-grade output with platform-optimized encoding, audio normalization, video filters, and enhanced subtitles. Used personally to create videos for two online stores, each with its own library and social media accounts.
+Edit Factory is a script-first video production platform for social media content (reels, TikTok, YouTube Shorts). Given an idea and product context, AI generates multiple voiceover scripts, ElevenLabs creates TTS audio with precise timestamps, the system matches keyword-tagged video segments to the narration, and assembles complete videos with synced subtitles. Supports multi-variant generation (one idea → N unique videos). Used personally for two online stores, each with isolated libraries and social media accounts.
 
 ## Core Value
 
-One-click video production workflow: upload a product video, get a social-media-ready clip with voiceover and captions, publish to the right store's social accounts.
+Script-first video production: describe an idea, get multiple social-media-ready videos with AI-generated voiceover, perfectly synced subtitles, and keyword-matched visuals — ready to publish.
 
 ## Requirements
 
@@ -44,7 +44,11 @@ One-click video production workflow: upload a product video, get a social-media-
 
 ### Active
 
-(None — next milestone requirements TBD)
+- [ ] ElevenLabs upgrade (flash v2.5, 192kbps, timestamps) — v4
+- [ ] AI script generation from context (Gemini + Claude) — v4
+- [ ] TTS-based subtitle generation (skip Whisper) — v4
+- [ ] Script-to-segment matching and assembly — v4
+- [ ] Multi-variant script pipeline (1 idea → N videos) — v4
 
 ### Out of Scope
 
@@ -66,7 +70,10 @@ One-click video production workflow: upload a product video, get a social-media-
 - Tech stack: FastAPI backend (Python), Next.js frontend (TypeScript), Supabase DB, FFmpeg
 - v3 baseline: CRF 18-20, preset medium, 192k audio, -14 LUFS normalization, video filters, enhanced subtitles
 - 4 backend services: encoding_presets, audio_normalizer, video_filters, subtitle_styler
-- 908 LOC in new v3 Python services, 366 LOC in new v3 TypeScript components
+- Segment system exists: source videos, segments with keywords, SRT matching, project assignment
+- ElevenLabs Starter plan: 100k credits/month, flash v2.5 at 0.5 credits/char
+- ElevenLabs /with-timestamps endpoint returns character-level timing data
+- Script template: plain text, line-by-line, proper punctuation, no emojis/stage directions (goes direct to TTS)
 
 ## Constraints
 
@@ -94,5 +101,10 @@ One-click video production workflow: upload a product video, get a social-media-
 | 5-factor scoring weights 40/20/20/15/5 | Balanced scoring, no single factor dominates | — Pending A/B testing |
 | Subtitle params per-render (not DB) | Flexibility for A/B testing, consistent with filter approach | ✓ Good |
 
+| eleven_flash_v2_5 as default model | 50% cheaper (0.5 credits/char), 32 languages, 75ms latency, 40k char limit | — Pending |
+| TTS timestamps over Whisper for subtitles | Perfect sync with voiceover, no extra processing step | — Pending |
+| Gemini + Claude Max for script generation | Two AI providers, user chooses per project | — Pending |
+| Script-first over video-first workflow | Script drives segment selection and assembly | — Pending |
+
 ---
-*Last updated: 2026-02-06 after v3 Video Quality Enhancement milestone*
+*Last updated: 2026-02-12 after v4 Script-First Pipeline milestone started*
