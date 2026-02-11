@@ -2,26 +2,22 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-06)
+See: .planning/PROJECT.md (updated 2026-02-12)
 
-**Core value:** One-click video production workflow: upload a product video, get a social-media-ready clip with voiceover and captions, publish to the right store's social accounts.
-**Current focus:** Planning next milestone
+**Core value:** Script-first video production: describe an idea, get multiple social-media-ready videos with AI-generated voiceover, perfectly synced subtitles, and keyword-matched visuals.
+**Current focus:** Defining requirements for v4
 
 ## Current Position
 
-Milestone: v3 Video Quality Enhancement — COMPLETE
-All phases shipped (7-11), 13 plans executed
-Last activity: 2026-02-06 — v3 milestone archived
+Milestone: v4 Script-First Video Production Pipeline
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-02-12 — Milestone v4 started
 
-Progress: [████████████████████] 100%
+Progress: [░░░░░░░░░░░░░░░░░░░░] 0%
 
 ## Performance Metrics
-
-**v3 milestone:**
-- 5 phases, 13 plans, 2 days
-- New services: encoding_presets (216 LOC), audio_normalizer (172 LOC), video_filters (253 LOC), subtitle_styler (267 LOC)
-- New components: VideoEnhancementControls (213 LOC), SubtitleEnhancementControls (153 LOC), PlatformSelector
-- Total: +1,690 lines / -75 lines across 11 files
 
 **Cumulative (v1+v2+v3):**
 - 11 phases, 38 plans
@@ -48,8 +44,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-06
-Stopped at: v3 milestone complete and archived
+Last session: 2026-02-12
+Stopped at: Defining v4 requirements
 Resume file: None
 
-**Next step:** `/gsd:new-milestone` to plan next iteration, or use the platform as-is.
+**Next step:** Complete requirements definition, then roadmap creation.
