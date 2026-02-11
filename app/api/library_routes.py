@@ -157,7 +157,7 @@ def verify_project_ownership(supabase, project_id: str, profile_id: str) -> dict
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error verifying project ownership: {{e}}")
+        logger.error(f"Error verifying project ownership: {e}")
         raise HTTPException(status_code=404, detail="Project not found")
 
 
