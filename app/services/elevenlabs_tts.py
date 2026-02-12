@@ -18,7 +18,7 @@ class ElevenLabsTTS:
     ElevenLabs Text-to-Speech service.
 
     Uses the exact settings from user's Ana Maria voice:
-    - Model: eleven_multilingual_v2
+    - Model: eleven_flash_v2_5
     - Stability: 0.57
     - Similarity: 0.75
     - Style: 0.22
@@ -35,7 +35,7 @@ class ElevenLabsTTS:
     ):
         self.api_key = api_key or os.getenv("ELEVENLABS_API_KEY")
         self.voice_id = voice_id or os.getenv("ELEVENLABS_VOICE_ID")
-        self.model_id = model_id or os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+        self.model_id = model_id or os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5")
 
         if not self.api_key:
             raise ValueError("ELEVENLABS_API_KEY is required")
@@ -87,7 +87,8 @@ class ElevenLabsTTS:
         }
 
         # Prepare request
-        url = f"{self.BASE_URL}/text-to-speech/{self.voice_id}"
+        # Request 192kbps MP3 output (flash v2.5 costs ~$0.11 per 1k chars, half of multilingual v2)
+        url = f"{self.BASE_URL}/text-to-speech/{self.voice_id}?output_format=mp3_44100_192"
 
         headers = {
             "Accept": "audio/mpeg",
@@ -378,7 +379,7 @@ class ElevenLabsTTS:
         # Cleanup temp audio
         try:
             audio_path.unlink()
-        except:
+        except Exception:
             pass
 
         stats["output_video"] = str(result)
