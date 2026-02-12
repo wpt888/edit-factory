@@ -141,11 +141,11 @@ Plans:
   2. Character timestamps are grouped into word-level and phrase-level subtitle entries with natural timing
   3. Generated subtitles use existing v3 styling (shadow, glow, adaptive sizing) without modification
   4. Subtitle sync is visually perfect when tested with generated TTS audio
-**Plans**: 2 plans
+**Plans**: 2 plans — Complete 2026-02-12
 
 Plans:
-- [ ] 13-01-PLAN.md -- TTS subtitle generator service: character timestamps to SRT conversion
-- [ ] 13-02-PLAN.md -- Render pipeline integration: auto-generate SRT from TTS timestamps
+- [x] 13-01-PLAN.md -- TTS subtitle generator service: character timestamps to SRT conversion
+- [x] 13-02-PLAN.md -- Render pipeline integration: auto-generate SRT from TTS timestamps
 
 ### Phase 14: AI Script Generation
 **Goal**: Generate multiple TTS-ready script variants from user idea and product context
@@ -210,7 +210,7 @@ Phases execute in numeric order: 12 → 13 → 14 → 15 → 16
 | 10. Segment Scoring Enhancement | v3 | 1/1 | Complete | 2026-02-05 |
 | 11. Subtitle Enhancement | v3 | 3/3 | Complete | 2026-02-06 |
 | 12. ElevenLabs TTS Upgrade | v4 | 3/3 | Complete | 2026-02-12 |
-| 13. TTS-Based Subtitles | v4 | 0/0 | Not started | - |
+| 13. TTS-Based Subtitles | v4 | 2/2 | Complete | 2026-02-12 |
 | 14. AI Script Generation | v4 | 0/0 | Not started | - |
 | 15. Script-to-Video Assembly | v4 | 0/0 | Not started | - |
 | 16. Multi-Variant Pipeline | v4 | 0/0 | Not started | - |
