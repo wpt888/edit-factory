@@ -8,6 +8,7 @@ import { useProfile } from "@/contexts/profile-context";
 const navLinks = [
   { label: "Librărie", href: "/librarie" },
   { label: "Export", href: "/library" },
+  { label: "Scripts", href: "/scripts" },
   { label: "Segments", href: "/segments" },
   { label: "Usage", href: "/usage" },
   { label: "Settings", href: "/settings" },
