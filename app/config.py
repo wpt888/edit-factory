@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     elevenlabs_voice_id: str = ""
     elevenlabs_model: str = "eleven_flash_v2_5"
 
+    # Anthropic Claude AI
+    anthropic_api_key: str = ""
+
     # Supabase
     supabase_url: str = ""
     supabase_key: str = ""

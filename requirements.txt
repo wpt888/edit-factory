@@ -19,6 +19,9 @@ scipy>=1.11.0
 # Google Gemini AI
 google-genai>=0.2.0
 
+# Anthropic Claude AI
+anthropic>=0.40.0
+
 # Audio Transcription (SRT generation)
 openai-whisper>=20231117
 
