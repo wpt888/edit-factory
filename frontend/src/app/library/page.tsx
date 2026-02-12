@@ -88,7 +88,7 @@ import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { VideoSegmentPlayer } from "@/components/video-segment-player";
 import { SimpleSegmentPopup } from "@/components/simple-segment-popup";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
-import { DEFAULT_SUBTITLE_SETTINGS } from "@/types/video-processing";
+import { DEFAULT_SUBTITLE_SETTINGS, ELEVENLABS_MODELS } from "@/types/video-processing";
 import {
   VideoEnhancementControls,
   VideoFilters,
@@ -227,6 +227,7 @@ function LibraryPageContent() {
   const [clipContent, setClipContent] = useState<ClipContent | null>(null);
   const [presets, setPresets] = useState<ExportPreset[]>([]);
   const [selectedPreset, setSelectedPreset] = useState<string>("instagram_reels");
+  const [selectedElevenLabsModel, setSelectedElevenLabsModel] = useState("eleven_flash_v2_5");
   const [videoFilters, setVideoFilters] = useState<VideoFilters>(defaultVideoFilters);
 
   const [loading, setLoading] = useState(false);
@@ -457,6 +458,7 @@ function LibraryPageContent() {
       // Generation settings
       if (config.variantCount) setVariantCount(config.variantCount);
       if (config.selectedPreset) setSelectedPreset(config.selectedPreset);
+      if (config.selectedElevenLabsModel) setSelectedElevenLabsModel(config.selectedElevenLabsModel);
       if (config.localVideoPath) setLocalVideoPath(config.localVideoPath);
 
       // TTS & Subtitle defaults
@@ -485,6 +487,7 @@ function LibraryPageContent() {
       newProjectContext,
       variantCount,
       selectedPreset,
+      selectedElevenLabsModel,
       localVideoPath,
       editingTtsText,
       editingSrtContent,
@@ -504,6 +507,7 @@ function LibraryPageContent() {
     newProjectContext,
     variantCount,
     selectedPreset,
+    selectedElevenLabsModel,
     localVideoPath,
     editingTtsText,
     editingSrtContent,
@@ -642,10 +646,13 @@ function LibraryPageContent() {
   };
 
   // Create new project
+  const [createError, setCreateError] = useState<string | null>(null);
+
   const createProject = async () => {
     if (!newProjectName.trim()) return;
 
     setLoading(true);
+    setCreateError(null);
     try {
       const res = await fetch(`${API_URL}/library/projects`, {
         method: "POST",
@@ -666,8 +673,18 @@ function LibraryPageContent() {
         setNewProjectName("");
         setNewProjectDescription("");
         setNewProjectContext("");
+      } else {
+        let detail = "Eroare la crearea proiectului";
+        try {
+          const errData = await res.json();
+          detail = errData.detail || detail;
+        } catch {}
+        setCreateError(`${res.status}: ${detail}`);
+        console.error("Failed to create project:", res.status, detail);
       }
     } catch (error) {
+      const msg = error instanceof Error ? error.message : "Eroare de rețea";
+      setCreateError(msg);
       console.error("Failed to create project:", error);
     } finally {
       setLoading(false);
@@ -862,6 +879,7 @@ function LibraryPageContent() {
     try {
       const formData = new FormData();
       formData.append("preset_name", selectedPreset);
+      formData.append("elevenlabs_model", selectedElevenLabsModel);
 
       // Video enhancement filters (Phase 9)
       formData.append("enable_denoise", videoFilters.enableDenoise.toString());
@@ -907,6 +925,7 @@ function LibraryPageContent() {
         body: JSON.stringify({
           clip_ids: selectedClips.map((c) => c.id),
           preset_name: selectedPreset,
+          elevenlabs_model: selectedElevenLabsModel,
         }),
       });
 
@@ -2386,6 +2405,36 @@ Text subtitrare..."
                     </Select>
                   </div>
 
+                  {/* ElevenLabs Model Selection (Phase 12) */}
+                  <div className="mb-4">
+                    <Label className="text-sm mb-2 block text-zinc-400">
+                      TTS Model
+                    </Label>
+                    <Select
+                      value={selectedElevenLabsModel}
+                      onValueChange={setSelectedElevenLabsModel}
+                    >
+                      <SelectTrigger className="w-full bg-zinc-800 border-zinc-700">
+                        <SelectValue placeholder="Select model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ELEVENLABS_MODELS.map((model) => (
+                          <SelectItem key={model.id} value={model.id}>
+                            <div className="flex items-center justify-between w-full gap-4">
+                              <span>{model.name}</span>
+                              <span className="text-xs text-zinc-500">
+                                ${model.costPer1kChars}/1k chars · {model.latencyMs}ms
+                              </span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-zinc-500 mt-1">
+                      {ELEVENLABS_MODELS.find(m => m.id === selectedElevenLabsModel)?.description}
+                    </p>
+                  </div>
+
                   <div className="flex gap-2">
                     <Button onClick={saveClipContent} className="flex-1" variant="secondary">
                       Salvează
@@ -2471,10 +2520,16 @@ Text subtitrare..."
             </div>
           </div>
 
+          {createError && (
+            <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-sm">
+              {createError}
+            </div>
+          )}
+
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setShowNewProject(false)}
+              onClick={() => { setShowNewProject(false); setCreateError(null); }}
             >
               Anulează
             </Button>
