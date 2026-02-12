@@ -125,12 +125,12 @@ Full details: `.planning/milestones/v3-ROADMAP.md`
   2. Character-level timestamps are retrieved from ElevenLabs /with-timestamps endpoint
   3. User can select between ElevenLabs models (flash v2.5, v3, multilingual v2) per render
   4. TTS timestamp data is persisted and available for downstream subtitle generation
-**Plans**: 3 plans
+**Plans**: 3 plans — Complete 2026-02-12
 
 Plans:
-- [ ] 12-01-PLAN.md -- Backend ElevenLabs service upgrade: flash v2.5 default, 192kbps output, /with-timestamps method
-- [ ] 12-02-PLAN.md -- Render integration: model selection param, timestamp persistence, DB migration
-- [ ] 12-03-PLAN.md -- Frontend model selector: dropdown UI for ElevenLabs model per render
+- [x] 12-01-PLAN.md -- Backend ElevenLabs service upgrade: flash v2.5 default, 192kbps output, /with-timestamps method
+- [x] 12-02-PLAN.md -- Render integration: model selection param, timestamp persistence, DB migration
+- [x] 12-03-PLAN.md -- Frontend model selector: dropdown UI for ElevenLabs model per render
 
 ### Phase 13: TTS-Based Subtitles
 **Goal**: Generate SRT subtitles from ElevenLabs character timestamps without Whisper
@@ -208,7 +208,7 @@ Phases execute in numeric order: 12 → 13 → 14 → 15 → 16
 | 9. Video Enhancement Filters | v3 | 3/3 | Complete | 2026-02-05 |
 | 10. Segment Scoring Enhancement | v3 | 1/1 | Complete | 2026-02-05 |
 | 11. Subtitle Enhancement | v3 | 3/3 | Complete | 2026-02-06 |
-| 12. ElevenLabs TTS Upgrade | v4 | 0/3 | Planned | - |
+| 12. ElevenLabs TTS Upgrade | v4 | 3/3 | Complete | 2026-02-12 |
 | 13. TTS-Based Subtitles | v4 | 0/0 | Not started | - |
 | 14. AI Script Generation | v4 | 0/0 | Not started | - |
 | 15. Script-to-Video Assembly | v4 | 0/0 | Not started | - |
