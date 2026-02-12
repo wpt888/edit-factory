@@ -9,6 +9,7 @@ const navLinks = [
   { label: "Librărie", href: "/librarie" },
   { label: "Export", href: "/library" },
   { label: "Scripts", href: "/scripts" },
+  { label: "Assembly", href: "/assembly" },
   { label: "Segments", href: "/segments" },
   { label: "Usage", href: "/usage" },
   { label: "Settings", href: "/settings" },
