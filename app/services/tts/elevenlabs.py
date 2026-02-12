@@ -3,9 +3,10 @@ ElevenLabs TTS Service - TTSService interface implementation.
 
 Wraps existing ElevenLabsTTS functionality with unified interface.
 """
+import base64
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import httpx
 import librosa
 
@@ -20,7 +21,7 @@ class ElevenLabsTTSService(TTSService):
     ElevenLabs Text-to-Speech service implementing TTSService interface.
 
     Uses the exact settings from user's Ana Maria voice:
-    - Model: eleven_multilingual_v2
+    - Model: eleven_flash_v2_5
     - Stability: 0.57
     - Similarity: 0.75
     - Style: 0.22
@@ -50,7 +51,7 @@ class ElevenLabsTTSService(TTSService):
         settings = get_settings()
         self.api_key = api_key or settings.elevenlabs_api_key
         self._voice_id = voice_id or settings.elevenlabs_voice_id
-        self.model_id = model_id or getattr(settings, 'elevenlabs_model', 'eleven_multilingual_v2')
+        self.model_id = model_id or getattr(settings, 'elevenlabs_model', 'eleven_flash_v2_5')
 
         if not self.api_key:
             raise ValueError("ELEVENLABS_API_KEY is required")
@@ -74,8 +75,8 @@ class ElevenLabsTTSService(TTSService):
 
     @property
     def cost_per_1k_chars(self) -> float:
-        """Return cost per 1000 characters."""
-        return 0.22
+        """Return cost per 1000 characters (flash v2.5 pricing)."""
+        return 0.11
 
     async def list_voices(self, language: Optional[str] = None) -> List[TTSVoice]:
         """
@@ -157,8 +158,8 @@ class ElevenLabsTTSService(TTSService):
             "use_speaker_boost": kwargs.get("use_speaker_boost", self.voice_settings["use_speaker_boost"])
         }
 
-        # Prepare request
-        url = f"{self.BASE_URL}/text-to-speech/{voice_id}"
+        # Prepare request with 192kbps MP3 output format
+        url = f"{self.BASE_URL}/text-to-speech/{voice_id}?output_format=mp3_44100_192"
         headers = {
             "Accept": "audio/mpeg",
             "Content-Type": "application/json",
@@ -221,6 +222,124 @@ class ElevenLabsTTSService(TTSService):
             raise Exception("ElevenLabs API timeout - text may be too long")
         except Exception as e:
             logger.error(f"TTS generation failed: {e}")
+            raise
+
+    async def generate_audio_with_timestamps(
+        self,
+        text: str,
+        voice_id: str,
+        output_path: Path,
+        model_id: Optional[str] = None,
+        **kwargs
+    ) -> Tuple[TTSResult, dict]:
+        """
+        Generate audio with character-level timestamps from ElevenLabs.
+
+        Uses the /text-to-speech/{voice_id}/with-timestamps endpoint.
+        Returns both the audio file and character-level timing data.
+
+        Args:
+            text: Text to convert to speech
+            voice_id: Voice identifier
+            output_path: Where to save the audio file
+            model_id: Optional model override (eleven_flash_v2_5, eleven_turbo_v2_5, eleven_multilingual_v2)
+            **kwargs: Voice settings overrides (stability, similarity_boost, style, use_speaker_boost)
+
+        Returns:
+            Tuple of (TTSResult, alignment_dict) where alignment_dict contains:
+            {
+                "characters": ["H", "e", "l", "l", "o", " ", ...],
+                "character_start_times_seconds": [0.0, 0.05, 0.09, ...],
+                "character_end_times_seconds": [0.05, 0.09, 0.14, ...]
+            }
+        """
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Prepare voice settings with optional overrides
+        voice_settings = {
+            "stability": kwargs.get("stability", self.voice_settings["stability"]),
+            "similarity_boost": kwargs.get("similarity_boost", self.voice_settings["similarity_boost"]),
+            "style": kwargs.get("style", self.voice_settings["style"]),
+            "use_speaker_boost": kwargs.get("use_speaker_boost", self.voice_settings["use_speaker_boost"])
+        }
+
+        # Prepare request - with-timestamps endpoint returns JSON, not audio stream
+        url = f"{self.BASE_URL}/text-to-speech/{voice_id}/with-timestamps?output_format=mp3_44100_192"
+        headers = {
+            "Content-Type": "application/json",
+            "xi-api-key": self.api_key
+        }
+        data = {
+            "text": text,
+            "model_id": model_id or self.model_id,
+            "voice_settings": voice_settings
+        }
+
+        logger.info(f"Generating TTS with timestamps for {len(text)} characters with voice {voice_id}...")
+
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(url, headers=headers, json=data)
+
+                if response.status_code != 200:
+                    error_detail = response.text
+                    logger.error(f"ElevenLabs API error: {response.status_code} - {error_detail}")
+                    raise Exception(f"ElevenLabs API error: {response.status_code} - {error_detail}")
+
+                # Parse JSON response
+                response_data = response.json()
+
+                # Decode base64 audio and save to file
+                audio_bytes = base64.b64decode(response_data["audio_base64"])
+                with open(output_path, "wb") as f:
+                    f.write(audio_bytes)
+
+                # Extract alignment data
+                alignment = response_data.get("alignment", {})
+
+                # Calculate duration using librosa
+                try:
+                    duration_seconds = librosa.get_duration(path=str(output_path))
+                except Exception as e:
+                    logger.warning(f"Failed to get audio duration: {e}")
+                    duration_seconds = 0.0
+
+                # Calculate cost
+                cost = (len(text) / 1000.0) * self.cost_per_1k_chars
+
+                logger.info(
+                    f"Audio with timestamps saved to: {output_path} "
+                    f"(duration: {duration_seconds:.2f}s, cost: ${cost:.4f}, "
+                    f"characters: {len(alignment.get('characters', []))})"
+                )
+
+                # Log cost to tracker
+                try:
+                    from app.services.cost_tracker import get_cost_tracker
+                    tracker = get_cost_tracker()
+                    tracker.log_elevenlabs_tts(
+                        job_id=output_path.stem,
+                        characters=len(text),
+                        text_preview=text[:100]
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to log cost: {e}")
+
+                tts_result = TTSResult(
+                    audio_path=output_path,
+                    duration_seconds=duration_seconds,
+                    provider="elevenlabs",
+                    voice_id=voice_id,
+                    cost=cost
+                )
+
+                return (tts_result, alignment)
+
+        except httpx.TimeoutException:
+            raise Exception("ElevenLabs API timeout - text may be too long")
+        except Exception as e:
+            logger.error(f"TTS generation with timestamps failed: {e}")
             raise
 
     async def supports_voice_cloning(self) -> bool:
