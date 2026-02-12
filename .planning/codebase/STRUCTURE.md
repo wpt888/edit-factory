@@ -6,331 +6,318 @@
 
 ```
 edit_factory/
-├── app/                          # FastAPI backend application
-│   ├── main.py                   # Entry point: app initialization, router mounting
-│   ├── config.py                 # Pydantic Settings: environment, paths, credentials
-│   ├── models.py                 # Pydantic data models: JobStatus, VideoSegment, JobResponse
-│   ├── api/                      # API route handlers (FastAPI routers)
-│   │   ├── auth.py               # JWT verification, ProfileContext extraction
-│   │   ├── routes.py             # Main routes: upload, analyze, costs, health (1447 lines)
-│   │   ├── library_routes.py     # Library workflow: projects, clips, rendering (2587 lines)
-│   │   ├── segments_routes.py    # Manual segment selection endpoints
-│   │   ├── postiz_routes.py      # Social media publishing integration
-│   │   ├── profile_routes.py     # Multi-tenancy profile endpoints
-│   │   └── tts_routes.py         # TTS-specific endpoints
-│   └── services/                 # Business logic services
-│       ├── video_processor.py    # Video analysis, frame scoring, segment detection (2112 lines)
-│       ├── gemini_analyzer.py    # Gemini Vision API integration for frame analysis
-│       ├── job_storage.py        # Job tracking with Supabase primary + memory fallback
-│       ├── cost_tracker.py       # API cost logging (Supabase + JSON)
-│       ├── elevenlabs_tts.py     # ElevenLabs TTS provider
-│       ├── edge_tts_service.py   # Microsoft Edge TTS provider (free fallback)
-│       ├── voice_detector.py     # Voice/speech detection in audio
-│       ├── voice_cloning_service.py # Voice cloning capabilities
-│       ├── subtitle_styler.py    # FFmpeg subtitle filter builder with styling
-│       ├── video_filters.py      # Video enhancement: denoise, sharpen, color
-│       ├── audio_normalizer.py   # Audio loudness measurement and normalization
-│       ├── encoding_presets.py   # Export presets (Instagram, TikTok, YouTube, etc.)
-│       ├── srt_validator.py      # SRT subtitle validation
-│       ├── silence_remover.py    # Remove silence from audio
-│       ├── keyword_matcher.py    # Keyword extraction for segment analysis
-│       ├── vocal_remover.py      # Vocal/instrument separation
-│       ├── tts/                  # TTS provider implementations
-│       │   ├── base.py           # TTSProvider abstract base class
-│       │   ├── elevenlabs.py     # ElevenLabs implementation
-│       │   ├── edge.py           # Edge TTS implementation
-│       │   ├── kokoro.py         # Kokoro TTS implementation
-│       │   ├── coqui.py          # Coqui XTTS implementation
-│       │   └── factory.py        # Factory function: get_tts_provider()
-│       └── __init__.py           # Service exports
-│
-├── frontend/                     # Next.js React frontend application
+├── app/                           # FastAPI backend
+│   ├── main.py                    # FastAPI app initialization
+│   ├── config.py                  # Settings and environment config
+│   ├── models.py                  # Pydantic data models
+│   ├── api/                       # Route handlers (8 modules)
+│   │   ├── auth.py                # JWT verification, profile context
+│   │   ├── routes.py              # Core video processing, costs, jobs
+│   │   ├── library_routes.py      # Project/clip CRUD, rendering
+│   │   ├── segments_routes.py     # Manual segment selection
+│   │   ├── postiz_routes.py       # Social media publishing
+│   │   ├── profile_routes.py      # User profiles
+│   │   ├── script_routes.py       # Script generation
+│   │   ├── assembly_routes.py     # Assembly endpoints
+│   │   ├── pipeline_routes.py     # Multi-variant pipeline
+│   │   ├── tts_routes.py          # TTS operations
+│   │   └── __init__.py
+│   └── services/                  # Business logic (40+ modules)
+│       ├── video_processor.py     # Video analysis, scoring
+│       ├── script_generator.py    # AI script generation
+│       ├── assembly_service.py    # Script-to-video orchestration
+│       ├── job_storage.py         # Job persistence layer
+│       ├── cost_tracker.py        # API cost tracking
+│       ├── gemini_analyzer.py     # Gemini AI analysis (optional)
+│       ├── postiz_service.py      # Social publishing
+│       ├── tts_subtitle_generator.py # TTS + SRT generation
+│       ├── subtitle_styler.py     # Subtitle rendering with FFmpeg
+│       ├── video_filters.py       # Denoise, sharpen, color
+│       ├── audio_normalizer.py    # Loudness normalization
+│       ├── encoding_presets.py    # FFmpeg encoding configs
+│       ├── voice_detector.py      # Voice/silence detection
+│       ├── vocal_remover.py       # Audio background removal
+│       ├── silence_remover.py     # Silence trimming
+│       ├── srt_validator.py       # SRT format validation
+│       ├── keyword_matcher.py     # Script-to-segment matching
+│       ├── edge_tts_service.py    # Microsoft Edge TTS
+│       ├── elevenlabs_tts.py      # ElevenLabs TTS (legacy)
+│       ├── tts_cache.py           # TTS audio caching
+│       ├── voice_cloning_service.py # Voice cloning
+│       ├── tts/                   # TTS factory pattern
+│       │   ├── base.py            # Abstract TTS provider
+│       │   ├── factory.py         # TTS factory
+│       │   ├── elevenlabs.py      # ElevenLabs provider
+│       │   ├── edge.py            # Edge TTS provider
+│       │   ├── coqui.py           # Coqui provider
+│       │   ├── kokoro.py          # Kokoro provider
+│       │   └── __init__.py
+│       └── __init__.py
+├── frontend/                      # Next.js frontend
+│   ├── package.json               # Dependencies
+│   ├── playwright.config.ts       # E2E test config
+│   ├── next.config.js             # Next.js config
 │   ├── src/
-│   │   ├── app/                  # Next.js App Router pages
-│   │   │   ├── layout.tsx        # Root layout: AuthProvider, ProfileProvider, styles
-│   │   │   ├── page.tsx          # Home/landing page (~2000 lines)
-│   │   │   ├── library/page.tsx  # Main workflow: projects, clips, rendering
-│   │   │   ├── segments/page.tsx # Manual segment selection UI
-│   │   │   ├── settings/page.tsx # User settings
-│   │   │   ├── usage/page.tsx    # Usage/cost dashboard
-│   │   │   ├── auth/             # Auth pages (login, signup)
-│   │   │   └── [other pages]     # Static pages (pricing, features, contact, etc.)
-│   │   ├── components/           # React components (Shadcn/UI + custom)
-│   │   │   ├── auth-provider.tsx # Supabase auth context wrapper
-│   │   │   ├── profile-switcher.tsx # Multi-profile selector
-│   │   │   ├── navbar.tsx        # Navigation bar
-│   │   │   ├── subtitle-enhancement-controls.tsx # Phase 11: subtitle styling UI
-│   │   │   ├── video-enhancement-controls.tsx # Phase 9: video filter UI
-│   │   │   ├── video-processing/ # Video processing sub-components
-│   │   │   │   ├── variant-triage.tsx # Clip selection UI
-│   │   │   │   ├── subtitle-editor.tsx # SRT editor
-│   │   │   │   ├── tts-panel.tsx # TTS configuration
-│   │   │   │   ├── progress-tracker.tsx # Job progress display
-│   │   │   │   └── secondary-videos-form.tsx # Additional video input
-│   │   │   ├── ui/               # Shadcn/UI components (button, dialog, tabs, etc.)
-│   │   │   └── tts/              # TTS-specific components
-│   │   ├── contexts/             # React Context providers
-│   │   │   └── profile-context.tsx # Multi-tenancy context + localStorage
-│   │   ├── hooks/                # Custom React hooks
-│   │   │   └── use-job-polling.ts # Poll job status until completion
-│   │   ├── lib/                  # Utilities and API client
-│   │   │   ├── api.ts            # API client wrapper (apiFetch, apiPost, apiGet, etc.)
-│   │   │   ├── supabase/         # Supabase integration
-│   │   │   └── utils.ts          # General utilities
-│   │   ├── types/                # TypeScript interfaces
-│   │   │   └── video-processing.ts # VideoInfo, Clip, Project, SubtitleSettings, etc.
-│   │   ├── globals.css           # Global Tailwind styles
-│   │   └── proxy.ts              # Proxy configuration (if needed)
-│   ├── public/                   # Static assets
-│   ├── tests/                    # Playwright E2E tests
-│   │   ├── library.spec.ts       # Library page tests
-│   │   ├── segments.spec.ts      # Segments page tests
-│   │   └── [other tests]         # Feature-specific test files
-│   ├── playwright.config.ts      # Playwright configuration
-│   ├── tsconfig.json             # TypeScript configuration
-│   ├── next.config.ts            # Next.js configuration
-│   ├── eslint.config.mjs         # ESLint configuration
-│   └── package.json              # Frontend dependencies
-
-├── supabase/                     # Database migrations and config
-│   └── migrations/               # Database schema migrations (SQL)
-│       ├── 001_init_projects.sql # Projects table
-│       ├── 002_init_clips.sql    # Clips table
-│       ├── 003_init_jobs.sql     # Jobs table
-│       ├── 004_init_costs.sql    # API costs table
-│       └── [other migrations]    # Additional schema changes
-
-├── CAPTIONS_AENEAS/              # Standalone caption UI (Tkinter)
-│   └── caption_ui.py             # Standalone caption generator
-
-├── scripts/                      # Development and utility scripts
-│   ├── start-dev.bat             # Windows development startup
-│   └── start-dev.sh              # Linux/WSL development startup
-
-├── temp/                         # Temporary files (gitignored)
-│   ├── {profile_id}/             # Profile-scoped temp directory
-│   └── ...                       # FFmpeg intermediate files, extracts
-
-├── output/                       # Final video outputs (gitignored)
-│   ├── project_{id}/             # Per-project output folder
-│   ├── tts/                      # TTS audio files
-│   └── thumbnails/               # Generated thumbnails
-
-├── input/                        # Upload staging directory (gitignored)
-│   └── ...                       # Uploaded videos pending processing
-
-├── logs/                         # Application logs (gitignored)
-│   ├── cost_log.json             # Cost tracking JSON log
-│   └── ...                       # Uvicorn/application logs
-
-├── ffmpeg/                       # FFmpeg binary (Windows, optional)
-│   └── ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe
-
-├── requirements.txt              # Python backend dependencies
-├── .env.example                  # Environment variables template
-├── .mcp.json                     # Claude MCP configuration
-├── CLAUDE.md                     # Claude instructions (this file)
-├── run.py                        # Backend entry point
-└── .planning/                    # GSD planning documents
-    └── codebase/                 # Codebase analysis documents
-        ├── ARCHITECTURE.md       # Architecture patterns and data flow
-        ├── STRUCTURE.md          # Directory layout and file locations
-        ├── CONVENTIONS.md        # Coding conventions and patterns
-        ├── TESTING.md            # Testing setup and patterns
-        ├── STACK.md              # Technology stack details
-        ├── INTEGRATIONS.md       # External service integrations
-        └── CONCERNS.md           # Technical debt and issues
+│   │   ├── app/                   # Next.js App Router pages
+│   │   │   ├── layout.tsx         # Root layout with providers
+│   │   │   ├── page.tsx           # Home page
+│   │   │   ├── library/page.tsx   # Library (legacy)
+│   │   │   ├── librarie/page.tsx  # Library (main)
+│   │   │   ├── pipeline/page.tsx  # Multi-variant pipeline
+│   │   │   ├── scripts/page.tsx   # AI script generation
+│   │   │   ├── assembly/page.tsx  # Assembly preview/render
+│   │   │   ├── segments/page.tsx  # Segment selection
+│   │   │   ├── usage/page.tsx     # Cost tracking
+│   │   │   ├── settings/page.tsx  # User settings
+│   │   │   ├── login/page.tsx     # Auth login
+│   │   │   ├── signup/page.tsx    # Auth signup
+│   │   │   ├── auth/callback/route.ts # OAuth callback
+│   │   │   ├── contact/page.tsx   # Contact form
+│   │   │   ├── cum-functioneaza/page.tsx # How it works
+│   │   │   ├── functionalitati/page.tsx  # Features
+│   │   │   ├── preturi/page.tsx   # Pricing
+│   │   │   ├── testimoniale/page.tsx # Testimonials
+│   │   │   ├── statsai/page.tsx   # Stats dashboard
+│   │   │   └── globals.css        # Global styles
+│   │   ├── components/            # React components
+│   │   │   ├── navbar.tsx         # Navigation bar
+│   │   │   ├── navbar-wrapper.tsx # Nav wrapper
+│   │   │   ├── auth-provider.tsx  # Supabase auth provider
+│   │   │   ├── profile-switcher.tsx # Profile selector
+│   │   │   ├── create-profile-dialog.tsx # Profile creation modal
+│   │   │   ├── editor-layout.tsx  # Editor container
+│   │   │   ├── video-segment-player.tsx # Video preview
+│   │   │   ├── segment-marker-popup.tsx # Segment UI
+│   │   │   ├── simple-segment-popup.tsx # Simplified segment UI
+│   │   │   ├── video-enhancement-controls.tsx # Video filters UI
+│   │   │   ├── subtitle-enhancement-controls.tsx # Subtitle UI
+│   │   │   ├── video-processing/  # Video processing components
+│   │   │   ├── tts/               # TTS UI components
+│   │   │   └── ui/                # Shadcn/UI base components
+│   │   ├── contexts/              # React context providers
+│   │   │   ├── profile-context.tsx # Multi-profile state
+│   │   │   └── other contexts
+│   │   ├── hooks/                 # Custom React hooks
+│   │   │   ├── use-job-polling.ts # Job status polling
+│   │   │   └── other hooks
+│   │   ├── lib/                   # Utilities
+│   │   │   ├── api.ts             # HTTP client wrapper
+│   │   │   └── other utilities
+│   │   ├── types/                 # TypeScript types
+│   │   │   ├── video-processing.ts # Video-related types
+│   │   │   └── other types
+│   │   └── proxy.ts               # API proxy config
+│   └── tests/                     # Playwright E2E tests
+│       ├── test-*.spec.ts         # Test files
+│       ├── verify-*.spec.ts       # Verification tests
+│       └── debug-*.spec.ts        # Debug utilities
+├── CAPTIONS_AENEAS/               # Standalone caption generator (Tkinter)
+│   ├── caption_ui.py              # Main UI
+│   └── .venv/                     # Isolated Python env
+├── supabase/                      # Supabase migrations
+│   └── migrations/                # SQL migration files
+├── ffmpeg/                        # FFmpeg binaries (Windows)
+│   └── ffmpeg-master-latest-win64-gpl/bin/
+├── scripts/                       # Utility scripts
+├── static/                        # Static assets
+├── input/                         # Input video directory
+├── output/                        # Output video directory
+├── temp/                          # Temporary files (profile-scoped)
+├── logs/                          # Application logs
+├── requirements.txt               # Python dependencies
+├── package.json                   # Frontend root dependencies
+├── .env.example                   # Environment template
+├── run.py                         # Backend startup script
+├── start-dev.sh/.bat              # Start both backend + frontend
+└── CLAUDE.md                      # Project guidance for Claude
 ```
 
 ## Directory Purposes
 
-**`app/`:**
-- Purpose: FastAPI backend application
-- Contains: Route handlers, services, configuration, data models
-- Key files: `main.py` (entry), `config.py` (settings)
+**app/ - FastAPI Backend:**
+- Purpose: Server-side application logic, API endpoints, service orchestration
+- Contains: Route handlers, business services, configuration
+- Key files: `main.py` (entry), `config.py` (settings), `models.py` (types)
 
-**`app/api/`:**
-- Purpose: HTTP endpoint handlers organized by domain
-- Contains: 6 router files, auth module
-- Entry via `main.py` mounting all routers with `/api/v1` prefix
+**app/api/ - Route Handlers:**
+- Purpose: HTTP endpoint definitions and request/response handling
+- Contains: 9 separate router modules for different functional areas
+- Key files: `auth.py` (JWT + profile context), `library_routes.py` (main CRUD)
 
-**`app/services/`:**
-- Purpose: Business logic and external service integrations
-- Contains: 23 service files implementing video processing, TTS, storage, etc.
-- Pattern: Singleton factory functions (not FastAPI Depends) for instantiation
+**app/services/ - Business Logic:**
+- Purpose: Core functionality implementation, external API integration
+- Contains: Video processing, AI script generation, assembly, audio processing
+- Pattern: Service classes with factory functions for singleton instantiation
 
-**`frontend/src/app/`:**
-- Purpose: Next.js App Router pages and layouts
-- Contains: 13 page directories, root layout.tsx
-- Key pages: `library/page.tsx` (main workflow), `page.tsx` (home)
+**app/services/tts/ - Text-to-Speech Abstraction:**
+- Purpose: Pluggable TTS provider support
+- Pattern: Factory pattern with unified interface across providers
+- Implementations: ElevenLabs, Edge (Microsoft), Coqui, Kokoro
 
-**`frontend/src/components/`:**
-- Purpose: Reusable React components
-- Contains: Shadcn/UI components, custom components, video processing sub-components
-- Usage: Composed into pages
+**frontend/src/app/ - Next.js Pages:**
+- Purpose: Public-facing user interface pages
+- Pattern: File-based routing (Next.js App Router)
+- Key pages: `librarie/page.tsx` (main editor), `pipeline/page.tsx` (workflow)
 
-**`frontend/src/contexts/`:**
-- Purpose: React Context for global state
-- Contains: ProfileProvider for multi-tenancy + localStorage
-- Pattern: Context + useContext hook for consumption
+**frontend/src/components/ - React Components:**
+- Purpose: Reusable UI components for pages
+- Pattern: Component tree with prop-based composition
+- Key files: `navbar.tsx` (navigation), `ui/` (Shadcn base components)
 
-**`frontend/src/lib/`:**
-- Purpose: Shared utilities and integration clients
-- Contains: API client wrapper, Supabase integration
-- Key file: `api.ts` (all HTTP requests flow through here)
+**frontend/src/contexts/ - React Context Providers:**
+- Purpose: Global state management (Supabase auth, profile selection)
+- Key files: `profile-context.tsx` (multi-tenant profile state)
 
-**`frontend/src/types/`:**
-- Purpose: TypeScript type definitions
-- Contains: All shared interfaces (Project, Clip, SubtitleSettings, etc.)
-- Key file: `video-processing.ts` (domain types)
+**frontend/src/lib/ - Utilities:**
+- Purpose: Helper functions and API client
+- Key file: `api.ts` (HTTP wrapper with profile ID injection)
 
-**`supabase/migrations/`:**
-- Purpose: Database schema versioning
-- Contains: SQL migration files numbered sequentially
-- Applied: Run `supabase db push` to apply
+**frontend/src/types/ - TypeScript Definitions:**
+- Purpose: Shared type definitions across components
+- Key file: `video-processing.ts` (video processing types)
 
-**`temp/`:**
-- Purpose: Profile-scoped temporary file storage
-- Contains: FFmpeg intermediates, frame extracts, audio files
-- Cleanup: Managed by routes.py cleanup tasks (not automatic)
+**frontend/tests/ - End-to-End Tests:**
+- Purpose: Playwright browser automation tests
+- Pattern: Visual verification of UI changes
+- Run: `npm run test` or `npm run test:ui`
 
-**`output/`:**
-- Purpose: Final rendered video outputs
-- Contains: Per-project folders, thumbnails, TTS audio files
-- Served via: `GET /library/files/{file_path}` endpoint
+**CAPTIONS_AENEAS/ - Standalone Caption Module:**
+- Purpose: Separate Tkinter app for caption generation with Whisper
+- Pattern: Isolated Python environment with dedicated dependencies
+- Run: `python caption_ui.py`
+
+**supabase/ - Database Migrations:**
+- Purpose: Version-controlled database schema changes
+- Contains: SQL migration files
+- Pattern: Numbered sequentially (001_*, 002_*, etc.)
 
 ## Key File Locations
 
 **Entry Points:**
-- Backend: `app/main.py` (FastAPI app initialization)
-- Frontend: `frontend/src/app/layout.tsx` (root layout)
-- Backend start: `run.py` (uvicorn wrapper with FFmpeg PATH setup)
-- Frontend start: `frontend/package.json` → `npm run dev`
+- `app/main.py`: Backend FastAPI application
+- `frontend/src/app/layout.tsx`: Frontend root layout
+- `run.py`: Development server launcher for backend
+- `start-dev.sh` (WSL/Linux): Launch both services
 
 **Configuration:**
-- Backend: `app/config.py` (Pydantic Settings from .env)
-- Frontend: `frontend/tsconfig.json`, `frontend/next.config.ts`
-- Build: `requirements.txt` (backend), `frontend/package.json` (frontend)
+- `app/config.py`: Environment settings and path management
+- `frontend/next.config.js`: Next.js build configuration
+- `frontend/tsconfig.json`: TypeScript configuration
+- `.env.example`: Environment variable template
 
 **Core Logic:**
-- Video analysis: `app/services/video_processor.py` (frame scoring, segment detection)
-- Rendering: `app/api/library_routes.py` (final_render_task, _render_with_preset)
-- TTS: `app/services/tts/` (provider abstraction and implementations)
-- API client: `frontend/src/lib/api.ts` (all HTTP requests)
+- `app/services/video_processor.py`: Video analysis and scoring
+- `app/services/script_generator.py`: AI script generation
+- `app/services/assembly_service.py`: Script-to-video orchestration
+- `frontend/src/lib/api.ts`: HTTP client with profile injection
 
 **Testing:**
-- Playwright tests: `frontend/tests/` (*.spec.ts files)
-- Config: `frontend/playwright.config.ts`
-- Screenshot storage: `frontend/screenshots/`
+- `frontend/tests/`: Playwright test files (*.spec.ts)
+- `frontend/playwright.config.ts`: Test configuration
+- `app/` - No unit tests checked in (manual QA via Playwright)
+
+**Authentication:**
+- `app/api/auth.py`: JWT verification and profile context
+- `frontend/src/components/auth-provider.tsx`: Supabase Auth UI
+- `frontend/src/contexts/profile-context.tsx`: Profile state management
 
 ## Naming Conventions
 
 **Files:**
-- Backend modules: `snake_case.py` (e.g., `video_processor.py`, `elevenlabs_tts.py`)
-- Frontend components: `PascalCase.tsx` (e.g., `VideoEnhancementControls.tsx`)
-- Pages: `page.tsx` (Next.js convention)
-- Hooks: `camelCase.ts` with `use-` prefix (e.g., `use-job-polling.ts`)
+- Python: `snake_case.py` (e.g., `video_processor.py`)
+- TypeScript: `kebab-case.tsx` or `kebab-case.ts` (e.g., `profile-context.tsx`)
+- Components: PascalCase exports (e.g., `export function NavBar`)
+- Pages: Lowercase directory, `page.tsx` (e.g., `frontend/src/app/librarie/page.tsx`)
 
 **Directories:**
-- Backend packages: `snake_case/` (e.g., `app/services/`, `app/api/`)
-- Frontend pages: `kebab-case/` (e.g., `library/`, `segments/`, `auth/`)
-- Feature directories: `kebab-case/` with index export (e.g., `tts/`, `video-processing/`)
+- Python packages: `lowercase` (e.g., `app/services/`)
+- Frontend features: `lowercase` (e.g., `frontend/src/app/librarie/`)
+- Components subdirs: `kebab-case` (e.g., `components/video-processing/`)
 
-**Variables & Functions:**
-- Python: `snake_case` for functions/variables, `PascalCase` for classes
-- TypeScript: `camelCase` for functions/variables, `PascalCase` for types/components/classes
+**Functions & Variables:**
+- Python: `snake_case` functions, `UPPER_CASE` constants
+- TypeScript: `camelCase` functions, `PascalCase` types/classes
+- Props: `camelCase`
 
-**Constants:**
-- Python: `UPPER_SNAKE_CASE` for module-level constants
-- TypeScript: `UPPER_SNAKE_CASE` for constants, `PascalCase` for type/interface names
+**API Routes:**
+- Pattern: `/api/v1/{resource}/{action}`
+- Examples: `/api/v1/library/projects`, `/api/v1/pipeline/generate`
+- HTTP Methods: POST (create), GET (read), PUT (update), DELETE (remove)
+
+**Environment Variables:**
+- Pattern: `UPPER_SNAKE_CASE`
+- Examples: `GEMINI_API_KEY`, `SUPABASE_URL`, `AUTH_DISABLED`
 
 ## Where to Add New Code
 
 **New Video Processing Feature:**
-- Primary code: `app/services/video_*.py` (create new service if needed)
-- API integration: Add endpoint to `app/api/library_routes.py` or `app/api/routes.py`
-- Frontend: Create component in `frontend/src/components/` or sub-directory
-- Types: Add types to `frontend/src/types/video-processing.ts`
-- Example: To add a new filter:
-  1. Implement in `app/services/video_filters.py`
-  2. Add UI control in `frontend/src/components/video-enhancement-controls.tsx`
-  3. Pass parameters through `POST /library/clips/{id}/render`
-  4. Apply in `_render_final_clip_task()` FFmpeg chain
-
-**New Backend Service:**
-- Location: `app/services/{service_name}.py`
-- Pattern: Create class with methods, export singleton factory function `get_{service_name}()`
-- Integration: Import and call from `app/api/` routes
-- Example: `app/services/elevenlabs_tts.py` → `from app.services.elevenlabs_tts import get_elevenlabs_tts`
-
-**New API Endpoint:**
-- Location: Choose router based on domain:
-  - Library workflow: `app/api/library_routes.py`
-  - Video processing: `app/api/routes.py`
-  - Segments: `app/api/segments_routes.py`
-  - Publishing: `app/api/postiz_routes.py`
-  - Profiles: `app/api/profile_routes.py`
-- Pattern: Define route handler with `@router.get/post/patch` decorator
-- Auth: Add `Depends(get_profile_context)` for multi-tenant isolation
-- Example: See `@router.post("/projects", response_model=ProjectResponse)` in library_routes.py
+- Implementation: `app/services/[feature_name].py`
+- Register: Import and use in `app/api/routes.py` or relevant router
+- Tests: `frontend/tests/[feature].spec.ts` (Playwright)
 
 **New Frontend Page:**
-- Location: `frontend/src/app/{page_name}/page.tsx`
-- Pattern: Create directory, add `page.tsx`, optionally add `layout.tsx`
-- Entry: Next.js App Router automatically routes `/app/{page_name}` → page.tsx
-- Example: `/library` served by `frontend/src/app/library/page.tsx`
+- Page: `frontend/src/app/[feature]/page.tsx`
+- Components: `frontend/src/components/[feature]/component-name.tsx`
+- Hooks: `frontend/src/hooks/use-feature.ts`
+- Types: Add to `frontend/src/types/video-processing.ts`
 
-**New Frontend Component:**
-- Location: `frontend/src/components/{component_name}.tsx` or sub-directory
-- Pattern: Export React component, use Shadcn/UI for styling
-- Usage: Import and compose into pages
-- Example: VideoEnhancementControls in `frontend/src/components/video-enhancement-controls.tsx`
+**New API Route:**
+- Router file: `app/api/[feature]_routes.py`
+- Register: Add `app.include_router(router, prefix="/api/v1")` in `app/main.py`
+- Authentication: Add `Depends(get_profile_context)` to protected endpoints
+- Profile context: Store profile_id in service calls for multi-tenant isolation
 
-**Shared Utilities:**
-- Frontend: `frontend/src/lib/` (api.ts for HTTP, utils.ts for helpers)
-- Backend: `app/services/` (domain-specific), or add utility module if needed
-- Types: `frontend/src/types/video-processing.ts`
+**New Service Integration:**
+- Service file: `app/services/[external_service].py`
+- Factory function: `def get_[service]() -> ServiceClass:` for singleton
+- Error handling: Try/except with graceful fallback (no hard failures)
+- Testing: Add Playwright integration test if user-facing
+
+**New Database Table:**
+- Migration: `supabase/migrations/XXX_[description].sql`
+- Schema: Add table with UUID primary key, profile_id foreign key
+- Queries: Use `get_supabase()` lazy client in services
+- Multi-tenancy: Always scope queries to profile_id
 
 ## Special Directories
 
-**`temp/`:**
-- Purpose: Profile-scoped temporary storage
-- Structure: `temp/{profile_id}/` for each profile
-- Generated: Yes (created by routes.py)
-- Committed: No (gitignored)
-- Cleanup: Manual via delete endpoints or periodic batch jobs
+**temp/ - Profile-Scoped Temporary Files:**
+- Purpose: Working directory for video processing per profile
+- Generated: Yes (created at runtime)
+- Committed: No (.gitignore)
+- Pattern: `temp/{profile_id}/` to prevent cross-profile collisions
 
-**`output/`:**
-- Purpose: Final video and asset output
-- Structure: `output/project_{project_id}/`, `output/tts/`, `output/thumbnails/`
-- Generated: Yes (by rendering tasks)
-- Committed: No (gitignored)
-- Served via: `GET /library/files/{file_path}` with directory traversal protection
+**input/ - Source Videos:**
+- Purpose: User-uploaded video files
+- Generated: Yes (uploaded by users)
+- Committed: No (.gitignore)
 
-**`logs/`:**
-- Purpose: Application logging
-- Structure: `cost_log.json` (cost tracking), stdout (uvicorn logs)
-- Generated: Yes (by services and middleware)
-- Committed: No (gitignored)
-- Retention: Manual cleanup or rotation policy
+**output/ - Rendered Videos:**
+- Purpose: Final processed videos available for download
+- Generated: Yes (by render endpoints)
+- Committed: No (.gitignore)
 
-**`.next/`:**
-- Purpose: Next.js build cache and development server state
-- Generated: Yes (by `npm run dev` or `npm run build`)
-- Committed: No (gitignored)
-- Note: Lock file at `.next/dev/lock` can block restarts, delete if stuck
+**logs/ - Application Logs:**
+- Purpose: Server and processing logs
+- Generated: Yes (at runtime)
+- Committed: No (.gitignore)
+- Key files: `cost_log.json` (API costs)
 
-**`node_modules/`:**
-- Purpose: npm package dependencies
-- Generated: Yes (by `npm install`)
-- Committed: No (gitignored)
-- Install: Run `npm install` from `frontend/` directory
+**static/ - Static Assets:**
+- Purpose: Images, icons, public files served by FastAPI
+- Committed: Yes (in version control)
+- Mount point: `/static` in `app/main.py`
 
-**`venv/`, `venv_linux/`:**
-- Purpose: Python virtual environment
-- Generated: Yes (by `python -m venv`)
-- Committed: No (gitignored)
-- Activation: `source venv/bin/activate` (Linux/WSL), `venv\Scripts\activate` (Windows)
+**frontend/.next/ - Next.js Build Cache:**
+- Purpose: Compiled frontend assets
+- Generated: Yes (by `npm run build`)
+- Committed: No (.gitignore)
+- Note: `frontend/.next/dev/lock` can block dev server restarts - delete if stuck
+
+**supabase/migrations/ - Database Versioning:**
+- Purpose: Track database schema changes
+- Committed: Yes (in version control)
+- Pattern: Sequential numbering (001_init.sql, 002_add_profiles.sql, etc.)
 
 ---
 

@@ -5,145 +5,156 @@
 ## Languages
 
 **Primary:**
-- Python 3.11 - Backend (FastAPI + video processing services)
-- TypeScript 5 - Frontend (Next.js application)
-- JavaScript - Build tooling
+- Python 3.11 - FastAPI backend, video processing, AI services
+- TypeScript 5 - Next.js frontend, React components, Playwright tests
+- JavaScript - Next.js build tooling, package management
 
 **Secondary:**
-- SQL (PostgreSQL via Supabase)
-- Bash - Development scripts
+- Shell/Bash - Development scripts (start-dev.sh, deploy-local.sh)
+- SQL - Supabase migrations (migrations/*.sql)
 
 ## Runtime
 
 **Environment:**
-- Python 3.11 (Docker target: `python:3.11-slim`)
-- Node.js 20+ (inferred from Next.js 16 requirements)
+- Python 3.11 (Docker base: `python:3.11-slim`)
+- Node.js (via npm, version managed by frontend lock file)
 
 **Package Manager:**
-- pip - Python dependencies (`requirements.txt`)
-- npm - JavaScript dependencies (`frontend/package.json`)
-- Lockfile: `package-lock.json` present for frontend, `requirements.txt` pinned for backend
+- pip (Python dependencies)
+- npm (JavaScript/TypeScript dependencies)
+- Lockfile: `requirements.txt` (pinned versions), `frontend/package-lock.json`
 
 ## Frameworks
 
-**Core:**
-- FastAPI 0.104.0+ - Web framework for REST API (`app/main.py`)
-- Uvicorn 0.24.0+ - ASGI server for FastAPI
-- Next.js 16.1.1 - React full-stack framework (`frontend/src/app/`)
+**Backend Core:**
+- FastAPI 0.104.0+ - Web framework, async HTTP API, automatic OpenAPI docs at /docs
+- Uvicorn 0.24.0+ - ASGI application server
+- python-multipart 0.0.6+ - Form data parsing
 
-**UI:**
-- React 19.2.1 - JavaScript library for UI components
-- Radix UI - Unstyled, accessible component library (all @radix-ui/* packages)
+**Frontend Core:**
+- Next.js 16.1.1 - App Router (pages in `frontend/src/app/`), React framework
+- React 19.2.1 - UI components
+- React DOM 19.2.1 - DOM rendering
+
+**UI Components:**
+- Radix UI - Headless component library (`@radix-ui/*`)
+- Shadcn/UI - Component wrapper over Radix UI (`frontend/src/components/ui/`)
 - Tailwind CSS 4 - Utility-first CSS framework
-- Shadcn/UI - Pre-built Radix UI + Tailwind components
-
-**Video Processing:**
-- FFmpeg - Local binary at `ffmpeg/ffmpeg-master-latest-win64-gpl/bin/` (Windows) or system PATH
-- OpenCV (cv2 via opencv-python-headless 4.8.0+) - Frame extraction and analysis
-- PyDub 0.25.0+ - Audio manipulation
+- Tailwind Merge 3.4.0 - Class merging utility
+- Sonner 2.0.7 - Toast notifications
+- Lucide React 0.556.0 - SVG icon library
 
 **Testing:**
-- Playwright 1.57.0 - E2E browser testing (`frontend/tests/`, config: `frontend/playwright.config.ts`)
+- Playwright 1.57.0 - E2E browser testing, config at `frontend/playwright.config.ts`
+- ESLint 9 - JavaScript/TypeScript linting
+- TypeScript 5 - Type checking
 
 **Build/Dev:**
-- TypeScript 5 - Static typing for frontend
-- ESLint 9 - Linting (config: `frontend/eslint.config.mjs`)
-- Tailwind CSS 4 - CSS compilation with PostCSS
+- Tailwind PostCSS 4 - CSS processing
+- Lightning CSS - Optional, faster CSS compilation (linux variants)
 
 ## Key Dependencies
 
-**Critical - AI & Analysis:**
-- google-genai 0.2.0+ - Google Gemini Vision API for video analysis (`app/services/gemini_analyzer.py`)
-- TTS 0.22.0+ - Coqui XTTS for voice cloning (supports 17 languages)
-- openai-whisper 20231117+ - Speech-to-text transcription for captions
+**Critical AI/ML:**
+- google-genai 0.2.0+ - Google Gemini video analysis and script generation
+- anthropic 0.40.0+ - Claude API for script refinement and content generation
+- openai-whisper 20231117+ - Speech-to-text for caption generation
 
-**Critical - TTS (Text-to-Speech):**
-- elevenlabs (version unspecified in requirements) - ElevenLabs API client (`app/services/elevenlabs_tts.py`)
-- edge-tts 6.1.0+ - Microsoft Edge TTS (free fallback)
-- kokoro 0.9.4+ - Lightweight TTS alternative (requires espeak-ng system dependency)
+**Critical TTS (Multiple Options):**
+- edge-tts 6.1.0+ - Free Microsoft Edge TTS (fallback, no cost)
+- elevenlabs-sdk - ElevenLabs premium TTS (async HTTP via httpx)
+- TTS 0.22.0+ - Coqui XTTS for voice cloning (requires PyTorch)
+- kokoro 0.9.4+ - Fast lightweight TTS (requires espeak-ng system dependency)
 
-**Critical - Voice Processing:**
-- torch 2.0.0+ - PyTorch for ML inference (VAD, voice detection)
-- torchaudio 2.0.0+ - PyTorch audio utilities
+**Critical Media Processing:**
+- scenedetect 0.6.0+ - Scene detection for video analysis (requires OpenCV)
+- opencv-python-headless 4.8.0+ - Computer vision without GUI
+- numpy 1.24.0+ - Numerical arrays for frame processing
+- scipy 1.11.0+ - Scientific computing (signal analysis, filtering)
+- pydub 0.25.0+ - Audio manipulation
 - librosa 0.10.0+ - Audio feature extraction
+- soundfile 0.12.1+ - WAV/audio file I/O
 
-**Infrastructure - Databases:**
-- supabase 2.0.0+ - PostgreSQL client for project/clip/cost management
-- PyJWT 2.8.0+ - JWT token verification for auth
+**Critical Voice Processing:**
+- torch 2.0.0+ - PyTorch (required by XTTS, Silero VAD, Whisper)
+- torchaudio 2.0.0+ - Audio processing with PyTorch
+- silero-vad (via torch) - Voice activity detection
 
-**Infrastructure - Video Analysis:**
-- scenedetect[opencv] 0.6.0+ - Scene detection and keyframe extraction
-- numpy 1.24.0+ - Numerical computing
-- scipy 1.11.0+ - Scientific computing
+**Critical Database:**
+- supabase 2.0.0+ - PostgreSQL database client, JWT validation
+- PyJWT 2.8.0+ - JWT token encoding/decoding for Supabase auth
 
-**Infrastructure - External APIs:**
-- httpx 0.25.0+ - Async HTTP client (used for ElevenLabs, Postiz)
+**Infrastructure/APIs:**
+- httpx 0.25.0+ - Async HTTP client (ElevenLabs, Postiz, fal.ai)
+- aiofiles 23.0.0+ - Async file I/O
 - google-api-python-client 2.100.0+ - Google Drive integration
-- google-auth-oauthlib 1.1.0+ - OAuth for Google Drive
+- google-auth-oauthlib 1.1.0+ - OAuth for Google services
 
-**Infrastructure - Job Processing:**
-- celery 5.3.0+ - Task queue (optional, declared but not required for core flow)
-- redis 5.0.0+ - Cache/message broker (optional, declared but not required)
+**Job Queue/Caching:**
+- celery 5.3.0+ - Distributed task queue (optional, for background jobs)
+- redis 5.0.0+ - In-memory data store for job queue and caching
+- (Note: FastAPI.BackgroundTasks is primary, Celery optional)
 
 **Utilities:**
-- python-dotenv 1.0.0+ - Environment variable loading (`.env` file)
-- pydantic 2.5.0+ - Data validation and settings
-- pydantic-settings 2.1.0+ - Configuration management
+- python-dotenv 1.0.0+ - .env file parsing
+- pydantic 2.5.0+ - Data validation
+- pydantic-settings 2.1.0+ - Settings management from environment
 - tqdm 4.65.0+ - Progress bars
-- srt 3.5.0+ - SRT subtitle parsing/generation
-- aiofiles 23.0.0+ - Async file operations
-
-**Frontend - API & Auth:**
-- @supabase/supabase-js 2.89.0+ - Supabase client for auth and real-time
-- @supabase/ssr 0.8.0+ - Supabase server-side rendering utilities
-
-**Frontend - UI Utilities:**
-- lucide-react 0.556.0 - Icon library
-- sonner 2.0.7+ - Toast notifications
-- clsx 2.1.1 - Conditional className utility
-- tailwind-merge 3.4.0 - Tailwind CSS conflict resolution
-- class-variance-authority 0.7.1 - CSS class generation
+- srt 3.5.0+ - SRT subtitle file parsing/writing
+- class-variance-authority 0.7.1 - CSS class variants (frontend)
+- clsx 2.1.1 - Conditional CSS classes (frontend)
 - embla-carousel-react 8.6.0 - Carousel component
-- react-resizable-panels 4.2.1 - Resizable panel layout
 
 ## Configuration
 
 **Environment:**
-- Loaded from `.env` file (see `.env.example`)
-- Database connection: `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_JWT_SECRET`
-- AI APIs: `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`
-- Optional services: `REDIS_URL`, `POSTIZ_API_URL`, `POSTIZ_API_KEY`, `GOOGLE_DRIVE_FOLDER_ID`
-- Development: `AUTH_DISABLED=true` bypasses JWT validation
+- Backend: `.env` file with variables loaded via `app/config.py` using pydantic-settings
+- Frontend: Environment variables available at build time (Next.js convention)
+- Config class: `app/config.py` - Settings dataclass with defaults
 
-**Backend Configuration:**
-- File: `app/config.py` - Pydantic Settings model
-- Defines paths: `input_dir`, `output_dir`, `logs_dir`
-- CORS origins: configurable from `ALLOWED_ORIGINS` env var
+**Key Environment Variables:**
+```
+SUPABASE_URL           # Required - PostgreSQL database URL
+SUPABASE_KEY           # Required - Anon client key
+SUPABASE_JWT_SECRET    # Required - JWT validation secret
+GEMINI_API_KEY         # Required - Google Gemini
+ELEVENLABS_API_KEY     # Required - ElevenLabs TTS (if using)
+ELEVENLABS_VOICE_ID    # Required - ElevenLabs voice ID
+ANTHROPIC_API_KEY      # Optional - Claude for script enhancement
+REDIS_URL              # Optional - Redis connection (redis://localhost:6379/0)
+POSTIZ_API_URL         # Optional - Social media publishing
+POSTIZ_API_KEY         # Optional - Postiz authentication
+AUTH_DISABLED          # Optional - Set true for dev auth bypass
+ALLOWED_ORIGINS        # CORS config (comma-separated)
+```
 
-**Frontend Configuration:**
-- TypeScript: `frontend/tsconfig.json` (ES2017 target, strict mode, path alias `@/*`)
-- Next.js: `frontend/next.config.ts` (output: "standalone" for Docker, remote image patterns)
-- Playwright: `frontend/playwright.config.ts` (base URL, screenshot/video retention, 60s timeout)
-- ESLint: `frontend/eslint.config.mjs` (next core-web-vitals + typescript presets)
-
-**Build:**
-- Backend uses Python venv
-- Frontend uses npm with lock file
-- Docker multistage build: Python 3.11 slim with FFmpeg
+**Build Configuration:**
+- `frontend/tsconfig.json` - TypeScript compilation
+- `frontend/playwright.config.ts` - E2E test configuration
+- `.eslintrc` - ESLint rules (if present)
+- `Dockerfile` - Multi-stage Python image
+- `docker-compose.yml` - Not present (services run independently)
 
 ## Platform Requirements
 
 **Development:**
-- Windows: Python 3.11, Node.js 20+, FFmpeg in local directory or PATH
-- Linux/WSL: Python 3.11, Node.js 20+, FFmpeg via system package manager
-- macOS: Python 3.11, Node.js 20+, FFmpeg via Homebrew
+- Python 3.11+ with venv support
+- Node.js 16+ (npm comes with it)
+- FFmpeg binary or system installation (auto-detected from `ffmpeg/ffmpeg-master-latest-win64-gpl/bin/` or PATH)
+- System dependencies for audio: `espeak-ng` (for Kokoro TTS)
+- Optional: NVIDIA CUDA toolkit for GPU acceleration (PyTorch CUDA variants)
 
 **Production:**
-- Docker container: `python:3.11-slim` with system packages (ffmpeg, libsm6, libxext6, libgl1)
-- Environment variables required: `SUPABASE_URL`, `SUPABASE_KEY`, `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`
-- Reverse proxy (nginx) recommended for frontend static files
-- Port 8000: FastAPI backend
-- Port 3000: Next.js frontend
+- Docker (Dockerfile provided for containerized deployment)
+- PostgreSQL database (via Supabase)
+- Redis (optional, for Celery job queue)
+- 2+ GB RAM minimum (video processing + ML models consume significant memory)
+- Deployment target: Linux container, AWS/GCP/Azure/Supabase Postgres
+
+**Deployment Tested:**
+- Local WSL2 (Windows Subsystem for Linux)
+- Docker containerization
+- Supabase cloud database
 
 ---
 
