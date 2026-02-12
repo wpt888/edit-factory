@@ -21,6 +21,7 @@ from app.api.segments_routes import router as segments_router
 from app.api.postiz_routes import router as postiz_router
 from app.api.profile_routes import router as profile_router
 from app.api import tts_routes
+from app.api.script_routes import router as script_router
 
 # Configurare logging
 logging.basicConfig(
@@ -60,6 +61,7 @@ app.include_router(segments_router, prefix="/api/v1", tags=["Segments & Manual S
 app.include_router(postiz_router, prefix="/api/v1", tags=["Postiz Publishing"])
 app.include_router(profile_router, prefix="/api/v1")
 app.include_router(tts_routes.router, prefix="/api/v1")
+app.include_router(script_router, prefix="/api/v1", tags=["AI Script Generation"])
 
 # Static files pentru frontend
 static_path = Path(__file__).parent.parent / "static"
