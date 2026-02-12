@@ -11,18 +11,18 @@ See: .planning/PROJECT.md (updated 2026-02-12)
 
 Milestone: v4 Script-First Video Production Pipeline
 Phase: 12 of 16 (ElevenLabs TTS Upgrade)
-Plan: 2 of 3 in current phase
-Status: Executing Phase 12
-Last activity: 2026-02-12 — Completed 12-02-PLAN.md (TTS timestamp pipeline integration)
+Plan: 3 of 3 in current phase
+Status: Phase 12 Complete
+Last activity: 2026-02-12 — Completed 12-03-PLAN.md (ElevenLabs model selector UI)
 
 Progress: [██████████████████████████████████████░░░░░░░░] 69% (11 of 16 phases complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 40
+- Total plans completed: 41
 - Total phases completed: 11
-- Total execution time: ~2.7 hours (v2) + ~2 days (v3) + 4.8 min (v4)
+- Total execution time: ~2.7 hours (v2) + ~2 days (v3) + 11.8 min (v4)
 
 **By Milestone:**
 
@@ -30,12 +30,20 @@ Progress: [███████████████████████
 |-----------|--------|-------|--------|
 | v2 Profile System | 6 | 23 | Complete (2026-02-04) |
 | v3 Video Quality | 5 | 13 | Complete (2026-02-06) |
-| v4 Script-First | 5 | 2 | In progress |
+| v4 Script-First | 5 | 3 | In progress |
 
 **Recent Trend:**
 - v2: 23 plans in 2.7 hours
 - v3: 13 plans in 2 days
+- v4: 3 plans in 11.8 min (avg 3.9 min/plan)
 - Trend: Stable execution, milestone completed successfully
+
+**Recent Plans:**
+| Plan | Duration (min) | Tasks | Files |
+|------|---------------|-------|-------|
+| Phase 12 P01 | 2.5 | 2 tasks | 1 file |
+| Phase 12 P02 | 2.3 | 2 tasks | 2 files |
+| Phase 12 P03 | 7 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -48,6 +56,8 @@ Recent decisions affecting v4 work:
 - **TTS timestamps over Whisper for subtitles**: Perfect sync with voiceover, no extra processing step
 - **Timestamp persistence strategy**: Store raw timestamp dict from ElevenLabs as JSONB for flexibility in Phase 13
 - **Model tracking**: Persist tts_model alongside timestamps to enable cost tracking and debugging
+- **Model selector always visible**: Always show TTS model dropdown in render section (not conditional on TTS text) for simpler UX
+- **Cost/latency transparency**: Display cost per 1k chars and latency inline in model dropdown for informed user decisions
 - **Gemini + Claude Max for script generation**: Two AI providers, user chooses per project
 - **Script-first over video-first workflow**: Script drives segment selection and assembly
 
@@ -70,10 +80,10 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-12
-Stopped at: Completed 12-02-PLAN.md (TTS timestamp pipeline integration)
+Stopped at: Completed 12-03-PLAN.md (ElevenLabs model selector UI) - Phase 12 Complete
 Resume file: None
 
-**Next step:** Execute 12-03-PLAN.md (Configuration UI for model selection)
+**Next step:** Phase 12 complete. Ready for Phase 13 or next milestone phase.
 
 ---
-*Last updated: 2026-02-12 after completing 12-02-PLAN.md*
+*Last updated: 2026-02-12 after completing 12-03-PLAN.md*
