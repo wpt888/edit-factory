@@ -188,10 +188,11 @@ Plans:
   2. Each variant gets a unique AI-generated script, unique TTS voiceover, and unique segment arrangement
   3. User can preview all variants (script + thumbnail) before triggering final renders
   4. Multi-variant generation completes with job progress tracking for all N videos
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 16-01: TBD
+- [ ] 16-01-PLAN.md -- Backend pipeline API: orchestrate script generation, preview, and batch render for N variants
+- [ ] 16-02-PLAN.md -- Frontend pipeline page with step-based workflow (input, scripts, preview, render)
 
 ## Progress
 
