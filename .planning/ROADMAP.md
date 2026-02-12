@@ -5,7 +5,7 @@
 - ✅ **v1.0 MVP** - Phases 1-0 (video processing core, shipped ~2024)
 - ✅ **v2 Profile System** - Phases 1-6 (profile isolation, TTS providers, shipped 2026-02-04)
 - ✅ **v3 Video Quality Enhancement** - Phases 7-11 (encoding optimization, shipped 2026-02-06)
-- 🚧 **v4 Script-First Pipeline** - Phases 12-16 (in progress)
+- ✅ **v4 Script-First Pipeline** - Phases 12-16 (shipped 2026-02-12)
 
 ## Phases
 
@@ -112,7 +112,7 @@ Full details: `.planning/milestones/v3-ROADMAP.md`
 
 </details>
 
-## 🚧 v4 Script-First Pipeline (In Progress)
+## ✅ v4 Script-First Pipeline (Shipped 2026-02-12)
 
 **Milestone Goal:** Transform Edit Factory from video-first to script-first production with AI-generated scripts, ElevenLabs TTS with character-level timestamps, TTS-based subtitles, keyword-based segment matching, and multi-variant video generation from a single idea.
 
@@ -188,11 +188,11 @@ Plans:
   2. Each variant gets a unique AI-generated script, unique TTS voiceover, and unique segment arrangement
   3. User can preview all variants (script + thumbnail) before triggering final renders
   4. Multi-variant generation completes with job progress tracking for all N videos
-**Plans**: 2 plans
+**Plans**: 2 plans — Complete 2026-02-12
 
 Plans:
-- [ ] 16-01-PLAN.md -- Backend pipeline API: orchestrate script generation, preview, and batch render for N variants
-- [ ] 16-02-PLAN.md -- Frontend pipeline page with step-based workflow (input, scripts, preview, render)
+- [x] 16-01-PLAN.md -- Backend pipeline API: orchestrate script generation, preview, and batch render for N variants
+- [x] 16-02-PLAN.md -- Frontend pipeline page with step-based workflow (input, scripts, preview, render)
 
 ## Progress
 
@@ -216,7 +216,7 @@ Phases execute in numeric order: 12 → 13 → 14 → 15 → 16
 | 13. TTS-Based Subtitles | v4 | 2/2 | Complete | 2026-02-12 |
 | 14. AI Script Generation | v4 | 2/2 | Complete | 2026-02-12 |
 | 15. Script-to-Video Assembly | v4 | 2/2 | Complete | 2026-02-12 |
-| 16. Multi-Variant Pipeline | v4 | 0/0 | Not started | - |
+| 16. Multi-Variant Pipeline | v4 | 2/2 | Complete | 2026-02-12 |
 
 ---
-*Last updated: 2026-02-12 after v4 roadmap creation*
+*Last updated: 2026-02-12 after Phase 16 completion — v4 milestone shipped*
