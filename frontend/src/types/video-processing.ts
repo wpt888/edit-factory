@@ -162,3 +162,36 @@ export const COLOR_PRESETS = [
   "#FFA500", // Orange
   "#800080", // Purple
 ];
+
+/** ElevenLabs model options for TTS generation */
+export interface ElevenLabsModelOption {
+  id: string;
+  name: string;
+  description: string;
+  costPer1kChars: number;
+  latencyMs: number;
+}
+
+export const ELEVENLABS_MODELS: ElevenLabsModelOption[] = [
+  {
+    id: "eleven_flash_v2_5",
+    name: "Flash v2.5",
+    description: "Fastest, lowest cost, 32 languages",
+    costPer1kChars: 0.11,
+    latencyMs: 75,
+  },
+  {
+    id: "eleven_turbo_v2_5",
+    name: "Turbo v2.5",
+    description: "Fast with higher quality, 32 languages",
+    costPer1kChars: 0.11,
+    latencyMs: 135,
+  },
+  {
+    id: "eleven_multilingual_v2",
+    name: "Multilingual v2",
+    description: "Highest quality, 29 languages",
+    costPer1kChars: 0.22,
+    latencyMs: 275,
+  },
+];
