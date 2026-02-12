@@ -23,6 +23,7 @@ from app.api.profile_routes import router as profile_router
 from app.api import tts_routes
 from app.api.script_routes import router as script_router
 from app.api.assembly_routes import router as assembly_router
+from app.api.pipeline_routes import router as pipeline_router
 
 # Configurare logging
 logging.basicConfig(
@@ -64,6 +65,7 @@ app.include_router(profile_router, prefix="/api/v1")
 app.include_router(tts_routes.router, prefix="/api/v1")
 app.include_router(script_router, prefix="/api/v1", tags=["AI Script Generation"])
 app.include_router(assembly_router, prefix="/api/v1", tags=["Script-to-Video Assembly"])
+app.include_router(pipeline_router, prefix="/api/v1", tags=["Multi-Variant Pipeline"])
 
 # Static files pentru frontend
 static_path = Path(__file__).parent.parent / "static"
