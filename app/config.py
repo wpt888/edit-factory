@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     # ElevenLabs TTS
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = ""
-    elevenlabs_model: str = "eleven_multilingual_v2"
+    elevenlabs_model: str = "eleven_flash_v2_5"
 
     # Supabase
     supabase_url: str = ""
@@ -49,6 +49,7 @@ class Settings(BaseSettings):
 
     # Security
     allowed_origins: str = "http://localhost:3000,http://localhost:3001,https://editai.obsid.ro"
+    auth_disabled: bool = False  # Set to True to disable authentication (local development only!)
 
     class Config:
         env_file = ".env"
