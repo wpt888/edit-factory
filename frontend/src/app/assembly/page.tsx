@@ -37,7 +37,8 @@ interface MatchPreview {
   srt_text: string;
   srt_start: number;
   srt_end: number;
-  matched_segment_id: string | null;
+  segment_id: string | null;
+  segment_keywords: string[];
   matched_keyword: string | null;
   confidence: number;
 }

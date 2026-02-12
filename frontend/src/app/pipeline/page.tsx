@@ -58,7 +58,7 @@ interface PreviewData {
 
 interface VariantStatus {
   variant_index: number;
-  status: "pending" | "processing" | "completed" | "failed";
+  status: "not_started" | "processing" | "completed" | "failed";
   progress: number;
   current_step: string;
   final_video_path?: string;
