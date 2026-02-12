@@ -22,6 +22,7 @@ from app.services.encoding_presets import get_preset, EncodingPreset
 from app.services.audio_normalizer import measure_loudness, build_loudnorm_filter
 from app.services.video_filters import VideoFilters, DenoiseConfig, SharpenConfig, ColorConfig
 from app.services.subtitle_styler import build_subtitle_filter
+from app.services.tts_subtitle_generator import generate_srt_from_timestamps
 
 import logging
 
@@ -1906,11 +1907,25 @@ async def _render_final_clip_task(
                     if adjusted_video_path.exists():
                         final_video_path = adjusted_video_path
 
-        # 3. Generăm SRT temporar dacă avem conținut
+        # 3. Generate SRT - user-provided takes priority, then auto-generate from TTS timestamps
         if content_data and content_data.get("srt_content"):
             srt_path = temp_dir / f"srt_{clip_id}.srt"
             with open(srt_path, "w", encoding="utf-8") as f:
                 f.write(content_data["srt_content"])
+            logger.info(f"Using user-provided SRT for clip {clip_id}")
+        elif tts_timestamps:
+            # Auto-generate SRT from TTS character-level timestamps (Phase 13)
+            try:
+                auto_srt = generate_srt_from_timestamps(tts_timestamps)
+                if auto_srt:
+                    srt_path = temp_dir / f"srt_{clip_id}.srt"
+                    with open(srt_path, "w", encoding="utf-8") as f:
+                        f.write(auto_srt)
+                    logger.info(f"Auto-generated SRT from TTS timestamps for clip {clip_id}")
+                else:
+                    logger.warning(f"TTS timestamps produced empty SRT for clip {clip_id}")
+            except Exception as e:
+                logger.warning(f"Failed to generate SRT from TTS timestamps: {e}")
 
         # Inject Phase 11 subtitle enhancement settings into subtitle_settings dict
         if content_data and content_data.get("subtitle_settings"):
@@ -1918,6 +1933,24 @@ async def _render_final_clip_task(
             content_data["subtitle_settings"]["enableGlow"] = enable_glow
             content_data["subtitle_settings"]["glowBlur"] = glow_blur
             content_data["subtitle_settings"]["adaptiveSizing"] = adaptive_sizing
+
+        # Ensure subtitle_settings exist when SRT is available (default styling for auto-generated subtitles)
+        if srt_path and (not content_data or not content_data.get("subtitle_settings")):
+            if not content_data:
+                content_data = {}
+            content_data["subtitle_settings"] = {
+                "fontSize": 48,
+                "fontFamily": "Montserrat",
+                "textColor": "#FFFFFF",
+                "outlineColor": "#000000",
+                "outlineWidth": 3,
+                "positionY": 85,
+                "shadowDepth": shadow_depth,
+                "enableGlow": enable_glow,
+                "glowBlur": glow_blur,
+                "adaptiveSizing": adaptive_sizing
+            }
+            logger.info(f"Applied default subtitle styling for auto-generated SRT")
 
         # 4. Randăm cu FFmpeg folosind preset-ul
         output_path = output_dir / f"final_{clip_id}_{preset_data['name']}.mp4"
