@@ -22,6 +22,7 @@ from app.api.postiz_routes import router as postiz_router
 from app.api.profile_routes import router as profile_router
 from app.api import tts_routes
 from app.api.script_routes import router as script_router
+from app.api.assembly_routes import router as assembly_router
 
 # Configurare logging
 logging.basicConfig(
@@ -62,6 +63,7 @@ app.include_router(postiz_router, prefix="/api/v1", tags=["Postiz Publishing"])
 app.include_router(profile_router, prefix="/api/v1")
 app.include_router(tts_routes.router, prefix="/api/v1")
 app.include_router(script_router, prefix="/api/v1", tags=["AI Script Generation"])
+app.include_router(assembly_router, prefix="/api/v1", tags=["Script-to-Video Assembly"])
 
 # Static files pentru frontend
 static_path = Path(__file__).parent.parent / "static"
