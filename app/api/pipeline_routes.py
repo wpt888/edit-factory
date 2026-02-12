@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import List, Optional, Dict
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body
 from pydantic import BaseModel
 
 from app.api.auth import ProfileContext, get_profile_context
@@ -267,7 +267,7 @@ async def preview_variant(
     pipeline_id: str,
     variant_index: int,
     profile: ProfileContext = Depends(get_profile_context),
-    elevenlabs_model: str = "eleven_flash_v2_5"
+    elevenlabs_model: str = Body("eleven_flash_v2_5", embed=True)
 ):
     """
     Preview segment matching for a single variant.
