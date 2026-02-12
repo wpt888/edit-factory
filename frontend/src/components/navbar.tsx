@@ -6,6 +6,7 @@ import { ProfileSwitcher } from "@/components/profile-switcher";
 import { useProfile } from "@/contexts/profile-context";
 
 const navLinks = [
+  { label: "Pipeline", href: "/pipeline" },
   { label: "Librărie", href: "/librarie" },
   { label: "Export", href: "/library" },
   { label: "Scripts", href: "/scripts" },
