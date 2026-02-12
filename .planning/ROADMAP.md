@@ -141,10 +141,11 @@ Plans:
   2. Character timestamps are grouped into word-level and phrase-level subtitle entries with natural timing
   3. Generated subtitles use existing v3 styling (shadow, glow, adaptive sizing) without modification
   4. Subtitle sync is visually perfect when tested with generated TTS audio
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 13-01: TBD
+- [ ] 13-01-PLAN.md -- TTS subtitle generator service: character timestamps to SRT conversion
+- [ ] 13-02-PLAN.md -- Render pipeline integration: auto-generate SRT from TTS timestamps
 
 ### Phase 14: AI Script Generation
 **Goal**: Generate multiple TTS-ready script variants from user idea and product context
