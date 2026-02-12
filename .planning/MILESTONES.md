@@ -49,3 +49,33 @@
 **What's next:** v3 Video Quality Enhancement
 
 ---
+
+## v4 Script-First Pipeline (Shipped: 2026-02-12)
+
+**Delivered:** Script-first video production pipeline transforming Edit Factory from video-first to idea-first workflow with AI-generated scripts, ElevenLabs TTS with character-level timestamps, auto-generated subtitles, keyword-matched visuals, and multi-variant generation.
+
+**Phases completed:** 12-16 (11 plans total)
+
+**Key accomplishments:**
+- ElevenLabs TTS upgrade to flash v2.5 with 192kbps audio, character-level timestamps, and 50% cost reduction
+- TTS-based subtitle generation from timestamps (characters -> words -> phrases -> SRT, no Whisper needed)
+- Dual-provider AI script generation (Gemini + Claude Max) with keyword-aware, TTS-safe output
+- Script-to-video assembly engine with keyword matching, timeline building, and silence removal
+- Multi-variant pipeline: 1 idea -> N unique videos with 4-step workflow (input, scripts, preview, render)
+- 3 new frontend pages (Pipeline, Scripts, Assembly) and 9 new API endpoints across 3 routers
+
+**Stats:**
+- 47 files modified
+- ~9,300 lines added (Python + TypeScript)
+- 5 phases, 11 plans, ~14 tasks
+- 1 day (2026-02-12)
+- 4 new backend services, 3 new pages, 1 DB migration
+
+**Git range:** `feat(12-01)` -> `docs(phase-16)`
+
+**Tech debt:** 9 non-blocking items (in-memory state, no job cancellation, exact keyword matching only)
+
+**What's next:** TBD — `/gsd:new-milestone`
+
+---
+

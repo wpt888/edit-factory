@@ -41,14 +41,15 @@ Script-first video production: describe an idea, get multiple social-media-ready
 - ✓ Subtitle shadow effects — v3
 - ✓ Subtitle glow/outline — v3
 - ✓ Adaptive subtitle sizing — v3
+- ✓ ElevenLabs flash v2.5 with 192kbps audio and character timestamps — v4
+- ✓ TTS-based subtitle generation from timestamps (no Whisper) — v4
+- ✓ AI script generation (Gemini + Claude Max, keyword-aware) — v4
+- ✓ Script-to-segment matching and video assembly — v4
+- ✓ Multi-variant pipeline (1 idea → N videos) — v4
 
 ### Active
 
-- [ ] ElevenLabs upgrade (flash v2.5, 192kbps, timestamps) — v4
-- [ ] AI script generation from context (Gemini + Claude) — v4
-- [ ] TTS-based subtitle generation (skip Whisper) — v4
-- [ ] Script-to-segment matching and assembly — v4
-- [ ] Multi-variant script pipeline (1 idea → N videos) — v4
+(No active requirements — start `/gsd:new-milestone` to define next milestone)
 
 ### Out of Scope
 
@@ -68,12 +69,15 @@ Script-first video production: describe an idea, get multiple social-media-ready
 - Runs on Windows/WSL development machine
 - Constant iteration — code changes frequently
 - Tech stack: FastAPI backend (Python), Next.js frontend (TypeScript), Supabase DB, FFmpeg
+- ~30,000 LOC across Python + TypeScript
+- v4 shipped: Script-first pipeline with AI scripts, TTS timestamps, auto-subtitles, segment matching, multi-variant generation
 - v3 baseline: CRF 18-20, preset medium, 192k audio, -14 LUFS normalization, video filters, enhanced subtitles
-- 4 backend services: encoding_presets, audio_normalizer, video_filters, subtitle_styler
-- Segment system exists: source videos, segments with keywords, SRT matching, project assignment
-- ElevenLabs Starter plan: 100k credits/month, flash v2.5 at 0.5 credits/char
-- ElevenLabs /with-timestamps endpoint returns character-level timing data
-- Script template: plain text, line-by-line, proper punctuation, no emojis/stage directions (goes direct to TTS)
+- 8 backend services: encoding_presets, audio_normalizer, video_filters, subtitle_styler, script_generator, assembly_service, tts_subtitle_generator, pipeline_routes
+- 6 frontend pages: Library, Pipeline, Scripts, Assembly, Segments, Usage/Stats
+- 9 API endpoints across 3 new routers (script, assembly, pipeline) + existing 4 routers
+- ElevenLabs Starter plan: 100k credits/month, flash v2.5 default at 0.5 credits/char
+- DB migrations: 009 (TTS timestamps) pending manual application
+- Tech debt: In-memory state dicts (pipeline, assembly, generation), no job cancellation, exact keyword matching only
 
 ## Constraints
 
@@ -101,10 +105,14 @@ Script-first video production: describe an idea, get multiple social-media-ready
 | 5-factor scoring weights 40/20/20/15/5 | Balanced scoring, no single factor dominates | — Pending A/B testing |
 | Subtitle params per-render (not DB) | Flexibility for A/B testing, consistent with filter approach | ✓ Good |
 
-| eleven_flash_v2_5 as default model | 50% cheaper (0.5 credits/char), 32 languages, 75ms latency, 40k char limit | — Pending |
-| TTS timestamps over Whisper for subtitles | Perfect sync with voiceover, no extra processing step | — Pending |
-| Gemini + Claude Max for script generation | Two AI providers, user chooses per project | — Pending |
-| Script-first over video-first workflow | Script drives segment selection and assembly | — Pending |
+| eleven_flash_v2_5 as default model | 50% cheaper (0.5 credits/char), 32 languages, 75ms latency, 40k char limit | ✓ Good |
+| TTS timestamps over Whisper for subtitles | Perfect sync with voiceover, no extra processing step | ✓ Good |
+| Gemini + Claude Max for script generation | Two AI providers, user chooses per project | ✓ Good |
+| Script-first over video-first workflow | Script drives segment selection and assembly | ✓ Good |
+| Keyword substring matching for segments | Exact word=1.0, substring=0.7 confidence scoring | ✓ Good |
+| In-memory state for pipeline/assembly | Consistent with existing patterns, acceptable for single-user | ⚠️ Tech debt |
+| Preview-before-render workflow | Avoids expensive render until user confirms matches | ✓ Good |
+| Manual SRT generation (no external lib) | Zero dependencies for timestamp-to-SRT conversion | ✓ Good |
 
 ---
-*Last updated: 2026-02-12 after v4 Script-First Pipeline milestone started*
+*Last updated: 2026-02-12 after v4 Script-First Pipeline milestone shipped*
