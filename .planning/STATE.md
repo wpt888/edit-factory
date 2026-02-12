@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-12)
 
 **Core value:** Script-first video production: describe an idea, get multiple social-media-ready videos with AI-generated voiceover, perfectly synced subtitles, and keyword-matched visuals.
-**Current focus:** Phase 15 - Script-to-Video Assembly
+**Current focus:** Phase 16 - Multi-Variant Pipeline
 
 ## Current Position
 
 Milestone: v4 Script-First Video Production Pipeline
-Phase: 15 of 16 (Script-to-Video Assembly)
-Plan: 2 of 2 in current phase
-Status: Phase 15 complete - All assembly plans executed (backend + frontend)
-Last activity: 2026-02-12 — Plan 15-02 complete (frontend assembly UI)
+Phase: 16 of 16 (Multi-Variant Pipeline)
+Plan: 1 of 2 in current phase
+Status: Phase 16 in progress - Plan 01 complete (pipeline backend API)
+Last activity: 2026-02-12 — Plan 16-01 complete (multi-variant pipeline backend)
 
 Progress: [███████████████████████████████████████████░░░] 94% (15 of 16 phases complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 47
+- Total plans completed: 48
 - Total phases completed: 15
-- Total execution time: ~2.7 hours (v2) + ~2 days (v3) + ~32 min (v4)
+- Total execution time: ~2.7 hours (v2) + ~2 days (v3) + ~34 min (v4)
 
 **By Milestone:**
 
@@ -30,13 +30,13 @@ Progress: [███████████████████████
 |-----------|--------|-------|--------|
 | v2 Profile System | 6 | 23 | Complete (2026-02-04) |
 | v3 Video Quality | 5 | 13 | Complete (2026-02-06) |
-| v4 Script-First | 5 | 8 | In progress |
+| v4 Script-First | 5 | 9 | In progress |
 
 **Recent Trend:**
 - v2: 23 plans in 2.7 hours
 - v3: 13 plans in 2 days
-- v4: 9 plans in 32 min (avg 3.6 min/plan)
-- Trend: Consistent velocity, Phase 15 complete
+- v4: 9 plans in 34 min (avg 3.8 min/plan)
+- Trend: Consistent velocity, Phase 16 in progress
 
 **Recent Plans:**
 | Plan | Duration (min) | Tasks | Files |
@@ -46,6 +46,7 @@ Progress: [███████████████████████
 | Phase 14 P02 | 1.9 | 2 tasks | 2 files |
 | Phase 15 P01 | 3.6 | 2 tasks | 3 files |
 | Phase 15 P02 | 9.2 | 3 tasks | 3 files |
+| Phase 16 P01 | 114 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,10 @@ Recent decisions affecting v4 work:
 - [Phase 15]: Preview-before-render workflow (preview endpoint avoids expensive render)
 - [Phase 15]: Assembly link positioned between Scripts and Segments in navbar for logical workflow progression
 - [Phase 15]: Two-column responsive layout matches Scripts page pattern for frontend consistency
+- [Phase 16]: Pipeline state stored in-memory (_pipelines dict) consistent with _assembly_jobs and _generation_progress patterns
+- [Phase 16]: Status endpoint is public (pipeline_id is the secret) for easy polling without auth headers
+- [Phase 16]: Each variant renders independently in background task for true parallelism
+- [Phase 16]: Preview data cached in pipeline state to avoid regenerating TTS for render step
 
 ### Pending Todos
 
@@ -89,10 +94,10 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-12
-Stopped at: Completed Phase 15 Plan 02 (frontend assembly UI) - Phase 15 complete
+Stopped at: Completed Phase 16 Plan 01 (multi-variant pipeline backend)
 Resume file: None
 
-**Next step:** Plan and execute Phase 16 (TTS Segment Library)
+**Next step:** Execute Phase 16 Plan 02 (pipeline frontend UI)
 
 ---
-*Last updated: 2026-02-12 after Phase 15 Plan 02 execution*
+*Last updated: 2026-02-12 after Phase 16 Plan 01 execution*
