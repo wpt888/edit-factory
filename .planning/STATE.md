@@ -11,18 +11,18 @@ See: .planning/PROJECT.md (updated 2026-02-12)
 
 Milestone: v4 Script-First Video Production Pipeline
 Phase: 15 of 16 (Script-to-Video Assembly)
-Plan: 0 of 0 in current phase (awaiting planning)
-Status: Phase 14 complete, ready to plan Phase 15
-Last activity: 2026-02-12 — Phase 14 verified and complete (2/2 plans, 5/5 must-haves auto-verified)
+Plan: 1 of 2 in current phase
+Status: In progress - Plan 01 complete (backend assembly engine)
+Last activity: 2026-02-12 — Plan 15-01 complete (assembly service + API routes)
 
 Progress: [███████████████████████████████████████████░░░] 88% (14 of 16 phases complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 45
+- Total plans completed: 46
 - Total phases completed: 14
-- Total execution time: ~2.7 hours (v2) + ~2 days (v3) + ~19.1 min (v4)
+- Total execution time: ~2.7 hours (v2) + ~2 days (v3) + ~22.7 min (v4)
 
 **By Milestone:**
 
@@ -30,22 +30,22 @@ Progress: [███████████████████████
 |-----------|--------|-------|--------|
 | v2 Profile System | 6 | 23 | Complete (2026-02-04) |
 | v3 Video Quality | 5 | 13 | Complete (2026-02-06) |
-| v4 Script-First | 5 | 7 | In progress |
+| v4 Script-First | 5 | 8 | In progress |
 
 **Recent Trend:**
 - v2: 23 plans in 2.7 hours
 - v3: 13 plans in 2 days
-- v4: 7 plans in 19.1 min (avg 2.7 min/plan)
-- Trend: Efficient execution, Phase 14 complete
+- v4: 8 plans in 22.7 min (avg 2.8 min/plan)
+- Trend: Consistent velocity, Phase 15 Plan 01 complete
 
 **Recent Plans:**
 | Plan | Duration (min) | Tasks | Files |
 |------|---------------|-------|-------|
-| Phase 12 P03 | 7 | 2 tasks | 2 files |
 | Phase 13 P01 | 1.5 | 1 tasks | 1 files |
 | Phase 13 P02 | 1.0 | 1 tasks | 1 files |
 | Phase 14 P01 | 2.9 | 2 tasks | 5 files |
 | Phase 14 P02 | 1.9 | 2 tasks | 2 files |
+| Phase 15 P01 | 3.6 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -64,6 +64,9 @@ Recent decisions affecting v4 work:
 - **Script-first over video-first workflow**: Script drives segment selection and assembly
 - [Phase 13]: Manual SRT generation without external library dependency for TTS subtitle generation
 - [Phase 14]: Dual-provider AI script generation (Gemini + Claude) with keyword awareness and TTS-safe sanitization
+- [Phase 15]: Keyword substring matching with confidence scoring (exact word=1.0, substring=0.7) balances precision and recall
+- [Phase 15]: Silence removal applied BEFORE timeline calculation to ensure timeline matches trimmed audio duration
+- [Phase 15]: Preview-before-render workflow (preview endpoint avoids expensive render)
 
 ### Pending Todos
 
@@ -84,10 +87,10 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-12
-Stopped at: Phase 14 verified complete, STATE updated to Phase 15
+Stopped at: Completed Phase 15 Plan 01 (backend assembly service + API routes)
 Resume file: None
 
-**Next step:** `/gsd:plan-phase 15` to create execution plan for Script-to-Video Assembly
+**Next step:** Execute Phase 15 Plan 02 (frontend assembly UI) or plan Phase 16
 
 ---
-*Last updated: 2026-02-12 after Phase 14 verification passed*
+*Last updated: 2026-02-12 after Phase 15 Plan 01 execution*
