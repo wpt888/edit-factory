@@ -157,10 +157,11 @@ Plans:
   3. Generated scripts follow TTS-safe template (plain text, proper punctuation, no emojis/stage directions)
   4. User can choose between Gemini and Claude Max as AI provider per generation request
   5. User can review and edit generated scripts before proceeding to TTS generation
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 14-01: TBD
+- [ ] 14-01-PLAN.md -- Backend AI script generation service + API routes (Gemini + Claude)
+- [ ] 14-02-PLAN.md -- Frontend script generation page with review/edit UI
 
 ### Phase 15: Script-to-Video Assembly
 **Goal**: Match subtitle keywords to video segments and assemble final videos with TTS audio
@@ -211,7 +212,7 @@ Phases execute in numeric order: 12 → 13 → 14 → 15 → 16
 | 11. Subtitle Enhancement | v3 | 3/3 | Complete | 2026-02-06 |
 | 12. ElevenLabs TTS Upgrade | v4 | 3/3 | Complete | 2026-02-12 |
 | 13. TTS-Based Subtitles | v4 | 2/2 | Complete | 2026-02-12 |
-| 14. AI Script Generation | v4 | 0/0 | Not started | - |
+| 14. AI Script Generation | v4 | 0/2 | Planning complete | - |
 | 15. Script-to-Video Assembly | v4 | 0/0 | Not started | - |
 | 16. Multi-Variant Pipeline | v4 | 0/0 | Not started | - |
 
