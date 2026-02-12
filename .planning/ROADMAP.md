@@ -173,10 +173,11 @@ Plans:
   3. Final video is rendered with matched segments, TTS audio, and subtitles using existing v3 quality settings
   4. Silence removal is applied to TTS audio before assembly using existing functionality
   5. User can preview segment matching results before final render
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 15-01: TBD
+- [ ] 15-01-PLAN.md -- Backend assembly service (matching engine + timeline builder) + API routes (preview, render, status)
+- [ ] 15-02-PLAN.md -- Frontend assembly page with script input, match preview, and render trigger
 
 ### Phase 16: Multi-Variant Pipeline
 **Goal**: Orchestrate end-to-end script-to-video pipeline for N variants from single idea
