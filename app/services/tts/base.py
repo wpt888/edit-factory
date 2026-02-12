@@ -30,6 +30,7 @@ class TTSResult:
     provider: str
     voice_id: str
     cost: float
+    timestamps: Optional[dict] = None  # Character-level timing data from /with-timestamps
 
 
 class TTSService(ABC):

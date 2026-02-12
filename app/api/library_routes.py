@@ -1639,6 +1639,8 @@ async def render_final_clip(
     enable_glow: str = Form(default="false"),
     glow_blur: int = Form(default=0),
     adaptive_sizing: str = Form(default="false"),
+    # TTS model selection (Phase 12)
+    elevenlabs_model: str = Form(default="eleven_flash_v2_5"),
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """
@@ -1697,7 +1699,9 @@ async def render_final_clip(
             shadow_depth=shadow_depth,
             enable_glow=enable_glow_bool,
             glow_blur=glow_blur,
-            adaptive_sizing=adaptive_sizing_bool
+            adaptive_sizing=adaptive_sizing_bool,
+            # TTS model selection (Phase 12)
+            elevenlabs_model=elevenlabs_model
         )
 
         return {
@@ -1731,7 +1735,9 @@ async def _render_final_clip_task(
     shadow_depth: int = 0,
     enable_glow: bool = False,
     glow_blur: int = 0,
-    adaptive_sizing: bool = False
+    adaptive_sizing: bool = False,
+    # TTS model selection (Phase 12)
+    elevenlabs_model: str = "eleven_flash_v2_5"
 ):
     """
     Task pentru randarea finală în background.
@@ -1788,18 +1794,71 @@ async def _render_final_clip_task(
 
         # 1. Generăm TTS dacă avem text (cu silence removal pentru dinamism)
         if content_data and content_data.get("tts_text"):
-            tts = get_elevenlabs_tts()
-            audio_path = temp_dir / f"tts_{clip_id}.mp3"
+            # Use new TTS service with timestamps support
+            from app.services.tts.elevenlabs import ElevenLabsTTSService
+            from app.config import get_settings
 
-            # Generăm cu silence removal ACTIVAT pentru audio dinamic
-            audio_path, silence_stats = tts.generate_audio_trimmed(
-                text=content_data["tts_text"],
-                output_path=audio_path,
-                remove_silence=True,
-                min_silence_duration=0.25,  # Păstrăm pauze < 250ms pentru ritm natural
-                padding=0.06  # 60ms padding pentru tranziții line
-            )
+            audio_path = temp_dir / f"tts_{clip_id}.mp3"
+            tts_timestamps = None
+            silence_stats = None
+
+            try:
+                # Initialize TTS service with user-selected model
+                tts_service = ElevenLabsTTSService(
+                    output_dir=temp_dir,
+                    model_id=elevenlabs_model
+                )
+
+                # Generate with timestamps for downstream subtitle sync
+                tts_result, tts_timestamps = await tts_service.generate_audio_with_timestamps(
+                    text=content_data["tts_text"],
+                    voice_id=tts_service._voice_id,
+                    output_path=audio_path,
+                    model_id=elevenlabs_model
+                )
+                audio_path = tts_result.audio_path
+                logger.info(f"TTS with timestamps generated for clip {clip_id}: {tts_result.duration_seconds:.1f}s, model={elevenlabs_model}")
+
+                # Apply silence removal to timestamped audio
+                try:
+                    from app.services.silence_remover import SilenceRemover
+                    remover = SilenceRemover(min_silence_duration=0.25, padding=0.06)
+                    trimmed_path = temp_dir / f"tts_trimmed_{clip_id}.mp3"
+                    silence_result = remover.remove_silence(audio_path, trimmed_path)
+                    audio_path = trimmed_path
+                    silence_stats = {
+                        'original_duration': silence_result.original_duration,
+                        'removed_duration': silence_result.removed_duration
+                    }
+                    logger.info(f"Silence removal: {silence_result.original_duration:.1f}s -> {silence_result.new_duration:.1f}s")
+                except Exception as e:
+                    logger.warning(f"Silence removal failed, using raw audio: {e}")
+
+            except Exception as e:
+                # Fallback to legacy TTS without timestamps
+                logger.warning(f"Timestamps generation failed, falling back to standard TTS: {e}")
+                from app.services.elevenlabs_tts import get_elevenlabs_tts
+                tts = get_elevenlabs_tts()
+                audio_path, silence_stats = tts.generate_audio_trimmed(
+                    text=content_data["tts_text"],
+                    output_path=audio_path,
+                    remove_silence=True,
+                    min_silence_duration=0.25,
+                    padding=0.06
+                )
+
             audio_duration = _get_audio_duration(audio_path)
+
+            # Persist timestamps and model to Supabase for Phase 13 subtitle generation
+            if tts_timestamps:
+                try:
+                    supabase.table("editai_clip_content").update({
+                        "tts_timestamps": tts_timestamps,
+                        "tts_model": elevenlabs_model
+                    }).eq("clip_id", clip_id).execute()
+                    logger.info(f"TTS timestamps persisted for clip {clip_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to persist TTS timestamps: {e}")
 
             if silence_stats:
                 logger.info(f"TTS generated for clip {clip_id}: {silence_stats.get('original_duration', 0):.1f}s → {audio_duration:.1f}s (removed {silence_stats.get('removed_duration', 0):.1f}s silence)")
