@@ -11,18 +11,18 @@ See: .planning/PROJECT.md (updated 2026-02-12)
 
 Milestone: v4 Script-First Video Production Pipeline
 Phase: 16 of 16 (Multi-Variant Pipeline)
-Plan: 1 of 2 in current phase
-Status: Phase 16 in progress - Plan 01 complete (pipeline backend API)
-Last activity: 2026-02-12 — Plan 16-01 complete (multi-variant pipeline backend)
+Plan: 2 of 2 in current phase
+Status: Phase 16 COMPLETE - All plans executed (pipeline backend + frontend)
+Last activity: 2026-02-12 — Plan 16-02 complete (pipeline frontend UI)
 
-Progress: [███████████████████████████████████████████░░░] 94% (15 of 16 phases complete)
+Progress: [████████████████████████████████████████████████] 100% (16 of 16 phases complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 48
-- Total phases completed: 15
-- Total execution time: ~2.7 hours (v2) + ~2 days (v3) + ~34 min (v4)
+- Total plans completed: 50
+- Total phases completed: 16
+- Total execution time: ~2.7 hours (v2) + ~2 days (v3) + ~47 min (v4)
 
 **By Milestone:**
 
@@ -30,23 +30,23 @@ Progress: [███████████████████████
 |-----------|--------|-------|--------|
 | v2 Profile System | 6 | 23 | Complete (2026-02-04) |
 | v3 Video Quality | 5 | 13 | Complete (2026-02-06) |
-| v4 Script-First | 5 | 9 | In progress |
+| v4 Script-First | 5 | 11 | Complete (2026-02-12) |
 
 **Recent Trend:**
 - v2: 23 plans in 2.7 hours
 - v3: 13 plans in 2 days
-- v4: 9 plans in 34 min (avg 3.8 min/plan)
-- Trend: Consistent velocity, Phase 16 in progress
+- v4: 11 plans in 47 min (avg 4.3 min/plan)
+- Trend: v4 milestone COMPLETE, all phases executed
 
 **Recent Plans:**
 | Plan | Duration (min) | Tasks | Files |
 |------|---------------|-------|-------|
-| Phase 13 P02 | 1.0 | 1 tasks | 1 files |
 | Phase 14 P01 | 2.9 | 2 tasks | 5 files |
 | Phase 14 P02 | 1.9 | 2 tasks | 2 files |
 | Phase 15 P01 | 3.6 | 2 tasks | 3 files |
 | Phase 15 P02 | 9.2 | 3 tasks | 3 files |
 | Phase 16 P01 | 114 | 2 tasks | 2 files |
+| Phase 16 P02 | 13 | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -74,6 +74,9 @@ Recent decisions affecting v4 work:
 - [Phase 16]: Status endpoint is public (pipeline_id is the secret) for easy polling without auth headers
 - [Phase 16]: Each variant renders independently in background task for true parallelism
 - [Phase 16]: Preview data cached in pipeline state to avoid regenerating TTS for render step
+- [Phase 16]: Pipeline positioned as first navbar item to emphasize v4 script-first workflow
+- [Phase 16]: All variants selected by default in Step 3 for quick batch rendering
+- [Phase 16]: Preview generation happens sequentially (one variant at a time) to show progress to user
 
 ### Pending Todos
 
@@ -94,10 +97,10 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-12
-Stopped at: Completed Phase 16 Plan 01 (multi-variant pipeline backend)
+Stopped at: Completed Phase 16 Plan 02 (pipeline frontend UI) - v4 MILESTONE COMPLETE
 Resume file: None
 
-**Next step:** Execute Phase 16 Plan 02 (pipeline frontend UI)
+**Next step:** v4 Script-First Video Production Pipeline COMPLETE. All 16 phases executed across 3 milestones (v2, v3, v4).
 
 ---
-*Last updated: 2026-02-12 after Phase 16 Plan 01 execution*
+*Last updated: 2026-02-12 after Phase 16 Plan 02 execution - v4 MILESTONE COMPLETE*
