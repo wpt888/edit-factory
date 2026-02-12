@@ -63,31 +63,38 @@ Requirements for v4 Script-First Video Production Pipeline. Each maps to roadmap
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TTS-01 | — | Pending |
-| TTS-02 | — | Pending |
-| TTS-03 | — | Pending |
-| TTS-04 | — | Pending |
-| SUB-01 | — | Pending |
-| SUB-02 | — | Pending |
-| SUB-03 | — | Pending |
-| SCRIPT-01 | — | Pending |
-| SCRIPT-02 | — | Pending |
-| SCRIPT-03 | — | Pending |
-| SCRIPT-04 | — | Pending |
-| SCRIPT-05 | — | Pending |
-| ASM-01 | — | Pending |
-| ASM-02 | — | Pending |
-| ASM-03 | — | Pending |
-| ASM-04 | — | Pending |
-| PIPE-01 | — | Pending |
-| PIPE-02 | — | Pending |
-| PIPE-03 | — | Pending |
+| TTS-01 | Phase 12 | Pending |
+| TTS-02 | Phase 12 | Pending |
+| TTS-03 | Phase 12 | Pending |
+| TTS-04 | Phase 12 | Pending |
+| SUB-01 | Phase 13 | Pending |
+| SUB-02 | Phase 13 | Pending |
+| SUB-03 | Phase 13 | Pending |
+| SCRIPT-01 | Phase 14 | Pending |
+| SCRIPT-02 | Phase 14 | Pending |
+| SCRIPT-03 | Phase 14 | Pending |
+| SCRIPT-04 | Phase 14 | Pending |
+| SCRIPT-05 | Phase 14 | Pending |
+| ASM-01 | Phase 15 | Pending |
+| ASM-02 | Phase 15 | Pending |
+| ASM-03 | Phase 15 | Pending |
+| ASM-04 | Phase 15 | Pending |
+| PIPE-01 | Phase 16 | Pending |
+| PIPE-02 | Phase 16 | Pending |
+| PIPE-03 | Phase 16 | Pending |
 
 **Coverage:**
 - v4 requirements: 19 total
-- Mapped to phases: 0
-- Unmapped: 19 (pending roadmap creation)
+- Mapped to phases: 19 (100%)
+- Unmapped: 0
+
+**Phase Distribution:**
+- Phase 12 (ElevenLabs TTS Upgrade): 4 requirements
+- Phase 13 (TTS-Based Subtitles): 3 requirements
+- Phase 14 (AI Script Generation): 5 requirements
+- Phase 15 (Script-to-Video Assembly): 4 requirements
+- Phase 16 (Multi-Variant Pipeline): 3 requirements
 
 ---
 *Requirements defined: 2026-02-12*
-*Last updated: 2026-02-12 after initial definition*
+*Last updated: 2026-02-12 after roadmap creation (100% coverage achieved)*
