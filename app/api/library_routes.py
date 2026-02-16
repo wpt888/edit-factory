@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Depends
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Depends, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -205,6 +205,71 @@ async def serve_file(file_path: str, download: bool = Query(default=False)):
 
     media_type, _ = mimetypes.guess_type(str(resolved_path))
     return FileResponse(path=str(resolved_path), media_type=media_type or "application/octet-stream", filename=resolved_path.name if download else None)
+
+
+# ============== CLIP ASSET DOWNLOADS (SRT, Audio) ==============
+
+@router.get("/clips/{clip_id}/srt")
+async def download_clip_srt(
+    clip_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Download SRT subtitle file for a clip."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Verify ownership
+    clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
+    if not clip.data:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Get SRT content from clip_content
+    content = supabase.table("editai_clip_content").select("srt_content").eq("clip_id", clip_id).single().execute()
+    if not content.data or not content.data.get("srt_content"):
+        raise HTTPException(status_code=404, detail="No subtitles available for this clip")
+
+    return Response(
+        content=content.data["srt_content"],
+        media_type="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="clip_{clip_id[:8]}.srt"'}
+    )
+
+
+@router.get("/clips/{clip_id}/audio")
+async def download_clip_audio(
+    clip_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Download TTS audio (MP3) file for a clip."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Verify ownership
+    clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
+    if not clip.data:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Get audio path from clip_content
+    content = supabase.table("editai_clip_content").select("tts_audio_path").eq("clip_id", clip_id).single().execute()
+    if not content.data or not content.data.get("tts_audio_path"):
+        raise HTTPException(status_code=404, detail="No audio available for this clip")
+
+    settings = get_settings()
+    file_path = Path(content.data["tts_audio_path"])
+    if not file_path.is_absolute():
+        file_path = settings.base_dir / file_path
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Audio file missing from disk")
+
+    return FileResponse(
+        path=str(file_path),
+        media_type="audio/mpeg",
+        filename=f"clip_{clip_id[:8]}.mp3"
+    )
+
 
 # ============== PROJECTS ==============
 
@@ -1804,10 +1869,11 @@ async def _render_final_clip_task(
             silence_stats = None
 
             try:
-                # Initialize TTS service with user-selected model
+                # Initialize TTS service with user-selected model (profile_id enables multi-account failover)
                 tts_service = ElevenLabsTTSService(
                     output_dir=temp_dir,
-                    model_id=elevenlabs_model
+                    model_id=elevenlabs_model,
+                    profile_id=profile_id
                 )
 
                 # Generate with timestamps for downstream subtitle sync
@@ -1866,6 +1932,37 @@ async def _render_final_clip_task(
             else:
                 logger.info(f"TTS generated for clip {clip_id}: {audio_duration:.1f}s")
 
+            # Auto-save to TTS Library (non-blocking)
+            try:
+                from app.services.tts_library_service import get_tts_library_service
+                from app.services.tts_subtitle_generator import generate_srt_from_timestamps as _gen_srt
+                _srt_for_lib = _gen_srt(tts_timestamps) if tts_timestamps else None
+                tts_lib = get_tts_library_service()
+                tts_lib.save_from_pipeline(
+                    profile_id=profile_id,
+                    text=content_data["tts_text"],
+                    audio_path=str(audio_path),
+                    srt_content=_srt_for_lib,
+                    timestamps=tts_timestamps,
+                    model=elevenlabs_model,
+                    duration=audio_duration or 0.0,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save TTS to library: {e}")
+
+            # Persist TTS audio to permanent location for later download
+            try:
+                tts_persist_dir = settings.output_dir / "tts" / profile_id
+                tts_persist_dir.mkdir(parents=True, exist_ok=True)
+                tts_persist_path = tts_persist_dir / f"clip_{clip_id}.mp3"
+                shutil.copy2(str(audio_path), str(tts_persist_path))
+                supabase.table("editai_clip_content").update({
+                    "tts_audio_path": str(tts_persist_path)
+                }).eq("clip_id", clip_id).execute()
+                logger.info(f"TTS audio persisted for clip {clip_id}: {tts_persist_path}")
+            except Exception as e:
+                logger.warning(f"Failed to persist TTS audio for download: {e}")
+
         # 2. SYNC: Ajustăm video-ul la durata audio-ului
         if audio_duration and audio_duration > 0:
             duration_diff = video_duration - audio_duration
@@ -1916,7 +2013,18 @@ async def _render_final_clip_task(
         elif tts_timestamps:
             # Auto-generate SRT from TTS character-level timestamps (Phase 13)
             try:
-                auto_srt = generate_srt_from_timestamps(tts_timestamps)
+                # Check SRT cache first
+                from app.services.tts_cache import srt_cache_lookup, srt_cache_store
+                _tts_voice = content_data.get("tts_voice_id", "")
+                _srt_cache_key = {"text": content_data["tts_text"], "voice_id": _tts_voice, "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
+                cached_srt = srt_cache_lookup(_srt_cache_key)
+                if cached_srt:
+                    auto_srt = cached_srt
+                else:
+                    auto_srt = generate_srt_from_timestamps(tts_timestamps)
+                    if auto_srt:
+                        srt_cache_store(_srt_cache_key, auto_srt)
+
                 if auto_srt:
                     srt_path = temp_dir / f"srt_{clip_id}.srt"
                     with open(srt_path, "w", encoding="utf-8") as f:
