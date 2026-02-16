@@ -35,6 +35,7 @@ import {
   CheckSquare,
   XCircle,
   User,
+  FileText,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiGet, apiPost, apiPatch, apiDelete, API_URL } from "@/lib/api";
@@ -406,6 +407,28 @@ function LibrarieContent() {
     }
   };
 
+  // Download helper for SRT/Audio files
+  const downloadFile = async (url: string, filename: string) => {
+    try {
+      const res = await apiGet(url);
+      if (!res.ok) {
+        toast.error("Download eșuat");
+        return;
+      }
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      toast.error("Eroare la descărcare");
+    }
+  };
+
   // Bulk upload to Postiz
   const bulkUploadToPostiz = async () => {
     if (selectedClipIds.size === 0) return;
@@ -747,6 +770,32 @@ function LibrarieContent() {
                         >
                           <Download className="h-4 w-4" />
                         </Button>
+                        {clip.has_subtitles && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              downloadFile(`/library/clips/${clip.id}/srt`, `clip_${clip.id.slice(0, 8)}.srt`);
+                            }}
+                            title="Descarcă subtitrări SRT"
+                          >
+                            <FileText className="h-4 w-4" />
+                          </Button>
+                        )}
+                        {clip.has_voiceover && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              downloadFile(`/library/clips/${clip.id}/audio`, `clip_${clip.id.slice(0, 8)}.mp3`);
+                            }}
+                            title="Descarcă audio TTS"
+                          >
+                            <Mic className="h-4 w-4" />
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
