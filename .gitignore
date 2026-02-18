@@ -75,6 +75,7 @@ input/
 output/
 processed/
 segments/
+!frontend/src/app/segments/
 logs/
 temp/
 source_videos/
