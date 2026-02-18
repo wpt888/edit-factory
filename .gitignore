@@ -79,6 +79,7 @@ logs/
 temp/
 source_videos/
 static/uploads/
+media/
 
 # Media files
 *.mp4
@@ -98,6 +99,7 @@ static/uploads/
 *.bak
 *.old
 .cache/
+cache/
 
 # ======================
 # Testing
@@ -123,6 +125,9 @@ ffmpeg/
 # ======================
 .claude/
 Tmux-Orchestrator/
+
+# Dev mode profile store (local state, not for VCS)
+.planning/dev-profiles.json
 
 # Keep directory structure
 !.gitkeep

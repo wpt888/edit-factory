@@ -2,7 +2,10 @@
 Profile Management Routes
 Handles CRUD operations for user profiles.
 """
+import json
 import logging
+import uuid
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 
@@ -35,6 +38,63 @@ def get_supabase():
     return _supabase_client
 
 
+# ============== DEV MODE FILE-BACKED STORE ==============
+# When AUTH_DISABLED=true, profiles are persisted to a local JSON file to avoid
+# Supabase FK constraints on auth.users (dev user_id is not a real UUID) while
+# still surviving backend restarts.
+
+_DEV_PROFILES_FILE = Path(__file__).parent.parent.parent / ".planning" / "dev-profiles.json"
+
+def _load_dev_profiles() -> Dict[str, dict]:
+    """Load profiles from the JSON file. Returns empty dict on missing/corrupt file."""
+    try:
+        if _DEV_PROFILES_FILE.exists():
+            return json.loads(_DEV_PROFILES_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning(f"Dev profiles file unreadable, starting fresh: {e}")
+    return {}
+
+
+def _save_dev_profiles(profiles: Dict[str, dict]) -> None:
+    """Persist profiles dict to the JSON file."""
+    try:
+        _DEV_PROFILES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _DEV_PROFILES_FILE.write_text(
+            json.dumps(profiles, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        logger.error(f"Failed to persist dev profiles: {e}")
+
+
+def _ensure_dev_profiles(user_id: str) -> Dict[str, dict]:
+    """
+    Load profiles from disk. If none exist for this user, seed with a Default profile.
+    Returns the current profiles dict (also written back to disk if seeded).
+    """
+    profiles = _load_dev_profiles()
+    user_profiles = [p for p in profiles.values() if p.get("user_id") == user_id]
+    if not user_profiles:
+        now = datetime.utcnow().isoformat()
+        default_id = "00000000-0000-0000-0000-000000000000"
+        profiles[default_id] = {
+            "id": default_id,
+            "user_id": user_id,
+            "name": "Default",
+            "description": "Default development profile",
+            "is_default": True,
+            "created_at": now,
+            "updated_at": now,
+        }
+        _save_dev_profiles(profiles)
+        logger.info(f"Dev mode: seeded default profile for {user_id}")
+    return profiles
+
+
+def _is_dev_mode() -> bool:
+    return get_settings().auth_disabled
+
+
 # ============== PYDANTIC MODELS ==============
 
 class ProfileCreate(BaseModel):
@@ -50,12 +110,15 @@ class ProfileSettingsUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     tts_settings: Optional[Dict[str, Any]] = None
+    monthly_quota_usd: Optional[float] = None
 
 class ProfileResponse(BaseModel):
     id: str
     name: str
     description: Optional[str]
     is_default: bool
+    tts_settings: Optional[Dict[str, Any]] = None
+    monthly_quota_usd: Optional[float] = None
     created_at: str
     updated_at: str
 
@@ -67,6 +130,12 @@ async def list_profiles(current_user: AuthUser = Depends(get_current_user)):
     """
     List all profiles for the current user.
     """
+    if _is_dev_mode():
+        dev_profiles = _ensure_dev_profiles(current_user.id)
+        profiles = [p for p in dev_profiles.values() if p["user_id"] == current_user.id]
+        profiles.sort(key=lambda p: (not p["is_default"], p["created_at"]))
+        return profiles
+
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -97,6 +166,24 @@ async def create_profile(
     Create a new profile for the current user.
     New profiles are created with is_default=False.
     """
+    if _is_dev_mode():
+        dev_profiles = _ensure_dev_profiles(current_user.id)
+        now = datetime.utcnow().isoformat()
+        new_id = str(uuid.uuid4())
+        new_profile = {
+            "id": new_id,
+            "user_id": current_user.id,
+            "name": profile.name,
+            "description": profile.description,
+            "is_default": False,
+            "created_at": now,
+            "updated_at": now,
+        }
+        dev_profiles[new_id] = new_profile
+        _save_dev_profiles(dev_profiles)
+        logger.info(f"[Dev] Created profile {new_id}: {profile.name}")
+        return new_profile
+
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -124,6 +211,8 @@ async def create_profile(
         logger.info(f"[Profile {created_profile['id']}] Created by user {current_user.id}: {profile.name}")
         return created_profile
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create profile for user {current_user.id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to create profile")
@@ -138,6 +227,15 @@ async def get_profile(
     Get a single profile by ID.
     Returns 404 if not found, 403 if belongs to another user.
     """
+    if _is_dev_mode():
+        dev_profiles = _ensure_dev_profiles(current_user.id)
+        profile = dev_profiles.get(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if profile["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+        return profile
+
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -179,6 +277,21 @@ async def update_profile(
     Update a profile's name and/or description.
     Returns 404 if not found, 403 if belongs to another user.
     """
+    if _is_dev_mode():
+        dev_profiles = _ensure_dev_profiles(current_user.id)
+        profile = dev_profiles.get(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if profile["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+        if profile_update.name is not None:
+            profile["name"] = profile_update.name
+        if profile_update.description is not None:
+            profile["description"] = profile_update.description
+        profile["updated_at"] = datetime.utcnow().isoformat()
+        _save_dev_profiles(dev_profiles)
+        return profile
+
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -236,6 +349,25 @@ async def patch_profile(
     Invalidates Postiz publisher cache when tts_settings change.
     Returns 404 if not found, 403 if belongs to another user.
     """
+    if _is_dev_mode():
+        dev_profiles = _ensure_dev_profiles(current_user.id)
+        profile = dev_profiles.get(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if profile["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+        if updates.name is not None:
+            profile["name"] = updates.name
+        if updates.description is not None:
+            profile["description"] = updates.description
+        if updates.tts_settings is not None:
+            profile["tts_settings"] = updates.tts_settings
+        if updates.monthly_quota_usd is not None:
+            profile["monthly_quota_usd"] = updates.monthly_quota_usd
+        profile["updated_at"] = datetime.utcnow().isoformat()
+        _save_dev_profiles(dev_profiles)
+        return profile
+
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -266,6 +398,8 @@ async def patch_profile(
         if updates.tts_settings is not None:
             update_data["tts_settings"] = updates.tts_settings
             tts_settings_updated = True
+        if updates.monthly_quota_usd is not None:
+            update_data["monthly_quota_usd"] = updates.monthly_quota_usd
 
         # Update profile
         result = supabase.table("profiles")\
@@ -306,6 +440,19 @@ async def delete_profile(
     Cannot delete if is_default=True. Set another profile as default first.
     CASCADE delete handled by database (deletes all associated projects/clips).
     """
+    if _is_dev_mode():
+        dev_profiles = _ensure_dev_profiles(current_user.id)
+        profile = dev_profiles.get(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if profile["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+        if profile["is_default"]:
+            raise HTTPException(status_code=400, detail="Cannot delete default profile. Set another profile as default first.")
+        del dev_profiles[profile_id]
+        _save_dev_profiles(dev_profiles)
+        return {"status": "deleted", "profile_id": profile_id}
+
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -359,6 +506,21 @@ async def set_default_profile(
     Set a profile as the default profile for the user.
     Automatically unsets is_default on other profiles.
     """
+    if _is_dev_mode():
+        dev_profiles = _ensure_dev_profiles(current_user.id)
+        profile = dev_profiles.get(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if profile["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+        for p in dev_profiles.values():
+            if p["user_id"] == current_user.id:
+                p["is_default"] = False
+        profile["is_default"] = True
+        profile["updated_at"] = datetime.utcnow().isoformat()
+        _save_dev_profiles(dev_profiles)
+        return profile
+
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -421,6 +583,20 @@ async def get_profile_dashboard(
     Returns:
         Profile stats including project/clip counts and cost breakdown
     """
+    if _is_dev_mode():
+        dev_profiles = _ensure_dev_profiles(current_user.id)
+        profile = dev_profiles.get(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if profile["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+        return {
+            "profile_id": profile_id,
+            "time_range": time_range,
+            "stats": {"projects_count": 0, "clips_count": 0, "rendered_count": 0},
+            "costs": {"elevenlabs": 0, "gemini": 0, "total": 0, "monthly": 0, "monthly_quota": 0, "quota_remaining": None}
+        }
+
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
