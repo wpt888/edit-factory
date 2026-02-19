@@ -15,23 +15,24 @@ const STORAGE_KEY_PREFIX = "editai_subtitle_";
 export function useSubtitleSettings(storageKey?: string) {
   const fullKey = storageKey ? `${STORAGE_KEY_PREFIX}${storageKey}` : null;
 
-  const [settings, setSettings] = useState<SubtitleSettings>(() => {
-    if (typeof window === "undefined" || !fullKey) {
-      return { ...DEFAULT_SUBTITLE_SETTINGS };
-    }
+  // Two-phase initialization: always start with defaults to match SSR,
+  // then hydrate from localStorage in useEffect to avoid hydration mismatches
+  const [settings, setSettings] = useState<SubtitleSettings>({ ...DEFAULT_SUBTITLE_SETTINGS });
+
+  // Hydrate from localStorage after mount
+  useEffect(() => {
+    if (!fullKey) return;
 
     try {
       const stored = localStorage.getItem(fullKey);
       if (stored) {
         const parsed = JSON.parse(stored);
-        // Merge with defaults to ensure all fields exist
-        return { ...DEFAULT_SUBTITLE_SETTINGS, ...parsed };
+        setSettings({ ...DEFAULT_SUBTITLE_SETTINGS, ...parsed });
       }
     } catch (error) {
       console.error("Error loading subtitle settings:", error);
     }
-    return { ...DEFAULT_SUBTITLE_SETTINGS };
-  });
+  }, [fullKey]);
 
   // Persist to localStorage when settings change
   useEffect(() => {
