@@ -11,6 +11,7 @@ const navLinks = [
   { label: "Export", href: "/library" },
   { label: "Scripts", href: "/scripts" },
   { label: "Assembly", href: "/assembly" },
+  { label: "TTS", href: "/tts-library" },
   { label: "Segments", href: "/segments" },
   { label: "Usage", href: "/usage" },
   { label: "Settings", href: "/settings" },
@@ -24,7 +25,7 @@ export function NavBar() {
       <div className="w-full max-w-[1400px] mx-auto px-6 md:px-10 lg:px-16">
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
-          <Link href="/librarie" className="flex items-center">
+          <Link href="/pipeline" className="flex items-center">
             <span className="text-xl md:text-2xl font-bold text-primary">
               EditAI
             </span>
@@ -45,7 +46,9 @@ export function NavBar() {
 
           {/* Right side actions */}
           <div className="flex items-center gap-3">
-            {!isLoading && <ProfileSwitcher />}
+            <div className={isLoading ? "invisible" : ""}>
+              <ProfileSwitcher />
+            </div>
             <Badge variant="secondary" className="hidden sm:inline-flex">
               {currentProfile?.name || "No Profile"}
             </Badge>

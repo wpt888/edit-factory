@@ -12,31 +12,35 @@ export function useLocalStorageConfig<T>(
   key: string,
   defaultValue: T
 ): [T, (value: T | ((prev: T) => T)) => void] {
-  // Initialize state with value from localStorage or default
-  const [value, setValue] = useState<T>(() => {
-    if (typeof window === "undefined") return defaultValue;
+  // Two-phase initialization: always start with defaultValue to match SSR,
+  // then hydrate from localStorage in useEffect to avoid hydration mismatches
+  const [value, setValue] = useState<T>(defaultValue);
+  const [hydrated, setHydrated] = useState(false);
 
+  // Hydrate from localStorage after mount
+  useEffect(() => {
     try {
       const stored = localStorage.getItem(key);
       if (stored) {
-        return JSON.parse(stored) as T;
+        setValue(JSON.parse(stored) as T);
       }
     } catch (error) {
       console.error(`Error reading localStorage key "${key}":`, error);
     }
-    return defaultValue;
-  });
+    setHydrated(true);
+  }, [key]);
 
-  // Sync to localStorage when value changes
+  // Sync to localStorage when value changes (only after hydration to avoid
+  // overwriting stored values with defaults on first render)
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (!hydrated) return;
 
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (error) {
       console.error(`Error writing localStorage key "${key}":`, error);
     }
-  }, [key, value]);
+  }, [key, value, hydrated]);
 
   // Wrapped setValue that handles function updates
   const setStoredValue = useCallback((newValue: T | ((prev: T) => T)) => {
