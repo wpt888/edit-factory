@@ -195,11 +195,11 @@ Plans:
   3. User can toggle an "On Sale" filter and see only products where sale_price is less than price
   4. User can select a category from a dropdown and see only products in that product_type
   5. User can select a brand from a dropdown and see only products from that brand
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 19-01: product_routes.py — /feeds/sync (BackgroundTask), /feeds (CRUD), /products (paginated + filtered with search/on-sale/category/brand params)
-- [ ] 19-02: /products frontend page — feed config panel, filter bar (search, on-sale toggle, category dropdown, brand dropdown), paginated product card grid
+- [ ] 19-01-PLAN.md — Backend: product_routes.py with filtered product listing (search/on_sale/category/brand params) + filter options endpoint
+- [ ] 19-02-PLAN.md — Frontend: /products page with feed selector, filter bar, paginated product card grid, navbar link
 
 ### Phase 20: Single Product End-to-End
 **Goal**: User can select one product, configure voiceover and TTS provider, generate a video, and find it in the library — the full atomic workflow working end-to-end
@@ -257,7 +257,7 @@ Plans:
 | 12-16 | v4 | 11/11 | Complete | 2026-02-12 |
 | 17. Feed Foundation | 2/2 | Complete    | 2026-02-20 | - |
 | 18. Video Composition | 2/2 | Complete    | 2026-02-20 | - |
-| 19. Product Browser | v5 | 0/2 | Not started | - |
+| 19. Product Browser | v5 | 0/2 | Planned | - |
 | 20. Single Product E2E | v5 | 0/3 | Not started | - |
 | 21. Batch Generation | v5 | 0/2 | Not started | - |
 | 22. Templates + Customization | v5 | 0/2 | Not started | - |
