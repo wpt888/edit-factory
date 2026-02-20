@@ -1,643 +1,446 @@
-# Technology Stack - Video Quality Enhancement
+# Stack Research — v5 Product Video Generator
 
-**Project:** Edit Factory - Video Quality Enhancement Milestone
-**Researched:** 2026-02-04
-**Confidence:** HIGH (FFmpeg official docs + 2026 social media standards)
+**Domain:** Product feed video generation (Google Shopping XML → social video)
+**Researched:** 2026-02-20
+**Confidence:** HIGH (PyPI verified versions, FFmpeg official docs, multiple sources)
 
-## Executive Summary
-
-This research covers FFmpeg-based video quality enhancements for social media platforms (TikTok, Instagram Reels, YouTube Shorts). All recommendations are based on current 2026 best practices verified through official FFmpeg documentation and recent industry sources.
-
-**Key Finding:** Current setup (CRF 23, preset "fast", 128k audio) is adequate but not optimized for 2026 social media standards. Specific improvements needed for:
-
-1. Platform-specific encoding (CRF/bitrate optimization)
-2. Audio loudness normalization (EBU R128 / -14 LUFS for social)
-3. Video filters (denoising, sharpening, color correction)
-4. Enhanced subtitle styling (shadow, glow, adaptive sizing)
-5. Quality-aware segment scoring (blur detection, contrast analysis)
+> **Scope:** NEW additions only. The existing stack (FastAPI, Next.js, Supabase, FFmpeg,
+> OpenCV, httpx, ElevenLabs, Edge TTS, Gemini, Claude, Whisper) is already validated.
+> Do not re-install or re-research existing capabilities.
 
 ---
 
-## Core Technology Stack
+## What Already Exists (Do Not Re-Add)
 
-### Video Encoding
-
-| Component | Current | Recommended | Why |
-|-----------|---------|-------------|-----|
-| **Codec** | libx264 / h264_nvenc | libx264 (CPU) / h264_nvenc (GPU) | Universal compatibility, H.264 remains standard for social media in 2026 |
-| **CRF (CPU)** | 23 | 22-23 (quality), 23-25 (balanced) | CRF 22-23 is optimal for social media quality/filesize balance |
-| **Preset** | fast | fast (speed), medium (quality) | "fast" is good for production; "medium" for higher quality when time permits |
-| **Profile** | Not specified | high | Better compression, supported by all modern devices |
-| **Level** | Not specified | 4.0 | Ensures compatibility with mobile devices |
-| **Keyframes** | -g 60 | -g 60 -keyint_min 60 -sc_threshold 0 | Fixed keyframe interval prevents platform recompression |
-
-### Audio Encoding
-
-| Component | Current | Recommended | Why |
-|-----------|---------|-------------|-----|
-| **Codec** | AAC | AAC (libfdk_aac if available) | AAC is universal standard |
-| **Bitrate** | 128k | 128k-192k | 128k sufficient for voice, 192k for music |
-| **Sample Rate** | 48000 | 48000 Hz | Industry standard for video |
-| **Channels** | 2 (stereo) | 2 (stereo) | Stereo expected by platforms |
-| **Loudness** | Not normalized | -14 LUFS (social media) | Critical for consistent volume across platforms |
+| Capability | Library | Notes |
+|------------|---------|-------|
+| HTTP requests (sync + async) | `httpx>=0.25.0` | In requirements.txt — use for image downloads |
+| AI text generation | `anthropic`, `google-genai` | Already integrated in script_generator |
+| TTS audio | ElevenLabs, Edge TTS | Already integrated |
+| FFmpeg subprocess | Used throughout assembly_service | Call via subprocess.run |
+| Image quality | `opencv-python-headless` | Already installed |
+| Async file I/O | `aiofiles` | Already installed |
+| Config/env | `python-dotenv`, `pydantic-settings` | Already in use |
 
 ---
 
-## Platform-Specific Presets (2026 Standards)
+## New Dependencies Required
 
-### Instagram Reels & TikTok
+### 1. XML Parsing — `lxml` 6.0.2
 
-**Resolution:** 1080x1920 (9:16 portrait)
-**Frame Rate:** 30 fps (standard), 60 fps (optional for high-motion)
-**Video Bitrate:** 3,500-4,500 kbps target
-**Audio:** 128-192 kbps AAC
+**Install:** `pip install "lxml>=6.0.0"`
 
-```bash
-ffmpeg -i input.mp4 \
-  -vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2" \
-  -c:v libx264 \
-  -profile:v high \
-  -level:v 4.0 \
-  -crf 23 \
-  -preset fast \
-  -g 60 -keyint_min 60 -sc_threshold 0 \
-  -bf 2 \
-  -c:a aac -b:a 128k -ar 48000 -ac 2 \
-  -pix_fmt yuv420p \
-  output.mp4
+Google Shopping feeds are large XML files (~10k products, multi-MB). `lxml` is the right
+choice over stdlib `xml.etree.ElementTree` for three reasons:
+
+- **Speed:** 2-10x faster on large files. lxml parsed a 95MB XML in 0.35s vs 2+ seconds
+  for ElementTree (measured benchmark from lxml.de/performance.html).
+- **Memory-efficient streaming:** `lxml.etree.iterparse()` processes feeds element-by-element
+  without loading the full document into memory. Critical for 9,987-product feeds.
+- **XPath support:** Google Shopping uses XML namespaces (`g:` prefix for Shopping
+  attributes). lxml's full XPath 1.0 support handles namespace-qualified queries cleanly.
+  ElementTree's namespace handling is verbose and error-prone.
+
+Do NOT use `feedparser` — it targets Atom/RSS feeds, not Google Shopping XML format.
+Do NOT use stdlib `xml.etree.ElementTree` — no streaming iterparse with namespace support.
+
+```python
+# Usage pattern for Google Shopping feed
+from lxml import etree
+
+NS = {
+    'g': 'http://base.google.com/ns/1.0',
+    'c': 'http://base.google.com/cns/1.0'
+}
+
+def stream_products(feed_path: str):
+    for event, elem in etree.iterparse(feed_path, events=('end',), tag='item'):
+        yield {
+            'id': elem.findtext('g:id', namespaces=NS),
+            'title': elem.findtext('title'),
+            'description': elem.findtext('description'),
+            'image_link': elem.findtext('g:image_link', namespaces=NS),
+            'price': elem.findtext('g:price', namespaces=NS),
+            'sale_price': elem.findtext('g:sale_price', namespaces=NS),
+            'brand': elem.findtext('g:brand', namespaces=NS),
+            'product_type': elem.findtext('g:product_type', namespaces=NS),
+            'link': elem.findtext('link'),
+        }
+        elem.clear()  # Free memory after processing each item
 ```
 
-**GPU (NVENC) variant:**
-```bash
-ffmpeg -hwaccel cuda -hwaccel_output_format cuda -i input.mp4 \
-  -vf "scale_cuda=1080:1920:force_original_aspect_ratio=decrease" \
-  -c:v h264_nvenc \
-  -preset p4 \
-  -cq 23 \
-  -g 60 -bf 2 \
-  -c:a aac -b:a 128k -ar 48000 -ac 2 \
-  -pix_fmt yuv420p \
-  output.mp4
-```
-
-### YouTube Shorts
-
-**Resolution:** 1080x1920 (9:16 portrait) or 2160x3840 (4K optional)
-**Frame Rate:** 30 fps (standard), 60 fps (high-motion content)
-**Video Bitrate:** 8,000-15,000 kbps for 1080p
-**Audio:** 128-192 kbps AAC
-
-```bash
-# 1080p Shorts
-ffmpeg -i input.mp4 \
-  -vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2" \
-  -c:v libx264 \
-  -profile:v high \
-  -level:v 4.2 \
-  -crf 21 \
-  -preset medium \
-  -g 60 -keyint_min 60 -sc_threshold 0 \
-  -bf 2 \
-  -c:a aac -b:a 192k -ar 48000 -ac 2 \
-  -pix_fmt yuv420p \
-  output.mp4
-
-# 4K Shorts (optional, for high-quality content)
-ffmpeg -i input.mp4 \
-  -vf "scale=2160:3840:force_original_aspect_ratio=decrease,pad=2160:3840:(ow-iw)/2:(oh-ih)/2" \
-  -c:v libx264 \
-  -profile:v high \
-  -level:v 5.2 \
-  -crf 20 \
-  -preset slow \
-  -g 120 -keyint_min 120 -sc_threshold 0 \
-  -bf 2 \
-  -c:a aac -b:a 192k -ar 48000 -ac 2 \
-  -pix_fmt yuv420p \
-  output_4k.mp4
-```
+**Confidence:** HIGH — lxml.de performance benchmarks + PyPI version 6.0.2 verified.
 
 ---
 
-## Video Quality Filters
+### 2. Image Processing — `Pillow` 12.1.1
 
-### Denoising (hqdn3d)
+**Install:** `pip install "Pillow>=12.0.0"`
 
-Reduces noise/grain in video, especially useful for low-light footage.
+Pillow handles all static image operations before handing off to FFmpeg:
 
-**Syntax:**
-```bash
--vf "hqdn3d=luma_spatial:chroma_spatial:luma_tmp:chroma_tmp"
+- Resize/pad product images to target resolution (1080x1920 or square crop)
+- Convert formats (WebP → JPEG for FFmpeg compatibility on Windows/WSL)
+- Composite multiple product images into a collage frame
+- Generate solid-color background frames for text overlays
+- Normalize image dimensions before FFmpeg input (prevents zoompan coordinate errors)
+
+**Why not OpenCV for this?** OpenCV is already installed and handles frame analysis, but
+Pillow's file format support (WebP, AVIF, animated GIF extraction) and Pillow's `ImageDraw`
+for compositing are cleaner for static image prep. Ken Burns animation itself is done
+entirely in FFmpeg — Pillow only prepares the source images.
+
+```python
+# Resize + letterbox to 1:1 square for product spotlight
+from PIL import Image
+
+def prepare_product_image(src_path: str, out_path: str, size=(1080, 1080)):
+    img = Image.open(src_path).convert('RGB')
+    img.thumbnail(size, Image.LANCZOS)
+    background = Image.new('RGB', size, (255, 255, 255))
+    offset = ((size[0] - img.width) // 2, (size[1] - img.height) // 2)
+    background.paste(img, offset)
+    background.save(out_path, 'JPEG', quality=95)
 ```
 
-**Recommended presets:**
-- **Light:** `hqdn3d=1.5:1.5:6:6` - Subtle noise reduction
-- **Medium:** `hqdn3d=3:3:6:6` - Standard noise reduction
-- **Heavy:** `hqdn3d=5:5:10:10` - Aggressive (may soften detail)
-
-**Parameters:**
-- `luma_spatial` (0-10): Spatial noise reduction for brightness
-- `chroma_spatial` (0-10): Spatial noise reduction for color
-- `luma_tmp` (0-20): Temporal noise reduction for brightness (across frames)
-- `chroma_tmp` (0-20): Temporal noise reduction for color
-
-**Use case:** Apply BEFORE sharpening to avoid amplifying noise.
-
-### Sharpening (unsharp)
-
-Enhances edges and details.
-
-**Syntax:**
-```bash
--vf "unsharp=luma_msize_x:luma_msize_y:luma_amount:chroma_msize_x:chroma_msize_y:chroma_amount"
-```
-
-**Recommended presets:**
-- **Light:** `unsharp=5:5:0.5:5:5:0.0` - Subtle sharpening
-- **Medium:** `unsharp=5:5:1.0:5:5:0.0` - Standard sharpening
-- **Heavy:** `unsharp=7:7:1.5:7:7:0.5` - Strong sharpening (risk of artifacts)
-
-**Simplified syntax (common):**
-```bash
--vf "unsharp=5:5:1.0"  # Matrix size 5x5, strength 1.0
-```
-
-**Parameters:**
-- `luma_msize_x/y` (3-23, odd): Matrix size for luma (larger = stronger)
-- `luma_amount` (-2.0 to 5.0): Sharpening strength (negative = blur)
-- `chroma_msize_x/y`: Matrix size for chroma
-- `chroma_amount`: Chroma sharpening strength
-
-**Use case:** Apply AFTER denoising for best results.
-
-### Color Correction (eq)
-
-Adjusts brightness, contrast, saturation, gamma.
-
-**Syntax:**
-```bash
--vf "eq=brightness:contrast:saturation:gamma"
-```
-
-**Examples:**
-- **Brighten:** `eq=brightness=0.1` (+10% brightness)
-- **Increase contrast:** `eq=contrast=1.2` (20% more contrast)
-- **Boost saturation:** `eq=saturation=1.3` (30% more saturation)
-- **Combined:** `eq=brightness=0.05:contrast=1.15:saturation=1.2`
-
-**Parameters:**
-- `brightness` (-1.0 to 1.0): Brightness adjustment (0 = no change)
-- `contrast` (0.0 to 3.0): Contrast multiplier (1.0 = no change)
-- `saturation` (0.0 to 3.0): Saturation multiplier (1.0 = no change)
-- `gamma` (0.1 to 10.0): Gamma correction (1.0 = no change)
-
-**Use case:** Correct exposure issues or create visual style.
-
-### Filter Chaining
-
-Combine multiple filters with commas (order matters):
-
-```bash
-# Denoise → Sharpen → Color correct
--vf "hqdn3d=3:3:6:6,unsharp=5:5:1.0,eq=brightness=0.05:contrast=1.15:saturation=1.2"
-```
-
-**Best practice order:**
-1. Scale/crop (if needed)
-2. Denoise (hqdn3d)
-3. Sharpen (unsharp)
-4. Color correction (eq)
-5. Subtitles (if burning in)
+**Confidence:** HIGH — PyPI version 12.1.1 confirmed, stable API.
 
 ---
 
-## Audio Loudness Normalization
+### 3. Web Scraping — `beautifulsoup4` 4.14.3 (no new HTTP library needed)
 
-### EBU R128 Standard (loudnorm filter)
+**Install:** `pip install "beautifulsoup4>=4.14.0"`
 
-**Target levels for 2026:**
-- **Broadcasting / YouTube:** -23 LUFS (EBU R128 standard)
-- **Social Media (TikTok, Reels):** -14 LUFS (louder for mobile)
-- **Podcasts:** -16 LUFS
+`httpx` is already in requirements. Use `httpx` for fetching + `BeautifulSoup` for
+parsing HTML to extract additional product images from product page URLs.
 
-**Two-pass loudnorm (most accurate):**
+**Why BeautifulSoup, not Playwright?** Nortia.ro product pages are standard e-commerce
+HTML — product images are in `<img>` tags, not dynamically loaded via JS. Playwright
+adds a full browser runtime (100MB+ install, Chromium binary) for zero benefit on
+static product pages. If a product page turns out to need JS rendering, fall back to
+skipping that product's scrape rather than adding Playwright.
 
-```bash
-# Pass 1: Analyze
-ffmpeg -i input.mp4 -af loudnorm=I=-14:LRA=7:TP=-2:print_format=json -f null -
+**Why not Scrapy?** Overkill — this is single-URL image extraction, not a crawling
+pipeline. The existing `httpx` async client handles concurrency fine.
 
-# Expected JSON output with measured_I, measured_LRA, measured_TP, measured_thresh
+```python
+import httpx
+from bs4 import BeautifulSoup
 
-# Pass 2: Normalize with measured values
-ffmpeg -i input.mp4 \
-  -af loudnorm=I=-14:LRA=7:TP=-2:measured_I=-18.5:measured_LRA=11.2:measured_TP=-3.5:measured_thresh=-28.5:offset=0.5:linear=true \
-  -c:v copy -c:a aac -b:a 192k \
-  output.mp4
+async def scrape_product_images(product_url: str, client: httpx.AsyncClient) -> list[str]:
+    """Extract image URLs from a product page. Returns empty list on failure."""
+    try:
+        resp = await client.get(product_url, timeout=10.0, follow_redirects=True)
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        # Product images typically in gallery containers or og:image meta
+        og_image = soup.find('meta', property='og:image')
+        if og_image:
+            return [og_image['content']]
+        imgs = soup.select('.product-gallery img, .product-images img, [data-zoom-image]')
+        return [img.get('src') or img.get('data-src') for img in imgs if img.get('src') or img.get('data-src')]
+    except Exception:
+        return []
 ```
 
-**Single-pass loudnorm (faster, less accurate):**
+**Parser note:** Pass `'html.parser'` (stdlib) to BeautifulSoup — avoids needing `lxml`
+as an HTML parser (lxml is used for XML parsing only, different code path).
 
-```bash
-ffmpeg -i input.mp4 \
-  -af "loudnorm=I=-14:LRA=7:TP=-2" \
-  -c:v copy -c:a aac -b:a 192k \
-  output.mp4
-```
-
-**Parameters:**
-- `I` (Integrated loudness target): -23 LUFS (broadcast), -14 LUFS (social)
-- `LRA` (Loudness Range target): 7 LU (tight), 11 LU (moderate)
-- `TP` (True Peak limit): -2 dBTP (prevents clipping on mobile devices)
-
-**Python library:**
-- `ffmpeg-normalize` (PyPI): Automated two-pass normalization wrapper
-- Install: `pip install ffmpeg-normalize`
-- Usage: `ffmpeg-normalize input.mp4 -c:a aac -b:a 192k -o output.mp4 -t -14`
+**Confidence:** HIGH — PyPI version 4.14.3 verified, httpx already installed.
 
 ---
 
-## Enhanced Subtitle Styling
+### 4. AI Image Generation — `fal-client` 0.13.1
 
-### Advanced ASS/SSA Styling
+**Install:** `pip install "fal-client>=0.13.0"`
 
-Current implementation uses `force_style` parameter. Enhanced options:
+`FAL_API_KEY` is already in `.env.example` (listed as optional). fal-client is the
+official Python SDK for fal.ai. Use FLUX.1 [dev] for product visuals from text
+descriptions — it produces photorealistic product-style imagery and handles text in
+images better than SD 1.5/2.x.
 
-**Current (working):**
-```bash
--vf "subtitles='input.srt':force_style='FontName=Arial,FontSize=48,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=100'"
-```
+**Why fal-client over Replicate SDK?** fal.ai wins on latency (fastest inference for
+FLUX models), and `FAL_API_KEY` is already in the existing config — zero new credential
+setup. Replicate would require a new API key.
 
-**Enhanced with shadow/glow:**
+**Why not Stability AI SDK directly?** fal.ai hosts the same models (FLUX, SDXL) with
+faster cold starts and simpler Python SDK.
 
-```bash
-# Shadow (drop shadow behind text)
-force_style='FontName=Arial,FontSize=48,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=3,Alignment=2,MarginV=100,Bold=1'
+**This is optional/feature-flagged.** AI image generation is listed as a feature but
+requires API credits. Add a `USE_AI_IMAGE_GENERATION` flag in settings.
 
-# Glow (outline + background box)
-force_style='FontName=Arial,FontSize=48,PrimaryColour=&H00FFFFFF,OutlineColour=&H00FFFF00,BackColour=&H80000000,Outline=2,BorderStyle=3,Shadow=0,Alignment=2,MarginV=100,Bold=1'
-
-# Adaptive sizing with PlayResX/PlayResY
-force_style='PlayResX=1080,PlayResY=1920,FontName=Arial,FontSize=48,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=100,Bold=1'
-```
-
-**Key ASS/SSA Parameters:**
-- `FontSize` (16-200): Font size in pixels (scales with PlayResX/PlayResY)
-- `Outline` (0-4): Outline width in pixels
-- `Shadow` (0-4): Shadow depth in pixels (0 = no shadow, higher = deeper)
-- `BorderStyle`:
-  - `1`: Outline + drop shadow (standard)
-  - `3`: Opaque box background
-- `PrimaryColour`: Text color in `&H00BBGGRR` format (hex BGR)
-- `OutlineColour`: Outline color
-- `BackColour`: Background/shadow color (with alpha: `&HAA` prefix for transparency)
-- `Alignment`: 1-9 (numpad layout: 1=bottom-left, 2=bottom-center, 8=top-center, etc.)
-- `MarginV`: Vertical margin in pixels from edge
-- `PlayResX/PlayResY`: Resolution reference (critical for portrait videos 1080x1920)
-
-**Color format conversion (Python helper):**
 ```python
-def hex_to_ass(hex_color: str) -> str:
-    """Convert #RRGGBB to &H00BBGGRR"""
-    hex_color = hex_color.lstrip('#')
-    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
-    return f"&H00{b:02X}{g:02X}{r:02X}"
+import fal_client
 
-def hex_to_ass_with_alpha(hex_color: str, alpha: int = 0) -> str:
-    """Convert #RRGGBB with alpha (0-255, 0=opaque, 255=transparent)"""
-    hex_color = hex_color.lstrip('#')
-    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
-    return f"&H{alpha:02X}{b:02X}{g:02X}{r:02X}"
+async def generate_product_visual(prompt: str) -> str:
+    """Returns local path to downloaded generated image. Returns None if unavailable."""
+    result = await fal_client.run_async(
+        "fal-ai/flux/dev",
+        arguments={
+            "prompt": prompt,
+            "image_size": "square_hd",   # 1024x1024
+            "num_inference_steps": 28,
+            "guidance_scale": 3.5,
+        }
+    )
+    image_url = result["images"][0]["url"]
+    # Download and cache locally via httpx (already available)
+    return image_url
 ```
+
+**Confidence:** MEDIUM — PyPI version 0.13.1 verified (released 2026-02-20), FLUX
+model availability confirmed on fal.ai, but pricing/quota behavior under load not tested.
 
 ---
 
-## Video Quality Analysis (for improved segment scoring)
+## FFmpeg Techniques for Product Video Composition
 
-### Python Libraries
+These require NO new Python libraries — all implemented via subprocess calls to the
+existing FFmpeg binary.
 
-#### OpenCV (already installed)
-**Current:** `opencv-python-headless>=4.8.0`
-**Use:** Frame extraction, basic quality metrics
+### Technique 1: Ken Burns Effect (zoompan filter)
 
+Animate a static product image as if a camera is slowly zooming in.
+
+```bash
+# Zoom in from 100% to 120% over 5 seconds at 30fps (150 frames)
+ffmpeg -loop 1 -i product.jpg -vf \
+  "scale=8000:-1,zoompan=z='zoom+0.0007':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=150:s=1080x1920" \
+  -t 5 -c:v libx264 -pix_fmt yuv420p output_kenburns.mp4
+```
+
+**Key parameters:**
+- `scale=8000:-1` — upscale first so zoompan has pixels to work with (prevents blur)
+- `z='zoom+0.0007'` — zoom expression per frame; 0.0007 × 150 frames = ~10% zoom
+- `d=150` — duration in frames (fps × seconds)
+- `s=1080x1920` — output size (portrait for Reels/TikTok)
+
+**Zoom out variant (more dramatic for sale items):**
+```bash
+z='if(eq(on,1),1.5,max(1.001,pzoom-0.004))'  # Start at 150%, zoom out to 100%
+```
+
+**Pan + zoom (product detail reveal):**
+```bash
+z='zoom+0.0007':x='iw/2-(iw/zoom/2)+20*on/d':y='ih/2-(ih/zoom/2)'
+```
+
+### Technique 2: Text Overlay with drawtext
+
+Product title, price, and brand over video. Requires FFmpeg built with `--enable-libfreetype`.
+
+```bash
+ffmpeg -i kenburns.mp4 -vf \
+  "drawtext=text='${TITLE}':fontfile='/path/to/font.ttf':fontsize=60:fontcolor=white:\
+   x=(w-text_w)/2:y=h*0.75:box=1:boxcolor=black@0.5:boxborderw=15" \
+  -c:v libx264 -pix_fmt yuv420p output_text.mp4
+```
+
+**Multi-layer text (title + price stacked):**
+```bash
+-vf "drawtext=text='${TITLE}':fontsize=52:fontcolor=white:x=(w-text_w)/2:y=h*0.72:\
+     box=1:boxcolor=black@0.6:boxborderw=12,\
+     drawtext=text='${PRICE}':fontsize=64:fontcolor=yellow:x=(w-text_w)/2:y=h*0.82:\
+     box=1:boxcolor=black@0.6:boxborderw=12"
+```
+
+**Note on text escaping:** Product titles contain special characters. Escape colons,
+apostrophes, and backslashes in Python before passing to FFmpeg:
 ```python
-import cv2
-import numpy as np
-
-# Blur detection (Laplacian variance method)
-def detect_blur(frame: np.ndarray) -> float:
-    """Returns blur score (higher = sharper, lower = blurrier)"""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-    return laplacian_var
-
-# Threshold: < 100 = blurry, > 500 = sharp
-
-# Contrast detection
-def detect_contrast(frame: np.ndarray) -> float:
-    """Returns contrast score (0-1, higher = more contrast)"""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    contrast = gray.std() / 255.0
-    return contrast
-
-# Threshold: < 0.15 = low contrast, > 0.3 = high contrast
+def escape_drawtext(text: str) -> str:
+    return text.replace('\\', '\\\\').replace("'", "\\'").replace(':', '\\:')
 ```
 
-#### scikit-image (NEW - recommended)
-**Install:** `pip install scikit-image>=0.22.0`
-**Use:** Advanced quality metrics
+### Technique 3: Multi-Image Concat (slideshow)
 
-```python
-from skimage import exposure
+For collection videos (multiple products), concat individual clips:
 
-# Low contrast detection (built-in)
-def is_low_contrast_image(frame: np.ndarray, fraction_threshold: float = 0.05) -> bool:
-    """Built-in method from scikit-image"""
-    from skimage.exposure import is_low_contrast
-    return is_low_contrast(frame, fraction_threshold=fraction_threshold)
+```bash
+# Create file list
+echo "file 'clip1.mp4'" > concat_list.txt
+echo "file 'clip2.mp4'" >> concat_list.txt
+echo "file 'clip3.mp4'" >> concat_list.txt
+
+# Concatenate
+ffmpeg -f concat -safe 0 -i concat_list.txt -c copy output_collection.mp4
 ```
 
-#### BRISQUE (NEW - optional)
-**Install:** Already available via OpenCV: `cv2.quality.QualityBRISQUE_create()`
-**Use:** No-reference image quality assessment (0-100, lower = better quality)
-
-```python
-import cv2
-
-# BRISQUE quality scoring
-def score_brisque(frame: np.ndarray, model_path: str, range_path: str) -> float:
-    """Returns BRISQUE score (0-100, lower is better)"""
-    brisque = cv2.quality.QualityBRISQUE_create(model_path, range_path)
-    score = brisque.compute(frame)[0]
-    return score
-
-# Requires pre-trained model files (download from OpenCV contrib)
-# Threshold: < 30 = good quality, > 50 = poor quality
+**With crossfade transition (filter_complex approach):**
+```bash
+ffmpeg -i clip1.mp4 -i clip2.mp4 -filter_complex \
+  "[0][1]xfade=transition=fade:duration=0.5:offset=4.5[out]" \
+  -map "[out]" -c:v libx264 output_fade.mp4
 ```
 
-### FFmpeg Quality Metrics (NEW - optional)
+### Technique 4: Product Image + Stock Video Background Overlay
 
-#### ffmpeg-quality-metrics (Python wrapper)
-**Install:** `pip install ffmpeg-quality-metrics>=3.11.0`
-**Use:** PSNR, SSIM, VMAF comparison between videos
-**Latest:** v3.11.2 released January 20, 2026
+Place product image (with alpha/transparent background) over a looping stock video:
 
-```python
-from ffmpeg_quality_metrics import FfmpegQualityMetrics
-
-# Compare two videos
-metrics = FfmpegQualityMetrics("reference.mp4", "processed.mp4")
-results = metrics.calculate(["ssim", "psnr"])
-# Returns per-frame and global statistics
+```bash
+ffmpeg -i stock_background.mp4 -i product_transparent.png \
+  -filter_complex \
+  "[1]scale=600:-1[product];\
+   [0][product]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2" \
+  -c:v libx264 -pix_fmt yuv420p output_overlay.mp4
 ```
 
-**Use case:** Compare before/after quality when applying filters.
-
-### Recommended Stack Additions
-
-```txt
-# Add to requirements.txt
-
-# Video Quality Analysis
-scikit-image>=0.22.0          # Low contrast detection, exposure analysis
-ffmpeg-quality-metrics>=3.11.0 # PSNR, SSIM, VMAF (optional, for validation)
+**Scale product to percentage of frame:**
+```bash
+[1]scale=iw*0.6:-1[product]   # Product image = 60% of frame width
 ```
+
+### Technique 5: Image-to-Video (still with audio)
+
+For simple templates: pad image to target duration, add TTS audio:
+
+```bash
+ffmpeg -loop 1 -i product.jpg -i voiceover.mp3 \
+  -c:v libx264 -tune stillimage -c:a aac -b:a 192k \
+  -pix_fmt yuv420p -shortest output.mp4
+```
+
+`-tune stillimage` optimizes H.264 encoding for static content (faster, smaller file).
 
 ---
 
-## Improved Segment Scoring Algorithm
+## Template System Pattern
 
-### Current Scoring
-```python
-combined_score = (motion * 0.6) + (variance * 0.3) + (brightness * 0.1)
-```
-
-### Enhanced Scoring (Proposed)
+Use Python dataclasses (not Jinja2) for video composition templates. The existing
+codebase uses stdlib dataclasses for filter configs — keep that pattern consistent.
 
 ```python
-import cv2
-import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional
+
+class TemplateType(str, Enum):
+    PRODUCT_SPOTLIGHT = "product_spotlight"  # Single product, Ken Burns + text
+    SALE_BANNER = "sale_banner"              # Sale price prominent, zoom-out effect
+    COLLECTION = "collection"               # Multi-product concat
 
 @dataclass
-class EnhancedVideoSegment:
-    start_time: float
-    end_time: float
-    motion_score: float       # 0-1 (existing)
-    variance_score: float     # 0-1 (existing)
-    avg_brightness: float     # 0-1 (existing)
-    blur_score: float         # NEW: Laplacian variance (higher = sharper)
-    contrast_score: float     # NEW: Std dev of luminance (0-1)
-
-    @property
-    def quality_score(self) -> float:
-        """Enhanced quality scoring with blur and contrast"""
-        # Normalize blur score (threshold-based)
-        blur_normalized = min(self.blur_score / 500.0, 1.0)  # 500 = sharp threshold
-
-        # Combined score prioritizes motion + sharpness + contrast
-        return (
-            self.motion_score * 0.40 +      # Motion (most important for engagement)
-            self.variance_score * 0.20 +    # Scene variety
-            blur_normalized * 0.20 +        # Sharpness (NEW)
-            self.contrast_score * 0.15 +    # Contrast (NEW)
-            (1 - abs(self.avg_brightness - 0.5)) * 0.05  # Brightness balance
-        )
-
-def analyze_frame_quality(frame: np.ndarray) -> tuple[float, float]:
-    """Returns (blur_score, contrast_score)"""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    # Blur detection (Laplacian variance)
-    blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
-
-    # Contrast detection (standard deviation)
-    contrast_score = gray.std() / 255.0
-
-    return blur_score, contrast_score
+class VideoTemplate:
+    type: TemplateType
+    duration_seconds: int = 15             # 15-60s
+    fps: int = 30
+    width: int = 1080
+    height: int = 1920
+    background_color: str = "#000000"
+    font_path: Optional[str] = None        # Falls back to system default
+    title_font_size: int = 52
+    price_font_size: int = 64
+    show_brand: bool = True
+    show_original_price: bool = True       # Strike-through for sale items
+    ken_burns_zoom_start: float = 1.0      # 1.0 = no zoom
+    ken_burns_zoom_end: float = 1.15       # 1.15 = 15% zoom in
+    transition_type: str = "fade"          # fade, slide, none
+    transition_duration: float = 0.5
 ```
 
-**Integration:**
-- Sample 3-5 frames per segment
-- Average blur_score and contrast_score
-- Update `VideoSegment.combined_score` property to use enhanced scoring
-- Filter out segments with `blur_score < 100` (too blurry)
-- Filter out segments with `contrast_score < 0.15` (too flat)
+**Why not Jinja2?** Jinja2 is a string template engine for text/HTML output — not suited
+for FFmpeg filter graph construction. Python dataclasses + string formatting produce
+the FFmpeg filter strings directly without an intermediate template language.
 
 ---
 
-## Two-Pass Encoding (Optional)
+## Stock Video Source: Pexels API
 
-### When to Use
-- Precise bitrate control required (file size limits)
-- Highest quality at target bitrate
-- Broadcasting / professional delivery
+Use the Pexels API for free stock video backgrounds (no new Python library needed —
+use `httpx` which is already installed).
 
-### When NOT to Use
-- Social media uploads (CRF is faster and sufficient)
-- Quick turnaround needed
-- No strict bitrate requirements
+**API key:** Free, register at pexels.com/api. Store as `PEXELS_API_KEY` in `.env`.
 
-### Single-Pass CRF (Recommended for Social Media)
-```bash
-# Current approach - KEEP THIS
-ffmpeg -i input.mp4 -c:v libx264 -crf 23 -preset fast output.mp4
-```
+**Rate limits:** 200 requests/hour, 20,000/month — sufficient for a personal-use tool.
 
-**Advantages:**
-- Faster (1x encoding pass)
-- Variable bitrate optimizes per-scene
-- Sufficient for TikTok/Reels/Shorts
-
-### Two-Pass (Only if bitrate control needed)
-
-```bash
-# Pass 1: Analysis
-ffmpeg -i input.mp4 -c:v libx264 -preset medium -b:v 4000k -pass 1 -an -f null /dev/null
-
-# Pass 2: Encoding
-ffmpeg -i input.mp4 -c:v libx264 -preset medium -b:v 4000k -pass 2 -c:a aac -b:a 192k output.mp4
-
-# Cleanup
-rm ffmpeg2pass-0.log ffmpeg2pass-0.log.mbtree
-```
-
-**Note:** Research shows two-pass encoding for x265 takes ~2x longer with "no meaningful overall quality difference" compared to single-pass. For x264 and social media, stick with CRF.
-
----
-
-## Implementation Priority
-
-### Phase 1: Critical (Immediate Impact)
-1. **Audio loudness normalization** - Consistent volume across all videos
-   - Add `ffmpeg-normalize` to requirements.txt OR implement two-pass loudnorm
-   - Target: -14 LUFS for social media
-2. **Platform-specific presets** - TikTok, Reels, YouTube Shorts
-   - Add preset parameter to rendering functions
-   - Map platform → CRF/bitrate/resolution
-3. **Enhanced subtitle styling** - Shadow and adaptive sizing
-   - Update `add_subtitles()` method with shadow parameter
-   - Already has PlayResX/PlayResY support
-
-### Phase 2: Quality Improvements (High Value)
-4. **Video filters (denoise, sharpen, color)** - Visual enhancement
-   - Add filter chain builder function
-   - Expose as optional parameters in rendering
-5. **Blur/contrast detection** - Better segment selection
-   - Update `VideoSegment` dataclass with quality metrics
-   - Integrate into `analyze_frame_quality()` sampling
-   - Filter low-quality segments before selection
-
-### Phase 3: Advanced (Nice to Have)
-6. **VMAF quality validation** - Compare before/after
-   - Optional post-processing validation
-   - Log quality metrics for monitoring
-
----
-
-## Configuration Recommendations
-
-### Add to `app/config.py`:
-
+**Search and download pattern:**
 ```python
-from enum import Enum
+async def search_stock_video(query: str, client: httpx.AsyncClient, api_key: str) -> str:
+    """Returns URL of first matching video (portrait orientation preferred)."""
+    resp = await client.get(
+        "https://api.pexels.com/videos/search",
+        params={"query": query, "orientation": "portrait", "per_page": 5},
+        headers={"Authorization": api_key}
+    )
+    videos = resp.json().get("videos", [])
+    if not videos:
+        return None
+    # Prefer HD portrait video files
+    for video_file in videos[0]["video_files"]:
+        if video_file["height"] >= 1920 and video_file["width"] == 1080:
+            return video_file["link"]
+    return videos[0]["video_files"][0]["link"]
+```
 
-class Platform(str, Enum):
-    TIKTOK = "tiktok"
-    REELS = "reels"
-    YOUTUBE_SHORTS = "youtube_shorts"
-    GENERIC = "generic"
+**Confidence:** MEDIUM — Pexels API is free and documented, but portrait video
+availability varies by search query. Cache downloaded backgrounds locally (by query hash)
+to avoid repeated downloads.
 
-class VideoQualitySettings:
-    """Platform-specific encoding settings"""
+---
 
-    PRESETS = {
-        Platform.TIKTOK: {
-            "resolution": (1080, 1920),
-            "fps": 30,
-            "crf": 23,
-            "preset": "fast",
-            "video_bitrate": "4000k",
-            "audio_bitrate": "128k",
-            "loudness_target": -14,  # LUFS
-        },
-        Platform.REELS: {
-            "resolution": (1080, 1920),
-            "fps": 30,
-            "crf": 23,
-            "preset": "fast",
-            "video_bitrate": "4000k",
-            "audio_bitrate": "128k",
-            "loudness_target": -14,  # LUFS
-        },
-        Platform.YOUTUBE_SHORTS: {
-            "resolution": (1080, 1920),
-            "fps": 30,
-            "crf": 21,  # Slightly higher quality
-            "preset": "medium",
-            "video_bitrate": "8000k",
-            "audio_bitrate": "192k",
-            "loudness_target": -14,  # LUFS (social standard, not -23)
-        },
-        Platform.GENERIC: {
-            "resolution": (1080, 1920),
-            "fps": 30,
-            "crf": 23,
-            "preset": "fast",
-            "video_bitrate": "5000k",
-            "audio_bitrate": "192k",
-            "loudness_target": -14,  # LUFS
-        }
-    }
+## Recommended Database Additions (Supabase)
 
-class VideoFilters:
-    """Video filter presets"""
+New tables needed — no new Python library, extends existing `supabase>=2.0.0` client:
 
-    DENOISE_PRESETS = {
-        "light": "hqdn3d=1.5:1.5:6:6",
-        "medium": "hqdn3d=3:3:6:6",
-        "heavy": "hqdn3d=5:5:10:10",
-    }
+```sql
+-- Product feed cache
+CREATE TABLE product_feeds (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    profile_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    url TEXT,                          -- Remote feed URL (for refresh)
+    file_path TEXT,                    -- Local cached copy
+    product_count INTEGER,
+    last_synced_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
 
-    SHARPEN_PRESETS = {
-        "light": "unsharp=5:5:0.5",
-        "medium": "unsharp=5:5:1.0",
-        "heavy": "unsharp=7:7:1.5",
-    }
+-- Video templates
+CREATE TABLE video_templates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    profile_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,                -- product_spotlight, sale_banner, collection
+    config JSONB NOT NULL,             -- Serialized VideoTemplate dataclass
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
 
-    COLOR_PRESETS = {
-        "brighten": "eq=brightness=0.1:contrast=1.1",
-        "vibrant": "eq=contrast=1.15:saturation=1.2",
-        "balanced": "eq=brightness=0.05:contrast=1.15:saturation=1.1",
-    }
+-- Product video jobs
+CREATE TABLE product_videos (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    profile_id TEXT NOT NULL,
+    feed_id UUID REFERENCES product_feeds(id),
+    product_ids TEXT[] NOT NULL,       -- Array of product IDs from feed
+    template_id UUID REFERENCES video_templates(id),
+    job_id TEXT,                       -- Link to existing jobs table
+    output_path TEXT,
+    status TEXT DEFAULT 'pending',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
 ```
 
 ---
 
-## Testing & Validation
+## Installation
 
-### Quality Thresholds
+```bash
+# Add to requirements.txt
 
-```python
-# Blur detection threshold
-BLUR_THRESHOLD_MIN = 100.0  # Below this = reject segment (too blurry)
-BLUR_THRESHOLD_GOOD = 500.0  # Above this = excellent sharpness
+# XML parsing (Google Shopping feeds)
+lxml>=6.0.0
 
-# Contrast detection threshold
-CONTRAST_THRESHOLD_MIN = 0.15  # Below this = reject segment (too flat)
-CONTRAST_THRESHOLD_GOOD = 0.30  # Above this = excellent contrast
+# Image preparation (resize, format conversion, compositing)
+Pillow>=12.0.0
 
-# Brightness range
-BRIGHTNESS_MIN = 0.08  # Below this = too dark (already implemented)
-BRIGHTNESS_MAX = 0.95  # Above this = overexposed
+# HTML parsing for product image scraping
+beautifulsoup4>=4.14.0
+
+# AI image generation (optional, requires FAL_API_KEY)
+fal-client>=0.13.0
 ```
 
-### Validation Workflow
-
-1. **Before enhancement:** Analyze sample segment with OpenCV
-2. **Apply filters:** Denoise → Sharpen → Color correct
-3. **After enhancement:** Re-analyze with SSIM/PSNR (optional)
-4. **Log metrics:** Track quality improvements per filter preset
-5. **User testing:** A/B test with real uploads to platforms
+Full command:
+```bash
+pip install "lxml>=6.0.0" "Pillow>=12.0.0" "beautifulsoup4>=4.14.0" "fal-client>=0.13.0"
+```
 
 ---
 
@@ -645,123 +448,73 @@ BRIGHTNESS_MAX = 0.95  # Above this = overexposed
 
 | Category | Recommended | Alternative | Why Not |
 |----------|-------------|-------------|---------|
-| Video Codec | H.264 (libx264) | H.265 (HEVC) | HEVC ~50% better compression but limited mobile support, licensing concerns |
-| Video Codec | H.264 (libx264) | AV1 | AV1 best compression but extremely slow encoding without hardware acceleration |
-| Audio Codec | AAC | Opus | Opus not universally supported in MP4 containers by social platforms |
-| Loudness Std | -14 LUFS | -23 LUFS (EBU R128) | -23 LUFS is for broadcast TV; social media uses -14 LUFS for mobile listening |
-| Encoding Mode | Single-pass CRF | Two-pass bitrate | Two-pass takes 2x longer with minimal quality benefit for social media |
-| Quality Metrics | OpenCV Laplacian | BRISQUE | BRISQUE requires model files (330MB+), Laplacian is lightweight and sufficient |
-| Python Library | scikit-image | PIL/Pillow | scikit-image has more advanced exposure/contrast tools optimized for analysis |
+| XML parsing | `lxml` | stdlib `xml.etree` | No streaming iterparse with namespace support; 2-10x slower on large files |
+| XML parsing | `lxml` | `feedparser` | feedparser targets Atom/RSS; no Google Shopping namespace support |
+| Scraping | `httpx` + `beautifulsoup4` | `playwright` | Playwright needs full browser runtime for static HTML pages — overkill |
+| Scraping | `httpx` + `beautifulsoup4` | `scrapy` | Scrapy is a crawling framework — wrong abstraction for single-URL image extraction |
+| Image prep | `Pillow` | `opencv-python-headless` | OpenCV already present but Pillow's format support (WebP, AVIF) and ImageDraw are better for static prep |
+| AI images | `fal-client` | `replicate` | `FAL_API_KEY` already in .env.example; fal wins on FLUX latency |
+| Templates | Python dataclasses | Jinja2 | Jinja2 is a text/HTML template engine; dataclasses integrate with existing pattern in codebase |
+| Video comp | FFmpeg subprocess | `moviepy` | moviepy is a Python wrapper over FFmpeg with API overhead; existing codebase calls FFmpeg directly |
+| Stock video | Pexels API (httpx) | `pexels-api-py` wrapper | Adds a dependency for a 3-endpoint API; `httpx` handles it with 10 lines |
 
 ---
 
-## Installation
+## What NOT to Use
 
-### Current Dependencies (no changes needed)
-```txt
-opencv-python-headless>=4.8.0  # Already installed
-numpy>=1.24.0                  # Already installed
-scipy>=1.11.0                  # Already installed
-```
-
-### New Dependencies (Phase 1 - Critical)
-```txt
-# Audio loudness normalization (optional, CLI wrapper)
-ffmpeg-normalize>=1.28.0
-
-# Alternative: Implement loudnorm directly with subprocess (no new dependency)
-```
-
-### New Dependencies (Phase 2 - Quality Analysis)
-```txt
-# Advanced image quality analysis
-scikit-image>=0.22.0
-
-# Optional: Video quality metrics (SSIM, PSNR, VMAF)
-ffmpeg-quality-metrics>=3.11.0
-```
+| Avoid | Why | Use Instead |
+|-------|-----|-------------|
+| `moviepy` | Wraps FFmpeg with Python overhead, slower than direct subprocess, complex filter graphs become opaque | FFmpeg subprocess (existing pattern) |
+| `feedparser` | Designed for RSS/Atom — lacks Google Shopping `g:` namespace support | `lxml.etree.iterparse` |
+| `playwright` (Python) | 150MB+ install, browser binary, complex async lifecycle — unnecessary for static HTML scraping | `httpx` + `beautifulsoup4` |
+| `Pillow` for Ken Burns | Pillow cannot produce video — it creates static images only | FFmpeg `zoompan` filter |
+| `pexels-api-py` | Stale PyPI package (last update 2022), adds a dependency for trivial REST calls | `httpx` with direct API calls |
+| `xml.etree.ElementTree` | No full namespace XPath; memory-loads full document; 2-10x slower | `lxml` |
 
 ---
 
-## Sources & References
+## Integration Points with Existing Pipeline
 
-**FFmpeg Encoding Best Practices:**
-- [FFmpeg Compress Video Guide | Cloudinary](https://cloudinary.com/guides/video-effects/ffmpeg-compress-video)
-- [FFmpeg for Instagram - DEV Community](https://dev.to/alfg/ffmpeg-for-instagram-35bi)
-- [How To Optimize FFmpeg For Fast Video Encoding - Muvi](https://www.muvi.com/blogs/optimize-ffmpeg-for-fast-video-encoding/)
-- [FFmpeg - Ultimate Guide | IMG.LY Blog](https://img.ly/blog/ultimate-guide-to-ffmpeg/)
-
-**Platform-Specific Settings:**
-- [Master Your Shorts: Export Settings for Reels, TikTok & YouTube 2026 | aaapresets](https://aaapresets.com/blogs/premiere-pro-blog-series-editing-tips-transitions-luts-guide/master-your-shorts-the-ultimate-guide-to-export-settings-for-instagram-reels-tiktok-youtube-shorts-in-2025-extended-edition)
-- [CRF Guide (Constant Rate Factor) | slhck](https://slhck.info/video/2017/02/24/crf-guide.html)
-- [Transcoding with FFmpeg: CRF vs Bitrate | FFmpeg Media](https://www.ffmpeg.media/articles/transcoding-crf-vs-bitrate-codecs-presets)
-
-**Audio Loudness Normalization:**
-- [LUFS: The Key to Consistent Audio in Streaming Era | MediaStream](https://www.mediastream.co/blog-es/lufs-the-key-to-consistent-audio-in-the-streaming-era)
-- [Audio Loudness Normalization With FFmpeg | Peter Forgacs](https://medium.com/@peter_forgacs/audio-loudness-normalization-with-ffmpeg-1ce7f8567053)
-- [ffmpeg-normalize · PyPI](https://pypi.org/project/ffmpeg-normalize/)
-- [GitHub - slhck/ffmpeg-normalize](https://github.com/slhck/ffmpeg-normalize)
-
-**Video Filters:**
-- [FFmpeg Filters Documentation](https://ffmpeg.org/ffmpeg-filters.html)
-- [FFmpeg: Enhance Video Quality | Freddy Ho](https://www.freddyho.com/2024/12/ffmpeg-enhance-video-quality.html)
-- [FFmpeg Filters and Effects | videoscompress.com](https://www.videoscompress.com/blog/FFmpeg-Filters-and-Effects-Enhance-Your-Videos-with-Advanced-Techniques)
-
-**Subtitle Styling:**
-- [How to Add Subtitles to a Video with FFmpeg | Bannerbear](https://www.bannerbear.com/blog/how-to-add-subtitles-to-a-video-with-ffmpeg-5-different-styles/)
-- [How to change the appearances of subtitles with FFmpeg | Abyssale](https://www.abyssale.com/blog/how-to-change-the-appearances-of-subtitles-with-ffmpeg)
-
-**Video Quality Analysis:**
-- [Blur detection with OpenCV | PyImageSearch](https://pyimagesearch.com/2015/09/07/blur-detection-with-opencv/)
-- [Detecting low contrast images with OpenCV | PyImageSearch](https://pyimagesearch.com/2021/01/25/detecting-low-contrast-images-with-opencv-scikit-image-and-python/)
-- [GitHub - slhck/ffmpeg-quality-metrics](https://github.com/slhck/ffmpeg-quality-metrics)
-- [Image Quality Assessment: BRISQUE | LearnOpenCV](https://learnopencv.com/image-quality-assessment-brisque/)
-
-**Two-Pass Encoding:**
-- [FFMPEG Tutorial: 2-Pass & CRF in x264 & x265 | GitHub Gist](https://gist.github.com/hsab/7c9219c4d57e13a42e06bf1cab90cd44)
-- [Two-Pass encoding with FFmpeg | Martin Riedl](https://www.martin-riedl.de/2022/01/09/two-pass-encoding-with-ffmpeg/)
-- [Three Things to Know About 2-Pass x265 Encoding | Streaming Learning Center](https://streaminglearningcenter.com/encoding/three-things-to-know-about-2-pass-x265-encoding.html)
+| New Feature | Hooks Into | Notes |
+|-------------|-----------|-------|
+| Feed parsing | New `product_feed_service.py` | Stand-alone, no existing service dependency |
+| Image download | `httpx` (existing) | Use existing `AsyncClient` from `assembly_service` pattern |
+| Ken Burns render | `assembly_service.py` — new `render_product_video()` method | Reuse FFmpeg subprocess pattern from `_render_with_preset()` |
+| Text overlay | Extend FFmpeg filter chain in `assembly_service.py` | Add `build_drawtext_filter()` next to `build_filter_chain()` |
+| TTS voiceover | `tts/factory.py` (existing) | No change — same factory returns ElevenLabs/Edge TTS |
+| Subtitles | `tts_subtitle_generator.py` (existing) | No change — same timestamp-to-SRT logic |
+| Job tracking | `job_storage.py` (existing) | Use same `create_job()` / `update_job()` pattern |
+| Template config | New `product_templates.py` dataclass module | Separate from existing `encoding_presets.py` |
+| Product video DB | Supabase (existing client) | 3 new migration files (feeds, templates, product_videos) |
 
 ---
 
-## Confidence Assessment
+## Version Compatibility
 
-| Area | Level | Rationale |
-|------|-------|-----------|
-| FFmpeg flags & syntax | HIGH | Official FFmpeg documentation + multiple verified sources |
-| Platform-specific settings (2026) | HIGH | Recent industry guides (2025-2026) with verified CRF/bitrate values |
-| Audio loudness standards | HIGH | EBU R128 standard confirmed, -14 LUFS for social media verified |
-| Filter syntax (hqdn3d, unsharp, eq) | HIGH | Official FFmpeg filter documentation |
-| Python libraries (OpenCV, scikit-image) | HIGH | Established libraries with PyPI verification |
-| Quality metrics (BRISQUE, VMAF) | MEDIUM | OpenCV contrib feature, requires model files |
-| Two-pass encoding value | HIGH | Multiple sources confirm single-pass CRF sufficient for social media |
+| Package | Version | Python Compat | Notes |
+|---------|---------|---------------|-------|
+| `lxml` | 6.0.2 | Python 3.8+ | WSL Linux wheels available on PyPI |
+| `Pillow` | 12.1.1 | Python 3.9+ | WebP support built-in since Pillow 9.x |
+| `beautifulsoup4` | 4.14.3 | Python 3.7+ | Requires `lxml` or `html.parser` for parsing |
+| `fal-client` | 0.13.1 | Python 3.8+ | Async API; use `asyncio.run()` or FastAPI async routes |
 
 ---
 
-## Next Steps for Implementation
+## Sources
 
-1. **Update requirements.txt** with new dependencies (Phase 2):
-   ```txt
-   scikit-image>=0.22.0
-   ffmpeg-normalize>=1.28.0  # Optional
-   ```
+- [lxml performance benchmarks](https://lxml.de/performance.html) — iterparse vs ElementTree, HIGH confidence
+- [lxml PyPI — version 6.0.2](https://pypi.org/project/lxml/) — version verified
+- [Pillow PyPI — version 12.1.1](https://pypi.org/project/pillow/) — version verified
+- [beautifulsoup4 PyPI — version 4.14.3](https://pypi.org/project/beautifulsoup4/) — version verified
+- [fal-client PyPI — version 0.13.1](https://pypi.org/project/fal-client/) — version verified 2026-02-20
+- [FFmpeg Ken Burns zoompan — Bannerbear](https://www.bannerbear.com/blog/how-to-do-a-ken-burns-style-effect-with-ffmpeg/) — MEDIUM confidence (technique verified, expression syntax confirmed)
+- [FFmpeg drawtext filter — OTTVerse](https://ottverse.com/ffmpeg-drawtext-filter-dynamic-overlays-timecode-scrolling-text-credits/) — HIGH confidence
+- [FFmpeg concat filter — Mux](https://www.mux.com/articles/create-a-video-slideshow-with-images-using-ffmpeg) — HIGH confidence
+- [Pexels API documentation](https://www.pexels.com/api/documentation/) — HIGH confidence, free tier confirmed
+- [Scraping comparison 2025 — ScrapingBee](https://www.scrapingbee.com/blog/best-python-web-scraping-libraries/) — MEDIUM confidence
+- [fal.ai FLUX.2 announcement](https://blog.fal.ai/flux-2-is-now-available-on-fal/) — MEDIUM confidence
 
-2. **Extend `VideoEditor` class** with:
-   - Platform preset support
-   - Filter chain builder method
-   - Loudness normalization integration (add_audio method)
+---
 
-3. **Enhance `VideoSegment` scoring** with:
-   - Add blur_score and contrast_score fields
-   - Implement analyze_frame_quality() helper
-   - Update combined_score formula
-
-4. **Add configuration** in `config.py`:
-   - Platform enum and presets dictionary
-   - VideoFilters class with preset strings
-   - Quality threshold constants
-
-5. **Create utility functions**:
-   - `build_filter_chain(denoise, sharpen, color)` → returns FFmpeg filter string
-   - `normalize_audio_loudness(audio_path, target_lufs)` → returns normalized audio path
-   - `analyze_segment_quality(video_path, start, end)` → returns quality metrics dict
+*Stack research for: v5 Product Video Generator — new dependencies only*
+*Researched: 2026-02-20*
