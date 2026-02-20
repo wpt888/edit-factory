@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 
 Milestone: v5 Product Video Generator
 Phase: 17 of 22 (Feed Foundation)
-Plan: 0 of 2 in Phase 17
-Status: Ready to plan
-Last activity: 2026-02-20 — v5 roadmap created (Phases 17-22, 30 requirements mapped)
+Plan: 2 of 2 in Phase 17
+Status: Phase 17 complete
+Last activity: 2026-02-20 — Phase 17-02 complete: image_fetcher + textfile_helper services built
 
-Progress: [░░░░░░░░░░] 0% (v5) — 4 milestones shipped prior
+Progress: [█░░░░░░░░░] 8% (v5) — 4 milestones shipped prior
 
 ## Performance Metrics
 
@@ -40,7 +40,9 @@ Progress: [░░░░░░░░░░] 0% (v5) — 4 milestones shipped prio
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- [v5 roadmap]: textfile= pattern for Romanian diacritics must be established in Phase 17 before any compositor work
+- [17-02]: textfile= (not text=) is canonical for all product text in FFmpeg — prevents diacritic corruption
+- [17-02]: Semaphore(5) concurrency cap for parallel image downloads (tunable via CONCURRENT_DOWNLOADS)
+- [17-02]: Gray placeholder via FFmpeg lavfi on download failure — no Pillow dependency
 - [v5 roadmap]: lxml iterparse with element clearing required for 10k-product feed (no full-tree load)
 - [v5 roadmap]: Ken Burns (zoompan) performance benchmark required in Phase 18 before batch is built
 - [v5 roadmap]: Single product E2E (Phase 20) must be validated before batch (Phase 21) is started
@@ -65,10 +67,10 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-20
-Stopped at: v5 roadmap created — Phases 17-22 defined, all 30 requirements mapped, files written
+Stopped at: Completed 17-02-PLAN.md — image_fetcher.py + textfile_helper.py delivered; Phase 17 complete
 Resume file: None
 
-**Next step:** `/gsd:plan-phase 17`
+**Next step:** `/gsd:plan-phase 18`
 
 ---
-*Last updated: 2026-02-20 after v5 roadmap created*
+*Last updated: 2026-02-20 after Phase 17-02 complete*
