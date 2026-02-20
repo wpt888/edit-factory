@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-20)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v5 Product Video Generator — Phase 19: Product Browser
+**Current focus:** v5 Product Video Generator — Phase 20: Single Product E2E
 
 ## Current Position
 
 Milestone: v5 Product Video Generator
-Phase: 19 of 22 (Product Browser) — complete
-Plan: 2 of 2 in Phase 19
-Status: Phase 19 complete — product browser backend + frontend delivered (FEED-02 through FEED-06)
-Last activity: 2026-02-21 — Phase 19 plan 02 executed (products page frontend)
+Phase: 20 of 22 (Single Product E2E) — not started
+Plan: 0 of 3 in Phase 20
+Status: Phase 19 complete — ready for Phase 20 planning
+Last activity: 2026-02-21 — Phase 19 verified (5/5 requirements met)
 
-Progress: [███░░░░░░░] 30% (v5) — 4 milestones shipped prior, phase 19 complete
+Progress: [█████░░░░░] 50% (v5) — 4 milestones shipped prior
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 55 (50 prior + 2 phase 17 + 2 phase 18 + 1 phase 19)
-- Total phases completed: 18 (phase 19 in progress)
+- Total plans completed: 56 (50 prior + 2 phase 17 + 2 phase 18 + 2 phase 19)
+- Total phases completed: 19
 - Total execution time: ~2.7 hours (v2) + ~2 days (v3) + ~47 min (v4)
 
 **By Milestone:**
@@ -32,8 +32,7 @@ Progress: [███░░░░░░░] 30% (v5) — 4 milestones shipped pri
 | v3 Video Quality | 5 (7-11) | 12 | Shipped 2026-02-06 |
 | v4 Script-First | 5 (12-16) | 11 | Shipped 2026-02-12 |
 | v5 Product Video | 6 (17-22) | TBD | In progress |
-| v5 P19 plan 01 (product-browser backend) | 8min | 1 task | 3 files |
-| v5 P19 plan 02 (product-browser frontend) | 5min | 1 task | 4 files |
+**Next step:** `/gsd:plan-phase 20`
 
 ## Accumulated Context
 
