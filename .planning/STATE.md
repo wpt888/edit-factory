@@ -10,12 +10,12 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Milestone: v5 Product Video Generator
-Phase: 21 of 22 (Batch Generation) — not started
-Plan: 0 of 2 in Phase 21
-Status: Phase 20 complete — ready for Phase 21 planning
-Last activity: 2026-02-21 — Phase 20 verified (10/10 must-haves, 5/5 success criteria)
+Phase: 21 of 22 (Batch Generation) — in progress
+Plan: 1 of 2 in Phase 21
+Status: Phase 21 Plan 01 complete — batch backend endpoints delivered
+Last activity: 2026-02-20 — Phase 21 Plan 01 executed (batch-generate + batch status endpoints)
 
-Progress: [██████░░░░] 67% (v5) — 4 milestones shipped prior
+Progress: [███████░░░] 72% (v5) — 4 milestones shipped prior
 
 ## Performance Metrics
 
@@ -33,7 +33,8 @@ Progress: [██████░░░░] 67% (v5) — 4 milestones shipped pri
 | v4 Script-First | 5 (12-16) | 11 | Shipped 2026-02-12 |
 | v5 Product Video | 6 (17-22) | TBD | In progress |
 
-**Next step:** `/gsd:plan-phase 21`
+**Next step:** Execute Phase 21 Plan 02 (batch generation frontend)
+| Phase 21-batch-generation P01 | 2 | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -63,6 +64,8 @@ Recent decisions affecting current work:
 - [Phase 20]: compose_product_video and _render_with_preset wrapped in run_in_executor for async compatibility
 - [Phase 20]: Product data passed as URL query params (not sessionStorage) — simpler, shareable, no hydration issues
 - [Phase 20]: useSearchParams wrapped in Suspense boundary — required by Next.js App Router to avoid build errors
+- [Phase 21-01]: Sequential batch loop over asyncio.gather — safer on WSL, avoids FFmpeg memory contention
+- [Phase 21-01]: BatchGenerateRequest shares settings uniformly across all products — per-product customization explicitly out of scope
 
 ### Pending Todos
 
@@ -77,16 +80,16 @@ None.
 **v5 Phase 18 risk — RESOLVED (18-01):**
 - zoompan benchmark completed: 2.3x slowdown. Zoompan is viable for batch.
 
-**v5 Phase 21 design requirement:**
-- Per-product state model (BatchJob/ProductJobState) has no direct precedent in existing codebase — must be designed before any render loop code is written in Phase 21-01
+**v5 Phase 21 backend — RESOLVED (21-01):**
+- Per-product state model implemented as product_jobs list in batch JSONB record. Sequential loop with except Exception per product.
 
 ## Session Continuity
 
-Last session: 2026-02-21
-Stopped at: Completed 20-02-PLAN.md (product video frontend)
+Last session: 2026-02-20
+Stopped at: Completed 21-01-PLAN.md (batch generation backend)
 Resume file: None
 
-**Next step:** Execute Phase 20 Plan 03 (E2E verification checkpoint / final phase 20 plan)
+**Next step:** Execute Phase 21 Plan 02 (batch generation frontend)
 
 ---
-*Last updated: 2026-02-21 after Phase 20 plan 02 complete*
+*Last updated: 2026-02-20 after Phase 21 plan 01 complete*
