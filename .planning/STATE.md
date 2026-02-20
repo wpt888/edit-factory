@@ -10,10 +10,10 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Milestone: v5 Product Video Generator
-Phase: 20 of 22 (Single Product E2E) — not started
-Plan: 0 of 3 in Phase 20
-Status: Phase 19 complete — ready for Phase 20 planning
-Last activity: 2026-02-21 — Phase 19 verified (5/5 requirements met)
+Phase: 20 of 22 (Single Product E2E) — in progress
+Plan: 1 of 3 in Phase 20
+Status: Phase 20 Plan 01 complete — product video generation backend
+Last activity: 2026-02-21 — 20-01 complete (product video generation endpoint + pipeline)
 
 Progress: [█████░░░░░] 50% (v5) — 4 milestones shipped prior
 
@@ -32,7 +32,7 @@ Progress: [█████░░░░░] 50% (v5) — 4 milestones shipped pri
 | v3 Video Quality | 5 (7-11) | 12 | Shipped 2026-02-06 |
 | v4 Script-First | 5 (12-16) | 11 | Shipped 2026-02-12 |
 | v5 Product Video | 6 (17-22) | TBD | In progress |
-**Next step:** `/gsd:plan-phase 20`
+**Next step:** Execute Phase 20 Plan 02 (product video frontend)
 
 ## Accumulated Context
 
@@ -58,6 +58,8 @@ Recent decisions affecting current work:
 - [Phase 19-01]: Filtered total uses count='exact' Supabase query; unfiltered uses stored product_count to avoid unnecessary DB round-trips
 - [Phase 19-02]: Plain img tag with onError fallback used for product images — avoids Next.js Image allowlist issues with multiple CDN domains
 - [Phase 19-02]: Filter state resets on feed change to prevent stale category/brand values carrying over between feeds
+- [Phase 20]: Built _build_preset_dict() bridge to convert EncodingPreset to dict format for _render_with_preset compatibility
+- [Phase 20]: compose_product_video and _render_with_preset wrapped in run_in_executor for async compatibility
 
 ### Pending Todos
 
@@ -78,10 +80,10 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 19-02-PLAN.md (product browser frontend) — Phase 19 complete
+Stopped at: Completed 20-01-PLAN.md (product video generation backend)
 Resume file: None
 
-**Next step:** Execute Phase 20 (single-product video generation)
+**Next step:** Execute Phase 20 Plan 02 (product video frontend)
 
 ---
-*Last updated: 2026-02-21 after Phase 19 plan 02 complete — Phase 19 done*
+*Last updated: 2026-02-21 after Phase 20 plan 01 complete*
