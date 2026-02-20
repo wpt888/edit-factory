@@ -10,12 +10,12 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Milestone: v5 Product Video Generator
-Phase: 19 of 22 (Product Browser) — in progress
-Plan: 1 of 2 in Phase 19
-Status: Phase 19 plan 01 complete — product browser backend API ready
-Last activity: 2026-02-21 — Phase 19 plan 01 executed (product_routes.py created)
+Phase: 19 of 22 (Product Browser) — complete
+Plan: 2 of 2 in Phase 19
+Status: Phase 19 complete — product browser backend + frontend delivered (FEED-02 through FEED-06)
+Last activity: 2026-02-21 — Phase 19 plan 02 executed (products page frontend)
 
-Progress: [██░░░░░░░░] 20% (v5) — 4 milestones shipped prior
+Progress: [███░░░░░░░] 30% (v5) — 4 milestones shipped prior, phase 19 complete
 
 ## Performance Metrics
 
@@ -33,6 +33,7 @@ Progress: [██░░░░░░░░] 20% (v5) — 4 milestones shipped pri
 | v4 Script-First | 5 (12-16) | 11 | Shipped 2026-02-12 |
 | v5 Product Video | 6 (17-22) | TBD | In progress |
 | v5 P19 plan 01 (product-browser backend) | 8min | 1 task | 3 files |
+| v5 P19 plan 02 (product-browser frontend) | 5min | 1 task | 4 files |
 
 ## Accumulated Context
 
@@ -56,6 +57,8 @@ Recent decisions affecting current work:
 - [18-02]: Badge cached at config.output_dir — skipped if exists, safe for batch
 - [Phase 19-01]: product_routes.py as separate router (not feed_routes.py inline) for clean separation of feed CRUD/sync vs product listing
 - [Phase 19-01]: Filtered total uses count='exact' Supabase query; unfiltered uses stored product_count to avoid unnecessary DB round-trips
+- [Phase 19-02]: Plain img tag with onError fallback used for product images — avoids Next.js Image allowlist issues with multiple CDN domains
+- [Phase 19-02]: Filter state resets on feed change to prevent stale category/brand values carrying over between feeds
 
 ### Pending Todos
 
@@ -76,10 +79,10 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 19-01-PLAN.md (product routes backend) — plan 1 of 2 in Phase 19
+Stopped at: Completed 19-02-PLAN.md (product browser frontend) — Phase 19 complete
 Resume file: None
 
-**Next step:** Execute Phase 19 plan 02 (product browser frontend)
+**Next step:** Execute Phase 20 (single-product video generation)
 
 ---
-*Last updated: 2026-02-21 after Phase 19 plan 01 complete*
+*Last updated: 2026-02-21 after Phase 19 plan 02 complete — Phase 19 done*
