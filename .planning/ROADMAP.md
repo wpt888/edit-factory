@@ -241,11 +241,11 @@ Plans:
   2. User can customize a template's primary color, accent color, font family, and CTA text — and the generated video reflects those choices
   3. Template customizations are saved per profile — switching profiles shows each store's own saved template settings
   4. All 3 templates define safe zones so text overlays do not overlap TikTok/Reels UI elements at the top and bottom of the frame
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 22-01: 3 template preset Python dataclasses (Product Spotlight, Sale Banner, Collection Showcase) with overlay positions, animation config, safe zones + product_templates DB migration (optional, may use profile settings JSON)
-- [ ] 22-02: Template customization UI in settings page — color pickers, font selector, CTA text field — saved per profile + template selector wired into generation flow
+- [ ] 22-01-PLAN.md — Backend: VideoTemplate dataclass + 3 presets, extended CompositorConfig, compositor refactors, DB migration, profile routes, generation pipeline wiring
+- [ ] 22-02-PLAN.md — Frontend: Template & Branding settings card (template selector, color pickers, CTA text), per-profile persistence, CTA pre-fill on generation page
 
 ## Progress
 
