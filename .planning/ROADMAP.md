@@ -258,7 +258,7 @@ Plans:
 | 18. Video Composition | 2/2 | Complete    | 2026-02-20 | - |
 | 19. Product Browser | 2/2 | Complete    | 2026-02-20 | - |
 | 20. Single Product E2E | 2/2 | Complete    | 2026-02-20 | - |
-| 21. Batch Generation | 2/2 | Complete   | 2026-02-20 | - |
+| 21. Batch Generation | 2/2 | Complete    | 2026-02-20 | - |
 | 22. Templates + Customization | v5 | 0/2 | Not started | - |
 
 ---

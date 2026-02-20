@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-20)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v5 Product Video Generator — Phase 21: Batch Generation
+**Current focus:** v5 Product Video Generator — Phase 22: Templates and Profile Customization
 
 ## Current Position
 
 Milestone: v5 Product Video Generator
-Phase: 21 of 22 (Batch Generation) — complete
-Plan: 2 of 2 in Phase 21
-Status: Phase 21 complete — batch frontend delivered (multi-select, useBatchPolling, batch-generate page)
-Last activity: 2026-02-20 — Phase 21 Plan 02 executed (batch generation frontend)
+Phase: 22 of 22 (Templates and Profile Customization) — not started
+Plan: 0 of 2 in Phase 22
+Status: Phase 21 complete — ready for Phase 22 planning
+Last activity: 2026-02-21 — Phase 21 verified (10/10 must-haves)
 
-Progress: [███████░░░] 72% (v5) — 4 milestones shipped prior
+Progress: [████████░░] 83% (v5) — 4 milestones shipped prior
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 58 (50 prior + 2 phase 17 + 2 phase 18 + 2 phase 19 + 2 phase 20)
-- Total phases completed: 20
+- Total plans completed: 60 (50 prior + 2 phase 17 + 2 phase 18 + 2 phase 19 + 2 phase 20 + 2 phase 21)
+- Total phases completed: 21
 - Total execution time: ~2.7 hours (v2) + ~2 days (v3) + ~47 min (v4)
 
 **By Milestone:**
@@ -33,9 +33,7 @@ Progress: [███████░░░] 72% (v5) — 4 milestones shipped pri
 | v4 Script-First | 5 (12-16) | 11 | Shipped 2026-02-12 |
 | v5 Product Video | 6 (17-22) | TBD | In progress |
 
-**Next step:** Execute Phase 22 (final milestone completion — v5 Product Video Generator)
-| Phase 21-batch-generation P01 | 2 | 2 tasks | 1 files |
-| Phase 21 P02 | 4 | 3 tasks | 4 files |
+**Next step:** `/gsd:plan-phase 22`
 
 ## Accumulated Context
 
