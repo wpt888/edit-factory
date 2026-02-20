@@ -11,9 +11,9 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 
 Milestone: v5 Product Video Generator
 Phase: 18 of 22 (Video Composition) — in progress
-Plan: 1 of 3 in Phase 18 — plan 18-01 complete
-Status: Phase 18 in progress — 18-01 (core compositor + benchmark) done; 18-02 and 18-03 pending
-Last activity: 2026-02-20 — Phase 18-01 complete: product_video_compositor.py with Ken Burns animation, duration control, and zoompan benchmark
+Plan: 2 of 3 in Phase 18 — plan 18-02 complete
+Status: Phase 18 in progress — 18-01 (core compositor + benchmark) done; 18-02 (text overlays, sale badge, CTA) done; 18-03 pending
+Last activity: 2026-02-20 — Phase 18-02 complete: full text overlay system, sale badge, CTA, filter_complex path for on-sale products
 
 Progress: [█░░░░░░░░░] 10% (v5) — 4 milestones shipped prior
 
@@ -33,6 +33,7 @@ Progress: [█░░░░░░░░░] 10% (v5) — 4 milestones shipped pri
 | v4 Script-First | 5 (12-16) | 11 | Shipped 2026-02-12 |
 | v5 Product Video | 6 (17-22) | TBD | In progress |
 | Phase 18-video-composition P01 | 35 | 2 tasks | 2 files |
+| Phase 18-video-composition P02 | 3 | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -53,6 +54,9 @@ Recent decisions affecting current work:
 - [v5 roadmap]: Edge TTS is the default for batch; ElevenLabs reserved for elaborate mode with explicit opt-in
 - [18-01]: zoompan benchmark on WSL dev machine (Ubuntu 24.04, Intel x86-64): simple_scale=6.5s, zoompan=14.7s, 2.3x slowdown for 30s portrait video at 1080x1920. Decision: zoompan IS viable for batch — 2.3x is far below the 18x concern threshold. Phase 21 batch WILL use zoompan by default; simple-scale kept as `use_zoompan=False` fallback option only.
 - [Phase 18-01]: zoompan benchmark: 2.3x slowdown (6.5s vs 14.7s for 30s video) — batch will use zoompan by default in Phase 21
+- [Phase 18-02]: filter_complex used only when is_on_sale=True (badge needs second input); -vf for regular products
+- [Phase 18-02]: Sale price in yellow; original in muted gray (y=1720) — no strikethrough per research recommendation
+- [Phase 18-02]: Badge cached at config.output_dir — skipped if exists, safe for batch
 
 ### Pending Todos
 
@@ -72,11 +76,11 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-21
-Stopped at: Completed 18-01-PLAN.md — product_video_compositor.py with Ken Burns zoompan, duration control, benchmark
+Last session: 2026-02-20
+Stopped at: Completed 18-02-PLAN.md — text overlays, sale badge, CTA, filter_complex path for on-sale products
 Resume file: None
 
-**Next step:** Execute Phase 18, Plan 02 (text overlays, sale badge, CTA)
+**Next step:** Execute Phase 18, Plan 03 (API endpoint for product video composition)
 
 ---
-*Last updated: 2026-02-21 after Phase 18-01 complete (compositor + benchmark done)*
+*Last updated: 2026-02-20 after Phase 18-02 complete (text overlays, sale badge, CTA done; all COMP requirements met)*
