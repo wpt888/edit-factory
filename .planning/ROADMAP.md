@@ -147,7 +147,7 @@ Full details: `.planning/milestones/v4-ROADMAP.md`
 - [x] **Phase 17: Feed Foundation** - XML feed parsing, product DB tables, image download, Romanian diacritics pattern (completed 2026-02-20)
 - [x] **Phase 18: Video Composition** - Ken Burns animation, text overlays, sale badge, CTA, duration control (completed 2026-02-20)
 - [x] **Phase 19: Product Browser** - API routes, product browser UI with search and filters (completed 2026-02-20)
-- [ ] **Phase 20: Single Product E2E** - Generate endpoint + product video page + TTS + subtitles + library output
+- [x] **Phase 20: Single Product E2E** - Generate endpoint + product video page + TTS + subtitles + library output (completed 2026-02-20)
 - [ ] **Phase 21: Batch Generation** - Multi-select, batch queue, per-product progress and error isolation
 - [ ] **Phase 22: Templates and Profile Customization** - 3 preset templates + per-profile colors, fonts, CTA
 
@@ -257,7 +257,7 @@ Plans:
 | 17. Feed Foundation | 2/2 | Complete    | 2026-02-20 | - |
 | 18. Video Composition | 2/2 | Complete    | 2026-02-20 | - |
 | 19. Product Browser | 2/2 | Complete    | 2026-02-20 | - |
-| 20. Single Product E2E | 1/2 | In Progress|  | - |
+| 20. Single Product E2E | 2/2 | Complete   | 2026-02-20 | - |
 | 21. Batch Generation | v5 | 0/2 | Not started | - |
 | 22. Templates + Customization | v5 | 0/2 | Not started | - |
 

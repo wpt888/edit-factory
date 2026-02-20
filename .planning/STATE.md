@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Milestone: v5 Product Video Generator
-Phase: 20 of 22 (Single Product E2E) — in progress
-Plan: 1 of 3 in Phase 20
-Status: Phase 20 Plan 01 complete — product video generation backend
-Last activity: 2026-02-21 — 20-01 complete (product video generation endpoint + pipeline)
+Phase: 20 of 22 (Single Product E2E) — plan 02 complete
+Plan: 2 of 3 in Phase 20 complete — ready for Phase 20 Plan 03 (or Phase 21 if 03 is final plan)
+Status: Phase 20 Plan 02 complete — product video frontend (generation page + product browser button)
+Last activity: 2026-02-21 — 20-02 complete (product video frontend)
 
-Progress: [█████░░░░░] 50% (v5) — 4 milestones shipped prior
+Progress: [█████░░░░░] 55% (v5) — 4 milestones shipped prior
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 56 (50 prior + 2 phase 17 + 2 phase 18 + 2 phase 19)
-- Total phases completed: 19
+- Total plans completed: 57 (50 prior + 2 phase 17 + 2 phase 18 + 2 phase 19 + 1 phase 20)
+- Total phases completed: 19 (phase 20 in progress — 2/3 plans done)
 - Total execution time: ~2.7 hours (v2) + ~2 days (v3) + ~47 min (v4)
 
 **By Milestone:**
@@ -32,7 +32,15 @@ Progress: [█████░░░░░] 50% (v5) — 4 milestones shipped pri
 | v3 Video Quality | 5 (7-11) | 12 | Shipped 2026-02-06 |
 | v4 Script-First | 5 (12-16) | 11 | Shipped 2026-02-12 |
 | v5 Product Video | 6 (17-22) | TBD | In progress |
-**Next step:** Execute Phase 20 Plan 02 (product video frontend)
+
+**Phase 20 Execution:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 20 P01 | 3 min | 2 tasks | 2 files |
+| Phase 20 P02 | 7 min | 3 tasks | 4 files |
+
+**Next step:** Execute Phase 20 Plan 03 (E2E verification / final plan in phase 20)
 
 ## Accumulated Context
 
@@ -60,6 +68,8 @@ Recent decisions affecting current work:
 - [Phase 19-02]: Filter state resets on feed change to prevent stale category/brand values carrying over between feeds
 - [Phase 20]: Built _build_preset_dict() bridge to convert EncodingPreset to dict format for _render_with_preset compatibility
 - [Phase 20]: compose_product_video and _render_with_preset wrapped in run_in_executor for async compatibility
+- [Phase 20]: Product data passed as URL query params (not sessionStorage) — simpler, shareable, no hydration issues
+- [Phase 20]: useSearchParams wrapped in Suspense boundary — required by Next.js App Router to avoid build errors
 
 ### Pending Todos
 
@@ -80,10 +90,10 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 20-01-PLAN.md (product video generation backend)
+Stopped at: Completed 20-02-PLAN.md (product video frontend)
 Resume file: None
 
-**Next step:** Execute Phase 20 Plan 02 (product video frontend)
+**Next step:** Execute Phase 20 Plan 03 (E2E verification checkpoint / final phase 20 plan)
 
 ---
-*Last updated: 2026-02-21 after Phase 20 plan 01 complete*
+*Last updated: 2026-02-21 after Phase 20 plan 02 complete*
