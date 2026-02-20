@@ -148,7 +148,7 @@ Full details: `.planning/milestones/v4-ROADMAP.md`
 - [x] **Phase 18: Video Composition** - Ken Burns animation, text overlays, sale badge, CTA, duration control (completed 2026-02-20)
 - [x] **Phase 19: Product Browser** - API routes, product browser UI with search and filters (completed 2026-02-20)
 - [x] **Phase 20: Single Product E2E** - Generate endpoint + product video page + TTS + subtitles + library output (completed 2026-02-20)
-- [ ] **Phase 21: Batch Generation** - Multi-select, batch queue, per-product progress and error isolation
+- [x] **Phase 21: Batch Generation** - Multi-select, batch queue, per-product progress and error isolation (completed 2026-02-20)
 - [ ] **Phase 22: Templates and Profile Customization** - 3 preset templates + per-profile colors, fonts, CTA
 
 ## Phase Details
@@ -258,7 +258,7 @@ Plans:
 | 18. Video Composition | 2/2 | Complete    | 2026-02-20 | - |
 | 19. Product Browser | 2/2 | Complete    | 2026-02-20 | - |
 | 20. Single Product E2E | 2/2 | Complete    | 2026-02-20 | - |
-| 21. Batch Generation | 1/2 | In Progress|  | - |
+| 21. Batch Generation | 2/2 | Complete   | 2026-02-20 | - |
 | 22. Templates + Customization | v5 | 0/2 | Not started | - |
 
 ---
