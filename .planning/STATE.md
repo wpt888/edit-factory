@@ -2,19 +2,19 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-12)
+See: .planning/PROJECT.md (updated 2026-02-20)
 
-**Core value:** Script-first video production: describe an idea, get multiple social-media-ready videos with AI-generated voiceover, perfectly synced subtitles, and keyword-matched visuals.
-**Current focus:** Planning next milestone
+**Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
+**Current focus:** v5 Product Video Generator
 
 ## Current Position
 
-Milestone: v4 Script-First Pipeline — SHIPPED
-Phase: All complete (16 phases across v2/v3/v4)
-Status: Milestone archived, ready for next milestone
-Last activity: 2026-02-12 — v4 milestone archived
+Milestone: v5 Product Video Generator
+Phase: Not started (defining requirements)
+Status: Defining requirements
+Last activity: 2026-02-20 — Milestone v5 started
 
-Progress: All 4 milestones shipped (v1, v2, v3, v4)
+Progress: 4 milestones shipped (v1, v2, v3, v4), v5 in progress
 
 ## Performance Metrics
 
@@ -30,6 +30,7 @@ Progress: All 4 milestones shipped (v1, v2, v3, v4)
 | v2 Profile System | 6 (1-6) | 23 | Shipped 2026-02-04 |
 | v3 Video Quality | 5 (7-11) | 12 | Shipped 2026-02-06 |
 | v4 Script-First | 5 (12-16) | 11 | Shipped 2026-02-12 |
+| v5 Product Video | TBD | TBD | In progress |
 
 ## Accumulated Context
 
@@ -54,11 +55,11 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-12
-Stopped at: v4 milestone archived
+Last session: 2026-02-20
+Stopped at: Defining v5 requirements
 Resume file: None
 
-**Next step:** `/gsd:new-milestone` to define next milestone
+**Next step:** Define requirements and create roadmap
 
 ---
-*Last updated: 2026-02-12 after v4 milestone archived*
+*Last updated: 2026-02-20 after v5 milestone started*

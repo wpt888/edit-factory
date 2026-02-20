@@ -2,11 +2,23 @@
 
 ## What This Is
 
-Edit Factory is a script-first video production platform for social media content (reels, TikTok, YouTube Shorts). Given an idea and product context, AI generates multiple voiceover scripts, ElevenLabs creates TTS audio with precise timestamps, the system matches keyword-tagged video segments to the narration, and assembles complete videos with synced subtitles. Supports multi-variant generation (one idea → N unique videos). Used personally for two online stores, each with isolated libraries and social media accounts.
+Edit Factory is a video production platform for social media content (reels, TikTok, YouTube Shorts). Two workflows: (1) Script-first — AI generates voiceover scripts from ideas, TTS creates audio with timestamps, system matches video segments to narration. (2) Product-first — parse product feeds (Google Shopping XML), auto-generate product showcase videos with images, text overlays, TTS voiceover, and subtitles. Supports multi-variant generation, batch processing, and preset templates. Used personally for two online stores (Nortia.ro + second brand), each with isolated libraries and social media accounts.
 
 ## Core Value
 
-Script-first video production: describe an idea, get multiple social-media-ready videos with AI-generated voiceover, perfectly synced subtitles, and keyword-matched visuals — ready to publish.
+Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos with AI-generated voiceover, perfectly synced subtitles, and matched visuals, ready to publish at scale.
+
+## Current Milestone: v5 Product Video Generator
+
+**Goal:** Generate product showcase videos automatically from Google Shopping XML feeds — single product or multi-product collections — with template-based composition, TTS voiceover, and batch processing.
+
+**Target features:**
+- Google Shopping XML feed parsing with product browser UI
+- Template system with presets (Product Spotlight, Sale Banner, Collection) + customization
+- Multiple visual sources: Ken Burns on images, scraped extra images, stock video backgrounds, AI-generated visuals
+- Voiceover: quick template text + AI-generated elaborate scripts from product descriptions
+- Batch generation: select products → generate videos at scale
+- User-configurable duration (15-60s), single or multi-product modes
 
 ## Requirements
 
@@ -49,7 +61,22 @@ Script-first video production: describe an idea, get multiple social-media-ready
 
 ### Active
 
-(No active requirements — start `/gsd:new-milestone` to define next milestone)
+- [ ] Google Shopping XML feed parsing and product data extraction
+- [ ] Product browser UI with search, filters, and selection
+- [ ] Automatic product filtering (on sale, category, new in stock)
+- [ ] Template system with presets + customization (colors, fonts, timings)
+- [ ] Ken Burns zoom/pan effect on product images
+- [ ] Web scraping of additional product images from product pages
+- [ ] Stock video backgrounds with product image overlay
+- [ ] AI-generated extra product visuals from description
+- [ ] Template voiceover text from product data (quick mode)
+- [ ] AI-generated voiceover scripts from product description (elaborate mode)
+- [ ] TTS audio generation for product voiceover (ElevenLabs/Edge)
+- [ ] Video composition: images + text overlays + transitions + audio + subtitles
+- [ ] User-configurable video duration (15-60 seconds)
+- [ ] Single product → single video generation
+- [ ] Multi-product showcase/collection video generation
+- [ ] Batch generation: select N products → generate N videos
 
 ### Out of Scope
 
@@ -71,6 +98,8 @@ Script-first video production: describe an idea, get multiple social-media-ready
 - Tech stack: FastAPI backend (Python), Next.js frontend (TypeScript), Supabase DB, FFmpeg
 - ~30,000 LOC across Python + TypeScript
 - v4 shipped: Script-first pipeline with AI scripts, TTS timestamps, auto-subtitles, segment matching, multi-variant generation
+- v5 target: Product feed-based video generation (Google Shopping XML → product videos)
+- Nortia.ro feed: ~9,987 products, Google Shopping XML format (title, description, image, price, sale_price, brand, product_type)
 - v3 baseline: CRF 18-20, preset medium, 192k audio, -14 LUFS normalization, video filters, enhanced subtitles
 - 8 backend services: encoding_presets, audio_normalizer, video_filters, subtitle_styler, script_generator, assembly_service, tts_subtitle_generator, pipeline_routes
 - 6 frontend pages: Library, Pipeline, Scripts, Assembly, Segments, Usage/Stats
@@ -114,5 +143,8 @@ Script-first video production: describe an idea, get multiple social-media-ready
 | Preview-before-render workflow | Avoids expensive render until user confirms matches | ✓ Good |
 | Manual SRT generation (no external lib) | Zero dependencies for timestamp-to-SRT conversion | ✓ Good |
 
+| Google Shopping XML feed for product data | Product feeds are standard, well-documented, already have one at Nortia.ro | — Pending |
+| FFmpeg for product video composition (not Remotion/React) | Already have FFmpeg pipeline, no need for Node.js video rendering | — Pending |
+
 ---
-*Last updated: 2026-02-12 after v4 Script-First Pipeline milestone shipped*
+*Last updated: 2026-02-20 after v5 Product Video Generator milestone started*
