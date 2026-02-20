@@ -43,8 +43,8 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 ### Batch & Generation
 
 - [x] **BATCH-01**: User can generate a single product video and preview it
-- [ ] **BATCH-02**: User can select multiple products and generate videos in batch
-- [ ] **BATCH-03**: Batch generation has per-product error isolation (one failure doesn't kill the batch)
+- [x] **BATCH-02**: User can select multiple products and generate videos in batch
+- [x] **BATCH-03**: Batch generation has per-product error isolation (one failure doesn't kill the batch)
 - [ ] **BATCH-04**: Batch UI shows per-product progress (not single progress bar)
 - [x] **BATCH-05**: Generated videos land in existing library (clips table) for review and publishing
 
@@ -53,7 +53,7 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 - [x] **OUT-01**: Rendered videos use existing encoding presets (TikTok, Reels, YouTube Shorts)
 - [x] **OUT-02**: Rendered videos use existing audio normalization (-14 LUFS)
 - [x] **OUT-03**: Rendered videos use existing video filters if enabled (denoise, sharpen, color)
-- [ ] **OUT-04**: Product videos are publishable via existing Postiz integration
+- [x] **OUT-04**: Product videos are publishable via existing Postiz integration
 
 ## Future Requirements
 
@@ -108,14 +108,14 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 | TMPL-03 | Phase 22 | Pending |
 | TMPL-04 | Phase 22 | Pending |
 | BATCH-01 | Phase 20 | Complete |
-| BATCH-02 | Phase 21 | Pending |
-| BATCH-03 | Phase 21 | Pending |
+| BATCH-02 | Phase 21 | Complete |
+| BATCH-03 | Phase 21 | Complete |
 | BATCH-04 | Phase 21 | Pending |
 | BATCH-05 | Phase 20 | Complete |
 | OUT-01 | Phase 20 | Complete |
 | OUT-02 | Phase 20 | Complete |
 | OUT-03 | Phase 20 | Complete |
-| OUT-04 | Phase 20 | Pending |
+| OUT-04 | Phase 20 | Complete |
 
 **Coverage:**
 - v5 requirements: 30 total
