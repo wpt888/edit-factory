@@ -1,586 +1,593 @@
-# Architecture Patterns: Profile/Workspace System
+# Architecture: Product Feed Video Generation
 
-**Domain:** Multi-profile isolation for video production platform
-**Researched:** 2026-02-03
-**Confidence:** HIGH
+**Domain:** Product showcase video generation from e-commerce feeds
+**Researched:** 2026-02-20
+**Confidence:** HIGH (existing codebase examined directly; integration points verified)
+
+---
 
 ## Executive Summary
 
-Adding profile/workspace isolation to an existing FastAPI + Next.js + Supabase application requires a tenant-scoped architecture using Supabase Row-Level Security (RLS) with a `profile_id` column pattern. The architecture must maintain backward compatibility while introducing profile context at the database, API, and frontend layers.
+The v5 milestone adds a product-feed-driven video generation workflow to an existing script-first platform. The architecture integrates at three well-defined seams: (1) a new `product_routes.py` router sitting alongside the existing pipeline/assembly/library routers, (2) three new services (`feed_parser`, `product_video_compositor`, `image_fetcher`) that plug into existing render infrastructure, and (3) two new frontend pages (`/products` browser, `/product-video` generator) that follow the established pattern of the Pipeline page. The full data flow is: Feed URL → XML parse → product DB table → user selection → template selection → script/voiceover gen → TTS audio → image composition → FFmpeg render → clip stored in existing library → publishable via existing Postiz integration.
 
-**Key Architectural Decision:** Use shared tables with `profile_id` foreign keys and RLS policies rather than schema-per-tenant approach. This matches Supabase best practices for 2-10 tenant scenarios where data models are consistent across tenants.
+Critically, most of the render stack is **reused without modification**: `encoding_presets`, `audio_normalizer`, `subtitle_styler`, `video_filters`, `tts_subtitle_generator`, `elevenlabs_tts/edge_tts`, and the `assembly_service` FFmpeg render logic. New code is concentrated in feed parsing, image handling, and the composition step that turns product images into video frames.
 
-## Recommended Architecture
+---
 
-### Three-Layer Profile Context Propagation
+## System Overview
 
 ```
-Frontend (Next.js)
-  ├─ ProfileProvider Context (selected profile_id)
-  │  └─ Wraps all authenticated pages
-  └─ API calls include profile_id in request context
-      ↓
-API Layer (FastAPI)
-  ├─ Profile middleware extracts profile_id from request
-  ├─ Validates user owns this profile
-  └─ Passes profile_id to service layer
-      ↓
-Database Layer (Supabase)
-  ├─ RLS policies filter by profile_id
-  └─ Indexes on (user_id, profile_id) for performance
+┌──────────────────────────────────────────────────────────────────────────┐
+│                         FRONTEND (Next.js)                               │
+│                                                                          │
+│  /products          /product-video        /library (existing)            │
+│  [Feed Browser]     [Video Generator]     [Clip Manager]                 │
+│       │                    │                     │                       │
+│   apiGet/apiPost       apiGet/apiPost        apiGet/apiPost              │
+└──────────────┬─────────────────┬────────────────────────────────────────┘
+               │                 │
+               ▼                 ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                        FASTAPI ROUTERS                                   │
+│                                                                          │
+│  [NEW] product_routes.py     [EXISTING]                                  │
+│  /api/v1/products/           pipeline_routes.py   library_routes.py      │
+│  - POST /feeds/sync          assembly_routes.py   script_routes.py       │
+│  - GET  /feeds               postiz_routes.py     tts_routes.py          │
+│  - GET  /products            segments_routes.py   profile_routes.py      │
+│  - POST /generate                                                        │
+│  - GET  /generate/{job_id}                                               │
+└──────────────┬─────────────────────────────────────────────────────────┘
+               │
+               ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                           SERVICES LAYER                                 │
+│                                                                          │
+│  [NEW]                         [REUSED AS-IS]                            │
+│  feed_parser.py                script_generator.py (AI voiceover text)  │
+│  image_fetcher.py              elevenlabs_tts / edge_tts (audio)         │
+│  product_video_compositor.py   tts_subtitle_generator.py (SRT)          │
+│                                audio_normalizer.py                      │
+│                                subtitle_styler.py                       │
+│                                video_filters.py                         │
+│                                encoding_presets.py                      │
+│                                job_storage.py                           │
+│                                cost_tracker.py                          │
+└──────────────┬─────────────────────────────────────────────────────────┘
+               │
+               ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      EXTERNAL + STORAGE                                  │
+│                                                                          │
+│  Supabase DB              FFmpeg              External APIs              │
+│  - product_feeds          (composition        - Google Shopping XML      │
+│  - products               + encoding)         - Product page scraping    │
+│  - product_templates                          - ElevenLabs TTS           │
+│  - editai_projects (existing)                 - Gemini/Claude AI         │
+│  - editai_clips    (existing)                                            │
+│  - jobs            (existing)                                            │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Data Model Changes
+---
 
-#### New Tables
+## Component Boundaries
 
-**1. profiles**
+| Component | Responsibility | New vs Existing | Communicates With |
+|-----------|---------------|-----------------|-------------------|
+| `product_routes.py` | Feed CRUD, product listing, job dispatch | **NEW** | `feed_parser`, `product_video_compositor`, `job_storage`, Supabase |
+| `feed_parser.py` | Fetch + parse Google Shopping XML, normalize product data | **NEW** | `product_routes`, Supabase products table |
+| `image_fetcher.py` | Download product images, optional page scraping, cache to disk | **NEW** | `product_video_compositor` |
+| `product_video_compositor.py` | Build FFmpeg filterchain for image-based composition (Ken Burns, text overlay, transitions), call render pipeline | **NEW** | `encoding_presets`, `audio_normalizer`, `subtitle_styler`, `video_filters`, `elevenlabs_tts/edge_tts`, `tts_subtitle_generator` |
+| `script_generator.py` | Generate product voiceover scripts from description (elaborate mode) | **REUSED** | `product_video_compositor` (via AI script path) |
+| `encoding_presets.py` | Platform encoding parameters | **REUSED** | `product_video_compositor` |
+| `audio_normalizer.py` | -14 LUFS normalization | **REUSED** | `product_video_compositor` |
+| `subtitle_styler.py` | ASS subtitle style parameters | **REUSED** | `product_video_compositor` |
+| `video_filters.py` | Denoise/sharpen/color filters | **REUSED** | `product_video_compositor` |
+| `tts_subtitle_generator.py` | ElevenLabs timestamps → SRT | **REUSED** | `product_video_compositor` |
+| `elevenlabs_tts` / `edge_tts` | TTS audio synthesis | **REUSED** | `product_video_compositor` |
+| `job_storage.py` | Background job state tracking | **REUSED** | `product_routes` |
+| `cost_tracker.py` | API cost logging | **REUSED** | `product_video_compositor` |
+| `/products` page | Feed config + product browser UI | **NEW** | `product_routes` REST |
+| `/product-video` page | Template selection + generation UI | **NEW** | `product_routes` REST |
+| `/library` page | View/publish rendered product videos | **REUSED** | `library_routes` (clips stored there already) |
+
+---
+
+## Data Flow: Feed URL to Rendered MP4
+
+```
+1. FEED SYNC
+   User enters Google Shopping XML URL in /products page
+   → POST /api/v1/products/feeds/sync
+     → feed_parser.py fetches XML (httpx async, streaming for large feeds)
+     → Parses <item> elements: title, description, g:image_link,
+       g:price, g:sale_price, g:brand, g:product_type, g:id, link
+     → Upserts normalized rows to products table
+       (keyed on g:id, profile_id scoped)
+     → Returns { feed_id, product_count, synced_at }
+
+2. PRODUCT BROWSE
+   GET /api/v1/products?feed_id=X&on_sale=true&category=shoes&q=text
+   → Returns paginated product list from DB
+   → Frontend renders grid with image, name, price, sale_price badge
+
+3. PRODUCT SELECTION + TEMPLATE CHOICE
+   User selects 1-N products, chooses template preset
+   (Product Spotlight / Sale Banner / Collection)
+   User sets: duration (15-60s), voiceover mode (quick/ai), TTS provider
+
+4. JOB DISPATCH
+   POST /api/v1/products/generate
+   {
+     product_ids: ["pid1", "pid2"],
+     template: "product_spotlight",
+     duration_sec: 30,
+     voiceover_mode: "ai",     // "quick" | "ai"
+     tts_provider: "elevenlabs",
+     variant_count: 1,
+     platform: "reels"
+   }
+   → product_routes creates job record in job_storage (job_id returned immediately)
+   → FastAPI BackgroundTasks starts _generate_product_video_task(job_id, ...)
+
+5. BACKGROUND GENERATION TASK
+   _generate_product_video_task runs in background:
+
+   5a. SCRIPT GENERATION
+       quick mode: build script from template text + product.title + price/sale fields
+       ai mode:    script_generator.generate_scripts(idea=product.description, ...)
+                   → Gemini or Claude API call
+
+   5b. TTS AUDIO
+       ElevenLabsTTSService.generate_audio_with_timestamps(script_text)
+       or EdgeTTSService.generate_audio(script_text)
+       → Returns: audio_path, duration, timestamps_dict
+
+   5c. SRT SUBTITLES
+       tts_subtitle_generator.generate_srt_from_timestamps(timestamps_dict)
+       → Returns: srt_content string
+
+   5d. IMAGE PREPARATION
+       image_fetcher.download_images(product.image_link, product.link)
+       → Downloads primary image (g:image_link)
+       → Optionally scrapes extra images from product.link page
+       → Returns: list of local image paths
+
+   5e. VIDEO COMPOSITION
+       product_video_compositor.build_product_video(
+           images, audio_path, srt_content, duration_sec, template, preset
+       )
+       This calls FFmpeg with:
+       - Input: images as video streams (loop each image for its segment duration)
+       - Ken Burns: zoompan filter per image (slow zoom in/out per template config)
+       - Text overlays: drawtext filter for product name, price, sale_price
+       - Transitions: xfade filter between image segments
+       - Audio: -i audio_path mapped to output
+       - Subtitles: ass filter with srt_content written to temp .srt file
+       - Encoding: encoding_presets.get_preset(platform).to_ffmpeg_params()
+       - Audio normalization: audio_normalizer.measure_loudness + build_loudnorm_filter
+       - Video filters: video_filters filterchain (denoise/sharpen/color if enabled)
+       → Returns: output_video_path
+
+   5f. STORE AS CLIP
+       Upsert row in editai_clips table with:
+       - project_id: auto-created product project (or user-specified project)
+       - final_video_path: output_video_path
+       - final_status: "completed"
+       - metadata: { product_id, template, voiceover_mode } in JSONB
+
+   5g. UPDATE JOB
+       job_storage.update_job(job_id, status="completed", data={clip_id, ...})
+
+6. POLLING
+   Frontend polls GET /api/v1/products/generate/{job_id} every 2s
+   → Returns { status, progress, clip_id } when done
+   → Redirects to /library or shows preview
+
+7. LIBRARY
+   Rendered product video appears in /library page
+   → Same Postiz publishing flow as any other clip
+```
+
+---
+
+## New Files to Create
+
+### Backend
+
+```
+app/api/
+└── product_routes.py          # NEW: All /products/* endpoints
+
+app/services/
+├── feed_parser.py             # NEW: Google Shopping XML → normalized products
+├── image_fetcher.py           # NEW: Image download + optional web scraping
+└── product_video_compositor.py # NEW: FFmpeg composition for image-based video
+```
+
+### Database Migrations
+
+```
+supabase/migrations/
+├── 013_create_product_feeds.sql      # NEW: product_feeds table
+├── 014_create_products.sql           # NEW: products table (profile-scoped)
+└── 015_create_product_templates.sql  # NEW: product_templates table (optional)
+```
+
+### Frontend
+
+```
+frontend/src/app/
+├── products/
+│   └── page.tsx               # NEW: Feed config + product browser
+└── product-video/
+    └── page.tsx               # NEW: Template selection + generation + polling
+```
+
+---
+
+## Database Schema: New Tables
+
+### product_feeds
+
 ```sql
-CREATE TABLE profiles (
-    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    user_id UUID REFERENCES auth.users(id) NOT NULL,
-    name TEXT NOT NULL,
-    description TEXT,
-
-    -- TTS Voice Presets (profile-specific)
-    default_tts_provider TEXT DEFAULT 'elevenlabs',  -- 'elevenlabs' | 'edge'
-    elevenlabs_voice_id TEXT,
-    edge_tts_voice TEXT,
-    tts_model TEXT,
-
-    -- Postiz Configuration (profile-specific)
-    postiz_integration_ids JSONB DEFAULT '[]',  -- Selected platforms for this profile
-    default_caption_template TEXT,
-    default_schedule_time TIME,
-
-    -- Metadata
-    is_default BOOLEAN DEFAULT false,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-
-    -- Constraint: user can only have one default profile
-    CONSTRAINT one_default_per_user EXCLUDE (user_id WITH =) WHERE (is_default = true)
-);
-
-CREATE INDEX idx_profiles_user_id ON profiles(user_id);
-CREATE INDEX idx_profiles_user_default ON profiles(user_id, is_default);
-```
-
-**2. profile_postiz_configs** (optional, if more structure needed)
-```sql
-CREATE TABLE profile_postiz_configs (
+CREATE TABLE product_feeds (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     profile_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
-    integration_id TEXT NOT NULL,  -- Postiz integration ID
-    platform_type TEXT NOT NULL,   -- 'instagram', 'tiktok', etc.
+    name TEXT NOT NULL,               -- "Nortia.ro feed"
+    url TEXT NOT NULL,                -- Full XML feed URL
+    last_synced_at TIMESTAMPTZ,
+    product_count INTEGER DEFAULT 0,
+    sync_status TEXT DEFAULT 'pending', -- 'pending' | 'syncing' | 'ready' | 'error'
+    error_message TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_product_feeds_profile ON product_feeds(profile_id);
+```
 
-    -- Platform-specific settings
-    settings JSONB DEFAULT '{}',
-    is_active BOOLEAN DEFAULT true,
+### products
 
+```sql
+CREATE TABLE products (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    feed_id UUID REFERENCES product_feeds(id) ON DELETE CASCADE NOT NULL,
+    profile_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
+    -- Google Shopping fields
+    external_id TEXT NOT NULL,        -- g:id from XML
+    title TEXT NOT NULL,
+    description TEXT,
+    image_url TEXT,
+    link TEXT,                        -- Product page URL
+    price NUMERIC(10,2),
+    sale_price NUMERIC(10,2),
+    brand TEXT,
+    product_type TEXT,                -- Category path
+    availability TEXT,                -- 'in stock' | 'out of stock'
+    condition TEXT DEFAULT 'new',
+    -- Additional images (scraped or extra)
+    extra_image_urls JSONB DEFAULT '[]',
+    -- Metadata
+    raw_data JSONB DEFAULT '{}',      -- Full original XML item (for future fields)
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
-
-    UNIQUE(profile_id, integration_id)
+    UNIQUE(feed_id, external_id)      -- Upsert key
 );
-
-CREATE INDEX idx_postiz_config_profile ON profile_postiz_configs(profile_id);
+CREATE INDEX idx_products_feed ON products(feed_id);
+CREATE INDEX idx_products_profile ON products(profile_id);
+CREATE INDEX idx_products_on_sale ON products(profile_id) WHERE sale_price IS NOT NULL;
+CREATE INDEX idx_products_type ON products(profile_id, product_type);
 ```
 
-#### Schema Changes to Existing Tables
+### product_templates (optional in v5, can use hardcoded presets initially)
 
-**projects**
 ```sql
-ALTER TABLE editai_projects
-ADD COLUMN profile_id UUID REFERENCES profiles(id) ON DELETE CASCADE;
-
--- Backfill for existing data: create default profile for each user
--- Migration script creates one default profile per user_id
--- and assigns all existing projects to that default profile
-
-CREATE INDEX idx_projects_profile_id ON editai_projects(profile_id);
-CREATE INDEX idx_projects_user_profile ON editai_projects(user_id, profile_id);
+CREATE TABLE product_templates (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,        -- 'product_spotlight' | 'sale_banner' | 'collection'
+    description TEXT,
+    config JSONB NOT NULL,            -- Template params (ken_burns, text_positions, etc.)
+    is_builtin BOOLEAN DEFAULT true,  -- System templates vs user-created
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
 ```
 
-**clips** (inherits profile_id from project)
-```sql
--- No schema change needed — clips inherit profile context via project_id FK
--- RLS policies will join through projects table
+---
+
+## Reuse Map: What Gets Reused vs What Is New
+
+### Reused Without Modification
+
+| Service | How It Gets Called |
+|---------|-------------------|
+| `encoding_presets.get_preset(platform)` | product_video_compositor passes platform param to get FFmpeg params |
+| `audio_normalizer.measure_loudness` + `build_loudnorm_filter` | Same two-pass loudnorm workflow applied to TTS audio |
+| `subtitle_styler.build_subtitle_filter` | ASS subtitle filter applied to composition output |
+| `video_filters.VideoFilters.to_filter_string` | Optional denoise/sharpen/color on final composite |
+| `tts_subtitle_generator.generate_srt_from_timestamps` | ElevenLabs timestamps → SRT, identical to assembly workflow |
+| `tts/elevenlabs.ElevenLabsTTSService.generate_audio_with_timestamps` | TTS audio generation with timestamps |
+| `tts/edge.EdgeTTSService.generate_audio` | Free TTS fallback |
+| `tts/factory.get_tts_service` | Provider selection by profile |
+| `job_storage.JobStorage` | Background job tracking (same polling pattern as Pipeline) |
+| `cost_tracker` | Log ElevenLabs + Gemini API costs |
+| `script_generator.ScriptGenerator.generate_scripts` | AI voiceover in elaborate mode |
+| `silence_remover.SilenceRemover` | Trim TTS audio silence (same as assembly_service uses) |
+
+### Reused With Adaptation
+
+| Component | What Changes |
+|-----------|-------------|
+| `assembly_service.py` render logic | Extract the FFmpeg concat + audio + subtitle logic into a shared internal function that both assembly and product compositor call. OR product_video_compositor duplicates the pattern — simpler, less coupling. Recommend duplication for v5, refactor later. |
+| `editai_projects` / `editai_clips` tables | Product videos stored as clips. Auto-create a project per product or per batch. Existing clip CRUD (library_routes) handles display and publishing without changes. |
+| `/library` page | No change needed. Clips appear automatically because they are stored in editai_clips. |
+
+### New (No Existing Equivalent)
+
+| Component | Why New |
+|-----------|---------|
+| `feed_parser.py` | Google Shopping XML parsing is domain-specific. Uses `lxml` or stdlib `xml.etree.ElementTree`. No existing XML parser in codebase. |
+| `image_fetcher.py` | HTTP image download + disk caching + optional scraping. No image fetch utility exists. Use `httpx` (already available via supabase-py deps) or `requests`. |
+| `product_video_compositor.py` | FFmpeg filterchain for image-to-video is distinct from segment-concat workflow. Needs: `loop` input, `zoompan` (Ken Burns), `xfade` transitions, `drawtext` overlays. No existing compositor for this mode. |
+| `product_routes.py` | New endpoint namespace for feed/product/generate endpoints. |
+| `/products` page | New product browser UI. |
+| `/product-video` page | New template + generate UI. |
+| `013_create_product_feeds.sql` etc | New DB tables. |
+
+---
+
+## FFmpeg Composition Pattern for Image-Based Video
+
+This is the technical core of the new work. The `product_video_compositor.py` must produce a valid FFmpeg command that:
+
+1. Takes N image inputs (one per product image or scene)
+2. Loops each image for its allocated duration
+3. Applies Ken Burns (zoompan filter) per segment
+4. Applies xfade transitions between segments
+5. Composes with TTS audio and subtitle ASS filter
+6. Applies encoding preset params
+
+Example FFmpeg filterchain for a 2-image product video:
+
+```
+ffmpeg
+  -loop 1 -t 15 -i product_img_1.jpg
+  -loop 1 -t 15 -i product_img_2.jpg
+  -i tts_audio.mp3
+  -filter_complex "
+    [0:v]scale=1080:1920:force_original_aspect_ratio=increase,
+          crop=1080:1920,
+          zoompan=z='min(zoom+0.0015,1.5)':d=450:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v0];
+    [1:v]scale=1080:1920:force_original_aspect_ratio=increase,
+          crop=1080:1920,
+          zoompan=z='max(zoom-0.0015,1.0)':d=450:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920[v1];
+    [v0][v1]xfade=transition=fade:duration=0.5:offset=14.5[vmerged];
+    [vmerged]drawtext=text='Product Name':fontsize=60:x=(w-text_w)/2:y=h*0.7[vtxt];
+    [vtxt]ass=/tmp/subtitles.ass[vfinal]
+  "
+  -map [vfinal] -map 2:a
+  -c:v libx264 -crf 20 -preset medium
+  -c:a aac -b:a 192k
+  output.mp4
 ```
 
-**api_costs** (optional: track costs per profile)
-```sql
-ALTER TABLE api_costs
-ADD COLUMN profile_id UUID REFERENCES profiles(id) ON DELETE SET NULL;
+The `zoompan` filter parameters are template-configurable (zoom in vs zoom out, speed, direction). Text overlay positions and sizes are template-configurable. Xfade transition type is template-configurable.
 
-CREATE INDEX idx_costs_profile ON api_costs(profile_id);
+**Important constraint:** `zoompan` is CPU-intensive on 1080x1920 portrait video. For a 30-second video with 2-3 images, expect 30-90 seconds of processing on a typical dev machine. This is acceptable (existing assembly render takes similar time).
+
+---
+
+## Frontend Page Architecture
+
+### /products Page Structure
+
+```
+ProductsPage
+├── FeedConfigPanel
+│   ├── FeedUrlInput
+│   ├── SyncButton → POST /products/feeds/sync (shows progress)
+│   └── FeedStatus (last synced, product count)
+├── ProductFilterBar
+│   ├── SearchInput
+│   ├── OnSaleFilter (checkbox)
+│   ├── CategoryFilter (select, from product_type values)
+│   └── SortSelect
+├── ProductGrid
+│   └── ProductCard[] (image, name, price/sale, select checkbox)
+└── SelectionActionBar (shown when products selected)
+    ├── SelectedCount
+    └── GenerateVideoButton → navigates to /product-video?products=id1,id2
 ```
 
-### Component Boundaries
+### /product-video Page Structure
 
-| Component | Responsibility | Communicates With | Profile Context |
-|-----------|---------------|-------------------|-----------------|
-| ProfileProvider (Frontend) | Manage selected profile state, provide context to child components | All authenticated pages, API client | Stores `selectedProfileId` in React Context |
-| ProfileSelector (Frontend) | UI for switching profiles | ProfileProvider, Supabase profiles table | Reads user's profiles, updates context |
-| Profile Middleware (Backend) | Extract/validate profile_id from requests | All API routes requiring profile isolation | Adds `profile_id` to request state |
-| Profile Service (Backend) | CRUD for profiles, validate ownership | Profile routes, other services | Returns profiles for user_id |
-| RLS Policies (Database) | Enforce data isolation at DB level | All tables with profile_id | Filters rows by `profile_id` |
-
-### Data Flow
-
-#### Profile Selection Flow (Frontend)
-
-```typescript
-User logs in
-  → AuthProvider fetches user.id
-  → ProfileProvider queries profiles where user_id = auth.uid()
-  → If user has profiles:
-      → Load last_selected_profile from localStorage
-      → Or default to profile where is_default = true
-      → Set selectedProfile in context
-  → If no profiles exist:
-      → Create default profile automatically
-      → Set as selected
-
-User switches profile via ProfileSelector
-  → ProfileSelector updates ProfileProvider.setSelectedProfile(newProfileId)
-  → Context re-renders all consumers
-  → Save selectedProfileId to localStorage
-  → API calls now include new profile_id
+```
+ProductVideoPage
+├── SelectedProductsSummary (from query params)
+├── TemplateSelector
+│   └── TemplateCard[] (Product Spotlight / Sale Banner / Collection)
+├── SettingsPanel
+│   ├── DurationSlider (15-60s)
+│   ├── VoiceoverModeToggle (quick/ai)
+│   ├── TTSProviderSelector (reuse existing provider-selector component)
+│   ├── AIProviderSelector (gemini/claude, only visible when ai mode)
+│   └── VariantCountSelect (1-3, batch mode only)
+├── GenerateButton → POST /products/generate → returns job_id
+└── ProgressPanel (same useJobPolling hook as Pipeline page)
+    └── on complete: link to /library
 ```
 
-#### API Request Flow (Backend)
+---
+
+## Architectural Patterns to Follow
+
+### Pattern 1: Background Task with Immediate Job ID Return
+
+**What:** Endpoint creates job record, starts BackgroundTask, returns job_id immediately.
+**When:** All product video generation endpoints. Processing takes 10-120 seconds.
+**Established by:** library_routes.py, assembly_routes.py, pipeline_routes.py
 
 ```python
-# Without profile isolation (current)
-@router.get("/library/projects")
-async def get_projects(user: User = Depends(get_current_user)):
-    # RLS filters by user_id only
-    projects = supabase.table("editai_projects").select("*").execute()
-    return projects
-
-# With profile isolation (new)
-@router.get("/library/projects")
-async def get_projects(
-    profile_id: str = Depends(get_current_profile),
-    user: User = Depends(get_current_user)
+@router.post("/generate")
+async def generate_product_video(
+    request: ProductVideoRequest,
+    background_tasks: BackgroundTasks,
+    profile: ProfileContext = Depends(get_profile_context)
 ):
-    # RLS filters by both user_id AND profile_id
-    projects = supabase.table("editai_projects") \
-        .select("*") \
-        .eq("profile_id", profile_id) \
-        .execute()
-    return projects
+    job_id = str(uuid.uuid4())
+    _product_jobs[job_id] = {"status": "queued", "progress": 0}
+    background_tasks.add_task(
+        _generate_product_video_task,
+        job_id, request, profile.profile_id
+    )
+    return {"job_id": job_id}
 ```
 
-#### Profile Context Dependency
+### Pattern 2: In-Memory Job Progress Dict
 
-```python
-# app/api/dependencies.py (new file)
-from fastapi import Depends, Header, HTTPException
-from typing import Optional
+**What:** Module-level dict `_product_jobs: Dict[str, dict]` for progress tracking.
+**When:** All v5 product video generation jobs.
+**Established by:** `_assembly_jobs` in assembly_routes.py, `_pipelines` in pipeline_routes.py, `_generation_progress` in library_routes.py
 
-async def get_current_profile(
-    x_profile_id: Optional[str] = Header(None),
-    user: User = Depends(get_current_user)
-) -> str:
-    """
-    Extract and validate profile_id from request headers.
-    Ensures user owns this profile.
-    """
-    if not x_profile_id:
-        raise HTTPException(
-            status_code=400,
-            detail="X-Profile-Id header required"
-        )
+Note: This is acknowledged tech debt (lost on restart), consistent with existing approach for this single-user personal-use tool.
 
-    # Verify user owns this profile
-    supabase = get_supabase()
-    profile = supabase.table("profiles") \
-        .select("id") \
-        .eq("id", x_profile_id) \
-        .eq("user_id", user.id) \
-        .single() \
-        .execute()
+### Pattern 3: Lazy Supabase Client Singleton
 
-    if not profile.data:
-        raise HTTPException(
-            status_code=403,
-            detail="Profile not found or access denied"
-        )
+**What:** Module-level `_supabase_client = None` with `get_supabase()` factory.
+**When:** All new routes and services needing DB access.
+**Established by:** Every existing router (copy the same 15-line pattern).
 
-    return x_profile_id
-```
+### Pattern 4: Profile-Scoped All DB Operations
 
-## Patterns to Follow
+**What:** Every DB query includes `.eq("profile_id", profile.profile_id)`.
+**When:** All feed, product, and generation operations.
+**Established by:** library_routes.py, assembly_routes.py
 
-### Pattern 1: Profile-Aware API Client (Frontend)
+### Pattern 5: Form String → Bool Coercion (for multipart endpoints)
 
-**What:** Inject profile_id into all API requests automatically via context.
+**What:** `generate_audio: str = Form(default="true")` + `.lower() in ("true", "1", "yes")`.
+**When:** Any product endpoint accepting multipart form data.
+**Established by:** routes.py video upload endpoint.
 
-**When:** All authenticated API calls that touch profile-scoped data.
-
-**Example:**
-```typescript
-// frontend/src/lib/api.ts
-import { useProfile } from '@/contexts/ProfileContext';
-
-export const useApiWithProfile = () => {
-  const { selectedProfileId } = useProfile();
-
-  const apiPost = async (endpoint: string, data: any) => {
-    return fetch(`/api/v1${endpoint}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Profile-Id': selectedProfileId,  // Inject profile context
-      },
-      body: JSON.stringify(data),
-    });
-  };
-
-  return { apiPost, apiGet: /* similar */ };
-};
-```
-
-### Pattern 2: RLS with Subquery Caching (Database)
-
-**What:** Use `(SELECT auth.uid())` wrapper for 94% performance improvement.
-
-**When:** All RLS policies on profile-scoped tables.
-
-**Example:**
-```sql
--- Projects table RLS
-CREATE POLICY "Users can view projects in owned profiles"
-ON editai_projects FOR SELECT
-USING (
-  profile_id IN (
-    SELECT id FROM profiles
-    WHERE user_id = (SELECT auth.uid())
-  )
-);
-
--- Clips table RLS (inherit from project)
-CREATE POLICY "Users can view clips in owned profiles"
-ON editai_clips FOR SELECT
-USING (
-  EXISTS (
-    SELECT 1 FROM editai_projects p
-    JOIN profiles pr ON pr.id = p.profile_id
-    WHERE p.id = editai_clips.project_id
-    AND pr.user_id = (SELECT auth.uid())
-  )
-);
-```
-
-### Pattern 3: Profile Context Provider (Frontend)
-
-**What:** React Context providing profile state to all components.
-
-**When:** Wrap all authenticated pages.
-
-**Example:**
-```typescript
-// frontend/src/contexts/ProfileContext.tsx
-import { createContext, useContext, useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
-
-interface Profile {
-  id: string;
-  name: string;
-  is_default: boolean;
-}
-
-interface ProfileContextType {
-  profiles: Profile[];
-  selectedProfileId: string | null;
-  selectProfile: (profileId: string) => void;
-  loading: boolean;
-}
-
-const ProfileContext = createContext<ProfileContextType>(null!);
-
-export const ProfileProvider = ({ children }: { children: React.ReactNode }) => {
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    loadProfiles();
-  }, []);
-
-  const loadProfiles = async () => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .order('is_default', { ascending: false });
-
-    if (data && data.length > 0) {
-      setProfiles(data);
-
-      // Load last selected or default
-      const lastSelected = localStorage.getItem('selectedProfileId');
-      const selected = lastSelected || data.find(p => p.is_default)?.id || data[0].id;
-      setSelectedProfileId(selected);
-    }
-    setLoading(false);
-  };
-
-  const selectProfile = (profileId: string) => {
-    setSelectedProfileId(profileId);
-    localStorage.setItem('selectedProfileId', profileId);
-  };
-
-  return (
-    <ProfileContext.Provider value={{ profiles, selectedProfileId, selectProfile, loading }}>
-      {children}
-    </ProfileContext.Provider>
-  );
-};
-
-export const useProfile = () => useContext(ProfileContext);
-```
-
-### Pattern 4: Graceful Migration (Database)
-
-**What:** Add profile_id as nullable first, backfill, then make non-null.
-
-**When:** Migrating existing multi-user data to profile isolation.
-
-**Example:**
-```sql
--- Step 1: Add nullable profile_id column
-ALTER TABLE editai_projects
-ADD COLUMN profile_id UUID REFERENCES profiles(id);
-
--- Step 2: Create default profile for each existing user
-INSERT INTO profiles (user_id, name, is_default)
-SELECT DISTINCT user_id, 'Default Profile', true
-FROM editai_projects
-WHERE user_id IS NOT NULL
-ON CONFLICT DO NOTHING;
-
--- Step 3: Backfill projects with default profile
-UPDATE editai_projects p
-SET profile_id = (
-  SELECT pr.id FROM profiles pr
-  WHERE pr.user_id = p.user_id
-  AND pr.is_default = true
-  LIMIT 1
-)
-WHERE profile_id IS NULL;
-
--- Step 4: Make profile_id non-null (only after backfill verified)
--- ALTER TABLE editai_projects ALTER COLUMN profile_id SET NOT NULL;
-```
+---
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Profile ID in URL Path
+### Anti-Pattern 1: Blocking Feed Sync in Request Handler
 
-**What:** Putting profile_id in REST URL like `/api/v1/profiles/{profile_id}/projects`.
+**What:** Fetching and parsing a 9,987-product XML feed synchronously in the request.
+**Why bad:** A 10k-product feed can be several MB and take 5-30 seconds. The HTTP request will timeout in production. Even in development, the frontend will appear frozen.
+**Instead:** Run feed sync as a BackgroundTask. Return a `sync_job_id` immediately. Poll for completion. For v5 this is less critical (personal use, no timeout) but the pattern should be consistent.
 
-**Why bad:**
-- Verbose routing
-- Requires path parameter extraction in every route
-- Harder to compose middleware
-- No consistency with other context (user_id not in path)
+### Anti-Pattern 2: Storing Images in Supabase Storage
 
-**Instead:** Use request header `X-Profile-Id` which middleware can extract uniformly.
+**What:** Uploading all product images to Supabase Storage before rendering.
+**Why bad:** Unnecessary latency, storage costs, and complexity for a local-use tool. Product images are downloaded just-in-time, used for rendering, then the rendered MP4 is the only artifact that needs persistence.
+**Instead:** Download images to `temp/{profile_id}/product_{id}/` directory before rendering. Clean up after job completes. Only the final MP4 path is stored in the DB.
 
-### Anti-Pattern 2: Client-Side Only Filtering
+### Anti-Pattern 3: Single Monolithic FFmpeg Command for Multi-Product Batch
 
-**What:** Fetching all user's data and filtering by profile in frontend.
+**What:** Attempting one FFmpeg command that generates all N videos in a batch.
+**Why bad:** One failure aborts all. Progress is all-or-nothing. Complex to build.
+**Instead:** Generate each product video independently and sequentially (or in a small async pool). Track progress per video. The batch job aggregates individual job results.
 
-**Why bad:**
-- Security risk: user sees other profiles' data momentarily
-- Performance: fetching unnecessary data
-- RLS bypassed: defeats database-level security
+### Anti-Pattern 4: Creating a New Render Stack Separate from Existing
 
-**Instead:** Always filter by profile_id at database level via RLS + explicit queries.
+**What:** Building a fully independent image-to-video pipeline that ignores existing `encoding_presets`, `audio_normalizer`, `subtitle_styler`.
+**Why bad:** Duplicates quality settings, creates divergence between script-first and product-first output quality. Two places to update when encoding params change.
+**Instead:** `product_video_compositor.py` explicitly calls `get_preset(platform)`, `measure_loudness`, `build_loudnorm_filter`, and `build_subtitle_filter` from their respective services. New code is only the image composition filterchain (zoompan, xfade, drawtext).
 
-### Anti-Pattern 3: Global Postiz Config
+### Anti-Pattern 5: Hardcoding Template Logic in the Route Handler
 
-**What:** Keeping Postiz API credentials in environment variables only.
+**What:** Template rendering logic (Ken Burns params, text positions) inside the route function.
+**Why bad:** Routes should be thin. Makes templates impossible to unit test. Couples transport to business logic.
+**Instead:** `product_video_compositor.py` owns all composition logic. `product_routes.py` only handles request/response, job creation, and task dispatch.
 
-**Why bad:**
-- Can't have different platform accounts per profile
-- Can't override settings for specific stores
-- Violates profile isolation principle
+---
 
-**Instead:** Store per-profile Postiz integration IDs in profiles table, allowing different platform selections per profile.
+## Build Order and Dependencies
 
-### Anti-Pattern 4: Unauthenticated Profile Access
+Phase order is driven by hard dependencies: DB must exist before routes use it, routes must exist before frontend calls them.
 
-**What:** Allowing RLS policies to evaluate for `anon` role.
+```
+Phase 1: Database Foundation
+  013_create_product_feeds.sql
+  014_create_products.sql
+  (015_create_product_templates.sql — optional, can use hardcoded presets)
+  → Enables: all subsequent phases
 
-**Why bad:**
-- Performance: policies run unnecessarily for public endpoints
-- Security: exposes policy logic to unauthenticated users
+Phase 2: Feed Parser Service
+  app/services/feed_parser.py
+  → Parses Google Shopping XML, upserts to products table
+  → Enables: Phase 3 (routes need parser), Phase 4 (compositor needs product data)
 
-**Instead:** Explicitly scope policies with `TO authenticated` role.
+Phase 3: Product API Routes (feed sync + product listing only)
+  app/api/product_routes.py (partial: /feeds/sync + /products endpoints)
+  → Enables: Phase 5 (frontend can browse products)
 
-```sql
--- Bad
-CREATE POLICY "profile_policy" ON profiles FOR SELECT
-USING (user_id = auth.uid());
+Phase 4: Image Fetcher + Video Compositor
+  app/services/image_fetcher.py
+  app/services/product_video_compositor.py
+  → Enables: Phase 3 completion (generate endpoint), Phase 6 (end-to-end testing)
 
--- Good
-CREATE POLICY "profile_policy" ON profiles FOR SELECT
-TO authenticated
-USING ((SELECT auth.uid()) = user_id);
+Phase 5: Frontend Product Browser
+  frontend/src/app/products/page.tsx
+  → Depends on: Phase 3 (feed sync + listing endpoints)
+  → Enables: UX validation before video generation is built
+
+Phase 6: Product Video Generator Route + Frontend
+  app/api/product_routes.py (complete: /generate + /generate/{job_id})
+  frontend/src/app/product-video/page.tsx
+  → Depends on: Phases 2-4 (all services must exist)
+  → Enables: End-to-end product → video generation
 ```
 
-## Scalability Considerations
+---
 
-| Concern | At 2 profiles (current need) | At 10 profiles per user | At 100+ profiles per user |
-|---------|------------------------------|------------------------|---------------------------|
-| RLS Performance | Negligible overhead with indexes | <10ms query overhead | May need materialized views or denormalization |
-| Profile Switching | Instant (React context update) | Instant | Instant |
-| Data Migration | Manual backfill acceptable | Automated migration required | Background job with progress tracking |
-| Storage | Shared tables optimal | Shared tables optimal | Consider schema-per-tenant if isolation critical |
-| API Header Overhead | ~50 bytes per request | ~50 bytes per request | Same (UUID is fixed size) |
+## Integration Points Summary
 
-## Frontend Routing Implications
+| Boundary | Communication Method | Direction | Notes |
+|----------|---------------------|-----------|-------|
+| product_routes ↔ feed_parser | Direct function call | sync (or async) | Feed may be large; consider async httpx fetch |
+| product_routes ↔ product_video_compositor | BackgroundTask function call | async background | Job ID returned immediately |
+| product_video_compositor ↔ encoding_presets | Direct import, function call | sync | `get_preset(platform).to_ffmpeg_params()` |
+| product_video_compositor ↔ audio_normalizer | Direct import, function call | sync | `measure_loudness()` then `build_loudnorm_filter()` |
+| product_video_compositor ↔ subtitle_styler | Direct import, function call | sync | `build_subtitle_filter(config)` |
+| product_video_compositor ↔ elevenlabs_tts / edge_tts | Direct import, async call | async | `generate_audio_with_timestamps()` |
+| product_video_compositor ↔ tts_subtitle_generator | Direct import, function call | sync | `generate_srt_from_timestamps(timestamps)` |
+| product_video_compositor ↔ script_generator | Direct import, method call | sync | Only in AI voiceover mode |
+| product_video_compositor ↔ FFmpeg | subprocess.run | sync | Same as all existing render services |
+| product_routes ↔ Supabase | supabase-py client | async | Same lazy-singleton pattern |
+| product_video_compositor ↔ editai_clips | Supabase upsert | sync | Stores final clip in existing clips table |
+| Frontend /products ↔ product_routes | REST HTTP via api.ts | async | apiGet/apiPost same as all existing pages |
+| Frontend /product-video ↔ product_routes | REST HTTP via api.ts + useJobPolling | async | Polling same as Pipeline page pattern |
+| product jobs ↔ /library page | editai_clips table | indirect | Clips appear in library automatically after generation |
 
-### Profile Selector Placement
+---
 
-**Location:** Navbar, visible on all authenticated pages.
+## Confidence Assessment
 
-**Behavior:**
-- Shows current profile name
-- Dropdown lists all user's profiles
-- Switching immediately updates context
-- No page reload needed (SPA behavior)
+| Area | Confidence | Basis |
+|------|------------|-------|
+| Integration points with existing codebase | HIGH | Examined all router files, services, main.py directly |
+| DB schema for feeds/products | HIGH | Follows established migration patterns exactly |
+| FFmpeg zoompan + xfade filterchain | MEDIUM | Patterns are documented; exact parameter tuning requires testing |
+| Google Shopping XML field names | HIGH | Google Shopping spec is stable and well-documented |
+| Image scraping from product pages | LOW | Site-specific, may require per-site rules, robots.txt compliance |
+| Render performance (zoompan at 1080p) | MEDIUM | Known to be CPU-intensive; exact timing needs measurement |
 
-### URL Structure (No Change Needed)
-
-**Current:** `/library`, `/segments`, `/usage`
-
-**After profiles:** Same URLs, context determines which profile's data loads.
-
-**Why:** Profile is request context, not routing context. Simpler than `/profiles/{id}/library`.
-
-### Page-Level Profile Guards
-
-```typescript
-// frontend/src/app/library/page.tsx
-'use client';
-
-import { useProfile } from '@/contexts/ProfileContext';
-
-export default function LibraryPage() {
-  const { selectedProfileId, loading } = useProfile();
-
-  if (loading) return <LoadingSpinner />;
-  if (!selectedProfileId) return <CreateProfilePrompt />;
-
-  // Normal page render with profile context
-  return <LibraryView profileId={selectedProfileId} />;
-}
-```
-
-## Build Order Dependencies
-
-### Phase 1: Database Foundation
-1. Create `profiles` table with RLS
-2. Add `profile_id` to `editai_projects` (nullable)
-3. Create default profiles for existing users
-4. Backfill `profile_id` in projects
-5. Create RLS policies for profile isolation
-6. Add indexes on `(user_id, profile_id)`
-
-**Blocker for:** All other phases. Must complete before API changes.
-
-### Phase 2: Backend API Layer
-1. Create `app/api/dependencies.py` with `get_current_profile()`
-2. Create `app/api/profile_routes.py` for CRUD
-3. Update existing routes to accept profile_id dependency
-4. Update Postiz service to use profile-specific configs
-5. Update TTS services to use profile voice presets
-
-**Depends on:** Phase 1 (database schema must exist)
-**Blocker for:** Phase 3 (frontend needs API endpoints)
-
-### Phase 3: Frontend Context & UI
-1. Create `ProfileContext` provider
-2. Wrap authenticated pages with `ProfileProvider`
-3. Create `ProfileSelector` component in navbar
-4. Update API client to inject `X-Profile-Id` header
-5. Add profile creation/editing UI
-
-**Depends on:** Phase 2 (API routes must exist)
-**Blocker for:** Phase 4 (migration needs UI)
-
-### Phase 4: Data Migration & Cleanup
-1. Verify all projects have `profile_id`
-2. Make `profile_id` non-null in projects table
-3. Add NOT NULL constraint to schema
-4. Remove any legacy code bypassing profiles
-5. Update documentation
-
-**Depends on:** Phase 3 (users must be able to manage profiles)
-
-## Performance Optimization Checklist
-
-- [x] Index `user_id` on profiles table
-- [x] Index `profile_id` on projects table
-- [x] Composite index `(user_id, profile_id)` on projects
-- [x] Wrap `auth.uid()` in SELECT for RLS
-- [x] Add `TO authenticated` to all RLS policies
-- [x] Use `.eq('profile_id', id)` in client queries for query planner hints
-- [ ] Monitor slow query log for missing indexes
-- [ ] Add materialized view for profile stats if needed
-
-## Security Considerations
-
-### RLS Defense-in-Depth
-
-1. **Database Level:** RLS policies prevent cross-profile data access
-2. **API Level:** `get_current_profile()` validates ownership
-3. **Frontend Level:** ProfileProvider ensures UI consistency
-
-**All three layers must be implemented.** RLS alone is insufficient if API accidentally bypasses it.
-
-### Profile Ownership Validation
-
-```python
-# ALWAYS validate user owns profile before operations
-async def validate_profile_ownership(profile_id: str, user_id: str) -> bool:
-    result = supabase.table("profiles") \
-        .select("id") \
-        .eq("id", profile_id) \
-        .eq("user_id", user_id) \
-        .execute()
-    return bool(result.data)
-```
-
-### Service Role Bypass Caution
-
-The Supabase service role key bypasses RLS. When using service role:
-- Only in backend code, never exposed to frontend
-- Explicitly filter by `profile_id` in queries
-- Log all service role operations for audit
+---
 
 ## Sources
 
-### High Confidence (Official Documentation)
+- Existing codebase: `app/main.py`, `app/api/assembly_routes.py`, `app/api/pipeline_routes.py`, `app/api/library_routes.py`, `app/services/assembly_service.py`, `app/services/encoding_presets.py`, `app/services/audio_normalizer.py`, `app/services/subtitle_styler.py`, `app/services/tts_subtitle_generator.py` — all read directly 2026-02-20
+- Existing DB migrations: `001_add_auth_and_rls.sql` through `012_add_missing_columns_for_500_fixes.sql` — schema patterns verified
+- FFmpeg zoompan filter: https://ffmpeg.org/ffmpeg-filters.html#zoompan (MEDIUM confidence — filter is stable but parameters require tuning)
+- FFmpeg xfade filter: https://ffmpeg.org/ffmpeg-filters.html#xfade (MEDIUM confidence — stable API)
+- Google Shopping XML feed specification: https://support.google.com/merchants/answer/7052112 (HIGH confidence — stable, well-documented)
 
-- [Supabase Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security) - RLS patterns and performance best practices
-- [Supabase RLS Performance Best Practices](https://supabase.com/docs/guides/troubleshooting/rls-performance-and-best-practices-Z5Jjwv) - Optimization techniques with benchmark data
-- [Next.js App Router](https://nextjs.org/docs/app) - App Router architecture and context patterns
+---
 
-### Medium Confidence (Community Best Practices)
-
-- [Multi-tenant Applications with RLS on Supabase](https://www.antstack.com/blog/multi-tenant-applications-with-rls-on-supabase-postgress/) - Multi-tenancy implementation patterns
-- [Building Multi-Panel Interfaces in Next.js Using Workspace-Based Architecture](https://medium.com/@ruhi.chandra14/building-multi-panel-interfaces-in-next-js-using-a-workspace-based-architecture-4209aefff972) - Workspace context management
-- [FastAPI Best Practices](https://github.com/zhanymkanov/fastapi-best-practices) - FastAPI architecture patterns
-- [Supabase Multi-Tenancy Simple and Fast](https://roughlywritten.substack.com/p/supabase-multi-tenancy-simple-and) - Practical implementation guide
-
-### Research Methodology
-
-- WebSearch queries verified with official documentation
-- Existing codebase patterns examined (auth.py, library_routes.py)
-- Current database schema reviewed (001_add_auth_and_rls.sql)
-- Performance benchmarks from Supabase official guides
+*Architecture research for: v5 Product Feed Video Generation integration*
+*Researched: 2026-02-20*

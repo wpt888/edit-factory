@@ -1,273 +1,239 @@
 # Project Research Summary
 
-**Project:** Edit Factory - Video Quality Enhancement Milestone v3
-**Domain:** Social Media Video Processing (FFmpeg-based)
-**Researched:** 2026-02-04
+**Project:** v5 Product Video Generator — Edit Factory
+**Domain:** E-commerce product feed to social media video generation
+**Researched:** 2026-02-20
 **Confidence:** HIGH
 
 ## Executive Summary
 
-This milestone enhances Edit Factory's existing FFmpeg-based video processing pipeline with professional-grade encoding optimizations, audio normalization, and perceptual quality scoring. Research confirms that the current baseline (CRF 23, fast preset, 128k audio, basic subtitles) is functional but leaves significant quality improvement on the table. Professional tools in 2026 differentiate through platform-specific presets, loudness normalization to -14 LUFS, enhanced video filters, and perceptual quality metrics.
+The v5 milestone adds a product-feed-driven video generation workflow to an existing, mature platform. The architectural approach is conservative and correct: the new feature integrates at three well-defined seams rather than building a parallel stack. Most of the render infrastructure — ElevenLabs/Edge TTS, subtitle generation, audio normalization, encoding presets, job tracking — is reused without modification. New code is concentrated in three focused areas: parsing Google Shopping XML feeds (lxml), image preparation and download (Pillow, httpx), and a new FFmpeg image-to-video compositor using zoompan Ken Burns effects, drawtext overlays, and xfade transitions. The data path is: feed URL → XML parse → products DB table → user selection → template choice → TTS voiceover → image composition → FFmpeg render → clip in existing library.
 
-The recommended approach leverages Edit Factory's existing GPU-accelerated FFmpeg architecture while adding: (1) platform-specific export presets for TikTok/Reels/YouTube Shorts with capped CRF encoding, (2) two-pass audio loudnorm targeting -14 LUFS for social media, (3) smart video enhancement filters (denoise/sharpen/color correction) applied selectively based on content analysis, and (4) improved segment scoring with blur detection and contrast analysis. These enhancements can be implemented incrementally without breaking existing functionality.
+The recommended MVP is deliberately narrow: feed parsing, a product browser UI, single-product video generation with Ken Burns + text overlays, and a sale banner template preset. This core workflow must be stable before batch processing is added. Batch generation is a thin layer on top of a working single-product flow — if single-product is reliable, batch is a queue wrapper; if single-product has bugs, batch multiplies those bugs by N. Competitors charge $39–$299/month for equivalent functionality; this system's only variable cost is ElevenLabs TTS for elaborate-mode voiceovers (~300 credits per 100-word script).
 
-The primary risks are **performance regression** from filter chains destroying GPU acceleration, **audio quality issues** from skipping two-pass normalization, and **platform rejection** from CRF/bitrate configuration errors. All three risks require careful architectural decisions in the foundation phase before implementation. The existing codebase already handles GPU/CPU filter separation correctly (line 680-684 in video_processor.py), providing a solid starting point. Critical success factor: maintain backward compatibility while introducing quality enhancements as opt-in features with smart defaults.
+The two categories of risk that can derail v5 are encoding correctness issues (Romanian diacritics in FFmpeg drawtext will corrupt product names silently, font path resolution on WSL is error-prone, and aspect ratio handling for mixed-orientation product images requires explicit planning) and performance traps at batch scale (zoompan Ken Burns is 10-100x slower than regular encoding, synchronous image downloads block the render pipeline, and a 9,987-product feed loaded naively into memory creates OOM pressure). Both categories are avoidable with well-documented patterns that must be established in Phase 1.
 
 ## Key Findings
 
 ### Recommended Stack
 
-Edit Factory's existing FFmpeg (libx264/h264_nvenc) + OpenCV stack requires minimal additions. The core enhancement is **configuration-driven encoding presets** rather than new dependencies. Only two new libraries are recommended: `scikit-image>=0.22.0` for advanced image quality analysis (blur/contrast detection) and optionally `ffmpeg-normalize>=1.28.0` as a CLI wrapper for audio loudnorm (though direct FFmpeg implementation is preferred for control).
+The stack adds four new Python libraries to the existing platform, all with HIGH confidence. `lxml` (6.0.2) for streaming XML feed parsing with namespace support — the Nortia.ro feed has ~9,987 products and must be parsed with iterparse + element clearing to avoid 200-500 MB memory spikes. `Pillow` (12.1.1) for static image preparation — resizing, format conversion (WebP to JPEG), and letterboxing before FFmpeg handles animation. `beautifulsoup4` (4.14.3) paired with the already-installed `httpx` for optional product image scraping from product page URLs. `fal-client` (0.13.1) for optional AI image generation via FLUX.1, using the `FAL_API_KEY` already in `.env.example`. All FFmpeg composition (Ken Burns, text overlays, crossfade transitions) is implemented via subprocess calls to the existing FFmpeg binary — no new video library is needed.
 
 **Core technologies:**
-- **FFmpeg libx264/h264_nvenc** (existing): Universal H.264 codec support — CRF 20-23 range for social media, capped with maxrate for platform compatibility
-- **FFmpeg loudnorm filter** (new): EBU R128 audio normalization — two-pass processing targeting -14 LUFS for TikTok/Reels/YouTube Shorts
-- **FFmpeg quality filters** (new): hqdn3d (denoise), unsharp (sharpen), eq (color correction) — CPU-based filters applied in correct order to avoid GPU pipeline breakage
-- **scikit-image** (new): Advanced quality metrics — `is_low_contrast()` and exposure analysis for segment scoring enhancement
-- **OpenCV Laplacian variance** (existing): Blur detection — lightweight perceptual quality metric (threshold: <100 = blurry, >500 = sharp)
+- `lxml` 6.0.2: Google Shopping XML feed parsing with namespace support — 2-10x faster than stdlib, full iterparse streaming
+- `Pillow` 12.1.1: Image resize, format conversion, letterboxing before FFmpeg input — WebP/AVIF support critical for e-commerce feeds
+- `beautifulsoup4` 4.14.3: Optional HTML scraping for extra product images — paired with existing `httpx`, no new HTTP library
+- `fal-client` 0.13.1: Optional FLUX.1 AI image generation — FAL_API_KEY already in env; feature-flagged, explicit opt-in only
+- FFmpeg `zoompan` filter: Ken Burns animation on product images — CPU-intensive, requires benchmarking and pre-scaling
+- FFmpeg `drawtext` + `textfile=`: Product name, price, CTA text overlays — textfile mode required for Romanian diacritics
+- Pexels API via `httpx`: Free stock video backgrounds — no new dependency, 200 req/hour free tier
+- Python dataclasses: Video template system — matches existing `encoding_presets.py` pattern, not Jinja2
 
-**Platform-specific encoding (2026 standards):**
-- Instagram Reels/TikTok: 1080x1920, CRF 23, maxrate 4000k, 192k audio, GOP 60 (2sec keyframes)
-- YouTube Shorts: 1080x1920, CRF 21, maxrate 12000k, 192k audio, GOP 60
-- All platforms: -14 LUFS loudness, yuv420p pixel format, H.264 high profile level 4.0
-
-**Dependencies to add:**
-```
-scikit-image>=0.22.0          # Quality analysis (blur, contrast)
-ffmpeg-normalize>=1.28.0      # Optional CLI wrapper (use direct FFmpeg preferred)
-```
+**New database tables:** `product_feeds`, `products`, `product_templates` (optional in v5) — 3 new migration files extending existing Supabase schema.
 
 ### Expected Features
 
-Professional video quality enhancement in 2026 has clear table stakes vs differentiators. Edit Factory already meets baseline expectations (1080x1920 format, subtitle customization, batch processing) but is missing critical professional features.
+**Must have (table stakes — v5 core):**
+- Google Shopping XML feed ingestion from URL — entry point for all automation
+- Product browser UI with search, on-sale filter, category filter — 9,987 products require pagination + filter
+- Ken Burns zoom/pan on product images — minimum visual motion standard for social video
+- Text overlays: product name, price, sale price (conditional), CTA — non-negotiable for product ads
+- Sale banner template preset — highest commercial value; validates the entire concept
+- Quick-mode TTS voiceover from template string (title + price + CTA) — wires to existing ElevenLabs/Edge TTS
+- Single product → single video → library output — core atomic workflow
 
-**Must have (table stakes):**
-- **Platform-specific export presets** — TikTok, Instagram Reels, YouTube Shorts have different optimal bitrates and platform algorithms favor different encoding parameters
-- **Audio loudness normalization** — Social platforms normalize to -14 LUFS; unnormalized audio sounds inconsistent and platforms auto-adjust badly
-- **Professional encoding settings** — CRF 18-22 with slower presets produce visibly better quality after platform re-compression (current CRF 23 is acceptable but not optimal)
-- **High-quality audio encoding** — 192k AAC minimum for professional sound (current 128k is functional but below pro standard)
+**Should have (add after v5 core validated):**
+- Batch generation (select N products → N videos) — queue wrapper over single-product flow; most impactful for campaign scale
+- AI-generated voiceover scripts (elaborate mode) — existing `script_generator` (Gemini/Claude) needs only a product-aware prompt
+- Template presets (Product Spotlight, Sale Banner, Collection) — 3 named Python dataclass configs
+- Per-profile template customization (colors, fonts, CTA text) — integrates with existing profile system
+- Auto-filter shortcuts for on-sale / category selection
 
-**Should have (competitive differentiators):**
-- **Video enhancement filters** — Denoise, sharpen, color correction improve user-generated phone footage quality (especially valuable for low-light content)
-- **Enhanced subtitle styling** — Shadow, glow, adaptive sizing bring Edit Factory closer to CapCut-style animated captions
-- **Perceptual quality scoring** — Blur detection and contrast analysis improve segment selection beyond motion-only scoring
-- **Platform-specific quality warnings** — Alert users when encoding settings may cause poor results after Instagram/TikTok compression (unique opportunity)
+**Defer (v6+):**
+- Multi-product collection video — different narrative architecture, higher complexity
+- Web scraping for extra product images — fragile, adds 2-10s per product; validate single-image quality first
+- Stock video backgrounds — different FFmpeg filter graph architecture, separate milestone
+- AI image generation in batch mode — cost risk ($0.04-0.08/image), strict per-product opt-in required
 
-**Defer (v2+):**
-- **Perceptual quality metrics (VMAF/SSIM)** — Objective quality measurement valuable but requires complex FFmpeg build with libvmaf
-- **AI-enhanced subtitle effects** — CapCut-style word highlighting with animations (high complexity, requires word-level timing from TTS)
-- **Audio enhancement suite** — Noise reduction, EQ, compression for voice clarity (overlaps with existing TTS quality)
-- **Multi-pass encoding** — Two-pass bitrate encoding for strict file size limits (social media works fine with capped CRF)
-
-**Anti-features (explicitly avoid):**
-- **Real-time preview rendering** — Complex infrastructure, adds latency, preview quality never matches final output (provide accurate time estimates instead)
-- **Automatic video upscaling** — AI upscaling is compute-intensive and produces artifacts (use efficient FFmpeg scale only)
-- **Advanced color grading** — Professional LUTs/curves/scopes way beyond scope for automated tool (stick to basic brightness/contrast/saturation)
+**Anti-features to avoid:**
+- Real-time video preview before render (FFmpeg render IS the preview at this scale)
+- Automatic social publishing after batch (bypasses human review; Postiz already handles manual publishing)
+- Background music (music rights, complicates audio normalization)
+- Per-video customization UI inside batch (defeats batch purpose; defeats scale)
 
 ### Architecture Approach
 
-The research confirms that Edit Factory's existing architecture (subprocess-based FFmpeg with GPU acceleration fallback) is sound and follows industry best practices. The quality enhancement features integrate cleanly into the existing three-layer pattern: Frontend context (Next.js) → API layer (FastAPI) → Service layer (FFmpeg execution). The critical architectural constraint is preserving GPU/CPU filter separation to avoid performance destruction.
+The new system integrates as a single new router (`product_routes.py`) alongside existing routers, three new services (`feed_parser`, `image_fetcher`, `product_video_compositor`), two new frontend pages (`/products`, `/product-video`), and three new database migrations. The `product_video_compositor` is the architectural core — it builds FFmpeg filterchains for image-based video (scale+pad → zoompan → xfade → drawtext → ass subtitles) while calling the same `encoding_presets`, `audio_normalizer`, `subtitle_styler`, and `tts_subtitle_generator` services used by the existing script-first pipeline. Rendered videos are stored as rows in the existing `editai_clips` table and appear automatically in the `/library` page with no changes to library_routes.
 
 **Major components:**
-
-1. **Platform Preset Manager** (new, app/config.py) — Provides encoding configuration dictionaries per platform (TikTok, Reels, YouTube Shorts) with CRF, maxrate, bufsize, audio bitrate, GOP size calculated from FPS. Replaces hardcoded encoding parameters with data-driven presets.
-
-2. **Quality Filter Chain Builder** (new, video_processor.py) — Constructs FFmpeg filter strings in correct order: hwdownload (GPU→CPU) → denoise (hqdn3d) → sharpen (unsharp) → color correction (eq) → subtitles. Enforces CPU-before-GPU separation to maintain hardware acceleration benefits.
-
-3. **Audio Normalization Service** (new, video_processor.py) — Two-pass loudnorm implementation: (1) analyze audio to get measured_I/LRA/TP values, (2) apply linear normalization with measured parameters. Operates on concatenated segments, not per-segment, for consistent loudness.
-
-4. **Enhanced Segment Scorer** (enhanced, video_processor.py) — Extends existing VideoSegment dataclass with blur_score (Laplacian variance) and contrast_score (std deviation). Updated combined_score formula: motion 40% + variance 20% + blur 20% + contrast 15% + brightness balance 5% (reduced motion weight from 60% to account for aesthetic quality).
-
-5. **FFmpeg Subprocess Manager** (enhanced, video_processor.py) — Stream FFmpeg output to temp files instead of memory buffering for long operations (>30sec) to prevent memory leaks. Add garbage collection triggers every 10 segments in batch processing.
-
-**Critical pattern preservation:**
-- Existing code CORRECTLY avoids hwaccel when adding subtitles (lines 944-965) because subtitles filter is CPU-only — this pattern must be preserved and documented
-- GPU filter chains require explicit hwdownload/hwupload_cuda calls (lines 680-684) — quality filters must follow this pattern
-- Segment-based processing with project-level threading locks prevents race conditions — maintain this for quality-enhanced variants
+1. `feed_parser.py` — Google Shopping XML iterparse, namespace handling, product normalization, Supabase upsert
+2. `image_fetcher.py` — Parallel image downloads (ThreadPoolExecutor, max 5 workers), disk cache, optional page scraping, fallback placeholder generation
+3. `product_video_compositor.py` — FFmpeg filterchain builder: scale+pad (aspect ratio), zoompan (Ken Burns), xfade (transitions), drawtext via textfile (overlays), audio + subtitle integration, encoding preset application
+4. `product_routes.py` — Thin router: feed CRUD, product listing with pagination/filters, job dispatch, polling endpoint
+5. `/products` page — Feed config panel, filter bar, paginated product grid, batch selection with sticky action bar
+6. `/product-video` page — Template selector (3 preset cards), settings panel, generation trigger, progress polling via existing `useJobPolling` hook
 
 ### Critical Pitfalls
 
-Research identified five critical pitfalls that will cause rewrites or major issues if not addressed architecturally in Phase 1.
+1. **Romanian diacritics silently corrupted in FFmpeg drawtext** — Use `textfile=` (not inline `text=`) for all text overlays; bundle a Noto Sans or DejaVu Sans font with Romanian comma-below support; install `fonts-noto` in WSL. Establish this pattern in Phase 1 before any text overlay is built.
 
-1. **Filter Chain Order Destroys Performance** — Incorrect ordering forces multiple CPU↔GPU transfers, causing 3-10x processing time increase. **Prevention:** Group filters by execution domain (GPU vs CPU), apply order decode → GPU filters → hwdownload → CPU filters (denoise/sharpen) → subtitles (last) → encode. Test that GPU encoding still works after filter additions.
+2. **XML feed loaded entirely into memory** — Use `lxml.etree.iterparse()` with explicit `elem.clear()` + parent removal after each item. A 10k-product feed becomes 200-500 MB as a Python object tree, creating OOM pressure during concurrent FFmpeg renders. Establish streaming pattern in Phase 1.
 
-2. **Audio Normalization Requires Two-Pass (But Developers Skip It)** — Single-pass loudnorm causes dynamic volume fluctuations that sound jarring with TTS. **Prevention:** Always use two-pass: analyze to get measured parameters, then apply linear normalization. Normalize AFTER segment concatenation (not per-segment) for consistency across variants.
+3. **Ken Burns (zoompan) is 10-100x slower than regular encoding** — Benchmark zoompan against a simple `scale+crop` alternative before committing as default. Pre-scale images to exact output resolution before zoompan. Set `-threads 0`. Offer a "simple" mode for batch speed. Address in Phase 2 before batch is built.
 
-3. **CRF vs Bitrate Confusion Breaks Platform Compatibility** — Using both CRF and bitrate constraints simultaneously produces suboptimal results or platform rejection. **Prevention:** Use "capped CRF" strategy: `-crf 23 -maxrate 4000k -bufsize 8000k` provides quality priority with safety ceiling. Never mix CRF with `-b:v` bitrate target.
+4. **Product images have unpredictable aspect ratios** — Feed images are mostly 1:1 square but include landscape and portrait variants. Use `scale=W:H:force_original_aspect_ratio=decrease` + `pad=W:H:(ow-iw)/2:(oh-ih)/2` to preserve ratio with letterbox. Test with real Nortia.ro feed images in Phase 2.
 
-4. **Denoising Destroys Processing Time Budget** — nlmeans denoise filter can increase processing from 2 minutes to 30+ minutes per video. **Prevention:** Use fast hqdn3d filter by default (10-15% overhead), only offer nlmeans as opt-in "High Quality Mode". Apply denoising selectively based on noise level analysis, not to all content.
+5. **Batch job errors kill the entire batch** — Design per-product state tracking (`ProductJobState` dataclass with `pending/downloading/rendering/done/failed` statuses) from the start of Phase 3. Wrap each product render in try/except and continue on failure — never re-raise inside the batch loop.
 
-5. **Subtitle Rendering Breaks GPU Pipeline** — Subtitles filter is CPU-only and disables GPU acceleration if mixed with GPU filters. **Prevention:** Preserve Edit Factory's existing pattern of applying subtitles separately without hwaccel (current implementation is CORRECT). Subtitles must be the final processing step after all quality filters.
+6. **HTML tags in feed descriptions break TTS** — Product descriptions frequently contain `<br/>`, `<p>`, `&amp;`, `&nbsp;`. Always run `clean_product_text()` (html.unescape + BeautifulSoup get_text + whitespace normalization + 500-char truncation) on all text fields at parse time, not at use time.
+
+7. **WSL font path resolution breaks drawtext** — Use Linux font paths (`/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf`) not Windows paths (`C:\Windows\Fonts\`). Windows paths in drawtext require colon escaping that conflicts with FFmpeg filter option syntax. Install `fonts-noto` in WSL explicitly.
 
 ## Implications for Roadmap
 
-Based on research findings, the milestone naturally divides into three phases: (1) encoding foundation with platform presets and audio normalization, (2) quality enhancement filters with smart application logic, and (3) perceptual scoring improvements. This ordering follows dependency chains from ARCHITECTURE.md and avoids critical pitfalls from PITFALLS.md.
+Based on research, the build order is strictly dependency-driven. The feed parser is a hard prerequisite for everything. The single-product video flow must be validated before batch is built. Text overlay correctness (diacritics, escaping) must be established before any template work. Architecture research provides an explicit 6-phase build sequence.
 
-### Phase 1: Professional Encoding Foundation
-**Rationale:** Platform presets and audio normalization are table stakes for professional output (FEATURES.md) and have minimal implementation complexity while delivering immediate quality improvements. These foundational changes establish encoding patterns that Phase 2 quality filters will build upon.
+### Phase 1: Foundation — Feed Parser and Data Pipeline
 
-**Delivers:**
-- Platform-specific export presets (TikTok, Reels, YouTube Shorts) with correct CRF/maxrate/GOP settings
-- Two-pass audio loudnorm targeting -14 LUFS for social media
-- Encoding configuration system in app/config.py
-- Updated video_processor.py encoding methods with preset support
+**Rationale:** Feed parsing gates the entire feature. Database tables must exist before routes, routes before frontend. Text normalization and encoding correctness must be established first — retrofitting these after the compositor is built is painful. Per research, this phase must address Pitfalls 1 (diacritics/textfile), 2 (streaming XML), 6 (HTML in descriptions), 7 (product text sanitization), 9 (missing image fallback), 12 (WSL font path), and 13 (XML namespace parsing).
 
-**Addresses:**
-- Table stakes: Platform-specific export presets, audio loudness normalization, professional encoding settings
-- Missing features: 192k audio bitrate, adaptive GOP size based on FPS
+**Delivers:** Working Google Shopping XML parser with streaming iterparse; `product_feeds` + `products` Supabase tables (migrations 013, 014); `clean_product_text()` normalization utility; parallel image downloader with fallback placeholder; font resolution utility for WSL; confirmed `textfile=` pattern for drawtext.
 
-**Avoids:**
-- Pitfall #3: CRF vs bitrate confusion (implements capped CRF strategy)
-- Pitfall #8: Missing platform keyframe intervals (calculates GOP from FPS)
+**Addresses:** XML feed ingestion (table stakes P1); image download infrastructure; product data normalization.
 
-**Stack elements:**
-- FFmpeg loudnorm filter (two-pass)
-- Platform preset configuration dictionaries
-- No new dependencies required
+**Avoids:** Memory spikes from full XML load; corrupted Romanian text in rendered videos; silent empty field parsing from namespace mishandling.
 
-**Implementation complexity:** LOW (parameter tuning + config additions)
-**Research needs:** SKIP — platform specs well-documented, FFmpeg loudnorm official docs sufficient
+**Research flag:** Standard patterns — skip research-phase. lxml iterparse, parallel httpx downloads, and Pillow image prep are all well-documented with HIGH-confidence sources.
 
-### Phase 2: Quality Enhancement Filters
-**Rationale:** After encoding foundation is solid, add optional quality filters (denoise/sharpen/color) that enhance user-generated content. These must be implemented with smart defaults to avoid pitfall #4 (performance destruction). Depends on Phase 1 establishing correct filter chain architecture.
+### Phase 2: Image-to-Video Compositor
 
-**Delivers:**
-- Filter chain builder with correct CPU/GPU separation
-- Smart denoise filter selection based on noise level analysis (hqdn3d default, nlmeans opt-in)
-- Conservative sharpening presets (unsharp 0.3-0.6 range to avoid halos)
-- Basic color correction (brightness/contrast/saturation adjustments)
-- Streaming FFmpeg output to prevent memory leaks
+**Rationale:** The core new technical work. Must be validated as a standalone component before it is called from routes or a batch. Ken Burns performance must be benchmarked here before batch multiplies the cost. Aspect ratio handling must be tested with real Nortia.ro feed images. Text overlay escaping for Romanian characters and % signs must be verified. Addresses Pitfalls 3 (image download timing), 4 (zoompan performance), 5 (aspect ratio), 10 (price % escaping).
 
-**Addresses:**
-- Differentiator: Video enhancement filters improve phone footage quality
-- Performance: Memory leak prevention for long operations
+**Delivers:** `product_video_compositor.py` service with Ken Burns filterchain, drawtext via textfile, xfade transitions, audio + subtitle integration, encoding preset application; `image_fetcher.py` with pre-download phase separated from render phase; Ken Burns vs simple-scale performance benchmark result; confirmed aspect ratio handling with real Nortia.ro feed images.
 
-**Avoids:**
-- Pitfall #1: Filter chain order destroys performance (enforces correct ordering)
-- Pitfall #4: Denoising destroys processing time (smart filter selection)
-- Pitfall #6: Sharpening creates halos (conservative defaults)
-- Pitfall #9: FFmpeg subprocess memory leaks (streaming output)
+**Uses:** lxml (feed data), Pillow (image prep), FFmpeg zoompan/drawtext/xfade, existing `encoding_presets`, `audio_normalizer`, `subtitle_styler`, `tts_subtitle_generator`, ElevenLabs/Edge TTS.
 
-**Stack elements:**
-- FFmpeg filters: hqdn3d, unsharp, eq
-- Noise level estimation (OpenCV)
-- Subprocess streaming output pattern
+**Implements:** `product_video_compositor.py` — the new architectural core.
 
-**Implementation complexity:** MEDIUM (filter chain logic + performance testing)
-**Research needs:** MODERATE — filter parameter tuning requires testing on sample content, performance benchmarking needed
+**Avoids:** zoompan performance trap at batch scale; aspect ratio distortion on square e-commerce images; % character corruption in overlay text.
 
-### Phase 3: Perceptual Quality Scoring
-**Rationale:** Improve segment selection algorithm to consider aesthetic quality beyond just motion. This builds on existing scoring system and integrates with Gemini AI analysis already present in codebase. Least critical for launch but high user-facing value.
+**Research flag:** Needs careful testing during execution — FFmpeg zoompan parameter tuning requires iteration against real images. Benchmark results will determine if simple-scale must be offered as batch fallback.
 
-**Delivers:**
-- Enhanced VideoSegment dataclass with blur_score and contrast_score fields
-- Blur detection using OpenCV Laplacian variance (threshold-based filtering)
-- Contrast analysis using std deviation (low-contrast segment rejection)
-- Updated scoring formula balancing motion/variance/quality/aesthetics
-- Integration with existing Gemini AI scoring
+### Phase 3: Product API Routes and Product Browser UI
 
-**Addresses:**
-- Differentiator: Perceptual quality metrics improve selection accuracy
-- Feature gap: Current motion-only scoring doesn't match platform aesthetics
+**Rationale:** With the compositor working, routes are straightforward thin wrappers following established patterns (BackgroundTask + immediate job_id return, lazy Supabase singleton, profile-scoped queries). The product browser UI is a net-new page but follows the same apiGet/apiPost pattern as existing pages. Feed sync must run as a BackgroundTask — a 10k-product feed can take 5-30 seconds.
 
-**Avoids:**
-- Pitfall #7: Scoring weights don't match platform aesthetics (balances motion with quality)
+**Delivers:** `product_routes.py` with /feeds/sync (BackgroundTask), /products (paginated + filtered), /generate, /generate/{job_id}; `/products` frontend page with feed config panel, filter bar (search, on-sale toggle, category dropdown), paginated product grid (50/page), batch selection sticky action bar.
 
-**Stack elements:**
-- scikit-image for advanced quality metrics
-- OpenCV Laplacian variance (existing)
-- Enhanced scoring algorithm
+**Addresses:** Product browser UI with search and filter (table stakes P1); job tracking (existing infrastructure reused); feed CRUD.
 
-**Implementation complexity:** MEDIUM (scoring algorithm changes + validation)
-**Research needs:** MODERATE — scoring weight tuning requires A/B testing with real content, platform aesthetic research ongoing
+**Avoids:** Blocking feed sync in request handler; showing all 9,987 products in a single scrollable list.
+
+**Research flag:** Standard patterns — existing router pattern (assembly_routes.py, pipeline_routes.py) is the direct template. No research-phase needed.
+
+### Phase 4: Single Product Video Generator UI and End-to-End Flow
+
+**Rationale:** Connect the compositor (Phase 2) to the routes (Phase 3) through a generation UI. This is the first end-to-end test: feed → browse → select → configure → generate → library. The `/product-video` page reuses the existing `useJobPolling` hook from the Pipeline page. This phase validates the full workflow before batch is introduced and constitutes the MVP milestone.
+
+**Delivers:** `/product-video` frontend page with template selector (3 preset cards), settings panel (duration 15-60s, voiceover mode quick/ai, TTS provider), generation trigger, progress polling; quick-mode TTS voiceover wired to existing ElevenLabs/Edge TTS factory; single product → library clip confirmed working end-to-end.
+
+**Addresses:** Ken Burns on product image (P1); text overlays (P1); sale banner template preset (P1); quick-mode voiceover (P1); single product → library output (P1). This delivers the MVP.
+
+**Avoids:** Batch before single works; auto-publishing after generation; per-video customization UI in generation flow.
+
+**Research flag:** Standard patterns — useJobPolling hook and template selector are directly modeled on existing Pipeline page. No research-phase needed.
+
+### Phase 5: Batch Generation
+
+**Rationale:** Batch is only safe to build after Phase 4 validates the single-product flow end-to-end. Batch is architecturally a sequential loop over single-product generation with per-product state tracking. The per-product state model (ProductJobState dataclass) must be designed before any batch rendering code is written. Addresses Pitfall 8 (batch error isolation).
+
+**Delivers:** Batch job dispatch with per-product state tracking; progress grid UI (each product card shows queued/processing/done/failed); "Retry failed" button for partial batch recovery; estimated time + ElevenLabs credit preview before batch confirm; background processing with navigation freedom.
+
+**Addresses:** Batch generation (P2 — add after single-product validated); most impactful for campaign scale.
+
+**Avoids:** Batch error isolation failure (per-product try/except, never re-raise); all-or-nothing progress display; AI image generation default-on in batch (explicit opt-in only, Pitfall 11).
+
+**Research flag:** The per-product state model is new territory — the existing single-job pattern does not directly apply. Plan the BatchJob/ProductJobState data structures before writing any render loop code.
+
+### Phase 6: Template System and Profile Customization
+
+**Rationale:** Template presets and per-profile customization build on a working generation pipeline. Templates are Python dataclasses following the `encoding_presets` pattern — no new infrastructure. Profile customization extends the existing profile system. These are polish features that improve consistency across campaigns.
+
+**Delivers:** 3 named template presets as Python dataclasses (Product Spotlight, Sale Banner, Collection); per-profile settings (primary/accent color, font family, CTA text); optional `product_templates` Supabase table (migration 015); AI-generated voiceover scripts via existing `script_generator` in elaborate mode with a product-aware prompt.
+
+**Addresses:** Template presets (P2); per-profile customization (P2); AI voiceover scripts (P2).
+
+**Avoids:** Too many templates (Creatify's 370+ causes choice paralysis — 3 presets is the correct number per UX research).
+
+**Research flag:** Standard patterns — mirrors encoding_presets.py dataclass approach exactly. No research-phase needed.
 
 ### Phase Ordering Rationale
 
-- **Phase 1 before Phase 2:** Encoding presets must be established before adding filters because filter chains depend on knowing target platform constraints (GOP size, bitrate caps affect filter selection)
-- **Phase 2 before Phase 3:** Quality filters improve segment appearance, which then gets scored by Phase 3's enhanced algorithm (logical dependency)
-- **Phase 3 deferrable:** Existing motion-based scoring is functional; quality scoring is enhancement not blocker
-- **Subtitle improvements span phases:** Shadow/glow styling can be added in Phase 1 (low-hanging fruit), animated word highlighting deferred to v4+ (high complexity)
+- Feed parser is a hard prerequisite for every subsequent phase — it cannot be skipped or deferred.
+- Text encoding correctness (diacritics, textfile=, font path) must be established in Phase 1 because the compositor in Phase 2 inherits those foundations. Fixing encoding after the compositor is built means re-testing every code path.
+- The compositor (Phase 2) is isolated from the API layer (Phase 3) deliberately — this allows benchmarking and testing the FFmpeg filterchain without needing a working frontend.
+- Single-product end-to-end (Phase 4) before batch (Phase 5) is a hard rule from feature research: "Batch is single-product × N with a queue wrapper. Ship and validate single first."
+- Template system (Phase 6) is deliberately last — it enhances a working pipeline rather than enabling it.
 
 ### Research Flags
 
-Phases likely needing deeper research during planning:
-- **Phase 2:** Filter parameter tuning needs empirical testing on diverse content (low-light, high-motion, static beauty shots). Current research provides starting values but production tuning requires real user content analysis.
-- **Phase 3:** Scoring algorithm weights need A/B testing with platform performance data (which clips get better engagement). Academic research provides direction but Edit Factory-specific tuning needed.
+Phases needing careful testing or iteration during execution:
+- **Phase 2 (compositor):** FFmpeg zoompan parameter tuning requires real Nortia.ro feed images. Benchmark Ken Burns vs simple-scale before finalizing — if zoompan takes >30s per clip, offer simple-scale as batch default.
+- **Phase 5 (batch):** Per-product state model has no direct precedent in existing codebase. Design the BatchJob/ProductJobState data structures before writing any render loop code.
 
-Phases with standard patterns (skip research-phase):
-- **Phase 1:** Platform encoding specs are well-documented (official Instagram/TikTok/YouTube docs), FFmpeg loudnorm is established standard with clear implementation guidance. Straightforward configuration task.
+Phases with standard, well-established patterns (no research-phase needed):
+- **Phase 1:** lxml iterparse, parallel httpx downloads, Pillow image prep — all HIGH-confidence, well-documented.
+- **Phase 3:** Follows existing router pattern (assembly_routes.py, pipeline_routes.py) directly.
+- **Phase 4:** Follows existing Pipeline page + useJobPolling pattern directly.
+- **Phase 6:** Follows existing encoding_presets.py dataclass pattern directly.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | **HIGH** | Official FFmpeg documentation + verified Python library compatibility. Platform specs from multiple 2026 sources cross-checked. Minimal new dependencies reduces risk. |
-| Features | **HIGH** | Table stakes vs differentiators clear from competitive analysis (CapCut, Descript, Premiere). Anti-features well-established through industry pitfalls. Feature priority validated with user-facing value. |
-| Architecture | **HIGH** | Existing Edit Factory patterns examined directly (video_processor.py lines verified). Proposed changes integrate cleanly without breaking existing functionality. GPU/CPU separation pattern already proven in codebase. |
-| Pitfalls | **HIGH** | Critical pitfalls verified through official docs + CVE database + codebase inspection. Performance numbers from benchmarked sources. Current code already avoids most pitfalls (subtitle handling, GOP settings). |
+| Stack | HIGH | All 4 new library versions verified on PyPI 2026-02-20; FFmpeg techniques confirmed with official docs and multiple community sources |
+| Features | HIGH (core), MEDIUM (visual sources), LOW (AI image gen) | Core feature set confirmed by competitor analysis and feature dependency mapping; web scraping reliability is site-specific; AI image generation cost and quality under load not tested |
+| Architecture | HIGH | Integration points verified by direct codebase inspection; existing migration patterns confirmed; FFmpeg filterchain patterns are MEDIUM (require parameter tuning with real images) |
+| Pitfalls | HIGH (FFmpeg/XML), MEDIUM (web scraping, AI costs) | FFmpeg escaping pitfalls confirmed from official docs; Romanian-specific issues confirmed from multiple sources; web scraping site behavior is speculative until tested against Nortia.ro |
 
-**Overall confidence:** **HIGH**
-
-Research based on official FFmpeg documentation, recent 2026 platform specifications, and direct codebase inspection. All recommendations preserve existing functionality while adding opt-in enhancements. No speculative technologies or unproven patterns.
+**Overall confidence:** HIGH for core MVP scope (Phases 1-4); MEDIUM for batch and template phases (Phases 5-6); LOW for optional features (web scraping, AI image generation).
 
 ### Gaps to Address
 
-Minor gaps requiring validation during implementation:
-
-- **Filter parameter optimal values:** Research provides starting values (hqdn3d 1.5-3, unsharp 0.3-0.6) but production values need tuning on Edit Factory's actual user content. **Mitigation:** Implement conservative defaults in Phase 2, expose as user-configurable presets for power users, collect metrics to tune in v3.1.
-
-- **Platform specs change frequency:** Social media platforms update encoding requirements periodically. TikTok/Instagram specs researched from January 2026 sources may drift. **Mitigation:** Version presets in code with date/source comments, implement telemetry to detect platform rejection patterns, plan quarterly spec review.
-
-- **Scoring algorithm aesthetic weights:** Proposed 40/20/20/15/5 split (motion/variance/blur/contrast/brightness) is research-based but not validated on Edit Factory's specific user base. **Mitigation:** Implement as configurable scoring profiles in Phase 3, A/B test with subset of users, validate with platform engagement metrics.
-
-- **GPU filter acceleration:** Research confirms hqdn3d and unsharp are CPU-only, but Edit Factory uses h264_nvenc which may support some CUDA filters. **Mitigation:** Test GPU-accelerated equivalents (scale_cuda verified working in code), benchmark performance, document GPU vs CPU filter capabilities.
+- **Nortia.ro feed structure:** Architecture research recommends testing against the actual feed file before finalizing the parser. Field availability, custom Google Shopping extensions, and character encoding in Romanian feed data may differ from the spec. Obtain the actual feed URL and validate during Phase 1 implementation.
+- **Ken Burns performance on target hardware:** Exact render times for zoompan at 1080x1920 on the development machine are unknown. PITFALLS.md notes 30-90s per clip is typical on a dev machine. Benchmark in Phase 2 and set user expectations accordingly — or provide simple-scale as batch default.
+- **Nortia.ro scraping viability:** PITFALLS.md flags Cloudflare protection as a risk for Romanian e-commerce sites. Web scraping is a v6+ feature but its viability should be confirmed early so it is not over-planned.
+- **ElevenLabs credit budget at batch scale:** With 100k credits/month and 40-160 credits per product video (quick mode template text), batch processing at scale approaches the budget ceiling. Quick-mode voiceovers should default to Edge TTS (free) for batch; ElevenLabs reserved for elaborate mode with explicit opt-in.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-
-**Official Documentation:**
-- FFmpeg Official Filters Documentation (https://ffmpeg.org/ffmpeg-filters.html) — loudnorm, hqdn3d, unsharp, eq filter syntax and parameters
-- FFmpeg CRF Guide (https://slhck.info/video/2017/02/24/crf-guide.html) — constant rate factor encoding best practices
-- EBU R128 Standard — audio loudness normalization specification (-14 LUFS for social media)
-
-**Edit Factory Codebase (Direct Inspection):**
-- app/services/video_processor.py lines 506-542 — FFmpeg subprocess execution patterns
-- app/services/video_processor.py lines 680-684 — GPU filter chain handling (hwdownload/hwupload_cuda)
-- app/services/video_processor.py lines 944-965 — Subtitle rendering without hwaccel (correct pattern)
-- app/services/video_processor.py lines 69-77 — Current segment scoring algorithm
-
-**Platform Specifications (2026):**
-- Master Your Shorts: Export Settings for Reels, TikTok & YouTube Shorts 2026 (https://aaapresets.com) — verified bitrate/CRF/GOP requirements
-- Instagram Video Format Specs 2026 (https://socialrails.com) — resolution and encoding constraints
-- LUFS Social Media Standards (https://starsoundstudios.com) — -14 LUFS target for all major platforms
+- Existing codebase (`app/main.py`, all router files, all service files) — read directly 2026-02-20
+- Existing DB migrations (001 through 012) — schema patterns verified directly
+- [lxml performance benchmarks](https://lxml.de/performance.html) — iterparse vs ElementTree
+- [lxml PyPI](https://pypi.org/project/lxml/) — version 6.0.2 verified
+- [Pillow PyPI](https://pypi.org/project/pillow/) — version 12.1.1 verified
+- [beautifulsoup4 PyPI](https://pypi.org/project/beautifulsoup4/) — version 4.14.3 verified
+- [fal-client PyPI](https://pypi.org/project/fal-client/) — version 0.13.1 verified 2026-02-20
+- [FFmpeg drawtext filter docs](https://ffmpeg.org/ffmpeg-filters.html) — textfile option, escaping rules
+- [Google Shopping XML feed specification](https://support.google.com/merchants/answer/7052112) — field names and namespaces
+- [Pexels API documentation](https://www.pexels.com/api/documentation/) — free tier confirmed
 
 ### Secondary (MEDIUM confidence)
+- [Bannerbear Ken Burns FFmpeg guide](https://www.bannerbear.com/blog/how-to-do-a-ken-burns-style-effect-with-ffmpeg/) — zoompan technique and parameters
+- [OTTVerse drawtext guide](https://ottverse.com/ffmpeg-drawtext-filter-dynamic-overlays-timecode-scrolling-text-credits/) — multi-layer text overlays
+- [Mux FFmpeg concat guide](https://www.mux.com/articles/create-a-video-slideshow-with-images-using-ffmpeg) — slideshow concat patterns
+- [Creatomate slideshow guide](https://creatomate.com/blog/how-to-create-a-slideshow-from-images-using-ffmpeg) — aspect ratio handling
+- [FFmpeg drawtext escaping levels](https://hhsprings.bitbucket.io/docs/programming/examples/ffmpeg/drawing_texts/drawtext.html) — four-level escaping documentation
+- [NemoVideo batch UX patterns](https://www.nemovideo.com/blog/batch-video-generator-scale-output) — batch video workflow UX
+- [Eleken bulk action UX guidelines](https://www.eleken.co/blog-posts/bulk-actions-ux) — bulk selection and wizard UX
+- [Tolstoy ecommerce video at scale](https://www.gotolstoy.com/blog/product-videos-for-ecommerce) — batch-at-scale patterns
 
-**FFmpeg Best Practices:**
-- FFmpeg Compress Video Guide (https://cloudinary.com/guides/video-effects/ffmpeg-compress-video) — encoding optimization techniques
-- FFmpeg for Instagram (https://dev.to/alfg/ffmpeg-for-instagram-35bi) — platform-specific settings
-- Audio Loudness Normalization with FFmpeg (https://medium.com/@peter_forgacs) — two-pass loudnorm implementation
-
-**Quality Analysis:**
-- Blur Detection with OpenCV (https://pyimagesearch.com/2015/09/07/blur-detection-with-opencv/) — Laplacian variance threshold methodology
-- Detecting Low Contrast Images (https://pyimagesearch.com/2021/01/25/detecting-low-contrast-images-with-opencv-scikit-image-and-python/) — scikit-image usage patterns
-- Perceptual Video Quality Assessment Survey (https://arxiv.org/html/2402.03413v1) — academic foundation for scoring algorithms
-
-**Performance and Pitfalls:**
-- FFmpeg Memory Leak CVE-2025-25469 (https://hackers-arise.com) — recent vulnerability documentation
-- Codec Wiki Denoise Filters (https://wiki.x266.mov/docs/filtering/denoise) — nlmeans vs hqdn3d performance comparison
-- Python subprocess Issue 28165 (https://bugs.python.org/issue28165) — memory buffering problems
-
-### Tertiary (LOW confidence)
-
-**Competitive Analysis:**
-- CapCut vs Descript Comparison 2026 (https://www.fahimai.com) — feature landscape understanding
-- AI Video Editor Trends 2026 (https://metricool.com) — industry direction
-- Best AI Video Enhancers 2026 (https://wavespeed.ai) — competitive differentiation
-
-**Note:** Tertiary sources used for feature landscape context only. All technical implementation recommendations based on primary sources (official docs + codebase inspection).
+### Tertiary (LOW confidence — needs validation)
+- [fal.ai FLUX.2 announcement](https://blog.fal.ai/flux-2-is-now-available-on-fal/) — FLUX model availability; pricing under load untested
+- [Cloudflare bypass options](https://scrapfly.io/blog/posts/how-to-bypass-cloudflare-anti-scraping) — Nortia.ro scraping viability not confirmed
+- [Google Shopping feed data quality issues](https://feedarmy.com/kb/common-google-shopping-errors-problems-mistakes/) — description HTML contamination patterns
 
 ---
-*Research completed: 2026-02-04*
-*Ready for roadmap: YES*
+*Research completed: 2026-02-20*
+*Ready for roadmap: yes*

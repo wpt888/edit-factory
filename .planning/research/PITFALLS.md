@@ -1,866 +1,801 @@
-# Domain Pitfalls: Video Quality Enhancement
+# Pitfalls Research
 
-**Domain:** Adding video quality enhancement to FFmpeg-based video processing
-**Researched:** 2026-02-04
-**Context:** Edit Factory milestone - enhancing existing video processing pipeline
-
-## Executive Summary
-
-Adding video quality enhancement features to an existing FFmpeg-based pipeline is deceptively complex. The primary risks are **performance regression** (filters compound processing time), **quality vs file size tradeoffs** (platform requirements conflict with quality goals), and **platform compatibility** (social media platforms have strict encoding requirements that can conflict with quality settings).
-
-**Critical insight from Edit Factory codebase:** The system already uses subprocess-based FFmpeg calls with GPU acceleration fallback patterns. Any quality enhancement must preserve this architecture while avoiding memory leaks and maintaining real-time processing expectations.
+**Domain:** Adding product feed-based video generation to existing FFmpeg video platform
+**Researched:** 2026-02-20
+**Confidence:** HIGH (FFmpeg/XML pitfalls) / MEDIUM (web scraping, AI image generation)
 
 ---
 
 ## Critical Pitfalls
 
-Mistakes that cause rewrites, major performance issues, or platform rejection.
+Mistakes that cause rewrites, major data loss, or system failures.
 
-### Pitfall 1: Filter Chain Order Destroys Performance
+### Pitfall 1: Romanian Diacritics Corrupted in FFmpeg drawtext
 
 **What goes wrong:**
-Incorrect filter chain ordering causes unnecessary re-encoding or prevents GPU acceleration. For example, applying CPU-based filters (like `subtitles`) before GPU filters forces data transfer between CPU/GPU multiple times, destroying performance.
+Product names and descriptions containing Romanian diacritics (ă, â, î, ș, ț, Ș, Ț) are silently corrupted or cause FFmpeg to error out when passed directly as `text=` in a drawtext filter. The text either renders as boxes/question marks or the entire filter fails, producing a video with no overlay text.
 
 **Why it happens:**
-FFmpeg filter graphs have implicit data flow, and mixing GPU/CPU filters requires explicit `hwdownload` and `hwupload` calls. Developers often add filters linearly without understanding the performance implications.
+The FFmpeg drawtext filter has up to four levels of escaping:
+1. The text value itself (backslash escaping)
+2. The filter option string (colon-delimited)
+3. The filtergraph description (comma-delimited)
+4. The shell command line
 
-**Evidence from Edit Factory:**
-Lines 680-684 in `video_processor.py` show explicit handling:
+UTF-8 diacritics survive level 1 but break at levels 2-4 when Python constructs the command as a list or string. Additionally, the font file must support the Unicode code points for these characters — Windows-bundled fonts often don't render Romanian ș/ț correctly (confusing them with ş/ţ, which use cedilla instead of comma-below).
+
+**How to avoid:**
+Write product text to a UTF-8 temp file and use `textfile=` instead of `text=`:
 ```python
-# Pentru GPU: trebuie să descărcăm din CUDA înainte de filtru video
-if video_filter:
-    cmd.extend(["-vf", f"hwdownload,format=nv12,{video_filter},hwupload_cuda"])
+import tempfile
+import os
+
+def write_text_file(text: str) -> str:
+    """Write UTF-8 text to temp file for FFmpeg drawtext."""
+    f = tempfile.NamedTemporaryFile(
+        mode='w',
+        encoding='utf-8',
+        suffix='.txt',
+        delete=False
+    )
+    f.write(text)
+    f.flush()
+    f.close()
+    return f.name
+
+# In FFmpeg filter string:
+# BAD:  "drawtext=text='Produs ș special':fontsize=40"
+# GOOD: "drawtext=textfile='/tmp/abc.txt':fontsize=40"
 ```
 
-**Consequences:**
-- 3-10x processing time increase
-- Memory pressure from multiple CPU↔GPU transfers
-- Potential NVENC errors when filters conflict
-- System becomes unusable for real-time processing
+For the font, use a font that includes correct Romanian glyphs. Noto Sans, DejaVu Sans, and Liberation Sans support Romanian. Bundle a font with the application instead of relying on system fonts. On WSL, prefer Linux-side font paths over Windows `C:\Windows\Fonts\` paths — Windows path colons require escape hell even with forward slashes (`C\:/Windows/Fonts/Arial.ttf`).
 
-**Prevention:**
-1. **Group filters by execution domain** (CPU vs GPU)
-2. **Apply order: decode → GPU filters → download (if needed) → CPU filters → encode**
-3. **For quality enhancement filters:**
-   - Denoising (hqdn3d, nlmeans): CPU-based, apply BEFORE subtitle rendering
-   - Sharpening (unsharp): CPU-based, apply AFTER denoising
-   - Scale/crop: GPU-accelerated if using `scale_cuda`
-   - Subtitles: CPU-only, always apply LAST before final encode
+**Warning signs:**
+- Boxes or `?` characters in rendered text where diacritics should be
+- FFmpeg error: `Option text not found` (colon in text broke option parsing)
+- Text renders but ș renders as ş (wrong Unicode code point — font substitution)
+- FFmpeg exits with code 1 on any product with diacritics but succeeds on ASCII-only names
 
-4. **Test filter combinations explicitly:**
-```python
-# CORRECT order for quality + subtitles
-filters = []
-if use_gpu:
-    filters.append("hwdownload,format=nv12")
-if denoise:
-    filters.append("hqdn3d=1.5:1.5:6:6")  # CPU denoise
-if sharpen:
-    filters.append("unsharp=5:5:0.8")     # CPU sharpen
-# Subtitle filter happens separately in add_subtitles()
-```
-
-**Detection:**
-- FFmpeg warnings about "filtergraph" errors
-- GPU encoding fails but CPU succeeds
-- Processing time >5x slower than expected
-- `nvidia-smi` shows GPU idle during filter application
-
-**Phase to address:** Phase 1 (Architecture design) - establish filter chain patterns
+**Phase to address:** Phase 1 (video composition foundation) — establish the textfile pattern before any text overlay is built.
 
 ---
 
-### Pitfall 2: Audio Normalization Requires Two-Pass (But You Skip It)
+### Pitfall 2: XML Feed Loaded Entirely Into Memory
 
 **What goes wrong:**
-Using FFmpeg's `loudnorm` filter in single-pass mode causes dynamic volume fluctuations that sound jarring when combined with TTS. The audio loudness jumps unexpectedly between segments, creating poor user experience.
+The Nortia.ro feed has ~9,987 products. Using `xml.etree.ElementTree.parse()` or `lxml.etree.parse()` loads the entire XML document tree into memory at once. A 10k-product Google Shopping feed with descriptions and image URLs is typically 20-80 MB of XML, which after Python object overhead becomes 200-500 MB in memory. On a WSL development machine with limited RAM, this competes directly with FFmpeg processes for memory.
 
 **Why it happens:**
-Two-pass loudnorm requires:
-1. First pass to analyze audio characteristics
-2. Second pass to apply normalization with analyzed parameters
+The natural first instinct is to parse the entire file once and query it. Developers treat a 10k feed like a small config file. The problem isn't the parse itself — it's keeping the full element tree resident while also holding parsed product objects.
 
-Developers skip the first pass thinking "normalization is normalization" and use single-pass mode for speed, not realizing single-pass produces worse results.
-
-**Evidence from research:**
-- "Single-pass mode introduces dynamic fluctuations to the audio, particularly problematic for music content"
-- "Single-pass is ideal for live normalization but produces worse results"
-- Source: [Audio Normalization with FFmpeg](https://wiki.tnonline.net/w/Blog/Audio_normalization_with_FFmpeg)
-
-**Consequences:**
-- Jarring volume changes between video segments
-- TTS audio doesn't blend with background video audio
-- Platform rejection due to audio quality issues
-- User complaints about "unprofessional sound"
-
-**Prevention:**
-1. **Always use two-pass loudnorm for post-processing:**
+**How to avoid:**
+Use `iterparse()` with explicit element clearing:
 ```python
-# Pass 1: Analyze
-ffmpeg -i input.mp4 -af loudnorm=print_format=json -f null -
+from lxml import etree
 
-# Parse JSON output to get measured_I, measured_LRA, measured_TP
-# Pass 2: Apply with linear mode
-ffmpeg -i input.mp4 -af loudnorm=linear=true:measured_I=-16.0:measured_LRA=11.0:measured_TP=-2.0 output.mp4
+def parse_feed_streaming(xml_path: str):
+    """Stream-parse Google Shopping XML without loading full tree."""
+    context = etree.iterparse(xml_path, events=('end',), tag='item')
+
+    for event, elem in context:
+        product = extract_product(elem)
+        yield product
+
+        # CRITICAL: clear element to free memory
+        elem.clear()
+        # Also eliminate the now-empty reference in the parent
+        while elem.getprevious() is not None:
+            del elem.getparent()[0]
+
+    del context
 ```
 
-2. **For Edit Factory's segment-based architecture:**
-   - Normalize AFTER concatenation, not per-segment
-   - Store normalization parameters per project
-   - Apply consistent normalization to all variants
+For the product browser UI, parse into a lightweight index (id, title, price, image_url only) on first load, cache it. Do NOT keep parsed element trees in memory.
 
-3. **Target loudness for social media:**
-   - Instagram Reels: -14 LUFS (integrated loudness)
-   - TikTok: -14 to -16 LUFS
-   - YouTube Shorts: -14 LUFS
-   - Never exceed -1.0 dBTP (true peak)
+**Warning signs:**
+- WSL memory usage spikes to >80% during feed parsing
+- FFmpeg jobs fail with OOM errors after feed is loaded
+- Python process using 300+ MB just for feed data
+- Slow initial page load (>5s) for the product browser
 
-4. **Handle the resampling issue:**
-   - loudnorm resamples to 192kHz internally
-   - Explicitly resample back to 48kHz after normalization: `-ar 48000`
-
-**Detection:**
-- Audio sounds "pumping" (volume goes up and down)
-- TTS is much louder than video background audio
-- FFmpeg output shows "switching to dynamic normalization"
-- Output audio sample rate is 192kHz instead of 48kHz
-
-**Phase to address:** Phase 2 (Audio normalization implementation)
+**Phase to address:** Phase 1 (feed parsing) — the streaming pattern must be established from the start. Retrofitting this after building the product browser is painful.
 
 ---
 
-### Pitfall 3: CRF vs Bitrate Confusion Breaks Platform Compatibility
+### Pitfall 3: Image Download Blocks the Render Pipeline
 
 **What goes wrong:**
-Using both CRF (quality-based encoding) AND bitrate constraints simultaneously creates conflicting encoding goals. For social media platforms with strict file size limits, this results in either quality degradation or upload rejection.
+Product videos need multiple images (feed image + scraped extras). Downloading them synchronously, one at a time, inside the video generation background task means a batch of 20 products waits for hundreds of HTTP requests sequentially. A single timeout (30s default) stalls the entire batch.
 
 **Why it happens:**
-Developers see platform specs like "bitrate: 3,500–4,500 kbps" and think "I'll set bitrate AND use CRF 23 for quality." FFmpeg then tries to satisfy both constraints, producing suboptimal results.
+The existing Edit Factory pattern runs everything inside a `BackgroundTasks` function sequentially. Adapting this pattern to image downloading without adding concurrency means 20 products × 3 images × (0.5-5s per image) = 30-300s just on downloads before FFmpeg starts.
 
-**Evidence from research:**
-- "Mixing incompatible rate control methods: using `-b` bitrate option together with CRF... doesn't make sense to specify both"
-- "CRF targets quality and adjusts bitrate. `-b` targets bitrate."
-- Platform specs (Instagram Reels: 3,500-4,500 kbps; TikTok: 2,000-4,000 kbps; YouTube Shorts: 8,000-15,000 kbps)
-- Sources: [FFmpeg Best Quality](https://www.baeldung.com/linux/ffmpeg-best-quality-conversion), [Social Media Video Sizes 2026](https://recurpost.com/blog/the-up-to-date-video-sizes-guide-for-social-media/)
-
-**Edit Factory context:**
-Current code uses CRF 23 for both CPU and GPU encoding (lines 411, 416, 715, 962). No bitrate capping means files may exceed platform limits.
-
-**Consequences:**
-- Upload rejection: "File too large" (Instagram limit: depends on duration)
-- Quality varies unpredictably across content types
-- Complex scenes blow up file size
-- Simple scenes waste bitrate budget
-
-**Prevention:**
-
-1. **Choose encoding strategy based on use case:**
-
-   **Option A: CRF-only (Edit Factory current approach)**
-   - Use when: Quality matters more than file size
-   - Platform: YouTube Shorts (large file limits)
-   - Setting: CRF 20-23
-   - Pros: Consistent quality, simple
-   - Cons: Unpredictable file size
-
-   **Option B: Capped CRF (RECOMMENDED for social media)**
-   - Use when: Need quality + file size guarantee
-   - Platform: Instagram Reels, TikTok
-   - Settings:
-   ```python
-   "-crf", "23",
-   "-maxrate", "4000k",  # Platform max bitrate
-   "-bufsize", "8000k",  # 2x maxrate
-   ```
-   - Pros: Quality priority with safety ceiling
-   - Cons: Slightly more complex
-
-   **Option C: Two-pass bitrate (for strict limits)**
-   - Use when: Platform has hard file size limits
-   - Settings: Target bitrate based on duration
-   ```python
-   # Pass 1
-   ffmpeg -i input.mp4 -c:v libx264 -b:v 3500k -pass 1 -f null -
-   # Pass 2
-   ffmpeg -i input.mp4 -c:v libx264 -b:v 3500k -pass 2 output.mp4
-   ```
-   - Pros: Predictable file size
-   - Cons: 2x encoding time, lower quality
-
-2. **Platform-specific presets for Edit Factory:**
-
+**How to avoid:**
+Pre-download all images for a batch before any FFmpeg rendering begins. Use `httpx` with async or `concurrent.futures.ThreadPoolExecutor` for parallel downloads with connection pooling:
 ```python
-PLATFORM_PRESETS = {
-    "instagram_reels": {
-        "resolution": "1080x1920",
-        "crf": 23,
-        "maxrate": "4000k",
-        "bufsize": "8000k",
-        "audio_bitrate": "192k",
-        "gop_size": 60  # 2sec at 30fps
-    },
-    "tiktok": {
-        "resolution": "1080x1920",
-        "crf": 24,  # Slightly lower quality for smaller files
-        "maxrate": "3500k",
-        "bufsize": "7000k",
-        "audio_bitrate": "128k",
-        "gop_size": 60
-    },
-    "youtube_shorts": {
-        "resolution": "1080x1920",  # Can use 2160x3840 for 4K
-        "crf": 20,  # Higher quality allowed
-        "maxrate": "12000k",
-        "bufsize": "24000k",
-        "audio_bitrate": "192k",
-        "gop_size": 60
-    }
-}
+import httpx
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def download_images_batch(urls: list[str], output_dir: Path,
+                           max_workers: int = 5) -> dict[str, Path]:
+    """Download images with timeout and retry. Returns url->path map."""
+    results = {}
+
+    def download_one(url: str) -> tuple[str, Path | None]:
+        try:
+            resp = httpx.get(url, timeout=10.0, follow_redirects=True)
+            resp.raise_for_status()
+
+            # Validate it's actually an image
+            content_type = resp.headers.get('content-type', '')
+            if 'image' not in content_type:
+                return url, None
+
+            ext = '.jpg'  # default
+            if 'png' in content_type:
+                ext = '.png'
+            elif 'webp' in content_type:
+                ext = '.webp'
+
+            filename = hashlib.md5(url.encode()).hexdigest() + ext
+            path = output_dir / filename
+            path.write_bytes(resp.content)
+            return url, path
+        except Exception as e:
+            logger.warning(f"Failed to download {url}: {e}")
+            return url, None
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(download_one, url): url for url in urls}
+        for future in as_completed(futures):
+            url, path = future.result()
+            results[url] = path
+
+    return results
 ```
 
-3. **CRF guidelines by resolution:**
-   - 1080p (Reels/TikTok): CRF 23-24
-   - 4K/2160p (YouTube Shorts): CRF 20-21
-   - Rule: +6 CRF = ~half file size, -6 CRF = ~double file size
+Cap `max_workers` at 5 to avoid triggering rate limits on CDNs. Use `httpx` instead of `requests` for connection pooling (avoid opening a new TCP connection per image).
 
-**Detection:**
-- Platform rejects uploads: "File exceeds size limit"
-- File sizes vary wildly (500MB for 60sec then 50MB for similar video)
-- Encoding time takes 2x-3x longer (sign of conflicting constraints)
-- FFmpeg warnings about rate control
+**Warning signs:**
+- Batch job "progress" stuck at 0% for 2+ minutes
+- Logs show sequential download timestamps (each 1-3s apart)
+- Single failed URL stops entire batch
+- Memory grows unbounded (stream large images in chunks)
 
-**Phase to address:** Phase 1 (Platform presets) + Phase 3 (Export settings)
+**Phase to address:** Phase 1 (product image pipeline) and Phase 3 (batch processing).
 
 ---
 
-### Pitfall 4: Denoising Destroys Processing Time Budget
+### Pitfall 4: FFmpeg zoompan Filter Makes Ken Burns Extremely Slow
 
 **What goes wrong:**
-Adding `nlmeans` (Non-Local Means) denoising to improve quality increases processing time from 2 minutes to 30+ minutes per video. Users expect near-real-time processing, but denoising makes it unusable.
+The `zoompan` filter is the standard FFmpeg tool for Ken Burns effects. However, it is a frame-by-frame filter that processes every output frame individually, making it 10-100x slower than regular encoding. For a 9-second image clip at 30fps = 270 frames, zoompan can take 30-60 seconds on CPU.
 
 **Why it happens:**
-nlmeans is CPU-only and doesn't parallelize well. A single 60-second 1080p video can take 10-30 minutes to denoise on modern hardware. Developers add it thinking "more filters = better quality" without benchmarking.
+Developers assume Ken Burns is just "a few filter params" and test with one clip. It works but takes a minute. At batch scale (20+ products), this becomes 20-40 minutes of total Ken Burns processing before the actual video encode even runs.
 
-**Evidence from research:**
-- "nlmeans filter is rather slow and doesn't parallelize well; only use it in cases the video contains a lot of noise"
-- "nlmeans provides the best quality but requires 10-30 minutes per hour of video"
-- "hqdn3d is a fast, high quality 3D denoising filter"
-- Sources: [FFmpeg Filters](https://www.ffmpeg.media/articles/ffmpeg-filters-scale-crop-rotate-sharpen), [Codec Wiki Denoise](https://wiki.x266.mov/docs/filtering/denoise)
+**How to avoid:**
+Two strategies:
 
-**Edit Factory context:**
-Current processing pipeline (lines 622-775) extracts segments then processes each individually. Adding denoising multiplies processing time by segment count.
+**Option A: Pre-render Ken Burns to a short video, then reuse.** Render the Ken Burns clip once per image to a temp `.mp4`, then concatenate. This separates the slow step from the product video assembly.
 
-**Consequences:**
-- 10-30x processing time increase
-- Background jobs timeout
-- System becomes unusable for multi-variant processing
-- Server resource exhaustion with parallel jobs
-- Users abandon uploads
+**Option B: Use `scale2ref` + `zoompan` with reduced output frames.** If Ken Burns is not strictly required, use a simpler zoom with the `scale` filter and `-vf scale=iw*1.1:ih*1.1,crop=iw/1.1:ih/1.1` approach which is significantly faster.
 
-**Prevention:**
-
-1. **Filter selection based on content analysis:**
-
+The key pattern: if you must use `zoompan`, set the output duration explicitly with `-t` and use a reasonable zoom speed:
 ```python
-def select_denoising_filter(video_path: Path, noise_threshold: float = 0.02) -> Optional[str]:
-    """
-    Analyze video noise level and select appropriate filter.
-    Only denoise if actually needed.
-    """
-    # Sample frames to detect noise
-    noise_level = estimate_noise_level(video_path)
+# SLOW: zoompan on high-res image at 30fps for 9s
+# Benchmark: ~45s encode time for 9s clip
 
-    if noise_level < noise_threshold:
-        return None  # Clean video, no denoising needed
-    elif noise_level < 0.05:
-        return "hqdn3d=1.5:1.5:6:6"  # Fast denoise (10% time overhead)
-    elif noise_level < 0.10:
-        return "hqdn3d=3:3:6:6"  # Stronger fast denoise
-    else:
-        # Very noisy - offer user choice: fast or quality
-        # Default to fast for real-time processing
-        return "atadenoise=0.02:s=9"  # Hybrid approach (50% time overhead)
+# FASTER: Pre-scale the image to exact output resolution first
+# then apply zoompan on the scaled image
+filters = (
+    f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
+    f"crop={target_w}:{target_h},"
+    f"zoompan=z='min(zoom+0.0005,1.3)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+    f":d={int(duration * fps)}:s={target_w}x{target_h}"
+)
 ```
 
-2. **Never use nlmeans by default:**
-   - Only offer as "High Quality Mode" with explicit warning
-   - Show estimated processing time before starting
-   - Not available for multi-variant processing
-   - Only for single-video exports where quality >> speed
+Set `-threads 0` to let FFmpeg use all CPU cores for zoompan — it does parallelize frame processing.
 
-3. **Recommended denoise settings:**
+**Warning signs:**
+- Single Ken Burns clip takes >30s to render
+- Batch job progress is linear but total time is unacceptable
+- `top` shows one FFmpeg process at 100% CPU single-threaded
+- FFmpeg stderr shows thousands of "frame=X" lines slowly incrementing
 
-```python
-DENOISE_PRESETS = {
-    "none": None,
-    "light": "hqdn3d=1.5:1.5:6:6",           # +10% time, mild noise reduction
-    "moderate": "hqdn3d=3:3:6:6",            # +15% time, visible improvement
-    "strong": "atadenoise=0.02:s=9",         # +50% time, aggressive
-    "maximum": "nlmeans=3:7:5:21:21:0"       # +1000% time, best quality (opt-in only)
-}
-```
-
-4. **Apply denoising selectively:**
-   - Analyze segments BEFORE selecting for inclusion
-   - Only denoise selected segments (not entire source video)
-   - Cache denoised segments for variant reuse
-
-5. **Edit Factory integration point:**
-   - Add denoise option to `extract_segments()` method
-   - Apply in filter chain between scale and sharpen
-   - Track processing time per segment
-
-**Detection:**
-- Processing time >>5x longer than without filter
-- CPU usage at 100% for extended periods
-- Background jobs timing out
-- Server runs out of disk space (temp files accumulate)
-
-**Phase to address:** Phase 2 (Filter implementation) - must implement smart filter selection
+**Phase to address:** Phase 2 (image-to-video composition) — benchmark before committing to zoompan defaults.
 
 ---
 
-### Pitfall 5: Subtitle Rendering Breaks GPU Pipeline
+### Pitfall 5: Aspect Ratio Mismatch Stretches Product Images
 
 **What goes wrong:**
-FFmpeg's `subtitles` filter is CPU-only and requires `libass`. Adding subtitles to a GPU-accelerated pipeline forces video decoding to CPU, destroying the performance benefit of GPU encoding.
+Product feed images come in wildly varying aspect ratios: square (1:1 is most common for e-commerce), landscape (4:3, 16:9 for banner shots), and occasionally portrait (3:4). Target output is 9:16 portrait (1080×1920 for Reels/TikTok). Blindly scaling images to fill 1080×1920 distorts them. A square product image becomes 30% wider than it should be.
 
 **Why it happens:**
-The subtitles filter doesn't support CUDA/hardware frames. When developers add `-vf subtitles=file.srt` to a GPU command, FFmpeg silently falls back to CPU decoding.
+`ffmpeg -i product.jpg -vf scale=1080:1920 output.mp4` scales without preserving aspect ratio. Developers test with images that happen to be near 9:16 and miss the general case.
 
-**Evidence from research:**
-- "To use the libass library for subtitle rendering, you need to have libass enabled at compile time"
-- "Adding soft subtitles won't re-encode the entire file and is faster than hardcoding subtitles"
-- Edit Factory code (lines 942-969) already handles this correctly by NOT using hwaccel with subtitles
-- Sources: [FFmpeg Subtitles](https://cloudinary.com/guides/video-effects/ffmpeg-subtitles), [Bannerbear FFmpeg Subtitles](https://www.bannerbear.com/blog/how-to-add-subtitles-to-a-video-file-using-ffmpeg/)
-
-**Edit Factory context:**
-Current implementation CORRECTLY avoids hwaccel when adding subtitles (line 944-965), but doesn't document WHY. This pattern must be preserved when adding quality filters.
-
-**Consequences:**
-- GPU encoding disabled when subtitles present
-- Processing time increases 3-5x
-- Wasted GPU resources
-- "GPU acceleration" setting becomes misleading
-
-**Prevention:**
-
-1. **Architecture: Separate subtitle rendering from quality enhancement:**
-
+**How to avoid:**
+Use `scale` with `force_original_aspect_ratio=decrease` then `pad` to fill the remaining space:
 ```python
-# CORRECT pattern (preserve Edit Factory's current approach)
-def add_subtitles(video_path, srt_path, output_path, use_gpu=True):
+def build_image_scale_filter(target_w: int, target_h: int,
+                              pad_color: str = "black") -> str:
     """
-    Subtitles filter is CPU-only.
-    Decode on CPU, apply subtitles, encode with GPU if available.
+    Scale image to target dimensions preserving aspect ratio.
+    Pads remaining space with pad_color.
     """
-    cmd = [
-        "ffmpeg", "-y",
-        # NO -hwaccel here - subtitles filter needs CPU frames
-        "-i", str(video_path),
-        "-vf", f"subtitles='{srt_path_escaped}':force_style='{style}'",
-        "-c:v", "h264_nvenc" if use_gpu else "libx264",  # Can still GPU encode
-        "-preset", "p4" if use_gpu else "fast",
-        "-c:a", "copy",
-        str(output_path)
-    ]
+    return (
+        f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+        f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:{pad_color}"
+    )
+
+# For product videos, consider blurred background instead of black bars:
+def build_image_blur_background_filter(target_w: int, target_h: int) -> str:
+    """
+    Scale with blurred version of image as background (Instagram style).
+    Requires split filter.
+    """
+    return (
+        f"[0:v]split=2[bg][fg];"
+        f"[bg]scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
+        f"crop={target_w}:{target_h},boxblur=20:5[bgblur];"
+        f"[fg]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease[fgscaled];"
+        f"[bgblur][fgscaled]overlay=(W-w)/2:(H-h)/2"
+    )
 ```
 
-2. **Performance optimization order:**
-   - Apply ALL quality filters BEFORE subtitles
-   - Subtitles should be THE LAST video processing step
-   - Never mix subtitle rendering with GPU filter chains
+The blurred background approach is aesthetically better for product videos — popular on Instagram/TikTok. However, it adds FFmpeg filter complexity and processing time.
 
-3. **For Edit Factory's multi-step pipeline:**
-   ```
-   Step 1: extract_segments() - GPU accelerated, no subtitles
-   Step 2: add_audio() - stream copy when possible
-   Step 3: [NEW] apply_quality_filters() - GPU denoise/sharpen if available
-   Step 4: add_subtitles() - CPU rendering, GPU encoding output
-   ```
+**Warning signs:**
+- Product images appear stretched horizontally or vertically
+- Circular logos become ellipses
+- Text overlaid on images appears at wrong position (assumes different dimensions)
+- Images with white backgrounds show black bars instead of brand-appropriate padding
 
-4. **Document the limitation:**
-   - UI should show "Subtitles use CPU rendering (normal behavior)"
-   - Don't let users think GPU acceleration is broken
-   - Provide ETA that accounts for CPU subtitle rendering
+**Phase to address:** Phase 2 (image-to-video composition) — must test with real Nortia.ro feed images, which are typically square e-commerce photos.
 
-**Detection:**
-- `nvidia-smi` shows 0% GPU usage during subtitle rendering
-- FFmpeg output shows "Incompatible pixel format" warnings
-- Processing slower than expected even with GPU enabled
-- Filtergraph errors mentioning "cuda" and "subtitles"
+---
 
-**Phase to address:** Phase 3 (Quality filters) - must document and preserve correct patterns
+### Pitfall 6: Web Scraping for Extra Images Is Fragile and May Be Blocked
+
+**What goes wrong:**
+The v5 plan includes scraping product pages for additional images beyond the feed image. Romanian e-commerce sites (including WooCommerce-based stores) increasingly use Cloudflare. Python `requests` with default headers gets 403s. Even sites without Cloudflare may have JavaScript-rendered galleries that `requests` or `lxml` can't parse.
+
+**Why it happens:**
+Developers test scraping in a browser (where it works trivially) then use `requests.get()` expecting the same. The site serves a Cloudflare challenge page instead of the HTML.
+
+**How to avoid:**
+Design web scraping as **optional enrichment**, not a required step. The pipeline must work without it:
+
+```python
+async def get_extra_images(product_url: str,
+                            fallback_images: list[str]) -> list[str]:
+    """
+    Attempt to scrape extra images from product page.
+    Returns fallback_images if scraping fails for any reason.
+    """
+    try:
+        # Attempt with reasonable timeout and real browser headers
+        result = await scrape_product_images(product_url, timeout=8.0)
+        if result:
+            return result
+    except Exception as e:
+        logger.info(f"Scraping skipped for {product_url}: {e}")
+
+    return fallback_images
+```
+
+For Nortia.ro specifically (which is the primary target), test the actual site structure once and build a site-specific parser rather than a generic scraper. WooCommerce product pages have consistent gallery HTML:
+```python
+# WooCommerce gallery image pattern
+soup.select('.woocommerce-product-gallery__image img')
+# or data attribute:
+soup.select('[data-large_image]')
+```
+
+Use `httpx` with real browser `User-Agent` and `Accept` headers. If Cloudflare is present, `playwright` (headless Chromium) is the only reliable option — but adds a 2-5 second per-product overhead.
+
+**Warning signs:**
+- 403 responses from all product URLs
+- Scraper returns no images for any product
+- HTML response contains "Checking your browser" (Cloudflare challenge)
+- Gallery div is present in HTML but images are `data-src` attributes (lazy-loaded, requires JS)
+
+**Phase to address:** Phase 2 (visual sources) — implement scraping as a plugin with graceful fallback, not as a core requirement.
+
+---
+
+### Pitfall 7: Product Description HTML Not Stripped Before TTS
+
+**What goes wrong:**
+Google Shopping feed descriptions frequently contain raw HTML tags: `<br/>`, `<p>`, `<strong>`, `&nbsp;`, `&amp;`, `&lt;`, HTML entities. If passed directly to ElevenLabs or Edge TTS, the TTS engine either reads the tags aloud ("less than br slash greater than") or refuses to process the input.
+
+**Why it happens:**
+The feed description field is populated from the product's HTML description, and many store owners/systems include markup. Google Merchant Center technically requires plain text but doesn't strictly enforce it.
+
+**How to avoid:**
+Always sanitize descriptions before any text use (TTS, overlays, AI script generation):
+```python
+import html
+import re
+from bs4 import BeautifulSoup
+
+def clean_product_text(raw: str) -> str:
+    """
+    Normalize product text from feed: strip HTML, decode entities,
+    normalize whitespace.
+    """
+    if not raw:
+        return ""
+
+    # Decode HTML entities: &amp; -> &, &nbsp; -> space, etc.
+    decoded = html.unescape(raw)
+
+    # Strip HTML tags (use BeautifulSoup for robustness over regex)
+    soup = BeautifulSoup(decoded, 'html.parser')
+    text = soup.get_text(separator=' ')
+
+    # Normalize whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    # Truncate for TTS (ElevenLabs flash_v2_5: 40k char limit)
+    # For product videos, descriptions > 500 chars are too long anyway
+    if len(text) > 500:
+        # Cut at last sentence boundary before 500 chars
+        truncated = text[:500]
+        last_period = truncated.rfind('.')
+        if last_period > 200:
+            text = truncated[:last_period + 1]
+        else:
+            text = truncated.rstrip() + '...'
+
+    return text
+```
+
+**Warning signs:**
+- TTS audio contains "p", "br", "strong" spoken aloud
+- ElevenLabs returns 422 (unprocessable content)
+- Script generation AI outputs HTML tags in the generated script
+- Text overlays show `&amp;` or `<br>` as literal characters
+
+**Phase to address:** Phase 1 (feed parsing) — add `clean_product_text()` as a mandatory normalization step on all product text fields at parse time, not at use time.
+
+---
+
+### Pitfall 8: Batch Processing Uses BackgroundTasks Without Job-Level Error Isolation
+
+**What goes wrong:**
+The existing Edit Factory `BackgroundTasks` pattern runs one job per upload. For batch product video generation (20+ products), an unhandled exception in product #5 kills the entire batch function, leaving products 6-20 never started. There is no per-product failure tracking.
+
+**Why it happens:**
+The existing `_generation_progress` dict (in-memory, lost on restart) tracks a single job, not N sub-jobs. Adapting it naively for batch means one dict entry for the whole batch — no visibility into which individual products failed.
+
+**How to avoid:**
+Build batch jobs with per-product state tracking from the start:
+```python
+@dataclass
+class ProductJobState:
+    product_id: str
+    status: str  # 'pending' | 'downloading' | 'rendering' | 'done' | 'failed'
+    error: Optional[str] = None
+    output_path: Optional[str] = None
+
+class BatchJob:
+    def __init__(self, job_id: str, product_ids: list[str]):
+        self.job_id = job_id
+        self.products: dict[str, ProductJobState] = {
+            pid: ProductJobState(pid, 'pending')
+            for pid in product_ids
+        }
+
+    @property
+    def progress_pct(self) -> int:
+        done = sum(1 for p in self.products.values()
+                   if p.status in ('done', 'failed'))
+        return int(done / len(self.products) * 100)
+
+async def run_batch(job: BatchJob):
+    for product_id, state in job.products.items():
+        try:
+            state.status = 'rendering'
+            path = await render_product_video(product_id)
+            state.status = 'done'
+            state.output_path = str(path)
+        except Exception as e:
+            # ISOLATE: this product failed, continue with next
+            state.status = 'failed'
+            state.error = str(e)
+            logger.error(f"Product {product_id} failed: {e}", exc_info=True)
+            # Do NOT re-raise — let batch continue
+```
+
+**Warning signs:**
+- Batch job shows "complete" but only 3 of 20 videos were generated
+- No way to tell which products failed from the UI
+- Re-running batch re-processes already-successful products
+- Server restart loses all batch progress
+
+**Phase to address:** Phase 3 (batch processing) — design the batch state model before implementing any batch rendering logic.
 
 ---
 
 ## Moderate Pitfalls
 
-Mistakes that cause delays, technical debt, or quality issues.
-
-### Pitfall 6: Sharpening Creates Halos and Artifacts
+### Pitfall 9: Missing Images Silently Produce Black Frames
 
 **What goes wrong:**
-Oversharpening with `unsharp` filter creates visible halos around edges and amplifies compression artifacts. Videos look "crunchy" and artificial, especially after platform re-encoding.
+When a product image URL is broken (404, CDN gone, server timeout), the image download fails. If the pipeline proceeds with a `None` image path, FFmpeg either errors out (crashing the job) or produces a video with black frames in place of the product image, which looks completely broken.
 
 **Why it happens:**
-Developers crank up unsharp values thinking "more sharpening = better quality." The filter is actually an unsharpen mask that boosts edge contrast, and too much creates artifacts.
+Error handling for downloads returns `None` on failure. The subsequent image-to-video composition doesn't check for `None` before calling FFmpeg, passing a non-existent file path.
 
-**Evidence from research:**
-- "Counter-sharpening (unsharp) to restore detail can introduce halos and artifacts if overused; use unsharp values between 0.3-1.0"
-- Source: [FFmpeg Video Sharpening](https://www.cloudacm.com/?p=3016)
+**How to avoid:**
+Implement a fallback image strategy — generate a solid color placeholder with the product name as text, or use the store's logo:
+```python
+def get_product_image_or_fallback(image_url: str,
+                                   product_title: str,
+                                   output_dir: Path) -> Path:
+    """Returns downloaded image path, or generated placeholder."""
+    downloaded = download_image_safe(image_url, output_dir)
+    if downloaded and downloaded.exists():
+        return downloaded
 
-**Prevention:**
-1. **Conservative unsharp values:**
-   ```python
-   # Light sharpening (barely visible, safe)
-   "unsharp=5:5:0.3:5:5:0.0"
+    # Generate placeholder with FFmpeg
+    placeholder_path = output_dir / f"placeholder_{hash(product_title)}.jpg"
+    if not placeholder_path.exists():
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "color=c=gray:s=1080x1080",
+            "-frames:v", "1",
+            str(placeholder_path)
+        ], capture_output=True)
 
-   # Moderate sharpening (recommended default)
-   "unsharp=5:5:0.6:5:5:0.0"
+    return placeholder_path
+```
 
-   # Strong sharpening (risk of artifacts, use sparingly)
-   "unsharp=5:5:1.0:5:5:0.0"
-   ```
+**Warning signs:**
+- Generated videos have 2-3 second black segments
+- FFmpeg error: `No such file or directory` for image input
+- Feed has products with `image_link` pointing to discontinued CDN URLs
+- Batch partially fails with no clear indication of which products had broken images
 
-2. **Never sharpen if denoising was skipped:**
-   - Sharpening amplifies noise
-   - Order: denoise → sharpen (if both enabled)
-
-3. **Test with platform re-encoding:**
-   - Instagram/TikTok re-encode uploads
-   - Sharpening + platform encoding = double artifacts
-   - Use lighter sharpening for social media
-
-4. **Adaptive sharpening:**
-   ```python
-   def select_sharpen_amount(video_resolution: str, denoise_applied: bool) -> str:
-       """Lower sharpening for lower resolutions and when denoising was applied."""
-       if video_resolution <= (720, 1280):
-           amount = 0.4  # Light for low-res
-       elif denoise_applied:
-           amount = 0.6  # Moderate after denoise
-       else:
-           amount = 0.5  # Conservative default
-
-       return f"unsharp=5:5:{amount}:5:5:0.0"
-   ```
-
-**Detection:**
-- Visible white/dark halos around text or edges
-- Video looks "over-processed" or "HDR-like"
-- Compression artifacts more visible than original
-- User feedback: "looks fake" or "too sharp"
+**Phase to address:** Phase 1 (product image pipeline) — implement fallback before any composition work begins.
 
 ---
 
-### Pitfall 7: Segment Scoring Weights Don't Match Platform Aesthetics
+### Pitfall 10: Price Display — Currency Symbol and Formatting Breaks drawtext
 
 **What goes wrong:**
-Edit Factory's current scoring formula `(motion * 0.6) + (variance * 0.3) + (brightness * 0.1)` prioritizes motion, but Instagram Reels/TikTok algorithms favor aesthetic quality and composition over pure motion.
+Romanian product prices use the `lei` suffix or `RON` currency code, sometimes with the `%` character for discount display ("30% reducere"). The `%` character is special in FFmpeg drawtext — it initiates expression expansion. A product promotion text of "Reducere 30%" becomes either a rendered error or the `%` silently disappears.
 
 **Why it happens:**
-The scoring algorithm was designed for "dynamic" clips but doesn't account for perceptual quality factors like facial detection, composition rules, or platform-specific trends.
+FFmpeg drawtext uses `%{...}` for dynamic text expansion (timecode, frame number, etc.). Any literal `%` must be escaped as `\%` (or `%%` depending on context). When this text comes from product data, developers forget to escape it.
 
-**Evidence from research:**
-- "Perceptual quality assessment algorithms... measure quality as perceived by humans"
-- "Motion-intensive macroblocks are identified by comparing their motion intensity against the average"
-- "VQA models have evolved... explicitly designed for user-generated content (UGC)"
-- Current Edit Factory formula (line 69-77) focuses purely on motion/variance
-- Sources: [Perceptual Video Quality](https://www.frontiersin.org/journals/signal-processing/articles/10.3389/frsip.2023.1193523/full), [Netflix VMAF](https://netflixtechblog.com/toward-a-practical-perceptual-video-quality-metric-653f208b9652)
-
-**Prevention:**
-
-1. **Enhanced scoring for social media:**
-
+**How to avoid:**
+Escape all text content before writing to the drawtext textfile. The `%` sign is the primary concern; also escape backslashes:
 ```python
-@property
-def combined_score_v2(self) -> float:
+def escape_for_drawtext_file(text: str) -> str:
     """
-    Enhanced scoring that considers aesthetic quality.
-    Weights tuned for Instagram Reels / TikTok content.
+    Escape text for FFmpeg drawtext textfile option.
+    % is an expression prefix; \\ starts escape sequences.
     """
-    # Motion (dynamic content)
-    motion_component = self.motion_score * 0.4  # Reduced from 0.6
-
-    # Variance (scene changes)
-    variance_component = self.variance_score * 0.3  # Same
-
-    # Brightness (avoid too dark/bright)
-    # Optimal brightness around 0.4-0.6 (not too dark, not blown out)
-    brightness_penalty = abs(self.avg_brightness - 0.5)
-    brightness_component = (1 - brightness_penalty * 2) * 0.1  # Same weight
-
-    # NEW: Aesthetic boost (faces, composition, color)
-    aesthetic_component = self.get_aesthetic_score() * 0.2  # NEW
-
-    return (motion_component + variance_component +
-            brightness_component + aesthetic_component)
-
-def get_aesthetic_score(self) -> float:
-    """
-    Calculate aesthetic quality score.
-    Factors: face detection, rule of thirds, color saturation.
-    """
-    # Placeholder - should integrate actual analysis
-    # Could use: face detection, scene classification, color analysis
-    return 0.5  # Default neutral score
+    # Escape backslashes first (must be first!)
+    text = text.replace('\\', '\\\\')
+    # Escape percent signs
+    text = text.replace('%', '\\%')
+    # Newlines in textfile are literal newlines — keep them if multiline
+    return text
 ```
 
-2. **Platform-specific scoring profiles:**
+Note: when using `textfile=`, the escaping rules differ from inline `text=`. With a text file, only `\` and `%` need escaping within the file contents.
+
+**Warning signs:**
+- Discount percentages missing from rendered videos
+- FFmpeg warning: "bad/incomplete expression"
+- Product names with `&` (ampersand, common in store names) cause drawtext errors
+- Prices with `.` (decimal point) work but prices with `,` (Romanian decimal format: `19,99 lei`) may need locale-aware formatting
+
+**Phase to address:** Phase 2 (text overlay composition) — add escaping to the text-writing utility.
+
+---
+
+### Pitfall 11: AI Image Generation Cost Runs Away in Batch Mode
+
+**What goes wrong:**
+The v5 plan includes AI-generated extra visuals. At FLUX pricing (~$0.04-0.08 per image) and with batch generation of 20 products × 2 AI images each = 40 images = $1.60-3.20 per batch run. If a developer accidentally triggers a batch twice, or if the system retries on failure, costs multiply quickly. For 9,987 products if someone accidentally hits "generate all", that's ~$800-1,600 in one run.
+
+**Why it happens:**
+AI image generation is treated like any other pipeline step with retry logic. There's no cost gate or idempotency check.
+
+**How to avoid:**
+- Make AI image generation **explicitly opt-in per product**, not on by default for batch
+- Implement idempotency: check if an AI image already exists for this product before generating
+- Add a cost estimate preview before any AI generation batch starts
+- Cap maximum AI images per batch run (e.g., 50 images max)
+- Use the existing `cost_tracker` service to log and monitor AI image costs
 
 ```python
-SCORING_PROFILES = {
-    "motion_priority": {  # Current Edit Factory default
-        "motion": 0.6,
-        "variance": 0.3,
-        "brightness": 0.1,
-        "aesthetic": 0.0
-    },
-    "balanced": {  # Recommended for mixed content
-        "motion": 0.4,
-        "variance": 0.3,
-        "brightness": 0.1,
-        "aesthetic": 0.2
-    },
-    "aesthetic_priority": {  # For beauty/lifestyle content
-        "motion": 0.2,
-        "variance": 0.2,
-        "brightness": 0.1,
-        "aesthetic": 0.5
+async def generate_ai_product_image(product_id: str,
+                                     prompt: str,
+                                     output_dir: Path) -> Optional[Path]:
+    """Generate AI image with idempotency check."""
+    # Check if already generated
+    existing = output_dir / f"ai_{product_id}.jpg"
+    if existing.exists():
+        logger.info(f"AI image already exists for {product_id}, reusing")
+        return existing
+
+    # Log estimated cost before generation
+    estimated_cost = 0.06  # USD, FLUX average
+    cost_tracker.log_estimate("ai_image", estimated_cost,
+                               {"product_id": product_id})
+
+    # Generate
+    image_bytes = await call_ai_image_api(prompt)
+    existing.write_bytes(image_bytes)
+    return existing
+```
+
+**Warning signs:**
+- Cost log shows repeated AI generation for the same product IDs
+- Batch job retries regenerating AI images that already succeeded
+- No cost preview before batch generation starts
+- AI generation happens even when feed image download succeeded
+
+**Phase to address:** Phase 2 (visual sources) — implement idempotency and cost gating before any AI image API integration.
+
+---
+
+### Pitfall 12: FFmpeg Font Path on WSL Breaks with Windows Paths
+
+**What goes wrong:**
+The Edit Factory codebase runs on WSL. If a font file is specified using a Windows path (`C:\Windows\Fonts\Arial.ttf`), FFmpeg's drawtext filter will fail even after forward-slash conversion (`C:/Windows/Fonts/Arial.ttf`) because the colon still requires escaping in the filter string. The correct WSL approach is different from either Windows or pure Linux.
+
+**Why it happens:**
+WSL mounts the Windows filesystem at `/mnt/c/`. Developers see "it's Windows" and use Windows paths, but FFmpeg runs as a Linux process and expects Linux paths.
+
+**How to avoid:**
+Use Linux font paths in WSL, not Windows paths:
+```python
+import subprocess
+from pathlib import Path
+
+def get_font_path(font_name: str = "DejaVuSans") -> str:
+    """
+    Get Linux font path for use in FFmpeg drawtext.
+    WSL: use /mnt/c/Windows/Fonts/ or install fonts in WSL.
+    Returns path with no escaping needed in textfile mode.
+    """
+    # Prefer WSL-native fonts (install: apt install fonts-dejavu)
+    wsl_font = Path(f"/usr/share/fonts/truetype/dejavu/{font_name}.ttf")
+    if wsl_font.exists():
+        return str(wsl_font)
+
+    # Fall back to Windows fonts via WSL mount
+    windows_font = Path(f"/mnt/c/Windows/Fonts/arial.ttf")
+    if windows_font.exists():
+        # Escape the colon for FFmpeg filter string usage
+        # /mnt/c/... path has no colon — safe to use directly
+        return str(windows_font)
+
+    raise RuntimeError(f"Font not found: {font_name}")
+```
+
+Install `fonts-noto` or `fonts-dejavu` in WSL for clean Romanian support: `sudo apt install fonts-noto`. These include full Unicode coverage including Romanian comma-below variants (ș, ț).
+
+**Warning signs:**
+- FFmpeg drawtext works with hardcoded English text but fails with any product name
+- Error: `Option fontfile not found` (colon in `C:` path parsed as option separator)
+- Font renders but diacritics show as fallback glyphs (wrong font charset)
+- Tests pass on dev machine but fail after WSL reinstall (font path changed)
+
+**Phase to address:** Phase 1 (video composition foundation) — establish font resolution before any text overlay work.
+
+---
+
+### Pitfall 13: Feed Parsing Silently Ignores Namespace-Prefixed Tags
+
+**What goes wrong:**
+Google Shopping XML feeds use XML namespaces: `<g:price>`, `<g:brand>`, `<g:condition>`. When parsed with `ElementTree` without namespace awareness, these tags are returned as `{http://base.google.com/ns/1.0}price` — the namespace URI is prepended. Naive selectors like `elem.find('g:price')` return `None`, silently.
+
+**Why it happens:**
+Developers look at the raw XML, see `<g:price>`, and try to find elements by `g:price`. Python's ElementTree uses Clark notation for namespaces, not prefix notation.
+
+**How to avoid:**
+Define namespace map and use it consistently:
+```python
+GOOGLE_SHOPPING_NS = {
+    'g': 'http://base.google.com/ns/1.0'
+}
+
+def extract_product(item_elem) -> dict:
+    """Extract product fields handling Google Shopping namespaces."""
+    def find_text(tag: str, ns_prefix: str = 'g') -> str:
+        """Find text with namespace awareness."""
+        # Try namespaced first
+        ns_uri = GOOGLE_SHOPPING_NS.get(ns_prefix, '')
+        elem = item_elem.find(f'{{{ns_uri}}}{tag}')
+        if elem is None:
+            # Try without namespace (some feeds omit it)
+            elem = item_elem.find(tag)
+        return (elem.text or '').strip() if elem is not None else ''
+
+    return {
+        'id': find_text('id'),
+        'title': item_elem.findtext('title', '').strip(),  # No namespace
+        'description': item_elem.findtext('description', '').strip(),
+        'price': find_text('price'),
+        'sale_price': find_text('sale_price'),
+        'image_link': find_text('image_link'),
+        'brand': find_text('brand'),
+        'product_type': find_text('product_type'),
+        'availability': find_text('availability'),
     }
-}
 ```
 
-3. **Integrate with Gemini AI scoring:**
-   - Edit Factory already has Gemini integration (lines 1051-1108)
-   - Gemini provides context-aware scoring
-   - Combine motion-based + AI-based scores
+Also test against the actual Nortia.ro feed before coding assumptions about field names — Romanian stores sometimes use custom Google Shopping extensions.
 
-**Detection:**
-- Generated clips feel "jumpy" or "chaotic"
-- Beautiful static shots are excluded
-- Clips don't match platform content style
-- User feedback: "Doesn't feel like Reels content"
+**Warning signs:**
+- All product prices/brands return as empty strings
+- Only `title`, `description`, `link` (non-namespaced fields) parse correctly
+- Product count is correct but most fields are blank
+- `elem.find('g:price')` returns `None` consistently
+
+**Phase to address:** Phase 1 (feed parsing) — test against real feed file during implementation.
 
 ---
 
-### Pitfall 8: Missing Platform-Specific Keyframe Intervals
+## Technical Debt Patterns
 
-**What goes wrong:**
-Using FFmpeg's default keyframe settings causes platforms to re-encode uploaded videos, reducing quality. Edit Factory's current settings (GOP 60 for 30fps = 2sec) are correct but not documented or adaptive.
+Shortcuts that seem reasonable but create long-term problems.
 
-**Why it happens:**
-Developers don't realize that platforms like Instagram require specific keyframe intervals. If not provided, the platform re-encodes to meet their requirements, degrading quality.
-
-**Evidence:**
-- Edit Factory code (line 689, 716, 1988, 2009) uses `-g 60` for 30fps = 2 second GOP
-- Platform requirements: keyframes every 2 seconds (Instagram, TikTok)
-- Source: [Instagram Reels Export Settings](https://aaapresets.com/blogs/premiere-pro-blog-series-editing-tips-transitions-luts-guide/master-your-shorts-the-ultimate-guide-to-export-settings-for-instagram-reels-tiktok-youtube-shorts-in-2025-extended-edition)
-
-**Prevention:**
-
-1. **Calculate GOP based on FPS:**
-```python
-def calculate_gop_size(fps: float, keyframe_interval_seconds: float = 2.0) -> int:
-    """
-    Calculate GOP (Group of Pictures) size for platform requirements.
-    Most social platforms require keyframes every 2 seconds.
-    """
-    return int(fps * keyframe_interval_seconds)
-
-# Usage
-gop_size = calculate_gop_size(fps=30)  # Returns 60
-gop_size = calculate_gop_size(fps=60)  # Returns 120 (for 60fps Shorts)
-```
-
-2. **Platform-specific GOP settings:**
-```python
-PLATFORM_GOP_REQUIREMENTS = {
-    "instagram_reels": {
-        "keyframe_interval": 2.0,  # seconds
-        "min_keyframe_interval": 2.0,  # -keyint_min
-        "scene_change_threshold": 0  # -sc_threshold (disable scene detection)
-    },
-    "tiktok": {
-        "keyframe_interval": 2.0,
-        "min_keyframe_interval": 2.0,
-        "scene_change_threshold": 0
-    },
-    "youtube_shorts": {
-        "keyframe_interval": 2.0,
-        "min_keyframe_interval": 2.0,
-        "scene_change_threshold": 0
-    }
-}
-```
-
-3. **Document Edit Factory's current correct approach:**
-   - Add comments explaining WHY `-g 60` is used
-   - Make it adaptive to detected FPS
-   - Ensure consistent across all encoding points
-
-**Detection:**
-- Platform shows "Processing video" for longer than upload time
-- Visual quality degradation after upload
-- File size changes significantly post-upload
-- Platform notification: "Video was re-encoded"
+| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
+|----------|-------------------|----------------|-----------------|
+| Store all downloaded images in a flat directory | Simplest code | 9,987+ images in one directory causes filesystem slowdown on some systems | Use per-product subdirectories from the start |
+| Use `text=` inline in drawtext for simple ASCII-only products | Fewer temp files | Romanian products break; inconsistent behavior based on product name | Never — always use `textfile=` |
+| Single in-memory dict for batch job state | Matches existing patterns | Lost on server restart, no recovery possible | Only for single-product generation; batch needs persistence |
+| Download images at render time (not pre-downloaded) | Simpler pipeline | Render job times are unpredictable; timeout failures hard to diagnose | Never for batch mode |
+| `xml.etree.ElementTree.parse()` for feed | stdlib, no dependencies | 200-500 MB memory spike, blocks async event loop | Only for testing with <100 products |
+| AI images generated for every product in batch | Complete visuals | Cost unbounded, no idempotency | Never without explicit per-product opt-in + cost estimate |
+| Hardcode `max_workers=10` for image downloads | Faster downloads | CDN rate limits trigger 429s, all downloads fail together | Set to 3-5; use exponential backoff |
 
 ---
 
-### Pitfall 9: FFmpeg Subprocess Memory Leaks
+## Integration Gotchas
 
-**What goes wrong:**
-Long-running video processing jobs accumulate memory from FFmpeg subprocess calls. Python's subprocess management doesn't release memory properly, leading to crashes or OOM kills.
+Common mistakes when connecting to the existing Edit Factory pipeline.
 
-**Why it happens:**
-Python subprocess with `capture_output=True` buffers stdout/stderr in memory. For long FFmpeg processes with verbose output, this buffer grows to hundreds of MB. Multiple parallel jobs compound the issue.
-
-**Evidence from research:**
-- "Memory leaks have been identified in the ffmpeg adapter when using subprocess.Popen"
-- "Old FFMPEG processes... remain in memory even after the write is finished"
-- "FFmpeg processes can start using extreme amounts of memory (up to 21GB reported)"
-- CVE-2025-25469: Memory leak in FFmpeg libavutil (recent vulnerability)
-- Sources: [Python Issue 28165](https://bugs.python.org/issue28165), [FFmpeg Memory Leak CVE](https://hackers-arise.com/how-to-dos-a-media-server-the-memory-leak-vulnerability-in-ffmpeg-cve-2025-25469/)
-
-**Edit Factory context:**
-Current `_run_ffmpeg()` method (line 506-542) uses `subprocess.run(capture_output=True)`, which is correct for short commands but risky for long processing.
-
-**Prevention:**
-
-1. **Stream FFmpeg output instead of buffering:**
-
-```python
-def _run_ffmpeg_streaming(self, cmd: list, operation: str) -> subprocess.CompletedProcess:
-    """
-    Execute FFmpeg with streaming output to avoid memory accumulation.
-    Use for long-running operations (>30 seconds).
-    """
-    logger.debug(f"FFmpeg command ({operation}): {' '.join(cmd)}")
-
-    # Stream to temporary files instead of memory
-    with tempfile.NamedTemporaryFile(mode='w+', delete=False) as stdout_f, \
-         tempfile.NamedTemporaryFile(mode='w+', delete=False) as stderr_f:
-
-        process = subprocess.Popen(
-            cmd,
-            stdout=stdout_f,
-            stderr=stderr_f,
-            text=True
-        )
-
-        returncode = process.wait()
-
-        # Read only on error
-        if returncode != 0:
-            stderr_f.seek(0)
-            stderr = stderr_f.read()
-            stdout_f.seek(0)
-            stdout = stdout_f.read()
-
-            # Parse errors
-            error_lines = [line for line in stderr.split('\n')
-                          if 'error' in line.lower()]
-            logger.error(f"FFmpeg {operation} failed: {error_lines[0] if error_lines else stderr[-500:]}")
-
-            raise RuntimeError(f"FFmpeg {operation} failed")
-
-        # Cleanup temp files
-        os.unlink(stdout_f.name)
-        os.unlink(stderr_f.name)
-
-    return subprocess.CompletedProcess(cmd, returncode, "", "")
-```
-
-2. **Explicit cleanup for segment processing:**
-
-```python
-def extract_segments(self, ...):
-    # ... existing code ...
-
-    for i, seg in enumerate(segments):
-        # Process segment
-        self._run_ffmpeg(cmd, f"extract segment {i+1}")
-
-        # Force garbage collection every N segments
-        if i % 10 == 0:
-            import gc
-            gc.collect()
-```
-
-3. **Monitor memory usage:**
-
-```python
-import psutil
-
-def check_memory_pressure() -> bool:
-    """Check if system is under memory pressure."""
-    memory = psutil.virtual_memory()
-    return memory.percent > 85  # Above 85% usage
-
-# Before starting heavy processing
-if check_memory_pressure():
-    logger.warning("System memory pressure detected, will process segments sequentially")
-    use_parallel = False
-```
-
-4. **Process limits for parallel jobs:**
-   - Limit concurrent FFmpeg processes
-   - Queue jobs when memory pressure detected
-   - Implement job throttling in library_routes.py
-
-**Detection:**
-- Python process memory grows continuously
-- System OOM killer terminates processes
-- "Out of memory" errors in logs
-- `ps aux` shows orphaned ffmpeg processes
-- Server swap usage increases
+| Integration | Common Mistake | Correct Approach |
+|-------------|----------------|------------------|
+| Existing TTS pipeline | Pass raw feed description to `generate_tts_audio()` | Strip HTML, decode entities, truncate to 500 chars via `clean_product_text()` before TTS |
+| Existing `assembly_service.py` | Try to reuse assembly service for product videos | Build a separate `product_video_service.py` — assembly service is built around script-segment matching, incompatible with image-based composition |
+| Existing `library_routes.py` render endpoint | Add product video generation to existing render flow | Add a new `product_routes.py` router; product videos have fundamentally different inputs (images, not video segments) |
+| Existing `job_storage.py` | Track batch of 20 product jobs as single job | Add batch job concept to job storage or create `product_batch_storage.py` with per-product sub-states |
+| Existing subtitle system (`force_style` / ASS) | Apply subtitle system to text overlays in product videos | Text overlays in product videos use `drawtext` (static overlays), not `subtitles` (timed captions) — different tools, different escaping |
+| Existing `cost_tracker.py` | Forget to log AI image generation costs | Hook `cost_tracker.log_cost()` for every AI image API call, same as existing ElevenLabs logging |
+| Existing ElevenLabs credits (100k/month) | Generate full voiceover for all 9,987 products | Product videos use short template text (20-80 chars typical) = ~40-160 credits per product. 100k credits / 40 chars = 2,500 products max per month. Use Edge TTS as default for batch. |
 
 ---
 
-## Minor Pitfalls
+## Performance Traps
 
-Mistakes that cause annoyance but are fixable.
+Patterns that work at small scale but fail as usage grows.
 
-### Pitfall 10: Hardcoded Font Paths Break Subtitle Rendering
-
-**What goes wrong:**
-Subtitle rendering fails on different systems because font paths are hardcoded or fonts aren't available. FFmpeg's `subtitles` filter uses system fonts, but availability varies by platform.
-
-**Prevention:**
-```python
-# Check font availability before rendering
-def validate_font(font_family: str) -> str:
-    """Fallback to available fonts if requested font missing."""
-    system_fonts = get_system_fonts()  # Use fc-list on Linux, registry on Windows
-    if font_family in system_fonts:
-        return font_family
-
-    # Fallback chain
-    fallbacks = ["Arial", "DejaVu Sans", "Liberation Sans"]
-    for fallback in fallbacks:
-        if fallback in system_fonts:
-            logger.warning(f"Font {font_family} not found, using {fallback}")
-            return fallback
-
-    return "sans-serif"  # Last resort
-```
-
-**Detection:**
-- Subtitles don't appear in output
-- FFmpeg errors mentioning "font not found"
-- Subtitles render with wrong font
+| Trap | Symptoms | Prevention | When It Breaks |
+|------|----------|------------|----------------|
+| Synchronous image downloads inside render job | Single product: fine. Batch of 20: 2-5 minute delay before rendering starts | Pre-download phase before render phase | >5 products |
+| Loading full 10k feed into memory for browser UI | First page load takes 5-10 seconds; WSL memory pressure during rendering | Parse to lightweight index (id/title/price/image only), cache as JSON | Feed > 1,000 products |
+| One FFmpeg process per product image (Ken Burns) | Single product: 10-30s. Batch of 20: 3-10 minutes | Benchmark Ken Burns vs simpler scale filter; offer both options | >5 products in batch |
+| No image cache — re-download same images each batch run | Same product video regenerated twice = 2x download time | Content-addressed cache keyed by MD5 of URL | After 2nd run of same products |
+| Unlimited `asyncio.gather()` for product rendering | Fine for 3 products; crashes with OOM for 20 | Use semaphore to limit concurrent FFmpeg processes to 2-3 | >5 concurrent renders |
+| Full product descriptions in AI script prompt | Works with 200-char descriptions; fails with 2000-char descriptions (token limits, slow) | Truncate descriptions to 300 chars before AI prompt | Products with very long descriptions |
 
 ---
 
-### Pitfall 11: Encoding Settings Not Preserved Across Pipeline Steps
+## Security Mistakes
 
-**What goes wrong:**
-Video characteristics change between extraction → audio → subtitles steps because encoding settings aren't consistent. Color space, pixel format, or SAR changes cause quality loss or compatibility issues.
+Domain-specific security issues for product feed processing.
 
-**Prevention:**
-```python
-# Define consistent encoding profile
-ENCODING_PROFILE = {
-    "pix_fmt": "yuv420p",    # Compatible with all platforms
-    "color_space": "bt709",   # Standard HD color space
-    "color_primaries": "bt709",
-    "color_trc": "bt709",
-    "sar": "1:1"              # Square pixels
-}
-
-# Apply to ALL encoding steps
-def get_encoding_params(use_gpu: bool) -> list:
-    """Get consistent encoding parameters."""
-    params = [
-        "-pix_fmt", ENCODING_PROFILE["pix_fmt"],
-        "-colorspace", ENCODING_PROFILE["color_space"],
-        "-color_primaries", ENCODING_PROFILE["color_primaries"],
-        "-color_trc", ENCODING_PROFILE["color_trc"],
-        "-sar", ENCODING_PROFILE["sar"]
-    ]
-    return params
-```
-
-**Detection:**
-- Color shift between segments
-- Aspect ratio changes unexpectedly
-- Platform shows compatibility warnings
+| Mistake | Risk | Prevention |
+|---------|------|------------|
+| Pass raw product URL to web scraper without validation | SSRF — attacker modifies feed to point to internal URLs (localhost:8000, AWS metadata endpoint) | Validate URLs are http/https and hostname is external before scraping |
+| Store downloaded product images in web-accessible directory without path sanitization | Path traversal if product ID or filename contains `../` | Use `uuid` or content hash as filename, never use product data in file paths |
+| Pass raw product title to shell command without escaping | Command injection if title contains backticks or `$()` | Always use `subprocess` with list args (not shell=True); use textfile for FFmpeg text |
+| Log full API responses containing product descriptions | Sensitive pricing data in logs | Log summary only (product count, status) not full product data |
 
 ---
 
-## Phase-Specific Warnings
+## UX Pitfalls
 
-| Phase Topic | Likely Pitfall | Mitigation |
-|-------------|---------------|------------|
-| Platform presets implementation | CRF vs bitrate confusion (#3) | Implement capped CRF for all social media presets |
-| Audio normalization | Skipping two-pass loudnorm (#2) | Mandate two-pass for quality, document clearly |
-| Quality filter addition | Filter chain order destroys performance (#1) | Establish filter chain architecture doc |
-| Denoising implementation | nlmeans destroys processing time (#4) | Smart filter selection based on noise analysis |
-| Sharpening implementation | Halos and artifacts (#6) | Conservative defaults, user testing |
-| Subtitle quality enhancement | Breaking GPU pipeline (#5) | Preserve current CPU-render pattern |
-| Export settings UI | Missing platform GOP settings (#8) | Calculate adaptive GOP based on FPS |
-| Concurrent processing | FFmpeg subprocess memory leaks (#9) | Implement streaming output, memory monitoring |
-| Scoring algorithm enhancement | Weights don't match aesthetics (#7) | A/B test scoring profiles with users |
+Common user experience mistakes for the product browser and video generation UI.
+
+| Pitfall | User Impact | Better Approach |
+|---------|-------------|-----------------|
+| Show all 9,987 products in a single scrollable list | Browser freezes; unusable for product selection | Paginate (50 per page) with search/filter; virtual scrolling if needed |
+| Start batch render without showing estimated time and cost | User doesn't know if it will take 5 minutes or 2 hours | Show "~X minutes, ~Y ElevenLabs credits" estimate before confirming batch |
+| No way to see which products in a batch failed | User re-runs entire batch to fix one failure | Per-product status in batch progress UI (table with status icons) |
+| Trigger AI image generation for every product in batch by default | Surprise API cost; slow batch | Make AI images explicitly opt-in; show cost estimate per product |
+| Show raw feed description text in product browser | HTML tags visible; messy UI | Always display cleaned text (strip HTML) in product browser |
+| No preview before batch commit | Wasted rendering for wrong template settings | Single-product preview mode before launching batch |
 
 ---
 
-## Quick Reference: Do's and Don'ts
+## "Looks Done But Isn't" Checklist
 
-### DO:
-✓ Use two-pass loudnorm for audio normalization
-✓ Implement capped CRF for social media exports
-✓ Keep filter chains separated by CPU/GPU domain
-✓ Use fast denoising (hqdn3d) by default, nlmeans opt-in only
-✓ Apply subtitles as THE LAST processing step
-✓ Calculate GOP size based on detected FPS
-✓ Monitor memory usage during batch processing
-✓ Test with actual platform uploads
-✓ Document WHY encoding settings are used
+Things that appear complete but are missing critical pieces.
 
-### DON'T:
-✗ Mix CRF and bitrate constraints without maxrate
-✗ Use single-pass loudnorm for final output
-✗ Apply CPU filters in GPU pipelines without hwdownload
-✗ Enable nlmeans denoising by default
-✗ Sharpen with values >1.0 (causes halos)
-✗ Assume platform specs are optional guidelines
-✗ Buffer large FFmpeg output in memory
-✗ Hardcode font paths or assume font availability
-✗ Skip testing encoding parameter consistency
+- [ ] **Feed parser:** Test against the actual Nortia.ro XML file (not a mock) — namespace handling, encoding, field availability may differ from spec
+- [ ] **Romanian text rendering:** Test with products containing all diacritics: ă â î ș ț (comma-below variants, not cedilla variants) — verify at font level
+- [ ] **Image downloads:** Test with broken URLs, redirects (CDN URL shorteners), HTTPS-only servers, and very large images (some feeds include unoptimized 5MB+ images)
+- [ ] **Aspect ratio handling:** Test with portrait, landscape, and square product images — verify all three look correct in the 9:16 output
+- [ ] **Ken Burns performance:** Benchmark with 5 and 20 products — total render time must be acceptable before committing to zoompan
+- [ ] **Batch failure isolation:** Deliberately break one product (point to non-existent image) in a 5-product batch — verify other 4 complete successfully
+- [ ] **ElevenLabs credit consumption:** Calculate credits for one full batch run against real product descriptions — verify it stays within 100k/month budget
+- [ ] **Price formatting:** Test products with sale prices (both price fields present) and without — verify display logic handles both cases
+- [ ] **XML namespace parsing:** Test `g:price`, `g:brand`, etc. parse correctly — log a warning if namespaced fields return empty for >10% of products
+
+---
+
+## Recovery Strategies
+
+When pitfalls occur despite prevention, how to recover.
+
+| Pitfall | Recovery Cost | Recovery Steps |
+|---------|---------------|----------------|
+| diacritics corrupted in rendered videos | HIGH — re-render all affected videos | Switch to `textfile=` pattern; regenerate using cached downloaded images (no re-download needed) |
+| Batch job crashed mid-run with no per-product state | MEDIUM — re-run batch | Add per-product state tracking; implement "resume batch" feature that skips already-completed products |
+| AI image costs unexpectedly high | LOW — no data loss | Add `--dry-run` flag to estimate cost before generation; implement idempotency cache |
+| Feed XML namespace mismatch = empty product data | MEDIUM | Add validation step after parsing: log warning if >10% of products have empty price/brand; halt if >50% empty |
+| Ken Burns too slow for batch | MEDIUM | Add configurable option: `ken_burns: bool = False` for batch mode, simple scale/crop for speed |
+| Aspect ratio mismatch = stretched images in production | HIGH — re-render | Detect during image download (PIL `Image.size` check) and store aspect ratio; fix scale filter |
+
+---
+
+## Pitfall-to-Phase Mapping
+
+How roadmap phases should address these pitfalls.
+
+| Pitfall | Prevention Phase | Verification |
+|---------|------------------|--------------|
+| Romanian diacritics in drawtext (#1) | Phase 1: Feed parsing + image pipeline | Render a test clip with "Produs ș.r.l. Ță special" as title overlay |
+| XML loaded into memory (#2) | Phase 1: Feed parsing | Measure Python process memory while parsing full Nortia.ro feed |
+| Image download blocks rendering (#3) | Phase 1: Image pipeline + Phase 3: Batch | Time a 10-product batch from request to first rendered video |
+| Ken Burns too slow (#4) | Phase 2: Image-to-video composition | Benchmark Ken Burns vs simple scale on 5 images; document time per image |
+| Aspect ratio mismatch (#5) | Phase 2: Image-to-video composition | Test with portrait, landscape, square images from real feed |
+| Web scraping fragile (#6) | Phase 2: Visual sources | Test against Nortia.ro product pages; verify fallback works when scraping fails |
+| HTML in product descriptions (#7) | Phase 1: Feed parsing | Parse 10 real products and verify `clean_product_text()` output has no HTML |
+| Batch error isolation (#8) | Phase 3: Batch processing | Inject one failing product into a 5-product batch; verify others complete |
+| Missing image fallback (#9) | Phase 1: Image pipeline | Test with broken image URL; verify placeholder renders without FFmpeg error |
+| Price % escaping (#10) | Phase 2: Text overlay composition | Test with `"Reducere 30%"` in overlay text; verify `%` displays correctly |
+| AI image cost control (#11) | Phase 2: Visual sources | Verify cost estimate shown before batch; verify idempotency for re-runs |
+| WSL font path (#12) | Phase 1: Video composition foundation | Test drawtext with WSL Linux font path vs Windows path |
+| XML namespace parsing (#13) | Phase 1: Feed parsing | Verify `g:price`, `g:brand` parse correctly from real Nortia.ro feed |
 
 ---
 
 ## Sources
 
-**HIGH Confidence (Verified with official documentation or multiple sources):**
-- [FFmpeg Best Quality Conversion](https://www.baeldung.com/linux/ffmpeg-best-quality-conversion) - CRF vs bitrate guidance
-- [Audio Normalization with FFmpeg](https://wiki.tnonline.net/w/Blog/Audio_normalization_with_FFmpeg) - Two-pass loudnorm requirements
-- [Social Media Video Sizes 2026](https://recurpost.com/blog/the-up-to-date-video-sizes-guide-for-social-media/) - Platform specifications
-- [Instagram Reels Export Settings](https://aaapresets.com/blogs/premiere-pro-blog-series-editing-tips-transitions-luts-guide/master-your-shorts-the-ultimate-guide-to-export-settings-for-instagram-reels-tiktok-youtube-shorts-in-2025-extended-edition) - GOP requirements
-- [FFmpeg Filters Documentation](https://www.ffmpeg.media/articles/ffmpeg-filters-scale-crop-rotate-sharpen) - Filter performance characteristics
-- [Codec Wiki Denoise](https://wiki.x266.mov/docs/filtering/denoise) - Denoising filter comparison
-- [Python subprocess memory leak](https://bugs.python.org/issue28165) - Subprocess management issues
-- [FFmpeg Memory Leak CVE-2025-25469](https://hackers-arise.com/how-to-dos-a-media-server-the-memory-leak-vulnerability-in-ffmpeg-cve-2025-25469/) - Recent vulnerability
+**HIGH Confidence (official documentation + direct FFmpeg behavior):**
+- [FFmpeg drawtext filter documentation](https://ffmpeg.org/ffmpeg-filters.html) — textfile option, escaping rules
+- [FFmpeg drawtext escaping levels](https://hhsprings.bitbucket.io/docs/programming/examples/ffmpeg/drawing_texts/drawtext.html) — four-level escaping documented
+- [lxml iterparse performance](https://lxml.de/performance.html) — iterparse vs DOM trade-offs
+- [Parsing large XML efficiently in Python](https://pranavk.me/python/parsing-xml-efficiently-with-python/) — iterparse patterns
 
-**MEDIUM Confidence (Single credible source or community consensus):**
-- [FFmpeg Video Sharpening](https://www.cloudacm.com/?p=3016) - Unsharp filter best practices
-- [Perceptual Video Quality Assessment](https://www.frontiersin.org/journals/signal-processing/articles/10.3389/frsip.2023.1193523/full) - Scoring algorithm research
-- [Netflix VMAF](https://netflixtechblog.com/toward-a-practical-perceptual-video-quality-metric-653f208b9652) - Perceptual quality metrics
-- [FFmpeg Subtitles Guide](https://cloudinary.com/guides/video-effects/ffmpeg-subtitles) - Subtitle rendering limitations
+**MEDIUM Confidence (multiple community sources, verified patterns):**
+- [Ken Burns effect with FFmpeg](https://mko.re/blog/ken-burns-ffmpeg/) — zoompan filter performance characteristics
+- [FFmpeg image aspect ratio handling](https://creatomate.com/blog/how-to-create-a-slideshow-from-images-using-ffmpeg) — scale + pad approach
+- [Python requests retry strategies](https://oxylabs.io/blog/python-requests-retry) — batch download error handling
+- [Cloudflare anti-bot bypass options](https://scrapfly.io/blog/posts/how-to-bypass-cloudflare-anti-scraping) — web scraping reliability
+- [Google Shopping feed data quality issues](https://feedarmy.com/kb/common-google-shopping-errors-problems-mistakes/) — common feed problems
+- [FFmpeg drawtext font path Windows](https://forum.videohelp.com/threads/382414-ffmpeg-drawtext-not-working) — Windows path escaping issues
 
-**Edit Factory Codebase (Direct inspection):**
-- `app/services/video_processor.py` - Current FFmpeg command patterns, GPU handling, filter chains
-- Verified correct patterns: GOP settings, hwaccel handling with subtitles, segment processing
+**Edit Factory Codebase (direct inspection):**
+- `app/services/assembly_service.py` — existing pipeline patterns to preserve or avoid
+- `app/services/subtitle_styler.py` — ASS subtitle approach (different from drawtext)
+- `app/api/library_routes.py` — existing BackgroundTasks pattern and job storage
+- `PROJECT.md` — confirmed: Nortia.ro feed = ~9,987 products, ElevenLabs 100k credits/month
 
 ---
-
-## Summary: Most Critical Risks
-
-For Edit Factory's video quality enhancement milestone, prioritize these three:
-
-1. **Filter Chain Order (#1)** - Will break GPU acceleration if done wrong
-2. **Audio Normalization (#2)** - Will produce poor audio quality if skipped
-3. **CRF vs Bitrate (#3)** - Will cause platform rejection if misconfigured
-
-All three require architectural decisions in Phase 1 before implementation begins.
+*Pitfalls research for: Product feed video generation (v5) added to Edit Factory*
+*Researched: 2026-02-20*
