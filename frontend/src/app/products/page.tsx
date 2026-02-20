@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +26,7 @@ import {
   Loader2,
   Package,
   Tag,
+  Film,
 } from "lucide-react";
 
 // Type definitions
@@ -65,6 +67,7 @@ interface FilterOptions {
 
 export default function ProductsPage() {
   const { currentProfile } = useProfile();
+  const router = useRouter();
 
   // Feed state
   const [feeds, setFeeds] = useState<Feed[]>([]);
@@ -235,6 +238,19 @@ export default function ProductsPage() {
     } catch {
       toast.error("Network error");
     }
+  };
+
+  // Navigate to product video generation page
+  const handleGenerateVideo = (product: Product) => {
+    const params = new URLSearchParams({
+      id: product.id,
+      title: product.title,
+      ...(product.image_link && { image: product.image_link }),
+      ...(product.raw_price_str && { price: product.raw_price_str }),
+      ...(product.brand && { brand: product.brand }),
+      ...(selectedFeedId && { feed_id: selectedFeedId }),
+    });
+    router.push(`/product-video?${params.toString()}`);
   };
 
   // Sync status badge color
@@ -477,6 +493,15 @@ export default function ProductsPage() {
                       </span>
                     )}
                   </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full mt-2 text-xs h-7"
+                    onClick={() => handleGenerateVideo(product)}
+                  >
+                    <Film className="h-3 w-3 mr-1" />
+                    Generate Video
+                  </Button>
                 </CardContent>
               </Card>
             ))}
