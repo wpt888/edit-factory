@@ -256,7 +256,7 @@ Plans:
 | 7-11 | v3 | 12/12 | Complete | 2026-02-06 |
 | 12-16 | v4 | 11/11 | Complete | 2026-02-12 |
 | 17. Feed Foundation | 2/2 | Complete    | 2026-02-20 | - |
-| 18. Video Composition | v5 | 0/2 | Not started | - |
+| 18. Video Composition | 1/2 | In Progress|  | - |
 | 19. Product Browser | v5 | 0/2 | Not started | - |
 | 20. Single Product E2E | v5 | 0/3 | Not started | - |
 | 21. Batch Generation | v5 | 0/2 | Not started | - |
