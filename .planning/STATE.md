@@ -10,10 +10,10 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Milestone: v5 Product Video Generator
-Phase: 21 of 22 (Batch Generation) — in progress
-Plan: 1 of 2 in Phase 21
-Status: Phase 21 Plan 01 complete — batch backend endpoints delivered
-Last activity: 2026-02-20 — Phase 21 Plan 01 executed (batch-generate + batch status endpoints)
+Phase: 21 of 22 (Batch Generation) — complete
+Plan: 2 of 2 in Phase 21
+Status: Phase 21 complete — batch frontend delivered (multi-select, useBatchPolling, batch-generate page)
+Last activity: 2026-02-20 — Phase 21 Plan 02 executed (batch generation frontend)
 
 Progress: [███████░░░] 72% (v5) — 4 milestones shipped prior
 
@@ -33,8 +33,9 @@ Progress: [███████░░░] 72% (v5) — 4 milestones shipped pri
 | v4 Script-First | 5 (12-16) | 11 | Shipped 2026-02-12 |
 | v5 Product Video | 6 (17-22) | TBD | In progress |
 
-**Next step:** Execute Phase 21 Plan 02 (batch generation frontend)
+**Next step:** Execute Phase 22 (final milestone completion — v5 Product Video Generator)
 | Phase 21-batch-generation P01 | 2 | 2 tasks | 1 files |
+| Phase 21 P02 | 4 | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,9 @@ Recent decisions affecting current work:
 - [Phase 20]: useSearchParams wrapped in Suspense boundary — required by Next.js App Router to avoid build errors
 - [Phase 21-01]: Sequential batch loop over asyncio.gather — safer on WSL, avoids FFmpeg memory contention
 - [Phase 21-01]: BatchGenerateRequest shares settings uniformly across all products — per-product customization explicitly out of scope
+- [Phase 21]: Checkbox uses absolute top-2 left-2 z-10 positioning to overlay product image without disrupting card layout
+- [Phase 21]: batch_id is in URL params only for navigate-away resilience — no sessionStorage needed
+- [Phase 21]: useBatchPolling stops when batchStatus.status === completed (batch-level done signal from backend)
 
 ### Pending Todos
 
@@ -86,10 +90,10 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-20
-Stopped at: Completed 21-01-PLAN.md (batch generation backend)
+Stopped at: Completed 21-02-PLAN.md (batch generation frontend)
 Resume file: None
 
-**Next step:** Execute Phase 21 Plan 02 (batch generation frontend)
+**Next step:** Execute Phase 22 (final milestone completion — v5 Product Video Generator)
 
 ---
-*Last updated: 2026-02-20 after Phase 21 plan 01 complete*
+*Last updated: 2026-02-20 after Phase 21 plan 02 complete — Phase 21 fully delivered*

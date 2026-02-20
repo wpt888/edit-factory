@@ -45,7 +45,7 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 - [x] **BATCH-01**: User can generate a single product video and preview it
 - [x] **BATCH-02**: User can select multiple products and generate videos in batch
 - [x] **BATCH-03**: Batch generation has per-product error isolation (one failure doesn't kill the batch)
-- [ ] **BATCH-04**: Batch UI shows per-product progress (not single progress bar)
+- [x] **BATCH-04**: Batch UI shows per-product progress (not single progress bar)
 - [x] **BATCH-05**: Generated videos land in existing library (clips table) for review and publishing
 
 ### Output & Integration
@@ -110,7 +110,7 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 | BATCH-01 | Phase 20 | Complete |
 | BATCH-02 | Phase 21 | Complete |
 | BATCH-03 | Phase 21 | Complete |
-| BATCH-04 | Phase 21 | Pending |
+| BATCH-04 | Phase 21 | Complete |
 | BATCH-05 | Phase 20 | Complete |
 | OUT-01 | Phase 20 | Complete |
 | OUT-02 | Phase 20 | Complete |
