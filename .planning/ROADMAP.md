@@ -257,7 +257,7 @@ Plans:
 | 17. Feed Foundation | 2/2 | Complete    | 2026-02-20 | - |
 | 18. Video Composition | 2/2 | Complete    | 2026-02-20 | - |
 | 19. Product Browser | 2/2 | Complete    | 2026-02-20 | - |
-| 20. Single Product E2E | 2/2 | Complete   | 2026-02-20 | - |
+| 20. Single Product E2E | 2/2 | Complete    | 2026-02-20 | - |
 | 21. Batch Generation | v5 | 0/2 | Not started | - |
 | 22. Templates + Customization | v5 | 0/2 | Not started | - |
 

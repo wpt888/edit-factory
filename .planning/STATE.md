@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-20)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v5 Product Video Generator — Phase 20: Single Product E2E
+**Current focus:** v5 Product Video Generator — Phase 21: Batch Generation
 
 ## Current Position
 
 Milestone: v5 Product Video Generator
-Phase: 20 of 22 (Single Product E2E) — plan 02 complete
-Plan: 2 of 3 in Phase 20 complete — ready for Phase 20 Plan 03 (or Phase 21 if 03 is final plan)
-Status: Phase 20 Plan 02 complete — product video frontend (generation page + product browser button)
-Last activity: 2026-02-21 — 20-02 complete (product video frontend)
+Phase: 21 of 22 (Batch Generation) — not started
+Plan: 0 of 2 in Phase 21
+Status: Phase 20 complete — ready for Phase 21 planning
+Last activity: 2026-02-21 — Phase 20 verified (10/10 must-haves, 5/5 success criteria)
 
-Progress: [█████░░░░░] 55% (v5) — 4 milestones shipped prior
+Progress: [██████░░░░] 67% (v5) — 4 milestones shipped prior
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 57 (50 prior + 2 phase 17 + 2 phase 18 + 2 phase 19 + 1 phase 20)
-- Total phases completed: 19 (phase 20 in progress — 2/3 plans done)
+- Total plans completed: 58 (50 prior + 2 phase 17 + 2 phase 18 + 2 phase 19 + 2 phase 20)
+- Total phases completed: 20
 - Total execution time: ~2.7 hours (v2) + ~2 days (v3) + ~47 min (v4)
 
 **By Milestone:**
@@ -33,14 +33,7 @@ Progress: [█████░░░░░] 55% (v5) — 4 milestones shipped pri
 | v4 Script-First | 5 (12-16) | 11 | Shipped 2026-02-12 |
 | v5 Product Video | 6 (17-22) | TBD | In progress |
 
-**Phase 20 Execution:**
-
-| Plan | Duration | Tasks | Files |
-|------|----------|-------|-------|
-| Phase 20 P01 | 3 min | 2 tasks | 2 files |
-| Phase 20 P02 | 7 min | 3 tasks | 4 files |
-
-**Next step:** Execute Phase 20 Plan 03 (E2E verification / final plan in phase 20)
+**Next step:** `/gsd:plan-phase 21`
 
 ## Accumulated Context
 
