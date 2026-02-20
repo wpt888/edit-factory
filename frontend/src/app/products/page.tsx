@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -98,6 +99,10 @@ export default function ProductsPage() {
   // Pagination
   const [page, setPage] = useState(1);
 
+  // Multi-select state
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
+  const [batchLoading, setBatchLoading] = useState(false);
+
   // Search debounce — 400ms
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -187,6 +192,7 @@ export default function ProductsPage() {
     setSearch("");
     setDebouncedSearch("");
     setOnSale(false);
+    setSelectedProductIds(new Set());
   }, [selectedFeedId, fetchFilterOptions]);
 
   // Fetch products when filters/page change
@@ -251,6 +257,52 @@ export default function ProductsPage() {
       ...(selectedFeedId && { feed_id: selectedFeedId }),
     });
     router.push(`/product-video?${params.toString()}`);
+  };
+
+  // Multi-select toggle
+  const toggleProductSelection = (productId: string) => {
+    setSelectedProductIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(productId)) {
+        next.delete(productId);
+      } else {
+        next.add(productId);
+      }
+      return next;
+    });
+  };
+
+  const selectAllOnPage = () => {
+    setSelectedProductIds(new Set(products.map((p) => p.id)));
+  };
+
+  const clearSelection = () => {
+    setSelectedProductIds(new Set());
+  };
+
+  // Batch generate handler
+  const handleBatchGenerate = async () => {
+    setBatchLoading(true);
+    try {
+      const res = await apiPost("/products/batch-generate", {
+        product_ids: Array.from(selectedProductIds),
+        voiceover_mode: "quick",
+        tts_provider: "edge",
+        duration_s: 30,
+        encoding_preset: "tiktok",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        router.push(`/batch-generate?batch_id=${data.batch_id}`);
+      } else {
+        const err = await res.json().catch(() => ({ detail: "Batch generation failed" }));
+        toast.error(err.detail || "Batch generation failed");
+      }
+    } catch {
+      toast.error("Network error starting batch generation");
+    } finally {
+      setBatchLoading(false);
+    }
   };
 
   // Sync status badge color
@@ -437,10 +489,21 @@ export default function ProductsPage() {
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+          <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 ${selectedProductIds.size > 0 ? "pb-24" : ""}`}>
             {products.map((product) => (
-              <Card key={product.id} className="overflow-hidden hover:shadow-md transition-shadow">
+              <Card key={product.id} className={`overflow-hidden hover:shadow-md transition-shadow ${selectedProductIds.has(product.id) ? "ring-2 ring-primary" : ""}`}>
                 <div className="relative">
+                  {/* Multi-select checkbox */}
+                  <div
+                    className="absolute top-2 left-2 z-10"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Checkbox
+                      checked={selectedProductIds.has(product.id)}
+                      onCheckedChange={() => toggleProductSelection(product.id)}
+                      className="bg-background/80 border-2"
+                    />
+                  </div>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={product.image_link || "/placeholder-product.svg"}
@@ -544,6 +607,31 @@ export default function ProductsPage() {
           </div>
         )}
       </div>
+
+      {/* Sticky action bar — visible when products are selected */}
+      {selectedProductIds.size > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 bg-card border-t shadow-lg z-50 p-4">
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="font-medium">{selectedProductIds.size} selected</span>
+              <Button variant="ghost" size="sm" onClick={selectAllOnPage}>
+                Select all on page
+              </Button>
+              <Button variant="ghost" size="sm" onClick={clearSelection}>
+                Clear
+              </Button>
+            </div>
+            <Button onClick={handleBatchGenerate} disabled={batchLoading}>
+              {batchLoading ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Film className="h-4 w-4 mr-2" />
+              )}
+              Generate {selectedProductIds.size} Videos
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
