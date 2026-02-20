@@ -211,12 +211,11 @@ Plans:
   3. Elaborate mode generates an AI voiceover script from the product description via Gemini or Claude and then synthesizes it with the selected TTS provider
   4. Generated video has synced subtitles derived from TTS timestamps — the same subtitle pipeline used in v4
   5. Generated video appears in the existing library page as a clip, uses the active encoding preset (TikTok/Reels/Shorts), -14 LUFS audio normalization, and any enabled video filters
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 20-01: /generate endpoint (product_routes.py) dispatching product video compositor as BackgroundTask + job polling endpoint
-- [ ] 20-02: /product-video frontend page — template selector, duration + voiceover mode + TTS provider settings, generate button, progress polling via useJobPolling
-- [ ] 20-03: Quick-mode TTS voiceover wiring (template string → existing TTS factory) + elaborate-mode AI script generation (product-aware prompt → existing script_generator) + subtitle integration
+- [ ] 20-01-PLAN.md — Backend: product_generate_routes.py with POST /generate endpoint + full background task pipeline (TTS, subtitles, compositor, render_with_preset, library insert)
+- [ ] 20-02-PLAN.md — Frontend: /product-video page with generation form, TTS/voiceover settings, progress polling + "Generate Video" button on product browser cards + E2E verification
 
 ### Phase 21: Batch Generation
 **Goal**: Users can select multiple products, launch batch generation, and monitor per-product progress — with one product failure not affecting the rest
@@ -258,7 +257,7 @@ Plans:
 | 17. Feed Foundation | 2/2 | Complete    | 2026-02-20 | - |
 | 18. Video Composition | 2/2 | Complete    | 2026-02-20 | - |
 | 19. Product Browser | 2/2 | Complete    | 2026-02-20 | - |
-| 20. Single Product E2E | v5 | 0/3 | Not started | - |
+| 20. Single Product E2E | v5 | 0/2 | Planning complete | - |
 | 21. Batch Generation | v5 | 0/2 | Not started | - |
 | 22. Templates + Customization | v5 | 0/2 | Not started | - |
 
