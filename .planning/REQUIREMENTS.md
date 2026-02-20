@@ -28,10 +28,10 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 
 ### Voiceover & Subtitles
 
-- [ ] **TTS-01**: Quick mode: system generates voiceover from template text (title + price + brand)
-- [ ] **TTS-02**: Elaborate mode: AI generates engaging voiceover script from product description (Gemini/Claude)
-- [ ] **TTS-03**: User can choose TTS provider (ElevenLabs or Edge TTS) — Edge TTS default for batch
-- [ ] **TTS-04**: System generates synced subtitles from TTS timestamps (reuse v4 pipeline)
+- [x] **TTS-01**: Quick mode: system generates voiceover from template text (title + price + brand)
+- [x] **TTS-02**: Elaborate mode: AI generates engaging voiceover script from product description (Gemini/Claude)
+- [x] **TTS-03**: User can choose TTS provider (ElevenLabs or Edge TTS) — Edge TTS default for batch
+- [x] **TTS-04**: System generates synced subtitles from TTS timestamps (reuse v4 pipeline)
 
 ### Templates
 
@@ -42,17 +42,17 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 
 ### Batch & Generation
 
-- [ ] **BATCH-01**: User can generate a single product video and preview it
+- [x] **BATCH-01**: User can generate a single product video and preview it
 - [ ] **BATCH-02**: User can select multiple products and generate videos in batch
 - [ ] **BATCH-03**: Batch generation has per-product error isolation (one failure doesn't kill the batch)
 - [ ] **BATCH-04**: Batch UI shows per-product progress (not single progress bar)
-- [ ] **BATCH-05**: Generated videos land in existing library (clips table) for review and publishing
+- [x] **BATCH-05**: Generated videos land in existing library (clips table) for review and publishing
 
 ### Output & Integration
 
-- [ ] **OUT-01**: Rendered videos use existing encoding presets (TikTok, Reels, YouTube Shorts)
-- [ ] **OUT-02**: Rendered videos use existing audio normalization (-14 LUFS)
-- [ ] **OUT-03**: Rendered videos use existing video filters if enabled (denoise, sharpen, color)
+- [x] **OUT-01**: Rendered videos use existing encoding presets (TikTok, Reels, YouTube Shorts)
+- [x] **OUT-02**: Rendered videos use existing audio normalization (-14 LUFS)
+- [x] **OUT-03**: Rendered videos use existing video filters if enabled (denoise, sharpen, color)
 - [ ] **OUT-04**: Product videos are publishable via existing Postiz integration
 
 ## Future Requirements
@@ -99,22 +99,22 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 | COMP-04 | Phase 18 | Complete |
 | COMP-05 | Phase 17 | Complete |
 | COMP-06 | Phase 18 | Complete |
-| TTS-01 | Phase 20 | Pending |
-| TTS-02 | Phase 20 | Pending |
-| TTS-03 | Phase 20 | Pending |
-| TTS-04 | Phase 20 | Pending |
+| TTS-01 | Phase 20 | Complete |
+| TTS-02 | Phase 20 | Complete |
+| TTS-03 | Phase 20 | Complete |
+| TTS-04 | Phase 20 | Complete |
 | TMPL-01 | Phase 22 | Pending |
 | TMPL-02 | Phase 22 | Pending |
 | TMPL-03 | Phase 22 | Pending |
 | TMPL-04 | Phase 22 | Pending |
-| BATCH-01 | Phase 20 | Pending |
+| BATCH-01 | Phase 20 | Complete |
 | BATCH-02 | Phase 21 | Pending |
 | BATCH-03 | Phase 21 | Pending |
 | BATCH-04 | Phase 21 | Pending |
-| BATCH-05 | Phase 20 | Pending |
-| OUT-01 | Phase 20 | Pending |
-| OUT-02 | Phase 20 | Pending |
-| OUT-03 | Phase 20 | Pending |
+| BATCH-05 | Phase 20 | Complete |
+| OUT-01 | Phase 20 | Complete |
+| OUT-02 | Phase 20 | Complete |
+| OUT-03 | Phase 20 | Complete |
 | OUT-04 | Phase 20 | Pending |
 
 **Coverage:**
