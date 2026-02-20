@@ -163,11 +163,11 @@ Full details: `.planning/milestones/v4-ROADMAP.md`
   3. Product images download in parallel to a local cache directory with fallback placeholder for missing images
   4. Romanian product names with diacritics (a, i, s, t with comma-below) render correctly in FFmpeg drawtext using the `textfile=` pattern — verified end-to-end with a real Nortia.ro product name
   5. HTML tags and entities in product descriptions are stripped by `clean_product_text()` before any field is stored or used
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 17-01: DB migrations (product_feeds, products tables) + feed_parser.py (lxml iterparse, namespace handling, clean_product_text, Supabase upsert)
-- [ ] 17-02: image_fetcher.py (parallel httpx downloads, Pillow format conversion, disk cache, placeholder generation) + font/textfile= pattern verification
+- [ ] 17-01-PLAN.md — DB migrations (product_feeds, products tables) + feed_parser.py + feed_routes.py API
+- [ ] 17-02-PLAN.md — image_fetcher.py (parallel downloads, placeholder) + textfile_helper.py (Romanian diacritics)
 
 ### Phase 18: Video Composition
 **Goal**: The system can produce a complete product video clip from a product image using Ken Burns animation, text overlays, and configurable duration — verified against real Nortia.ro product images
