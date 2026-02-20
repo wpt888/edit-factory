@@ -19,12 +19,12 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 
 ### Video Composition
 
-- [ ] **COMP-01**: System generates Ken Burns zoom/pan animation from product image (FFmpeg zoompan)
+- [x] **COMP-01**: System generates Ken Burns zoom/pan animation from product image (FFmpeg zoompan)
 - [ ] **COMP-02**: System renders text overlays: product name, price, sale price (with strikethrough), brand
 - [ ] **COMP-03**: System renders sale badge overlay when product has sale_price
 - [ ] **COMP-04**: System renders CTA text overlay (configurable, e.g. "Comanda acum!")
 - [x] **COMP-05**: Text overlays handle Romanian diacritics correctly (UTF-8 textfile= pattern)
-- [ ] **COMP-06**: User can set video duration (15/30/45/60 seconds)
+- [x] **COMP-06**: User can set video duration (15/30/45/60 seconds)
 
 ### Voiceover & Subtitles
 
@@ -93,12 +93,12 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 | FEED-05 | Phase 19 | Pending |
 | FEED-06 | Phase 19 | Pending |
 | FEED-07 | Phase 17 | Complete |
-| COMP-01 | Phase 18 | Pending |
+| COMP-01 | Phase 18 | Complete |
 | COMP-02 | Phase 18 | Pending |
 | COMP-03 | Phase 18 | Pending |
 | COMP-04 | Phase 18 | Pending |
 | COMP-05 | Phase 17 | Complete |
-| COMP-06 | Phase 18 | Pending |
+| COMP-06 | Phase 18 | Complete |
 | TTS-01 | Phase 20 | Pending |
 | TTS-02 | Phase 20 | Pending |
 | TTS-03 | Phase 20 | Pending |
