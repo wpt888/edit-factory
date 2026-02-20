@@ -86,42 +86,42 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FEED-01 | TBD | Pending |
-| FEED-02 | TBD | Pending |
-| FEED-03 | TBD | Pending |
-| FEED-04 | TBD | Pending |
-| FEED-05 | TBD | Pending |
-| FEED-06 | TBD | Pending |
-| FEED-07 | TBD | Pending |
-| COMP-01 | TBD | Pending |
-| COMP-02 | TBD | Pending |
-| COMP-03 | TBD | Pending |
-| COMP-04 | TBD | Pending |
-| COMP-05 | TBD | Pending |
-| COMP-06 | TBD | Pending |
-| TTS-01 | TBD | Pending |
-| TTS-02 | TBD | Pending |
-| TTS-03 | TBD | Pending |
-| TTS-04 | TBD | Pending |
-| TMPL-01 | TBD | Pending |
-| TMPL-02 | TBD | Pending |
-| TMPL-03 | TBD | Pending |
-| TMPL-04 | TBD | Pending |
-| BATCH-01 | TBD | Pending |
-| BATCH-02 | TBD | Pending |
-| BATCH-03 | TBD | Pending |
-| BATCH-04 | TBD | Pending |
-| BATCH-05 | TBD | Pending |
-| OUT-01 | TBD | Pending |
-| OUT-02 | TBD | Pending |
-| OUT-03 | TBD | Pending |
-| OUT-04 | TBD | Pending |
+| FEED-01 | Phase 17 | Pending |
+| FEED-02 | Phase 19 | Pending |
+| FEED-03 | Phase 19 | Pending |
+| FEED-04 | Phase 19 | Pending |
+| FEED-05 | Phase 19 | Pending |
+| FEED-06 | Phase 19 | Pending |
+| FEED-07 | Phase 17 | Pending |
+| COMP-01 | Phase 18 | Pending |
+| COMP-02 | Phase 18 | Pending |
+| COMP-03 | Phase 18 | Pending |
+| COMP-04 | Phase 18 | Pending |
+| COMP-05 | Phase 17 | Pending |
+| COMP-06 | Phase 18 | Pending |
+| TTS-01 | Phase 20 | Pending |
+| TTS-02 | Phase 20 | Pending |
+| TTS-03 | Phase 20 | Pending |
+| TTS-04 | Phase 20 | Pending |
+| TMPL-01 | Phase 22 | Pending |
+| TMPL-02 | Phase 22 | Pending |
+| TMPL-03 | Phase 22 | Pending |
+| TMPL-04 | Phase 22 | Pending |
+| BATCH-01 | Phase 20 | Pending |
+| BATCH-02 | Phase 21 | Pending |
+| BATCH-03 | Phase 21 | Pending |
+| BATCH-04 | Phase 21 | Pending |
+| BATCH-05 | Phase 20 | Pending |
+| OUT-01 | Phase 20 | Pending |
+| OUT-02 | Phase 20 | Pending |
+| OUT-03 | Phase 20 | Pending |
+| OUT-04 | Phase 20 | Pending |
 
 **Coverage:**
 - v5 requirements: 30 total
-- Mapped to phases: 0
-- Unmapped: 30 (roadmap pending)
+- Mapped to phases: 30
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-20*
-*Last updated: 2026-02-20 after initial definition*
+*Last updated: 2026-02-20 after v5 roadmap created (Phases 17-22)*
