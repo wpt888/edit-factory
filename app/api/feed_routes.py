@@ -11,7 +11,9 @@ Endpoints:
     GET    /feeds/{feed_id}          Get single feed
     DELETE /feeds/{feed_id}          Delete feed (cascades products)
     POST   /feeds/{feed_id}/sync     Trigger async XML sync
-    GET    /feeds/{feed_id}/products List products with pagination
+
+Note: Product listing endpoints (GET /feeds/{feed_id}/products and
+GET /feeds/{feed_id}/products/filters) are in product_routes.py.
 """
 import asyncio
 import logging
@@ -256,53 +258,3 @@ async def sync_feed(
     }
 
 
-@router.get("/{feed_id}/products")
-async def list_products(
-    feed_id: str,
-    page: int = 1,
-    page_size: int = 50,
-    profile: ProfileContext = Depends(get_profile_context),
-):
-    """List products for a feed with pagination.
-
-    Query params:
-        page: Page number (1-based, default 1)
-        page_size: Items per page (default 50, max 200)
-    """
-    supabase = _get_supabase()
-
-    # Verify feed ownership
-    feed_check = supabase.table("product_feeds")\
-        .select("id, product_count")\
-        .eq("id", feed_id)\
-        .eq("profile_id", profile.profile_id)\
-        .single()\
-        .execute()
-
-    if not feed_check.data:
-        raise HTTPException(status_code=404, detail="Feed not found")
-
-    # Clamp page_size
-    page_size = max(1, min(page_size, 200))
-    page = max(1, page)
-    offset = (page - 1) * page_size
-
-    result = supabase.table("products")\
-        .select("*")\
-        .eq("feed_id", feed_id)\
-        .order("created_at", desc=False)\
-        .range(offset, offset + page_size - 1)\
-        .execute()
-
-    total = feed_check.data.get("product_count", 0)
-    products = result.data or []
-
-    return {
-        "products": products,
-        "pagination": {
-            "page": page,
-            "page_size": page_size,
-            "total": total,
-            "total_pages": max(1, -(-total // page_size)),  # ceiling division
-        },
-    }
