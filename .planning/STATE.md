@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Milestone: v5 Product Video Generator
-Phase: 19 of 22 (Product Browser) — not started
-Plan: 0 of 2 in Phase 19
-Status: Phase 18 complete — ready for Phase 19 planning
-Last activity: 2026-02-20 — Phase 18 verified (5/5 requirements, human_needed for visual checks)
+Phase: 19 of 22 (Product Browser) — in progress
+Plan: 1 of 2 in Phase 19
+Status: Phase 19 plan 01 complete — product browser backend API ready
+Last activity: 2026-02-21 — Phase 19 plan 01 executed (product_routes.py created)
 
 Progress: [██░░░░░░░░] 20% (v5) — 4 milestones shipped prior
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 54 (50 prior + 2 phase 17 + 2 phase 18)
-- Total phases completed: 18
+- Total plans completed: 55 (50 prior + 2 phase 17 + 2 phase 18 + 1 phase 19)
+- Total phases completed: 18 (phase 19 in progress)
 - Total execution time: ~2.7 hours (v2) + ~2 days (v3) + ~47 min (v4)
 
 **By Milestone:**
@@ -32,6 +32,7 @@ Progress: [██░░░░░░░░] 20% (v5) — 4 milestones shipped pri
 | v3 Video Quality | 5 (7-11) | 12 | Shipped 2026-02-06 |
 | v4 Script-First | 5 (12-16) | 11 | Shipped 2026-02-12 |
 | v5 Product Video | 6 (17-22) | TBD | In progress |
+| v5 P19 plan 01 (product-browser backend) | 8min | 1 task | 3 files |
 
 ## Accumulated Context
 
@@ -53,6 +54,8 @@ Recent decisions affecting current work:
 - [18-02]: filter_complex used only when is_on_sale=True (badge needs second input); -vf for regular products
 - [18-02]: Sale price in yellow; original in muted gray — no strikethrough per research recommendation
 - [18-02]: Badge cached at config.output_dir — skipped if exists, safe for batch
+- [Phase 19-01]: product_routes.py as separate router (not feed_routes.py inline) for clean separation of feed CRUD/sync vs product listing
+- [Phase 19-01]: Filtered total uses count='exact' Supabase query; unfiltered uses stored product_count to avoid unnecessary DB round-trips
 
 ### Pending Todos
 
@@ -72,11 +75,11 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-20
-Stopped at: Phase 18 complete — all 2 plans executed, verified 5/5 requirements
+Last session: 2026-02-21
+Stopped at: Completed 19-01-PLAN.md (product routes backend) — plan 1 of 2 in Phase 19
 Resume file: None
 
-**Next step:** `/gsd:plan-phase 19`
+**Next step:** Execute Phase 19 plan 02 (product browser frontend)
 
 ---
-*Last updated: 2026-02-20 after Phase 18 complete and verified*
+*Last updated: 2026-02-21 after Phase 19 plan 01 complete*
