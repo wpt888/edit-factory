@@ -179,11 +179,11 @@ Plans:
   3. A sale badge overlay appears in a corner of the video when the product has a sale_price
   4. A CTA text overlay (e.g. "Comanda acum!") appears at a fixed position — text is configurable
   5. User can set video duration to 15, 30, 45, or 60 seconds and the output duration matches the selection
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 18-01: product_video_compositor.py — FFmpeg filterchain (scale+pad, zoompan Ken Burns, drawtext via textfile, xfade) + Ken Burns vs simple-scale performance benchmark
-- [ ] 18-02: Sale badge overlay + CTA overlay + duration control + aspect ratio handling — tested against real Nortia.ro feed images
+- [ ] 18-01-PLAN.md — Core compositor: Ken Burns zoompan animation, simple-scale fallback, duration control, benchmark
+- [ ] 18-02-PLAN.md — Text overlays (name, brand, price, sale price), sale badge, CTA, Romanian diacritics verification
 
 ### Phase 19: Product Browser
 **Goal**: Users can browse, search, and filter synced products in a paginated UI and select products for video generation
