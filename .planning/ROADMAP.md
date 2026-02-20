@@ -6,6 +6,7 @@
 - ✅ **v2 Profile System** - Phases 1-6 (profile isolation, TTS providers, shipped 2026-02-04)
 - ✅ **v3 Video Quality Enhancement** - Phases 7-11 (encoding optimization, shipped 2026-02-06)
 - ✅ **v4 Script-First Pipeline** - Phases 12-16 (shipped 2026-02-12)
+- 🚧 **v5 Product Video Generator** - Phases 17-22 (in progress)
 
 ## Phases
 
@@ -139,6 +140,114 @@ Full details: `.planning/milestones/v4-ROADMAP.md`
 
 </details>
 
+### 🚧 v5 Product Video Generator (In Progress)
+
+**Milestone Goal:** Generate product showcase videos automatically from Google Shopping XML feeds — single product or batch — with Ken Burns animation, text overlays, TTS voiceover, synced subtitles, template presets, and per-profile customization.
+
+- [ ] **Phase 17: Feed Foundation** - XML feed parsing, product DB tables, image download, Romanian diacritics pattern
+- [ ] **Phase 18: Video Composition** - Ken Burns animation, text overlays, sale badge, CTA, duration control
+- [ ] **Phase 19: Product Browser** - API routes, product browser UI with search and filters
+- [ ] **Phase 20: Single Product E2E** - Generate endpoint + product video page + TTS + subtitles + library output
+- [ ] **Phase 21: Batch Generation** - Multi-select, batch queue, per-product progress and error isolation
+- [ ] **Phase 22: Templates and Profile Customization** - 3 preset templates + per-profile colors, fonts, CTA
+
+## Phase Details
+
+### Phase 17: Feed Foundation
+**Goal**: Users can add a Google Shopping XML feed URL and sync product data into a browsable database, with all encoding patterns for Romanian text and streaming parse established
+**Depends on**: Nothing (builds on existing platform, no v5 dependencies)
+**Requirements**: FEED-01, FEED-07, COMP-05
+**Success Criteria** (what must be TRUE):
+  1. User can enter a Google Shopping XML feed URL and trigger a sync that completes without memory spikes on a 10k-product feed
+  2. Synced products are stored in Supabase `product_feeds` and `products` tables with title, price, sale_price, brand, product_type, image_link, and product_url fields populated
+  3. Product images download in parallel to a local cache directory with fallback placeholder for missing images
+  4. Romanian product names with diacritics (a, i, s, t with comma-below) render correctly in FFmpeg drawtext using the `textfile=` pattern — verified end-to-end with a real Nortia.ro product name
+  5. HTML tags and entities in product descriptions are stripped by `clean_product_text()` before any field is stored or used
+**Plans**: TBD
+
+Plans:
+- [ ] 17-01: DB migrations (product_feeds, products tables) + feed_parser.py (lxml iterparse, namespace handling, clean_product_text, Supabase upsert)
+- [ ] 17-02: image_fetcher.py (parallel httpx downloads, Pillow format conversion, disk cache, placeholder generation) + font/textfile= pattern verification
+
+### Phase 18: Video Composition
+**Goal**: The system can produce a complete product video clip from a product image using Ken Burns animation, text overlays, and configurable duration — verified against real Nortia.ro product images
+**Depends on**: Phase 17 (product images, textfile= pattern)
+**Requirements**: COMP-01, COMP-02, COMP-03, COMP-04, COMP-06
+**Success Criteria** (what must be TRUE):
+  1. A product image animates with Ken Burns zoom/pan motion for the full video duration — no static freeze frames
+  2. Product name, price, and brand appear as text overlays on the video; sale_price renders alongside original price when present
+  3. A sale badge overlay appears in a corner of the video when the product has a sale_price
+  4. A CTA text overlay (e.g. "Comanda acum!") appears at a fixed position — text is configurable
+  5. User can set video duration to 15, 30, 45, or 60 seconds and the output duration matches the selection
+**Plans**: TBD
+
+Plans:
+- [ ] 18-01: product_video_compositor.py — FFmpeg filterchain (scale+pad, zoompan Ken Burns, drawtext via textfile, xfade) + Ken Burns vs simple-scale performance benchmark
+- [ ] 18-02: Sale badge overlay + CTA overlay + duration control + aspect ratio handling — tested against real Nortia.ro feed images
+
+### Phase 19: Product Browser
+**Goal**: Users can browse, search, and filter synced products in a paginated UI and select products for video generation
+**Depends on**: Phase 17 (products table populated)
+**Requirements**: FEED-02, FEED-03, FEED-04, FEED-05, FEED-06
+**Success Criteria** (what must be TRUE):
+  1. User can see synced products in a card grid showing product image, title, price, sale badge, and brand — paginated at 50 products per page
+  2. User can type in a search box and the grid filters to products whose title contains the search text
+  3. User can toggle an "On Sale" filter and see only products where sale_price is less than price
+  4. User can select a category from a dropdown and see only products in that product_type
+  5. User can select a brand from a dropdown and see only products from that brand
+**Plans**: TBD
+
+Plans:
+- [ ] 19-01: product_routes.py — /feeds/sync (BackgroundTask), /feeds (CRUD), /products (paginated + filtered with search/on-sale/category/brand params)
+- [ ] 19-02: /products frontend page — feed config panel, filter bar (search, on-sale toggle, category dropdown, brand dropdown), paginated product card grid
+
+### Phase 20: Single Product End-to-End
+**Goal**: User can select one product, configure voiceover and TTS provider, generate a video, and find it in the library — the full atomic workflow working end-to-end
+**Depends on**: Phase 18 (compositor), Phase 19 (routes + product browser)
+**Requirements**: TTS-01, TTS-02, TTS-03, TTS-04, BATCH-01, BATCH-05, OUT-01, OUT-02, OUT-03, OUT-04
+**Success Criteria** (what must be TRUE):
+  1. User can trigger single product video generation from the product browser and see a progress indicator update in real time via job polling
+  2. Quick mode generates voiceover audio from a template string (title + price + CTA) using the selected TTS provider without requiring AI generation
+  3. Elaborate mode generates an AI voiceover script from the product description via Gemini or Claude and then synthesizes it with the selected TTS provider
+  4. Generated video has synced subtitles derived from TTS timestamps — the same subtitle pipeline used in v4
+  5. Generated video appears in the existing library page as a clip, uses the active encoding preset (TikTok/Reels/Shorts), -14 LUFS audio normalization, and any enabled video filters
+**Plans**: TBD
+
+Plans:
+- [ ] 20-01: /generate endpoint (product_routes.py) dispatching product video compositor as BackgroundTask + job polling endpoint
+- [ ] 20-02: /product-video frontend page — template selector, duration + voiceover mode + TTS provider settings, generate button, progress polling via useJobPolling
+- [ ] 20-03: Quick-mode TTS voiceover wiring (template string → existing TTS factory) + elaborate-mode AI script generation (product-aware prompt → existing script_generator) + subtitle integration
+
+### Phase 21: Batch Generation
+**Goal**: Users can select multiple products, launch batch generation, and monitor per-product progress — with one product failure not affecting the rest
+**Depends on**: Phase 20 (single product flow validated end-to-end)
+**Requirements**: BATCH-02, BATCH-03, BATCH-04
+**Success Criteria** (what must be TRUE):
+  1. User can select multiple product cards in the product browser using checkboxes and trigger batch generation from a sticky action bar
+  2. Batch UI shows a per-product progress card for each selected product — each card independently transitions through queued, downloading, rendering, done, and failed states
+  3. If one product video fails (missing image, TTS error, FFmpeg error), the remaining products in the batch continue processing — the batch does not abort
+  4. User can navigate away from the batch page and return to see current progress without losing state
+**Plans**: TBD
+
+Plans:
+- [ ] 21-01: BatchJob + ProductJobState data model + batch dispatch endpoint (sequential loop with per-product try/except, never re-raise) + per-product status polling
+- [ ] 21-02: Batch UI — multi-select checkboxes on product cards, sticky action bar, per-product progress grid, retry-failed button
+
+### Phase 22: Templates and Profile Customization
+**Goal**: Users can choose from 3 named template presets and customize the template colors, font, and CTA text per profile — giving each store its own brand identity in generated videos
+**Depends on**: Phase 20 (working generation pipeline)
+**Requirements**: TMPL-01, TMPL-02, TMPL-03, TMPL-04
+**Success Criteria** (what must be TRUE):
+  1. User can select one of 3 named template presets (Product Spotlight, Sale Banner, Collection Showcase) and the generated video uses the overlay positions, animation direction, and text layout defined by that preset
+  2. User can customize a template's primary color, accent color, font family, and CTA text — and the generated video reflects those choices
+  3. Template customizations are saved per profile — switching profiles shows each store's own saved template settings
+  4. All 3 templates define safe zones so text overlays do not overlap TikTok/Reels UI elements at the top and bottom of the frame
+**Plans**: TBD
+
+Plans:
+- [ ] 22-01: 3 template preset Python dataclasses (Product Spotlight, Sale Banner, Collection Showcase) with overlay positions, animation config, safe zones + product_templates DB migration (optional, may use profile settings JSON)
+- [ ] 22-02: Template customization UI in settings page — color pickers, font selector, CTA text field — saved per profile + template selector wired into generation flow
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -146,6 +255,12 @@ Full details: `.planning/milestones/v4-ROADMAP.md`
 | 1-6 | v2 | 23/23 | Complete | 2026-02-04 |
 | 7-11 | v3 | 12/12 | Complete | 2026-02-06 |
 | 12-16 | v4 | 11/11 | Complete | 2026-02-12 |
+| 17. Feed Foundation | v5 | 0/2 | Not started | - |
+| 18. Video Composition | v5 | 0/2 | Not started | - |
+| 19. Product Browser | v5 | 0/2 | Not started | - |
+| 20. Single Product E2E | v5 | 0/3 | Not started | - |
+| 21. Batch Generation | v5 | 0/2 | Not started | - |
+| 22. Templates + Customization | v5 | 0/2 | Not started | - |
 
 ---
-*Last updated: 2026-02-12 after v4 Script-First Pipeline milestone archived*
+*Last updated: 2026-02-20 after v5 Product Video Generator roadmap created*
