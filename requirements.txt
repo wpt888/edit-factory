@@ -71,3 +71,6 @@ pydantic-settings>=2.1.0
 
 # Subtitle Processing
 srt>=3.5.0
+
+# XML Feed Parsing (Google Shopping feeds)
+lxml>=5.0.0
