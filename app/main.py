@@ -28,6 +28,7 @@ from app.api.tts_library_routes import router as tts_library_router
 from app.api.elevenlabs_accounts_routes import router as elevenlabs_accounts_router
 from app.api.feed_routes import router as feed_router
 from app.api.product_routes import router as product_router
+from app.api.product_generate_routes import router as product_generate_router
 
 # Configurare logging
 logging.basicConfig(
@@ -74,6 +75,7 @@ app.include_router(tts_library_router, prefix="/api/v1", tags=["TTS Library"])
 app.include_router(elevenlabs_accounts_router, prefix="/api/v1", tags=["ElevenLabs Accounts"])
 app.include_router(feed_router, prefix="/api/v1", tags=["feeds"])
 app.include_router(product_router, prefix="/api/v1", tags=["Products"])
+app.include_router(product_generate_router, prefix="/api/v1", tags=["Product Video Generation"])
 
 # Static files pentru frontend
 static_path = Path(__file__).parent.parent / "static"
