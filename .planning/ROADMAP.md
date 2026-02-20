@@ -226,11 +226,11 @@ Plans:
   2. Batch UI shows a per-product progress card for each selected product — each card independently transitions through queued, downloading, rendering, done, and failed states
   3. If one product video fails (missing image, TTS error, FFmpeg error), the remaining products in the batch continue processing — the batch does not abort
   4. User can navigate away from the batch page and return to see current progress without losing state
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 21-01: BatchJob + ProductJobState data model + batch dispatch endpoint (sequential loop with per-product try/except, never re-raise) + per-product status polling
-- [ ] 21-02: Batch UI — multi-select checkboxes on product cards, sticky action bar, per-product progress grid, retry-failed button
+- [ ] 21-01-PLAN.md — Backend: BatchGenerateRequest + POST /batch-generate dispatch + sequential loop with per-product error isolation + GET /batch/{batch_id}/status polling endpoint
+- [ ] 21-02-PLAN.md — Frontend: Multi-select checkboxes on product cards, sticky action bar, useBatchPolling hook, per-product progress grid page, retry-failed button
 
 ### Phase 22: Templates and Profile Customization
 **Goal**: Users can choose from 3 named template presets and customize the template colors, font, and CTA text per profile — giving each store its own brand identity in generated videos
