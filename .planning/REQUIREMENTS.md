@@ -23,7 +23,7 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 - [ ] **COMP-02**: System renders text overlays: product name, price, sale price (with strikethrough), brand
 - [ ] **COMP-03**: System renders sale badge overlay when product has sale_price
 - [ ] **COMP-04**: System renders CTA text overlay (configurable, e.g. "Comanda acum!")
-- [ ] **COMP-05**: Text overlays handle Romanian diacritics correctly (UTF-8 textfile= pattern)
+- [x] **COMP-05**: Text overlays handle Romanian diacritics correctly (UTF-8 textfile= pattern)
 - [ ] **COMP-06**: User can set video duration (15/30/45/60 seconds)
 
 ### Voiceover & Subtitles
@@ -97,7 +97,7 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 | COMP-02 | Phase 18 | Pending |
 | COMP-03 | Phase 18 | Pending |
 | COMP-04 | Phase 18 | Pending |
-| COMP-05 | Phase 17 | Pending |
+| COMP-05 | Phase 17 | Complete |
 | COMP-06 | Phase 18 | Pending |
 | TTS-01 | Phase 20 | Pending |
 | TTS-02 | Phase 20 | Pending |
