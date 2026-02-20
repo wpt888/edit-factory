@@ -12,6 +12,7 @@ const navLinks = [
   { label: "Scripts", href: "/scripts" },
   { label: "Assembly", href: "/assembly" },
   { label: "TTS", href: "/tts-library" },
+  { label: "Products", href: "/products" },
   { label: "Segments", href: "/segments" },
   { label: "Usage", href: "/usage" },
   { label: "Settings", href: "/settings" },
