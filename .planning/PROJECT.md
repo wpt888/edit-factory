@@ -66,7 +66,27 @@ Automated video production from any input — an idea, a product feed, or a coll
 
 ### Active
 
-(None — planning next milestone)
+#### v6 Production Hardening
+- [ ] Fix memory leak in project locks (cleanup never called)
+- [ ] Persist generation progress to DB (lost on restart)
+- [ ] Add file size validation on all upload endpoints
+- [ ] Fix silent JSON parse failures (return 400 instead of ignoring)
+- [ ] Add rate limiting middleware (slowapi)
+- [ ] Add retry logic with exponential backoff for external API calls
+- [ ] Add global React error boundary with fallback UI
+- [ ] Consistent frontend error handling (replace toast/alert/silence mix)
+- [ ] API client improvements (timeout, retry, centralized error handling)
+- [ ] Split library/page.tsx into smaller components
+- [ ] Add empty states for all pages
+- [ ] Backend unit tests (pytest) for critical services
+- [ ] Structured logging (JSON format)
+- [ ] Data cleanup/retention policies (temp files, old jobs)
+- [ ] Centralize get_supabase() in db.py (remove duplicates)
+- [ ] Async HTTP client for ElevenLabs TTS (don't block event loop)
+- [ ] XSS prevention in SRT subtitle preview
+- [ ] Stream endpoint cache headers
+- [ ] Clean up debug logs ([MUTE DEBUG] etc.)
+- [ ] Extract common polling logic into reusable hook
 
 ### Out of Scope
 
@@ -137,5 +157,16 @@ Automated video production from any input — an idea, a product feed, or a coll
 | CSS hex colors in DB, FFmpeg conversion at render | Clean storage, conversion is trivial | ✓ Good |
 | In-memory state for pipeline/assembly | Consistent with patterns, acceptable for single-user | ⚠️ Tech debt |
 
+## Current Milestone: v6 Production Hardening
+
+**Goal:** Harden Edit Factory for production stability — fix memory leaks, add error handling, improve security, add tests, and clean up technical debt identified in comprehensive codebase audit.
+
+**Target features:**
+- Backend stability: memory leak fixes, progress persistence, file validation, rate limiting
+- Frontend resilience: error boundaries, consistent error handling, component splitting
+- Security: XSS prevention, cache headers, input validation
+- Testing & DevOps: backend unit tests, structured logging, data cleanup
+- Code quality: centralize DB client, async HTTP, cleanup debug code
+
 ---
-*Last updated: 2026-02-21 after v5 Product Video Generator milestone shipped*
+*Last updated: 2026-02-22 after v6 Production Hardening milestone started*
