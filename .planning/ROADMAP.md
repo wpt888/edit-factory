@@ -6,7 +6,7 @@
 - ✅ **v2 Profile System** - Phases 1-6 (profile isolation, TTS providers, shipped 2026-02-04)
 - ✅ **v3 Video Quality Enhancement** - Phases 7-11 (encoding optimization, shipped 2026-02-06)
 - ✅ **v4 Script-First Pipeline** - Phases 12-16 (shipped 2026-02-12)
-- 🚧 **v5 Product Video Generator** - Phases 17-22 (in progress)
+- 🚧 **v5 Product Video Generator** - Phases 17-23 (in progress)
 
 ## Phases
 
@@ -247,6 +247,20 @@ Plans:
 - [ ] 22-01-PLAN.md — Backend: VideoTemplate dataclass + 3 presets, extended CompositorConfig, compositor refactors, DB migration, profile routes, generation pipeline wiring
 - [ ] 22-02-PLAN.md — Frontend: Template & Branding settings card (template selector, color pickers, CTA text), per-profile persistence, CTA pre-fill on generation page
 
+### Phase 23: Feed Creation UI
+**Goal**: Users can create a Google Shopping XML feed from the frontend UI — closing the FEED-01 gap where the backend API exists but has no frontend caller
+**Depends on**: Phase 17 (feed_routes.py API), Phase 19 (products page)
+**Requirements**: FEED-01
+**Gap Closure:** Closes gaps from v5 audit (FEED-01 partial, feed creation flow, Phase 17→Frontend integration)
+**Success Criteria** (what must be TRUE):
+  1. User can open a "Create Feed" dialog from the products page, enter a feed name and URL, and submit it
+  2. The dialog calls `POST /api/v1/feeds` and the new feed appears in the feed selector without page reload
+  3. First-time users see a clear CTA to create their first feed (not just "Add a feed in Settings" text)
+**Plans**: 1 plan
+
+Plans:
+- [ ] 23-01-PLAN.md — Frontend: CreateFeedDialog component on products page + POST /api/v1/feeds call + feed selector refresh + first-time UX
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -260,6 +274,7 @@ Plans:
 | 20. Single Product E2E | 2/2 | Complete    | 2026-02-20 | - |
 | 21. Batch Generation | 2/2 | Complete    | 2026-02-20 | - |
 | 22. Templates + Customization | 2/2 | Complete    | 2026-02-21 | - |
+| 23. Feed Creation UI (Gap Closure) | 0/1 | Pending    | - | - |
 
 ---
 *Last updated: 2026-02-20 after v5 Product Video Generator roadmap created*
