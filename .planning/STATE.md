@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Milestone: v5 Product Video Generator
-Phase: 22 of 22 (Templates and Profile Customization) — in progress
-Plan: 1 of 2 in Phase 22
-Status: Phase 22 plan 01 complete — backend templates and profile customization delivered
-Last activity: 2026-02-21 — Phase 22 plan 01 executed (VideoTemplate presets, extended CompositorConfig, profile JSONB, pipeline wiring)
+Phase: 22 of 22 (Templates and Profile Customization) — COMPLETE
+Plan: 2 of 2 in Phase 22
+Status: Phase 22 COMPLETE — all plans delivered (backend + frontend template customization)
+Last activity: 2026-02-21 — Phase 22 plan 02 executed (Template & Branding card, color pickers, CTA pre-fill)
 
-Progress: [████████░░] 83% (v5) — 4 milestones shipped prior
+Progress: [██████████] 100% (v5) — v5 Product Video Generator milestone COMPLETE
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 60 (50 prior + 2 phase 17 + 2 phase 18 + 2 phase 19 + 2 phase 20 + 2 phase 21)
-- Total phases completed: 21
+- Total plans completed: 62 (50 prior + 2 phase 17 + 2 phase 18 + 2 phase 19 + 2 phase 20 + 2 phase 21 + 2 phase 22)
+- Total phases completed: 22
 - Total execution time: ~2.7 hours (v2) + ~2 days (v3) + ~47 min (v4)
 
 **By Milestone:**
@@ -31,10 +31,11 @@ Progress: [████████░░] 83% (v5) — 4 milestones shipped pri
 | v2 Profile System | 6 (1-6) | 23 | Shipped 2026-02-04 |
 | v3 Video Quality | 5 (7-11) | 12 | Shipped 2026-02-06 |
 | v4 Script-First | 5 (12-16) | 11 | Shipped 2026-02-12 |
-| v5 Product Video | 6 (17-22) | TBD | In progress |
+| v5 Product Video | 6 (17-22) | 12 | COMPLETE — 2026-02-21 |
 
-**Next step:** `/gsd:plan-phase 22`
-| Phase 22 P01 | 6 | 2 tasks | 4 files |
+**Phase 22 metrics:**
+| Phase 22 P01 | 6 min | 2 tasks | 4 files |
+| Phase 22 P02 | 5 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -71,6 +72,8 @@ Recent decisions affecting current work:
 - [Phase 21]: useBatchPolling stops when batchStatus.status === completed (batch-level done signal from backend)
 - [Phase 22]: VideoTemplate dataclass with 3 presets — layout/animation/colors as dataclass fields, not DB rows (same proven pattern as service-level config)
 - [Phase 22]: Store template colors as CSS hex in DB (#FF0000), convert to FFmpeg 0xRRGGBB only at render time via _hex_to_ffmpeg_color helper
+- [22-02]: CTA pre-fill uses functional setState (prev) => prev === default ? profileValue : prev — safe against race conditions with URL params
+- [22-02]: Native HTML input[type=color] with Tailwind styling chosen for color pickers — no third-party color picker library needed
 
 ### Pending Todos
 
@@ -91,10 +94,11 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 22-01-PLAN.md (backend templates and profile customization)
+Stopped at: Completed 22-02-PLAN.md (frontend Template & Branding settings card + CTA pre-fill)
 Resume file: None
 
-**Next step:** Execute Phase 22 Plan 02 (frontend Template & Branding settings card)
+**v5 Product Video Generator milestone COMPLETE.**
+All 6 phases (17-22), 12 plans, all requirements delivered.
 
 ---
-*Last updated: 2026-02-21 after Phase 22 plan 01 complete — VideoTemplate presets, extended CompositorConfig, profile JSONB column, generation pipeline wiring*
+*Last updated: 2026-02-21 after Phase 22 plan 02 complete — Template & Branding card, color pickers, CTA pre-fill, v5 milestone COMPLETE*

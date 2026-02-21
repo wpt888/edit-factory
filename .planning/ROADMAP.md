@@ -149,7 +149,7 @@ Full details: `.planning/milestones/v4-ROADMAP.md`
 - [x] **Phase 19: Product Browser** - API routes, product browser UI with search and filters (completed 2026-02-20)
 - [x] **Phase 20: Single Product E2E** - Generate endpoint + product video page + TTS + subtitles + library output (completed 2026-02-20)
 - [x] **Phase 21: Batch Generation** - Multi-select, batch queue, per-product progress and error isolation (completed 2026-02-20)
-- [ ] **Phase 22: Templates and Profile Customization** - 3 preset templates + per-profile colors, fonts, CTA
+- [x] **Phase 22: Templates and Profile Customization** - 3 preset templates + per-profile colors, fonts, CTA (completed 2026-02-21)
 
 ## Phase Details
 
@@ -259,7 +259,7 @@ Plans:
 | 19. Product Browser | 2/2 | Complete    | 2026-02-20 | - |
 | 20. Single Product E2E | 2/2 | Complete    | 2026-02-20 | - |
 | 21. Batch Generation | 2/2 | Complete    | 2026-02-20 | - |
-| 22. Templates + Customization | 1/2 | In Progress|  | - |
+| 22. Templates + Customization | 2/2 | Complete   | 2026-02-21 | - |
 
 ---
 *Last updated: 2026-02-20 after v5 Product Video Generator roadmap created*
