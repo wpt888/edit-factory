@@ -10,10 +10,10 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Milestone: v5 Product Video Generator
-Phase: 22 of 22 (Templates and Profile Customization) — not started
-Plan: 0 of 2 in Phase 22
-Status: Phase 21 complete — ready for Phase 22 planning
-Last activity: 2026-02-21 — Phase 21 verified (10/10 must-haves)
+Phase: 22 of 22 (Templates and Profile Customization) — in progress
+Plan: 1 of 2 in Phase 22
+Status: Phase 22 plan 01 complete — backend templates and profile customization delivered
+Last activity: 2026-02-21 — Phase 22 plan 01 executed (VideoTemplate presets, extended CompositorConfig, profile JSONB, pipeline wiring)
 
 Progress: [████████░░] 83% (v5) — 4 milestones shipped prior
 
@@ -34,6 +34,7 @@ Progress: [████████░░] 83% (v5) — 4 milestones shipped pri
 | v5 Product Video | 6 (17-22) | TBD | In progress |
 
 **Next step:** `/gsd:plan-phase 22`
+| Phase 22 P01 | 6 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -68,6 +69,8 @@ Recent decisions affecting current work:
 - [Phase 21]: Checkbox uses absolute top-2 left-2 z-10 positioning to overlay product image without disrupting card layout
 - [Phase 21]: batch_id is in URL params only for navigate-away resilience — no sessionStorage needed
 - [Phase 21]: useBatchPolling stops when batchStatus.status === completed (batch-level done signal from backend)
+- [Phase 22]: VideoTemplate dataclass with 3 presets — layout/animation/colors as dataclass fields, not DB rows (same proven pattern as service-level config)
+- [Phase 22]: Store template colors as CSS hex in DB (#FF0000), convert to FFmpeg 0xRRGGBB only at render time via _hex_to_ffmpeg_color helper
 
 ### Pending Todos
 
@@ -87,11 +90,11 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-20
-Stopped at: Completed 21-02-PLAN.md (batch generation frontend)
+Last session: 2026-02-21
+Stopped at: Completed 22-01-PLAN.md (backend templates and profile customization)
 Resume file: None
 
-**Next step:** Execute Phase 22 (final milestone completion — v5 Product Video Generator)
+**Next step:** Execute Phase 22 Plan 02 (frontend Template & Branding settings card)
 
 ---
-*Last updated: 2026-02-20 after Phase 21 plan 02 complete — Phase 21 fully delivered*
+*Last updated: 2026-02-21 after Phase 22 plan 01 complete — VideoTemplate presets, extended CompositorConfig, profile JSONB column, generation pipeline wiring*
