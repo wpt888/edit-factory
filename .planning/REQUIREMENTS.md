@@ -35,10 +35,10 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 
 ### Templates
 
-- [ ] **TMPL-01**: System provides 3 preset templates: Product Spotlight, Sale Banner, Collection Showcase
-- [ ] **TMPL-02**: User can customize template: colors (primary/accent), font, CTA text
-- [ ] **TMPL-03**: Template customization is per-profile (two stores, two brand identities)
-- [ ] **TMPL-04**: Templates define: overlay positions, animation direction, text layout, safe zones for TikTok/Reels
+- [x] **TMPL-01**: System provides 3 preset templates: Product Spotlight, Sale Banner, Collection Showcase
+- [x] **TMPL-02**: User can customize template: colors (primary/accent), font, CTA text
+- [x] **TMPL-03**: Template customization is per-profile (two stores, two brand identities)
+- [x] **TMPL-04**: Templates define: overlay positions, animation direction, text layout, safe zones for TikTok/Reels
 
 ### Batch & Generation
 
@@ -103,10 +103,10 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 | TTS-02 | Phase 20 | Complete |
 | TTS-03 | Phase 20 | Complete |
 | TTS-04 | Phase 20 | Complete |
-| TMPL-01 | Phase 22 | Pending |
-| TMPL-02 | Phase 22 | Pending |
-| TMPL-03 | Phase 22 | Pending |
-| TMPL-04 | Phase 22 | Pending |
+| TMPL-01 | Phase 22 | Complete |
+| TMPL-02 | Phase 22 | Complete |
+| TMPL-03 | Phase 22 | Complete |
+| TMPL-04 | Phase 22 | Complete |
 | BATCH-01 | Phase 20 | Complete |
 | BATCH-02 | Phase 21 | Complete |
 | BATCH-03 | Phase 21 | Complete |
