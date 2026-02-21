@@ -7,11 +7,13 @@ Generates a portrait MP4 (1080x1920) from a product image using:
 - Full text overlays: product name, brand, price (sale + regular), CTA
 - Sale badge PNG overlay via filter_complex when product is on sale
 - textfile= pattern (never text= for product content — handles Romanian diacritics)
+- Template-driven layout: 3 preset templates define positions, animation, colors
 
 Usage:
     from app.services.product_video_compositor import compose_product_video, CompositorConfig
 
-    cfg = CompositorConfig(duration_s=30, cta_text="Comanda acum!", use_zoompan=True)
+    cfg = CompositorConfig(duration_s=30, cta_text="Comanda acum!", use_zoompan=True,
+                           template_name="sale_banner", primary_color="#FF0000")
     compose_product_video(
         image_path=Path("/path/to/product.jpg"),
         output_path=Path("/path/to/output.mp4"),
@@ -26,6 +28,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from app.services.textfile_helper import build_drawtext_filter, build_multi_drawtext, cleanup_textfiles
 
@@ -42,6 +45,126 @@ H_LARGE = W_LARGE * H_OUT // W_OUT  # = 7680px
 
 VALID_DURATIONS = {15, 30, 45, 60}
 
+# ---------------------------------------------------------------------------
+# Template type alias
+# ---------------------------------------------------------------------------
+
+TemplateName = Literal["product_spotlight", "sale_banner", "collection_showcase"]
+
+
+# ---------------------------------------------------------------------------
+# VideoTemplate dataclass — layout and animation constants per preset
+# ---------------------------------------------------------------------------
+
+@dataclass
+class VideoTemplate:
+    """Layout and animation constants for a named template preset.
+
+    All y-coordinates are for 1080x1920 portrait video.
+    Safe zones prevent overlay collision with TikTok/Reels UI chrome:
+      - TikTok UI chrome: top ~80px, bottom ~160px
+      - Reels UI chrome: top ~80px, bottom ~200px
+      - Recommended safe zones: top 150px, bottom 200px
+    """
+    name: TemplateName
+    display_name: str
+
+    # Animation direction
+    zoom_direction: Literal["in", "out"] = "in"   # in=zoom in, out=zoom out
+    pan_x: Literal["left", "right", "center"] = "center"
+    pan_y: Literal["up", "down", "center"] = "center"
+
+    # Text layout — y positions for 1920px height
+    title_y: int = 160
+    brand_y: int = 230
+    price_y: int = 1650
+    orig_price_y: int = 1720
+    cta_y: int = 1820
+
+    # Font sizes
+    title_fontsize: int = 48
+    brand_fontsize: int = 32
+    price_fontsize: int = 56
+    cta_fontsize: int = 44
+
+    # Safe zones (pixels from edge)
+    safe_zone_top: int = 150      # No overlays above this y
+    safe_zone_bottom: int = 200   # No overlays within this many px of bottom (1920-200=1720)
+
+    # Badge / accent overlay behavior
+    badge_position: Literal["top_right", "top_left", "bottom_right"] = "top_right"
+
+
+# ---------------------------------------------------------------------------
+# The 3 named template preset instances
+# ---------------------------------------------------------------------------
+
+TEMPLATES: dict[str, VideoTemplate] = {
+    "product_spotlight": VideoTemplate(
+        name="product_spotlight",
+        display_name="Product Spotlight",
+        zoom_direction="in",
+        pan_x="center",
+        pan_y="center",
+        title_y=160,
+        brand_y=230,
+        price_y=1650,
+        orig_price_y=1720,
+        cta_y=1820,
+        title_fontsize=48,
+        brand_fontsize=32,
+        price_fontsize=56,
+        cta_fontsize=44,
+        safe_zone_top=150,
+        safe_zone_bottom=200,
+        badge_position="top_right",
+    ),
+    "sale_banner": VideoTemplate(
+        name="sale_banner",
+        display_name="Sale Banner",
+        zoom_direction="out",          # reverse zoom for variety
+        pan_x="left",
+        pan_y="center",
+        title_y=200,                   # pushed down slightly for badge prominence
+        brand_y=270,
+        price_y=1600,
+        orig_price_y=1670,
+        cta_y=1820,
+        title_fontsize=48,
+        brand_fontsize=32,
+        price_fontsize=56,
+        cta_fontsize=44,
+        safe_zone_top=150,
+        safe_zone_bottom=200,
+        badge_position="top_left",     # badge on left for this template
+    ),
+    "collection_showcase": VideoTemplate(
+        name="collection_showcase",
+        display_name="Collection Showcase",
+        zoom_direction="in",
+        pan_x="right",
+        pan_y="up",
+        title_y=160,
+        brand_y=240,
+        price_y=1680,
+        orig_price_y=1750,
+        cta_y=1820,
+        title_fontsize=48,
+        brand_fontsize=32,
+        price_fontsize=56,
+        cta_fontsize=44,
+        safe_zone_top=150,
+        safe_zone_bottom=200,
+        badge_position="top_right",
+    ),
+}
+
+DEFAULT_TEMPLATE: TemplateName = "product_spotlight"
+
+
+# ---------------------------------------------------------------------------
+# CompositorConfig — now extended with template + customization fields
+# ---------------------------------------------------------------------------
 
 @dataclass
 class CompositorConfig:
@@ -52,6 +175,34 @@ class CompositorConfig:
     use_zoompan: bool = True      # False = simple-scale (faster, for batch)
     output_dir: Path = field(default_factory=lambda: Path("output/product_videos"))
     # output_dir is used for badge PNG storage location
+
+    # Phase 22: Template and customization fields
+    template_name: TemplateName = "product_spotlight"
+    primary_color: str = "#FF0000"   # CSS hex — stored as hex, converted at render time
+    accent_color: str = "#FFFF00"    # CSS hex — used for sale price text
+    font_family: str = ""            # Path to .ttf font file; empty = FFmpeg default
+
+
+# ---------------------------------------------------------------------------
+# Color conversion helper
+# ---------------------------------------------------------------------------
+
+def _hex_to_ffmpeg_color(hex_color: str, opacity: str = "") -> str:
+    """Convert CSS hex color '#FF0000' to FFmpeg '0xFF0000' or '0xFF0000@0.85'.
+
+    Passes through non-hex values (e.g. 'red', 'yellow') unchanged.
+
+    Args:
+        hex_color: CSS hex color string (e.g. '#FF0000') or FFmpeg named color.
+        opacity: Optional FFmpeg opacity suffix like '@0.85' (empty = no suffix).
+
+    Returns:
+        FFmpeg-compatible color string.
+    """
+    if not hex_color or not hex_color.startswith("#"):
+        return hex_color + opacity if opacity else hex_color
+    ffmpeg_hex = "0x" + hex_color.lstrip("#").upper()
+    return ffmpeg_hex + opacity if opacity else ffmpeg_hex
 
 
 def ensure_sale_badge(badge_dir: Path) -> Path:
@@ -108,18 +259,14 @@ def ensure_sale_badge(badge_dir: Path) -> Path:
 def _build_text_overlays(
     product: dict,
     cta_text: str,
+    template: VideoTemplate,
+    primary_color: str = "#FF0000",
+    accent_color: str = "#FFFF00",
+    font_family: str = "",
 ) -> tuple[bool, str, list[str]]:
     """Build full text overlay specs for the compositor.
 
-    Layout for portrait 1080x1920 (safe zones: avoid top 150px, bottom 200px):
-      - Product name: y=160, fontsize=48, white text, black@0.6 box
-      - Brand:        y=230, fontsize=32, white@0.85 text, black@0.5 box (if present)
-      - Price display (sale):
-          Sale price: y=1650, fontsize=56, yellow text, black@0.7 box
-          Orig price: y=1720, fontsize=32, gray text, black@0.5 box (muted style)
-      - Price display (regular):
-          Price:      y=1650, fontsize=56, white text, black@0.7 box
-      - CTA:          y=1820, fontsize=44, white text on red@0.85 box, centered
+    Layout is driven by template positions and colors — no hard-coded values.
 
     Determines `is_on_sale` from product: sale_price exists AND < price.
 
@@ -127,6 +274,10 @@ def _build_text_overlays(
         product: Product dict with keys: title, brand, price, sale_price,
                  raw_price_str, raw_sale_price_str.
         cta_text: Call-to-action text (e.g. "Comanda acum!").
+        template: VideoTemplate instance defining layout constants.
+        primary_color: CSS hex for CTA box background (e.g. "#FF0000").
+        accent_color: CSS hex for sale price text (e.g. "#FFFF00").
+        font_family: Optional path to .ttf font file. Empty = FFmpeg default.
 
     Returns:
         Tuple of (is_on_sale, combined_vf_string, list_of_tmp_paths).
@@ -155,85 +306,108 @@ def _build_text_overlays(
     price_str = _fmt_price(product, "raw_price_str", "price")
     sale_price_str = _fmt_price(product, "raw_sale_price_str", "sale_price")
 
-    # Build overlay specs
+    # Convert colors to FFmpeg format
+    cta_box_color = _hex_to_ffmpeg_color(primary_color, "@0.85")
+    sale_price_color = _hex_to_ffmpeg_color(accent_color)
+
+    # Build overlay specs using template layout constants
     overlays = []
 
     # Product name (truncate to 60 chars)
     title = str(product.get("title", "Product"))[:60]
-    overlays.append({
+    title_spec = {
         "text": title,
-        "fontsize": 48,
+        "fontsize": template.title_fontsize,
         "fontcolor": "white",
         "x": "40",
-        "y": "160",
+        "y": str(template.title_y),
         "box": True,
         "boxcolor": "black@0.6",
         "boxborderw": 8,
-    })
+    }
+    if font_family:
+        title_spec["fontfile"] = font_family
+    overlays.append(title_spec)
 
     # Brand (skip if absent)
     brand = product.get("brand")
     if brand:
-        overlays.append({
+        brand_spec = {
             "text": str(brand),
-            "fontsize": 32,
+            "fontsize": template.brand_fontsize,
             "fontcolor": "white@0.85",
             "x": "40",
-            "y": "230",
+            "y": str(template.brand_y),
             "box": True,
             "boxcolor": "black@0.5",
             "boxborderw": 6,
-        })
+        }
+        if font_family:
+            brand_spec["fontfile"] = font_family
+        overlays.append(brand_spec)
 
     # Price overlays
     if is_on_sale and sale_price_str:
-        # Sale price in yellow (prominent)
-        overlays.append({
+        # Sale price in accent color (prominent)
+        sale_spec = {
             "text": sale_price_str,
-            "fontsize": 56,
-            "fontcolor": "yellow",
+            "fontsize": template.price_fontsize,
+            "fontcolor": sale_price_color,
             "x": "40",
-            "y": "1650",
+            "y": str(template.price_y),
             "box": True,
             "boxcolor": "black@0.7",
             "boxborderw": 10,
-        })
+        }
+        if font_family:
+            sale_spec["fontfile"] = font_family
+        overlays.append(sale_spec)
+
         # Original price in muted gray (no strikethrough — use muted style per research)
         if price_str:
-            overlays.append({
+            orig_spec = {
                 "text": f"Pret initial: {price_str}",
-                "fontsize": 32,
+                "fontsize": template.brand_fontsize,
                 "fontcolor": "gray",
                 "x": "40",
-                "y": "1720",
+                "y": str(template.orig_price_y),
                 "box": True,
                 "boxcolor": "black@0.5",
                 "boxborderw": 6,
-            })
+            }
+            if font_family:
+                orig_spec["fontfile"] = font_family
+            overlays.append(orig_spec)
     elif price_str:
         # Regular price in white
-        overlays.append({
+        price_spec = {
             "text": price_str,
-            "fontsize": 56,
+            "fontsize": template.price_fontsize,
             "fontcolor": "white",
             "x": "40",
-            "y": "1650",
+            "y": str(template.price_y),
             "box": True,
             "boxcolor": "black@0.7",
             "boxborderw": 10,
-        })
+        }
+        if font_family:
+            price_spec["fontfile"] = font_family
+        overlays.append(price_spec)
 
-    # CTA — centered horizontally
-    overlays.append({
+    # CTA — centered horizontally, using primary_color for box
+    cta_spec = {
         "text": cta_text,
-        "fontsize": 44,
+        "fontsize": template.cta_fontsize,
         "fontcolor": "white",
         "x": "(w-text_w)/2",
-        "y": "1820",
+        "y": str(template.cta_y),
         "box": True,
-        "boxcolor": "red@0.85",
+        "boxcolor": cta_box_color,
         "boxborderw": 12,
-    })
+    }
+    if font_family:
+        cta_spec["fontfile"] = font_family
+    overlays.append(cta_spec)
 
     combined_vf, tmp_paths = build_multi_drawtext(overlays)
     return (is_on_sale, combined_vf, tmp_paths)
@@ -285,25 +459,41 @@ def _build_scale_pad_filter(use_zoompan: bool) -> str:
         )
 
 
-def _build_zoompan_filter(duration_s: int, fps: int = FPS) -> str:
+def _build_zoompan_filter(
+    duration_s: int,
+    fps: int = FPS,
+    direction: Literal["in", "out"] = "in",
+) -> str:
     """Build zoompan Ken Burns filter string.
 
-    Generates a centered zoom-in from 1.0 to 1.5 over the full duration.
+    Generates centered zoom animation over the full duration.
+    - direction="in":  zoom from 1.0 to 1.5 (zoom in)
+    - direction="out": zoom from 1.5 to 1.0 (zoom out, using if(eq(on,1),...) to prime initial value)
+
     Must be applied AFTER pre-scaling to W_LARGE for smooth motion.
 
     Args:
         duration_s: Duration in seconds.
         fps: Frames per second.
+        direction: "in" for zoom-in, "out" for zoom-out.
 
     Returns:
         FFmpeg zoompan filter string (without input/output pad labels).
     """
     params = _calculate_zoompan_params(duration_s, fps)
     z_inc = params["z_inc"]
-    z_end = params["z_end"]
     n_frames = params["n_frames"]
+
+    if direction == "out":
+        # Start at 1.5 and pull out to 1.0
+        # Use if(eq(on,1),1.5,...) to prime initial zoom value
+        z_expr = f"if(eq(on,1),1.5,max(zoom-{z_inc:.6f},1.0))"
+    else:
+        # Default zoom-in: start at 1.0, increment to 1.5
+        z_expr = f"min(zoom+{z_inc:.6f},1.5)"
+
     return (
-        f"zoompan=z='min(zoom+{z_inc:.6f},{z_end})':"
+        f"zoompan=z='{z_expr}':"
         f"x='iw/2-(iw/zoom/2)':"
         f"y='ih/2-(ih/zoom/2)':"
         f"d={n_frames}:"
@@ -321,12 +511,13 @@ def compose_product_video(
     """Compose a portrait product video from a single image using FFmpeg.
 
     Generates a 1080x1920 MP4 with Ken Burns animation, full text overlays,
-    and optional sale badge PNG overlay.
+    and optional sale badge PNG overlay. Template settings from config drive
+    layout, animation direction, colors, and badge position.
 
     Two code paths:
     - **No badge (not on sale):** Uses -vf (scale+pad + optional zoompan + text).
     - **With badge (on sale):** Uses -filter_complex (badge PNG is a second input,
-      overlaid at top-right after video processing chain).
+      overlaid at template-defined position after video processing chain).
 
     Args:
         image_path: Path to the product image (JPEG, PNG, etc.).
@@ -334,7 +525,7 @@ def compose_product_video(
         product: Product dict. Expected keys: title, brand, price, sale_price,
                  raw_price_str, raw_sale_price_str.
         config: CompositorConfig with duration, CTA text, fps, use_zoompan,
-                output_dir.
+                output_dir, template_name, primary_color, accent_color, font_family.
 
     Raises:
         ValueError: If duration_s is not in VALID_DURATIONS.
@@ -352,14 +543,28 @@ def compose_product_video(
     # Ensure output directory exists
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Build full text overlays (name, brand, price/sale, CTA)
-    is_on_sale, text_vf, tmp_paths = _build_text_overlays(product, config.cta_text)
+    # Look up template (fall back to default if unknown name)
+    template = TEMPLATES.get(config.template_name, TEMPLATES[DEFAULT_TEMPLATE])
+
+    # Build full text overlays (name, brand, price/sale, CTA) using template layout + colors
+    is_on_sale, text_vf, tmp_paths = _build_text_overlays(
+        product,
+        config.cta_text,
+        template=template,
+        primary_color=config.primary_color,
+        accent_color=config.accent_color,
+        font_family=config.font_family,
+    )
 
     try:
         scale_pad = _build_scale_pad_filter(config.use_zoompan)
 
         if config.use_zoompan:
-            zoompan = _build_zoompan_filter(config.duration_s, config.fps)
+            zoompan = _build_zoompan_filter(
+                config.duration_s,
+                config.fps,
+                direction=template.zoom_direction,
+            )
             video_chain = f"{scale_pad},{zoompan},{text_vf}"
         else:
             video_chain = f"{scale_pad},{text_vf}"
@@ -368,10 +573,18 @@ def compose_product_video(
             # ---- filter_complex path: badge PNG is second input ----
             badge_path = ensure_sale_badge(config.output_dir)
 
-            # Build filter_complex: video chain outputs [vid], then overlay badge at top-right
+            # Map badge_position to FFmpeg overlay coordinates
+            badge_pos_map = {
+                "top_right": "x=W-w-20:y=20",
+                "top_left": "x=20:y=20",
+                "bottom_right": "x=W-w-20:y=H-h-20",
+            }
+            badge_overlay_pos = badge_pos_map.get(template.badge_position, "x=W-w-20:y=20")
+
+            # Build filter_complex: video chain outputs [vid], then overlay badge
             filter_complex = (
                 f"[0:v]{video_chain}[vid];"
-                f"[vid][1:v]overlay=x=W-w-20:y=20[out]"
+                f"[vid][1:v]overlay={badge_overlay_pos}[out]"
             )
 
             cmd = [
@@ -391,11 +604,13 @@ def compose_product_video(
             ]
 
             logger.info(
-                "Composing sale product video (filter_complex): image=%s output=%s duration=%ds zoompan=%s",
+                "Composing sale product video (filter_complex): image=%s output=%s duration=%ds zoompan=%s template=%s badge_pos=%s",
                 image_path.name,
                 output_path.name,
                 config.duration_s,
                 config.use_zoompan,
+                config.template_name,
+                template.badge_position,
             )
 
         else:
@@ -415,11 +630,12 @@ def compose_product_video(
             ]
 
             logger.info(
-                "Composing product video (-vf): image=%s output=%s duration=%ds zoompan=%s",
+                "Composing product video (-vf): image=%s output=%s duration=%ds zoompan=%s template=%s",
                 image_path.name,
                 output_path.name,
                 config.duration_s,
                 config.use_zoompan,
+                config.template_name,
             )
 
         result = subprocess.run(
