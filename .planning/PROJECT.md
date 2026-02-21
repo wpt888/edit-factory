@@ -2,23 +2,11 @@
 
 ## What This Is
 
-Edit Factory is a video production platform for social media content (reels, TikTok, YouTube Shorts). Two workflows: (1) Script-first — AI generates voiceover scripts from ideas, TTS creates audio with timestamps, system matches video segments to narration. (2) Product-first — parse product feeds (Google Shopping XML), auto-generate product showcase videos with images, text overlays, TTS voiceover, and subtitles. Supports multi-variant generation, batch processing, and preset templates. Used personally for two online stores (Nortia.ro + second brand), each with isolated libraries and social media accounts.
+Edit Factory is a video production platform for social media content (reels, TikTok, YouTube Shorts). Three workflows: (1) Upload-first — upload video, AI analyzes frames, selects best segments, adds TTS voiceover and subtitles. (2) Script-first — AI generates voiceover scripts from ideas, TTS creates audio with timestamps, system matches video segments to narration. (3) Product-first — parse product feeds (Google Shopping XML), auto-generate product showcase videos with Ken Burns animation, text overlays, TTS voiceover, synced subtitles, and template presets. Supports batch processing, multi-variant generation, and per-profile customization. Used personally for two online stores (Nortia.ro + second brand), each with isolated libraries and social media accounts.
 
 ## Core Value
 
 Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos with AI-generated voiceover, perfectly synced subtitles, and matched visuals, ready to publish at scale.
-
-## Current Milestone: v5 Product Video Generator
-
-**Goal:** Generate product showcase videos automatically from Google Shopping XML feeds — single product or multi-product collections — with template-based composition, TTS voiceover, and batch processing.
-
-**Target features:**
-- Google Shopping XML feed parsing with product browser UI
-- Template system with presets (Product Spotlight, Sale Banner, Collection) + customization
-- Multiple visual sources: Ken Burns on images, scraped extra images, stock video backgrounds, AI-generated visuals
-- Voiceover: quick template text + AI-generated elaborate scripts from product descriptions
-- Batch generation: select products → generate videos at scale
-- User-configurable duration (15-60s), single or multi-product modes
 
 ## Requirements
 
@@ -58,25 +46,27 @@ Automated video production from any input — an idea, a product feed, or a coll
 - ✓ AI script generation (Gemini + Claude Max, keyword-aware) — v4
 - ✓ Script-to-segment matching and video assembly — v4
 - ✓ Multi-variant pipeline (1 idea → N videos) — v4
+- ✓ Google Shopping XML feed parsing and product data sync — v5
+- ✓ Product browser UI with search, filters, and pagination — v5
+- ✓ Ken Burns zoom/pan animation on product images — v5
+- ✓ Text overlays (name, price, brand, CTA, sale badge) — v5
+- ✓ Romanian diacritics via FFmpeg textfile= pattern — v5
+- ✓ Quick mode TTS voiceover from template text — v5
+- ✓ Elaborate mode AI-generated voiceover scripts — v5
+- ✓ TTS provider selection for product videos (Edge/ElevenLabs) — v5
+- ✓ Synced subtitles from TTS timestamps — v5
+- ✓ Configurable video duration (15-60s) — v5
+- ✓ Single product video generation with progress — v5
+- ✓ Batch generation with per-product error isolation — v5
+- ✓ Per-product progress tracking in batch UI — v5
+- ✓ 3 template presets (Spotlight, Sale Banner, Collection) — v5
+- ✓ Per-profile template customization (colors, font, CTA) — v5
+- ✓ Generated videos use existing encoding presets and filters — v5
+- ✓ Feed creation dialog on products page — v5
 
 ### Active
 
-- [ ] Google Shopping XML feed parsing and product data extraction
-- [ ] Product browser UI with search, filters, and selection
-- [ ] Automatic product filtering (on sale, category, new in stock)
-- [ ] Template system with presets + customization (colors, fonts, timings)
-- [ ] Ken Burns zoom/pan effect on product images
-- [ ] Web scraping of additional product images from product pages
-- [ ] Stock video backgrounds with product image overlay
-- [ ] AI-generated extra product visuals from description
-- [ ] Template voiceover text from product data (quick mode)
-- [ ] AI-generated voiceover scripts from product description (elaborate mode)
-- [ ] TTS audio generation for product voiceover (ElevenLabs/Edge)
-- [ ] Video composition: images + text overlays + transitions + audio + subtitles
-- [ ] User-configurable video duration (15-60 seconds)
-- [ ] Single product → single video generation
-- [ ] Multi-product showcase/collection video generation
-- [ ] Batch generation: select N products → generate N videos
+(None — planning next milestone)
 
 ### Out of Scope
 
@@ -89,6 +79,9 @@ Automated video production from any input — an idea, a product feed, or a coll
 - VMAF/perceptual quality metrics — requires FFmpeg rebuild, defer to future
 - Audio enhancement suite (noise reduction, EQ) — overlaps with TTS quality
 - Lossless export — massive files, platforms compress anyway
+- Per-video customization in batch — defeats batch purpose; edit individually after
+- Manual product entry (CSV/form) — feed is single source of truth
+- Auto-publish after batch — bypasses human review; library is review layer
 
 ## Context
 
@@ -96,17 +89,15 @@ Automated video production from any input — an idea, a product feed, or a coll
 - Runs on Windows/WSL development machine
 - Constant iteration — code changes frequently
 - Tech stack: FastAPI backend (Python), Next.js frontend (TypeScript), Supabase DB, FFmpeg
-- ~30,000 LOC across Python + TypeScript
-- v4 shipped: Script-first pipeline with AI scripts, TTS timestamps, auto-subtitles, segment matching, multi-variant generation
-- v5 target: Product feed-based video generation (Google Shopping XML → product videos)
-- Nortia.ro feed: ~9,987 products, Google Shopping XML format (title, description, image, price, sale_price, brand, product_type)
-- v3 baseline: CRF 18-20, preset medium, 192k audio, -14 LUFS normalization, video filters, enhanced subtitles
-- 8 backend services: encoding_presets, audio_normalizer, video_filters, subtitle_styler, script_generator, assembly_service, tts_subtitle_generator, pipeline_routes
-- 6 frontend pages: Library, Pipeline, Scripts, Assembly, Segments, Usage/Stats
-- 9 API endpoints across 3 new routers (script, assembly, pipeline) + existing 4 routers
-- ElevenLabs Starter plan: 100k credits/month, flash v2.5 default at 0.5 credits/char
-- DB migrations: 009 (TTS timestamps) pending manual application
-- Tech debt: In-memory state dicts (pipeline, assembly, generation), no job cancellation, exact keyword matching only
+- ~35,000 LOC across Python + TypeScript
+- v5 shipped: Product feed-based video generation (Google Shopping XML → product videos with templates, batch processing)
+- Nortia.ro feed: ~9,987 products, Google Shopping XML format
+- 5 milestones shipped: v1 (MVP), v2 (Profiles), v3 (Video Quality), v4 (Script-First), v5 (Product Videos)
+- 23 phases, 59 plans executed across all milestones
+- 13 backend services, 9 frontend pages, 13+ API routers
+- DB migrations: 014 total (007/009 pending manual application)
+- ElevenLabs Starter plan: 100k credits/month, flash v2.5 default
+- Tech debt: In-memory state dicts, no job cancellation, safe_zone fields unused, unreachable dead code in batch
 
 ## Constraints
 
@@ -123,28 +114,28 @@ Automated video production from any input — an idea, a product feed, or a coll
 | Browser + start script over desktop app | Constant upgrades need zero build overhead | ✓ Good |
 | Profile system over separate deployments | Two stores share same codebase | ✓ Good |
 | Edge TTS as primary free option | Already integrated, zero cost, decent quality | ✓ Good |
-| -14 LUFS for audio normalization | Social media platform standard (YouTube, Instagram, TikTok) | ✓ Good |
+| -14 LUFS for audio normalization | Social media platform standard | ✓ Good |
 | Platform presets over manual encoding | Users shouldn't configure technical settings | ✓ Good |
-| hqdn3d over nlmeans for denoising | nlmeans is 10-30x slower, hqdn3d sufficient for social video | ✓ Good |
-| Two-pass loudnorm workflow | Measure first, apply linear normalization second for precision | ✓ Good |
-| stdlib dataclass over Pydantic for filters | Simpler, no validation overhead for nested configs | ✓ Good |
+| hqdn3d over nlmeans for denoising | nlmeans is 10-30x slower | ✓ Good |
+| Two-pass loudnorm workflow | Measure first, apply linear normalization second | ✓ Good |
+| stdlib dataclass over Pydantic for configs | Simpler, no validation overhead | ✓ Good |
 | Filter order: denoise -> sharpen -> color | Prevent sharpening noise artifacts | ✓ Good |
-| Checkbox+slider UI pattern | Reduces visual clutter, sliders only visible when enabled | ✓ Good |
+| Checkbox+slider UI pattern | Reduces visual clutter | ✓ Good |
 | Laplacian variance for blur detection | Industry standard, single-pass, fast | ✓ Good |
-| 5-factor scoring weights 40/20/20/15/5 | Balanced scoring, no single factor dominates | — Pending A/B testing |
-| Subtitle params per-render (not DB) | Flexibility for A/B testing, consistent with filter approach | ✓ Good |
-
-| eleven_flash_v2_5 as default model | 50% cheaper (0.5 credits/char), 32 languages, 75ms latency, 40k char limit | ✓ Good |
-| TTS timestamps over Whisper for subtitles | Perfect sync with voiceover, no extra processing step | ✓ Good |
-| Gemini + Claude Max for script generation | Two AI providers, user chooses per project | ✓ Good |
-| Script-first over video-first workflow | Script drives segment selection and assembly | ✓ Good |
-| Keyword substring matching for segments | Exact word=1.0, substring=0.7 confidence scoring | ✓ Good |
-| In-memory state for pipeline/assembly | Consistent with existing patterns, acceptable for single-user | ⚠️ Tech debt |
-| Preview-before-render workflow | Avoids expensive render until user confirms matches | ✓ Good |
-| Manual SRT generation (no external lib) | Zero dependencies for timestamp-to-SRT conversion | ✓ Good |
-
-| Google Shopping XML feed for product data | Product feeds are standard, well-documented, already have one at Nortia.ro | — Pending |
-| FFmpeg for product video composition (not Remotion/React) | Already have FFmpeg pipeline, no need for Node.js video rendering | — Pending |
+| Subtitle params per-render (not DB) | Flexibility for A/B testing | ✓ Good |
+| eleven_flash_v2_5 as default model | 50% cheaper, 32 languages, 75ms latency | ✓ Good |
+| TTS timestamps over Whisper for subtitles | Perfect sync, no extra processing | ✓ Good |
+| Gemini + Claude Max for script generation | Two AI providers, user chooses | ✓ Good |
+| Script-first over video-first workflow | Script drives segment selection | ✓ Good |
+| Google Shopping XML for product data | Standard format, already have Nortia.ro feed | ✓ Good |
+| FFmpeg for product video (not Remotion) | Already have FFmpeg pipeline, no Node.js render | ✓ Good |
+| lxml iterparse for feed parsing | Memory-safe 10k product parsing, no full-tree load | ✓ Good |
+| textfile= pattern for Romanian diacritics | Prevents UTF-8 corruption in FFmpeg drawtext | ✓ Good |
+| zoompan for Ken Burns animation | 2.3x slower than simple scale but viable for batch | ✓ Good |
+| Sequential batch over asyncio.gather | Safer on WSL, avoids FFmpeg memory contention | ✓ Good |
+| VideoTemplate as Python dataclass | Same proven pattern as service-level config | ✓ Good |
+| CSS hex colors in DB, FFmpeg conversion at render | Clean storage, conversion is trivial | ✓ Good |
+| In-memory state for pipeline/assembly | Consistent with patterns, acceptable for single-user | ⚠️ Tech debt |
 
 ---
-*Last updated: 2026-02-20 after v5 Product Video Generator milestone started*
+*Last updated: 2026-02-21 after v5 Product Video Generator milestone shipped*

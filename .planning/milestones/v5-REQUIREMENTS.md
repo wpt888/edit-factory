@@ -1,3 +1,12 @@
+# Requirements Archive: v5 Product Video Generator
+
+**Archived:** 2026-02-21
+**Status:** SHIPPED
+
+For current requirements, see `.planning/REQUIREMENTS.md`.
+
+---
+
 # Requirements: Edit Factory
 
 **Defined:** 2026-02-20
