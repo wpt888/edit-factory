@@ -79,3 +79,37 @@
 
 ---
 
+
+## v5 Product Video Generator (Shipped: 2026-02-21)
+
+**Delivered:** Automated product video generation from Google Shopping XML feeds — streaming feed parsing, Ken Burns animation compositor, product browser with filters, single/batch generation with TTS voiceover and synced subtitles, 3 template presets with per-profile customization.
+
+**Phases completed:** 17-23 (7 phases, 13 plans)
+
+**Key accomplishments:**
+- Google Shopping XML feed pipeline with streaming lxml parser for 10k products, parallel image downloads, Romanian diacritics textfile= pattern
+- Product video compositor with Ken Burns zoompan animation, text overlays (name, price, brand, CTA), sale badge, configurable duration (15-60s)
+- Product browser UI with paginated card grid, search, on-sale toggle, category/brand filter dropdowns
+- Single product E2E flow: generate button, quick/elaborate TTS voiceover modes, synced subtitles, library output with encoding presets
+- Batch generation with multi-select checkboxes, sequential processing with per-product error isolation, per-product progress tracking
+- Template system: 3 presets (Product Spotlight, Sale Banner, Collection Showcase) with per-profile color/font/CTA customization
+- Feed creation dialog: inline on products page with first-time CTA, closing FEED-01 gap
+
+**Stats:**
+- 22 files created/modified (code only)
+- +5,028 / -227 lines (Python + TypeScript)
+- 7 phases, 13 plans, 30 requirements
+- 2 days (2026-02-20 → 2026-02-21)
+- 5 new backend services, 3 new frontend pages, 4 DB migrations
+
+**Git range:** `feat(17-02)` → `feat(23-01)`
+
+**Tech debt:**
+- TMPL-04: safe_zone_top/safe_zone_bottom fields on VideoTemplate unused — y-positions manually respect safe zones
+- Dead code: _finalize_batch 'completed_with_errors' branch unreachable
+- Human verification pending: subtitle sync, filter quality, platform upload acceptance
+
+**What's next:** TBD — `/gsd:new-milestone`
+
+---
+
