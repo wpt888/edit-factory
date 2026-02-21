@@ -2,20 +2,18 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-21)
+See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** Planning next milestone
+**Current focus:** v6 Production Hardening
 
 ## Current Position
 
-Milestone: Between milestones (v5 shipped, v6 not started)
-Phase: None active
-Plan: None active
-Status: v5 Product Video Generator shipped 2026-02-21
-Last activity: 2026-02-21 — v5 milestone archived
-
-Progress: All milestones complete — awaiting /gsd:new-milestone
+Milestone: v6 Production Hardening
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-02-22 — Milestone v6 started
 
 ## Performance Metrics
 
@@ -33,6 +31,7 @@ Progress: All milestones complete — awaiting /gsd:new-milestone
 | v3 Video Quality | 5 (7-11) | 12 | Shipped 2026-02-06 |
 | v4 Script-First | 5 (12-16) | 11 | Shipped 2026-02-12 |
 | v5 Product Video | 7 (17-23) | 13 | Shipped 2026-02-21 |
+| v6 Hardening | — | — | In progress |
 
 ## Accumulated Context
 
@@ -52,9 +51,9 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-21
-Stopped at: v5 milestone archived, ready for next milestone
+Last session: 2026-02-22
+Stopped at: Defining v6 requirements
 Resume file: None
 
 ---
-*Last updated: 2026-02-21 after v5 milestone archived*
+*Last updated: 2026-02-22 after v6 milestone started*
