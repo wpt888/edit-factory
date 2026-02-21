@@ -17,7 +17,8 @@ import {
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Progress } from "@/components/ui/progress";
-import { apiPost, API_URL } from "@/lib/api";
+import { apiPost, apiGet, API_URL } from "@/lib/api";
+import { useProfile } from "@/contexts/profile-context";
 import { useJobPolling, formatElapsedTime } from "@/hooks/use-job-polling";
 import { toast } from "sonner";
 import {
@@ -35,6 +36,7 @@ import {
 function ProductVideoContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { currentProfile } = useProfile();
 
   // Extract product info from query params
   const productId = searchParams.get("id") || "";
@@ -67,6 +69,28 @@ function ProductVideoContent() {
       router.push("/products");
     }
   }, [productId, router]);
+
+  // Pre-fill CTA from profile template settings (only if user hasn't changed the default)
+  useEffect(() => {
+    if (!currentProfile?.id) return;
+
+    const loadProfileDefaults = async () => {
+      try {
+        const res = await apiGet(`/profiles/${currentProfile.id}`);
+        if (!res.ok) return;
+        const profileData = await res.json();
+        const ctaFromProfile = profileData?.video_template_settings?.cta_text;
+        if (ctaFromProfile) {
+          // Only override the default value — do not override if user has already changed it
+          setCtaText((prev) => (prev === "Comanda acum!" ? ctaFromProfile : prev));
+        }
+      } catch (err) {
+        console.warn("Failed to load profile template defaults:", err);
+      }
+    };
+
+    loadProfileDefaults();
+  }, [currentProfile?.id]);
 
   // Default voice based on TTS provider
   const defaultVoice = ttsProvider === "edge" ? "ro-RO-EmilNeural" : "";
