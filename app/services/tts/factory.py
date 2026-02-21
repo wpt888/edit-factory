@@ -39,7 +39,7 @@ def get_tts_service(
 
     if provider == "elevenlabs":
         from .elevenlabs import ElevenLabsTTSService
-        return ElevenLabsTTSService(output_dir=output_dir, voice_id=voice_id)
+        return ElevenLabsTTSService(output_dir=output_dir, voice_id=voice_id, profile_id=profile_id)
 
     elif provider == "edge":
         from .edge import EdgeTTSService

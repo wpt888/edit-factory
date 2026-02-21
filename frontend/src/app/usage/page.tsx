@@ -31,7 +31,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001/api/v1";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
 interface CostSummary {
   source: string;
@@ -93,6 +93,7 @@ export default function UsagePage() {
   const [geminiStatus, setGeminiStatus] = useState<GeminiStatus | null>(null);
   const [allEntries, setAllEntries] = useState<CostEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [testingGemini, setTestingGemini] = useState(false);
   const [budget, setBudget] = useState<number>(50); // Default $50 budget
   const [showAllEntries, setShowAllEntries] = useState(false);
@@ -114,6 +115,7 @@ export default function UsagePage() {
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const [costsRes, usageRes] = await Promise.all([
         fetch(`${API_URL}/costs`),
@@ -123,17 +125,22 @@ export default function UsagePage() {
       if (costsRes.ok) {
         const costsData = await costsRes.json();
         setCostSummary(costsData);
+      } else {
+        console.warn("Costs endpoint returned:", costsRes.status);
       }
 
       if (usageRes.ok) {
         const usageData = await usageRes.json();
         setUsageStats(usageData);
+      } else {
+        console.warn("Usage endpoint returned:", usageRes.status);
       }
 
       // Also fetch Gemini status
       await fetchGeminiStatus();
-    } catch (error) {
-      console.error("Failed to fetch usage data:", error);
+    } catch (err) {
+      console.error("Failed to fetch usage data:", err);
+      setError("Nu s-a putut conecta la server. Verifică că backend-ul rulează pe port 8000.");
     } finally {
       setLoading(false);
     }
@@ -206,6 +213,27 @@ export default function UsagePage() {
             Refresh
           </Button>
         </div>
+
+        {/* Error Alert */}
+        {error && (
+          <Card className="bg-destructive/10 border-destructive/30 mb-8">
+            <CardContent className="flex items-center gap-3 py-4">
+              <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0" />
+              <div className="flex-1">
+                <p className="text-destructive font-medium">{error}</p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={fetchData}
+                className="border-destructive/30 text-destructive hover:bg-destructive/10"
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+                Retry
+              </Button>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Budget Overview */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">

@@ -29,24 +29,7 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Supabase client (lazy initialization)
-_supabase_client = None
-
-def get_supabase():
-    """Get Supabase client with lazy initialization."""
-    global _supabase_client
-    if _supabase_client is None:
-        try:
-            from supabase import create_client
-            settings = get_settings()
-            if settings.supabase_url and settings.supabase_key:
-                _supabase_client = create_client(settings.supabase_url, settings.supabase_key)
-                logger.info("Supabase client initialized for assembly service")
-            else:
-                logger.warning("Supabase credentials not configured")
-        except Exception as e:
-            logger.error(f"Failed to initialize Supabase: {e}")
-    return _supabase_client
+from app.db import get_supabase
 
 
 @dataclass
@@ -155,8 +138,8 @@ class AssemblyService:
         temp_dir = self.settings.base_dir / "temp" / profile_id / f"assembly_{uuid.uuid4().hex[:8]}"
         temp_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate TTS with timestamps
-        tts_service = ElevenLabsTTSService(output_dir=temp_dir, model_id=elevenlabs_model)
+        # Generate TTS with timestamps (profile_id enables multi-account failover)
+        tts_service = ElevenLabsTTSService(output_dir=temp_dir, model_id=elevenlabs_model, profile_id=profile_id)
 
         # Use the configured voice ID
         voice_id = tts_service._voice_id
@@ -528,13 +511,37 @@ class AssemblyService:
                 elevenlabs_model=elevenlabs_model
             )
 
-            # Step 2: Generate SRT from timestamps
+            # Step 2: Generate SRT from timestamps (with cache)
             logger.info("Step 2/7: Generating SRT subtitles from timestamps")
-            srt_content = await self.generate_srt_from_timestamps(timestamps)
+            from app.services.tts_cache import srt_cache_lookup, srt_cache_store
+            _srt_cache_key = {"text": script_text, "voice_id": "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
+            cached_srt = srt_cache_lookup(_srt_cache_key)
+            if cached_srt:
+                srt_content = cached_srt
+            else:
+                srt_content = await self.generate_srt_from_timestamps(timestamps)
+                if srt_content:
+                    srt_cache_store(_srt_cache_key, srt_content)
 
             srt_path = temp_dir / "subtitles.srt"
             with open(srt_path, 'w', encoding='utf-8') as f:
                 f.write(srt_content)
+
+            # Auto-save to TTS Library (non-blocking)
+            try:
+                from app.services.tts_library_service import get_tts_library_service
+                tts_lib = get_tts_library_service()
+                tts_lib.save_from_pipeline(
+                    profile_id=profile_id,
+                    text=script_text,
+                    audio_path=str(audio_path),
+                    srt_content=srt_content,
+                    timestamps=timestamps,
+                    model=elevenlabs_model,
+                    duration=audio_duration,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save TTS to library: {e}")
 
             # Step 3: Parse SRT
             logger.info("Step 3/7: Parsing SRT entries")
@@ -647,9 +654,17 @@ class AssemblyService:
             elevenlabs_model=elevenlabs_model
         )
 
-        # Step 2: Generate SRT
+        # Step 2: Generate SRT (with cache)
         logger.info("Preview Step 2/4: Generating SRT subtitles")
-        srt_content = await self.generate_srt_from_timestamps(timestamps)
+        from app.services.tts_cache import srt_cache_lookup, srt_cache_store
+        _srt_cache_key = {"text": script_text, "voice_id": "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
+        cached_srt = srt_cache_lookup(_srt_cache_key)
+        if cached_srt:
+            srt_content = cached_srt
+        else:
+            srt_content = await self.generate_srt_from_timestamps(timestamps)
+            if srt_content:
+                srt_cache_store(_srt_cache_key, srt_content)
         srt_entries = self._parse_srt(srt_content)
 
         # Step 3: Fetch segments

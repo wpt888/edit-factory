@@ -14,6 +14,9 @@ import {
   Scissors,
   Maximize2,
   Minimize2,
+  AudioLines,
+  Mic,
+  Loader2,
 } from "lucide-react";
 
 interface Segment {
@@ -24,6 +27,13 @@ interface Segment {
   isTemp?: boolean; // For segment being created
 }
 
+interface VoiceRegion {
+  start: number;
+  end: number;
+  duration: number;
+  confidence: number;
+}
+
 interface VideoSegmentPlayerProps {
   videoUrl: string;
   duration: number;
@@ -31,7 +41,10 @@ interface VideoSegmentPlayerProps {
   onSegmentCreate: (start: number, end: number) => void;
   onSegmentClick?: (segment: Segment) => void;
   currentSegment?: Segment;
+  sourceVideoId?: string;
 }
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
 export function VideoSegmentPlayer({
   videoUrl,
@@ -40,9 +53,20 @@ export function VideoSegmentPlayer({
   onSegmentCreate,
   onSegmentClick,
   currentSegment,
+  sourceVideoId,
 }: VideoSegmentPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Waveform state
+  const [waveformData, setWaveformData] = useState<number[]>([]);
+  const [waveformLoading, setWaveformLoading] = useState(false);
+  const [voiceRegions, setVoiceRegions] = useState<VoiceRegion[]>([]);
+  const [voiceLoading, setVoiceLoading] = useState(false);
+  const [showWaveform, setShowWaveform] = useState(true);
+  const [showVoiceOverlay, setShowVoiceOverlay] = useState(false);
+  const [resizeCounter, setResizeCounter] = useState(0);
 
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -154,6 +178,11 @@ export function VideoSegmentPlayer({
       } else if (start > end) {
         // User went backwards, swap
         onSegmentCreate(end, start);
+      }
+
+      // Pause video at the end point
+      if (videoRef.current && !videoRef.current.paused) {
+        videoRef.current.pause();
       }
 
       // Reset marking
@@ -467,6 +496,157 @@ export function VideoSegmentPlayer({
     };
   }, [isScrubbing, getTimeFromMouseEvent, seekTo]);
 
+  // Fetch waveform data when sourceVideoId changes
+  useEffect(() => {
+    if (!sourceVideoId) {
+      setWaveformData([]);
+      return;
+    }
+
+    let cancelled = false;
+    setWaveformLoading(true);
+
+    fetch(`${API_URL}/segments/source-videos/${sourceVideoId}/waveform?samples=1200`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (!cancelled && data?.waveform) {
+          setWaveformData(data.waveform);
+        }
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setWaveformLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [sourceVideoId]);
+
+  // Fetch voice detection data when enabled
+  useEffect(() => {
+    if (!sourceVideoId || !showVoiceOverlay) {
+      return;
+    }
+
+    // Don't refetch if we already have data for this video
+    if (voiceRegions.length > 0) return;
+
+    let cancelled = false;
+    setVoiceLoading(true);
+
+    const profileId = typeof window !== "undefined"
+      ? localStorage.getItem("editai_current_profile_id")
+      : null;
+
+    fetch(`${API_URL}/segments/source-videos/${sourceVideoId}/voice-detection`, {
+      headers: {
+        ...(profileId && { "X-Profile-Id": profileId }),
+      },
+    })
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (!cancelled && data?.voice_segments) {
+          setVoiceRegions(data.voice_segments);
+        }
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setVoiceLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [sourceVideoId, showVoiceOverlay]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reset voice data when video changes
+  useEffect(() => {
+    setVoiceRegions([]);
+    setShowVoiceOverlay(false);
+  }, [sourceVideoId]);
+
+  // ResizeObserver for timeline redraws
+  useEffect(() => {
+    const timeline = timelineRef.current;
+    if (!timeline) return;
+
+    const observer = new ResizeObserver(() => {
+      setResizeCounter((c) => c + 1);
+    });
+    observer.observe(timeline);
+
+    return () => observer.disconnect();
+  }, []);
+
+  // Canvas waveform rendering
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const timeline = timelineRef.current;
+    if (!canvas || !timeline || waveformData.length === 0 || !showWaveform) return;
+
+    const rect = timeline.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const width = rect.width;
+    const height = rect.height - 16; // subtract time markers area (top-4 = 16px)
+
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, width, height);
+
+    const totalSamples = waveformData.length;
+    const sampleDuration = safeDuration / totalSamples;
+
+    // Build a set of voice time ranges for quick lookup
+    const voiceActive = showVoiceOverlay && voiceRegions.length > 0;
+
+    // Determine which samples are visible
+    const startSample = Math.floor((visibleStart / safeDuration) * totalSamples);
+    const endSample = Math.ceil((visibleEnd / safeDuration) * totalSamples);
+    const visibleSampleCount = endSample - startSample;
+
+    if (visibleSampleCount <= 0) return;
+
+    // Normalize: find the peak amplitude in visible range so waveform uses full height
+    let peakAmplitude = 0;
+    for (let i = 0; i < visibleSampleCount; i++) {
+      const sampleIdx = startSample + i;
+      if (sampleIdx >= 0 && sampleIdx < totalSamples) {
+        peakAmplitude = Math.max(peakAmplitude, waveformData[sampleIdx]);
+      }
+    }
+    const normFactor = peakAmplitude > 0 ? 1 / peakAmplitude : 1;
+
+    const barWidth = Math.max(1, width / visibleSampleCount);
+
+    for (let i = 0; i < visibleSampleCount; i++) {
+      const sampleIdx = startSample + i;
+      if (sampleIdx < 0 || sampleIdx >= totalSamples) continue;
+
+      const amplitude = waveformData[sampleIdx] * normFactor;
+      const barHeight = Math.max(1, amplitude * height * 0.9);
+      const x = i * barWidth;
+      const y = height - barHeight;
+
+      // Check if this sample falls within a voice region
+      let isVoice = false;
+      if (voiceActive) {
+        const sampleTime = sampleIdx * sampleDuration;
+        for (const region of voiceRegions) {
+          if (sampleTime >= region.start && sampleTime <= region.end) {
+            isVoice = true;
+            break;
+          }
+        }
+      }
+
+      ctx.fillStyle = isVoice
+        ? "rgba(245, 158, 11, 0.7)"  // amber for voice
+        : "rgba(34, 197, 94, 0.5)";  // green for non-voice
+
+      ctx.fillRect(x, y, Math.max(1, barWidth - 0.5), barHeight);
+    }
+  }, [waveformData, visibleStart, visibleEnd, voiceRegions, showWaveform, showVoiceOverlay, resizeCounter, safeDuration]);
+
   // Handle segment click
   const handleSegmentClick = (e: React.MouseEvent, segment: Segment) => {
     e.stopPropagation(); // Prevent timeline seek
@@ -516,9 +696,17 @@ export function VideoSegmentPlayer({
       {/* Timeline with segments */}
       <div
         ref={timelineRef}
-        className={`relative h-16 bg-muted rounded-md overflow-hidden select-none ${isScrubbing ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+        className={`relative h-40 bg-muted rounded-md overflow-hidden select-none ${isScrubbing ? 'cursor-grabbing' : 'cursor-crosshair'}`}
         onMouseDown={handleTimelineMouseDown}
       >
+        {/* Waveform canvas - behind everything */}
+        {showWaveform && waveformData.length > 0 && (
+          <canvas
+            ref={canvasRef}
+            className="absolute top-4 left-0 right-0 bottom-0 pointer-events-none z-0"
+          />
+        )}
+
         {/* Time scale markers - pointer-events-none so clicks pass through to timeline */}
         <div className="absolute top-0 left-0 right-0 h-4 bg-background/50 flex items-center text-[10px] text-muted-foreground font-mono pointer-events-none">
           {Array.from({ length: Math.min(10, Math.ceil(visibleDuration / 5) + 1) }).map((_, i) => {
@@ -634,6 +822,44 @@ export function VideoSegmentPlayer({
           </Button>
         </div>
       )}
+
+      {/* Waveform & Voice toggles */}
+      <div className="flex items-center gap-2 px-2">
+        <Button
+          variant={showWaveform ? "default" : "outline"}
+          size="sm"
+          className="h-7 text-xs gap-1"
+          onClick={() => setShowWaveform(!showWaveform)}
+          disabled={waveformData.length === 0 && !waveformLoading}
+        >
+          {waveformLoading ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <AudioLines className="h-3 w-3" />
+          )}
+          Waveform
+        </Button>
+        <Button
+          variant={showVoiceOverlay ? "default" : "outline"}
+          size="sm"
+          className="h-7 text-xs gap-1"
+          onClick={() => setShowVoiceOverlay(!showVoiceOverlay)}
+          disabled={!sourceVideoId}
+        >
+          {voiceLoading ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Mic className="h-3 w-3" />
+          )}
+          Voice
+        </Button>
+        {waveformLoading && (
+          <span className="text-[10px] text-muted-foreground">Loading waveform...</span>
+        )}
+        {voiceLoading && (
+          <span className="text-[10px] text-muted-foreground">Detecting voice...</span>
+        )}
+      </div>
 
       {/* Controls */}
       <div className="flex items-center gap-2 px-2">

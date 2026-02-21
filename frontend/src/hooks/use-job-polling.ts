@@ -3,8 +3,31 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Job } from "@/types/video-processing";
 
+function extractProgress(job: Job): number {
+  const raw = job.progress;
+  // Try numeric string first
+  const num = parseInt(raw);
+  if (!isNaN(num) && num >= 0 && num <= 100) return num;
+
+  // Try fraction pattern "2/5"
+  const fractionMatch = raw?.match(/(\d+)\s*\/\s*(\d+)/);
+  if (fractionMatch) {
+    const [, done, total] = fractionMatch;
+    return Math.round((parseInt(done) / parseInt(total)) * 100);
+  }
+
+  // Try percentage pattern "50%"
+  const pctMatch = raw?.match(/(\d+)%/);
+  if (pctMatch) return parseInt(pctMatch[1]);
+
+  // Status-based fallback
+  if (job.status === "processing") return 10;
+  if (job.status === "completed") return 100;
+  return 0;
+}
+
 interface UseJobPollingOptions {
-  /** Base API URL (e.g., "http://localhost:8001/api/v1") */
+  /** Base API URL (e.g., "http://localhost:8000/api/v1") */
   apiBaseUrl: string;
   /** Polling interval in milliseconds (default: 2000) */
   interval?: number;
@@ -107,7 +130,7 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
       setCurrentJob(job);
 
       // Parse progress
-      const progressNum = parseInt(job.progress) || 0;
+      const progressNum = extractProgress(job);
       setProgress(progressNum);
       setStatusText(job.status);
 
@@ -142,8 +165,9 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
 
   // Start polling for a job
   const startPolling = useCallback((jobId: string) => {
-    // Reset state
+    // Reset state from any previous polling session
     isCancelledRef.current = false;
+    setCurrentJob(null);
     setIsPolling(true);
     setProgress(10);
     setStatusText("pending");

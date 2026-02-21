@@ -65,7 +65,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
    */
   const refreshProfiles = useCallback(async () => {
     try {
-      const res = await apiGet("/profiles");
+      const res = await apiGet("/profiles/");
 
       if (res.ok) {
         const fetchedProfiles: Profile[] = await res.json();
@@ -109,7 +109,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
    */
   useEffect(() => {
     async function initialize() {
-      setIsLoading(true);
+      let hasCachedData = false;
 
       // Phase 1: Hydrate from localStorage for instant UI (only in browser)
       if (typeof window !== "undefined") {
@@ -125,6 +125,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
               const profile = parsed.find((p) => p.id === storedProfileId);
               if (profile) {
                 setCurrentProfileState(profile);
+                hasCachedData = true;
               }
             }
           } catch (e) {
@@ -133,9 +134,15 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // Phase 2: Fetch fresh data from API
-      await refreshProfiles();
-      setIsLoading(false);
+      // Phase 2: If cache exists, unblock immediately and refresh in background
+      if (hasCachedData) {
+        setIsLoading(false);
+        refreshProfiles(); // no await — background refresh
+      } else {
+        // No cache — must wait for API before unblocking
+        await refreshProfiles();
+        setIsLoading(false);
+      }
     }
 
     initialize();
