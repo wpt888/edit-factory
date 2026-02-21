@@ -49,6 +49,7 @@ import { VideoSegmentPlayer } from "@/components/video-segment-player";
 import { SimpleSegmentPopup } from "@/components/simple-segment-popup";
 import { EditorLayout } from "@/components/editor-layout";
 import { apiGet, apiPost, apiPatch, apiDelete, API_URL } from "@/lib/api";
+import { useProfile } from "@/contexts/profile-context";
 
 interface SourceVideo {
   id: string;
@@ -81,6 +82,8 @@ interface Segment {
 }
 
 export default function SegmentsPage() {
+  const { currentProfile, isLoading: profileLoading } = useProfile();
+
   // Source videos state
   const [sourceVideos, setSourceVideos] = useState<SourceVideo[]>([]);
   const [selectedVideo, setSelectedVideo] = useState<SourceVideo | null>(null);
@@ -233,11 +236,20 @@ export default function SegmentsPage() {
     )
   ).sort();
 
-  // Initial load
+  // Initial load — re-fetch when profile changes
   useEffect(() => {
+    if (profileLoading) return;
+    if (!currentProfile) return;
+
+    // Reset state when profile switches
+    setSelectedVideo(null);
+    setSegments([]);
+    setAllSegments([]);
+    setSelectedSegment(null);
+
     fetchSourceVideos();
     fetchAllSegments();
-  }, [fetchSourceVideos, fetchAllSegments]);
+  }, [currentProfile?.id, profileLoading, fetchSourceVideos, fetchAllSegments]);
 
   // Load segments when video selected
   useEffect(() => {
@@ -896,6 +908,7 @@ export default function SegmentsPage() {
             onSegmentCreate={handleSegmentCreate}
             onSegmentClick={(seg) => setSelectedSegment(seg as Segment)}
             currentSegment={selectedSegment || undefined}
+            sourceVideoId={selectedVideo.id}
           />
         ) : (
           <div className="aspect-video bg-muted rounded-lg flex items-center justify-center max-h-[60vh]">
