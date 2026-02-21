@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -10,11 +10,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Loader2, Save, Settings as SettingsIcon, Eye, EyeOff, BarChart3 } from "lucide-react"
-import { apiGet, apiPatch } from "@/lib/api"
+import { Loader2, Save, Settings as SettingsIcon, Eye, EyeOff, BarChart3, Trash2, Star, RefreshCw, Plus, Key } from "lucide-react"
+import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api"
 import { Input } from "@/components/ui/input"
-import { ProviderSelector } from "@/components/tts/provider-selector"
-import { VoiceCloningUpload } from "@/components/tts/voice-cloning-upload"
 import { useProfile } from "@/contexts/profile-context"
 
 interface Voice {
@@ -50,10 +48,24 @@ interface DashboardData {
   }
 }
 
+interface ElevenLabsAccount {
+  id: string
+  label: string
+  api_key_hint: string
+  is_primary: boolean
+  is_active: boolean
+  sort_order: number
+  character_limit: number | null
+  characters_used: number | null
+  tier: string | null
+  last_error: string | null
+  last_checked_at: string | null
+}
+
 export default function SettingsPage() {
   const { currentProfile, isLoading: profileLoading } = useProfile()
 
-  const [provider, setProvider] = useState("edge")
+  const [provider, setProvider] = useState("elevenlabs")
   const [voiceId, setVoiceId] = useState("")
   const [voices, setVoices] = useState<Voice[]>([])
   const [loadingVoices, setLoadingVoices] = useState(false)
@@ -75,6 +87,39 @@ export default function SettingsPage() {
   // Quota state
   const [monthlyQuota, setMonthlyQuota] = useState<string>("")
 
+  // Template & Branding state
+  const [templateName, setTemplateName] = useState<string>("product_spotlight")
+  const [primaryColor, setPrimaryColor] = useState<string>("#FF0000")
+  const [accentColor, setAccentColor] = useState<string>("#FFFF00")
+  const [templateCta, setTemplateCta] = useState<string>("Comanda acum!")
+  const [availableTemplates, setAvailableTemplates] = useState<{name: string, display_name: string}[]>([])
+
+  // ElevenLabs accounts state
+  const [elAccounts, setElAccounts] = useState<ElevenLabsAccount[]>([])
+  const [elAccountsLoading, setElAccountsLoading] = useState(false)
+  const [newAccountLabel, setNewAccountLabel] = useState("")
+  const [newAccountKey, setNewAccountKey] = useState("")
+  const [showNewAccountKey, setShowNewAccountKey] = useState(false)
+  const [addingAccount, setAddingAccount] = useState(false)
+  const [accountActionLoading, setAccountActionLoading] = useState<string | null>(null)
+
+  // Load ElevenLabs accounts
+  const loadAccounts = useCallback(async () => {
+    if (!currentProfile) return
+    setElAccountsLoading(true)
+    try {
+      const response = await apiGet("/elevenlabs-accounts/")
+      if (response.ok) {
+        const data = await response.json()
+        setElAccounts(data.accounts || [])
+      }
+    } catch (error) {
+      console.error("Failed to load ElevenLabs accounts:", error)
+    } finally {
+      setElAccountsLoading(false)
+    }
+  }, [currentProfile])
+
   // Load current profile TTS settings
   useEffect(() => {
     if (profileLoading || !currentProfile) return
@@ -87,9 +132,8 @@ export default function SettingsPage() {
         const data = await response.json()
         const ttsSettings = data.tts_settings || {}
 
-        if (ttsSettings.provider) {
-          setProvider(ttsSettings.provider)
-        }
+        // Always use elevenlabs
+        setProvider("elevenlabs")
         if (ttsSettings.voice_id) {
           setVoiceId(ttsSettings.voice_id)
         }
@@ -104,6 +148,13 @@ export default function SettingsPage() {
         if (data.monthly_quota_usd !== undefined && data.monthly_quota_usd !== null) {
           setMonthlyQuota(data.monthly_quota_usd.toString())
         }
+
+        // Load template settings
+        const videoSettings = data.video_template_settings || {}
+        setTemplateName(videoSettings.template_name || "product_spotlight")
+        setPrimaryColor(videoSettings.primary_color || "#FF0000")
+        setAccentColor(videoSettings.accent_color || "#FFFF00")
+        setTemplateCta(videoSettings.cta_text || "Comanda acum!")
       } catch (error) {
         console.error("Failed to load settings:", error)
       } finally {
@@ -111,8 +162,25 @@ export default function SettingsPage() {
       }
     }
 
+    // Fetch available template presets
+    const loadTemplates = async () => {
+      try {
+        const tmplRes = await apiGet("/profiles/templates")
+        if (tmplRes.ok) {
+          const tmplData = await tmplRes.json()
+          if (Array.isArray(tmplData)) {
+            setAvailableTemplates(tmplData)
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to load templates:", err)
+      }
+    }
+
     loadSettings()
-  }, [currentProfile, profileLoading])
+    loadAccounts()
+    loadTemplates()
+  }, [currentProfile, profileLoading, loadAccounts])
 
   // Load dashboard data
   useEffect(() => {
@@ -143,7 +211,7 @@ export default function SettingsPage() {
     const loadVoices = async () => {
       setLoadingVoices(true)
       try {
-        const response = await apiGet(`/tts/voices?provider=${provider}`, { skipAuth: true })
+        const response = await apiGet(`/tts/voices?provider=${provider}`)
         if (!response.ok) throw new Error("Failed to load voices")
 
         const data = await response.json()
@@ -155,7 +223,6 @@ export default function SettingsPage() {
         }
       } catch (error) {
         console.error("Failed to load voices:", error)
-        alert("Failed to load voices for selected provider")
         setVoices([])
       } finally {
         setLoadingVoices(false)
@@ -174,7 +241,7 @@ export default function SettingsPage() {
     setSaving(true)
     try {
       const ttsSettings: TTSSettings = {
-        provider,
+        provider: "elevenlabs",
         voice_id: voiceId,
         postiz: {
           api_url: postizUrl,
@@ -192,6 +259,13 @@ export default function SettingsPage() {
       // Build update payload
       const updates: Record<string, unknown> = {
         tts_settings: ttsSettings,
+        video_template_settings: {
+          template_name: templateName,
+          primary_color: primaryColor,
+          accent_color: accentColor,
+          font_family: "",
+          cta_text: templateCta,
+        },
       }
 
       // Add quota if entered
@@ -204,30 +278,11 @@ export default function SettingsPage() {
 
       if (!response.ok) throw new Error("Failed to save settings")
 
-      alert("Settings saved successfully (TTS and Postiz)")
+      alert("Settings saved successfully (TTS, Postiz, and Template)")
     } catch (error) {
       alert(error instanceof Error ? error.message : "Failed to save settings")
     } finally {
       setSaving(false)
-    }
-  }
-
-  const handleVoiceCloned = async (newVoiceId: string, newVoiceName: string) => {
-    alert(`Voice "${newVoiceName}" is ready to use`)
-
-    // Reload voices to include the new cloned voice
-    setLoadingVoices(true)
-    try {
-      const response = await apiGet(`/tts/voices?provider=${provider}`, { skipAuth: true })
-      if (response.ok) {
-        const data = await response.json()
-        setVoices(data.voices || [])
-        setVoiceId(newVoiceId)
-      }
-    } catch (error) {
-      console.error("Failed to reload voices:", error)
-    } finally {
-      setLoadingVoices(false)
     }
   }
 
@@ -258,6 +313,81 @@ export default function SettingsPage() {
       alert(error instanceof Error ? error.message : "Connection test failed")
     } finally {
       setTestingConnection(false)
+    }
+  }
+
+  // ElevenLabs account handlers
+  const handleAddAccount = async () => {
+    if (!newAccountLabel.trim() || !newAccountKey.trim()) {
+      alert("Please enter both a label and API key")
+      return
+    }
+
+    setAddingAccount(true)
+    try {
+      const response = await apiPost("/elevenlabs-accounts/", {
+        label: newAccountLabel.trim(),
+        api_key: newAccountKey.trim(),
+      })
+
+      if (!response.ok) {
+        const err = await response.json()
+        throw new Error(err.detail || "Failed to add account")
+      }
+
+      const data = await response.json()
+      const tier = data.subscription?.tier || "unknown"
+      alert(`Account added! Tier: ${tier}`)
+
+      setNewAccountLabel("")
+      setNewAccountKey("")
+      setShowNewAccountKey(false)
+      loadAccounts()
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Failed to add account")
+    } finally {
+      setAddingAccount(false)
+    }
+  }
+
+  const handleDeleteAccount = async (accountId: string) => {
+    if (!confirm("Delete this ElevenLabs account?")) return
+
+    setAccountActionLoading(accountId)
+    try {
+      const response = await apiDelete(`/elevenlabs-accounts/${accountId}`)
+      if (!response.ok) throw new Error("Failed to delete account")
+      loadAccounts()
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Failed to delete")
+    } finally {
+      setAccountActionLoading(null)
+    }
+  }
+
+  const handleSetPrimary = async (accountId: string) => {
+    setAccountActionLoading(accountId)
+    try {
+      const response = await apiPost(`/elevenlabs-accounts/${accountId}/set-primary`)
+      if (!response.ok) throw new Error("Failed to set primary")
+      loadAccounts()
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Failed to set primary")
+    } finally {
+      setAccountActionLoading(null)
+    }
+  }
+
+  const handleRefreshAccount = async (accountId: string) => {
+    setAccountActionLoading(accountId)
+    try {
+      const response = await apiPost(`/elevenlabs-accounts/${accountId}/refresh`)
+      if (!response.ok) throw new Error("Failed to refresh")
+      loadAccounts()
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Failed to refresh")
+    } finally {
+      setAccountActionLoading(null)
     }
   }
 
@@ -396,22 +526,209 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      {/* ElevenLabs API Keys Section */}
       <Card>
         <CardHeader>
-          <CardTitle>Text-to-Speech Provider</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <Key className="h-5 w-5" />
+            ElevenLabs API Keys
+          </CardTitle>
           <CardDescription>
-            Choose your preferred TTS provider and voice for video generation
+            Manage multiple API keys with automatic failover when credits run out
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {elAccountsLoading ? (
+            <div className="flex items-center justify-center h-16">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : elAccounts.length === 0 ? (
+            <div className="p-4 bg-muted rounded-lg text-center">
+              <p className="text-sm text-muted-foreground">
+                No API keys configured. Using default .env API key.
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Add accounts below for automatic failover when credits run out.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {elAccounts.map((account) => (
+                <div
+                  key={account.id}
+                  className={`flex items-center gap-3 p-3 rounded-lg border ${
+                    !account.is_active ? "opacity-50 bg-muted/50" : "bg-muted/30"
+                  }`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm truncate">{account.label}</span>
+                      {account.is_primary && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">
+                          Primary
+                        </span>
+                      )}
+                      {!account.is_active && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                          Disabled
+                        </span>
+                      )}
+                      {account.tier && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                          {account.tier}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 mt-1">
+                      <span className="text-xs text-muted-foreground font-mono">
+                        {account.api_key_hint}
+                      </span>
+                      {account.character_limit && account.characters_used !== null && (
+                        <div className="flex items-center gap-1.5 flex-1 max-w-[200px]">
+                          <div className="flex-1 bg-gray-200 rounded-full h-1.5 dark:bg-gray-700">
+                            <div
+                              className={`h-1.5 rounded-full ${
+                                (account.characters_used! / account.character_limit) > 0.9
+                                  ? 'bg-red-500'
+                                  : (account.characters_used! / account.character_limit) > 0.7
+                                    ? 'bg-yellow-500'
+                                    : 'bg-green-500'
+                              }`}
+                              style={{
+                                width: `${Math.min(100, (account.characters_used! / account.character_limit) * 100)}%`
+                              }}
+                            />
+                          </div>
+                          <span className="text-xs text-muted-foreground whitespace-nowrap">
+                            {Math.round((account.characters_used! / account.character_limit) * 100)}%
+                          </span>
+                        </div>
+                      )}
+                      {account.last_error && (
+                        <span className="text-xs text-red-500 truncate max-w-[150px]" title={account.last_error}>
+                          {account.last_error}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {!account.is_primary && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => handleSetPrimary(account.id)}
+                        disabled={accountActionLoading === account.id}
+                        title="Set as primary"
+                      >
+                        <Star className="h-4 w-4" />
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => handleRefreshAccount(account.id)}
+                      disabled={accountActionLoading === account.id}
+                      title="Refresh subscription info"
+                    >
+                      {accountActionLoading === account.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4" />
+                      )}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-red-500 hover:text-red-600"
+                      onClick={() => handleDeleteAccount(account.id)}
+                      disabled={accountActionLoading === account.id}
+                      title="Delete account"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add Account Form */}
+          {elAccounts.length < 3 && (
+            <div className="pt-3 border-t space-y-3">
+              <h4 className="text-sm font-medium flex items-center gap-2">
+                <Plus className="h-4 w-4" />
+                Add Account
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Label</label>
+                  <Input
+                    value={newAccountLabel}
+                    onChange={(e) => setNewAccountLabel(e.target.value)}
+                    placeholder="e.g. Main Account"
+                    disabled={addingAccount}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">API Key</label>
+                  <div className="flex gap-1">
+                    <Input
+                      type={showNewAccountKey ? "text" : "password"}
+                      value={newAccountKey}
+                      onChange={(e) => setNewAccountKey(e.target.value)}
+                      placeholder="sk_..."
+                      disabled={addingAccount}
+                      className="flex-1"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9"
+                      onClick={() => setShowNewAccountKey(!showNewAccountKey)}
+                    >
+                      {showNewAccountKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              <Button
+                onClick={handleAddAccount}
+                disabled={addingAccount || !newAccountLabel.trim() || !newAccountKey.trim()}
+                size="sm"
+              >
+                {addingAccount ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Validating...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add Account
+                  </>
+                )}
+              </Button>
+            </div>
+          )}
+          {elAccounts.length >= 3 && (
+            <p className="text-xs text-muted-foreground pt-2 border-t">
+              Maximum 3 accounts reached. Delete an account to add a new one.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>ElevenLabs Voice</CardTitle>
+          <CardDescription>
+            Select the ElevenLabs voice for video generation
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="space-y-4">
-            <ProviderSelector
-              value={provider}
-              onChange={setProvider}
-              disabled={saving}
-            />
-          </div>
-
           <div className="space-y-2">
             <label className="text-sm font-medium">Voice Selection</label>
             <Select
@@ -433,16 +750,10 @@ export default function SettingsPage() {
             </Select>
             {voices.length === 0 && !loadingVoices && (
               <p className="text-sm text-muted-foreground">
-                No voices available for this provider
+                No voices available. Check your ElevenLabs API key.
               </p>
             )}
           </div>
-
-          {provider === "coqui" && (
-            <div className="pt-4 border-t">
-              <VoiceCloningUpload onVoiceCloned={handleVoiceCloned} />
-            </div>
-          )}
         </CardContent>
       </Card>
 
@@ -553,6 +864,77 @@ export default function SettingsPage() {
             </div>
             <p className="text-xs text-muted-foreground">
               Set to 0 for unlimited. TTS generation will be blocked when quota is exceeded.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Template & Branding */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Template &amp; Branding</CardTitle>
+          <CardDescription>
+            Choose a video template and brand colors for {currentProfile.name}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Template selector */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Video Template</label>
+            <Select value={templateName} onValueChange={setTemplateName} disabled={saving}>
+              <SelectTrigger className="w-[280px]">
+                <SelectValue placeholder="Select template" />
+              </SelectTrigger>
+              <SelectContent>
+                {availableTemplates.map((t) => (
+                  <SelectItem key={t.name} value={t.name}>{t.display_name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Color pickers */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Primary Color (CTA)</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={primaryColor}
+                  onChange={(e) => setPrimaryColor(e.target.value)}
+                  disabled={saving}
+                  className="h-9 w-16 rounded border border-input cursor-pointer"
+                />
+                <span className="text-xs text-muted-foreground font-mono">{primaryColor}</span>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Accent Color (Sale Price)</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={accentColor}
+                  onChange={(e) => setAccentColor(e.target.value)}
+                  disabled={saving}
+                  className="h-9 w-16 rounded border border-input cursor-pointer"
+                />
+                <span className="text-xs text-muted-foreground font-mono">{accentColor}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* CTA text */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Default CTA Text</label>
+            <Input
+              value={templateCta}
+              onChange={(e) => setTemplateCta(e.target.value)}
+              disabled={saving}
+              className="w-full max-w-sm"
+              placeholder="e.g. Comanda acum!"
+            />
+            <p className="text-xs text-muted-foreground">
+              Pre-fills the CTA field when generating videos for this profile.
             </p>
           </div>
         </CardContent>
