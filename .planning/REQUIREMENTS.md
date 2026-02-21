@@ -9,7 +9,7 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 
 ### Feed & Data
 
-- [x] **FEED-01**: User can add a Google Shopping XML feed URL and sync product data
+- [ ] **FEED-01**: User can add a Google Shopping XML feed URL and sync product data
 - [x] **FEED-02**: User can browse synced products in a visual card grid with pagination
 - [x] **FEED-03**: User can search products by title (full-text search)
 - [x] **FEED-04**: User can filter products by on-sale status (sale_price < price)
@@ -86,7 +86,7 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FEED-01 | Phase 17 | Complete |
+| FEED-01 | Phase 23 (gap closure) | Pending |
 | FEED-02 | Phase 19 | Complete |
 | FEED-03 | Phase 19 | Complete |
 | FEED-04 | Phase 19 | Complete |
@@ -124,4 +124,4 @@ Requirements for v5 Product Video Generator. Each maps to roadmap phases.
 
 ---
 *Requirements defined: 2026-02-20*
-*Last updated: 2026-02-20 after v5 roadmap created (Phases 17-22)*
+*Last updated: 2026-02-21 after gap closure phase 23 added*
