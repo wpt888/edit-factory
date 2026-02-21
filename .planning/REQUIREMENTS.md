@@ -1,0 +1,122 @@
+# Requirements: Edit Factory
+
+**Defined:** 2026-02-22
+**Core Value:** Automated video production from any input — get social-media-ready videos at scale.
+
+## v6 Requirements
+
+Requirements for production hardening milestone. Each maps to roadmap phases.
+
+### Backend Stability
+
+- [ ] **STAB-01**: Server persists generation progress to database (survives restart)
+- [ ] **STAB-02**: Project render locks are cleaned up after completion (no memory leak)
+- [ ] **STAB-03**: Lock timeout returns 409 Conflict to client instead of continuing
+- [ ] **STAB-04**: Invalid JSON in form params returns 400 error (not silent ignore)
+- [ ] **STAB-05**: File uploads are validated for max size (413 Payload Too Large)
+- [ ] **STAB-06**: External API calls retry with exponential backoff (tenacity)
+
+### Rate Limiting & Security
+
+- [ ] **SEC-01**: Rate limiting middleware enforces per-user request limits
+- [ ] **SEC-02**: SRT subtitle preview escapes user content (XSS prevention)
+- [ ] **SEC-03**: Stream endpoints include Cache-Control headers
+- [ ] **SEC-04**: TTS text length validated at endpoint level (not just background job)
+
+### Frontend Resilience
+
+- [ ] **FE-01**: Global React error boundary catches unhandled errors with fallback UI
+- [ ] **FE-02**: Consistent error handling utility replaces toast/alert/silence mix
+- [ ] **FE-03**: API client has timeout, retry logic, and centralized error handling
+- [ ] **FE-04**: All pages show empty states when no data exists
+- [ ] **FE-05**: Common polling logic extracted into shared reusable hook
+
+### Frontend Refactoring
+
+- [ ] **REF-01**: library/page.tsx split into 5-6 focused components
+- [ ] **REF-02**: Polling duplication eliminated (useJobPolling, useBatchPolling, inline)
+
+### Code Quality
+
+- [ ] **QUAL-01**: Single get_supabase() in db.py used everywhere (remove duplicates)
+- [ ] **QUAL-02**: ElevenLabs TTS uses async HTTP client (httpx.AsyncClient)
+- [ ] **QUAL-03**: Debug logs cleaned up ([MUTE DEBUG] removed)
+- [ ] **QUAL-04**: Unused cleanup_project_lock integrated into render flow
+
+### Testing & Observability
+
+- [ ] **TEST-01**: pytest setup with conftest.py and fixtures for backend
+- [ ] **TEST-02**: Unit tests for critical services (job_storage, cost_tracker, srt_validator)
+- [ ] **TEST-03**: Structured JSON logging replaces plain text logs
+- [ ] **TEST-04**: Data retention policy cleans up temp files and old failed jobs
+
+## Future Requirements
+
+### CI/CD Pipeline
+- **CICD-01**: GitHub Actions workflow for lint + test on push
+- **CICD-02**: Automated Playwright E2E tests in CI
+- **CICD-03**: Docker build validation in CI
+
+### Advanced Monitoring
+- **MON-01**: Prometheus metrics endpoint (/metrics)
+- **MON-02**: Alert notifications on job failures
+- **MON-03**: Request tracing with correlation IDs
+
+### Scalability
+- **SCALE-01**: Celery/Redis job queue replaces BackgroundTasks
+- **SCALE-02**: Distributed locks via PostgreSQL advisory locks
+- **SCALE-03**: S3/GCS file storage with local fallback
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| Celery migration | Over-engineered for single-user; BackgroundTasks sufficient |
+| Distributed locks | Single-instance deployment, threading locks adequate |
+| S3 file storage | Local filesystem sufficient for personal use |
+| Mobile responsive redesign | Desktop-first, personal use only |
+| i18n/localization | Single user, Romanian hardcoded is fine |
+| Dark mode toggle | Already dark-only, no need for toggle |
+| Kubernetes readiness probes | Not deploying to K8s |
+| Full dependency pinning | Version ranges acceptable for personal project |
+
+## Traceability
+
+Which phases cover which requirements. Updated during roadmap creation.
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| STAB-01 | — | Pending |
+| STAB-02 | — | Pending |
+| STAB-03 | — | Pending |
+| STAB-04 | — | Pending |
+| STAB-05 | — | Pending |
+| STAB-06 | — | Pending |
+| SEC-01 | — | Pending |
+| SEC-02 | — | Pending |
+| SEC-03 | — | Pending |
+| SEC-04 | — | Pending |
+| FE-01 | — | Pending |
+| FE-02 | — | Pending |
+| FE-03 | — | Pending |
+| FE-04 | — | Pending |
+| FE-05 | — | Pending |
+| REF-01 | — | Pending |
+| REF-02 | — | Pending |
+| QUAL-01 | — | Pending |
+| QUAL-02 | — | Pending |
+| QUAL-03 | — | Pending |
+| QUAL-04 | — | Pending |
+| TEST-01 | — | Pending |
+| TEST-02 | — | Pending |
+| TEST-03 | — | Pending |
+| TEST-04 | — | Pending |
+
+**Coverage:**
+- v6 requirements: 25 total
+- Mapped to phases: 0
+- Unmapped: 25 ⚠️
+
+---
+*Requirements defined: 2026-02-22*
+*Last updated: 2026-02-22 after initial definition*
