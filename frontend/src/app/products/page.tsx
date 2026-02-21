@@ -28,7 +28,9 @@ import {
   Package,
   Tag,
   Film,
+  PlusCircle,
 } from "lucide-react";
+import { CreateFeedDialog } from "@/components/create-feed-dialog";
 
 // Type definitions
 interface Feed {
@@ -102,6 +104,9 @@ export default function ProductsPage() {
   // Multi-select state
   const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
   const [batchLoading, setBatchLoading] = useState(false);
+
+  // Create feed dialog state
+  const [createFeedOpen, setCreateFeedOpen] = useState(false);
 
   // Search debounce — 400ms
   useEffect(() => {
@@ -200,6 +205,15 @@ export default function ProductsPage() {
     if (!selectedFeedId) return;
     fetchProducts();
   }, [selectedFeedId, debouncedSearch, onSale, category, brand, page, fetchProducts]);
+
+  // Handle feed creation — optimistic update + auto-select
+  const handleFeedCreated = async (newFeed: any) => {
+    setFeeds((prev) => [newFeed, ...prev]);
+    setSelectedFeedId(newFeed.id);
+    setSelectedFeed(newFeed);
+    // Refresh from server for consistency
+    await fetchFeeds();
+  };
 
   // Handle feed selection
   const handleFeedChange = (feedId: string) => {
@@ -405,10 +419,26 @@ export default function ProductsPage() {
             </>
           )}
 
+          {feeds.length > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setCreateFeedOpen(true)}
+            >
+              <PlusCircle className="h-4 w-4 mr-1" />
+              New Feed
+            </Button>
+          )}
+
           {feeds.length === 0 && (
-            <span className="text-sm text-muted-foreground">
-              No feeds configured. Add a feed in Settings.
-            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setCreateFeedOpen(true)}
+            >
+              <PlusCircle className="h-4 w-4 mr-1" />
+              Add Your First Feed
+            </Button>
           )}
         </div>
 
@@ -607,6 +637,13 @@ export default function ProductsPage() {
           </div>
         )}
       </div>
+
+      {/* Create Feed dialog */}
+      <CreateFeedDialog
+        open={createFeedOpen}
+        onOpenChange={setCreateFeedOpen}
+        onCreated={handleFeedCreated}
+      />
 
       {/* Sticky action bar — visible when products are selected */}
       {selectedProductIds.size > 0 && (
