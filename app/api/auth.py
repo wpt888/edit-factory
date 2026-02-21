@@ -110,7 +110,7 @@ async def get_current_user(
     if settings.auth_disabled:
         logger.warning("⚠️ Authentication is DISABLED - development mode only!")
         return AuthUser(
-            user_id="dev-user-local",
+            user_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             email="dev@localhost",
             role="authenticated"
         )
@@ -186,21 +186,7 @@ def require_role(required_role: str):
     return role_checker
 
 
-# Supabase client for profile context queries
-_supabase_client = None
-
-def _get_supabase():
-    """Get Supabase client for auth queries."""
-    global _supabase_client
-    if _supabase_client is None:
-        try:
-            from supabase import create_client
-            settings = get_settings()
-            if settings.supabase_url and settings.supabase_key:
-                _supabase_client = create_client(settings.supabase_url, settings.supabase_key)
-        except Exception as e:
-            logger.error(f"Failed to init Supabase in auth: {e}")
-    return _supabase_client
+from app.db import get_supabase as _get_supabase
 
 
 async def get_profile_context(
@@ -216,10 +202,27 @@ async def get_profile_context(
     """
     settings = get_settings()
 
-    # Development mode bypass - return dev profile without database query
+    # Development mode bypass
     if settings.auth_disabled:
-        profile_id = x_profile_id if x_profile_id else "dev-profile-default"
-        logger.warning(f"⚠️ Using dev profile: {profile_id} (AUTH_DISABLED=true)")
+        if x_profile_id:
+            logger.warning(f"⚠️ Using explicit dev profile: {x_profile_id} (AUTH_DISABLED=true)")
+            return ProfileContext(profile_id=x_profile_id, user_id=current_user.id)
+
+        # Try to find a real profile in the DB to avoid FK violations
+        supabase = _get_supabase()
+        if supabase:
+            try:
+                result = supabase.table("profiles").select("id").limit(1).execute()
+                if result.data:
+                    profile_id = result.data[0]["id"]
+                    logger.warning(f"⚠️ Dev mode: using DB profile {profile_id}")
+                    return ProfileContext(profile_id=profile_id, user_id=current_user.id)
+            except Exception as e:
+                logger.warning(f"Dev mode: could not query profiles table: {e}")
+
+        # Fallback if no DB profile found (will fail on FK-constrained inserts)
+        profile_id = "00000000-0000-0000-0000-000000000000"
+        logger.warning(f"⚠️ Dev mode: no profiles in DB, using fallback {profile_id}")
         return ProfileContext(profile_id=profile_id, user_id=current_user.id)
 
     supabase = _get_supabase()

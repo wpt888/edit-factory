@@ -66,24 +66,7 @@ def clear_generation_progress(project_id: str):
     if project_id in _generation_progress:
         del _generation_progress[project_id]
 
-# Supabase client pentru DB
-_supabase_client = None
-
-def get_supabase():
-    """Get Supabase client with lazy initialization."""
-    global _supabase_client
-    if _supabase_client is None:
-        try:
-            from supabase import create_client
-            settings = get_settings()
-            if settings.supabase_url and settings.supabase_key:
-                _supabase_client = create_client(settings.supabase_url, settings.supabase_key)
-                logger.info("Supabase client initialized for library")
-            else:
-                logger.warning("Supabase credentials not configured")
-        except Exception as e:
-            logger.error(f"Failed to initialize Supabase: {e}")
-    return _supabase_client
+from app.db import get_supabase
 
 
 # ============== PYDANTIC MODELS ==============
@@ -159,7 +142,7 @@ def verify_project_ownership(supabase, project_id: str, profile_id: str) -> dict
         raise
     except Exception as e:
         logger.error(f"Error verifying project ownership: {e}")
-        raise HTTPException(status_code=404, detail="Project not found")
+        raise HTTPException(status_code=503, detail="Database unavailable")
 
 
 # ============== FILE SERVING ==============
@@ -362,6 +345,8 @@ async def get_project(
                 created_at=proj["created_at"]
             )
         raise HTTPException(status_code=404, detail="Project not found")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting project: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -407,7 +392,7 @@ async def update_project(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    allowed_fields = ["name", "description", "status", "target_duration", "context_text"]
+    allowed_fields = ["name", "description", "target_duration", "context_text"]
     filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
     filtered_updates["updated_at"] = datetime.now().isoformat()
 
@@ -416,9 +401,32 @@ async def update_project(
         if result.data:
             return {"status": "updated", "project": result.data[0]}
         raise HTTPException(status_code=404, detail="Project not found")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error updating project: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/projects/{project_id}/cancel")
+async def cancel_generation(
+    project_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Cancel an in-progress generation for a project."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    verify_project_ownership(supabase, project_id, profile.profile_id)
+    clear_generation_progress(project_id)
+
+    supabase.table("editai_projects").update({
+        "status": "failed",
+        "updated_at": datetime.now().isoformat()
+    }).eq("id", project_id).eq("profile_id", profile.profile_id).execute()
+
+    return {"status": "cancelled"}
 
 
 @router.delete("/projects/{project_id}")
@@ -441,6 +449,8 @@ async def delete_project(
         # Ștergem proiectul
         result = supabase.table("editai_projects").delete().eq("id", project_id).eq("profile_id", profile.profile_id).execute()
         return {"status": "deleted", "project_id": project_id}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error deleting project: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -474,7 +484,6 @@ async def generate_raw_clips(
 
     # Verificăm că proiectul există și aparține profilului
     project_data = verify_project_ownership(supabase, project_id, profile.profile_id)
-    project = type('obj', (object,), {'data': project_data})()
 
     # Determine video source: uploaded file or local path
     if video and video.filename:
@@ -517,8 +526,8 @@ async def generate_raw_clips(
         profile_id=profile.profile_id,
         video_path=str(final_video_path),
         variant_count=variant_count,
-        target_duration=project.data["target_duration"],
-        context_text=project.data.get("context_text")
+        target_duration=project_data["target_duration"],
+        context_text=project_data.get("context_text")
     )
 
     return {
@@ -684,7 +693,6 @@ async def generate_from_segments(
 
     # Verificăm că proiectul există și aparține profilului
     project_data = verify_project_ownership(supabase, project_id, profile.profile_id)
-    project = type('obj', (object,), {'data': project_data})()
 
     # Obținem segmentele asignate proiectului
     segments_result = supabase.table("editai_project_segments")\
@@ -805,7 +813,7 @@ def _merge_close_intervals(intervals: list, gap_threshold: float = 0.3) -> list:
     return merged
 
 
-def _build_mute_filter(mute_intervals: list, fade_duration: float = 0.8, min_volume: float = 0.03) -> str:
+def _build_mute_filter(mute_intervals: list, fade_duration: float = 0.8, min_volume: float = 0.03) -> Optional[str]:
     """
     Construiește filtrul FFmpeg pentru mute selectiv cu fade exponențial profesional.
 
@@ -1154,7 +1162,7 @@ async def _generate_from_segments_task(
                 logger.info(f"Created variant {variant_idx} for project {project_id}: {actual_duration:.1f}s")
 
                 # Update progress after variant created
-                done_pct = 10 + int((variant_idx / variant_count) * 80)
+                done_pct = min(10 + int(((variant_idx - start_variant_index + 1) / variant_count) * 80), 95)
                 update_generation_progress(
                     project_id,
                     done_pct,
@@ -1317,6 +1325,8 @@ async def get_clip(
             "clip": clip.data,
             "content": content.data[0] if content.data else None
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting clip: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1363,6 +1373,8 @@ async def update_clip(
                 _update_project_counts(clip["project_id"])
             return {"status": "updated", "clip": clip}
         raise HTTPException(status_code=404, detail="Clip not found")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error updating clip: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1391,6 +1403,8 @@ async def toggle_clip_selection(
             _update_project_counts(clip["project_id"])
             return {"status": "updated", "clip_id": clip_id, "is_selected": selected}
         raise HTTPException(status_code=404, detail="Clip not found")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error updating clip selection: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1592,8 +1606,8 @@ async def update_clip_content(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        # Verificăm că clipul există
-        clip = supabase.table("editai_clips").select("id").eq("id", clip_id).single().execute()
+        # Verificăm că clipul există și aparține profilului
+        clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
         if not clip.data:
             raise HTTPException(status_code=404, detail="Clip not found")
 
@@ -1616,19 +1630,34 @@ async def update_clip_content(
         ).execute()
 
         return {"status": "updated", "content": result.data[0] if result.data else None}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error updating clip content: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/clips/{clip_id}/content/copy-from/{source_clip_id}")
-async def copy_content_from_clip(clip_id: str, source_clip_id: str):
+async def copy_content_from_clip(
+    clip_id: str,
+    source_clip_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Copiază conținutul (TTS, SRT, stil) de la un alt clip."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
+        # Verify ownership of both clips
+        dest_clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
+        if not dest_clip.data:
+            raise HTTPException(status_code=404, detail="Destination clip not found")
+
+        src_clip = supabase.table("editai_clips").select("id").eq("id", source_clip_id).eq("profile_id", profile.profile_id).single().execute()
+        if not src_clip.data:
+            raise HTTPException(status_code=404, detail="Source clip not found")
+
         # Obținem conținutul sursă
         source = supabase.table("editai_clip_content").select("*").eq("clip_id", source_clip_id).single().execute()
         if not source.data:
@@ -1650,6 +1679,8 @@ async def copy_content_from_clip(clip_id: str, source_clip_id: str):
         ).execute()
 
         return {"status": "copied", "content": result.data[0] if result.data else None}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error copying content: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1840,6 +1871,7 @@ async def _render_final_clip_task(
     audio_path = None
     srt_path = None
     adjusted_video_path = None
+    tts_timestamps = None
 
     # Profile-scoped temp directory to prevent cross-profile file collisions
     temp_dir = settings.base_dir / "temp" / profile_id
@@ -1951,6 +1983,7 @@ async def _render_final_clip_task(
                 logger.warning(f"Failed to save TTS to library: {e}")
 
             # Persist TTS audio to permanent location for later download
+            tts_persist_failed = False
             try:
                 tts_persist_dir = settings.output_dir / "tts" / profile_id
                 tts_persist_dir.mkdir(parents=True, exist_ok=True)
@@ -1961,7 +1994,8 @@ async def _render_final_clip_task(
                 }).eq("clip_id", clip_id).execute()
                 logger.info(f"TTS audio persisted for clip {clip_id}: {tts_persist_path}")
             except Exception as e:
-                logger.warning(f"Failed to persist TTS audio for download: {e}")
+                tts_persist_failed = True
+                logger.warning(f"TTS PERSIST FAILED for clip {clip_id}: audio was generated but could not be saved for download: {e}")
 
         # 2. SYNC: Ajustăm video-ul la durata audio-ului
         if audio_duration and audio_duration > 0:
@@ -2091,11 +2125,10 @@ async def _render_final_clip_task(
         # Salvăm exportul
         supabase.table("editai_exports").insert({
             "clip_id": clip_id,
-            "preset_id": preset_data["id"],
+            "preset_name": preset_data["name"],
             "output_path": str(output_path),
-            "file_size_bytes": output_path.stat().st_size,
-            "status": "completed",
-            "completed_at": datetime.now().isoformat()
+            "file_size": output_path.stat().st_size,
+            "status": "completed"
         }).execute()
 
         # Actualizăm contorul din proiect
@@ -2132,26 +2165,30 @@ async def _render_final_clip_task(
             logger.debug(f"Released and cleaned up render lock for project {project_id}")
 
 
+class BulkRenderRequest(BaseModel):
+    clip_ids: List[str]
+    preset_name: str = "instagram_reels"
+
+
 @router.post("/clips/bulk-render")
 async def bulk_render_clips(
     background_tasks: BackgroundTasks,
-    clip_ids: List[str],
-    preset_name: str = "instagram_reels",
+    request: BulkRenderRequest,
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Randează mai multe clipuri selectate cu același preset."""
-    for clip_id in clip_ids:
+    for clip_id in request.clip_ids:
         background_tasks.add_task(
             _start_render_for_clip,
             clip_id=clip_id,
-            preset_name=preset_name
+            preset_name=request.preset_name
         )
 
     return {
         "status": "processing",
-        "count": len(clip_ids),
-        "preset": preset_name,
-        "message": f"Rendering {len(clip_ids)} clips..."
+        "count": len(request.clip_ids),
+        "preset": request.preset_name,
+        "message": f"Rendering {len(request.clip_ids)} clips..."
     }
 
 
@@ -2169,6 +2206,8 @@ async def _start_render_for_clip(clip_id: str, preset_name: str):
         if clip.data and preset.data:
             await _render_final_clip_task(
                 clip_id=clip_id,
+                project_id=clip.data["project_id"],
+                profile_id=clip.data["profile_id"],
                 clip_data=clip.data,
                 content_data=content.data[0] if content.data else None,
                 preset_data=preset.data
@@ -2266,8 +2305,8 @@ def _delete_clip_files(clip: dict):
         if clip.get(key):
             try:
                 Path(clip[key]).unlink(missing_ok=True)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to delete {clip[key]}: {e}")
 
 
 def _update_project_counts(project_id: str):
@@ -2555,15 +2594,17 @@ def cleanup_orphaned_temp_files(max_age_hours: int = 24, profile_id: Optional[st
             if not temp_dir.exists():
                 continue
 
-            for temp_file in temp_dir.iterdir():
-                if temp_file.is_file():
-                    try:
-                        if temp_file.stat().st_mtime < cutoff_time:
-                            temp_file.unlink()
-                            deleted_count += 1
-                            logger.debug(f"Cleaned up orphaned temp file: {temp_file.name}")
-                    except Exception as e:
-                        logger.warning(f"Failed to cleanup {temp_file}: {e}")
+            for temp_file in sorted(temp_dir.rglob("*"), key=lambda p: len(str(p)), reverse=True):
+                try:
+                    if temp_file.is_file() and temp_file.stat().st_mtime < cutoff_time:
+                        temp_file.unlink()
+                        deleted_count += 1
+                        logger.debug(f"Cleaned up orphaned temp file: {temp_file.name}")
+                    elif temp_file.is_dir() and not any(temp_file.iterdir()):
+                        temp_file.rmdir()
+                        logger.debug(f"Cleaned up empty temp dir: {temp_file.name}")
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup {temp_file}: {e}")
 
         if deleted_count > 0:
             logger.info(f"Cleaned up {deleted_count} orphaned temp files")

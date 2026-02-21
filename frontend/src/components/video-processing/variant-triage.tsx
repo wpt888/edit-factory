@@ -48,7 +48,7 @@ export function VariantTriage({
   onAddTts,
   isAddingTts = false,
   ttsStatus = "",
-  apiBaseUrl = "http://localhost:8001/api/v1",
+  apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1",
   className = "",
   columns = 3,
 }: VariantTriageProps) {

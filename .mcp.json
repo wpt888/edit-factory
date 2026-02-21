@@ -1,3 +1,11 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "supabase": {
+      "type": "http",
+      "url": "https://supabase.nortia.ro/mcp",
+      "headers": {
+        "apikey": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJzdXBhYmFzZSIsImlhdCI6MTc2Mzk5ODgwMCwiZXhwIjo0OTE5NjcyNDAwLCJyb2xlIjoic2VydmljZV9yb2xlIn0.PjaidIWbpmsR32YxToVG8Z2wCeRKTlGu4PiAV2m6O7E"
+      }
+    }
+  }
 }

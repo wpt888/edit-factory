@@ -30,12 +30,15 @@ class ElevenLabsTTSService(TTSService):
 
     BASE_URL = "https://api.elevenlabs.io/v1"
 
+    MAX_FAILOVER_RETRIES = 2  # Total attempts = 1 + retries = 3
+
     def __init__(
         self,
         output_dir: Path,
         api_key: Optional[str] = None,
         voice_id: Optional[str] = None,
-        model_id: Optional[str] = None
+        model_id: Optional[str] = None,
+        profile_id: Optional[str] = None
     ):
         """
         Initialize ElevenLabs TTS service.
@@ -45,10 +48,22 @@ class ElevenLabsTTSService(TTSService):
             api_key: ElevenLabs API key (defaults to env var)
             voice_id: Voice ID (defaults to env var)
             model_id: Model ID (defaults to eleven_multilingual_v2)
+            profile_id: Profile ID for multi-account key lookup
         """
         super().__init__(output_dir)
 
         settings = get_settings()
+        self._profile_id = profile_id
+
+        # If no explicit api_key and we have a profile_id, try account manager
+        if not api_key and profile_id:
+            try:
+                from app.services.elevenlabs_account_manager import get_account_manager
+                manager = get_account_manager()
+                api_key = manager.get_api_key(profile_id)
+            except (ValueError, Exception) as e:
+                logger.debug(f"Account manager key lookup failed, falling back to env: {e}")
+
         self.api_key = api_key or settings.elevenlabs_api_key
         self._voice_id = voice_id or settings.elevenlabs_voice_id
         self.model_id = model_id or getattr(settings, 'elevenlabs_model', 'eleven_flash_v2_5')
@@ -67,6 +82,66 @@ class ElevenLabsTTSService(TTSService):
         }
 
         logger.info(f"ElevenLabsTTSService initialized with voice: {self._voice_id}, model: {self.model_id}")
+
+    async def _post_with_failover(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        headers: dict,
+        data: dict
+    ) -> httpx.Response:
+        """
+        POST with automatic key rotation on 402 (quota exceeded).
+
+        Tries current key, then rotates through available keys via AccountManager.
+        Max retries = MAX_FAILOVER_RETRIES (default 2, so 3 total attempts).
+        """
+        current_key = headers.get("xi-api-key", self.api_key)
+        current_hint = f"...{current_key[-4:]}" if len(current_key) >= 4 else "..."
+
+        response = await client.post(url, headers=headers, json=data)
+
+        if response.status_code != 402 or not self._profile_id:
+            return response
+
+        # 402 = quota exceeded, try failover
+        logger.warning(f"ElevenLabs 402 on key {current_hint}, attempting failover...")
+
+        try:
+            from app.services.elevenlabs_account_manager import get_account_manager
+            manager = get_account_manager()
+            manager.record_error(self._profile_id, current_key, "402 Quota exceeded")
+        except Exception as e:
+            logger.warning(f"Failed to record error: {e}")
+            return response
+
+        for attempt in range(self.MAX_FAILOVER_RETRIES):
+            next_key = manager.get_next_api_key(self._profile_id, current_key)
+            if not next_key:
+                logger.error("All ElevenLabs keys exhausted")
+                return response
+
+            next_hint = f"...{next_key[-4:]}" if len(next_key) >= 4 else "..."
+            logger.info(f"Rotating ElevenLabs key: {current_hint} -> {next_hint} (attempt {attempt + 2})")
+
+            headers["xi-api-key"] = next_key
+            response = await client.post(url, headers=headers, json=data)
+
+            if response.status_code != 402:
+                # Success or different error - update our active key
+                self.api_key = next_key
+                return response
+
+            # Still 402, record and try next
+            try:
+                manager.record_error(self._profile_id, next_key, "402 Quota exceeded")
+            except Exception:
+                pass
+            current_key = next_key
+            current_hint = next_hint
+
+        logger.error("All ElevenLabs keys returned 402")
+        return response
 
     @property
     def provider_name(self) -> str:
@@ -150,6 +225,19 @@ class ElevenLabsTTSService(TTSService):
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # --- Cache check ---
+        from app.services.tts_cache import cache_lookup, cache_store
+        cache_key = {"text": text, "voice_id": voice_id, "model_id": self.model_id, "provider": "elevenlabs"}
+        cached = cache_lookup(cache_key, "elevenlabs", output_path)
+        if cached:
+            return TTSResult(
+                audio_path=output_path,
+                duration_seconds=cached.get("duration_seconds", 0.0),
+                provider="elevenlabs",
+                voice_id=voice_id,
+                cost=0.0
+            )
+
         # Prepare voice settings with optional overrides
         voice_settings = {
             "stability": kwargs.get("stability", self.voice_settings["stability"]),
@@ -175,7 +263,7 @@ class ElevenLabsTTSService(TTSService):
 
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(url, headers=headers, json=data)
+                response = await self._post_with_failover(client, url, headers, data)
 
                 if response.status_code != 200:
                     error_detail = response.text
@@ -209,6 +297,13 @@ class ElevenLabsTTSService(TTSService):
                     )
                 except Exception as e:
                     logger.warning(f"Failed to log cost: {e}")
+
+                # --- Cache store ---
+                cache_store(cache_key, "elevenlabs", output_path, {
+                    "duration_seconds": duration_seconds,
+                    "cost": cost,
+                    "characters": len(text)
+                })
 
                 return TTSResult(
                     audio_path=output_path,
@@ -256,6 +351,22 @@ class ElevenLabsTTSService(TTSService):
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # --- Cache check ---
+        from app.services.tts_cache import cache_lookup, cache_store
+        effective_model = model_id or self.model_id
+        cache_key = {"text": text, "voice_id": voice_id, "model_id": effective_model, "provider": "elevenlabs_ts"}
+        cached = cache_lookup(cache_key, "elevenlabs", output_path)
+        if cached:
+            alignment = cached.get("alignment", {})
+            tts_result = TTSResult(
+                audio_path=output_path,
+                duration_seconds=cached.get("duration_seconds", 0.0),
+                provider="elevenlabs",
+                voice_id=voice_id,
+                cost=0.0
+            )
+            return (tts_result, alignment)
+
         # Prepare voice settings with optional overrides
         voice_settings = {
             "stability": kwargs.get("stability", self.voice_settings["stability"]),
@@ -280,7 +391,7 @@ class ElevenLabsTTSService(TTSService):
 
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(url, headers=headers, json=data)
+                response = await self._post_with_failover(client, url, headers, data)
 
                 if response.status_code != 200:
                     error_detail = response.text
@@ -325,6 +436,14 @@ class ElevenLabsTTSService(TTSService):
                     )
                 except Exception as e:
                     logger.warning(f"Failed to log cost: {e}")
+
+                # --- Cache store ---
+                cache_store(cache_key, "elevenlabs", output_path, {
+                    "duration_seconds": duration_seconds,
+                    "cost": cost,
+                    "characters": len(text),
+                    "alignment": alignment
+                })
 
                 tts_result = TTSResult(
                     audio_path=output_path,

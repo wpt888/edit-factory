@@ -78,6 +78,14 @@ class ElevenLabsTTS:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # --- Cache check ---
+        from app.services.tts_cache import cache_lookup, cache_store
+        cache_key = {"text": text, "voice_id": self.voice_id, "model_id": self.model_id, "provider": "legacy"}
+        cached = cache_lookup(cache_key, "legacy", output_path)
+        if cached:
+            logger.info(f"Using cached TTS audio (cost: $0.00)")
+            return output_path
+
         # Prepare voice settings
         voice_settings = {
             "stability": stability if stability is not None else self.voice_settings["stability"],
@@ -130,6 +138,11 @@ class ElevenLabsTTS:
                     )
                 except Exception as e:
                     logger.warning(f"Failed to log cost: {e}")
+
+                # --- Cache store ---
+                cache_store(cache_key, "legacy", output_path, {
+                    "characters": len(text)
+                })
 
                 return output_path
 

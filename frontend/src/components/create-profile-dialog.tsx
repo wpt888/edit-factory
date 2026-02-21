@@ -57,7 +57,7 @@ export function CreateProfileDialog({
     setLoading(true);
 
     try {
-      const response = await apiPost("/profiles", {
+      const response = await apiPost("/profiles/", {
         name: trimmedName,
         description: description.trim() || undefined,
       });

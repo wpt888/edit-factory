@@ -5,6 +5,8 @@ Manual video segment selection system - Source videos, segments, and matching.
 import uuid
 import subprocess
 import json
+import struct
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
@@ -21,24 +23,7 @@ import logging
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/segments", tags=["segments"])
 
-# Supabase client
-_supabase_client = None
-
-def get_supabase():
-    """Get Supabase client with lazy initialization."""
-    global _supabase_client
-    if _supabase_client is None:
-        try:
-            from supabase import create_client
-            settings = get_settings()
-            if settings.supabase_url and settings.supabase_key:
-                _supabase_client = create_client(settings.supabase_url, settings.supabase_key)
-                logger.info("Supabase client initialized for segments")
-            else:
-                logger.warning("Supabase credentials not configured")
-        except Exception as e:
-            logger.error(f"Failed to initialize Supabase: {e}")
-    return _supabase_client
+from app.db import get_supabase
 
 
 # ============== PYDANTIC MODELS ==============
@@ -228,6 +213,32 @@ async def upload_source_video(
         content = await video.read()
         f.write(content)
 
+    # Auto-transcode non-mp4 formats to .mp4 for browser compatibility
+    non_mp4_formats = {'.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm'}
+    if video_path.suffix.lower() in non_mp4_formats:
+        mp4_path = video_path.with_suffix('.mp4')
+        logger.info(f"Transcoding {video_path.suffix} to .mp4: {video_path.name}")
+        try:
+            cmd = [
+                "ffmpeg", "-y", "-i", str(video_path),
+                "-c:v", "libx264", "-c:a", "aac", "-preset", "fast",
+                str(mp4_path)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if result.returncode == 0:
+                video_path.unlink()  # remove original
+                video_path = mp4_path
+                logger.info(f"Transcode successful: {mp4_path.name}")
+            else:
+                logger.error(f"Transcode failed: {result.stderr}")
+                # Keep original file, continue with it
+        except subprocess.TimeoutExpired:
+            logger.error(f"Transcode timed out for {video_path.name}")
+            if mp4_path.exists():
+                mp4_path.unlink(missing_ok=True)
+        except Exception as e:
+            logger.error(f"Transcode error: {e}")
+
     # Get video metadata
     video_info = _get_video_info(video_path)
 
@@ -239,6 +250,7 @@ async def upload_source_video(
     try:
         result = supabase.table("editai_source_videos").insert({
             "id": video_id,
+            "profile_id": profile.profile_id,
             "name": name,
             "description": description,
             "file_path": str(video_path),
@@ -276,7 +288,7 @@ async def upload_source_video(
 async def list_source_videos(
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """List all source videos."""
+    """List all source videos for the current profile."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -285,6 +297,7 @@ async def list_source_videos(
 
     result = supabase.table("editai_source_videos")\
         .select("*")\
+        .eq("profile_id", profile.profile_id)\
         .order("created_at", desc=True)\
         .execute()
 
@@ -320,6 +333,7 @@ async def get_source_video(
     result = supabase.table("editai_source_videos")\
         .select("*")\
         .eq("id", video_id)\
+        .eq("profile_id", profile.profile_id)\
         .execute()
 
     if not result.data:
@@ -353,10 +367,11 @@ async def delete_source_video(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    # Get video info first
+    # Get video info first (scoped to profile)
     result = supabase.table("editai_source_videos")\
         .select("file_path, thumbnail_path")\
         .eq("id", video_id)\
+        .eq("profile_id", profile.profile_id)\
         .execute()
 
     if not result.data:
@@ -368,6 +383,7 @@ async def delete_source_video(
     segments = supabase.table("editai_segments")\
         .select("extracted_video_path, thumbnail_path")\
         .eq("source_video_id", video_id)\
+        .eq("profile_id", profile.profile_id)\
         .execute()
 
     # Delete segment files
@@ -378,7 +394,10 @@ async def delete_source_video(
             Path(seg["thumbnail_path"]).unlink(missing_ok=True)
 
     # Delete from database (cascade will handle segments)
-    supabase.table("editai_source_videos").delete().eq("id", video_id).execute()
+    supabase.table("editai_source_videos").delete()\
+        .eq("id", video_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
 
     # Delete source video files
     if video_data.get("file_path"):
@@ -392,9 +411,12 @@ async def delete_source_video(
 @router.get("/source-videos/{video_id}/stream")
 async def stream_source_video(
     video_id: str,
-    profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Stream source video for playback."""
+    """Stream source video for playback.
+
+    NOTE: No profile auth required - the <video> element makes direct browser
+    requests without custom headers. Video IDs are UUIDs so they're unguessable.
+    """
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -411,11 +433,167 @@ async def stream_source_video(
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found")
 
+    suffix = video_path.suffix.lower()
+    media_type = {
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".webm": "video/webm",
+        ".avi": "video/x-msvideo",
+        ".mkv": "video/x-matroska",
+    }.get(suffix, "video/mp4")
+
     return FileResponse(
         path=str(video_path),
-        media_type="video/mp4",
+        media_type=media_type,
         filename=video_path.name
     )
+
+
+# ============== WAVEFORM & VOICE DETECTION ==============
+
+def _extract_waveform(video_path: str, num_samples: int = 800, duration: float = 0) -> List[float]:
+    """Extract audio waveform as RMS amplitude values normalized 0-1.
+
+    Uses FFmpeg to decode audio to raw PCM (mono, 8kHz, s16le) via pipe,
+    then computes RMS per temporal bin with sqrt scaling.
+    """
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(video_path),
+        "-vn",
+        "-ac", "1",          # mono
+        "-ar", "8000",       # 8kHz — enough for waveform viz
+        "-f", "s16le",       # raw signed 16-bit little-endian
+        "-acodec", "pcm_s16le",
+        "pipe:1"
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        if result.returncode != 0:
+            logger.error(f"FFmpeg waveform extraction failed: {result.stderr[:500]}")
+            return []
+
+        raw = result.stdout
+        if not raw:
+            return []
+
+        # Parse raw PCM — each sample is 2 bytes (s16le)
+        total_samples = len(raw) // 2
+        if total_samples == 0:
+            return []
+
+        samples_per_bin = max(1, total_samples // num_samples)
+        actual_bins = min(num_samples, total_samples)
+        waveform = []
+
+        for i in range(actual_bins):
+            start_byte = i * samples_per_bin * 2
+            end_byte = min(start_byte + samples_per_bin * 2, len(raw))
+            chunk = raw[start_byte:end_byte]
+
+            # Compute RMS for this bin
+            n = len(chunk) // 2
+            if n == 0:
+                waveform.append(0.0)
+                continue
+
+            sum_sq = 0.0
+            for j in range(n):
+                sample = struct.unpack_from('<h', chunk, j * 2)[0]
+                sum_sq += sample * sample
+            rms = math.sqrt(sum_sq / n) / 32768.0  # normalize to 0-1
+
+            # sqrt scaling for better visual dynamic range
+            waveform.append(round(math.sqrt(rms), 4))
+
+        return waveform
+
+    except subprocess.TimeoutExpired:
+        logger.error("FFmpeg waveform extraction timed out")
+        return []
+    except Exception as e:
+        logger.error(f"Waveform extraction error: {e}")
+        return []
+
+
+@router.get("/source-videos/{video_id}/waveform")
+async def get_source_video_waveform(
+    video_id: str,
+    samples: int = Query(default=800, ge=100, le=4000),
+):
+    """Get audio waveform data for visualization.
+
+    No auth required — same pattern as /stream (UUID is unguessable).
+    """
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    result = supabase.table("editai_source_videos")\
+        .select("file_path, duration")\
+        .eq("id", video_id)\
+        .execute()
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Source video not found")
+
+    video_path = Path(result.data[0]["file_path"])
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Video file not found")
+
+    duration = result.data[0].get("duration") or 0
+
+    waveform = _extract_waveform(str(video_path), num_samples=samples, duration=duration)
+
+    return {
+        "video_id": video_id,
+        "samples": len(waveform),
+        "duration": duration,
+        "waveform": waveform
+    }
+
+
+@router.get("/source-videos/{video_id}/voice-detection")
+async def get_source_video_voice_detection(
+    video_id: str,
+    threshold: float = Query(default=0.5, ge=0.1, le=0.9),
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Get voice activity detection regions for a source video.
+
+    Uses Silero VAD to detect speech segments.
+    """
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    result = supabase.table("editai_source_videos")\
+        .select("file_path")\
+        .eq("id", video_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Source video not found")
+
+    video_path = Path(result.data[0]["file_path"])
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Video file not found")
+
+    try:
+        from app.services.voice_detector import VoiceDetector
+        detector = VoiceDetector(threshold=threshold)
+        voice_segments = detector.detect_voice(video_path)
+
+        return {
+            "video_id": video_id,
+            "voice_segments": [seg.to_dict() for seg in voice_segments],
+            "segments_count": len(voice_segments)
+        }
+    except Exception as e:
+        logger.error(f"Voice detection failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Voice detection failed: {e}")
 
 
 # ============== SEGMENTS ENDPOINTS ==============
@@ -432,10 +610,11 @@ async def create_segment(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    # Verify source video exists
+    # Verify source video exists and belongs to profile
     video_result = supabase.table("editai_source_videos")\
         .select("file_path, name")\
         .eq("id", video_id)\
+        .eq("profile_id", profile.profile_id)\
         .execute()
 
     if not video_result.data:
@@ -464,6 +643,7 @@ async def create_segment(
         result = supabase.table("editai_segments").insert({
             "id": segment_id,
             "source_video_id": video_id,
+            "profile_id": profile.profile_id,
             "start_time": segment.start_time,
             "end_time": segment.end_time,
             "keywords": segment.keywords,
@@ -506,6 +686,7 @@ async def list_video_segments(
     result = supabase.table("editai_segments")\
         .select("*, editai_source_videos(name)")\
         .eq("source_video_id", video_id)\
+        .eq("profile_id", profile.profile_id)\
         .order("start_time")\
         .execute()
 
@@ -538,13 +719,14 @@ async def list_all_segments(
     max_duration: Optional[float] = Query(default=None, description="Maximum duration in seconds"),
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """List all segments (library view) with optional filters."""
+    """List all segments (library view) with optional filters, scoped to current profile."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
     query = supabase.table("editai_segments")\
-        .select("*, editai_source_videos(name)")
+        .select("*, editai_source_videos(name)")\
+        .eq("profile_id", profile.profile_id)
 
     if source_video_id:
         query = query.eq("source_video_id", source_video_id)
@@ -600,6 +782,7 @@ async def get_segment(
     result = supabase.table("editai_segments")\
         .select("*, editai_source_videos(name)")\
         .eq("id", segment_id)\
+        .eq("profile_id", profile.profile_id)\
         .execute()
 
     if not result.data:
@@ -654,13 +837,14 @@ async def update_segment(
     result = supabase.table("editai_segments")\
         .update(update_data)\
         .eq("id", segment_id)\
+        .eq("profile_id", profile.profile_id)\
         .execute()
 
     if not result.data:
         raise HTTPException(status_code=404, detail="Segment not found")
 
     # Fetch updated segment
-    return await get_segment(segment_id)
+    return await get_segment(segment_id, profile)
 
 
 @router.delete("/{segment_id}")
@@ -674,10 +858,11 @@ async def delete_segment(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    # Get segment files first
+    # Get segment files first (scoped to profile)
     result = supabase.table("editai_segments")\
         .select("extracted_video_path, thumbnail_path")\
         .eq("id", segment_id)\
+        .eq("profile_id", profile.profile_id)\
         .execute()
 
     if not result.data:
@@ -686,7 +871,10 @@ async def delete_segment(
     seg = result.data[0]
 
     # Delete from database
-    supabase.table("editai_segments").delete().eq("id", segment_id).execute()
+    supabase.table("editai_segments").delete()\
+        .eq("id", segment_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
 
     # Delete files
     if seg.get("extracted_video_path"):
@@ -707,10 +895,11 @@ async def toggle_favorite(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    # Get current status
+    # Get current status (scoped to profile)
     result = supabase.table("editai_segments")\
         .select("is_favorite")\
         .eq("id", segment_id)\
+        .eq("profile_id", profile.profile_id)\
         .execute()
 
     if not result.data:
@@ -722,6 +911,7 @@ async def toggle_favorite(
     supabase.table("editai_segments")\
         .update({"is_favorite": new_status, "updated_at": datetime.now().isoformat()})\
         .eq("id", segment_id)\
+        .eq("profile_id", profile.profile_id)\
         .execute()
 
     return {"id": segment_id, "is_favorite": new_status}
@@ -739,10 +929,11 @@ async def extract_segment(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    # Get segment and source video info
+    # Get segment and source video info (scoped to profile)
     result = supabase.table("editai_segments")\
         .select("*, editai_source_videos(file_path)")\
         .eq("id", segment_id)\
+        .eq("profile_id", profile.profile_id)\
         .execute()
 
     if not result.data:
@@ -776,6 +967,7 @@ async def extract_segment(
                     "updated_at": datetime.now().isoformat()
                 })\
                 .eq("id", segment_id)\
+                .eq("profile_id", profile.profile_id)\
                 .execute()
 
     background_tasks.add_task(do_extract)
@@ -796,6 +988,7 @@ async def stream_segment(
     result = supabase.table("editai_segments")\
         .select("extracted_video_path, start_time, end_time, editai_source_videos(file_path)")\
         .eq("id", segment_id)\
+        .eq("profile_id", profile.profile_id)\
         .execute()
 
     if not result.data:
@@ -825,7 +1018,7 @@ async def match_segments_to_srt(
     request: SRTMatchRequest,
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Match segments to SRT content based on keywords."""
+    """Match segments to SRT content based on keywords, scoped to current profile."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -833,9 +1026,10 @@ async def match_segments_to_srt(
     # Parse SRT content
     srt_entries = _parse_srt(request.srt_content)
 
-    # Get all segments with keywords
+    # Get all segments with keywords (scoped to profile)
     result = supabase.table("editai_segments")\
         .select("id, keywords")\
+        .eq("profile_id", profile.profile_id)\
         .execute()
 
     matches = []
@@ -1051,6 +1245,9 @@ async def serve_segment_file(file_path: str):
     media_types = {
         ".mp4": "video/mp4",
         ".webm": "video/webm",
+        ".mov": "video/quicktime",
+        ".avi": "video/x-msvideo",
+        ".mkv": "video/x-matroska",
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
         ".png": "image/png"

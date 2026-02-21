@@ -25,7 +25,7 @@ export async function apiFetch(
       : null;
 
   const headers: HeadersInit = {
-    "Content-Type": "application/json",
+    ...(!(options.body instanceof FormData) && { "Content-Type": "application/json" }),
     ...(profileId && { "X-Profile-Id": profileId }),
     ...customHeaders, // Custom headers can override
   };
@@ -101,6 +101,21 @@ export async function apiDelete(
   options: FetchOptions = {}
 ): Promise<Response> {
   return apiFetch(endpoint, { ...options, method: "DELETE" });
+}
+
+/**
+ * Upload FormData (sets correct multipart headers automatically).
+ */
+export async function apiUpload(
+  endpoint: string,
+  formData: FormData,
+  options: FetchOptions = {}
+): Promise<Response> {
+  return apiFetch(endpoint, {
+    ...options,
+    method: "POST",
+    body: formData,
+  });
 }
 
 export { API_URL };

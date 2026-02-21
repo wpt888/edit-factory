@@ -82,7 +82,9 @@ export interface ExportPreset {
   width: number;
   height: number;
   fps: number;
-  bitrate: string;
+  video_bitrate: string;
+  audio_bitrate: string;
+  crf: number;
   is_default: boolean;
 }
 
@@ -162,6 +164,21 @@ export const COLOR_PRESETS = [
   "#FFA500", // Orange
   "#800080", // Purple
 ];
+
+export interface TTSAsset {
+  id: string;
+  tts_text: string;
+  mp3_url: string | null;
+  srt_url: string | null;
+  srt_content: string | null;
+  audio_duration: number;
+  char_count: number;
+  tts_model: string;
+  status: "generating" | "ready" | "failed";
+  is_used: boolean;
+  created_at: string;
+  updated_at: string;
+}
 
 /** ElevenLabs model options for TTS generation */
 export interface ElevenLabsModelOption {

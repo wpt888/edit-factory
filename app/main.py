@@ -10,6 +10,9 @@ _ffmpeg_bin = Path(__file__).parent.parent / "ffmpeg" / "ffmpeg-master-latest-wi
 if _ffmpeg_bin.exists():
     os.environ['PATH'] = str(_ffmpeg_bin) + os.pathsep + os.environ.get('PATH', '')
 
+from contextlib import asynccontextmanager
+from datetime import datetime
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,11 +43,43 @@ logger = logging.getLogger(__name__)
 # Get settings
 settings = get_settings()
 
+async def _recover_stuck_projects():
+    """Recover projects stuck in 'generating' status (e.g. from server crash)."""
+    try:
+        from app.db import get_supabase
+        supabase = get_supabase()
+        if not supabase:
+            return
+        result = supabase.table("editai_projects").select("id").eq("status", "generating").execute()
+        if result.data:
+            for proj in result.data:
+                supabase.table("editai_projects").update({
+                    "status": "failed",
+                    "updated_at": datetime.now().isoformat()
+                }).eq("id", proj["id"]).execute()
+            logger.info(f"Recovered {len(result.data)} stuck projects (generating -> failed)")
+    except Exception as e:
+        logger.warning(f"Failed to recover stuck projects: {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    settings.ensure_dirs()
+    logger.info("Edit Factory started")
+    logger.info(f"  Input dir: {settings.input_dir.absolute()}")
+    logger.info(f"  Output dir: {settings.output_dir.absolute()}")
+    await _recover_stuck_projects()
+    yield
+    # Shutdown (nothing needed)
+
+
 # Cream aplicatia
 app = FastAPI(
     title="Edit Factory",
     description="Video processing API pentru reels si short-form content",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS - configurat din environment variables
@@ -81,15 +116,6 @@ app.include_router(product_generate_router, prefix="/api/v1", tags=["Product Vid
 static_path = Path(__file__).parent.parent / "static"
 if static_path.exists():
     app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize on startup."""
-    settings.ensure_dirs()
-    logger.info("Edit Factory started")
-    logger.info(f"  Input dir: {settings.input_dir.absolute()}")
-    logger.info(f"  Output dir: {settings.output_dir.absolute()}")
 
 
 @app.get("/")

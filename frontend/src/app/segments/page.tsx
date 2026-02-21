@@ -251,6 +251,25 @@ export default function SegmentsPage() {
     fetchAllSegments();
   }, [currentProfile?.id, profileLoading, fetchSourceVideos, fetchAllSegments]);
 
+  // Delete key shortcut — delete selected segment instantly
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      ) return;
+
+      if (e.key === "Delete" && selectedSegment) {
+        e.preventDefault();
+        handleDeleteSegment(selectedSegment.id);
+        setSelectedSegment(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedSegment]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Load segments when video selected
   useEffect(() => {
     if (selectedVideo) {

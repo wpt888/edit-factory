@@ -92,46 +92,6 @@ async def reset_cost_tracker_endpoint():
 
 
 @router.get("/usage")
-async def get_usage_stats(
-    profile: ProfileContext = Depends(get_profile_context)
-):
-    """Get usage statistics."""
-    logger.info(f"[Profile {profile.profile_id}] Fetching usage stats")
-    import httpx
-    settings = get_settings()
-    result = {
-        "elevenlabs": None,
-        "gemini": None,
-        "errors": []
-    }
-    # NOTE: Truncating pattern match - continuing with original code
-    logger.info(f"Cost tracker supabase client: {tracker._supabase is not None}")
-    return tracker.get_summary()
-
-
-@router.get("/costs/all")
-async def get_all_costs():
-    """Get all cost entries (full history)."""
-    from app.services.cost_tracker import get_cost_tracker
-
-    tracker = get_cost_tracker()
-    return {"entries": tracker.get_all_entries()}
-
-
-@router.post("/costs/reset")
-async def reset_cost_tracker_endpoint():
-    """Reset and reinitialize the cost tracker (reconnect to Supabase)."""
-    from app.services.cost_tracker import reset_cost_tracker, get_cost_tracker
-
-    reset_cost_tracker()
-    tracker = get_cost_tracker()
-    return {
-        "status": "reset",
-        "supabase_connected": tracker._supabase is not None
-    }
-
-
-@router.get("/usage")
 async def get_usage_stats():
     """
     Get usage statistics from ElevenLabs and Gemini APIs.
@@ -703,12 +663,13 @@ async def process_job(job_id: str):
         return
 
     job["status"] = JobStatus.PROCESSING
-    job["updated_at"] = datetime.now()
+    job["updated_at"] = datetime.now().isoformat()
     job["progress"] = "Starting..."
 
     def update_progress(step: str, status: str):
         job["progress"] = f"{step}: {status}"
-        job["updated_at"] = datetime.now()
+        job["updated_at"] = datetime.now().isoformat()
+        get_job_storage().update_job(job_id, {"progress": job["progress"], "updated_at": job["updated_at"]})
 
     try:
         processor = get_processor()
@@ -1217,7 +1178,8 @@ async def add_tts_to_videos(
     output_suffix: str = Form(default="_with_tts"),
     remove_silence: str = Form(default="true"),
     min_silence_duration: float = Form(default=0.3, ge=0.1, le=2.0),
-    silence_padding: float = Form(default=0.08, ge=0.02, le=0.3)
+    silence_padding: float = Form(default=0.08, ge=0.02, le=0.3),
+    profile: ProfileContext = Depends(get_profile_context)
 ):
     """
     Add TTS audio to selected video variants.
@@ -1278,7 +1240,7 @@ async def add_tts_to_videos(
     get_job_storage().create_job(job)
 
     # Process in background
-    background_tasks.add_task(process_tts_job, job_id)
+    background_tasks.add_task(process_tts_job, job_id, profile.profile_id)
 
     return JobResponse(
         job_id=job_id,
@@ -1297,7 +1259,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         return
 
     job["status"] = JobStatus.PROCESSING
-    job["updated_at"] = datetime.now()
+    job["updated_at"] = datetime.now().isoformat()
     job["progress"] = "Initializing TTS..."
 
     try:
@@ -1386,7 +1348,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         # Cleanup temp audio
         try:
             audio_path.unlink()
-        except:
+        except Exception:
             pass
 
         job["status"] = JobStatus.COMPLETED

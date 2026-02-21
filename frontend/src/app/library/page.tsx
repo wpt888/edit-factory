@@ -95,8 +95,7 @@ import {
   defaultVideoFilters,
 } from "@/components/video-enhancement-controls";
 import { SubtitleEnhancementControls } from "@/components/subtitle-enhancement-controls";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+import { apiFetch, apiPost, apiPatch, apiDelete, API_URL } from "@/lib/api";
 
 // Types
 interface Project {
@@ -537,8 +536,8 @@ function LibraryPageContent() {
       const pollInterval = setInterval(async () => {
         try {
           const [projectRes, progressRes] = await Promise.all([
-            fetch(`${API_URL}/library/projects/${projectId}`),
-            fetch(`${API_URL}/library/projects/${projectId}/progress`)
+            apiFetch(`/library/projects/${projectId}`),
+            apiFetch(`/library/projects/${projectId}/progress`)
           ]);
 
           if (projectRes.ok) {
@@ -585,7 +584,7 @@ function LibraryPageContent() {
   // Fetch projects
   const fetchProjects = async () => {
     try {
-      const res = await fetch(`${API_URL}/library/projects`);
+      const res = await apiFetch("/library/projects");
       if (res.ok) {
         const data = await res.json();
         setProjects(data.projects || []);
@@ -598,7 +597,7 @@ function LibraryPageContent() {
   // Fetch export presets
   const fetchPresets = async () => {
     try {
-      const res = await fetch(`${API_URL}/library/export-presets`);
+      const res = await apiFetch("/library/export-presets");
       if (res.ok) {
         const data = await res.json();
         setPresets(data.presets || []);
@@ -615,7 +614,7 @@ function LibraryPageContent() {
   // Fetch clips for project
   const fetchClips = async (projectId: string) => {
     try {
-      const res = await fetch(`${API_URL}/library/projects/${projectId}/clips`);
+      const res = await apiFetch(`/library/projects/${projectId}/clips`);
       if (res.ok) {
         const data = await res.json();
         setClips(data.clips || []);
@@ -628,7 +627,7 @@ function LibraryPageContent() {
   // Fetch clip content
   const fetchClipContent = async (clipId: string) => {
     try {
-      const res = await fetch(`${API_URL}/library/clips/${clipId}`);
+      const res = await apiFetch(`/library/clips/${clipId}`);
       if (res.ok) {
         const data = await res.json();
         setClipContent(data.content);
@@ -654,15 +653,11 @@ function LibraryPageContent() {
     setLoading(true);
     setCreateError(null);
     try {
-      const res = await fetch(`${API_URL}/library/projects`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const res = await apiPost("/library/projects", {
           name: newProjectName,
           description: newProjectDescription,
           target_duration: newProjectDuration,
           context_text: newProjectContext,
-        }),
       });
 
       if (res.ok) {
@@ -701,9 +696,7 @@ function LibraryPageContent() {
     if (!projectToDelete) return;
 
     try {
-      const res = await fetch(`${API_URL}/library/projects/${projectToDelete.id}`, {
-        method: "DELETE",
-      });
+      const res = await apiDelete(`/library/projects/${projectToDelete.id}`);
 
       if (res.ok) {
         setProjects(projects.filter((p) => p.id !== projectToDelete.id));
@@ -739,7 +732,7 @@ function LibraryPageContent() {
       }
       formData.append("variant_count", variantCount.toString());
 
-      const res = await fetch(`${API_URL}/library/projects/${selectedProject.id}/generate`, {
+      const res = await apiFetch(`/library/projects/${selectedProject.id}/generate`, {
         method: "POST",
         body: formData,
       });
@@ -772,15 +765,13 @@ function LibraryPageContent() {
     // Call backend to cancel
     if (selectedProject) {
       try {
-        await fetch(`${API_URL}/library/projects/${selectedProject.id}/cancel`, {
-          method: "POST"
-        });
+        await apiPost(`/library/projects/${selectedProject.id}/cancel`);
       } catch (error) {
         console.error("Failed to cancel generation:", error);
       }
 
       // Refresh project status
-      const projectRes = await fetch(`${API_URL}/library/projects/${selectedProject.id}`);
+      const projectRes = await apiFetch(`/library/projects/${selectedProject.id}`);
       if (projectRes.ok) {
         const project = await projectRes.json();
         setSelectedProject(project);
@@ -796,9 +787,7 @@ function LibraryPageContent() {
   // Toggle clip selection
   const toggleClipSelection = async (clipId: string, selected: boolean) => {
     try {
-      const res = await fetch(`${API_URL}/library/clips/${clipId}/select?selected=${selected}`, {
-        method: "PATCH",
-      });
+      const res = await apiPatch(`/library/clips/${clipId}/select?selected=${selected}`);
 
       if (res.ok) {
         setClips(clips.map((c) =>
@@ -806,7 +795,7 @@ function LibraryPageContent() {
         ));
         // Refresh project counts
         if (selectedProject) {
-          const projectRes = await fetch(`${API_URL}/library/projects/${selectedProject.id}`);
+          const projectRes = await apiFetch(`/library/projects/${selectedProject.id}`);
           if (projectRes.ok) {
             setSelectedProject(await projectRes.json());
           }
@@ -820,9 +809,7 @@ function LibraryPageContent() {
   // Delete clip
   const deleteClip = async (clipId: string) => {
     try {
-      const res = await fetch(`${API_URL}/library/clips/${clipId}`, {
-        method: "DELETE",
-      });
+      const res = await apiDelete(`/library/clips/${clipId}`);
 
       if (res.ok) {
         const newClips = clips.filter((c) => c.id !== clipId);
@@ -833,7 +820,7 @@ function LibraryPageContent() {
 
         // Refresh project data to update counts
         if (selectedProject) {
-          const projectRes = await fetch(`${API_URL}/library/projects/${selectedProject.id}`);
+          const projectRes = await apiFetch(`/library/projects/${selectedProject.id}`);
           if (projectRes.ok) {
             const updatedProject = await projectRes.json();
             setSelectedProject(updatedProject);
@@ -854,9 +841,8 @@ function LibraryPageContent() {
     if (!selectedClip) return;
 
     try {
-      const res = await fetch(`${API_URL}/library/clips/${selectedClip.id}/content`, {
+      const res = await apiFetch(`/library/clips/${selectedClip.id}/content`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           tts_text: editingTtsText,
           srt_content: editingSrtContent,
@@ -897,7 +883,7 @@ function LibraryPageContent() {
       formData.append("glow_blur", (editingSubtitleSettings.glowBlur ?? 0).toString());
       formData.append("adaptive_sizing", (editingSubtitleSettings.adaptiveSizing ?? false).toString());
 
-      const res = await fetch(`${API_URL}/library/clips/${clipId}/render`, {
+      const res = await apiFetch(`/library/clips/${clipId}/render`, {
         method: "POST",
         body: formData,
       });
@@ -919,14 +905,10 @@ function LibraryPageContent() {
 
     setRendering(true);
     try {
-      const res = await fetch(`${API_URL}/library/clips/bulk-render`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const res = await apiPost("/library/clips/bulk-render", {
           clip_ids: selectedClips.map((c) => c.id),
           preset_name: selectedPreset,
           elevenlabs_model: selectedElevenLabsModel,
-        }),
       });
 
       if (res.ok) {
@@ -943,7 +925,7 @@ function LibraryPageContent() {
   const pollClipStatus = async (clipId: string) => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${API_URL}/library/clips/${clipId}`);
+        const res = await apiFetch(`/library/clips/${clipId}`);
         if (res.ok) {
           const data = await res.json();
           setClips((prevClips) =>
@@ -1006,11 +988,7 @@ function LibraryPageContent() {
   // Rename clip function
   const renameClip = async (clipId: string, newName: string) => {
     try {
-      const res = await fetch(`${API_URL}/library/clips/${clipId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ variant_name: newName }),
-      });
+      const res = await apiPatch(`/library/clips/${clipId}`, { variant_name: newName });
       if (res.ok) {
         // Update local state
         setClips(prev => prev.map(c =>
@@ -1037,7 +1015,7 @@ function LibraryPageContent() {
   // Fetch source videos for segment modal
   const fetchSourceVideos = async () => {
     try {
-      const res = await fetch(`${API_URL}/segments/source-videos`);
+      const res = await apiFetch("/segments/source-videos");
       if (res.ok) {
         const data = await res.json();
         setSourceVideos(data);
@@ -1050,7 +1028,7 @@ function LibraryPageContent() {
   // Fetch segments for selected source video
   const fetchModalSegments = async (videoId: string) => {
     try {
-      const res = await fetch(`${API_URL}/segments/source-videos/${videoId}/segments`);
+      const res = await apiFetch(`/segments/source-videos/${videoId}/segments`);
       if (res.ok) {
         const data = await res.json();
         setModalSegments(data);
@@ -1063,7 +1041,7 @@ function LibraryPageContent() {
   // Fetch segments assigned to project
   const fetchProjectSegments = async (projectId: string) => {
     try {
-      const res = await fetch(`${API_URL}/segments/projects/${projectId}/segments`);
+      const res = await apiFetch(`/segments/projects/${projectId}/segments`);
       if (res.ok) {
         const data = await res.json();
         setProjectSegments(data);
@@ -1103,17 +1081,13 @@ function LibraryPageContent() {
     if (!selectedSourceVideo || !pendingSegment) return;
 
     try {
-      const res = await fetch(
-        `${API_URL}/segments/source-videos/${selectedSourceVideo.id}/segments`,
+      const res = await apiPost(
+        `/segments/source-videos/${selectedSourceVideo.id}/segments`,
         {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
             start_time: pendingSegment.start,
             end_time: pendingSegment.end,
             keywords,
             notes,
-          }),
         }
       );
 
@@ -1160,8 +1134,8 @@ function LibraryPageContent() {
         formData.append("segment_ids", seg.id);
       });
 
-      const res = await fetch(
-        `${API_URL}/segments/projects/${selectedProject.id}/assign`,
+      const res = await apiFetch(
+        `/segments/projects/${selectedProject.id}/assign`,
         {
           method: "POST",
           body: formData,
@@ -1205,15 +1179,9 @@ function LibraryPageContent() {
         requestBody.generate_tts = generateTts;
       }
 
-      const res = await fetch(
-        `${API_URL}/library/projects/${selectedProject.id}/generate-from-segments`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(requestBody),
-        }
+      const res = await apiPost(
+        `/library/projects/${selectedProject.id}/generate-from-segments`,
+        requestBody
       );
 
       if (res.ok) {
@@ -1249,7 +1217,7 @@ function LibraryPageContent() {
   // Fetch Postiz integrations
   const fetchPostizIntegrations = async () => {
     try {
-      const res = await fetch(`${API_URL}/postiz/integrations`);
+      const res = await apiFetch("/postiz/integrations");
       if (res.ok) {
         const data = await res.json();
         setPostizIntegrations(data);
@@ -1305,16 +1273,12 @@ function LibraryPageContent() {
           .filter(c => c.is_selected && c.final_video_path)
           .map(c => c.id);
 
-        const res = await fetch(`${API_URL}/postiz/bulk-publish`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        const res = await apiPost("/postiz/bulk-publish", {
             clip_ids: selectedClipIds,
             caption: postizCaption,
             integration_ids: selectedIntegrations,
             schedule_date: scheduleDate,
             schedule_interval_minutes: 30
-          })
         });
 
         if (res.ok) {
@@ -1327,15 +1291,11 @@ function LibraryPageContent() {
         }
       } else if (postizClipToPublish) {
         // Single clip publish
-        const res = await fetch(`${API_URL}/postiz/publish`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        const res = await apiPost("/postiz/publish", {
             clip_id: postizClipToPublish.id,
             caption: postizCaption,
             integration_ids: selectedIntegrations,
             schedule_date: scheduleDate
-          })
         });
 
         if (res.ok) {
@@ -1779,11 +1739,7 @@ function LibraryPageContent() {
                       <Button
                         onClick={async () => {
                           try {
-                            const res = await fetch(`${API_URL}/library/projects/${selectedProject.id}`, {
-                              method: "PATCH",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ status: "draft" })
-                            });
+                            const res = await apiPatch(`/library/projects/${selectedProject.id}`, { status: "draft" });
                             if (res.ok) {
                               const updated = await res.json();
                               setSelectedProject(updated);
@@ -2662,7 +2618,7 @@ Text subtitrare..."
                                 e.stopPropagation();
                                 // Fetch segments for this video if not already loaded
                                 try {
-                                  const res = await fetch(`${API_URL}/segments/source-videos/${video.id}/segments`);
+                                  const res = await apiFetch(`/segments/source-videos/${video.id}/segments`);
                                   if (res.ok) {
                                     const segments = await res.json();
                                     if (e.target.checked) {

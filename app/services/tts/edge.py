@@ -106,6 +106,19 @@ class EdgeTTSService(TTSService):
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # --- Cache check ---
+        from app.services.tts_cache import cache_lookup, cache_store
+        cache_key = {"text": text, "voice_id": voice_id, "model_id": "edge", "provider": "edge"}
+        cached = cache_lookup(cache_key, "edge", output_path)
+        if cached:
+            return TTSResult(
+                audio_path=output_path,
+                duration_seconds=cached.get("duration_seconds", 0.0),
+                provider="edge",
+                voice_id=voice_id,
+                cost=0.0
+            )
+
         # Extract optional parameters
         rate = kwargs.get("rate", "+0%")
         volume = kwargs.get("volume", "+0%")
@@ -133,6 +146,12 @@ class EdgeTTSService(TTSService):
             duration_seconds = 0.0
 
         logger.info(f"Audio saved to: {output_path} (duration: {duration_seconds:.2f}s)")
+
+        # --- Cache store ---
+        cache_store(cache_key, "edge", output_path, {
+            "duration_seconds": duration_seconds,
+            "characters": len(text)
+        })
 
         return TTSResult(
             audio_path=output_path,
