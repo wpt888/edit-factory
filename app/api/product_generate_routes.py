@@ -510,6 +510,18 @@ async def _generate_product_video_task(
 
         product = product_result.data
 
+        # Read profile template settings (video_template_settings JSONB column)
+        try:
+            profile_result = _get_supabase().table("profiles")\
+                .select("video_template_settings")\
+                .eq("id", profile_id)\
+                .single()\
+                .execute()
+            tmpl_cfg = (profile_result.data or {}).get("video_template_settings") or {}
+        except Exception as _tmpl_exc:
+            logger.warning("[%s] Failed to read profile template settings: %s", job_id, _tmpl_exc)
+            tmpl_cfg = {}
+
         # Resolve image path
         image_path: Optional[Path] = None
 
@@ -677,12 +689,23 @@ async def _generate_product_video_task(
         # ---------------------------------------------------------------
         composed_path = temp_dir / f"composed_{job_id}.mp4"
 
+        # CTA priority: explicit non-default request value wins; otherwise use profile setting
+        cta_text = (
+            request.cta_text
+            if request.cta_text != "Comanda acum!"
+            else (tmpl_cfg.get("cta_text") or request.cta_text)
+        )
+
         compositor_config = CompositorConfig(
             duration_s=request.duration_s,
-            cta_text=request.cta_text,
+            cta_text=cta_text,
             fps=25,
             use_zoompan=True,
             output_dir=settings.output_dir / "product_videos",
+            template_name=tmpl_cfg.get("template_name", "product_spotlight"),
+            primary_color=tmpl_cfg.get("primary_color", "#FF0000"),
+            accent_color=tmpl_cfg.get("accent_color", "#FFFF00"),
+            font_family=tmpl_cfg.get("font_family", ""),
         )
 
         # compose_product_video is synchronous (FFmpeg subprocess)
