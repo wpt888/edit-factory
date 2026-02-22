@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v6 Production Hardening — Phase 30 (Frontend Error Handling Adoption)
+**Current focus:** Phase 31 Final Polish — Backend tech debt closure and v6 audit gap fixes
 
 ## Current Position
 
-Milestone: v6 Production Hardening
-Phase: 30 of 30 (Frontend Error Handling Adoption)
-Plan: 04 complete
-Status: Complete (4/4 plans complete)
-Last activity: 2026-02-22 — Completed Phase 30 Plan 04 (segments/page.tsx handleApiError migration — FE-02 fully closed across all pages)
+Milestone: v6 Production Hardening (Final Polish)
+Phase: 31 of 31 (Final Polish)
+Plan: 02 complete
+Status: Complete (2/2 plans complete)
+Last activity: 2026-02-22 — Completed Phase 31 Plan 02 (apiGetWithRetry in usage/page.tsx + apiFetch in usePolling)
 
-Progress: [██████████] 100% (10/10 plans)
+Progress: [██████████] 100% (2/2 plans)
 
 ## Performance Metrics
 
@@ -35,6 +35,7 @@ Progress: [██████████] 100% (10/10 plans)
 | v6 Hardening | 6 (24-29) | — | In progress |
 | Phase 30-frontend-error-handling-adoption P01 | 7 | 2 tasks | 5 files |
 | Phase 30-frontend-error-handling-adoption P04 | 10 | 1 tasks | 1 files |
+| Phase 31-final-polish P01 | 12 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -83,6 +84,9 @@ Recent decisions affecting current work:
 - [Phase 30-03]: segments/page.tsx console.error calls (12) were deferred to Plan 04 (now fixed in 30-04)
 - [Phase 30-04]: Dead else-branch removed from handleDeleteSegment — apiDelete throws ApiError on non-2xx, so else branch was unreachable dead code
 - [Phase 30-04]: handleUpload raw fetch() kept for FormData multipart POST — only console.error replaced with handleApiError per plan
+- [Phase 31-01]: cost_tracker, job_storage, tts_library_service now use get_supabase() from app.db singleton — no local create_client calls
+- [Phase 31-01]: All 6 inline MAX_TTS_CHARS comparisons replaced with validate_tts_text_length() helper across 3 route files
+- [Phase 31-01]: Background task validation in process_tts_job uses validate_tts_text_length() — HTTPException caught by outer except Exception handler marking job as failed
 
 ### Pending Todos
 
@@ -98,8 +102,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 30-04-PLAN.md (segments/page.tsx handleApiError migration — Phase 30 fully complete, FE-02 closed)
+Stopped at: Completed 31-01-PLAN.md (pytest + Supabase centralization + validate_tts_text_length adoption)
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after Phase 30-04 complete (Phase 30 fully done, all 4 plans executed)*
+*Last updated: 2026-02-22 after Phase 31-01 complete (1/2 plans done)*
