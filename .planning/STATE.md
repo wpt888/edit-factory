@@ -11,9 +11,9 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v6 Production Hardening
 Phase: 30 of 30 (Frontend Error Handling Adoption)
-Plan: 03 complete
-Status: Complete (3/3 plans complete)
-Last activity: 2026-02-22 — Completed Phase 30 Plan 03 (apiGetWithRetry adoption + ErrorBoundary wiring, FE-02 fully closed)
+Plan: 04 complete
+Status: Complete (4/4 plans complete)
+Last activity: 2026-02-22 — Completed Phase 30 Plan 04 (segments/page.tsx handleApiError migration — FE-02 fully closed across all pages)
 
 Progress: [██████████] 100% (10/10 plans)
 
@@ -34,6 +34,7 @@ Progress: [██████████] 100% (10/10 plans)
 | v5 Product Video | 7 (17-23) | 13 | Shipped 2026-02-21 |
 | v6 Hardening | 6 (24-29) | — | In progress |
 | Phase 30-frontend-error-handling-adoption P01 | 7 | 2 tasks | 5 files |
+| Phase 30-frontend-error-handling-adoption P04 | 10 | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -79,7 +80,9 @@ Recent decisions affecting current work:
 - [Phase 30-01]: handleApiError replaces console.error in all catch blocks; alert() split by semantic intent into toast.success/warning/error
 - [Phase 30-03]: blob download calls (librarie downloadFile, tts-library fetchAudioBlob/downloadFile) kept as apiGet — binary fetches are not retry candidates
 - [Phase 30-03]: ErrorBoundary wraps 3 logical sections in library/page.tsx (ClipGallery, ClipEditorPanel, SegmentSelectionModal) — granular isolation not page-wide
-- [Phase 30-03]: segments/page.tsx console.error calls (12) are pre-existing out-of-scope — documented as deferred, not fixed
+- [Phase 30-03]: segments/page.tsx console.error calls (12) were deferred to Plan 04 (now fixed in 30-04)
+- [Phase 30-04]: Dead else-branch removed from handleDeleteSegment — apiDelete throws ApiError on non-2xx, so else branch was unreachable dead code
+- [Phase 30-04]: handleUpload raw fetch() kept for FormData multipart POST — only console.error replaced with handleApiError per plan
 
 ### Pending Todos
 
@@ -95,8 +98,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 30-03-PLAN.md (apiGetWithRetry adoption + ErrorBoundary wiring — Phase 30 complete)
+Stopped at: Completed 30-04-PLAN.md (segments/page.tsx handleApiError migration — Phase 30 fully complete, FE-02 closed)
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after Phase 30-03 complete (Phase 30 fully done)*
+*Last updated: 2026-02-22 after Phase 30-04 complete (Phase 30 fully done, all 4 plans executed)*
