@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
+from app.api.validators import validate_upload_size
 from app.models import (
     JobStatus, JobCreate, JobResponse, AnalyzeRequest,
     AnalyzeResponse, HealthResponse, VideoInfo, VideoSegment
@@ -588,6 +589,9 @@ async def create_job(
     if not output_name:
         output_name = f"reel_{job_id}"
 
+    # Reject oversized uploads before reading into memory (STAB-05)
+    await validate_upload_size(video)
+
     # Salvam fisierele
     video_path = settings.input_dir / f"{job_id}_{_sanitize_filename(video.filename)}"
     with open(video_path, "wb") as f:
@@ -595,6 +599,7 @@ async def create_job(
 
     audio_path = None
     if audio:
+        await validate_upload_size(audio)
         audio_path = settings.input_dir / f"{job_id}_{_sanitize_filename(audio.filename)}"
         with open(audio_path, "wb") as f:
             shutil.copyfileobj(audio.file, f)
@@ -610,8 +615,11 @@ async def create_job(
     if subtitle_settings:
         try:
             parsed_subtitle_settings = json.loads(subtitle_settings)
-        except json.JSONDecodeError:
-            logger.warning(f"Invalid subtitle_settings JSON: {subtitle_settings}")
+        except json.JSONDecodeError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid JSON in subtitle_settings: {str(e)}"
+            )
 
     # Limitam variant_count la 1-10
     variant_count = max(1, min(10, variant_count))
@@ -879,8 +887,11 @@ async def create_multi_video_job(
     if subtitle_settings:
         try:
             parsed_subtitle_settings = json.loads(subtitle_settings)
-        except json.JSONDecodeError:
-            logger.warning(f"Invalid subtitle_settings JSON: {subtitle_settings}")
+        except json.JSONDecodeError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid JSON in subtitle_settings: {str(e)}"
+            )
 
     # Limitări
     variant_count = max(1, min(10, variant_count))
