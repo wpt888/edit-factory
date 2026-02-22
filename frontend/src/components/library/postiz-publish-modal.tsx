@@ -6,7 +6,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Check, X, Share2, Loader2, Calendar } from "lucide-react";
-import { apiFetch, apiPost } from "@/lib/api";
+import { apiFetch, apiPost, handleApiError } from "@/lib/api";
+import { toast } from "sonner";
 import { Clip, PostizIntegration } from "./types";
 
 interface PostizPublishModalProps {
@@ -66,7 +67,7 @@ export function PostizPublishModal({
         setIntegrations(data);
       }
     } catch (error) {
-      console.error("Failed to fetch Postiz integrations:", error);
+      handleApiError(error, "Eroare la incarcarea integrarilor Postiz");
     }
   };
 
@@ -80,7 +81,7 @@ export function PostizPublishModal({
 
   const publishToPostiz = async () => {
     if (selectedIntegrations.length === 0) {
-      alert("Selecteaza cel putin o platforma!");
+      toast.error("Selecteaza cel putin o platforma!");
       return;
     }
 
@@ -108,13 +109,12 @@ export function PostizPublishModal({
         });
 
         if (res.ok) {
-          const data = await res.json();
-          alert(`Publicare in curs! Job ID: ${data.job_id}`);
+          toast.success("Publicare in curs!");
           onClose();
           onPublishComplete?.();
         } else {
-          const error = await res.json();
-          alert(`Eroare: ${error.detail}`);
+          const errData = await res.json();
+          toast.error(errData.detail || "Eroare la publicare");
         }
       } else if (clip) {
         // Single clip publish
@@ -126,22 +126,16 @@ export function PostizPublishModal({
         });
 
         if (res.ok) {
-          const data = await res.json();
-          alert(
-            schedDate
-              ? `Programat cu succes! Job ID: ${data.job_id}`
-              : `Publicat cu succes! Job ID: ${data.job_id}`
-          );
+          toast.success(schedDate ? "Programat cu succes!" : "Publicat cu succes!");
           onClose();
           onPublishComplete?.();
         } else {
-          const error = await res.json();
-          alert(`Eroare: ${error.detail}`);
+          const errData = await res.json();
+          toast.error(errData.detail || "Eroare la publicare");
         }
       }
     } catch (error) {
-      console.error("Failed to publish:", error);
-      alert("Eroare la publicare. Verifica conexiunea.");
+      handleApiError(error, "Eroare la publicare");
     } finally {
       setPublishing(false);
     }
