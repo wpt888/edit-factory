@@ -38,9 +38,9 @@ Requirements for production hardening milestone. Each maps to roadmap phases.
 
 ### Code Quality
 
-- [ ] **QUAL-01**: Single get_supabase() in db.py used everywhere (remove duplicates)
+- [x] **QUAL-01**: Single get_supabase() in db.py used everywhere (remove duplicates)
 - [x] **QUAL-02**: ElevenLabs TTS uses async HTTP client (httpx.AsyncClient)
-- [ ] **QUAL-03**: Debug logs cleaned up ([MUTE DEBUG] removed)
+- [x] **QUAL-03**: Debug logs cleaned up ([MUTE DEBUG] removed)
 - [x] **QUAL-04**: Unused cleanup_project_lock integrated into render flow
 
 ### Testing & Observability
@@ -103,9 +103,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FE-05 | Phase 26 | Complete |
 | REF-01 | Phase 27 | Complete |
 | REF-02 | Phase 27 | Complete |
-| QUAL-01 | Phase 28 | Pending |
+| QUAL-01 | Phase 28 | Complete |
 | QUAL-02 | Phase 24 | Complete |
-| QUAL-03 | Phase 28 | Pending |
+| QUAL-03 | Phase 28 | Complete |
 | QUAL-04 | Phase 24 | Complete |
 | TEST-01 | Phase 29 | Pending |
 | TEST-02 | Phase 29 | Pending |

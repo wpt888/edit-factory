@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v6 Production Hardening
 Phase: 28 of 29 (Code Quality)
-Plan: — (not yet started)
-Status: Ready to plan
-Last activity: 2026-02-22 — Completed Phase 27 (Frontend Refactoring) — 1/1 plans, verified 4/5 must-haves (1 human_needed)
+Plan: 1 of 1 complete
+Status: In progress
+Last activity: 2026-02-22 — Completed Phase 28 Plan 01 (Supabase centralization + debug log cleanup)
 
-Progress: [███████░░░] 70% (7/10 plans)
+Progress: [████████░░] 80% (8/10 plans)
 
 ## Performance Metrics
 
@@ -65,6 +65,8 @@ Recent decisions affecting current work:
 - 27-01: renderingClipIds string[] array replaces the old pollClipStatus function — supports multiple simultaneous clip renders naturally
 - 27-01: PostizPublishModal owns its own state (integrations, caption, schedule) and resets via useEffect on open prop change
 - 27-01: SegmentSelectionModal owns its own modal-specific state (sourceVideos, modalSegments) while projectSegments lives in page.tsx
+- 28-01: All backend modules import get_supabase from app.db — no local redefinitions; app.db is the single source of truth for Supabase client initialization
+- 28-01: [MUTE DEBUG] logger.info lines deleted entirely (not downgraded) — they were temporary debug artifacts not intended for long-term use
 
 ### Pending Todos
 
@@ -80,8 +82,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 27-01-PLAN.md
+Stopped at: Completed 28-01-PLAN.md
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after Phase 27-01 complete*
+*Last updated: 2026-02-22 after Phase 28-01 complete*
