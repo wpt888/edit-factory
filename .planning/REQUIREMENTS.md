@@ -45,10 +45,10 @@ Requirements for production hardening milestone. Each maps to roadmap phases.
 
 ### Testing & Observability
 
-- [ ] **TEST-01**: pytest setup with conftest.py and fixtures for backend
-- [ ] **TEST-02**: Unit tests for critical services (job_storage, cost_tracker, srt_validator)
-- [ ] **TEST-03**: Structured JSON logging replaces plain text logs
-- [ ] **TEST-04**: Data retention policy cleans up temp files and old failed jobs
+- [x] **TEST-01**: pytest setup with conftest.py and fixtures for backend
+- [x] **TEST-02**: Unit tests for critical services (job_storage, cost_tracker, srt_validator)
+- [x] **TEST-03**: Structured JSON logging replaces plain text logs
+- [x] **TEST-04**: Data retention policy cleans up temp files and old failed jobs
 
 ## Future Requirements
 
@@ -107,10 +107,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | QUAL-02 | Phase 24 | Complete |
 | QUAL-03 | Phase 28 | Complete |
 | QUAL-04 | Phase 24 | Complete |
-| TEST-01 | Phase 29 | Pending |
-| TEST-02 | Phase 29 | Pending |
-| TEST-03 | Phase 29 | Pending |
-| TEST-04 | Phase 29 | Pending |
+| TEST-01 | Phase 29 | Complete |
+| TEST-02 | Phase 29 | Complete |
+| TEST-03 | Phase 29 | Complete |
+| TEST-04 | Phase 29 | Complete |
 
 **Coverage:**
 - v6 requirements: 25 total
