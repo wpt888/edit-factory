@@ -24,6 +24,7 @@ from app.services.audio_normalizer import measure_loudness, build_loudnorm_filte
 from app.services.video_filters import VideoFilters, DenoiseConfig, SharpenConfig, ColorConfig
 from app.services.subtitle_styler import build_subtitle_filter
 from app.services.tts_subtitle_generator import generate_srt_from_timestamps
+from app.services.srt_validator import sanitize_srt_text
 
 import logging
 
@@ -286,7 +287,12 @@ async def serve_file(file_path: str, download: bool = Query(default=False)):
         raise HTTPException(status_code=400, detail="Not a file")
 
     media_type, _ = mimetypes.guess_type(str(resolved_path))
-    return FileResponse(path=str(resolved_path), media_type=media_type or "application/octet-stream", filename=resolved_path.name if download else None)
+    return FileResponse(
+        path=str(resolved_path),
+        media_type=media_type or "application/octet-stream",
+        filename=resolved_path.name if download else None,
+        headers={"Cache-Control": "public, max-age=3600"}
+    )
 
 
 # ============== CLIP ASSET DOWNLOADS (SRT, Audio) ==============
@@ -349,7 +355,8 @@ async def download_clip_audio(
     return FileResponse(
         path=str(file_path),
         media_type="audio/mpeg",
-        filename=f"clip_{clip_id[:8]}.mp3"
+        filename=f"clip_{clip_id[:8]}.mp3",
+        headers={"Cache-Control": "public, max-age=3600"}
     )
 
 
@@ -1737,7 +1744,7 @@ async def update_clip_content(
         if content.tts_text is not None:
             content_data["tts_text"] = content.tts_text
         if content.srt_content is not None:
-            content_data["srt_content"] = content.srt_content
+            content_data["srt_content"] = sanitize_srt_text(content.srt_content)
         if content.subtitle_settings is not None:
             content_data["subtitle_settings"] = content.subtitle_settings
 
@@ -2168,7 +2175,8 @@ async def _render_final_clip_task(
         if content_data and content_data.get("srt_content"):
             srt_path = temp_dir / f"srt_{clip_id}.srt"
             with open(srt_path, "w", encoding="utf-8") as f:
-                f.write(content_data["srt_content"])
+                srt_text = sanitize_srt_text(content_data["srt_content"])
+                f.write(srt_text)
             logger.info(f"Using user-provided SRT for clip {clip_id}")
         elif tts_timestamps:
             # Auto-generate SRT from TTS character-level timestamps (Phase 13)

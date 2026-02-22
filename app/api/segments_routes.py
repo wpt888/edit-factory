@@ -52,6 +52,15 @@ class SegmentCreate(BaseModel):
     keywords: List[str] = []
     notes: Optional[str] = None
 
+class SegmentTransformInput(BaseModel):
+    rotation: float = 0.0
+    scale: float = 1.0
+    pan_x: int = 0
+    pan_y: int = 0
+    flip_h: bool = False
+    flip_v: bool = False
+    opacity: float = 1.0
+
 class SegmentResponse(BaseModel):
     id: str
     source_video_id: str
@@ -64,6 +73,7 @@ class SegmentResponse(BaseModel):
     usage_count: int
     is_favorite: bool
     notes: Optional[str]
+    transforms: Optional[dict] = None
     created_at: str
     # Joined data
     source_video_name: Optional[str] = None
@@ -73,6 +83,7 @@ class SegmentUpdate(BaseModel):
     end_time: Optional[float] = None
     keywords: Optional[List[str]] = None
     notes: Optional[str] = None
+    transforms: Optional[SegmentTransformInput] = None
 
 class SRTMatchRequest(BaseModel):
     srt_content: str
@@ -445,7 +456,8 @@ async def stream_source_video(
     return FileResponse(
         path=str(video_path),
         media_type=media_type,
-        filename=video_path.name
+        filename=video_path.name,
+        headers={"Cache-Control": "public, max-age=3600"}
     )
 
 
@@ -665,6 +677,7 @@ async def create_segment(
             usage_count=0,
             is_favorite=False,
             notes=segment.notes,
+            transforms=None,
             created_at=datetime.now().isoformat(),
             source_video_name=source_video.get("name")
         )
@@ -703,6 +716,7 @@ async def list_video_segments(
             usage_count=s.get("usage_count", 0),
             is_favorite=s.get("is_favorite", False),
             notes=s.get("notes"),
+            transforms=s.get("transforms"),
             created_at=s["created_at"],
             source_video_name=s.get("editai_source_videos", {}).get("name")
         )
@@ -762,6 +776,7 @@ async def list_all_segments(
             usage_count=s.get("usage_count", 0),
             is_favorite=s.get("is_favorite", False),
             notes=s.get("notes"),
+            transforms=s.get("transforms"),
             created_at=s["created_at"],
             source_video_name=s.get("editai_source_videos", {}).get("name")
         ))
@@ -801,6 +816,7 @@ async def get_segment(
         usage_count=s.get("usage_count", 0),
         is_favorite=s.get("is_favorite", False),
         notes=s.get("notes"),
+        transforms=s.get("transforms"),
         created_at=s["created_at"],
         source_video_name=s.get("editai_source_videos", {}).get("name")
     )
@@ -828,6 +844,8 @@ async def update_segment(
         update_data["keywords"] = update.keywords
     if update.notes is not None:
         update_data["notes"] = update.notes
+    if update.transforms is not None:
+        update_data["transforms"] = update.transforms.model_dump()
 
     # Validate times if both provided
     if update.start_time is not None and update.end_time is not None:
@@ -917,6 +935,65 @@ async def toggle_favorite(
     return {"id": segment_id, "is_favorite": new_status}
 
 
+@router.put("/{segment_id}/transforms")
+async def update_segment_transforms(
+    segment_id: str,
+    transforms: SegmentTransformInput,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Update transforms for a segment (quick dedicated endpoint)."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    result = supabase.table("editai_segments")\
+        .update({
+            "transforms": transforms.model_dump(),
+        })\
+        .eq("id", segment_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Segment not found")
+
+    return {"id": segment_id, "transforms": transforms.model_dump()}
+
+
+@router.put("/projects/{project_id}/segments/{segment_id}/transforms")
+async def update_project_segment_transforms(
+    project_id: str,
+    segment_id: str,
+    transforms: SegmentTransformInput,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Update per-project transform overrides for a segment."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Verify project belongs to profile
+    project = supabase.table("editai_projects")\
+        .select("id")\
+        .eq("id", project_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
+
+    if not project.data:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    result = supabase.table("editai_project_segments")\
+        .update({"transforms": transforms.model_dump()})\
+        .eq("project_id", project_id)\
+        .eq("segment_id", segment_id)\
+        .execute()
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Project-segment assignment not found")
+
+    return {"project_id": project_id, "segment_id": segment_id, "transforms": transforms.model_dump()}
+
+
 @router.post("/{segment_id}/extract")
 async def extract_segment(
     segment_id: str,
@@ -1000,7 +1077,7 @@ async def stream_segment(
     if seg.get("extracted_video_path"):
         path = Path(seg["extracted_video_path"])
         if path.exists():
-            return FileResponse(path=str(path), media_type="video/mp4")
+            return FileResponse(path=str(path), media_type="video/mp4", headers={"Cache-Control": "public, max-age=3600"})
 
     # Otherwise, stream from source with time range
     # Note: For now, return 404 if not extracted
@@ -1180,6 +1257,8 @@ async def get_project_segments(
     for ps in result.data:
         s = ps.get("editai_segments", {})
         if s:
+            # Use project-level transform override if present, else segment default
+            effective_transforms = ps.get("transforms") or s.get("transforms")
             segments.append(SegmentResponse(
                 id=s["id"],
                 source_video_id=s["source_video_id"],
@@ -1192,6 +1271,7 @@ async def get_project_segments(
                 usage_count=s.get("usage_count", 0),
                 is_favorite=s.get("is_favorite", False),
                 notes=s.get("notes"),
+                transforms=effective_transforms,
                 created_at=s["created_at"],
                 source_video_name=s.get("editai_source_videos", {}).get("name")
             ))
