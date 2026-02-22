@@ -11,6 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends
 
 from app.api.auth import ProfileContext, get_profile_context
+from app.api.validators import validate_tts_text_length
 from app.services.tts import get_tts_service
 from app.services.job_storage import get_job_storage
 from app.config import get_settings
@@ -302,6 +303,9 @@ async def generate_tts(
         except Exception as e:
             logger.warning(f"[Profile {profile.profile_id}] Failed to check quota: {e}")
             # Continue without quota check on error (graceful degradation)
+
+    # Validate text length before dispatching background job
+    text = validate_tts_text_length(text)
 
     # Create job
     job_id = str(uuid.uuid4())

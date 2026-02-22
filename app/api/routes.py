@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
-from app.api.validators import validate_upload_size
+from app.api.validators import validate_upload_size, MAX_TTS_CHARS
 from app.models import (
     JobStatus, JobCreate, JobResponse, AnalyzeRequest,
     AnalyzeResponse, HealthResponse, VideoInfo, VideoSegment
@@ -1044,7 +1044,6 @@ async def generate_tts(
     settings.ensure_dirs()
 
     # Validate text
-    MAX_TTS_CHARS = 5000
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
     if len(text) > MAX_TTS_CHARS:
@@ -1219,7 +1218,6 @@ async def add_tts_to_videos(
         raise HTTPException(status_code=400, detail="tts_text is required")
 
     # Validate text length (ElevenLabs limit)
-    MAX_TTS_CHARS = 5000
     if len(tts_text) > MAX_TTS_CHARS:
         raise HTTPException(
             status_code=400,
@@ -1285,7 +1283,6 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         silence_padding = job.get("silence_padding", 0.08)
 
         # Validate text length (ElevenLabs limit is ~5000 chars per request)
-        MAX_TTS_CHARS = 5000
         if not tts_text or not tts_text.strip():
             raise ValueError("TTS text cannot be empty")
         if len(tts_text) > MAX_TTS_CHARS:
