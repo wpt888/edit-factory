@@ -49,7 +49,7 @@ import { VideoSegmentPlayer } from "@/components/video-segment-player";
 import { SimpleSegmentPopup } from "@/components/simple-segment-popup";
 import { SegmentTransformPanel } from "@/components/segment-transform-panel";
 import { EditorLayout } from "@/components/editor-layout";
-import { apiGet, apiPost, apiPatch, apiPut, apiDelete, API_URL } from "@/lib/api";
+import { apiGetWithRetry, apiPost, apiPatch, apiPut, apiDelete, handleApiError, API_URL } from "@/lib/api";
 import { useProfile } from "@/contexts/profile-context";
 import type { SegmentTransform } from "@/types/video-processing";
 import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
@@ -180,13 +180,13 @@ export default function SegmentsPage() {
   // Fetch source videos
   const fetchSourceVideos = useCallback(async () => {
     try {
-      const res = await apiGet("/segments/source-videos");
+      const res = await apiGetWithRetry("/segments/source-videos");
       if (res.ok) {
         const data = await res.json();
         setSourceVideos(data);
       }
     } catch (error) {
-      console.error("Failed to fetch source videos:", error);
+      handleApiError(error, "Eroare la incarcarea video-urilor sursa");
     }
   }, []);
 
@@ -194,13 +194,13 @@ export default function SegmentsPage() {
   const fetchSegments = useCallback(async (videoId: string) => {
     setLoadingSegments(true);
     try {
-      const res = await apiGet(`/segments/source-videos/${videoId}/segments`);
+      const res = await apiGetWithRetry(`/segments/source-videos/${videoId}/segments`);
       if (res.ok) {
         const data = await res.json();
         setSegments(data);
       }
     } catch (error) {
-      console.error("Failed to fetch segments:", error);
+      handleApiError(error, "Eroare la incarcarea segmentelor");
     } finally {
       setLoadingSegments(false);
     }
@@ -209,13 +209,13 @@ export default function SegmentsPage() {
   // Fetch ALL segments (for library view)
   const fetchAllSegments = useCallback(async () => {
     try {
-      const res = await apiGet("/segments");
+      const res = await apiGetWithRetry("/segments");
       if (res.ok) {
         const data = await res.json();
         setAllSegments(data);
       }
     } catch (error) {
-      console.error("Failed to fetch all segments:", error);
+      handleApiError(error, "Eroare la incarcarea tuturor segmentelor");
     }
   }, []);
 
@@ -283,11 +283,9 @@ export default function SegmentsPage() {
             )
           );
         }
-      } else {
-        console.error("Delete segment failed:", res.status, await res.text().catch(() => ""));
       }
     } catch (error) {
-      console.error("Failed to delete segment:", error);
+      handleApiError(error, "Eroare la stergerea segmentului");
     }
   }, [segments, allSegments, selectedVideo?.id]);
 
@@ -359,7 +357,7 @@ export default function SegmentsPage() {
         setUploadError(message);
       }
     } catch (error) {
-      console.error("Failed to upload video:", error);
+      handleApiError(error, "Eroare la incarcarea video-ului");
       setUploadError("Failed to upload video. Check your connection and try again.");
     } finally {
       setUploadingVideo(false);
@@ -386,7 +384,7 @@ export default function SegmentsPage() {
         }
       }
     } catch (error) {
-      console.error("Failed to delete video:", error);
+      handleApiError(error, "Eroare la stergerea video-ului");
     }
   };
 
@@ -429,7 +427,7 @@ export default function SegmentsPage() {
       try {
         await apiDelete(`/segments/${seg.id}`);
       } catch (error) {
-        console.error("Failed to delete segment:", error);
+        handleApiError(error, "Eroare la stergerea segmentului in unire");
       }
     }
 
@@ -497,7 +495,7 @@ export default function SegmentsPage() {
         );
       }
     } catch (error) {
-      console.error("Failed to create segment:", error);
+      handleApiError(error, "Eroare la crearea segmentului");
     }
 
     setPendingSegment(null);
@@ -521,7 +519,7 @@ export default function SegmentsPage() {
         );
       }
     } catch (error) {
-      console.error("Failed to update segment:", error);
+      handleApiError(error, "Eroare la actualizarea segmentului");
     }
 
     setEditingSegment(null);
@@ -564,7 +562,7 @@ export default function SegmentsPage() {
         setSelectedSegment((prev) => prev ? { ...prev, transforms } : prev);
       }
     } catch (error) {
-      console.error("Failed to save transforms:", error);
+      handleApiError(error, "Eroare la salvarea transformarilor");
     }
   };
 
@@ -588,7 +586,7 @@ export default function SegmentsPage() {
         );
       }
     } catch (error) {
-      console.error("Failed to toggle favorite:", error);
+      handleApiError(error, "Eroare la modificarea favoritului");
     }
   };
 
