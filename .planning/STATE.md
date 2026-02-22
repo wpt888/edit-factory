@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v6 Production Hardening — Phase 28 (Code Quality)
+**Current focus:** v6 Production Hardening — Phase 29 (Testing & Observability)
 
 ## Current Position
 
 Milestone: v6 Production Hardening
-Phase: 28 of 29 (Code Quality)
-Plan: 1 of 1 complete
-Status: In progress
-Last activity: 2026-02-22 — Completed Phase 28 Plan 01 (Supabase centralization + debug log cleanup)
+Phase: 29 of 29 (Testing & Observability)
+Plan: — (not yet started)
+Status: Ready to plan
+Last activity: 2026-02-22 — Completed Phase 28 (Code Quality) — 1/1 plans, verified 3/3 must-haves
 
 Progress: [████████░░] 80% (8/10 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 69 (across v2-v6)
-- Total phases completed: 26
+- Total plans completed: 70 (across v2-v6)
+- Total phases completed: 27
 - Total milestones shipped: 5
 
 **By Milestone:**
@@ -82,8 +82,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 28-01-PLAN.md
+Stopped at: Completed Phase 28 (Code Quality)
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after Phase 28-01 complete*
+*Last updated: 2026-02-22 after Phase 28 complete*
