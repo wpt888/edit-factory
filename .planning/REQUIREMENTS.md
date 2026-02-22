@@ -33,8 +33,8 @@ Requirements for production hardening milestone. Each maps to roadmap phases.
 
 ### Frontend Refactoring
 
-- [ ] **REF-01**: library/page.tsx split into 5-6 focused components
-- [ ] **REF-02**: Polling duplication eliminated (useJobPolling, useBatchPolling, inline)
+- [x] **REF-01**: library/page.tsx split into 5-6 focused components
+- [x] **REF-02**: Polling duplication eliminated (useJobPolling, useBatchPolling, inline)
 
 ### Code Quality
 
@@ -101,8 +101,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FE-03 | Phase 26 | Complete |
 | FE-04 | Phase 26 | Complete |
 | FE-05 | Phase 26 | Complete |
-| REF-01 | Phase 27 | Pending |
-| REF-02 | Phase 27 | Pending |
+| REF-01 | Phase 27 | Complete |
+| REF-02 | Phase 27 | Complete |
 | QUAL-01 | Phase 28 | Pending |
 | QUAL-02 | Phase 24 | Complete |
 | QUAL-03 | Phase 28 | Pending |
