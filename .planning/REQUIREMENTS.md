@@ -114,10 +114,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 **Coverage:**
 - v6 requirements: 25 total
-- Satisfied: 24
-- Pending (gap closure): 1 (FE-02 → Phase 30)
+- Satisfied: 25
+- Pending: 0
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-22*
-*Last updated: 2026-02-22 after milestone audit — FE-02 reassigned to Phase 30 gap closure*
+*Last updated: 2026-02-22 — all 25 requirements satisfied after Phase 30 gap closure*

@@ -1,55 +1,57 @@
 ---
 milestone: v6
-audited: 2026-02-22T10:00:00Z
+audited: 2026-02-22T10:30:00Z
 status: tech_debt
 scores:
   requirements: 25/25
   phases: 7/7
-  integration: 26/28
-  flows: 6/7
+  integration: 31/34
+  flows: 7/8
 gaps:
   requirements: []
   integration:
-    - id: "INT-01"
-      description: "usePolling hook bypasses apiFetch — polling calls lack 30s timeout"
-      from: "Phase 26 (api.ts timeout/ApiError)"
-      to: "Phase 26 (use-polling.ts)"
-      affected_requirements: ["FE-03", "FE-05"]
-      severity: "moderate"
-      evidence: "use-polling.ts line 85 uses raw fetch() instead of apiFetch(); no AbortSignal.timeout"
-    - id: "INT-02"
-      description: "usePolling duplicates API_URL constant instead of importing from api.ts"
-      from: "Phase 26 (api.ts API_URL)"
-      to: "Phase 26 (use-polling.ts)"
-      affected_requirements: ["FE-03"]
+    - id: "MISSING-01"
+      description: "usage/page.tsx data-fetch GETs use apiGet instead of apiGetWithRetry"
+      affected_requirements: ["FE-02"]
       severity: "low"
-      evidence: "use-polling.ts line 33 defines local API_URL identical to api.ts — drift risk"
+      evidence: "Lines 105, 120-121, 142 use apiGet; handleApiError present in catch blocks, only retry missing"
+    - id: "MISSING-02"
+      description: "pytest not in requirements.txt"
+      affected_requirements: ["TEST-01"]
+      severity: "medium"
+      evidence: "Fresh pip install -r requirements.txt cannot run pytest; works in development venv only"
+    - id: "MISSING-03"
+      description: "library/page.tsx data-fetch calls use apiFetch instead of apiGetWithRetry"
+      affected_requirements: ["FE-02"]
+      severity: "low"
+      evidence: "Lines 352, 388, 400, 415, 427, 446 use apiFetch directly; has timeout and ApiError, missing only retry"
   flows:
-    - id: "FLOW-01"
-      description: "pytest requires venv_linux activation — system Python lacks pydantic_settings"
-      step: "Test execution"
-      affected_requirements: ["TEST-01", "TEST-02"]
-      severity: "low"
-      evidence: "python -m pytest fails under system Python; passes under venv_linux (43/43)"
+    - id: "BROKEN-01"
+      description: "pytest test suite fails in fresh environment"
+      severity: "medium"
+      evidence: "pytest not in requirements.txt; 18 tests fail under system Python without pydantic_settings"
 tech_debt:
-  - phase: 28-code-quality
+  - phase: 25-rate-limiting-and-security
     items:
-      - "cost_tracker.py, job_storage.py, tts_library_service.py still have local create_client calls (out of Phase 28 scope)"
+      - "validate_tts_text_length() helper used only in tts_routes.py; other routes use MAX_TTS_CHARS inline (functional but inconsistent)"
+  - phase: 26-frontend-resilience
+    items:
+      - "usePolling hook uses raw fetch() not apiFetch — onError receives plain Error not ApiError, losing status-specific toast messages"
+      - "usePolling duplicates API_URL constant locally instead of importing from api.ts"
   - phase: 27-frontend-refactoring
     items:
       - "library/page.tsx is 1100 lines total (290 lines JSX) — state/handler logic retained as orchestrator"
       - "4 human verification items pending (visual layout, ClipStatusPoller, segment modal, postiz modal)"
-  - phase: 26-frontend-resilience
+  - phase: 28-code-quality
     items:
-      - "usePolling uses raw fetch() instead of apiFetch — lacks timeout protection on polling calls"
-      - "usePolling duplicates API_URL constant locally"
+      - "cost_tracker.py, job_storage.py, tts_library_service.py still have local create_client calls (out of Phase 28 scope)"
   - phase: 29-testing-and-observability
     items:
-      - "pyproject.toml does not document required Python interpreter (venv_linux)"
-      - "python-json-logger installed in .venv-wsl but needs pip install -r requirements.txt for other venvs"
-  - phase: 25-rate-limiting-and-security
+      - "pytest not declared in requirements.txt — works in dev venv but not reproducible for fresh installs"
+  - phase: 30-frontend-error-handling-adoption
     items:
-      - "tts_library_routes.py uses raw MAX_TTS_CHARS length check inline rather than validate_tts_text_length() helper"
+      - "usage/page.tsx has 3 data-fetch apiGet calls not migrated to apiGetWithRetry"
+      - "library/page.tsx data-fetch calls use apiFetch directly (has timeout/error handling, missing retry)"
 ---
 
 # v6 Production Hardening — Milestone Audit Report
@@ -94,7 +96,7 @@ All 25 v6 requirements are satisfied across 7 phases.
 | TEST-03 | Structured JSON logging | SATISFIED (Ph.29) | `[x]` | **satisfied** |
 | TEST-04 | Data retention cleanup | SATISFIED (Ph.29) | `[x]` | **satisfied** |
 
-**Note:** SUMMARY frontmatter `requirements_completed` field not used in v6 summaries — 2-source cross-reference (VERIFICATION + REQUIREMENTS.md) used. Both sources agree on all 25 requirements.
+**Note:** SUMMARY frontmatter uses `provides`/`affects` fields instead of `requirements_completed` — 2-source cross-reference (VERIFICATION + REQUIREMENTS.md) used. Both sources agree on all 25 requirements.
 
 **Orphaned Requirements:** None. All 25 REQ-IDs in traceability table appear in at least one phase VERIFICATION.md.
 
@@ -112,62 +114,71 @@ All 25 v6 requirements are satisfied across 7 phases.
 
 All 7 phases have VERIFICATION.md files. No unverified phases. Phase 27's single "NEEDS HUMAN" item is runtime behavior (live browser test), not a code gap.
 
-## Cross-Phase Integration (26/28 wired)
+## Cross-Phase Integration (31/34 exports wired)
 
-### 7 Key Integration Chains — All Confirmed
+### Key Integration Chains — All Confirmed
 
 | # | Chain | Status |
 |---|-------|--------|
-| 1 | Phase 24 `validators.py` → Phase 25 `MAX_TTS_CHARS` extension | WIRED |
-| 2 | Phase 24 async TTS → Phase 25 tenacity retry wrapping | WIRED |
-| 3 | Phase 26 `handleApiError` → Phase 27 components → Phase 30 full adoption | WIRED |
-| 4 | Phase 26 `usePolling` → Phase 27 `ClipStatusPoller` | WIRED |
-| 5 | Phase 28 `get_supabase()` → Phase 24 DB progress | WIRED |
-| 6 | Phase 29 structured logging → Phase 24/25 backend | WIRED |
-| 7 | Phase 30 `apiGetWithRetry` → Phase 26 definition | WIRED |
+| 1 | Phase 24 `validators.py` → Phase 25 `MAX_TTS_CHARS` extension and shared usage | WIRED |
+| 2 | Phase 24 async TTS → Phase 25 tenacity retry wrapping on `_call_elevenlabs_api` | WIRED |
+| 3 | Phase 26 `handleApiError` → Phase 27 components → Phase 30 full adoption (22 files) | WIRED |
+| 4 | Phase 26 `usePolling` → Phase 27 `ClipStatusPoller` in clip-gallery.tsx | WIRED |
+| 5 | Phase 26 `EmptyState` → 11 data pages + project-sidebar.tsx | WIRED |
+| 6 | Phase 26 `ErrorBoundary` → Phase 27 library/page.tsx (3 section wraps) | WIRED |
+| 7 | Phase 28 `get_supabase()` from db.py → 18 backend files | WIRED |
+| 8 | Phase 29 structured logging → root logger → all backend services inherit | WIRED |
+| 9 | Phase 29 tests → cover srt_validator (Phase 25), job_storage (Phase 24) | WIRED |
+| 10 | Phase 30 `apiGetWithRetry` → Phase 26 definition consumed in 22 files | WIRED |
+| 11 | Phase 25 rate limiting (60/min) safe with Phase 26/27 polling (20/min max) | SAFE |
 
-### Integration Issues (2 non-critical)
+### Missing Connections (3 non-critical)
 
-**INT-01 (moderate): usePolling bypasses apiFetch timeout**
-- `use-polling.ts` line 85 uses raw `fetch()` instead of `apiFetch()`
-- Polling calls (generation progress, clip status, pipeline, TTS) have no 30s timeout
-- Fix: Replace `fetch()` with `apiFetch()`, catch `ApiError` instead of generic `Error`
+1. **usage/page.tsx** — 3 `apiGet` calls at lines 105, 120-121, 142 not migrated to `apiGetWithRetry` (error handling works via `handleApiError`, only retry on transient failures missing)
+2. **pytest not in requirements.txt** — fresh `pip install -r requirements.txt` followed by `pytest` fails; works in dev venv only
+3. **library/page.tsx** — data-fetch calls use `apiFetch` directly (has timeout + ApiError, missing only retry behavior)
 
-**INT-02 (low): usePolling duplicates API_URL constant**
-- `use-polling.ts` line 33 defines local `API_URL` identical to `api.ts`
-- Fix: Import `{ API_URL }` from `@/lib/api`
+### Orphaned Exports: 0
 
-## E2E Flow Verification (6/7)
+All Phase 24-30 exports are consumed within the milestone.
 
-| Flow | Status |
-|------|--------|
-| Upload → Validate (413) → Rate Limit → Generate → Progress Poll → Complete | OK |
-| TTS → Length Validate → Retry on Fail → Audio Output | OK |
-| Error → handleApiError → Sonner Toast (18 files) | OK |
-| Empty Page → EmptyState Component (11 pages) | OK |
-| Library → Component Tree → ClipStatusPoller via usePolling | OK |
-| Structured Log → JSON Output via python-json-logger | OK |
-| System Python → pytest → Tests Pass | PARTIAL (requires venv) |
+## E2E Flow Verification (7/8)
 
-## Tech Debt Summary (8 items across 5 phases)
+| Flow | Status | Notes |
+|------|--------|-------|
+| Upload → validate_upload_size → 413 error | COMPLETE | |
+| Lock contention → is_project_locked → 409 Conflict | COMPLETE | |
+| Rate limit → slowapi → 429 response | COMPLETE | |
+| SRT XSS → sanitize_srt_text → safe render | COMPLETE | |
+| Error → handleApiError → sonner toast (22 files) | COMPLETE | |
+| Empty DB → EmptyState component (11 pages) | COMPLETE | |
+| Generation → usePolling → progress updates | COMPLETE | |
+| Fresh install → pip install → pytest → all pass | PARTIAL | pytest not in requirements.txt |
 
-### Phase 28 — Code Quality
-- `cost_tracker.py`, `job_storage.py`, `tts_library_service.py` retain local `create_client` calls (out of scope)
-
-### Phase 27 — Frontend Refactoring
-- `library/page.tsx` is 1100 lines total (290 lines JSX) — state/handlers retained as orchestrator
-- 4 human verification items pending for live runtime testing
-
-### Phase 26 — Frontend Resilience
-- `usePolling` uses raw `fetch()` instead of `apiFetch` — no timeout on polling calls
-- `usePolling` duplicates `API_URL` constant locally
-
-### Phase 29 — Testing & Observability
-- `pyproject.toml` does not document required Python interpreter (`venv_linux`)
-- `python-json-logger` needs `pip install -r requirements.txt` for non-WSL venvs
+## Tech Debt Summary (9 items across 6 phases)
 
 ### Phase 25 — Rate Limiting & Security
-- `tts_library_routes.py` uses inline `MAX_TTS_CHARS` check rather than `validate_tts_text_length()` helper
+- `validate_tts_text_length()` helper used only in tts_routes.py; other routes use inline MAX_TTS_CHARS comparison
+
+### Phase 26 — Frontend Resilience
+- `usePolling` uses raw `fetch()` instead of `apiFetch` — onError receives plain Error, losing status-specific toast messages
+- `usePolling` duplicates `API_URL` constant locally instead of importing from api.ts
+
+### Phase 27 — Frontend Refactoring
+- `library/page.tsx` is 1100 lines total (290 lines JSX) — state/handler logic retained as orchestrator
+- 4 human verification items pending for live runtime testing
+
+### Phase 28 — Code Quality
+- `cost_tracker.py`, `job_storage.py`, `tts_library_service.py` retain local `create_client` calls (out of phase scope)
+
+### Phase 29 — Testing & Observability
+- pytest not declared in requirements.txt — works in dev venv but not reproducible for fresh installs
+
+### Phase 30 — Frontend Error Handling Adoption
+- `usage/page.tsx` has 3 data-fetch apiGet calls not migrated to `apiGetWithRetry`
+- `library/page.tsx` data-fetch calls use `apiFetch` directly (has timeout/error handling, missing retry)
+
+**Total: 9 items across 6 phases**
 
 ## Human Verification Pending (11 items)
 
@@ -187,6 +198,6 @@ All 7 phases have VERIFICATION.md files. No unverified phases. Phase 27's single
 
 ---
 
-_Audited: 2026-02-22_
-_Previous audit: 2026-02-22T05:00 (gaps_found → Phase 30 created → gaps closed)_
-_Auditor: Claude (gsd audit-milestone)_
+_Audited: 2026-02-22T10:30:00Z_
+_Previous audit: 2026-02-22T05:00 (gaps_found → Phase 30 gap closure → gaps closed)_
+_Auditor: Claude (gsd audit-milestone workflow)_
