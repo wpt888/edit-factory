@@ -199,10 +199,11 @@ Plans:
   4. `pytest` is listed in `requirements.txt` — running `pip install -r requirements.txt && pytest` works in a fresh venv
   5. `cost_tracker.py`, `job_storage.py`, `tts_library_service.py` import `get_supabase()` from `app.db` — no local `create_client` calls remain
   6. All TTS endpoints use `validate_tts_text_length()` helper from `validators.py` — no inline `MAX_TTS_CHARS` comparisons
-**Plans**: TBD (created during /gsd:plan-phase 31)
+**Plans**: 2 plans
 
 Plans:
-- [ ] 31-01-PLAN.md — TBD
+- [ ] 31-01-PLAN.md — Backend polish: pytest dep, Supabase centralization, validate_tts_text_length adoption
+- [ ] 31-02-PLAN.md — Frontend polish: apiGetWithRetry adoption, usePolling apiFetch refactor
 
 ## Progress
 
@@ -222,7 +223,7 @@ Plans:
 | 28. Code Quality | 1/1 | Complete    | 2026-02-22 | - |
 | 29. Testing & Observability | 2/2 | Complete    | 2026-02-22 | - |
 | 30. Frontend Error Handling Adoption | 4/4 | Complete    | 2026-02-22 | - |
-| 31. Final Polish | 0/? | Planned    | — | - |
+| 31. Final Polish | 0/2 | Planned    | — | - |
 
 ---
 *Last updated: 2026-02-22 after gap closure Phase 31 created*
