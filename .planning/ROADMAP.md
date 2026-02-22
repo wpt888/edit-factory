@@ -121,11 +121,11 @@ Plans:
   3. API requests time out after a defined period and failed requests retry automatically
   4. Every page shows an informative empty state when no data exists (no blank content areas)
   5. Polling-based job tracking uses a single shared hook across all pages
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 26-01: Global error boundary and consistent error handling utility
-- [ ] 26-02: API client hardening (timeout, retry, centralized error), empty states, polling hook
+- [ ] 26-01-PLAN.md — Global error boundary, centralized API error handling, API client timeout/retry
+- [ ] 26-02-PLAN.md — Shared usePolling hook, EmptyState component, empty states on all pages
 
 ### Phase 27: Frontend Refactoring
 **Goal**: The library page is decomposed into maintainable components with no duplicated polling logic
