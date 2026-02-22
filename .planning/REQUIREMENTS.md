@@ -18,10 +18,10 @@ Requirements for production hardening milestone. Each maps to roadmap phases.
 
 ### Rate Limiting & Security
 
-- [ ] **SEC-01**: Rate limiting middleware enforces per-user request limits
+- [x] **SEC-01**: Rate limiting middleware enforces per-user request limits
 - [ ] **SEC-02**: SRT subtitle preview escapes user content (XSS prevention)
 - [ ] **SEC-03**: Stream endpoints include Cache-Control headers
-- [ ] **SEC-04**: TTS text length validated at endpoint level (not just background job)
+- [x] **SEC-04**: TTS text length validated at endpoint level (not just background job)
 
 ### Frontend Resilience
 
@@ -92,10 +92,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | STAB-04 | Phase 24 | Complete |
 | STAB-05 | Phase 24 | Complete |
 | STAB-06 | Phase 25 | Pending |
-| SEC-01 | Phase 25 | Pending |
+| SEC-01 | Phase 25 | Complete |
 | SEC-02 | Phase 25 | Pending |
 | SEC-03 | Phase 25 | Pending |
-| SEC-04 | Phase 25 | Pending |
+| SEC-04 | Phase 25 | Complete |
 | FE-01 | Phase 26 | Pending |
 | FE-02 | Phase 26 | Pending |
 | FE-03 | Phase 26 | Pending |
