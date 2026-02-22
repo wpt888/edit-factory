@@ -64,6 +64,9 @@ google-auth-oauthlib>=1.1.0
 # Authentication
 PyJWT>=2.8.0
 
+# Structured JSON Logging
+python-json-logger>=2.0.0
+
 # Utilities
 python-dotenv>=1.0.0
 tqdm>=4.65.0
