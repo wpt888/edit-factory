@@ -16,6 +16,10 @@ from datetime import datetime
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.config import get_settings
 from app.api.routes import router as api_router
@@ -43,6 +47,9 @@ logger = logging.getLogger(__name__)
 # Get settings
 settings = get_settings()
 
+# Rate limiter - 60 requests/minute per IP (default limit for all routes)
+limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+
 async def _recover_stuck_projects():
     """Recover projects stuck in 'generating' status (e.g. from server crash)."""
     try:
@@ -62,6 +69,33 @@ async def _recover_stuck_projects():
         logger.warning(f"Failed to recover stuck projects: {e}")
 
 
+async def _cleanup_expired_pipelines():
+    """Delete expired pipeline and assembly job rows from Supabase."""
+    try:
+        from app.db import get_supabase
+        supabase = get_supabase()
+        if not supabase:
+            return
+        now = datetime.now().isoformat()
+
+        result1 = supabase.table("editai_pipelines")\
+            .delete()\
+            .lt("expires_at", now)\
+            .execute()
+        count1 = len(result1.data) if result1.data else 0
+
+        result2 = supabase.table("editai_assembly_jobs")\
+            .delete()\
+            .lt("expires_at", now)\
+            .execute()
+        count2 = len(result2.data) if result2.data else 0
+
+        if count1 or count2:
+            logger.info(f"Cleaned up {count1} expired pipelines, {count2} expired assembly jobs")
+    except Exception as e:
+        logger.warning(f"Failed to cleanup expired pipelines: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -70,6 +104,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"  Input dir: {settings.input_dir.absolute()}")
     logger.info(f"  Output dir: {settings.output_dir.absolute()}")
     await _recover_stuck_projects()
+    await _cleanup_expired_pipelines()
     yield
     # Shutdown (nothing needed)
 
@@ -81,6 +116,11 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# Register rate limiter on app
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # CORS - configurat din environment variables
 # În producție: ALLOWED_ORIGINS=https://editai.obsid.ro
