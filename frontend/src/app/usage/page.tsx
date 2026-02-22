@@ -32,9 +32,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { EmptyState } from "@/components/empty-state";
-import { handleApiError } from "@/lib/api";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+import { apiGetWithRetry, handleApiError } from "@/lib/api";
 
 interface CostSummary {
   source: string;
@@ -104,11 +102,9 @@ export default function UsagePage() {
   const fetchGeminiStatus = useCallback(async () => {
     setTestingGemini(true);
     try {
-      const res = await fetch(`${API_URL}/gemini/status`);
-      if (res.ok) {
-        const data = await res.json();
-        setGeminiStatus(data);
-      }
+      const res = await apiGetWithRetry("/gemini/status");
+      const data = await res.json();
+      setGeminiStatus(data);
     } catch (error) {
       handleApiError(error, "Eroare la verificarea statusului Gemini");
     } finally {
@@ -121,23 +117,15 @@ export default function UsagePage() {
     setError(null);
     try {
       const [costsRes, usageRes] = await Promise.all([
-        fetch(`${API_URL}/costs`),
-        fetch(`${API_URL}/usage`),
+        apiGetWithRetry("/costs"),
+        apiGetWithRetry("/usage"),
       ]);
 
-      if (costsRes.ok) {
-        const costsData = await costsRes.json();
-        setCostSummary(costsData);
-      } else {
-        console.warn("Costs endpoint returned:", costsRes.status);
-      }
+      const costsData = await costsRes.json();
+      setCostSummary(costsData);
 
-      if (usageRes.ok) {
-        const usageData = await usageRes.json();
-        setUsageStats(usageData);
-      } else {
-        console.warn("Usage endpoint returned:", usageRes.status);
-      }
+      const usageData = await usageRes.json();
+      setUsageStats(usageData);
 
       // Also fetch Gemini status
       await fetchGeminiStatus();
@@ -151,12 +139,10 @@ export default function UsagePage() {
 
   const fetchAllEntries = async () => {
     try {
-      const res = await fetch(`${API_URL}/costs/all`);
-      if (res.ok) {
-        const data = await res.json();
-        setAllEntries(data.entries || []);
-        setShowAllEntries(true);
-      }
+      const res = await apiGetWithRetry("/costs/all");
+      const data = await res.json();
+      setAllEntries(data.entries || []);
+      setShowAllEntries(true);
     } catch (error) {
       handleApiError(error, "Eroare la incarcarea costurilor");
     }
