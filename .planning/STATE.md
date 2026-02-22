@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v6 Production Hardening — Phase 29 (Testing & Observability)
+**Current focus:** v6 Production Hardening — Phase 30 (Frontend Error Handling Adoption)
 
 ## Current Position
 
 Milestone: v6 Production Hardening
-Phase: 29 of 29 (Testing & Observability)
+Phase: 30 of 30 (Frontend Error Handling Adoption)
 Plan: 02 complete
-Status: In progress (2/N plans complete)
-Last activity: 2026-02-22 — Completed Phase 29 Plan 02 (Structured Logging & Data Retention)
+Status: In progress (2/2 plans complete)
+Last activity: 2026-02-22 — Completed Phase 30 Plan 02 (handleApiError adoption in pages, components, hooks, contexts)
 
-Progress: [████████░░] 80% (8/10 plans)
+Progress: [██████████] 100% (10/10 plans)
 
 ## Performance Metrics
 
@@ -72,6 +72,9 @@ Recent decisions affecting current work:
 - [Phase 29-testing-and-observability]: 29-01: force _supabase=None after init to guarantee in-memory fallback path even if env vars are present
 - [Phase 29-testing-and-observability]: 29-02: python-json-logger with rename_fields produces timestamp/level/logger keys — matches aggregator conventions
 - [Phase 29-testing-and-observability]: 29-02: setup_logging() replaces logging.basicConfig at app startup — all loggers inherit JSON root handler
+- [Phase 30-02]: auth-provider.tsx, error-boundary.tsx, global-error.tsx intentionally skipped — infrastructure logging not suitable for UI toasts
+- [Phase 30-02]: use-job-polling and use-batch-polling retain retry logic after handleApiError — polling resilience preserved
+- [Phase 30-02]: FE-02 gap closure complete — all 13 target files use handleApiError() in every catch block
 
 ### Pending Todos
 
@@ -87,8 +90,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 29-01-PLAN.md (pytest infrastructure and unit tests) and 29-02-PLAN.md (Structured JSON Logging and Data Retention)
+Stopped at: Completed 30-02-PLAN.md (handleApiError adoption in pages, components, hooks, contexts — FE-02 complete)
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after Phase 29-01 and 29-02 complete*
+*Last updated: 2026-02-22 after Phase 30-02 complete*
