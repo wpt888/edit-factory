@@ -7,7 +7,7 @@
 - ✅ **v3 Video Quality Enhancement** - Phases 7-11 (encoding optimization, shipped 2026-02-06)
 - ✅ **v4 Script-First Pipeline** - Phases 12-16 (shipped 2026-02-12)
 - ✅ **v5 Product Video Generator** - Phases 17-23 (shipped 2026-02-21)
-- 🚧 **v6 Production Hardening** - Phases 24-30 (in progress)
+- ✅ **v6 Production Hardening** - Phases 24-31 (shipped 2026-02-22)
 
 ## Phases
 
@@ -66,149 +66,23 @@ Full details: `.planning/milestones/v5-ROADMAP.md`
 
 </details>
 
-### 🚧 v6 Production Hardening (In Progress)
+<details>
+<summary>✅ v6 Production Hardening (Phases 24-31) — SHIPPED 2026-02-22</summary>
 
-**Milestone Goal:** Harden Edit Factory for production stability — fix memory leaks, add error handling, improve security, add tests, and clean up technical debt identified in comprehensive codebase audit.
+- [x] Phase 24: Backend Stability (2 plans) — completed 2026-02-22
+- [x] Phase 25: Rate Limiting & Security (2 plans) — completed 2026-02-22
+- [x] Phase 26: Frontend Resilience (2 plans) — completed 2026-02-22
+- [x] Phase 27: Frontend Refactoring (1 plan) — completed 2026-02-22
+- [x] Phase 28: Code Quality (1 plan) — completed 2026-02-22
+- [x] Phase 29: Testing & Observability (2 plans) — completed 2026-02-22
+- [x] Phase 30: Frontend Error Handling Adoption (4 plans) — completed 2026-02-22
+- [x] Phase 31: Final Polish (2 plans) — completed 2026-02-22
 
-- [x] **Phase 24: Backend Stability** - Fix memory leaks, persist progress, validate uploads, async TTS client (completed 2026-02-22)
-- [x] **Phase 25: Rate Limiting & Security** - slowapi middleware, XSS prevention, cache headers, retry logic (completed 2026-02-22)
-- [x] **Phase 26: Frontend Resilience** - Error boundary, consistent error handling, API client hardening, empty states, polling hook (completed 2026-02-22)
-- [x] **Phase 27: Frontend Refactoring** - Split library page, eliminate polling duplication (completed 2026-02-22)
-- [x] **Phase 28: Code Quality** - Centralize Supabase client, remove debug logs (completed 2026-02-22)
-- [x] **Phase 29: Testing & Observability** - pytest setup, unit tests, structured logging, data retention (completed 2026-02-22)
-- [x] **Phase 30: Frontend Error Handling Adoption** - Wire handleApiError into all catch blocks, adopt ErrorBoundary, switch to apiGetWithRetry (gap closure) (completed 2026-02-22)
-- [x] **Phase 31: Final Polish** - Close remaining integration gaps and tech debt from v6 audit (apiGetWithRetry adoption, usePolling refactor, pytest dependency, Supabase centralization) (completed 2026-02-22)
+Full details: `.planning/milestones/v6-ROADMAP.md`
 
-## Phase Details
-
-### Phase 24: Backend Stability
-**Goal**: The backend handles errors, cleans up after itself, and validates all input before processing
-**Depends on**: Nothing (first v6 phase)
-**Requirements**: STAB-01, STAB-02, STAB-03, STAB-04, STAB-05, QUAL-02, QUAL-04
-**Success Criteria** (what must be TRUE):
-  1. Generation progress survives a server restart — jobs resumed show correct prior progress
-  2. Project render locks are released after completion and never accumulate indefinitely
-  3. A lock timeout returns a 409 Conflict response instead of silently continuing
-  4. Uploading a file over the size limit returns 413 Payload Too Large immediately
-  5. Sending malformed JSON in form params returns a 400 error (not a silent ignore or 500)
-**Plans**: 2 plans
-
-Plans:
-- [ ] 24-01-PLAN.md — Persist generation progress to DB and fix lock lifecycle
-- [ ] 24-02-PLAN.md — File upload validation, JSON parse error handling, async ElevenLabs TTS client
-
-### Phase 25: Rate Limiting & Security
-**Goal**: The backend enforces request limits, sanitizes user content, and secures HTTP responses
-**Depends on**: Phase 24
-**Requirements**: SEC-01, SEC-02, SEC-03, SEC-04, STAB-06
-**Success Criteria** (what must be TRUE):
-  1. Exceeding the request rate limit returns a 429 Too Many Requests response
-  2. SRT subtitle preview renders user content without executing injected scripts
-  3. Stream endpoints return Cache-Control headers appropriate for media streaming
-  4. TTS text length exceeding the limit is rejected at the endpoint before the background job starts
-  5. External API calls (ElevenLabs, Gemini) automatically retry on transient failures with exponential backoff
-**Plans**: 2 plans
-
-Plans:
-- [ ] 25-01-PLAN.md — Rate limiting middleware (slowapi) and TTS text length validation
-- [ ] 25-02-PLAN.md — SRT content sanitization, Cache-Control headers, tenacity retry logic
-
-### Phase 26: Frontend Resilience
-**Goal**: The frontend handles errors gracefully and communicates clearly in every state
-**Depends on**: Phase 24
-**Requirements**: FE-01, FE-02, FE-03, FE-04, FE-05
-**Success Criteria** (what must be TRUE):
-  1. An unhandled React error shows a fallback UI instead of a white blank screen
-  2. All API errors surface as a consistent error notification (no mix of toast/alert/silence)
-  3. API requests time out after a defined period and failed requests retry automatically
-  4. Every page shows an informative empty state when no data exists (no blank content areas)
-  5. Polling-based job tracking uses a single shared hook across all pages
-**Plans**: 2 plans
-
-Plans:
-- [ ] 26-01-PLAN.md — Global error boundary, centralized API error handling, API client timeout/retry
-- [ ] 26-02-PLAN.md — Shared usePolling hook, EmptyState component, empty states on all pages
-
-### Phase 27: Frontend Refactoring
-**Goal**: The library page is decomposed into maintainable components with no duplicated polling logic
-**Depends on**: Phase 26
-**Requirements**: REF-01, REF-02
-**Success Criteria** (what must be TRUE):
-  1. library/page.tsx is split into 5-6 focused components each with a single responsibility
-  2. Polling logic exists in exactly one place — the shared hook from Phase 26 — with no inline duplicates
-**Plans**: 1 plan
-
-Plans:
-- [ ] 27-01-PLAN.md — Split library/page.tsx into 5-6 components and eliminate polling duplication
-
-### Phase 28: Code Quality
-**Goal**: The codebase has a single Supabase client and no debug noise in logs
-**Depends on**: Phase 24
-**Requirements**: QUAL-01, QUAL-03
-**Success Criteria** (what must be TRUE):
-  1. All backend modules import get_supabase() from one central db.py — no local redefinitions
-  2. Log output contains no [MUTE DEBUG] lines or equivalent debug artifacts
-**Plans**: 1 plan
-
-Plans:
-- [ ] 28-01-PLAN.md — Centralize Supabase client in db.py and remove debug log noise
-
-### Phase 29: Testing & Observability
-**Goal**: The backend has a test harness for critical services and emits structured logs with a data retention policy
-**Depends on**: Phase 24
-**Requirements**: TEST-01, TEST-02, TEST-03, TEST-04
-**Success Criteria** (what must be TRUE):
-  1. Running `pytest` from the project root executes the test suite without configuration errors
-  2. Unit tests for job_storage, cost_tracker, and srt_validator pass with no failures
-  3. Backend log output is valid JSON (structured logging) parseable by log aggregators
-  4. A data retention command or scheduled task removes temp files and failed jobs older than the retention window
-**Plans**: 2 plans
-
-Plans:
-- [ ] 29-01-PLAN.md — pytest setup, conftest fixtures, unit tests for job_storage/cost_tracker/srt_validator
-- [ ] 29-02-PLAN.md — Structured JSON logging (python-json-logger) and data retention cleanup CLI
-
-### Phase 30: Frontend Error Handling Adoption
-**Goal**: Every frontend catch block uses handleApiError() for consistent toast notifications — no console.error() or alert() patterns remain
-**Depends on**: Phase 26, Phase 27
-**Requirements**: FE-02
-**Gap Closure**: Closes FE-02 gap from v6 milestone audit + 3 orphaned Phase 26 exports
-**Success Criteria** (what must be TRUE):
-  1. Zero `console.error()` calls remain in catch blocks across all pages — all replaced with `handleApiError()`
-  2. Zero `alert()` calls remain in any frontend page
-  3. `apiGetWithRetry()` is used for all polling and data-fetch GET calls instead of raw `apiGet()`
-  4. At least 3 page sections are wrapped with `ErrorBoundary` for section-level error isolation
-  5. The error → boundary → handleApiError → toast E2E flow works (error shows as sonner toast, not console-only)
-**Plans**: 4 plans
-
-Plans:
-- [ ] 30-01-PLAN.md — Replace console.error/alert with handleApiError in library, librarie, settings, postiz-modal, segment-modal
-- [ ] 30-02-PLAN.md — Replace console.error with handleApiError in remaining pages, components, hooks, and contexts
-- [ ] 30-03-PLAN.md — Adopt apiGetWithRetry for all data-fetch GET calls and wire ErrorBoundary sections
-- [ ] 30-04-PLAN.md — Gap closure: migrate segments/page.tsx (12 console.error + 3 apiGet)
-
-### Phase 31: Final Polish
-**Goal**: All v6 audit integration gaps and tech debt items are resolved — apiGetWithRetry fully adopted, usePolling uses apiFetch, pytest installable, remaining Supabase clients centralized
-**Depends on**: Phase 30
-**Requirements**: FE-02, FE-03, FE-05, TEST-01, QUAL-01
-**Gap Closure**: Closes MISSING-01, MISSING-02, MISSING-03, BROKEN-01 from v6 audit + 5 tech debt items
-**Success Criteria** (what must be TRUE):
-  1. `usage/page.tsx` data-fetch GET calls use `apiGetWithRetry()` instead of `apiGet()`
-  2. `library/page.tsx` data-fetch GET calls use `apiGetWithRetry()` instead of raw `apiFetch()`
-  3. `usePolling` hook uses `apiFetch()` instead of raw `fetch()` and imports `API_URL` from `@/lib/api`
-  4. `pytest` is listed in `requirements.txt` — running `pip install -r requirements.txt && pytest` works in a fresh venv
-  5. `cost_tracker.py`, `job_storage.py`, `tts_library_service.py` import `get_supabase()` from `app.db` — no local `create_client` calls remain
-  6. All TTS endpoints use `validate_tts_text_length()` helper from `validators.py` — no inline `MAX_TTS_CHARS` comparisons
-**Plans**: 2 plans
-
-Plans:
-- [ ] 31-01-PLAN.md — Backend polish: pytest dep, Supabase centralization, validate_tts_text_length adoption
-- [ ] 31-02-PLAN.md — Frontend polish: apiGetWithRetry adoption, usePolling apiFetch refactor
+</details>
 
 ## Progress
-
-**Execution Order:** 24 → 25 → 26 → 27 → 28 → 29 → 30 → 31
-(Phases 25, 26, 28 can run in parallel after Phase 24; 27 depends on 26; 29 depends on 24; 30 depends on 26+27; 31 depends on 30)
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -216,14 +90,7 @@ Plans:
 | 7-11 | v3 | 12/12 | Complete | 2026-02-06 |
 | 12-16 | v4 | 11/11 | Complete | 2026-02-12 |
 | 17-23 | v5 | 13/13 | Complete | 2026-02-21 |
-| 24. Backend Stability | 2/2 | Complete    | 2026-02-22 | - |
-| 25. Rate Limiting & Security | 2/2 | Complete    | 2026-02-22 | - |
-| 26. Frontend Resilience | 2/2 | Complete    | 2026-02-22 | - |
-| 27. Frontend Refactoring | 1/1 | Complete    | 2026-02-22 | - |
-| 28. Code Quality | 1/1 | Complete    | 2026-02-22 | - |
-| 29. Testing & Observability | 2/2 | Complete    | 2026-02-22 | - |
-| 30. Frontend Error Handling Adoption | 4/4 | Complete    | 2026-02-22 | - |
-| 31. Final Polish | 2/2 | Complete    | 2026-02-22 | - |
+| 24-31 | v6 | 16/16 | Complete | 2026-02-22 |
 
 ---
-*Last updated: 2026-02-22 after gap closure Phase 31 created*
+*Last updated: 2026-02-22 after v6 Production Hardening shipped*

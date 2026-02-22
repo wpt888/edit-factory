@@ -1,3 +1,12 @@
+# Requirements Archive: v6 Production Hardening
+
+**Archived:** 2026-02-22
+**Status:** SHIPPED
+
+For current requirements, see `.planning/REQUIREMENTS.md`.
+
+---
+
 # Requirements: Edit Factory
 
 **Defined:** 2026-02-22

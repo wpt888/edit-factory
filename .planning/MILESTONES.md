@@ -113,3 +113,39 @@
 
 ---
 
+
+## v6 Production Hardening (Shipped: 2026-02-22)
+
+**Delivered:** Production-hardened Edit Factory with backend stability fixes, rate limiting, frontend resilience, component refactoring, unit tests, structured logging, and consistent error handling across all pages.
+
+**Phases completed:** 24-31 (8 phases, 16 plans)
+
+**Key accomplishments:**
+- Backend stability: generation progress persists to Supabase (survives restart), project lock lifecycle fixed, upload size validation, async ElevenLabs TTS client
+- Rate limiting & security: slowapi middleware (60 req/min), XSS prevention in SRT preview, Cache-Control headers, tenacity retry on ElevenLabs/Gemini
+- Frontend resilience: global React ErrorBoundary with fallback UI, centralized API client with timeout/retry (apiGetWithRetry), shared usePolling hook, empty states on all pages
+- Frontend refactoring: library/page.tsx split into ClipGallery, ClipEditorPanel, PostizPublishModal, SegmentSelectionModal, ClipStatusPoller
+- Code quality: single get_supabase() in db.py used everywhere, debug log noise eliminated, validate_tts_text_length() helper across all TTS routes
+- Testing & observability: pytest harness with conftest fixtures, unit tests for job_storage/cost_tracker/srt_validator, structured JSON logging (python-json-logger), data retention cleanup CLI
+- Consistent error handling: handleApiError() in every frontend catch block, zero console.error/alert patterns, apiGetWithRetry for all data-fetch GETs, apiFetch in usePolling
+
+**Stats:**
+- 109 files modified
+- +11,331 / -3,400 lines (Python + TypeScript)
+- 8 phases, 16 plans, 47 commits
+- 1 day (2026-02-22)
+- 25/25 v6 requirements satisfied
+
+**Git range:** `feat(24-01)` → `docs(31-02)`
+
+**Tech debt resolved:**
+- Memory leak in project locks (cleanup never called) — fixed
+- In-memory generation progress (lost on restart) — persisted to DB
+- Scattered Supabase client initialization — centralized in db.py
+- Mixed error handling patterns (toast/alert/silence) — unified via handleApiError + sonner toasts
+- No tests — pytest harness with unit test suite
+
+**What's next:** TBD — `/gsd:new-milestone`
+
+---
+

@@ -63,30 +63,30 @@ Automated video production from any input — an idea, a product feed, or a coll
 - ✓ Per-profile template customization (colors, font, CTA) — v5
 - ✓ Generated videos use existing encoding presets and filters — v5
 - ✓ Feed creation dialog on products page — v5
+- ✓ Generation progress persists to DB (survives restart) — v6
+- ✓ Project render lock lifecycle fixed (no memory leak) — v6
+- ✓ File size validation on all upload endpoints — v6
+- ✓ JSON parse error handling (400 instead of silent ignore) — v6
+- ✓ Rate limiting middleware (slowapi, 60 req/min) — v6
+- ✓ Retry logic with exponential backoff on external APIs (tenacity) — v6
+- ✓ Global React error boundary with fallback UI — v6
+- ✓ Consistent error handling (handleApiError + sonner toasts) — v6
+- ✓ API client timeout, retry, centralized error handling (apiGetWithRetry) — v6
+- ✓ library/page.tsx split into 5 focused components — v6
+- ✓ Empty states on all pages — v6
+- ✓ Backend unit tests (pytest) for job_storage, cost_tracker, srt_validator — v6
+- ✓ Structured JSON logging (python-json-logger) — v6
+- ✓ Data retention cleanup CLI (temp files, old jobs) — v6
+- ✓ Centralized get_supabase() in db.py (no duplicate clients) — v6
+- ✓ Async HTTP client for ElevenLabs TTS — v6
+- ✓ XSS prevention in SRT subtitle preview — v6
+- ✓ Cache-Control headers on stream endpoints — v6
+- ✓ Debug log noise eliminated — v6
+- ✓ Shared usePolling hook across all pages — v6
 
 ### Active
 
-#### v6 Production Hardening
-- [ ] Fix memory leak in project locks (cleanup never called)
-- [ ] Persist generation progress to DB (lost on restart)
-- [ ] Add file size validation on all upload endpoints
-- [ ] Fix silent JSON parse failures (return 400 instead of ignoring)
-- [ ] Add rate limiting middleware (slowapi)
-- [ ] Add retry logic with exponential backoff for external API calls
-- [ ] Add global React error boundary with fallback UI
-- [ ] Consistent frontend error handling (replace toast/alert/silence mix)
-- [ ] API client improvements (timeout, retry, centralized error handling)
-- [ ] Split library/page.tsx into smaller components
-- [ ] Add empty states for all pages
-- [ ] Backend unit tests (pytest) for critical services
-- [ ] Structured logging (JSON format)
-- [ ] Data cleanup/retention policies (temp files, old jobs)
-- [ ] Centralize get_supabase() in db.py (remove duplicates)
-- [ ] Async HTTP client for ElevenLabs TTS (don't block event loop)
-- [ ] XSS prevention in SRT subtitle preview
-- [ ] Stream endpoint cache headers
-- [ ] Clean up debug logs ([MUTE DEBUG] etc.)
-- [ ] Extract common polling logic into reusable hook
+(None — define next milestone with `/gsd:new-milestone`)
 
 ### Out of Scope
 
@@ -109,15 +109,17 @@ Automated video production from any input — an idea, a product feed, or a coll
 - Runs on Windows/WSL development machine
 - Constant iteration — code changes frequently
 - Tech stack: FastAPI backend (Python), Next.js frontend (TypeScript), Supabase DB, FFmpeg
-- ~35,000 LOC across Python + TypeScript
-- v5 shipped: Product feed-based video generation (Google Shopping XML → product videos with templates, batch processing)
+- ~189K LOC across Python (~168K) + TypeScript (~21K)
+- v6 shipped: Production hardening (stability, security, tests, error handling, code quality)
 - Nortia.ro feed: ~9,987 products, Google Shopping XML format
-- 5 milestones shipped: v1 (MVP), v2 (Profiles), v3 (Video Quality), v4 (Script-First), v5 (Product Videos)
-- 23 phases, 59 plans executed across all milestones
+- 6 milestones shipped: v1 (MVP), v2 (Profiles), v3 (Video Quality), v4 (Script-First), v5 (Product Videos), v6 (Production Hardening)
+- 31 phases, 75 plans executed across all milestones
 - 13 backend services, 9 frontend pages, 13+ API routers
-- DB migrations: 014 total (007/009 pending manual application)
+- DB migrations: 017 total (007/009/017 pending manual application)
 - ElevenLabs Starter plan: 100k credits/month, flash v2.5 default
-- Tech debt: In-memory state dicts, no job cancellation, safe_zone fields unused, unreachable dead code in batch
+- pytest test suite with unit tests for critical services
+- Structured JSON logging across all backend services
+- Tech debt: In-memory state dicts for pipeline/assembly, no job cancellation, safe_zone fields unused
 
 ## Constraints
 
@@ -157,16 +159,9 @@ Automated video production from any input — an idea, a product feed, or a coll
 | CSS hex colors in DB, FFmpeg conversion at render | Clean storage, conversion is trivial | ✓ Good |
 | In-memory state for pipeline/assembly | Consistent with patterns, acceptable for single-user | ⚠️ Tech debt |
 
-## Current Milestone: v6 Production Hardening
+## Current Milestone
 
-**Goal:** Harden Edit Factory for production stability — fix memory leaks, add error handling, improve security, add tests, and clean up technical debt identified in comprehensive codebase audit.
-
-**Target features:**
-- Backend stability: memory leak fixes, progress persistence, file validation, rate limiting
-- Frontend resilience: error boundaries, consistent error handling, component splitting
-- Security: XSS prevention, cache headers, input validation
-- Testing & DevOps: backend unit tests, structured logging, data cleanup
-- Code quality: centralize DB client, async HTTP, cleanup debug code
+None — all 6 milestones shipped. Start next with `/gsd:new-milestone`.
 
 ---
-*Last updated: 2026-02-22 after v6 Production Hardening milestone started*
+*Last updated: 2026-02-22 after v6 Production Hardening milestone complete*
