@@ -2064,7 +2064,7 @@ async def _render_final_clip_task(
                 logger.warning(f"Timestamps generation failed, falling back to standard TTS: {e}")
                 from app.services.elevenlabs_tts import get_elevenlabs_tts
                 tts = get_elevenlabs_tts()
-                audio_path, silence_stats = tts.generate_audio_trimmed(
+                audio_path, silence_stats = await tts.generate_audio_trimmed(
                     text=content_data["tts_text"],
                     output_path=audio_path,
                     remove_silence=True,
