@@ -13,7 +13,7 @@
 
 import { useState } from "react";
 import { useProfile } from "@/contexts/profile-context";
-import { apiPost } from "@/lib/api";
+import { apiPost, handleApiError } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -77,7 +77,7 @@ export function CreateProfileDialog({
         toast.error(error.detail || "Failed to create profile");
       }
     } catch (error) {
-      console.error("Failed to create profile:", error);
+      handleApiError(error, "Eroare la crearea profilului");
       toast.error("An error occurred while creating the profile");
     } finally {
       setLoading(false);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { handleApiError } from "@/lib/api";
 
 export interface ProductJobStatus {
   product_id: string;
@@ -99,7 +100,7 @@ export function useBatchPolling(options: UseBatchPollingOptions): UseBatchPollin
           pollingRef.current = setTimeout(() => poll(batchId), interval);
         }
       } catch (error) {
-        console.error("Batch polling error:", error);
+        handleApiError(error, "Eroare la actualizarea statusului");
         // Retry on network errors with doubled interval
         if (!isCancelledRef.current) {
           pollingRef.current = setTimeout(() => poll(batchId), interval * 2);
