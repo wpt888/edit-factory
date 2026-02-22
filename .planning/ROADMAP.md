@@ -146,10 +146,10 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. All backend modules import get_supabase() from one central db.py — no local redefinitions
   2. Log output contains no [MUTE DEBUG] lines or equivalent debug artifacts
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 28-01: Centralize Supabase client in db.py and clean up debug logs
+- [ ] 28-01-PLAN.md — Centralize Supabase client in db.py and remove debug log noise
 
 ### Phase 29: Testing & Observability
 **Goal**: The backend has a test harness for critical services and emits structured logs with a data retention policy
