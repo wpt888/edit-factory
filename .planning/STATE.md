@@ -5,15 +5,15 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v6 Production Hardening — Phase 24 (Backend Stability)
+**Current focus:** v6 Production Hardening — Phase 25 (Rate Limiting & Security)
 
 ## Current Position
 
 Milestone: v6 Production Hardening
-Phase: 24 of 29 (Backend Stability)
-Plan: 2 of 2 (24-02 complete — phase 24 complete)
-Status: In progress
-Last activity: 2026-02-22 — Completed 24-02: Upload validation, JSON error handling, async TTS
+Phase: 25 of 29 (Rate Limiting & Security)
+Plan: — (not yet started)
+Status: Ready to plan
+Last activity: 2026-02-22 — Completed Phase 24 (Backend Stability) — 2/2 plans, verified 7/7 must-haves
 
 Progress: [██░░░░░░░░] 20% (2/10 plans)
 
@@ -64,7 +64,7 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 24-02-PLAN.md (upload validation, JSON errors, async TTS)
+Stopped at: Phase 24 complete, ready to plan Phase 25
 Resume file: None
 
 ---
