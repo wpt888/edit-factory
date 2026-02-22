@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { usePolling } from "@/hooks";
+import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -39,6 +41,7 @@ import {
   Loader2,
   AlertCircle,
   FileText,
+  Mic,
 } from "lucide-react";
 import type { TTSAsset } from "@/types/video-processing";
 import { ELEVENLABS_MODELS } from "@/types/video-processing";
@@ -64,8 +67,8 @@ export default function TTSLibraryPage() {
   const [playingId, setPlayingId] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Polling for generating assets
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  // Track whether any asset is currently generating (to enable polling)
+  const hasGenerating = assets.some((a) => a.status === "generating");
 
   const fetchAssets = useCallback(async () => {
     try {
@@ -89,23 +92,32 @@ export default function TTSLibraryPage() {
     fetchAssets();
   }, [fetchAssets]);
 
-  // Poll for generating assets
-  useEffect(() => {
-    const hasGenerating = assets.some((a) => a.status === "generating");
-
-    if (hasGenerating) {
-      pollingRef.current = setInterval(() => {
-        fetchAssets();
-      }, 2000);
-    }
-
-    return () => {
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
+  // Poll for generating assets via usePolling
+  const { startPolling: startAssetsPolling, stopPolling: stopAssetsPolling } = usePolling<TTSAsset[]>({
+    endpoint: "/tts-library/",
+    interval: 2000,
+    enabled: false,
+    onData: (data) => {
+      setAssets(data);
+      const stillGenerating = data.some((a) => a.status === "generating");
+      if (!stillGenerating) {
+        stopAssetsPolling();
       }
-    };
-  }, [assets, fetchAssets]);
+    },
+    onError: (err) => {
+      console.error("Error polling TTS assets:", err);
+    },
+  });
+
+  // Start/stop polling when generating status changes
+  useEffect(() => {
+    if (hasGenerating) {
+      startAssetsPolling();
+    } else {
+      stopAssetsPolling();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasGenerating]);
 
   // Cleanup audio on unmount
   useEffect(() => {
@@ -348,21 +360,12 @@ export default function TTSLibraryPage() {
           </div>
         ) : assets.length === 0 ? (
           /* Empty state */
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-16">
-              <Volume2 className="h-16 w-16 text-muted-foreground/30 mb-4" />
-              <p className="text-lg text-muted-foreground mb-2">
-                No TTS assets yet
-              </p>
-              <p className="text-sm text-muted-foreground mb-6">
-                Create your first TTS or render a clip to auto-save here
-              </p>
-              <Button onClick={() => setCreateOpen(true)}>
-                <Plus className="h-4 w-4 mr-2" />
-                Create TTS
-              </Button>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={<Mic className="h-6 w-6" />}
+            title="Niciun fisier audio"
+            description="Fisierele TTS generate vor aparea aici."
+            action={{ label: "TTS Nou", onClick: () => setCreateOpen(true) }}
+          />
         ) : (
           /* Asset grid */
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

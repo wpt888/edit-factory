@@ -41,6 +41,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { apiGet, apiPost, apiPatch, apiDelete, API_URL } from "@/lib/api";
 import { toast } from "sonner";
 import { useProfile } from "@/contexts/profile-context";
+import { EmptyState } from "@/components/empty-state";
 
 interface ClipWithProject {
   id: string;
@@ -661,17 +662,11 @@ function LibrarieContent() {
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
           </div>
         ) : filteredClips.length === 0 ? (
-          <Card className="py-20">
-            <div className="text-center">
-              <FolderOpen className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
-              <h3 className="text-lg font-medium mb-2">Niciun clip găsit</h3>
-              <p className="text-muted-foreground">
-                {clips.length === 0
-                  ? "Nu există clipuri exportate încă."
-                  : "Modifică filtrele pentru a vedea clipuri."}
-              </p>
-            </div>
-          </Card>
+          <EmptyState
+            icon={<Film className="h-6 w-6" />}
+            title="Nicio editare"
+            description={clips.length === 0 ? "Clipurile procesate vor aparea aici." : "Modifica filtrele pentru a vedea clipuri."}
+          />
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
             {filteredClips.map((clip) => {

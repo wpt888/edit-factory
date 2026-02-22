@@ -27,7 +27,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { apiGet, apiPost } from "@/lib/api";
-import { Loader2, ChevronDown, ChevronUp, Sparkles, AlertCircle } from "lucide-react";
+import { Loader2, ChevronDown, ChevronUp, Sparkles, AlertCircle, FileText } from "lucide-react";
+import { EmptyState } from "@/components/empty-state";
 
 export default function ScriptsPage() {
   // Input state
@@ -264,14 +265,11 @@ export default function ScriptsPage() {
           <div className="space-y-6">
             {scripts.length === 0 ? (
               // Empty state
-              <Card>
-                <CardContent className="flex items-center justify-center py-12">
-                  <div className="text-center text-muted-foreground">
-                    <Sparkles className="h-16 w-16 mx-auto mb-4 opacity-30" />
-                    <p className="text-lg">Enter your idea and click Generate to create scripts</p>
-                  </div>
-                </CardContent>
-              </Card>
+              <EmptyState
+                icon={<FileText className="h-6 w-6" />}
+                title="Niciun script"
+                description="Genereaza un script pentru a incepe."
+              />
             ) : (
               // Scripts display
               <>

@@ -28,8 +28,10 @@ import {
   ExternalLink,
   XCircle,
   Loader2,
+  BarChart3,
 } from "lucide-react";
 import Link from "next/link";
+import { EmptyState } from "@/components/empty-state";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
@@ -564,9 +566,12 @@ export default function UsagePage() {
                 {(!costSummary?.last_entries || costSummary.last_entries.length === 0) &&
                   !showAllEntries && (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                        <AlertCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                        No cost entries yet. Start processing videos to see usage.
+                      <TableCell colSpan={6} className="py-4">
+                        <EmptyState
+                          icon={<BarChart3 className="h-6 w-6" />}
+                          title="Nicio utilizare"
+                          description="Costurile API vor fi inregistrate aici."
+                        />
                       </TableCell>
                     </TableRow>
                   )}

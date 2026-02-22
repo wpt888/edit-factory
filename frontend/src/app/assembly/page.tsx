@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -30,7 +30,15 @@ import {
   Play,
   Download,
   Film,
+  Move,
+  Layers,
 } from "lucide-react";
+import { usePolling } from "@/hooks";
+import { EmptyState } from "@/components/empty-state";
+import { SegmentTransformPanel } from "@/components/segment-transform-panel";
+import type { SegmentTransform } from "@/types/video-processing";
+import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
+import { apiPut } from "@/lib/api";
 
 interface MatchPreview {
   srt_index: number;
@@ -71,35 +79,46 @@ export default function AssemblyPage() {
   const [previewData, setPreviewData] = useState<PreviewResponse | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
+  // Transform override state
+  const [transformingMatchIdx, setTransformingMatchIdx] = useState<number | null>(null);
+  const [matchTransforms, setMatchTransforms] = useState<Record<string, SegmentTransform>>({});
+
   // Render state
   const [isRendering, setIsRendering] = useState(false);
   const [renderJobId, setRenderJobId] = useState<string | null>(null);
   const [renderStatus, setRenderStatus] = useState<RenderStatus | null>(null);
 
-  // Poll render status
-  useEffect(() => {
-    if (!renderJobId || renderStatus?.status === "completed" || renderStatus?.status === "failed") {
-      return;
-    }
+  // Poll render status via usePolling
+  const renderStatusEndpoint = useMemo(
+    () => (renderJobId ? `/assembly/status/${renderJobId}` : ""),
+    [renderJobId]
+  );
 
-    const interval = setInterval(async () => {
-      try {
-        const res = await apiGet(`/assembly/status/${renderJobId}`);
-        if (res.ok) {
-          const data = await res.json();
-          setRenderStatus(data);
-
-          if (data.status === "completed" || data.status === "failed") {
-            setIsRendering(false);
-          }
-        }
-      } catch (err) {
-        console.error("Error polling render status:", err);
+  const { startPolling: startRenderPolling, stopPolling: stopRenderPolling } = usePolling<RenderStatus>({
+    endpoint: renderStatusEndpoint,
+    interval: 2000,
+    enabled: false,
+    onData: (data) => {
+      setRenderStatus(data);
+      if (data.status === "completed" || data.status === "failed") {
+        stopRenderPolling();
+        setIsRendering(false);
       }
-    }, 2000);
+    },
+    onError: (err) => {
+      console.error("Error polling render status:", err);
+    },
+  });
 
-    return () => clearInterval(interval);
-  }, [renderJobId, renderStatus?.status]);
+  // Start/stop render polling when renderJobId changes
+  useEffect(() => {
+    if (renderJobId && renderStatus?.status !== "completed" && renderStatus?.status !== "failed") {
+      startRenderPolling();
+    } else {
+      stopRenderPolling();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderJobId]);
 
   const handlePreview = async () => {
     if (!scriptText.trim()) return;
@@ -278,14 +297,11 @@ export default function AssemblyPage() {
           <div className="space-y-6">
             {!previewData ? (
               // Empty state
-              <Card>
-                <CardContent className="flex items-center justify-center py-12">
-                  <div className="text-center text-muted-foreground">
-                    <Sparkles className="h-16 w-16 mx-auto mb-4 opacity-30" />
-                    <p className="text-lg">Enter a script and click Preview to see segment matches</p>
-                  </div>
-                </CardContent>
-              </Card>
+              <EmptyState
+                icon={<Layers className="h-6 w-6" />}
+                title="Niciun assembly"
+                description="Creeaza un assembly pentru a combina segmente."
+              />
             ) : (
               <>
                 {/* Summary stats */}
@@ -327,6 +343,8 @@ export default function AssemblyPage() {
                         const textPreview = match.srt_text.length > 50
                           ? match.srt_text.substring(0, 50) + "..."
                           : match.srt_text;
+                        const segKey = match.segment_id || `unmatched-${index}`;
+                        const hasOverride = !!matchTransforms[segKey];
 
                         return (
                           <div
@@ -341,7 +359,18 @@ export default function AssemblyPage() {
                                   {formatTime(match.srt_start)} - {formatTime(match.srt_end)}
                                 </p>
                               </div>
-                              <div className="ml-2">
+                              <div className="ml-2 flex items-center gap-1">
+                                {isMatched && (
+                                  <Button
+                                    variant={hasOverride ? "default" : "ghost"}
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    onClick={() => setTransformingMatchIdx(transformingMatchIdx === index ? null : index)}
+                                    title="Segment transforms"
+                                  >
+                                    <Move className="h-3 w-3" />
+                                  </Button>
+                                )}
                                 {isMatched ? (
                                   <Badge variant="default" className="flex items-center gap-1">
                                     <CheckCircle className="h-3 w-3" />
@@ -355,6 +384,26 @@ export default function AssemblyPage() {
                                 )}
                               </div>
                             </div>
+
+                            {/* Transform panel (inline) */}
+                            {transformingMatchIdx === index && isMatched && match.segment_id && (
+                              <div className="pt-2 border-t">
+                                <SegmentTransformPanel
+                                  transforms={matchTransforms[segKey] || { ...DEFAULT_SEGMENT_TRANSFORM }}
+                                  onChange={(t) => setMatchTransforms((prev) => ({ ...prev, [segKey]: t }))}
+                                  onSave={async (t) => {
+                                    try {
+                                      await apiPut(`/segments/${match.segment_id}/transforms`, t);
+                                      setMatchTransforms((prev) => ({ ...prev, [segKey]: t }));
+                                      setTransformingMatchIdx(null);
+                                    } catch (err) {
+                                      console.error("Failed to save transforms:", err);
+                                    }
+                                  }}
+                                  isOverride={true}
+                                />
+                              </div>
+                            )}
                           </div>
                         );
                       })}

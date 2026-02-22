@@ -18,7 +18,9 @@ import {
   ArrowLeft,
   Film,
   RefreshCw,
+  Layers,
 } from "lucide-react";
+import { EmptyState } from "@/components/empty-state";
 
 // Status badge config
 function getStatusBadge(status: ProductJobStatus["status"]) {
@@ -157,23 +159,16 @@ function BatchGenerateContent() {
     }
   };
 
-  // Error state — no batch_id in URL
+  // Empty state — no batch_id in URL
   if (!batchId) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <Film className="h-16 w-16 text-muted-foreground/30 mx-auto" />
-          <h2 className="text-xl font-semibold">No Batch ID Found</h2>
-          <p className="text-muted-foreground">
-            This page requires a batch_id URL parameter.
-          </p>
-          <Link href="/products">
-            <Button variant="outline">
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Products
-            </Button>
-          </Link>
-        </div>
+        <EmptyState
+          icon={<Layers className="h-6 w-6" />}
+          title="Nicio generare batch"
+          description="Selecteaza produse si configureaza o generare batch."
+          action={{ label: "Inapoi la Produse", onClick: () => { window.location.href = "/products"; } }}
+        />
       </div>
     );
   }
