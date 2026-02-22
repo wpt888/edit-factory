@@ -11,9 +11,9 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v6 Production Hardening
 Phase: 30 of 30 (Frontend Error Handling Adoption)
-Plan: 02 complete
-Status: In progress (2/2 plans complete)
-Last activity: 2026-02-22 — Completed Phase 30 Plan 02 (handleApiError adoption in pages, components, hooks, contexts)
+Plan: 01 complete
+Status: In progress (1/2 plans complete)
+Last activity: 2026-02-22 — Completed Phase 30 Plan 01 (handleApiError adoption across 5 heaviest frontend files)
 
 Progress: [██████████] 100% (10/10 plans)
 
@@ -33,6 +33,7 @@ Progress: [██████████] 100% (10/10 plans)
 | v4 Script-First | 5 (12-16) | 11 | Shipped 2026-02-12 |
 | v5 Product Video | 7 (17-23) | 13 | Shipped 2026-02-21 |
 | v6 Hardening | 6 (24-29) | — | In progress |
+| Phase 30-frontend-error-handling-adoption P01 | 7 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,7 @@ Recent decisions affecting current work:
 - [Phase 30-02]: auth-provider.tsx, error-boundary.tsx, global-error.tsx intentionally skipped — infrastructure logging not suitable for UI toasts
 - [Phase 30-02]: use-job-polling and use-batch-polling retain retry logic after handleApiError — polling resilience preserved
 - [Phase 30-02]: FE-02 gap closure complete — all 13 target files use handleApiError() in every catch block
+- [Phase 30-01]: handleApiError replaces console.error in all catch blocks; alert() split by semantic intent into toast.success/warning/error
 
 ### Pending Todos
 
@@ -90,7 +92,7 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 30-02-PLAN.md (handleApiError adoption in pages, components, hooks, contexts — FE-02 complete)
+Stopped at: Completed 30-01-PLAN.md (handleApiError adoption across 5 heaviest frontend files)
 Resume file: None
 
 ---
