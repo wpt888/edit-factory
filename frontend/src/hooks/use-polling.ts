@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import { apiFetch } from "@/lib/api";
 
 export interface UsePollingOptions<T> {
   /** API endpoint to poll (relative path, e.g., "/assembly/status/123") */
@@ -29,8 +30,6 @@ export interface UsePollingReturn<T> {
   /** Stop polling */
   stopPolling: () => void;
 }
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
 /**
  * Generic polling hook for any endpoint.
@@ -82,11 +81,7 @@ export function usePolling<T>(options: UsePollingOptions<T>): UsePollingReturn<T
       if (isCancelledRef.current) return;
 
       try {
-        const response = await fetch(`${API_URL}${endpoint}`);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
+        const response = await apiFetch(endpoint);
         const result: T = await response.json();
         setData(result);
         setError(null);
@@ -120,7 +115,7 @@ export function usePolling<T>(options: UsePollingOptions<T>): UsePollingReturn<T
     intervalRef.current = setInterval(poll, currentIntervalRef.current);
   }, [endpoint, interval, onData, onError, shouldStop, stopPolling, clearPolling]);
 
-  // Auto-start when enabled becomes true
+  // Auto-start when enabled becomes true or endpoint changes
   useEffect(() => {
     if (enabled) {
       startPolling();
@@ -128,7 +123,7 @@ export function usePolling<T>(options: UsePollingOptions<T>): UsePollingReturn<T
       stopPolling();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled]);
+  }, [enabled, endpoint]);
 
   // Cleanup on unmount
   useEffect(() => {
