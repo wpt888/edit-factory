@@ -72,7 +72,7 @@ Full details: `.planning/milestones/v5-ROADMAP.md`
 
 - [x] **Phase 24: Backend Stability** - Fix memory leaks, persist progress, validate uploads, async TTS client (completed 2026-02-22)
 - [x] **Phase 25: Rate Limiting & Security** - slowapi middleware, XSS prevention, cache headers, retry logic (completed 2026-02-22)
-- [ ] **Phase 26: Frontend Resilience** - Error boundary, consistent error handling, API client hardening, empty states, polling hook
+- [x] **Phase 26: Frontend Resilience** - Error boundary, consistent error handling, API client hardening, empty states, polling hook (completed 2026-02-22)
 - [ ] **Phase 27: Frontend Refactoring** - Split library page, eliminate polling duplication
 - [ ] **Phase 28: Code Quality** - Centralize Supabase client, remove debug logs
 - [ ] **Phase 29: Testing & Observability** - pytest setup, unit tests, structured logging, data retention
@@ -179,7 +179,7 @@ Plans:
 | 17-23 | v5 | 13/13 | Complete | 2026-02-21 |
 | 24. Backend Stability | 2/2 | Complete    | 2026-02-22 | - |
 | 25. Rate Limiting & Security | 2/2 | Complete    | 2026-02-22 | - |
-| 26. Frontend Resilience | 1/2 | In Progress|  | - |
+| 26. Frontend Resilience | 2/2 | Complete   | 2026-02-22 | - |
 | 27. Frontend Refactoring | v6 | 0/1 | Not started | - |
 | 28. Code Quality | v6 | 0/1 | Not started | - |
 | 29. Testing & Observability | v6 | 0/2 | Not started | - |
