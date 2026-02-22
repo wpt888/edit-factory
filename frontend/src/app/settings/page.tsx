@@ -11,7 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Loader2, Save, Settings as SettingsIcon, Eye, EyeOff, BarChart3, Trash2, Star, RefreshCw, Plus, Key } from "lucide-react"
-import { apiGet, apiPost, apiPatch, apiDelete, handleApiError } from "@/lib/api"
+import { apiGetWithRetry, apiPost, apiPatch, apiDelete, handleApiError } from "@/lib/api"
 import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import { useProfile } from "@/contexts/profile-context"
@@ -109,7 +109,7 @@ export default function SettingsPage() {
     if (!currentProfile) return
     setElAccountsLoading(true)
     try {
-      const response = await apiGet("/elevenlabs-accounts/")
+      const response = await apiGetWithRetry("/elevenlabs-accounts/")
       if (response.ok) {
         const data = await response.json()
         setElAccounts(data.accounts || [])
@@ -127,7 +127,7 @@ export default function SettingsPage() {
 
     const loadSettings = async () => {
       try {
-        const response = await apiGet(`/profiles/${currentProfile.id}`)
+        const response = await apiGetWithRetry(`/profiles/${currentProfile.id}`)
         if (!response.ok) throw new Error("Failed to load profile settings")
 
         const data = await response.json()
@@ -166,7 +166,7 @@ export default function SettingsPage() {
     // Fetch available template presets
     const loadTemplates = async () => {
       try {
-        const tmplRes = await apiGet("/profiles/templates")
+        const tmplRes = await apiGetWithRetry("/profiles/templates")
         if (tmplRes.ok) {
           const tmplData = await tmplRes.json()
           if (Array.isArray(tmplData)) {
@@ -190,7 +190,7 @@ export default function SettingsPage() {
     const loadDashboard = async () => {
       setDashboardLoading(true)
       try {
-        const response = await apiGet(`/profiles/${currentProfile.id}/dashboard?time_range=30d`)
+        const response = await apiGetWithRetry(`/profiles/${currentProfile.id}/dashboard?time_range=30d`)
         if (!response.ok) throw new Error("Failed to load dashboard")
 
         const data = await response.json()
@@ -212,7 +212,7 @@ export default function SettingsPage() {
     const loadVoices = async () => {
       setLoadingVoices(true)
       try {
-        const response = await apiGet(`/tts/voices?provider=${provider}`)
+        const response = await apiGetWithRetry(`/tts/voices?provider=${provider}`)
         if (!response.ok) throw new Error("Failed to load voices")
 
         const data = await response.json()
@@ -298,7 +298,7 @@ export default function SettingsPage() {
 
     try {
       // Test using the current profile's credentials (will use saved or env fallback)
-      const response = await apiGet("/postiz/status")
+      const response = await apiGetWithRetry("/postiz/status")
       if (!response.ok) throw new Error("Connection failed")
 
       const data = await response.json()

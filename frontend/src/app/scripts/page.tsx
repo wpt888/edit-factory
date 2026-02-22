@@ -26,7 +26,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { apiGet, apiPost, handleApiError } from "@/lib/api";
+import { apiGetWithRetry, apiPost, handleApiError } from "@/lib/api";
 import { Loader2, ChevronDown, ChevronUp, Sparkles, AlertCircle, FileText } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 
@@ -55,7 +55,7 @@ export default function ScriptsPage() {
   const fetchKeywords = async () => {
     setKeywordsLoading(true);
     try {
-      const res = await apiGet("/scripts/keywords");
+      const res = await apiGetWithRetry("/scripts/keywords");
       if (res.ok) {
         const data = await res.json();
         setKeywords(data.keywords || []);

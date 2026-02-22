@@ -28,7 +28,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { apiGet, apiPost, apiPut, apiDelete, API_URL, handleApiError } from "@/lib/api";
+import { apiGet, apiGetWithRetry, apiPost, apiPut, apiDelete, API_URL, handleApiError } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Plus,
@@ -72,7 +72,7 @@ export default function TTSLibraryPage() {
 
   const fetchAssets = useCallback(async () => {
     try {
-      const res = await apiGet("/tts-library/");
+      const res = await apiGetWithRetry("/tts-library/");
       if (res.ok) {
         const data = await res.json();
         setAssets(data);

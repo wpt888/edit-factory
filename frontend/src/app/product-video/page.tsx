@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Progress } from "@/components/ui/progress";
-import { apiPost, apiGet, API_URL } from "@/lib/api";
+import { apiPost, apiGetWithRetry, API_URL } from "@/lib/api";
 import { useProfile } from "@/contexts/profile-context";
 import { useJobPolling, formatElapsedTime } from "@/hooks/use-job-polling";
 import { toast } from "sonner";
@@ -77,7 +77,7 @@ function ProductVideoContent() {
 
     const loadProfileDefaults = async () => {
       try {
-        const res = await apiGet(`/profiles/${currentProfile.id}`);
+        const res = await apiGetWithRetry(`/profiles/${currentProfile.id}`);
         if (!res.ok) return;
         const profileData = await res.json();
         const ctaFromProfile = profileData?.video_template_settings?.cta_text;
