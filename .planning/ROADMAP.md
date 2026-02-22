@@ -75,7 +75,7 @@ Full details: `.planning/milestones/v5-ROADMAP.md`
 - [x] **Phase 26: Frontend Resilience** - Error boundary, consistent error handling, API client hardening, empty states, polling hook (completed 2026-02-22)
 - [x] **Phase 27: Frontend Refactoring** - Split library page, eliminate polling duplication (completed 2026-02-22)
 - [x] **Phase 28: Code Quality** - Centralize Supabase client, remove debug logs (completed 2026-02-22)
-- [ ] **Phase 29: Testing & Observability** - pytest setup, unit tests, structured logging, data retention
+- [x] **Phase 29: Testing & Observability** - pytest setup, unit tests, structured logging, data retention (completed 2026-02-22)
 
 ## Phase Details
 
@@ -182,7 +182,7 @@ Plans:
 | 26. Frontend Resilience | 2/2 | Complete    | 2026-02-22 | - |
 | 27. Frontend Refactoring | 1/1 | Complete    | 2026-02-22 | - |
 | 28. Code Quality | 1/1 | Complete    | 2026-02-22 | - |
-| 29. Testing & Observability | 1/2 | In Progress|  | - |
+| 29. Testing & Observability | 2/2 | Complete   | 2026-02-22 | - |
 
 ---
 *Last updated: 2026-02-22 after v6 Production Hardening roadmap created*

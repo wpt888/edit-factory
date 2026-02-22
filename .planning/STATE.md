@@ -67,6 +67,9 @@ Recent decisions affecting current work:
 - 27-01: SegmentSelectionModal owns its own modal-specific state (sourceVideos, modalSegments) while projectSegments lives in page.tsx
 - 28-01: All backend modules import get_supabase from app.db — no local redefinitions; app.db is the single source of truth for Supabase client initialization
 - 28-01: [MUTE DEBUG] logger.info lines deleted entirely (not downgraded) — they were temporary debug artifacts not intended for long-term use
+- [Phase 29-testing-and-observability]: 29-01: pyproject.toml testpaths=["tests"] + pythonpath=["."] — app.* imports resolve without sys.path hacks
+- [Phase 29-testing-and-observability]: 29-01: mock_settings patches app.config.get_settings at module level so no .env or Supabase connection needed during tests
+- [Phase 29-testing-and-observability]: 29-01: force _supabase=None after init to guarantee in-memory fallback path even if env vars are present
 - [Phase 29-testing-and-observability]: 29-02: python-json-logger with rename_fields produces timestamp/level/logger keys — matches aggregator conventions
 - [Phase 29-testing-and-observability]: 29-02: setup_logging() replaces logging.basicConfig at app startup — all loggers inherit JSON root handler
 
@@ -84,8 +87,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 29-02-PLAN.md (Structured JSON Logging and Data Retention)
+Stopped at: Completed 29-01-PLAN.md (pytest infrastructure and unit tests) and 29-02-PLAN.md (Structured JSON Logging and Data Retention)
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after Phase 29-02 complete*
+*Last updated: 2026-02-22 after Phase 29-01 and 29-02 complete*
