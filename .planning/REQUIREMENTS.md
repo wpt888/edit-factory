@@ -26,7 +26,7 @@ Requirements for production hardening milestone. Each maps to roadmap phases.
 ### Frontend Resilience
 
 - [x] **FE-01**: Global React error boundary catches unhandled errors with fallback UI
-- [x] **FE-02**: Consistent error handling utility replaces toast/alert/silence mix
+- [ ] **FE-02**: Consistent error handling utility replaces toast/alert/silence mix
 - [x] **FE-03**: API client has timeout, retry logic, and centralized error handling
 - [x] **FE-04**: All pages show empty states when no data exists
 - [x] **FE-05**: Common polling logic extracted into shared reusable hook
@@ -97,7 +97,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SEC-03 | Phase 25 | Complete |
 | SEC-04 | Phase 25 | Complete |
 | FE-01 | Phase 26 | Complete |
-| FE-02 | Phase 26 | Complete |
+| FE-02 | Phase 30 | Pending |
 | FE-03 | Phase 26 | Complete |
 | FE-04 | Phase 26 | Complete |
 | FE-05 | Phase 26 | Complete |
@@ -114,9 +114,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 **Coverage:**
 - v6 requirements: 25 total
-- Mapped to phases: 25
-- Unmapped: 0 ✓
+- Satisfied: 24
+- Pending (gap closure): 1 (FE-02 → Phase 30)
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-22*
-*Last updated: 2026-02-22 after roadmap created — all 25 requirements mapped*
+*Last updated: 2026-02-22 after milestone audit — FE-02 reassigned to Phase 30 gap closure*
