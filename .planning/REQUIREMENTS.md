@@ -14,13 +14,13 @@ Requirements for production hardening milestone. Each maps to roadmap phases.
 - [x] **STAB-03**: Lock timeout returns 409 Conflict to client instead of continuing
 - [x] **STAB-04**: Invalid JSON in form params returns 400 error (not silent ignore)
 - [x] **STAB-05**: File uploads are validated for max size (413 Payload Too Large)
-- [ ] **STAB-06**: External API calls retry with exponential backoff (tenacity)
+- [x] **STAB-06**: External API calls retry with exponential backoff (tenacity)
 
 ### Rate Limiting & Security
 
 - [x] **SEC-01**: Rate limiting middleware enforces per-user request limits
-- [ ] **SEC-02**: SRT subtitle preview escapes user content (XSS prevention)
-- [ ] **SEC-03**: Stream endpoints include Cache-Control headers
+- [x] **SEC-02**: SRT subtitle preview escapes user content (XSS prevention)
+- [x] **SEC-03**: Stream endpoints include Cache-Control headers
 - [x] **SEC-04**: TTS text length validated at endpoint level (not just background job)
 
 ### Frontend Resilience
@@ -91,10 +91,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | STAB-03 | Phase 24 | Complete |
 | STAB-04 | Phase 24 | Complete |
 | STAB-05 | Phase 24 | Complete |
-| STAB-06 | Phase 25 | Pending |
+| STAB-06 | Phase 25 | Complete |
 | SEC-01 | Phase 25 | Complete |
-| SEC-02 | Phase 25 | Pending |
-| SEC-03 | Phase 25 | Pending |
+| SEC-02 | Phase 25 | Complete |
+| SEC-03 | Phase 25 | Complete |
 | SEC-04 | Phase 25 | Complete |
 | FE-01 | Phase 26 | Pending |
 | FE-02 | Phase 26 | Pending |
