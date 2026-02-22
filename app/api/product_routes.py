@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.auth import ProfileContext, get_profile_context
 from app.config import get_settings
+from app.db import get_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +26,6 @@ router = APIRouter(prefix="/feeds", tags=["Products"])
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _get_supabase():
-    """Lazy-init Supabase client (same pattern as library_routes and feed_routes)."""
-    from supabase import create_client
-    settings = get_settings()
-    return create_client(settings.supabase_url, settings.supabase_key)
-
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -47,7 +41,7 @@ async def get_product_filters(
     Used to populate filter dropdowns in the product browser. NULLs are
     excluded from both lists. Returns sorted lists.
     """
-    supabase = _get_supabase()
+    supabase = get_supabase()
 
     # Verify feed ownership
     feed_check = supabase.table("product_feeds")\
@@ -100,7 +94,7 @@ async def list_products(
         category: Filter by product_type (exact match)
         brand: Filter by brand (exact match)
     """
-    supabase = _get_supabase()
+    supabase = get_supabase()
 
     # Verify feed ownership and get stored product_count for unfiltered totals
     feed_check = supabase.table("product_feeds")\

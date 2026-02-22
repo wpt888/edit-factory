@@ -12,9 +12,10 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Background
 
 from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import validate_tts_text_length
+from app.config import get_settings
+from app.db import get_supabase
 from app.services.tts import get_tts_service
 from app.services.job_storage import get_job_storage
-from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tts", tags=["tts"])
@@ -234,18 +235,6 @@ async def _generate_tts_background(
         )
 
 
-def _get_supabase():
-    """Get Supabase client for quota checking."""
-    try:
-        from supabase import create_client
-        settings = get_settings()
-        if settings.supabase_url and settings.supabase_key:
-            return create_client(settings.supabase_url, settings.supabase_key)
-    except Exception as e:
-        logger.warning(f"Failed to get Supabase client: {e}")
-    return None
-
-
 @router.post("/generate")
 async def generate_tts(
     background_tasks: BackgroundTasks,
@@ -271,7 +260,7 @@ async def generate_tts(
     logger.info(f"[Profile {profile.profile_id}] TTS generation request: provider={provider}, voice={voice_id}, text_len={len(text)}")
 
     # Check quota if profile has one set
-    supabase = _get_supabase()
+    supabase = get_supabase()
     if supabase:
         try:
             profile_data = supabase.table("profiles")\

@@ -27,6 +27,7 @@ from pydantic import BaseModel, field_validator
 
 from app.api.auth import ProfileContext, get_profile_context
 from app.config import get_settings
+from app.db import get_supabase
 from app.services.job_storage import get_job_storage
 
 logger = logging.getLogger(__name__)
@@ -85,13 +86,6 @@ class BatchGenerateRequest(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_supabase():
-    """Lazy-init Supabase client (same pattern as product_routes and library_routes)."""
-    from supabase import create_client
-    settings = get_settings()
-    return create_client(settings.supabase_url, settings.supabase_key)
-
-
 def _build_preset_dict(preset_name: str) -> dict:
     """Convert EncodingPreset to the dict format expected by _render_with_preset.
 
@@ -130,7 +124,7 @@ async def generate_product_video(
     Returns:
         {"job_id": str, "status": "pending"}
     """
-    supabase = _get_supabase()
+    supabase = get_supabase()
 
     # Verify product exists (and belongs to profile's accessible feeds)
     product_result = supabase.table("products")\
@@ -187,7 +181,7 @@ async def batch_generate_products(
     Returns:
         {"batch_id": str, "total": int}
     """
-    supabase = _get_supabase()
+    supabase = get_supabase()
     job_storage = get_job_storage()
 
     batch_id = str(uuid.uuid4())
@@ -496,7 +490,7 @@ async def _generate_product_video_task(
             profile_id=profile_id,
         )
 
-        supabase = _get_supabase()
+        supabase = get_supabase()
 
         # Fetch full product row
         product_result = supabase.table("products")\
@@ -512,7 +506,7 @@ async def _generate_product_video_task(
 
         # Read profile template settings (video_template_settings JSONB column)
         try:
-            profile_result = _get_supabase().table("profiles")\
+            profile_result = get_supabase().table("profiles")\
                 .select("video_template_settings")\
                 .eq("id", profile_id)\
                 .single()\

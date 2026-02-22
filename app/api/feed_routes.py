@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from app.api.auth import ProfileContext, get_profile_context
 from app.config import get_settings
+from app.db import get_supabase
 from app.services.feed_parser import parse_feed_xml, upsert_products
 
 logger = logging.getLogger(__name__)
@@ -50,13 +51,6 @@ class FeedCreate(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_supabase():
-    """Lazy-init Supabase client (same pattern as library_routes)."""
-    from supabase import create_client
-    settings = get_settings()
-    return create_client(settings.supabase_url, settings.supabase_key)
-
-
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -67,7 +61,7 @@ def _utcnow_iso() -> str:
 
 def _sync_feed_task(feed_id: str, feed_url: str) -> None:
     """Background task: download feed XML, parse products, upsert, download images."""
-    supabase = _get_supabase()
+    supabase = get_supabase()
     settings = get_settings()
 
     try:
@@ -141,7 +135,7 @@ async def create_feed(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Create a new product feed for the current profile."""
-    supabase = _get_supabase()
+    supabase = get_supabase()
 
     result = supabase.table("product_feeds").insert({
         "profile_id": profile.profile_id,
@@ -160,7 +154,7 @@ async def list_feeds(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """List all product feeds for the current profile."""
-    supabase = _get_supabase()
+    supabase = get_supabase()
 
     result = supabase.table("product_feeds")\
         .select("*")\
@@ -177,7 +171,7 @@ async def get_feed(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Get a single feed with its product_count."""
-    supabase = _get_supabase()
+    supabase = get_supabase()
 
     result = supabase.table("product_feeds")\
         .select("*")\
@@ -198,7 +192,7 @@ async def delete_feed(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Delete a feed and all its products (CASCADE)."""
-    supabase = _get_supabase()
+    supabase = get_supabase()
 
     # Verify ownership before deleting
     existing = supabase.table("product_feeds")\
@@ -223,7 +217,7 @@ async def sync_feed(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Trigger an async feed sync. Returns immediately; parse runs in background."""
-    supabase = _get_supabase()
+    supabase = get_supabase()
 
     # Verify feed exists and belongs to this profile
     result = supabase.table("product_feeds")\
