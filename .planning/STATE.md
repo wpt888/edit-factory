@@ -87,6 +87,9 @@ Recent decisions affecting current work:
 - [Phase 31-01]: cost_tracker, job_storage, tts_library_service now use get_supabase() from app.db singleton — no local create_client calls
 - [Phase 31-01]: All 6 inline MAX_TTS_CHARS comparisons replaced with validate_tts_text_length() helper across 3 route files
 - [Phase 31-01]: Background task validation in process_tts_job uses validate_tts_text_length() — HTTPException caught by outer except Exception handler marking job as failed
+- [Phase 31-02]: librarie/page.tsx blob download (downloadFile) correctly stays as apiGet per 30-03 convention — binary fetches are not retry candidates
+- [Phase 31-02]: apiFetch in usePolling removes both raw fetch() and local API_URL — timeout, profile-header injection, and non-2xx throwing now handled by centralized client
+- [Phase 31-02]: if (!response.ok) guard removed from usePolling — apiFetch already throws ApiError on non-2xx, making the guard dead code
 
 ### Pending Todos
 
@@ -102,8 +105,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 31-01-PLAN.md (pytest + Supabase centralization + validate_tts_text_length adoption)
+Stopped at: Completed 31-02-PLAN.md (apiGetWithRetry in usage/page.tsx + apiFetch in usePolling — Phase 31 fully complete)
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after Phase 31-01 complete (1/2 plans done)*
+*Last updated: 2026-02-22 after Phase 31-02 complete (2/2 plans done — Phase 31 Final Polish complete)*
