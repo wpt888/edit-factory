@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGetWithRetry, apiPost } from "@/lib/api";
 import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
 import {
@@ -125,7 +125,7 @@ export default function ProductsPage() {
   // Fetch feeds when profile loads
   const fetchFeeds = useCallback(async () => {
     try {
-      const res = await apiGet("/feeds");
+      const res = await apiGetWithRetry("/feeds");
       if (res.ok) {
         const data = await res.json();
         setFeeds(data);
@@ -150,7 +150,7 @@ export default function ProductsPage() {
   // Fetch filter options when feed changes
   const fetchFilterOptions = useCallback(async (feedId: string) => {
     try {
-      const res = await apiGet(`/feeds/${feedId}/products/filters`);
+      const res = await apiGetWithRetry(`/feeds/${feedId}/products/filters`);
       if (res.ok) {
         const data = await res.json();
         setFilterOptions(data);
@@ -173,7 +173,7 @@ export default function ProductsPage() {
         ...(category !== "all" && { category }),
         ...(brand !== "all" && { brand }),
       });
-      const res = await apiGet(`/feeds/${selectedFeedId}/products?${params}`);
+      const res = await apiGetWithRetry(`/feeds/${selectedFeedId}/products?${params}`);
       if (res.ok) {
         const data = await res.json();
         setProducts(data.products);
@@ -242,7 +242,7 @@ export default function ProductsPage() {
         }
         // Refresh feed data after 3s
         setTimeout(async () => {
-          const refreshRes = await apiGet("/feeds");
+          const refreshRes = await apiGetWithRetry("/feeds");
           if (refreshRes.ok) {
             const data = await refreshRes.json();
             setFeeds(data);

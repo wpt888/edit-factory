@@ -25,7 +25,7 @@ import {
   useMemo,
   ReactNode,
 } from "react";
-import { apiGet, handleApiError } from "@/lib/api";
+import { apiGetWithRetry, handleApiError } from "@/lib/api";
 
 // Profile interface matching backend schema
 interface Profile {
@@ -65,7 +65,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
    */
   const refreshProfiles = useCallback(async () => {
     try {
-      const res = await apiGet("/profiles/");
+      const res = await apiGetWithRetry("/profiles/");
 
       if (res.ok) {
         const fetchedProfiles: Profile[] = await res.json();

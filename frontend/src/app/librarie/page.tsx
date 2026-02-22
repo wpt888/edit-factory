@@ -38,7 +38,7 @@ import {
   FileText,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { apiGet, apiPost, apiPatch, apiDelete, API_URL, handleApiError } from "@/lib/api";
+import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, handleApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { useProfile } from "@/contexts/profile-context";
 import { EmptyState } from "@/components/empty-state";
@@ -125,7 +125,7 @@ function LibrarieContent() {
   const fetchAllClips = async () => {
     try {
       setLoading(true);
-      const res = await apiGet("/library/all-clips");
+      const res = await apiGetWithRetry("/library/all-clips");
       if (res.ok) {
         const data = await res.json();
         setClips(data.clips || []);
