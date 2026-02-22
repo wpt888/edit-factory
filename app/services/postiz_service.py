@@ -10,6 +10,8 @@ from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 from datetime import datetime
 
+from app.db import get_supabase
+
 logger = logging.getLogger(__name__)
 
 
@@ -306,16 +308,6 @@ class PostizPublisher:
 _postiz_instances: Dict[str, PostizPublisher] = {}
 
 
-def _get_supabase():
-    """Get Supabase client from library_routes."""
-    try:
-        from app.api.library_routes import get_supabase
-        return get_supabase()
-    except Exception as e:
-        logger.error(f"Failed to get Supabase client: {e}")
-        return None
-
-
 def get_postiz_publisher(profile_id: str) -> PostizPublisher:
     """
     Get Postiz publisher instance for specific profile.
@@ -336,7 +328,7 @@ def get_postiz_publisher(profile_id: str) -> PostizPublisher:
         return _postiz_instances[profile_id]
 
     # Load profile's Postiz settings from database
-    supabase = _get_supabase()
+    supabase = get_supabase()
     api_url = None
     api_key = None
 
@@ -407,7 +399,7 @@ def is_postiz_configured(profile_id: Optional[str] = None) -> bool:
     """
     if profile_id:
         # Check profile's tts_settings.postiz
-        supabase = _get_supabase()
+        supabase = get_supabase()
         if supabase:
             try:
                 result = supabase.table("profiles")\

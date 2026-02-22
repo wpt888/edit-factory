@@ -8,32 +8,11 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from app.api.auth import ProfileContext, get_profile_context
+from app.db import get_supabase
 from app.services.script_generator import get_script_generator
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/scripts", tags=["scripts"])
-
-# Supabase client with lazy initialization
-_supabase_client = None
-
-
-def get_supabase():
-    """Get Supabase client with lazy initialization."""
-    global _supabase_client
-    if _supabase_client is None:
-        try:
-            from supabase import create_client
-            from app.config import get_settings
-            settings = get_settings()
-            if settings.supabase_url and settings.supabase_key:
-                _supabase_client = create_client(settings.supabase_url, settings.supabase_key)
-                logger.info("Supabase client initialized for script routes")
-            else:
-                logger.warning("Supabase credentials not configured")
-        except Exception as e:
-            logger.error(f"Failed to initialize Supabase: {e}")
-    return _supabase_client
-
 
 # ============== PYDANTIC MODELS ==============
 

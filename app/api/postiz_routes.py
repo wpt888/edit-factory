@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
+from app.db import get_supabase
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/postiz", tags=["postiz"])
@@ -88,16 +89,6 @@ def get_publish_progress(job_id: str) -> Optional[dict]:
 
 
 # ============== HELPER FUNCTIONS ==============
-
-def get_supabase():
-    """Import and return supabase client from library_routes."""
-    try:
-        from app.api.library_routes import get_supabase as _get_supabase
-        return _get_supabase()
-    except Exception as e:
-        logger.error(f"Failed to get Supabase client: {e}")
-        return None
-
 
 # ============== ENDPOINTS ==============
 

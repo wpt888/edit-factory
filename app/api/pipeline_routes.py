@@ -15,39 +15,124 @@ from datetime import datetime
 from typing import List, Optional, Dict
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body, Query
 from pydantic import BaseModel
 
 from app.api.auth import ProfileContext, get_profile_context
+from app.db import get_supabase
 from app.services.script_generator import get_script_generator
 from app.services.assembly_service import get_assembly_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/pipeline", tags=["Multi-Variant Pipeline"])
 
-# Supabase client (lazy initialization)
-_supabase_client = None
-
-def get_supabase():
-    """Get Supabase client with lazy initialization."""
-    global _supabase_client
-    if _supabase_client is None:
-        try:
-            from supabase import create_client
-            from app.config import get_settings
-            settings = get_settings()
-            if settings.supabase_url and settings.supabase_key:
-                _supabase_client = create_client(settings.supabase_url, settings.supabase_key)
-                logger.info("Supabase client initialized for pipeline routes")
-            else:
-                logger.warning("Supabase credentials not configured")
-        except Exception as e:
-            logger.error(f"Failed to initialize Supabase: {e}")
-    return _supabase_client
-
-
 # In-memory pipeline state storage
 _pipelines: Dict[str, dict] = {}
+
+
+# ============== DB PERSISTENCE HELPERS ==============
+
+def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
+    """Upsert full pipeline state to editai_pipelines. Graceful degradation."""
+    try:
+        supabase = get_supabase()
+        if not supabase:
+            return
+        # Convert int keys in previews/render_jobs to strings for JSON
+        previews_json = {str(k): v for k, v in pipeline_dict.get("previews", {}).items()}
+        render_jobs_json = {str(k): v for k, v in pipeline_dict.get("render_jobs", {}).items()}
+
+        row = {
+            "id": pipeline_id,
+            "profile_id": pipeline_dict["profile_id"],
+            "idea": pipeline_dict.get("idea", ""),
+            "context": pipeline_dict.get("context", ""),
+            "provider": pipeline_dict.get("provider", "gemini"),
+            "variant_count": pipeline_dict.get("variant_count", 0),
+            "keyword_count": pipeline_dict.get("keyword_count", 0),
+            "scripts": pipeline_dict.get("scripts", []),
+            "previews": previews_json,
+            "render_jobs": render_jobs_json,
+        }
+        supabase.table("editai_pipelines").upsert(row).execute()
+        logger.debug(f"Pipeline {pipeline_id} saved to DB")
+    except Exception as e:
+        logger.warning(f"Failed to save pipeline {pipeline_id} to DB: {e}")
+
+
+def _db_update_render_jobs(pipeline_id: str, render_jobs: dict):
+    """Update only render_jobs column for a pipeline. Graceful degradation."""
+    try:
+        supabase = get_supabase()
+        if not supabase:
+            return
+        render_jobs_json = {str(k): v for k, v in render_jobs.items()}
+        supabase.table("editai_pipelines").update({
+            "render_jobs": render_jobs_json
+        }).eq("id", pipeline_id).execute()
+        logger.debug(f"Pipeline {pipeline_id} render_jobs updated in DB")
+    except Exception as e:
+        logger.warning(f"Failed to update render_jobs for {pipeline_id}: {e}")
+
+
+def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
+    """Load pipeline from DB into _pipelines cache. Returns pipeline dict or None."""
+    try:
+        supabase = get_supabase()
+        if not supabase:
+            return None
+        result = supabase.table("editai_pipelines")\
+            .select("*")\
+            .eq("id", pipeline_id)\
+            .single()\
+            .execute()
+        if not result.data:
+            return None
+
+        row = result.data
+        # Convert string keys back to int for previews and render_jobs
+        previews = {}
+        for k, v in (row.get("previews") or {}).items():
+            previews[int(k)] = v
+            # Verify audio_path still exists on disk
+            if isinstance(v, dict) and "preview_data" in v:
+                pd = v["preview_data"]
+                if pd.get("audio_path") and not Path(pd["audio_path"]).exists():
+                    pd["audio_path"] = None
+
+        render_jobs = {}
+        for k, v in (row.get("render_jobs") or {}).items():
+            render_jobs[int(k)] = v
+
+        pipeline = {
+            "pipeline_id": pipeline_id,
+            "profile_id": row["profile_id"],
+            "idea": row.get("idea", ""),
+            "context": row.get("context", ""),
+            "provider": row.get("provider", "gemini"),
+            "variant_count": row.get("variant_count", 0),
+            "keyword_count": row.get("keyword_count", 0),
+            "scripts": row.get("scripts") or [],
+            "previews": previews,
+            "render_jobs": render_jobs,
+            "created_at": row.get("created_at", ""),
+        }
+
+        # Cache in memory
+        _pipelines[pipeline_id] = pipeline
+        logger.info(f"Pipeline {pipeline_id} loaded from DB")
+        return pipeline
+
+    except Exception as e:
+        logger.warning(f"Failed to load pipeline {pipeline_id} from DB: {e}")
+        return None
+
+
+def _get_pipeline_or_load(pipeline_id: str) -> Optional[dict]:
+    """Get pipeline from in-memory cache, falling back to DB load."""
+    if pipeline_id in _pipelines:
+        return _pipelines[pipeline_id]
+    return _db_load_pipeline(pipeline_id)
 
 
 # ============== PYDANTIC MODELS ==============
@@ -144,7 +229,80 @@ class PipelineStatusResponse(BaseModel):
     variants: List[VariantStatus]
 
 
+class PipelineListItem(BaseModel):
+    """Lightweight pipeline summary for list endpoint."""
+    pipeline_id: str
+    idea: str
+    provider: str
+    variant_count: int
+    keyword_count: int
+    created_at: str
+
+
+class PipelineListResponse(BaseModel):
+    """Response model for list endpoint."""
+    pipelines: List[PipelineListItem]
+    total: int
+
+
 # ============== ENDPOINTS ==============
+
+@router.get("/list", response_model=PipelineListResponse)
+async def list_pipelines(
+    profile: ProfileContext = Depends(get_profile_context),
+    limit: int = Query(20, ge=1, le=100)
+):
+    """
+    List recent pipelines for the current profile.
+
+    Returns lightweight summaries (no scripts/previews) ordered by creation date.
+    Falls back to in-memory pipelines if DB is unavailable.
+    """
+    items = []
+
+    # Try DB first
+    try:
+        supabase = get_supabase()
+        if supabase:
+            result = supabase.table("editai_pipelines")\
+                .select("id, idea, provider, variant_count, keyword_count, created_at")\
+                .eq("profile_id", profile.profile_id)\
+                .order("created_at", desc=True)\
+                .limit(limit)\
+                .execute()
+            if result.data:
+                for row in result.data:
+                    items.append(PipelineListItem(
+                        pipeline_id=row["id"],
+                        idea=row.get("idea", ""),
+                        provider=row.get("provider", "gemini"),
+                        variant_count=row.get("variant_count", 0),
+                        keyword_count=row.get("keyword_count", 0),
+                        created_at=row.get("created_at", "")
+                    ))
+                return PipelineListResponse(pipelines=items, total=len(items))
+    except Exception as e:
+        logger.warning(f"Failed to list pipelines from DB: {e}")
+
+    # Fallback to in-memory
+    profile_pipelines = [
+        p for p in _pipelines.values()
+        if p.get("profile_id") == profile.profile_id
+    ]
+    profile_pipelines.sort(key=lambda p: p.get("created_at", ""), reverse=True)
+
+    for p in profile_pipelines[:limit]:
+        items.append(PipelineListItem(
+            pipeline_id=p["pipeline_id"],
+            idea=p.get("idea", ""),
+            provider=p.get("provider", "gemini"),
+            variant_count=p.get("variant_count", 0),
+            keyword_count=p.get("keyword_count", 0),
+            created_at=p.get("created_at", "")
+        ))
+
+    return PipelineListResponse(pipelines=items, total=len(items))
+
 
 @router.post("/generate", response_model=PipelineGenerateResponse)
 async def generate_pipeline(
@@ -239,6 +397,9 @@ async def generate_pipeline(
             "profile_id": profile.profile_id
         }
 
+        # Persist to DB
+        _db_save_pipeline(pipeline_id, _pipelines[pipeline_id])
+
         logger.info(
             f"[Profile {profile.profile_id}] Created pipeline {pipeline_id} "
             f"with {len(scripts)} scripts"
@@ -275,11 +436,10 @@ async def preview_variant(
     Runs TTS, SRT generation, and keyword matching without expensive render.
     This is step 2 of the workflow: preview before rendering.
     """
-    # Validate pipeline exists
-    if pipeline_id not in _pipelines:
+    # Validate pipeline exists (with DB fallback)
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
-
-    pipeline = _pipelines[pipeline_id]
 
     # Validate ownership
     if pipeline["profile_id"] != profile.profile_id:
@@ -313,6 +473,9 @@ async def preview_variant(
             "elevenlabs_model": elevenlabs_model,
             "preview_data": preview_data
         }
+
+        # Persist to DB
+        _db_save_pipeline(pipeline_id, pipeline)
 
         # Convert matches to MatchPreview models
         matches = [
@@ -356,11 +519,10 @@ async def render_variants(
     This is step 3 of the workflow: render the variants you want.
     Each variant renders independently in background. Poll /status for progress.
     """
-    # Validate pipeline exists
-    if pipeline_id not in _pipelines:
+    # Validate pipeline exists (with DB fallback)
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
-
-    pipeline = _pipelines[pipeline_id]
 
     # Validate ownership
     if pipeline["profile_id"] != profile.profile_id:
@@ -494,6 +656,9 @@ async def render_variants(
                         f"variant {vid} completed: {final_video_path}"
                     )
 
+                    # Persist render result to DB
+                    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+
                 except Exception as e:
                     logger.error(
                         f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
@@ -504,6 +669,9 @@ async def render_variants(
                     job["current_step"] = "Render failed"
                     job["error"] = str(e)
                     job["failed_at"] = datetime.now().isoformat()
+
+                    # Persist failure to DB
+                    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
             # Add background task
             background_tasks.add_task(do_render)
@@ -523,10 +691,10 @@ async def get_pipeline_status(pipeline_id: str):
     Public endpoint (no auth) - pipeline_id is the secret.
     Returns status for all variants (rendered and not-yet-rendered).
     """
-    if pipeline_id not in _pipelines:
+    # Try in-memory first, then DB fallback
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
-
-    pipeline = _pipelines[pipeline_id]
 
     # Build variants status list
     variants = []

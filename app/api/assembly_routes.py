@@ -16,34 +16,98 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
 
 from app.api.auth import ProfileContext, get_profile_context
+from app.db import get_supabase
 from app.services.assembly_service import get_assembly_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/assembly", tags=["assembly"])
 
-# Supabase client (lazy initialization)
-_supabase_client = None
-
-def get_supabase():
-    """Get Supabase client with lazy initialization."""
-    global _supabase_client
-    if _supabase_client is None:
-        try:
-            from supabase import create_client
-            from app.config import get_settings
-            settings = get_settings()
-            if settings.supabase_url and settings.supabase_key:
-                _supabase_client = create_client(settings.supabase_url, settings.supabase_key)
-                logger.info("Supabase client initialized for assembly routes")
-            else:
-                logger.warning("Supabase credentials not configured")
-        except Exception as e:
-            logger.error(f"Failed to initialize Supabase: {e}")
-    return _supabase_client
-
-
 # Job storage (in-memory, same pattern as library_routes _generation_progress)
 _assembly_jobs = {}
+
+
+# ============== DB PERSISTENCE HELPERS ==============
+
+def _db_create_assembly_job(job_id: str, profile_id: str, job: dict):
+    """Insert a new assembly job into editai_assembly_jobs. Graceful degradation."""
+    try:
+        supabase = get_supabase()
+        if not supabase:
+            return
+        row = {
+            "id": job_id,
+            "profile_id": profile_id,
+            "status": job.get("status", "processing"),
+            "progress": job.get("progress", 0),
+            "current_step": job.get("current_step", "Initializing assembly"),
+            "final_video_path": job.get("final_video_path"),
+            "error": job.get("error"),
+            "started_at": job.get("started_at"),
+        }
+        supabase.table("editai_assembly_jobs").insert(row).execute()
+        logger.debug(f"Assembly job {job_id} created in DB")
+    except Exception as e:
+        logger.warning(f"Failed to create assembly job {job_id} in DB: {e}")
+
+
+def _db_update_assembly_job(job_id: str, job: dict):
+    """Update assembly job status/progress in DB. Graceful degradation."""
+    try:
+        supabase = get_supabase()
+        if not supabase:
+            return
+        update = {
+            "status": job.get("status"),
+            "progress": job.get("progress"),
+            "current_step": job.get("current_step"),
+            "final_video_path": job.get("final_video_path"),
+            "error": job.get("error"),
+        }
+        if job.get("completed_at"):
+            update["completed_at"] = job["completed_at"]
+        if job.get("failed_at"):
+            update["failed_at"] = job["failed_at"]
+
+        supabase.table("editai_assembly_jobs").update(update).eq("id", job_id).execute()
+        logger.debug(f"Assembly job {job_id} updated in DB")
+    except Exception as e:
+        logger.warning(f"Failed to update assembly job {job_id} in DB: {e}")
+
+
+def _db_load_assembly_job(job_id: str) -> Optional[dict]:
+    """Load assembly job from DB into _assembly_jobs cache. Returns job dict or None."""
+    try:
+        supabase = get_supabase()
+        if not supabase:
+            return None
+        result = supabase.table("editai_assembly_jobs")\
+            .select("*")\
+            .eq("id", job_id)\
+            .single()\
+            .execute()
+        if not result.data:
+            return None
+
+        row = result.data
+        job = {
+            "status": row.get("status", "processing"),
+            "progress": row.get("progress", 0),
+            "current_step": row.get("current_step", ""),
+            "final_video_path": row.get("final_video_path"),
+            "error": row.get("error"),
+            "started_at": row.get("started_at"),
+            "completed_at": row.get("completed_at"),
+            "failed_at": row.get("failed_at"),
+        }
+
+        # Cache in memory
+        _assembly_jobs[job_id] = job
+        logger.info(f"Assembly job {job_id} loaded from DB")
+        return job
+
+    except Exception as e:
+        logger.warning(f"Failed to load assembly job {job_id} from DB: {e}")
+        return None
 
 
 # ============== PYDANTIC MODELS ==============
@@ -246,6 +310,9 @@ async def render_assembly(
         "started_at": datetime.now().isoformat()
     }
 
+    # Persist to DB
+    _db_create_assembly_job(job_id, profile.profile_id, _assembly_jobs[job_id])
+
     # Background task function
     async def do_assembly():
         try:
@@ -287,6 +354,9 @@ async def render_assembly(
 
             logger.info(f"[Profile {profile.profile_id}] Assembly job {job_id} completed: {final_video_path}")
 
+            # Persist to DB
+            _db_update_assembly_job(job_id, _assembly_jobs[job_id])
+
         except Exception as e:
             logger.error(f"[Profile {profile.profile_id}] Assembly job {job_id} failed: {e}")
             _assembly_jobs[job_id]["status"] = "failed"
@@ -294,6 +364,9 @@ async def render_assembly(
             _assembly_jobs[job_id]["current_step"] = "Assembly failed"
             _assembly_jobs[job_id]["error"] = str(e)
             _assembly_jobs[job_id]["failed_at"] = datetime.now().isoformat()
+
+            # Persist to DB
+            _db_update_assembly_job(job_id, _assembly_jobs[job_id])
 
     # Add background task
     background_tasks.add_task(do_assembly)
@@ -311,8 +384,11 @@ async def get_assembly_status(job_id: str):
 
     Public endpoint (no auth) - job_id is the secret.
     """
+    # Try in-memory first, then DB fallback
     if job_id not in _assembly_jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
+        loaded = _db_load_assembly_job(job_id)
+        if not loaded:
+            raise HTTPException(status_code=404, detail="Job not found")
 
     job = _assembly_jobs[job_id]
 
