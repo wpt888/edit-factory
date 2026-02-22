@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.api.auth import ProfileContext, get_profile_context
-from app.api.validators import MAX_TTS_CHARS
+from app.api.validators import validate_tts_text_length
 from app.config import get_settings
 from app.services.tts_library_service import get_tts_library_service
 
@@ -196,10 +196,7 @@ async def create_tts_asset(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    if not request.tts_text.strip():
-        raise HTTPException(status_code=400, detail="Text cannot be empty")
-    if len(request.tts_text.strip()) > MAX_TTS_CHARS:
-        raise HTTPException(status_code=400, detail=f"Text too long: {len(request.tts_text.strip())} characters (maximum {MAX_TTS_CHARS})")
+    validate_tts_text_length(request.tts_text, "tts_text")
 
     import uuid
     asset_id = str(uuid.uuid4())
@@ -271,10 +268,7 @@ async def update_tts_asset(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    if not request.tts_text.strip():
-        raise HTTPException(status_code=400, detail="Text cannot be empty")
-    if len(request.tts_text.strip()) > MAX_TTS_CHARS:
-        raise HTTPException(status_code=400, detail=f"Text too long: {len(request.tts_text.strip())} characters (maximum {MAX_TTS_CHARS})")
+    validate_tts_text_length(request.tts_text, "tts_text")
 
     # Verify asset exists and belongs to profile
     result = (
