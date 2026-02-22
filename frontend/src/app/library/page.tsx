@@ -20,6 +20,7 @@ import { Trash2, Loader2, X } from "lucide-react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { VideoFilters, defaultVideoFilters } from "@/components/video-enhancement-controls";
 import { apiFetch, apiPost, apiPatch, apiDelete, handleApiError } from "@/lib/api";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { toast } from "sonner";
 
 import {
@@ -808,6 +809,7 @@ function LibraryPageContent() {
 
           {/* Main content */}
           <div className="col-span-6">
+            <ErrorBoundary>
             <ClipGallery
               selectedProject={selectedProject}
               clips={clips}
@@ -870,10 +872,12 @@ function LibraryPageContent() {
               onResetProject={resetProject}
               onClipStatusUpdate={handleClipStatusUpdate}
             />
+            </ErrorBoundary>
           </div>
 
           {/* Right sidebar */}
           <div className="col-span-3">
+            <ErrorBoundary>
             <ClipEditorPanel
               selectedClip={selectedClip}
               clipContent={clipContent}
@@ -893,6 +897,7 @@ function LibraryPageContent() {
               onSave={saveClipContent}
               onRender={renderFinalClip}
             />
+            </ErrorBoundary>
           </div>
         </div>
       </div>
@@ -1056,19 +1061,21 @@ function LibraryPageContent() {
       )}
 
       {/* Segment Selection Modal */}
-      <SegmentSelectionModal
-        open={showSegmentModal}
-        onClose={() => setShowSegmentModal(false)}
-        selectedProject={selectedProject}
-        projectSegments={projectSegments}
-        onSegmentsChange={(segments) => {
-          setProjectSegments(segments);
-          setAssignedSegmentsCount(segments.length);
-          if (segments.length > 0) {
-            setGenerationMode("segments");
-          }
-        }}
-      />
+      <ErrorBoundary>
+        <SegmentSelectionModal
+          open={showSegmentModal}
+          onClose={() => setShowSegmentModal(false)}
+          selectedProject={selectedProject}
+          projectSegments={projectSegments}
+          onSegmentsChange={(segments) => {
+            setProjectSegments(segments);
+            setAssignedSegmentsCount(segments.length);
+            if (segments.length > 0) {
+              setGenerationMode("segments");
+            }
+          }}
+        />
+      </ErrorBoundary>
 
       {/* Postiz Publish Modal */}
       <PostizPublishModal
