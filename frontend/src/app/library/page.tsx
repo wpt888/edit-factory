@@ -19,7 +19,8 @@ import {
 import { Trash2, Loader2, X } from "lucide-react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { VideoFilters, defaultVideoFilters } from "@/components/video-enhancement-controls";
-import { apiFetch, apiPost, apiPatch, apiDelete } from "@/lib/api";
+import { apiFetch, apiPost, apiPatch, apiDelete, handleApiError } from "@/lib/api";
+import { toast } from "sonner";
 
 import {
   Project,
@@ -363,7 +364,7 @@ function LibraryPageContent() {
             }
           }
         } catch (error) {
-          console.error("Poll project error:", error);
+          handleApiError(error, "Eroare la verificarea statusului proiectului");
         }
       }
     },
@@ -389,7 +390,7 @@ function LibraryPageContent() {
         setProjects(data.projects || []);
       }
     } catch (error) {
-      console.error("Failed to fetch projects:", error);
+      handleApiError(error, "Eroare la incarcarea proiectelor");
     }
   };
 
@@ -404,7 +405,7 @@ function LibraryPageContent() {
         }
       }
     } catch (error) {
-      console.error("Failed to fetch presets:", error);
+      handleApiError(error, "Eroare la incarcarea preseturilor");
     }
   };
 
@@ -416,7 +417,7 @@ function LibraryPageContent() {
         setClips(data.clips || []);
       }
     } catch (error) {
-      console.error("Failed to fetch clips:", error);
+      handleApiError(error, "Eroare la incarcarea clipurilor");
     }
   };
 
@@ -435,7 +436,7 @@ function LibraryPageContent() {
         }
       }
     } catch (error) {
-      console.error("Failed to fetch clip content:", error);
+      handleApiError(error, "Eroare la incarcarea continutului clipului");
     }
   };
 
@@ -451,7 +452,7 @@ function LibraryPageContent() {
         }
       }
     } catch (error) {
-      console.error("Failed to fetch project segments:", error);
+      handleApiError(error, "Eroare la incarcarea segmentelor proiectului");
     }
   };
 
@@ -486,12 +487,11 @@ function LibraryPageContent() {
           detail = errData.detail || detail;
         } catch {}
         setCreateError(`${res.status}: ${detail}`);
-        console.error("Failed to create project:", res.status, detail);
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Eroare de rețea";
       setCreateError(msg);
-      console.error("Failed to create project:", error);
+      handleApiError(error, "Eroare la crearea proiectului");
     } finally {
       setLoading(false);
     }
@@ -515,7 +515,7 @@ function LibraryPageContent() {
         }
       }
     } catch (error) {
-      console.error("Failed to delete project:", error);
+      handleApiError(error, "Eroare la stergerea proiectului");
     } finally {
       setProjectToDelete(null);
     }
@@ -562,7 +562,7 @@ function LibraryPageContent() {
         setGenerationProgress(null);
       }
     } catch (error) {
-      console.error("Failed to generate clips:", error);
+      handleApiError(error, "Eroare la generarea clipurilor");
       setGenerating(false);
       setGenerationProgress(null);
     }
@@ -573,7 +573,7 @@ function LibraryPageContent() {
       try {
         await apiPost(`/library/projects/${selectedProject.id}/cancel`);
       } catch (error) {
-        console.error("Failed to cancel generation:", error);
+        handleApiError(error, "Eroare la anularea generarii");
       }
 
       const projectRes = await apiFetch(`/library/projects/${selectedProject.id}`);
@@ -593,7 +593,7 @@ function LibraryPageContent() {
     if (!selectedProject) return;
 
     if (assignedSegmentsCount === 0) {
-      alert("Trebuie să asignezi segmente mai întâi!");
+      toast.error("Trebuie sa asignezi segmente mai intai!");
       return;
     }
 
@@ -628,11 +628,11 @@ function LibraryPageContent() {
           typeof error === "object"
             ? error.detail || JSON.stringify(error)
             : String(error);
-        alert(`Eroare: ${errorMsg}`);
+        toast.error(errorMsg || "Eroare la generare");
         setGenerating(false);
       }
     } catch (error) {
-      console.error("Failed to generate from segments:", error);
+      handleApiError(error, "Eroare la generarea din segmente");
       setGenerating(false);
     }
   };
@@ -651,7 +651,7 @@ function LibraryPageContent() {
         }
       }
     } catch (error) {
-      console.error("Failed to toggle selection:", error);
+      handleApiError(error, "Eroare la modificarea selectiei");
     }
   };
 
@@ -676,7 +676,7 @@ function LibraryPageContent() {
         }
       }
     } catch (error) {
-      console.error("Failed to delete clip:", error);
+      handleApiError(error, "Eroare la stergerea clipului");
     }
   };
 
@@ -698,7 +698,7 @@ function LibraryPageContent() {
         setClipContent(data.content);
       }
     } catch (error) {
-      console.error("Failed to save clip content:", error);
+      handleApiError(error, "Eroare la salvarea continutului clipului");
     }
   };
 
@@ -737,7 +737,7 @@ function LibraryPageContent() {
         setRendering(false);
       }
     } catch (error) {
-      console.error("Failed to render clip:", error);
+      handleApiError(error, "Eroare la renderizarea clipului");
       setRendering(false);
     }
   };
@@ -753,7 +753,7 @@ function LibraryPageContent() {
         setRenameValue("");
       }
     } catch (error) {
-      console.error("Failed to rename clip:", error);
+      handleApiError(error, "Eroare la redenumirea clipului");
     }
   };
 
@@ -767,7 +767,7 @@ function LibraryPageContent() {
         setProjects((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
       }
     } catch (error) {
-      console.error("Failed to reset project:", error);
+      handleApiError(error, "Eroare la resetarea proiectului");
     }
   };
 

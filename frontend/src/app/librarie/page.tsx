@@ -38,7 +38,7 @@ import {
   FileText,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { apiGet, apiPost, apiPatch, apiDelete, API_URL } from "@/lib/api";
+import { apiGet, apiPost, apiPatch, apiDelete, API_URL, handleApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { useProfile } from "@/contexts/profile-context";
 import { EmptyState } from "@/components/empty-state";
@@ -134,7 +134,7 @@ function LibrarieContent() {
         window.location.href = "/login";
       }
     } catch (error) {
-      console.error("Failed to fetch clips:", error);
+      handleApiError(error, "Eroare la incarcarea clipurilor");
     } finally {
       setLoading(false);
     }
@@ -259,8 +259,7 @@ function LibrarieContent() {
         toast.error(`Eroare: ${error.detail || "Upload eșuat"}`);
       }
     } catch (error) {
-      console.error("Failed to upload to Postiz:", error);
-      toast.error("Eroare la upload");
+      handleApiError(error, "Eroare la upload");
     } finally {
       setPublishing(false);
       setPostizClip(null);
@@ -291,8 +290,7 @@ function LibrarieContent() {
         setRenameClipId(null);
       }
     } catch (error) {
-      console.error("Failed to rename clip:", error);
-      toast.error("Eroare la redenumirea clipului.");
+      handleApiError(error, "Eroare la redenumirea clipului");
       setRenameClipId(null);
     }
   };
@@ -321,8 +319,7 @@ function LibrarieContent() {
         toast.error(`Eroare: ${error.detail || "Nu s-a putut elimina sunetul"}`);
       }
     } catch (error) {
-      console.error("Failed to remove audio:", error);
-      toast.error("Eroare la eliminarea sunetului");
+      handleApiError(error, "Eroare la eliminarea sunetului");
     } finally {
       setRemovingAudioClipId(null);
     }
@@ -347,8 +344,7 @@ function LibrarieContent() {
         toast.error(`Eroare: ${error.detail || "Nu s-a putut șterge clipul"}`);
       }
     } catch (error) {
-      console.error("Failed to delete clip:", error);
-      toast.error("Eroare la ștergerea clipului");
+      handleApiError(error, "Eroare la stergerea clipului");
     } finally {
       setDeletingClipId(null);
     }
@@ -401,8 +397,7 @@ function LibrarieContent() {
         toast.error(`Eroare: ${error.detail || "Nu s-au putut șterge clipurile"}`);
       }
     } catch (error) {
-      console.error("Failed to bulk delete clips:", error);
-      toast.error("Eroare la ștergerea clipurilor");
+      handleApiError(error, "Eroare la stergerea clipurilor");
     } finally {
       setBulkDeleting(false);
     }
@@ -467,8 +462,7 @@ function LibrarieContent() {
         toast.error(`Eroare: ${error.detail || "Nu s-au putut trimite clipurile"}`);
       }
     } catch (error) {
-      console.error("Failed to bulk upload to Postiz:", error);
-      toast.error("Eroare la trimiterea clipurilor către Postiz");
+      handleApiError(error, "Eroare la trimiterea clipurilor catre Postiz");
     } finally {
       setBulkUploading(false);
     }
