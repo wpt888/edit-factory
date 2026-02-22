@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v6 Production Hardening
 Phase: 27 of 29 (Frontend Refactoring)
-Plan: — (not yet started)
-Status: Ready to plan
-Last activity: 2026-02-22 — Completed Phase 26 (Frontend Resilience) — 2/2 plans, verified 5/5 must-haves
+Plan: 01 (complete)
+Status: In progress
+Last activity: 2026-02-22 — Completed Phase 27-01 (Library Page Decomposition) — 2/2 tasks
 
-Progress: [██████░░░░] 60% (6/10 plans)
+Progress: [███████░░░] 70% (7/10 plans)
 
 ## Performance Metrics
 
@@ -61,6 +61,10 @@ Recent decisions affecting current work:
 - 26-02: usePolling designed as a single-endpoint primitive; library dual-endpoint polling uses usePolling for progress + manual fetch for project status in onData
 - 26-02: pollClipStatus in library/page.tsx kept as setInterval — hooks cannot be called inside regular functions; deferred to Phase 27
 - 26-02: Pipeline setInterval bug fixed — variantStatuses in dependency array caused interval restart on every poll; usePolling avoids this
+- 27-01: ClipStatusPoller is an invisible React component (returns null) wrapping usePolling — rendered conditionally per rendering clip ID, auto-cleans on unmount
+- 27-01: renderingClipIds string[] array replaces the old pollClipStatus function — supports multiple simultaneous clip renders naturally
+- 27-01: PostizPublishModal owns its own state (integrations, caption, schedule) and resets via useEffect on open prop change
+- 27-01: SegmentSelectionModal owns its own modal-specific state (sourceVideos, modalSegments) while projectSegments lives in page.tsx
 
 ### Pending Todos
 
@@ -76,8 +80,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Phase 26 complete, ready to plan Phase 27
+Stopped at: Completed 27-01-PLAN.md
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after Phase 26-02 complete*
+*Last updated: 2026-02-22 after Phase 27-01 complete*
