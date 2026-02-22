@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v6 Production Hardening
 Phase: 24 of 29 (Backend Stability)
-Plan: — (not yet started)
-Status: Ready to plan
-Last activity: 2026-02-22 — Roadmap created for v6 Production Hardening (6 phases, 25 requirements)
+Plan: 1 of 2 (24-01 complete)
+Status: In progress
+Last activity: 2026-02-22 — Completed 24-01: Progress persistence + lock lifecycle fixes
 
-Progress: [░░░░░░░░░░] 0% (0/10 plans)
+Progress: [█░░░░░░░░░] 10% (1/10 plans)
 
 ## Performance Metrics
 
@@ -43,6 +43,9 @@ Recent decisions affecting current work:
 
 - v6 Roadmap: Phase 24 (backend stability) is prerequisite — phases 25, 26, 28 can run in parallel after it completes
 - v6 Roadmap: Phase 27 (frontend refactoring) depends on Phase 26 (resilience patterns in place first)
+- 24-01: In-memory dict is primary progress source; Supabase is durability layer — all DB calls try/except so DB outage never blocks generation
+- 24-01: 409 Conflict returned at endpoint level (not inside background task) via is_project_locked() non-blocking check
+- 24-01: editai_generation_progress uses TEXT PK for project_id to match backend string UUID usage
 
 ### Pending Todos
 
@@ -53,12 +56,13 @@ None.
 **Database migrations pending:**
 - Migration 007 (v3 encoding presets) requires manual application via Supabase SQL Editor
 - Migration 009 (v4 TTS timestamps) requires manual application via Supabase SQL Editor
+- Migration 017 (editai_generation_progress) requires manual application via Supabase SQL Editor
 
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Roadmap defined — ready to begin Phase 24 planning
+Stopped at: Completed 24-01-PLAN.md (progress persistence + lock lifecycle)
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after v6 roadmap created*
+*Last updated: 2026-02-22 after 24-01 executed*

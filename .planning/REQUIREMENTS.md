@@ -9,9 +9,9 @@ Requirements for production hardening milestone. Each maps to roadmap phases.
 
 ### Backend Stability
 
-- [ ] **STAB-01**: Server persists generation progress to database (survives restart)
-- [ ] **STAB-02**: Project render locks are cleaned up after completion (no memory leak)
-- [ ] **STAB-03**: Lock timeout returns 409 Conflict to client instead of continuing
+- [x] **STAB-01**: Server persists generation progress to database (survives restart)
+- [x] **STAB-02**: Project render locks are cleaned up after completion (no memory leak)
+- [x] **STAB-03**: Lock timeout returns 409 Conflict to client instead of continuing
 - [ ] **STAB-04**: Invalid JSON in form params returns 400 error (not silent ignore)
 - [ ] **STAB-05**: File uploads are validated for max size (413 Payload Too Large)
 - [ ] **STAB-06**: External API calls retry with exponential backoff (tenacity)
@@ -41,7 +41,7 @@ Requirements for production hardening milestone. Each maps to roadmap phases.
 - [ ] **QUAL-01**: Single get_supabase() in db.py used everywhere (remove duplicates)
 - [ ] **QUAL-02**: ElevenLabs TTS uses async HTTP client (httpx.AsyncClient)
 - [ ] **QUAL-03**: Debug logs cleaned up ([MUTE DEBUG] removed)
-- [ ] **QUAL-04**: Unused cleanup_project_lock integrated into render flow
+- [x] **QUAL-04**: Unused cleanup_project_lock integrated into render flow
 
 ### Testing & Observability
 
@@ -86,9 +86,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STAB-01 | Phase 24 | Pending |
-| STAB-02 | Phase 24 | Pending |
-| STAB-03 | Phase 24 | Pending |
+| STAB-01 | Phase 24 | Complete |
+| STAB-02 | Phase 24 | Complete |
+| STAB-03 | Phase 24 | Complete |
 | STAB-04 | Phase 24 | Pending |
 | STAB-05 | Phase 24 | Pending |
 | STAB-06 | Phase 25 | Pending |
@@ -106,7 +106,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | QUAL-01 | Phase 28 | Pending |
 | QUAL-02 | Phase 24 | Pending |
 | QUAL-03 | Phase 28 | Pending |
-| QUAL-04 | Phase 24 | Pending |
+| QUAL-04 | Phase 24 | Complete |
 | TEST-01 | Phase 29 | Pending |
 | TEST-02 | Phase 29 | Pending |
 | TEST-03 | Phase 29 | Pending |
