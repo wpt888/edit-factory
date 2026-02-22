@@ -52,7 +52,7 @@ class ElevenLabsTTS:
 
         logger.info(f"ElevenLabsTTS initialized with voice: {self.voice_id}, model: {self.model_id}")
 
-    def generate_audio(
+    async def generate_audio(
         self,
         text: str,
         output_path: Path,
@@ -113,8 +113,8 @@ class ElevenLabsTTS:
         logger.info(f"Generating TTS for {len(text)} characters...")
 
         try:
-            with httpx.Client(timeout=120.0) as client:
-                response = client.post(url, headers=headers, json=data)
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(url, headers=headers, json=data)
 
                 if response.status_code != 200:
                     error_detail = response.text
@@ -266,7 +266,7 @@ class ElevenLabsTTS:
             logger.error(f"Failed to add audio to video: {e}")
             raise
 
-    def generate_audio_trimmed(
+    async def generate_audio_trimmed(
         self,
         text: str,
         output_path: Path,
@@ -299,7 +299,7 @@ class ElevenLabsTTS:
 
             # Generate raw TTS
             raw_audio = temp_dir / f"raw_{output_path.stem}.mp3"
-            self.generate_audio(
+            await self.generate_audio(
                 text=text,
                 output_path=raw_audio,
                 stability=stability,
@@ -338,7 +338,7 @@ class ElevenLabsTTS:
                 shutil.copy(raw_audio, output_path)
                 return output_path, {"silence_removed": False, "error": str(e)}
 
-    def process_video_with_tts(
+    async def process_video_with_tts(
         self,
         video_path: Path,
         text: str,
@@ -374,7 +374,7 @@ class ElevenLabsTTS:
         audio_path = temp_dir / audio_filename
 
         if remove_silence:
-            audio_path, silence_stats = self.generate_audio_trimmed(
+            audio_path, silence_stats = await self.generate_audio_trimmed(
                 text=text,
                 output_path=audio_path,
                 remove_silence=True,
@@ -383,7 +383,7 @@ class ElevenLabsTTS:
             )
             stats["silence_removal"] = silence_stats
         else:
-            self.generate_audio(text, audio_path)
+            await self.generate_audio(text, audio_path)
             stats["silence_removal"] = {"enabled": False}
 
         # Add audio to video

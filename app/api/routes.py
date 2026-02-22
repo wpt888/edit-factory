@@ -1109,7 +1109,7 @@ async def process_tts_generate_job(job_id: str):
             job["progress"] = "Generating TTS and removing silence..."
             job["updated_at"] = datetime.now()
 
-            audio_path, silence_stats = tts.generate_audio_trimmed(
+            audio_path, silence_stats = await tts.generate_audio_trimmed(
                 text=job["text"],
                 output_path=output_path,
                 remove_silence=True,
@@ -1134,7 +1134,7 @@ async def process_tts_generate_job(job_id: str):
             job["progress"] = "Generating TTS..."
             job["updated_at"] = datetime.now()
 
-            tts.generate_audio(job["text"], output_path)
+            await tts.generate_audio(job["text"], output_path)
 
             job["result"] = {
                 "status": "success",
@@ -1302,7 +1302,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
             job["progress"] = "Generating voice-over and removing silence..."
             job["updated_at"] = datetime.now()
 
-            audio_path, silence_stats = tts.generate_audio_trimmed(
+            audio_path, silence_stats = await tts.generate_audio_trimmed(
                 text=tts_text,
                 output_path=audio_path,
                 remove_silence=True,
@@ -1318,7 +1318,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
             job["progress"] = "Generating voice-over with ElevenLabs..."
             job["updated_at"] = datetime.now()
 
-            tts.generate_audio(tts_text, audio_path)
+            await tts.generate_audio(tts_text, audio_path)
             logger.info(f"TTS audio generated: {audio_path}")
 
         # Add audio to each video
