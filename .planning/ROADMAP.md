@@ -181,7 +181,7 @@ Plans:
 | 25. Rate Limiting & Security | 2/2 | Complete    | 2026-02-22 | - |
 | 26. Frontend Resilience | 2/2 | Complete    | 2026-02-22 | - |
 | 27. Frontend Refactoring | 1/1 | Complete    | 2026-02-22 | - |
-| 28. Code Quality | 1/1 | Complete   | 2026-02-22 | - |
+| 28. Code Quality | 1/1 | Complete    | 2026-02-22 | - |
 | 29. Testing & Observability | v6 | 0/2 | Not started | - |
 
 ---
