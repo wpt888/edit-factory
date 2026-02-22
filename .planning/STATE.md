@@ -5,15 +5,15 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v6 Production Hardening — Phase 27 (Frontend Refactoring)
+**Current focus:** v6 Production Hardening — Phase 28 (Code Quality)
 
 ## Current Position
 
 Milestone: v6 Production Hardening
-Phase: 27 of 29 (Frontend Refactoring)
-Plan: 01 (complete)
-Status: In progress
-Last activity: 2026-02-22 — Completed Phase 27-01 (Library Page Decomposition) — 2/2 tasks
+Phase: 28 of 29 (Code Quality)
+Plan: — (not yet started)
+Status: Ready to plan
+Last activity: 2026-02-22 — Completed Phase 27 (Frontend Refactoring) — 1/1 plans, verified 4/5 must-haves (1 human_needed)
 
 Progress: [███████░░░] 70% (7/10 plans)
 
