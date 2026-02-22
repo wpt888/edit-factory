@@ -12,6 +12,7 @@ from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass, asdict
 import cv2
 from google import genai
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,18 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
 
         return base_prompt
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        reraise=True,
+        before_sleep=lambda retry_state: logger.warning(
+            f"Gemini API retry {retry_state.attempt_number}/3: {retry_state.outcome.exception()}"
+        )
+    )
+    def _call_gemini_api(self, model: str, contents: list):
+        """Call Gemini API with automatic retry on transient failures."""
+        return self.client.models.generate_content(model=model, contents=contents)
+
     def analyze_batch(
         self,
         frames: List[Tuple[float, bytes]],
@@ -194,10 +207,7 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
             })
 
         try:
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=contents
-            )
+            response = self._call_gemini_api(self.model_name, contents)
 
             # Parsăm răspunsul JSON
             response_text = response.text

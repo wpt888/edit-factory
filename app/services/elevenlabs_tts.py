@@ -9,8 +9,31 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Tuple
 import httpx
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logger = logging.getLogger(__name__)
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception_type((httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.HTTPStatusError)),
+    before_sleep=lambda retry_state: logger.warning(
+        f"ElevenLabs API retry {retry_state.attempt_number}/3: {retry_state.outcome.exception()}"
+    ),
+    reraise=True
+)
+async def _call_elevenlabs_api(url: str, headers: dict, data: dict) -> httpx.Response:
+    """Make ElevenLabs API call with automatic retry on transient errors."""
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(url, headers=headers, json=data)
+        if response.status_code in (429, 500, 502, 503, 504):
+            raise httpx.HTTPStatusError(
+                f"Transient error {response.status_code}",
+                request=response.request,
+                response=response
+            )
+        return response
 
 
 class ElevenLabsTTS:
@@ -113,17 +136,16 @@ class ElevenLabsTTS:
         logger.info(f"Generating TTS for {len(text)} characters...")
 
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(url, headers=headers, json=data)
+            response = await _call_elevenlabs_api(url, headers, data)
 
-                if response.status_code != 200:
-                    error_detail = response.text
-                    logger.error(f"ElevenLabs API error: {response.status_code} - {error_detail}")
-                    raise Exception(f"ElevenLabs API error: {response.status_code} - {error_detail}")
+            if response.status_code != 200:
+                error_detail = response.text
+                logger.error(f"ElevenLabs API error: {response.status_code} - {error_detail}")
+                raise Exception(f"ElevenLabs API error: {response.status_code} - {error_detail}")
 
-                # Save audio file
-                with open(output_path, "wb") as f:
-                    f.write(response.content)
+            # Save audio file
+            with open(output_path, "wb") as f:
+                f.write(response.content)
 
                 logger.info(f"Audio saved to: {output_path}")
 
