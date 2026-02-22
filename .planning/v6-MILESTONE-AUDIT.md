@@ -1,184 +1,175 @@
 ---
 milestone: v6
-audited: 2026-02-22T05:00:00Z
-status: gaps_found
+audited: 2026-02-22T10:00:00Z
+status: tech_debt
 scores:
-  requirements: 24/25
-  phases: 6/6
-  integration: 18/21 exports wired
-  flows: 4/5 E2E flows complete
+  requirements: 25/25
+  phases: 7/7
+  integration: 26/28
+  flows: 6/7
 gaps:
-  requirements:
-    - id: "FE-02"
-      status: "unsatisfied"
-      phase: "Phase 26"
-      claimed_by_plans: ["26-01-PLAN.md"]
-      completed_by_plans: ["26-01-SUMMARY.md"]
-      verification_status: "passed (artifact exists but not adopted)"
-      evidence: "handleApiError() defined in api-error.ts, re-exported via api.ts L7, but zero call sites in any page or component. All 33+ catch blocks in pages use console.error(). alert() calls remain in library/page.tsx L596, L631. The utility was built but never wired into consumers — the old inconsistent patterns were not replaced."
+  requirements: []
   integration:
-    - from: "Phase 26 api-error.ts"
-      to: "All page catch blocks"
-      issue: "handleApiError() has zero consumers. Pages continue using console.error() (72 instances across app pages) and alert() (2 instances in library/page.tsx)"
-    - from: "Phase 26 error-boundary.tsx"
-      to: "Page sections"
-      issue: "ErrorBoundary component created but never imported by any page or layout. Section-level error isolation is non-functional (global-error.tsx root boundary works)"
-    - from: "Phase 26 apiGetWithRetry"
-      to: "Page data fetching"
-      issue: "apiGetWithRetry() defined at api.ts L91 but never called. Pages using apiGet do not get retry behavior on transient failures"
+    - id: "INT-01"
+      description: "usePolling hook bypasses apiFetch — polling calls lack 30s timeout"
+      from: "Phase 26 (api.ts timeout/ApiError)"
+      to: "Phase 26 (use-polling.ts)"
+      affected_requirements: ["FE-03", "FE-05"]
+      severity: "moderate"
+      evidence: "use-polling.ts line 85 uses raw fetch() instead of apiFetch(); no AbortSignal.timeout"
+    - id: "INT-02"
+      description: "usePolling duplicates API_URL constant instead of importing from api.ts"
+      from: "Phase 26 (api.ts API_URL)"
+      to: "Phase 26 (use-polling.ts)"
+      affected_requirements: ["FE-03"]
+      severity: "low"
+      evidence: "use-polling.ts line 33 defines local API_URL identical to api.ts — drift risk"
   flows:
-    - flow: "Error → boundary catches → handleApiError shows toast"
-      breaks_at: "handleApiError never called by any catch block"
-      affected_requirements: ["FE-02"]
+    - id: "FLOW-01"
+      description: "pytest requires venv_linux activation — system Python lacks pydantic_settings"
+      step: "Test execution"
+      affected_requirements: ["TEST-01", "TEST-02"]
+      severity: "low"
+      evidence: "python -m pytest fails under system Python; passes under venv_linux (43/43)"
 tech_debt:
-  - phase: 26-frontend-resilience
-    items:
-      - "ErrorBoundary component unused — no section-level error isolation (FE-01 partial)"
-      - "apiGetWithRetry() unused — pages don't get automatic retry (FE-03 partial)"
-      - "72 console.error() calls + 2 alert() calls remain across pages — not migrated to handleApiError"
-  - phase: 25-rate-limiting-and-security
-    items:
-      - "routes.py L1288 raises ValueError (not HTTPException) for TTS length in background task — surfaces as 500 instead of 400 (SEC-04 edge case)"
-      - "3 of 4 TTS endpoint files use raw inline MAX_TTS_CHARS check instead of validate_tts_text_length() helper"
   - phase: 28-code-quality
     items:
-      - "cost_tracker.py, job_storage.py, tts_library_service.py still have local create_client calls (out of scope for Phase 28)"
-  - phase: 29-testing-and-observability
-    items:
-      - "No unit tests for Phase 24 additions: is_project_locked, update_generation_progress, validate_upload_size"
-      - "No unit tests for Phase 25 additions: tenacity @retry behavior, validate_tts_text_length"
+      - "cost_tracker.py, job_storage.py, tts_library_service.py still have local create_client calls (out of Phase 28 scope)"
   - phase: 27-frontend-refactoring
     items:
-      - "library/page.tsx is 1100 lines total (290 JSX) — handlers and state kept in orchestrator"
-      - "4 human verification items pending: layout rendering, ClipStatusPoller, segment modal, Postiz modal"
+      - "library/page.tsx is 1100 lines total (290 lines JSX) — state/handler logic retained as orchestrator"
+      - "4 human verification items pending (visual layout, ClipStatusPoller, segment modal, postiz modal)"
+  - phase: 26-frontend-resilience
+    items:
+      - "usePolling uses raw fetch() instead of apiFetch — lacks timeout protection on polling calls"
+      - "usePolling duplicates API_URL constant locally"
+  - phase: 29-testing-and-observability
+    items:
+      - "pyproject.toml does not document required Python interpreter (venv_linux)"
+      - "python-json-logger installed in .venv-wsl but needs pip install -r requirements.txt for other venvs"
+  - phase: 25-rate-limiting-and-security
+    items:
+      - "tts_library_routes.py uses raw MAX_TTS_CHARS length check inline rather than validate_tts_text_length() helper"
 ---
 
-# v6 Production Hardening — Milestone Audit
+# v6 Production Hardening — Milestone Audit Report
 
 **Milestone Goal:** Harden Edit Factory for production stability — fix memory leaks, add error handling, improve security, add tests, and clean up technical debt.
 
 **Audited:** 2026-02-22
-**Status:** GAPS FOUND
-**Score:** 24/25 requirements satisfied
+**Status:** TECH DEBT (all requirements satisfied, no critical blockers, accumulated debt items)
+**Previous Audit:** 2026-02-22T05:00 — gaps_found (FE-02 unsatisfied) — closed by Phase 30
 
-## Phase Verification Summary
+## Requirements Coverage (25/25)
 
-| Phase | Goal | Status | Score |
-|-------|------|--------|-------|
-| 24 Backend Stability | Backend handles errors, cleans up, validates input | passed | 7/7 |
-| 25 Rate Limiting & Security | Enforce request limits, sanitize content, secure HTTP | passed | 5/5 |
-| 26 Frontend Resilience | Handle errors gracefully, communicate clearly | passed | 5/5 |
-| 27 Frontend Refactoring | Decompose library page, eliminate polling duplication | human_needed | 4/5 |
-| 28 Code Quality | Single Supabase client, no debug noise | passed | 3/3 |
-| 29 Testing & Observability | Test harness, structured logs, data retention | passed | 6/6 |
+All 25 v6 requirements are satisfied across 7 phases.
 
-All 6 phases have VERIFICATION.md files. No unverified phases.
+### 3-Source Cross-Reference
 
-## Requirements Coverage (3-Source Cross-Reference)
+| REQ-ID | Description | VERIFICATION.md | REQUIREMENTS.md | Final Status |
+|--------|-------------|-----------------|-----------------|--------------|
+| STAB-01 | Persist progress to DB | SATISFIED (Ph.24) | `[x]` | **satisfied** |
+| STAB-02 | Lock cleanup after completion | SATISFIED (Ph.24) | `[x]` | **satisfied** |
+| STAB-03 | Lock timeout returns 409 | SATISFIED (Ph.24) | `[x]` | **satisfied** |
+| STAB-04 | Invalid JSON returns 400 | SATISFIED (Ph.24) | `[x]` | **satisfied** |
+| STAB-05 | Upload size validated (413) | SATISFIED (Ph.24) | `[x]` | **satisfied** |
+| STAB-06 | Retry with exponential backoff | SATISFIED (Ph.25) | `[x]` | **satisfied** |
+| SEC-01 | Rate limiting middleware | SATISFIED (Ph.25) | `[x]` | **satisfied** |
+| SEC-02 | SRT XSS prevention | SATISFIED (Ph.25) | `[x]` | **satisfied** |
+| SEC-03 | Cache-Control headers | SATISFIED (Ph.25) | `[x]` | **satisfied** |
+| SEC-04 | TTS text length validated | SATISFIED (Ph.25) | `[x]` | **satisfied** |
+| FE-01 | Global error boundary | SATISFIED (Ph.26) | `[x]` | **satisfied** |
+| FE-02 | Consistent error handling replaces mix | SATISFIED (Ph.30) | `[x]` | **satisfied** |
+| FE-03 | API client timeout + retry | SATISFIED (Ph.26) | `[x]` | **satisfied** |
+| FE-04 | All pages show empty states | SATISFIED (Ph.26) | `[x]` | **satisfied** |
+| FE-05 | Shared polling hook | SATISFIED (Ph.26) | `[x]` | **satisfied** |
+| REF-01 | Split library page | SATISFIED (Ph.27) | `[x]` | **satisfied** |
+| REF-02 | Eliminate polling duplication | SATISFIED (Ph.27) | `[x]` | **satisfied** |
+| QUAL-01 | Single get_supabase() | SATISFIED (Ph.28) | `[x]` | **satisfied** |
+| QUAL-02 | Async ElevenLabs client | SATISFIED (Ph.24) | `[x]` | **satisfied** |
+| QUAL-03 | Remove debug logs | SATISFIED (Ph.28) | `[x]` | **satisfied** |
+| QUAL-04 | Integrate cleanup_project_lock | SATISFIED (Ph.24) | `[x]` | **satisfied** |
+| TEST-01 | pytest setup | SATISFIED (Ph.29) | `[x]` | **satisfied** |
+| TEST-02 | Unit tests for critical services | SATISFIED (Ph.29) | `[x]` | **satisfied** |
+| TEST-03 | Structured JSON logging | SATISFIED (Ph.29) | `[x]` | **satisfied** |
+| TEST-04 | Data retention cleanup | SATISFIED (Ph.29) | `[x]` | **satisfied** |
 
-**Sources:**
-1. Phase VERIFICATION.md requirements tables (all 6 present)
-2. SUMMARY.md frontmatter `provides` fields (no `requirements-completed` field — using `provides` as proxy)
-3. REQUIREMENTS.md traceability table (all 25 mapped, all marked `[x]`)
+**Note:** SUMMARY frontmatter `requirements_completed` field not used in v6 summaries — 2-source cross-reference (VERIFICATION + REQUIREMENTS.md) used. Both sources agree on all 25 requirements.
 
-| REQ-ID | Description | VERIFICATION | SUMMARY provides | REQUIREMENTS.md | Integration | Final |
-|--------|-------------|-------------|-----------------|-----------------|-------------|-------|
-| STAB-01 | Persist progress to DB | SATISFIED | listed (24-01) | [x] Complete | WIRED | **satisfied** |
-| STAB-02 | Lock cleanup after completion | SATISFIED | listed (24-01) | [x] Complete | WIRED | **satisfied** |
-| STAB-03 | Lock timeout → 409 | SATISFIED | listed (24-01) | [x] Complete | WIRED | **satisfied** |
-| STAB-04 | Invalid JSON → 400 | SATISFIED | listed (24-02) | [x] Complete | WIRED | **satisfied** |
-| STAB-05 | Upload size → 413 | SATISFIED | listed (24-02) | [x] Complete | WIRED | **satisfied** |
-| STAB-06 | Retry with backoff | SATISFIED | listed (25-02) | [x] Complete | WIRED | **satisfied** |
-| SEC-01 | Rate limiting middleware | SATISFIED | listed (25-01) | [x] Complete | WIRED | **satisfied** |
-| SEC-02 | SRT XSS prevention | SATISFIED | listed (25-02) | [x] Complete | WIRED | **satisfied** |
-| SEC-03 | Cache-Control headers | SATISFIED | listed (25-02) | [x] Complete | WIRED | **satisfied** |
-| SEC-04 | TTS text length validation | SATISFIED | listed (25-01) | [x] Complete | PARTIAL | **satisfied** |
-| FE-01 | Global error boundary | SATISFIED | listed (26-01) | [x] Complete | PARTIAL | **satisfied** |
-| FE-02 | Consistent error handling utility **replaces** mix | SATISFIED | listed (26-01) | [x] Complete | UNWIRED | **unsatisfied** |
-| FE-03 | API client timeout + retry | SATISFIED | listed (26-01) | [x] Complete | PARTIAL | **satisfied** |
-| FE-04 | All pages show empty states | SATISFIED | listed (26-02) | [x] Complete | WIRED | **satisfied** |
-| FE-05 | Shared polling hook | SATISFIED | listed (26-02) | [x] Complete | WIRED | **satisfied** |
-| REF-01 | Split library page | SATISFIED | listed (27-01) | [x] Complete | WIRED | **satisfied** |
-| REF-02 | Eliminate polling duplication | SATISFIED | listed (27-01) | [x] Complete | WIRED | **satisfied** |
-| QUAL-01 | Single get_supabase() | SATISFIED | listed (28-01) | [x] Complete | WIRED | **satisfied** |
-| QUAL-02 | Async ElevenLabs client | SATISFIED | listed (24-02) | [x] Complete | WIRED | **satisfied** |
-| QUAL-03 | Remove debug logs | SATISFIED | listed (28-01) | [x] Complete | WIRED | **satisfied** |
-| QUAL-04 | Integrate cleanup_project_lock | SATISFIED | listed (24-01) | [x] Complete | WIRED | **satisfied** |
-| TEST-01 | pytest setup | SATISFIED | listed (29-01) | [x] Complete | WIRED | **satisfied** |
-| TEST-02 | Unit tests for critical services | SATISFIED | listed (29-01) | [x] Complete | PARTIAL | **satisfied** |
-| TEST-03 | Structured JSON logging | SATISFIED | listed (29-02) | [x] Complete | WIRED | **satisfied** |
-| TEST-04 | Data retention cleanup | SATISFIED | listed (29-02) | [x] Complete | WIRED | **satisfied** |
+**Orphaned Requirements:** None. All 25 REQ-IDs in traceability table appear in at least one phase VERIFICATION.md.
 
-**Orphaned requirements:** None. All 25 REQ-IDs in REQUIREMENTS.md traceability table appear in at least one phase VERIFICATION.md.
+## Phase Verification Summary (7/7)
 
-## Unsatisfied Requirements Detail
+| Phase | Status | Score | Critical Gaps | Human Items |
+|-------|--------|-------|---------------|-------------|
+| 24 — Backend Stability | passed | 7/7 | 0 | 2 |
+| 25 — Rate Limiting & Security | passed | 7/7 | 0 | 2 |
+| 26 — Frontend Resilience | passed | 5/5 | 0 | 3 |
+| 27 — Frontend Refactoring | human_needed | 4/5 | 0 | 4 |
+| 28 — Code Quality | passed | 3/3 | 0 | 0 |
+| 29 — Testing & Observability | passed | 6/6 | 0 | 0 |
+| 30 — Error Handling Adoption | passed | 5/5 | 0 | 0 |
 
-### FE-02: Consistent error handling utility replaces toast/alert/silence mix
+All 7 phases have VERIFICATION.md files. No unverified phases. Phase 27's single "NEEDS HUMAN" item is runtime behavior (live browser test), not a code gap.
 
-**Requirement:** "Consistent error handling utility replaces toast/alert/silence mix"
-**Phase:** 26 (Frontend Resilience)
-**What was built:** `handleApiError()` in `api-error.ts` routes all ApiError variants through `toast.error()`. Re-exported via `api.ts`.
-**What's missing:** Zero call sites. No page or component imports or calls `handleApiError()`. Evidence:
-- 72 `console.error()` calls across app pages
-- 2 `alert()` calls in `library/page.tsx` (lines 596, 631)
-- 33+ catch blocks use `console.error()` instead of `handleApiError()`
+## Cross-Phase Integration (26/28 wired)
 
-**Why unsatisfied:** The requirement says "replaces" — the old inconsistent patterns (console.error, alert) must be gone, substituted by the new utility. The utility infrastructure was built correctly but adoption was not completed. The old patterns remain.
+### 7 Key Integration Chains — All Confirmed
 
-## Cross-Phase Integration
+| # | Chain | Status |
+|---|-------|--------|
+| 1 | Phase 24 `validators.py` → Phase 25 `MAX_TTS_CHARS` extension | WIRED |
+| 2 | Phase 24 async TTS → Phase 25 tenacity retry wrapping | WIRED |
+| 3 | Phase 26 `handleApiError` → Phase 27 components → Phase 30 full adoption | WIRED |
+| 4 | Phase 26 `usePolling` → Phase 27 `ClipStatusPoller` | WIRED |
+| 5 | Phase 28 `get_supabase()` → Phase 24 DB progress | WIRED |
+| 6 | Phase 29 structured logging → Phase 24/25 backend | WIRED |
+| 7 | Phase 30 `apiGetWithRetry` → Phase 26 definition | WIRED |
 
-### Connected Exports (18 verified)
+### Integration Issues (2 non-critical)
 
-All critical cross-phase wiring is functional:
-- Phase 24 `validators.py` → used by Phase 25 (`MAX_TTS_CHARS`, `validate_tts_text_length`)
-- Phase 26 `usePolling` → used by Phase 27 (`ClipStatusPoller` in `clip-gallery.tsx`)
-- Phase 28 `app/db.py` → 18 backend files import `get_supabase()`
-- Phase 24 async ElevenLabs + Phase 25 tenacity retry → both modify `elevenlabs_tts.py` correctly
-- Phase 29 tests → test services modified by Phases 24-25 (job_storage, cost_tracker, srt_validator)
+**INT-01 (moderate): usePolling bypasses apiFetch timeout**
+- `use-polling.ts` line 85 uses raw `fetch()` instead of `apiFetch()`
+- Polling calls (generation progress, clip status, pipeline, TTS) have no 30s timeout
+- Fix: Replace `fetch()` with `apiFetch()`, catch `ApiError` instead of generic `Error`
 
-### Orphaned Exports (3)
+**INT-02 (low): usePolling duplicates API_URL constant**
+- `use-polling.ts` line 33 defines local `API_URL` identical to `api.ts`
+- Fix: Import `{ API_URL }` from `@/lib/api`
 
-1. **`apiGetWithRetry()`** — Phase 26 `api.ts` L91 — defined but never called
-2. **`ErrorBoundary`** — Phase 26 `error-boundary.tsx` — created but never imported by any page
-3. **`handleApiError()`** — Phase 26 `api-error.ts` — defined, re-exported, zero consumers
+## E2E Flow Verification (6/7)
 
-### Broken E2E Flows (1)
+| Flow | Status |
+|------|--------|
+| Upload → Validate (413) → Rate Limit → Generate → Progress Poll → Complete | OK |
+| TTS → Length Validate → Retry on Fail → Audio Output | OK |
+| Error → handleApiError → Sonner Toast (18 files) | OK |
+| Empty Page → EmptyState Component (11 pages) | OK |
+| Library → Component Tree → ClipStatusPoller via usePolling | OK |
+| Structured Log → JSON Output via python-json-logger | OK |
+| System Python → pytest → Tests Pass | PARTIAL (requires venv) |
 
-**Error → boundary → toast:** Global error boundary works (global-error.tsx). But catch blocks → handleApiError → toast chain is broken because handleApiError is never called. Pages still use console.error() and alert().
+## Tech Debt Summary (8 items across 5 phases)
 
-### Complete E2E Flows (4)
+### Phase 28 — Code Quality
+- `cost_tracker.py`, `job_storage.py`, `tts_library_service.py` retain local `create_client` calls (out of scope)
 
-1. **Upload → validate → rate limit → generate → progress → poll:** All steps wired
-2. **TTS text → validate length → retry → async client:** Complete (minor: routes.py ValueError edge case)
-3. **SRT content → sanitize → render → no XSS:** All steps wired, tested
-4. **pytest → test services → structured logs:** All steps wired
+### Phase 27 — Frontend Refactoring
+- `library/page.tsx` is 1100 lines total (290 lines JSX) — state/handlers retained as orchestrator
+- 4 human verification items pending for live runtime testing
 
-## Tech Debt Inventory
+### Phase 26 — Frontend Resilience
+- `usePolling` uses raw `fetch()` instead of `apiFetch` — no timeout on polling calls
+- `usePolling` duplicates `API_URL` constant locally
 
-### Phase 26 — Frontend Resilience (3 items)
-- `ErrorBoundary` component unused (section-level isolation absent)
-- `apiGetWithRetry()` unused (no automatic retry on page data fetches)
-- 72 console.error() + 2 alert() calls not migrated to handleApiError
+### Phase 29 — Testing & Observability
+- `pyproject.toml` does not document required Python interpreter (`venv_linux`)
+- `python-json-logger` needs `pip install -r requirements.txt` for non-WSL venvs
 
-### Phase 25 — Rate Limiting & Security (2 items)
-- `routes.py` L1288: ValueError in background task for TTS length → 500 not 400
-- 3/4 TTS files use raw inline check instead of `validate_tts_text_length()` helper
+### Phase 25 — Rate Limiting & Security
+- `tts_library_routes.py` uses inline `MAX_TTS_CHARS` check rather than `validate_tts_text_length()` helper
 
-### Phase 28 — Code Quality (1 item)
-- `cost_tracker.py`, `job_storage.py`, `tts_library_service.py` still have local `create_client` calls (out of scope)
-
-### Phase 29 — Testing & Observability (1 item)
-- No unit tests for Phase 24/25 core additions (lock lifecycle, progress persistence, upload validation, retry behavior)
-
-### Phase 27 — Frontend Refactoring (2 items)
-- `library/page.tsx` at 1100 lines (290 JSX) — handlers/state retained as orchestrator
-- 4 human verification items pending
-
-**Total: 9 tech debt items across 5 phases**
-
-## Human Verification Pending
-
-Items flagged by phase verifiers requiring live browser/server testing:
+## Human Verification Pending (11 items)
 
 | Phase | Test | Status |
 |-------|------|--------|
@@ -197,4 +188,5 @@ Items flagged by phase verifiers requiring live browser/server testing:
 ---
 
 _Audited: 2026-02-22_
+_Previous audit: 2026-02-22T05:00 (gaps_found → Phase 30 created → gaps closed)_
 _Auditor: Claude (gsd audit-milestone)_
