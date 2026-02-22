@@ -77,6 +77,7 @@ Full details: `.planning/milestones/v5-ROADMAP.md`
 - [x] **Phase 28: Code Quality** - Centralize Supabase client, remove debug logs (completed 2026-02-22)
 - [x] **Phase 29: Testing & Observability** - pytest setup, unit tests, structured logging, data retention (completed 2026-02-22)
 - [x] **Phase 30: Frontend Error Handling Adoption** - Wire handleApiError into all catch blocks, adopt ErrorBoundary, switch to apiGetWithRetry (gap closure) (completed 2026-02-22)
+- [ ] **Phase 31: Final Polish** - Close remaining integration gaps and tech debt from v6 audit (apiGetWithRetry adoption, usePolling refactor, pytest dependency, Supabase centralization)
 
 ## Phase Details
 
@@ -186,10 +187,27 @@ Plans:
 - [ ] 30-03-PLAN.md — Adopt apiGetWithRetry for all data-fetch GET calls and wire ErrorBoundary sections
 - [ ] 30-04-PLAN.md — Gap closure: migrate segments/page.tsx (12 console.error + 3 apiGet)
 
+### Phase 31: Final Polish
+**Goal**: All v6 audit integration gaps and tech debt items are resolved — apiGetWithRetry fully adopted, usePolling uses apiFetch, pytest installable, remaining Supabase clients centralized
+**Depends on**: Phase 30
+**Requirements**: FE-02, FE-03, FE-05, TEST-01, QUAL-01
+**Gap Closure**: Closes MISSING-01, MISSING-02, MISSING-03, BROKEN-01 from v6 audit + 5 tech debt items
+**Success Criteria** (what must be TRUE):
+  1. `usage/page.tsx` data-fetch GET calls use `apiGetWithRetry()` instead of `apiGet()`
+  2. `library/page.tsx` data-fetch GET calls use `apiGetWithRetry()` instead of raw `apiFetch()`
+  3. `usePolling` hook uses `apiFetch()` instead of raw `fetch()` and imports `API_URL` from `@/lib/api`
+  4. `pytest` is listed in `requirements.txt` — running `pip install -r requirements.txt && pytest` works in a fresh venv
+  5. `cost_tracker.py`, `job_storage.py`, `tts_library_service.py` import `get_supabase()` from `app.db` — no local `create_client` calls remain
+  6. All TTS endpoints use `validate_tts_text_length()` helper from `validators.py` — no inline `MAX_TTS_CHARS` comparisons
+**Plans**: TBD (created during /gsd:plan-phase 31)
+
+Plans:
+- [ ] 31-01-PLAN.md — TBD
+
 ## Progress
 
-**Execution Order:** 24 → 25 → 26 → 27 → 28 → 29 → 30
-(Phases 25, 26, 28 can run in parallel after Phase 24; 27 depends on 26; 29 depends on 24; 30 depends on 26+27)
+**Execution Order:** 24 → 25 → 26 → 27 → 28 → 29 → 30 → 31
+(Phases 25, 26, 28 can run in parallel after Phase 24; 27 depends on 26; 29 depends on 24; 30 depends on 26+27; 31 depends on 30)
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -204,6 +222,7 @@ Plans:
 | 28. Code Quality | 1/1 | Complete    | 2026-02-22 | - |
 | 29. Testing & Observability | 2/2 | Complete    | 2026-02-22 | - |
 | 30. Frontend Error Handling Adoption | 4/4 | Complete    | 2026-02-22 | - |
+| 31. Final Polish | 0/? | Planned    | — | - |
 
 ---
-*Last updated: 2026-02-22 after Phase 30 gap closure plan created*
+*Last updated: 2026-02-22 after gap closure Phase 31 created*
