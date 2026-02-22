@@ -178,7 +178,7 @@ Plans:
 | 12-16 | v4 | 11/11 | Complete | 2026-02-12 |
 | 17-23 | v5 | 13/13 | Complete | 2026-02-21 |
 | 24. Backend Stability | 2/2 | Complete    | 2026-02-22 | - |
-| 25. Rate Limiting & Security | 2/2 | Complete   | 2026-02-22 | - |
+| 25. Rate Limiting & Security | 2/2 | Complete    | 2026-02-22 | - |
 | 26. Frontend Resilience | v6 | 0/2 | Not started | - |
 | 27. Frontend Refactoring | v6 | 0/1 | Not started | - |
 | 28. Code Quality | v6 | 0/1 | Not started | - |
