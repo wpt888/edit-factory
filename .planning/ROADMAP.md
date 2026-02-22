@@ -89,11 +89,11 @@ Full details: `.planning/milestones/v5-ROADMAP.md`
   3. A lock timeout returns a 409 Conflict response instead of silently continuing
   4. Uploading a file over the size limit returns 413 Payload Too Large immediately
   5. Sending malformed JSON in form params returns a 400 error (not a silent ignore or 500)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 24-01: Persist generation progress to DB and fix lock lifecycle
-- [ ] 24-02: File upload validation, JSON parse error handling, async ElevenLabs TTS client
+- [ ] 24-01-PLAN.md — Persist generation progress to DB and fix lock lifecycle
+- [ ] 24-02-PLAN.md — File upload validation, JSON parse error handling, async ElevenLabs TTS client
 
 ### Phase 25: Rate Limiting & Security
 **Goal**: The backend enforces request limits, sanitizes user content, and secures HTTP responses
