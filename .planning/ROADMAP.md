@@ -7,7 +7,7 @@
 - ✅ **v3 Video Quality Enhancement** - Phases 7-11 (encoding optimization, shipped 2026-02-06)
 - ✅ **v4 Script-First Pipeline** - Phases 12-16 (shipped 2026-02-12)
 - ✅ **v5 Product Video Generator** - Phases 17-23 (shipped 2026-02-21)
-- 🚧 **v6 Production Hardening** - Phases 24-29 (in progress)
+- 🚧 **v6 Production Hardening** - Phases 24-30 (in progress)
 
 ## Phases
 
@@ -70,12 +70,13 @@ Full details: `.planning/milestones/v5-ROADMAP.md`
 
 **Milestone Goal:** Harden Edit Factory for production stability — fix memory leaks, add error handling, improve security, add tests, and clean up technical debt identified in comprehensive codebase audit.
 
-- [x] **Phase 24: Backend Stability** - Fix memory leaks, persist progress, validate uploads, async TTS client (completed 2026-02-22)
-- [x] **Phase 25: Rate Limiting & Security** - slowapi middleware, XSS prevention, cache headers, retry logic (completed 2026-02-22)
-- [x] **Phase 26: Frontend Resilience** - Error boundary, consistent error handling, API client hardening, empty states, polling hook (completed 2026-02-22)
-- [x] **Phase 27: Frontend Refactoring** - Split library page, eliminate polling duplication (completed 2026-02-22)
-- [x] **Phase 28: Code Quality** - Centralize Supabase client, remove debug logs (completed 2026-02-22)
-- [x] **Phase 29: Testing & Observability** - pytest setup, unit tests, structured logging, data retention (completed 2026-02-22)
+- [x] **Phase 24: Backend Stability** - Fix memory leaks, persist progress, validate uploads, async TTS client (completed 2026-02-22)
+- [x] **Phase 25: Rate Limiting & Security** - slowapi middleware, XSS prevention, cache headers, retry logic (completed 2026-02-22)
+- [x] **Phase 26: Frontend Resilience** - Error boundary, consistent error handling, API client hardening, empty states, polling hook (completed 2026-02-22)
+- [x] **Phase 27: Frontend Refactoring** - Split library page, eliminate polling duplication (completed 2026-02-22)
+- [x] **Phase 28: Code Quality** - Centralize Supabase client, remove debug logs (completed 2026-02-22)
+- [x] **Phase 29: Testing & Observability** - pytest setup, unit tests, structured logging, data retention (completed 2026-02-22)
+- [ ] **Phase 30: Frontend Error Handling Adoption** - Wire handleApiError into all catch blocks, adopt ErrorBoundary, switch to apiGetWithRetry (gap closure)
 
 ## Phase Details
 
@@ -166,10 +167,26 @@ Plans:
 - [ ] 29-01-PLAN.md — pytest setup, conftest fixtures, unit tests for job_storage/cost_tracker/srt_validator
 - [ ] 29-02-PLAN.md — Structured JSON logging (python-json-logger) and data retention cleanup CLI
 
+### Phase 30: Frontend Error Handling Adoption
+**Goal**: Every frontend catch block uses handleApiError() for consistent toast notifications — no console.error() or alert() patterns remain
+**Depends on**: Phase 26, Phase 27
+**Requirements**: FE-02
+**Gap Closure**: Closes FE-02 gap from v6 milestone audit + 3 orphaned Phase 26 exports
+**Success Criteria** (what must be TRUE):
+  1. Zero `console.error()` calls remain in catch blocks across all pages — all replaced with `handleApiError()`
+  2. Zero `alert()` calls remain in any frontend page
+  3. `apiGetWithRetry()` is used for all polling and data-fetch GET calls instead of raw `apiGet()`
+  4. At least 3 page sections are wrapped with `ErrorBoundary` for section-level error isolation
+  5. The error → boundary → handleApiError → toast E2E flow works (error shows as sonner toast, not console-only)
+**Plans**: 1 plan
+
+Plans:
+- [ ] 30-01-PLAN.md — Replace console.error/alert with handleApiError, adopt apiGetWithRetry, wire ErrorBoundary
+
 ## Progress
 
-**Execution Order:** 24 → 25 → 26 → 27 → 28 → 29
-(Phases 25, 26, 28 can run in parallel after Phase 24; 27 depends on 26; 29 depends on 24)
+**Execution Order:** 24 → 25 → 26 → 27 → 28 → 29 → 30
+(Phases 25, 26, 28 can run in parallel after Phase 24; 27 depends on 26; 29 depends on 24; 30 depends on 26+27)
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -183,6 +200,7 @@ Plans:
 | 27. Frontend Refactoring | 1/1 | Complete    | 2026-02-22 | - |
 | 28. Code Quality | 1/1 | Complete    | 2026-02-22 | - |
 | 29. Testing & Observability | 2/2 | Complete    | 2026-02-22 | - |
+| 30. Frontend Error Handling Adoption | 0/1 | Pending | - | - |
 
 ---
 *Last updated: 2026-02-22 after v6 Production Hardening roadmap created*
