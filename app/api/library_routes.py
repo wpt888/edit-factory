@@ -33,12 +33,52 @@ router = APIRouter(prefix="/library", tags=["library"])
 _project_locks: Dict[str, threading.Lock] = {}
 _locks_lock = threading.Lock()  # Meta-lock for managing project locks
 
+
+def _cleanup_stale_locks():
+    """Remove lock entries for projects that are not currently being processed.
+
+    A lock is considered stale if it can be acquired non-blocking (meaning no
+    task holds it). Called automatically when the dict grows beyond 50 entries
+    to prevent unbounded accumulation.
+    """
+    stale_keys = []
+    for pid, lock in list(_project_locks.items()):
+        if lock.acquire(blocking=False):
+            # Nobody holds it — it's stale
+            lock.release()
+            stale_keys.append(pid)
+    for pid in stale_keys:
+        _project_locks.pop(pid, None)
+    if stale_keys:
+        logger.debug(f"[locks] Cleaned up {len(stale_keys)} stale project lock(s)")
+
+
 def get_project_lock(project_id: str) -> threading.Lock:
-    """Get or create a lock for a specific project."""
+    """Get or create a lock for a specific project.
+
+    Automatically purges stale lock entries when the dict exceeds 50 entries
+    to prevent unbounded growth.
+    """
     with _locks_lock:
+        if len(_project_locks) > 50:
+            _cleanup_stale_locks()
         if project_id not in _project_locks:
             _project_locks[project_id] = threading.Lock()
         return _project_locks[project_id]
+
+
+def is_project_locked(project_id: str) -> bool:
+    """Return True if a project lock is currently held (a task is in progress)."""
+    with _locks_lock:
+        lock = _project_locks.get(project_id)
+    if lock is None:
+        return False
+    acquired = lock.acquire(blocking=False)
+    if acquired:
+        lock.release()
+        return False
+    return True
+
 
 def cleanup_project_lock(project_id: str):
     """Remove project lock when no longer needed."""
@@ -478,6 +518,8 @@ async def cancel_generation(
 
     verify_project_ownership(supabase, project_id, profile.profile_id)
     clear_generation_progress(project_id)
+    # Clean up any stale lock entry so get_project_lock() starts fresh on next run
+    cleanup_project_lock(project_id)
 
     supabase.table("editai_projects").update({
         "status": "failed",
@@ -542,6 +584,13 @@ async def generate_raw_clips(
 
     # Verificăm că proiectul există și aparține profilului
     project_data = verify_project_ownership(supabase, project_id, profile.profile_id)
+
+    # Reject immediately if a task is already running for this project (STAB-03)
+    if is_project_locked(project_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Project is currently being processed. Wait for the current job to finish before starting a new one."
+        )
 
     # Determine video source: uploaded file or local path
     if video and video.filename:
@@ -751,6 +800,13 @@ async def generate_from_segments(
 
     # Verificăm că proiectul există și aparține profilului
     project_data = verify_project_ownership(supabase, project_id, profile.profile_id)
+
+    # Reject immediately if a task is already running for this project (STAB-03)
+    if is_project_locked(project_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Project is currently being processed. Wait for the current job to finish before starting a new one."
+        )
 
     # Obținem segmentele asignate proiectului
     segments_result = supabase.table("editai_project_segments")\
@@ -1818,6 +1874,14 @@ async def render_final_clip(
         clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
         if not clip.data:
             raise HTTPException(status_code=404, detail="Clip not found")
+
+        # Reject immediately if a task is already running for this project (STAB-03)
+        render_project_id = clip.data.get("project_id")
+        if render_project_id and is_project_locked(render_project_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Project is currently being processed. Wait for the current job to finish before rendering."
+            )
 
         content = supabase.table("editai_clip_content").select("*").eq("clip_id", clip_id).execute()
 
