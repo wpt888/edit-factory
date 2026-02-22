@@ -7,6 +7,21 @@ import logging
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 
+
+def sanitize_srt_text(srt_content: str) -> str:
+    """Strip HTML/script tags from SRT content to prevent XSS.
+
+    Preserves SRT structure (timestamps, sequence numbers, blank lines)
+    but removes any HTML tags from subtitle text lines.
+    """
+    if not srt_content:
+        return srt_content
+    # Remove HTML tags (including <script>...</script> with content)
+    cleaned = re.sub(r'<script[^>]*>.*?</script>', '', srt_content, flags=re.DOTALL | re.IGNORECASE)
+    # Remove remaining HTML tags but preserve SRT arrow (-->)
+    cleaned = re.sub(r'<[^>]+>', '', cleaned)
+    return cleaned
+
 logger = logging.getLogger(__name__)
 
 
