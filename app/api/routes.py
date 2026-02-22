@@ -5,7 +5,7 @@ import uuid
 import shutil
 import subprocess
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
-from app.api.validators import validate_upload_size, MAX_TTS_CHARS
+from app.api.validators import validate_upload_size, validate_tts_text_length
 from app.models import (
     JobStatus, JobCreate, JobResponse, AnalyzeRequest,
     AnalyzeResponse, HealthResponse, VideoInfo, VideoSegment
@@ -80,7 +80,9 @@ async def get_all_costs(
 
 
 @router.post("/costs/reset")
-async def reset_cost_tracker_endpoint():
+async def reset_cost_tracker_endpoint(
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Reset and reinitialize the cost tracker (reconnect to Supabase)."""
     from app.services.cost_tracker import reset_cost_tracker, get_cost_tracker
 
@@ -307,7 +309,7 @@ async def detect_voice_in_video(
 
     except Exception as e:
         logger.error(f"Voice detection failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
     finally:
         temp_video.unlink(missing_ok=True)
@@ -350,7 +352,7 @@ async def mute_voice_in_video(
         "job_id": job_id,
         "job_type": "voice_mute",
         "status": JobStatus.PENDING,
-        "created_at": datetime.now().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": None,
         "progress": "Queued for voice muting",
         "video_path": str(video_path),
@@ -493,7 +495,7 @@ async def get_video_info(video: UploadFile = File(...)):
             str(temp_video)
         ]
 
-        result = subprocess.run(probe_cmd, capture_output=True, text=True)
+        result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
 
         if result.returncode != 0:
             raise HTTPException(status_code=400, detail="Could not analyze video")
@@ -634,7 +636,7 @@ async def create_job(
     job = {
         "job_id": job_id,
         "status": JobStatus.PENDING,
-        "created_at": datetime.now(),
+        "created_at": datetime.now(timezone.utc),
         "updated_at": None,
         "progress": "Queued",
         "video_path": str(video_path),
@@ -671,12 +673,12 @@ async def process_job(job_id: str):
         return
 
     job["status"] = JobStatus.PROCESSING
-    job["updated_at"] = datetime.now().isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
     job["progress"] = "Starting..."
 
     def update_progress(step: str, status: str):
         job["progress"] = f"{step}: {status}"
-        job["updated_at"] = datetime.now().isoformat()
+        job["updated_at"] = datetime.now(timezone.utc).isoformat()
         get_job_storage().update_job(job_id, {"progress": job["progress"], "updated_at": job["updated_at"]})
 
     try:
@@ -716,7 +718,7 @@ async def process_job(job_id: str):
         job["error"] = str(e)
         job["progress"] = f"Failed: {e}"
 
-    job["updated_at"] = datetime.now().isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
     # Persist final job state to storage
     get_job_storage().update_job(job_id, job)
 
@@ -902,7 +904,7 @@ async def create_multi_video_job(
         "job_id": job_id,
         "job_type": "multi_video",
         "status": JobStatus.PENDING,
-        "created_at": datetime.now(),
+        "created_at": datetime.now(timezone.utc),
         "updated_at": None,
         "progress": "Queued",
         "main_video_path": str(main_video_path),
@@ -938,12 +940,12 @@ async def process_multi_video_job(job_id: str):
         return
 
     job["status"] = JobStatus.PROCESSING
-    job["updated_at"] = datetime.now()
+    job["updated_at"] = datetime.now(timezone.utc)
     job["progress"] = "Starting multi-video processing..."
 
     def update_progress(step: str, status: str):
         job["progress"] = f"{step}: {status}"
-        job["updated_at"] = datetime.now()
+        job["updated_at"] = datetime.now(timezone.utc)
 
     try:
         processor = get_processor()
@@ -985,7 +987,7 @@ async def process_multi_video_job(job_id: str):
         job["error"] = str(e)
         job["progress"] = f"Failed: {e}"
 
-    job["updated_at"] = datetime.now().isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
     # Persist final job state to storage
     get_job_storage().update_job(job_id, job)
 
@@ -1044,13 +1046,7 @@ async def generate_tts(
     settings.ensure_dirs()
 
     # Validate text
-    if not text or not text.strip():
-        raise HTTPException(status_code=400, detail="Text cannot be empty")
-    if len(text) > MAX_TTS_CHARS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Text too long: {len(text)} characters (maximum {MAX_TTS_CHARS})"
-        )
+    text = validate_tts_text_length(text)
 
     job_id = uuid.uuid4().hex[:12]
 
@@ -1061,7 +1057,7 @@ async def generate_tts(
         "job_id": job_id,
         "job_type": "tts_generate",
         "status": JobStatus.PENDING,
-        "created_at": datetime.now(),
+        "created_at": datetime.now(timezone.utc),
         "updated_at": None,
         "progress": "Queued for TTS generation",
         "text": text,
@@ -1092,7 +1088,7 @@ async def process_tts_generate_job(job_id: str):
         return
 
     job["status"] = JobStatus.PROCESSING
-    job["updated_at"] = datetime.now()
+    job["updated_at"] = datetime.now(timezone.utc)
     job["progress"] = "Generating voice-over with ElevenLabs..."
 
     try:
@@ -1106,7 +1102,7 @@ async def process_tts_generate_job(job_id: str):
         # Generate with silence removal
         if job["remove_silence"]:
             job["progress"] = "Generating TTS and removing silence..."
-            job["updated_at"] = datetime.now()
+            job["updated_at"] = datetime.now(timezone.utc)
 
             audio_path, silence_stats = await tts.generate_audio_trimmed(
                 text=job["text"],
@@ -1131,7 +1127,7 @@ async def process_tts_generate_job(job_id: str):
                 job["progress"] = "Completed"
         else:
             job["progress"] = "Generating TTS..."
-            job["updated_at"] = datetime.now()
+            job["updated_at"] = datetime.now(timezone.utc)
 
             await tts.generate_audio(job["text"], output_path)
 
@@ -1151,7 +1147,7 @@ async def process_tts_generate_job(job_id: str):
         job["error"] = str(e)
         job["progress"] = f"Failed: {e}"
 
-    job["updated_at"] = datetime.now().isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
     # Persist final job state to storage
     get_job_storage().update_job(job_id, job)
 
@@ -1214,15 +1210,8 @@ async def add_tts_to_videos(
     except json_lib.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON in video_paths")
 
-    if not tts_text or len(tts_text.strip()) == 0:
-        raise HTTPException(status_code=400, detail="tts_text is required")
-
-    # Validate text length (ElevenLabs limit)
-    if len(tts_text) > MAX_TTS_CHARS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Text too long: {len(tts_text)} characters (maximum {MAX_TTS_CHARS})"
-        )
+    # Validate text (empty + length check)
+    tts_text = validate_tts_text_length(tts_text, "tts_text")
 
     # Parse remove_silence
     remove_silence_bool = remove_silence.lower() in ("true", "1", "yes", "on")
@@ -1234,7 +1223,7 @@ async def add_tts_to_videos(
         "job_id": job_id,
         "job_type": "tts",
         "status": JobStatus.PENDING,
-        "created_at": datetime.now(),
+        "created_at": datetime.now(timezone.utc),
         "updated_at": None,
         "progress": "Queued for TTS processing",
         "video_paths": paths,
@@ -1268,7 +1257,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         return
 
     job["status"] = JobStatus.PROCESSING
-    job["updated_at"] = datetime.now().isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
     job["progress"] = "Initializing TTS..."
 
     try:
@@ -1283,10 +1272,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         silence_padding = job.get("silence_padding", 0.08)
 
         # Validate text length (ElevenLabs limit is ~5000 chars per request)
-        if not tts_text or not tts_text.strip():
-            raise ValueError("TTS text cannot be empty")
-        if len(tts_text) > MAX_TTS_CHARS:
-            raise ValueError(f"TTS text too long: {len(tts_text)} chars (max {MAX_TTS_CHARS})")
+        tts_text = validate_tts_text_length(tts_text, "tts_text")
 
         # Generate TTS audio with silence removal
         # Profile-scoped temp directory to prevent cross-profile file collisions
@@ -1297,7 +1283,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         silence_stats = {}
         if remove_silence:
             job["progress"] = "Generating voice-over and removing silence..."
-            job["updated_at"] = datetime.now()
+            job["updated_at"] = datetime.now(timezone.utc)
 
             audio_path, silence_stats = await tts.generate_audio_trimmed(
                 text=tts_text,
@@ -1313,7 +1299,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
                 logger.info(f"Silence removed: {saved:.1f}s saved")
         else:
             job["progress"] = "Generating voice-over with ElevenLabs..."
-            job["updated_at"] = datetime.now()
+            job["updated_at"] = datetime.now(timezone.utc)
 
             await tts.generate_audio(tts_text, audio_path)
             logger.info(f"TTS audio generated: {audio_path}")
@@ -1322,7 +1308,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         results = []
         for i, video_path_str in enumerate(video_paths):
             job["progress"] = f"Adding voice-over to video {i + 1}/{len(video_paths)}..."
-            job["updated_at"] = datetime.now()
+            job["updated_at"] = datetime.now(timezone.utc)
 
             video_path = Path(video_path_str)
             if not video_path.exists():
@@ -1383,7 +1369,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         job["error"] = str(e)
         job["progress"] = f"Failed: {e}"
 
-    job["updated_at"] = datetime.now().isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
     # Persist final job state to storage
     get_job_storage().update_job(job_id, job)
 

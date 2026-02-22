@@ -8,7 +8,7 @@ import subprocess
 import json
 import mimetypes
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
-from app.api.validators import validate_upload_size, MAX_TTS_CHARS
+from app.api.validators import validate_upload_size, validate_tts_text_length
 from app.services.encoding_presets import get_preset, EncodingPreset
 from app.services.audio_normalizer import measure_loudness, build_loudnorm_filter
 from app.services.video_filters import VideoFilters, DenoiseConfig, SharpenConfig, ColorConfig
@@ -34,6 +34,22 @@ router = APIRouter(prefix="/library", tags=["library"])
 # ============== PROJECT LOCKS (prevent race conditions) ==============
 _project_locks: Dict[str, threading.Lock] = {}
 _locks_lock = threading.Lock()  # Meta-lock for managing project locks
+_cancelled_projects: set = set()  # Set of project IDs that have been cancelled
+
+
+def is_project_cancelled(project_id: str) -> bool:
+    """Check if a project has been flagged for cancellation."""
+    return project_id in _cancelled_projects
+
+
+def mark_project_cancelled(project_id: str):
+    """Flag a project for cancellation."""
+    _cancelled_projects.add(project_id)
+
+
+def clear_project_cancelled(project_id: str):
+    """Clear the cancellation flag for a project."""
+    _cancelled_projects.discard(project_id)
 
 
 def _cleanup_stale_locks():
@@ -113,7 +129,7 @@ def update_generation_progress(project_id: str, percentage: int, current_step: s
                 "percentage": percentage,
                 "current_step": current_step,
                 "estimated_remaining": estimated_remaining,
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now(timezone.utc).isoformat()
             }).execute()
     except Exception as e:
         logger.warning(f"[progress] Failed to persist progress to DB for {project_id}: {e}")
@@ -400,7 +416,7 @@ async def create_project(
         raise HTTPException(status_code=500, detail="Failed to create project")
     except Exception as e:
         logger.error(f"Error creating project: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/projects")
@@ -421,7 +437,7 @@ async def list_projects(
         return {"projects": result.data}
     except Exception as e:
         logger.error(f"Error listing projects: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/projects/{project_id}", response_model=ProjectResponse)
@@ -455,7 +471,7 @@ async def get_project(
         raise
     except Exception as e:
         logger.error(f"Error getting project: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/projects/{project_id}/progress")
@@ -500,7 +516,7 @@ async def update_project(
 
     allowed_fields = ["name", "description", "target_duration", "context_text"]
     filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
-    filtered_updates["updated_at"] = datetime.now().isoformat()
+    filtered_updates["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     try:
         result = supabase.table("editai_projects").update(filtered_updates).eq("id", project_id).eq("profile_id", profile.profile_id).execute()
@@ -511,7 +527,7 @@ async def update_project(
         raise
     except Exception as e:
         logger.error(f"Error updating project: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/projects/{project_id}/cancel")
@@ -525,13 +541,14 @@ async def cancel_generation(
         raise HTTPException(status_code=503, detail="Database not available")
 
     verify_project_ownership(supabase, project_id, profile.profile_id)
+    mark_project_cancelled(project_id)
     clear_generation_progress(project_id)
     # Clean up any stale lock entry so get_project_lock() starts fresh on next run
     cleanup_project_lock(project_id)
 
     supabase.table("editai_projects").update({
         "status": "failed",
-        "updated_at": datetime.now().isoformat()
+        "updated_at": datetime.now(timezone.utc).isoformat()
     }).eq("id", project_id).eq("profile_id", profile.profile_id).execute()
 
     return {"status": "cancelled"}
@@ -561,7 +578,7 @@ async def delete_project(
         raise
     except Exception as e:
         logger.error(f"Error deleting project: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ============== GENERATE RAW CLIPS ==============
@@ -631,7 +648,7 @@ async def generate_raw_clips(
         "source_video_width": video_info.get("width", 1080),
         "source_video_height": video_info.get("height", 1920),
         "status": "generating",
-        "updated_at": datetime.now().isoformat()
+        "updated_at": datetime.now(timezone.utc).isoformat()
     }).eq("id", project_id).eq("profile_id", profile.profile_id).execute()
 
     # Limitări
@@ -744,7 +761,7 @@ async def _generate_raw_clips_task(
             supabase.table("editai_projects").update({
                 "status": "ready_for_triage",
                 "variants_count": len(variants),
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now(timezone.utc).isoformat()
             }).eq("id", project_id).eq("profile_id", profile_id).execute()
 
             logger.info(f"Generated {len(variants)} raw clips for project {project_id}")
@@ -752,7 +769,7 @@ async def _generate_raw_clips_task(
             # Eroare
             supabase.table("editai_projects").update({
                 "status": "failed",
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now(timezone.utc).isoformat()
             }).eq("id", project_id).eq("profile_id", profile_id).execute()
             logger.error(f"Failed to generate clips for project {project_id}: {result.get('error')}")
 
@@ -760,8 +777,8 @@ async def _generate_raw_clips_task(
         logger.error(f"Error generating raw clips for {project_id}: {e}")
         supabase.table("editai_projects").update({
             "status": "failed",
-            "updated_at": datetime.now().isoformat()
-        }).eq("id", project_id).execute()
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", project_id).eq("profile_id", profile_id).execute()
     finally:
         # Always release and cleanup the lock
         lock.release()
@@ -833,19 +850,9 @@ async def generate_from_segments(
         start_variant_index = max_index + 1
         logger.info(f"Found {len(existing_clips.data)} existing clips, starting from variant {start_variant_index}")
 
-    # Actualizăm statusul proiectului
-    supabase.table("editai_projects").update({
-        "status": "generating",
-        "target_duration": request.target_duration,
-        "updated_at": datetime.now().isoformat()
-    }).eq("id", project_id).eq("profile_id", profile.profile_id).execute()
-
     # Validate TTS text length before dispatching background task
-    if request.generate_tts and request.tts_text and len(request.tts_text.strip()) > MAX_TTS_CHARS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"TTS text too long: {len(request.tts_text.strip())} characters (maximum {MAX_TTS_CHARS})"
-        )
+    if request.generate_tts and request.tts_text:
+        validate_tts_text_length(request.tts_text, "tts_text")
 
     # Limitări
     variant_count = max(1, min(10, request.variant_count))
@@ -1057,6 +1064,13 @@ async def _generate_from_segments_task(
         return
 
     try:
+        # Update project status now that we hold the lock
+        supabase.table("editai_projects").update({
+            "status": "generating",
+            "target_duration": target_duration,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", project_id).eq("profile_id", profile_id).execute()
+
         # Initial progress
         update_generation_progress(project_id, 5, "Se pregătesc segmentele...")
 
@@ -1116,6 +1130,12 @@ async def _generate_from_segments_task(
         end_variant_index = start_variant_index + variant_count
 
         for variant_idx in range(start_variant_index, end_variant_index):
+            # Check for cancellation
+            if is_project_cancelled(project_id):
+                logger.info(f"[Profile {profile_id}] Generation cancelled for project {project_id}")
+                clear_project_cancelled(project_id)
+                break
+
             try:
                 # Update progress for this variant (relative to this batch)
                 relative_idx = variant_idx - start_variant_index + 1
@@ -1225,7 +1245,7 @@ async def _generate_from_segments_task(
                             str(segment_output)
                         ]
 
-                        result = subprocess.run(extract_cmd, capture_output=True, text=True)
+                        result = subprocess.run(extract_cmd, capture_output=True, text=True, timeout=300)
                         if result.returncode != 0:
                             logger.error(f"FFmpeg extract error: {result.stderr}")
                             continue
@@ -1242,7 +1262,7 @@ async def _generate_from_segments_task(
                     str(output_path)
                 ]
 
-                result = subprocess.run(concat_cmd, capture_output=True, text=True)
+                result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=300)
                 if result.returncode != 0:
                     logger.error(f"FFmpeg concat error: {result.stderr}")
                     continue
@@ -1291,6 +1311,16 @@ async def _generate_from_segments_task(
             except Exception as e:
                 logger.error(f"Error creating variant {variant_idx}: {e}")
                 continue
+            finally:
+                # Clean up segment temp files for this variant
+                try:
+                    temp_dir = settings.base_dir / "temp" / profile_id
+                    for tmp_file in temp_dir.glob(f"seg_{project_id}_{variant_idx}_*.mp4"):
+                        tmp_file.unlink(missing_ok=True)
+                    concat_path = temp_dir / f"concat_{project_id}_{variant_idx}.txt"
+                    concat_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
         # Final progress update
         update_generation_progress(project_id, 95, "Se finalizează...")
@@ -1304,13 +1334,13 @@ async def _generate_from_segments_task(
             supabase.table("editai_projects").update({
                 "status": "ready_for_triage",
                 "variants_count": total_count,
-                "updated_at": datetime.now().isoformat()
-            }).eq("id", project_id).execute()
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", project_id).eq("profile_id", profile_id).execute()
             logger.info(f"Added {len(variants_created)} new clips (total: {total_count}) for project {project_id}")
         else:
             supabase.table("editai_projects").update({
                 "status": "failed",
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now(timezone.utc).isoformat()
             }).eq("id", project_id).eq("profile_id", profile_id).execute()
             logger.error(f"Failed to generate any clips for project {project_id}")
 
@@ -1318,7 +1348,7 @@ async def _generate_from_segments_task(
         logger.error(f"Error generating from segments for {project_id}: {e}")
         supabase.table("editai_projects").update({
             "status": "failed",
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("id", project_id).eq("profile_id", profile_id).execute()
     finally:
         lock.release()
@@ -1351,7 +1381,7 @@ async def list_project_clips(
         return {"clips": result.data}
     except Exception as e:
         logger.error(f"Error listing clips: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/all-clips")
@@ -1418,7 +1448,7 @@ async def list_all_clips(profile: ProfileContext = Depends(get_profile_context))
         return {"clips": clips_with_info}
     except Exception as e:
         logger.error(f"Error listing all clips: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/clips/{clip_id}")
@@ -1448,7 +1478,7 @@ async def get_clip(
         raise
     except Exception as e:
         logger.error(f"Error getting clip: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 class ClipUpdateRequest(BaseModel):
@@ -1471,7 +1501,7 @@ async def update_clip(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        update_data = {"updated_at": datetime.now().isoformat()}
+        update_data = {"updated_at": datetime.now(timezone.utc).isoformat()}
 
         if request.variant_name is not None:
             update_data["variant_name"] = request.variant_name
@@ -1496,7 +1526,7 @@ async def update_clip(
         raise
     except Exception as e:
         logger.error(f"Error updating clip: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/clips/{clip_id}/select")
@@ -1513,7 +1543,7 @@ async def toggle_clip_selection(
     try:
         result = supabase.table("editai_clips").update({
             "is_selected": selected,
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
 
         if result.data:
@@ -1526,7 +1556,7 @@ async def toggle_clip_selection(
         raise
     except Exception as e:
         logger.error(f"Error updating clip selection: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/clips/bulk-select")
@@ -1545,7 +1575,7 @@ async def bulk_select_clips(
         for clip_id in clip_ids:
             result = supabase.table("editai_clips").update({
                 "is_selected": selected,
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now(timezone.utc).isoformat()
             }).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
             if result.data:
                 project_ids.add(result.data[0]["project_id"])
@@ -1557,7 +1587,7 @@ async def bulk_select_clips(
         return {"status": "updated", "count": len(clip_ids), "is_selected": selected}
     except Exception as e:
         logger.error(f"Error bulk selecting clips: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/clips/{clip_id}/remove-audio")
@@ -1601,7 +1631,7 @@ async def remove_clip_audio(
         ]
 
         logger.info(f"Removing audio from clip {clip_id}: {video_path} -> {output_path}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
         if result.returncode != 0:
             logger.error(f"FFmpeg error: {result.stderr}")
@@ -1610,7 +1640,7 @@ async def remove_clip_audio(
         # Update database with new video path
         update_data = {
             "raw_video_path": str(output_path),
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
 
         # If there was a final_video_path, clear it since we've modified the source
@@ -1635,7 +1665,7 @@ async def remove_clip_audio(
         raise
     except Exception as e:
         logger.error(f"Error removing audio from clip {clip_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/clips/{clip_id}")
@@ -1663,7 +1693,7 @@ async def delete_clip(
         return {"status": "deleted", "clip_id": clip_id}
     except Exception as e:
         logger.error(f"Error deleting clip: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 class BulkDeleteRequest(BaseModel):
@@ -1733,7 +1763,7 @@ async def update_clip_content(
         # Pregătim datele pentru upsert
         content_data = {
             "clip_id": clip_id,
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
         if content.tts_text is not None:
             content_data["tts_text"] = content.tts_text
@@ -1753,7 +1783,7 @@ async def update_clip_content(
         raise
     except Exception as e:
         logger.error(f"Error updating clip content: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/clips/{clip_id}/content/copy-from/{source_clip_id}")
@@ -1789,7 +1819,7 @@ async def copy_content_from_clip(
             "tts_voice_id": source.data.get("tts_voice_id"),
             "srt_content": source.data.get("srt_content"),
             "subtitle_settings": source.data.get("subtitle_settings"),
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
 
         result = supabase.table("editai_clip_content").upsert(
@@ -1802,13 +1832,15 @@ async def copy_content_from_clip(
         raise
     except Exception as e:
         logger.error(f"Error copying content: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ============== EXPORT PRESETS ==============
 
 @router.get("/export-presets")
-async def list_export_presets():
+async def list_export_presets(
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Listează toate preset-urile de export disponibile."""
     supabase = get_supabase()
     if not supabase:
@@ -1819,13 +1851,16 @@ async def list_export_presets():
         return {"presets": result.data}
     except Exception as e:
         logger.error(f"Error listing presets: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ============== MAINTENANCE ==============
 
 @router.post("/maintenance/cleanup-temp")
-async def cleanup_temp_files(max_age_hours: int = 24):
+async def cleanup_temp_files(
+    max_age_hours: int = 24,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """
     Cleanup orphaned temp files older than specified hours.
     Useful for manual maintenance or scheduled cleanup.
@@ -1898,7 +1933,7 @@ async def render_final_clip(
         # Actualizăm statusul
         supabase.table("editai_clips").update({
             "final_status": "processing",
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("id", clip_id).execute()
 
         # Lansăm renderul în background
@@ -1934,9 +1969,11 @@ async def render_final_clip(
             "preset": preset_name,
             "message": "Rendering final clip with TTS and subtitles..."
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error starting render: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error starting render")
 
 
 async def _render_final_clip_task(
@@ -1990,7 +2027,7 @@ async def _render_final_clip_task(
         logger.warning(f"Could not acquire lock for project {project_id} within timeout")
         supabase.table("editai_clips").update({
             "final_status": "failed",
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("id", clip_id).eq("profile_id", profile_id).execute()
         return
 
@@ -2247,7 +2284,7 @@ async def _render_final_clip_task(
         supabase.table("editai_clips").update({
             "final_video_path": str(output_path),
             "final_status": "completed",
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("id", clip_id).eq("profile_id", profile_id).execute()
 
         # Salvăm exportul
@@ -2268,7 +2305,7 @@ async def _render_final_clip_task(
         logger.error(f"Error rendering clip {clip_id}: {e}")
         supabase.table("editai_clips").update({
             "final_status": "failed",
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("id", clip_id).eq("profile_id", profile_id).execute()
     finally:
         # Always cleanup temp files (even on error)
@@ -2309,7 +2346,8 @@ async def bulk_render_clips(
         background_tasks.add_task(
             _start_render_for_clip,
             clip_id=clip_id,
-            preset_name=request.preset_name
+            preset_name=request.preset_name,
+            profile_id=profile.profile_id
         )
 
     return {
@@ -2320,14 +2358,17 @@ async def bulk_render_clips(
     }
 
 
-async def _start_render_for_clip(clip_id: str, preset_name: str):
+async def _start_render_for_clip(clip_id: str, preset_name: str, profile_id: str = None):
     """Helper pentru bulk render."""
     supabase = get_supabase()
     if not supabase:
         return
 
     try:
-        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).single().execute()
+        query = supabase.table("editai_clips").select("*").eq("id", clip_id)
+        if profile_id:
+            query = query.eq("profile_id", profile_id)
+        clip = query.single().execute()
         content = supabase.table("editai_clip_content").select("*").eq("clip_id", clip_id).execute()
         preset = supabase.table("editai_export_presets").select("*").eq("name", preset_name).single().execute()
 
@@ -2369,7 +2410,7 @@ def _get_video_info(video_path: Path) -> dict:
             "-of", "json",
             str(video_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode == 0:
             data = json.loads(result.stdout)
             stream = data.get("streams", [{}])[0]
@@ -2393,7 +2434,7 @@ def _get_video_duration(video_path: Path) -> float:
             "-of", "default=noprint_wrappers=1:nokey=1",
             str(video_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode == 0:
             return float(result.stdout.strip())
     except Exception:
@@ -2419,7 +2460,7 @@ def _generate_thumbnail(video_path: Path) -> Optional[Path]:
             "-q:v", "3",
             str(thumb_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode == 0 and thumb_path.exists():
             return thumb_path
     except Exception as e:
@@ -2455,7 +2496,7 @@ def _update_project_counts(project_id: str):
             "variants_count": total,
             "selected_count": selected,
             "exported_count": exported,
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("id", project_id).execute()
     except Exception as e:
         logger.warning(f"Failed to update project counts: {e}")
@@ -2472,7 +2513,7 @@ def _get_audio_duration(audio_path: Path) -> float:
             "-of", "default=noprint_wrappers=1:nokey=1",
             str(audio_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode == 0:
             return float(result.stdout.strip())
     except Exception as e:
@@ -2498,7 +2539,7 @@ def _trim_video_to_duration(input_path: Path, output_path: Path, target_duration
             "-movflags", "+faststart",
             str(output_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode == 0 and output_path.exists():
             logger.info(f"Trimmed video to {target_duration:.1f}s: {output_path.name}")
             return True
@@ -2530,7 +2571,7 @@ def _loop_video_to_duration(input_path: Path, output_path: Path, target_duration
             "-movflags", "+faststart",
             str(output_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode == 0 and output_path.exists():
             logger.info(f"Looped video to {target_duration:.1f}s: {output_path.name}")
             return True
@@ -2638,7 +2679,7 @@ def _extend_video_with_segments(
                     str(seg_output)
                 ]
 
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                 if result.returncode == 0 and seg_output.exists():
                     segment_files.append(seg_output)
 
@@ -2668,7 +2709,7 @@ def _extend_video_with_segments(
                 str(output_path)
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
             if result.returncode == 0 and output_path.exists():
                 logger.info(f"Extended video to {target_duration:.1f}s with {len(selected_segments)} additional segments")
@@ -2949,7 +2990,7 @@ def _render_with_preset(
 
     logger.info(f"Rendering with command: {' '.join(cmd)}")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg render failed: {result.stderr}")
 
