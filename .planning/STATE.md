@@ -11,9 +11,9 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v6 Production Hardening
 Phase: 26 of 29 (Frontend Resilience)
-Plan: — (not yet started)
-Status: Ready to plan
-Last activity: 2026-02-22 — Completed Phase 25 (Rate Limiting & Security) — 2/2 plans, verified 5/5 must-haves
+Plan: 1 of 2 complete
+Status: In Progress
+Last activity: 2026-02-22 — Completed 26-01 (Error Boundaries + API Hardening) — 2/2 tasks, 4 files changed
 
 Progress: [████░░░░░░] 40% (4/10 plans)
 
@@ -55,6 +55,9 @@ Recent decisions affecting current work:
 - 25-02: ElevenLabs new service uses _call_elevenlabs_api_new module-level helper (tenacity handles 429/500-504); 402 key failover remains in _post_with_failover for future use
 - 25-02: Cache-Control: public, max-age=3600 added to all 4 media file/stream endpoints
 - 25-02: Gemini retry uses synchronous @retry (Gemini SDK is sync, not async)
+- [Phase 26-01]: ApiError re-exported from api.ts so callers only need one import path
+- [Phase 26-01]: apiGetWithRetry added as new export to preserve backward compatibility of apiGet
+- [Phase 26-01]: AbortSignal.timeout() used instead of manual setTimeout + AbortController for cleaner timeout handling
 
 ### Pending Todos
 
@@ -70,8 +73,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Phase 25 complete, ready to plan Phase 26
+Stopped at: Completed 26-01-PLAN.md (error boundaries + API hardening)
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after Phase 25 complete*
+*Last updated: 2026-02-22 after Phase 26-01 complete*

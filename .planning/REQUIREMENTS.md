@@ -25,9 +25,9 @@ Requirements for production hardening milestone. Each maps to roadmap phases.
 
 ### Frontend Resilience
 
-- [ ] **FE-01**: Global React error boundary catches unhandled errors with fallback UI
-- [ ] **FE-02**: Consistent error handling utility replaces toast/alert/silence mix
-- [ ] **FE-03**: API client has timeout, retry logic, and centralized error handling
+- [x] **FE-01**: Global React error boundary catches unhandled errors with fallback UI
+- [x] **FE-02**: Consistent error handling utility replaces toast/alert/silence mix
+- [x] **FE-03**: API client has timeout, retry logic, and centralized error handling
 - [ ] **FE-04**: All pages show empty states when no data exists
 - [ ] **FE-05**: Common polling logic extracted into shared reusable hook
 
@@ -96,9 +96,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SEC-02 | Phase 25 | Complete |
 | SEC-03 | Phase 25 | Complete |
 | SEC-04 | Phase 25 | Complete |
-| FE-01 | Phase 26 | Pending |
-| FE-02 | Phase 26 | Pending |
-| FE-03 | Phase 26 | Pending |
+| FE-01 | Phase 26 | Complete |
+| FE-02 | Phase 26 | Complete |
+| FE-03 | Phase 26 | Complete |
 | FE-04 | Phase 26 | Pending |
 | FE-05 | Phase 26 | Pending |
 | REF-01 | Phase 27 | Pending |
