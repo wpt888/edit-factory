@@ -178,10 +178,12 @@ Plans:
   3. `apiGetWithRetry()` is used for all polling and data-fetch GET calls instead of raw `apiGet()`
   4. At least 3 page sections are wrapped with `ErrorBoundary` for section-level error isolation
   5. The error → boundary → handleApiError → toast E2E flow works (error shows as sonner toast, not console-only)
-**Plans**: 1 plan
+**Plans**: 3 plans
 
 Plans:
-- [ ] 30-01-PLAN.md — Replace console.error/alert with handleApiError, adopt apiGetWithRetry, wire ErrorBoundary
+- [ ] 30-01-PLAN.md — Replace console.error/alert with handleApiError in library, librarie, settings, postiz-modal, segment-modal
+- [ ] 30-02-PLAN.md — Replace console.error with handleApiError in remaining pages, components, hooks, and contexts
+- [ ] 30-03-PLAN.md — Adopt apiGetWithRetry for all data-fetch GET calls and wire ErrorBoundary sections
 
 ## Progress
 
@@ -200,7 +202,7 @@ Plans:
 | 27. Frontend Refactoring | 1/1 | Complete    | 2026-02-22 | - |
 | 28. Code Quality | 1/1 | Complete    | 2026-02-22 | - |
 | 29. Testing & Observability | 2/2 | Complete    | 2026-02-22 | - |
-| 30. Frontend Error Handling Adoption | 0/1 | Pending | - | - |
+| 30. Frontend Error Handling Adoption | 0/3 | Pending | - | - |
 
 ---
 *Last updated: 2026-02-22 after v6 Production Hardening roadmap created*
