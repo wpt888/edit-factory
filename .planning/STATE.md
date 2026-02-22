@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v6 Production Hardening
 Phase: 26 of 29 (Frontend Resilience)
-Plan: 1 of 2 complete
-Status: In Progress
-Last activity: 2026-02-22 — Completed 26-01 (Error Boundaries + API Hardening) — 2/2 tasks, 4 files changed
+Plan: 2 of 2 complete
+Status: Phase Complete
+Last activity: 2026-02-22 — Completed 26-02 (Shared Polling Hook + Empty States) — 2/2 tasks, 14 files changed
 
-Progress: [████░░░░░░] 40% (4/10 plans)
+Progress: [█████░░░░░] 50% (5/10 plans)
 
 ## Performance Metrics
 
@@ -58,6 +58,9 @@ Recent decisions affecting current work:
 - [Phase 26-01]: ApiError re-exported from api.ts so callers only need one import path
 - [Phase 26-01]: apiGetWithRetry added as new export to preserve backward compatibility of apiGet
 - [Phase 26-01]: AbortSignal.timeout() used instead of manual setTimeout + AbortController for cleaner timeout handling
+- 26-02: usePolling designed as a single-endpoint primitive; library dual-endpoint polling uses usePolling for progress + manual fetch for project status in onData
+- 26-02: pollClipStatus in library/page.tsx kept as setInterval — hooks cannot be called inside regular functions; deferred to Phase 27
+- 26-02: Pipeline setInterval bug fixed — variantStatuses in dependency array caused interval restart on every poll; usePolling avoids this
 
 ### Pending Todos
 
@@ -73,8 +76,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 26-01-PLAN.md (error boundaries + API hardening)
+Stopped at: Completed 26-02-PLAN.md (shared polling hook + empty states) — Phase 26 complete
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after Phase 26-01 complete*
+*Last updated: 2026-02-22 after Phase 26-02 complete*
