@@ -37,11 +37,8 @@ from app.api.feed_routes import router as feed_router
 from app.api.product_routes import router as product_router
 from app.api.product_generate_routes import router as product_generate_router
 
-# Configurare logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from app.logging_config import setup_logging
+setup_logging()
 logger = logging.getLogger(__name__)
 
 # Get settings
