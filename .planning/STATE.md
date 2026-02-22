@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v6 Production Hardening
 Phase: 25 of 29 (Rate Limiting & Security)
-Plan: — (not yet started)
-Status: Ready to plan
-Last activity: 2026-02-22 — Completed Phase 24 (Backend Stability) — 2/2 plans, verified 7/7 must-haves
+Plan: 1 of 2 complete
+Status: In progress
+Last activity: 2026-02-22 — Completed 25-01 (Rate Limiting Middleware + TTS Validation) — 2/2 tasks
 
-Progress: [██░░░░░░░░] 20% (2/10 plans)
+Progress: [███░░░░░░░] 30% (3/10 plans)
 
 ## Performance Metrics
 
@@ -49,6 +49,8 @@ Recent decisions affecting current work:
 - 24-02: Created app/api/validators.py as shared module for validate_upload_size() rather than duplicating in each route
 - 24-02: generate_audio_trimmed and process_video_with_tts made async to propagate async generate_audio change
 - 24-02: json.JSONDecodeError now raises HTTPException 400 at both subtitle_settings parse sites in routes.py
+- 25-01: slowapi default_limits=['60/minute'] on Limiter applies globally without per-route decorators; SlowAPIMiddleware added before CORSMiddleware (FastAPI reverse order)
+- 25-01: MAX_TTS_CHARS=5000 defined once in validators.py — all route files import rather than redefine; validate_tts_text_length() validates, strips, and returns text for downstream use
 
 ### Pending Todos
 
@@ -64,7 +66,7 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Phase 24 complete, ready to plan Phase 25
+Stopped at: Completed 25-01-PLAN.md (Rate Limiting + TTS Validation)
 Resume file: None
 
 ---
