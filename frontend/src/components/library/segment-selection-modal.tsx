@@ -13,7 +13,7 @@ import {
 import Link from "next/link";
 import { VideoSegmentPlayer } from "@/components/video-segment-player";
 import { SimpleSegmentPopup } from "@/components/simple-segment-popup";
-import { apiFetch, apiPost, API_URL } from "@/lib/api";
+import { apiFetch, apiPost, API_URL, handleApiError } from "@/lib/api";
 import { Project, Segment, SourceVideo } from "./types";
 
 interface SegmentSelectionModalProps {
@@ -58,7 +58,7 @@ export function SegmentSelectionModal({
         setSourceVideos(data);
       }
     } catch (error) {
-      console.error("Failed to fetch source videos:", error);
+      handleApiError(error, "Eroare la incarcarea video-urilor sursa");
     }
   };
 
@@ -70,7 +70,7 @@ export function SegmentSelectionModal({
         setModalSegments(data);
       }
     } catch (error) {
-      console.error("Failed to fetch segments:", error);
+      handleApiError(error, "Eroare la incarcarea segmentelor");
     }
   };
 
@@ -114,7 +114,7 @@ export function SegmentSelectionModal({
         );
       }
     } catch (error) {
-      console.error("Failed to create segment:", error);
+      handleApiError(error, "Eroare la crearea segmentului");
     }
 
     setPendingSegment(null);
@@ -152,7 +152,7 @@ export function SegmentSelectionModal({
         onClose();
       }
     } catch (error) {
-      console.error("Failed to save project segments:", error);
+      handleApiError(error, "Eroare la salvarea segmentelor proiectului");
     }
   };
 
@@ -257,7 +257,7 @@ export function SegmentSelectionModal({
                                   }
                                 }
                               } catch (error) {
-                                console.error("Failed to fetch segments:", error);
+                                handleApiError(error, "Eroare la incarcarea segmentelor");
                               }
                             }}
                             className="mt-1 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
