@@ -47,9 +47,13 @@ import Link from "next/link";
 
 import { VideoSegmentPlayer } from "@/components/video-segment-player";
 import { SimpleSegmentPopup } from "@/components/simple-segment-popup";
+import { SegmentTransformPanel } from "@/components/segment-transform-panel";
 import { EditorLayout } from "@/components/editor-layout";
-import { apiGet, apiPost, apiPatch, apiDelete, API_URL } from "@/lib/api";
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete, API_URL } from "@/lib/api";
 import { useProfile } from "@/contexts/profile-context";
+import type { SegmentTransform } from "@/types/video-processing";
+import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
+import { EmptyState } from "@/components/empty-state";
 
 interface SourceVideo {
   id: string;
@@ -77,6 +81,7 @@ interface Segment {
   usage_count: number;
   is_favorite: boolean;
   notes?: string;
+  transforms?: SegmentTransform | null;
   created_at: string;
   source_video_name?: string;
 }
@@ -121,6 +126,11 @@ export default function SegmentsPage() {
     id: string;
     name: string;
   } | null>(null);
+
+  // Transform state
+  const [activeTransforms, setActiveTransforms] = useState<SegmentTransform>({
+    ...DEFAULT_SEGMENT_TRANSFORM,
+  });
 
   // Overlap detection state
   const [overlapInfo, setOverlapInfo] = useState<{
@@ -251,15 +261,47 @@ export default function SegmentsPage() {
     fetchAllSegments();
   }, [currentProfile?.id, profileLoading, fetchSourceVideos, fetchAllSegments]);
 
+  // Actually delete segment
+  const handleDeleteSegment = useCallback(async (segmentId: string) => {
+    // Get the segment before deleting to know its source video
+    const segmentToDelete = segments.find((s) => s.id === segmentId) ||
+                            allSegments.find((s) => s.id === segmentId);
+
+    try {
+      const res = await apiDelete(`/segments/${segmentId}`);
+      if (res.ok) {
+        setSegments((prev) => prev.filter((s) => s.id !== segmentId));
+        setAllSegments((prev) => prev.filter((s) => s.id !== segmentId));
+        // Update source video segments count
+        const videoId = segmentToDelete?.source_video_id || selectedVideo?.id;
+        if (videoId) {
+          setSourceVideos((prev) =>
+            prev.map((v) =>
+              v.id === videoId
+                ? { ...v, segments_count: Math.max(0, v.segments_count - 1) }
+                : v
+            )
+          );
+        }
+      } else {
+        console.error("Delete segment failed:", res.status, await res.text().catch(() => ""));
+      }
+    } catch (error) {
+      console.error("Failed to delete segment:", error);
+    }
+  }, [segments, allSegments, selectedVideo?.id]);
+
   // Delete key shortcut — delete selected segment instantly
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip when typing in form elements
       if (
         e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement
       ) return;
 
-      if (e.key === "Delete" && selectedSegment) {
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedSegment) {
         e.preventDefault();
         handleDeleteSegment(selectedSegment.id);
         setSelectedSegment(null);
@@ -268,7 +310,7 @@ export default function SegmentsPage() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedSegment]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedSegment, handleDeleteSegment]);
 
   // Load segments when video selected
   useEffect(() => {
@@ -494,34 +536,6 @@ export default function SegmentsPage() {
     });
   };
 
-  // Actually delete segment
-  const handleDeleteSegment = async (segmentId: string) => {
-    // Get the segment before deleting to know its source video
-    const segmentToDelete = segments.find((s) => s.id === segmentId) ||
-                            allSegments.find((s) => s.id === segmentId);
-
-    try {
-      const res = await apiDelete(`/segments/${segmentId}`);
-      if (res.ok) {
-        setSegments((prev) => prev.filter((s) => s.id !== segmentId));
-        setAllSegments((prev) => prev.filter((s) => s.id !== segmentId));
-        // Update source video segments count
-        const videoId = segmentToDelete?.source_video_id || selectedVideo?.id;
-        if (videoId) {
-          setSourceVideos((prev) =>
-            prev.map((v) =>
-              v.id === videoId
-                ? { ...v, segments_count: Math.max(0, v.segments_count - 1) }
-                : v
-            )
-          );
-        }
-      }
-    } catch (error) {
-      console.error("Failed to delete segment:", error);
-    }
-  };
-
   // Handle confirmed delete
   const handleConfirmDelete = async () => {
     if (!deleteConfirm) return;
@@ -533,6 +547,31 @@ export default function SegmentsPage() {
     }
 
     setDeleteConfirm(null);
+  };
+
+  // Save transforms for selected segment
+  const handleSaveTransforms = async (transforms: SegmentTransform) => {
+    if (!selectedSegment) return;
+    try {
+      const res = await apiPut(`/segments/${selectedSegment.id}/transforms`, transforms);
+      if (res.ok) {
+        setSegments((prev) =>
+          prev.map((s) => (s.id === selectedSegment.id ? { ...s, transforms } : s))
+        );
+        setAllSegments((prev) =>
+          prev.map((s) => (s.id === selectedSegment.id ? { ...s, transforms } : s))
+        );
+        setSelectedSegment((prev) => prev ? { ...prev, transforms } : prev);
+      }
+    } catch (error) {
+      console.error("Failed to save transforms:", error);
+    }
+  };
+
+  // Sync activeTransforms when selectedSegment changes
+  const handleSegmentSelect = (seg: Segment) => {
+    setSelectedSegment(seg);
+    setActiveTransforms(seg.transforms || { ...DEFAULT_SEGMENT_TRANSFORM });
   };
 
   // Toggle favorite
@@ -776,31 +815,34 @@ export default function SegmentsPage() {
       )}
 
       {/* Segments list */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 min-h-0">
         <div className="space-y-2 p-2">
           {loadingSegments && viewMode === "current" ? (
             <p className="text-sm text-muted-foreground text-center py-8">
               Loading...
             </p>
           ) : filteredSegments.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-8">
-              {viewMode === "current" && !selectedVideo
-                ? "Select a video first"
-                : searchQuery || showFavoritesOnly || selectedKeywordFilter
-                ? "No segments match your filters"
-                : viewMode === "current"
-                ? "No segments yet. Use the player to mark segments."
-                : "No segments in library"}
-            </p>
+            <EmptyState
+              icon={<Scissors className="h-6 w-6" />}
+              title="Niciun segment"
+              description={
+                viewMode === "current" && !selectedVideo
+                  ? "Selecteaza un video mai intai."
+                  : searchQuery || showFavoritesOnly || selectedKeywordFilter
+                  ? "Niciun segment nu corespunde filtrelor."
+                  : "Segmentele video selectate vor aparea aici."
+              }
+            />
           ) : (
             filteredSegments.map((segment) => (
               <div
                 key={segment.id}
-                className={`p-2 rounded-lg border transition-colors ${
+                className={`p-2 rounded-lg border transition-colors cursor-pointer ${
                   selectedSegment?.id === segment.id
-                    ? "border-primary bg-primary/5"
+                    ? "border-primary bg-primary/5 ring-1 ring-primary/30"
                     : "border-border hover:border-primary/50"
                 }`}
+                onClick={() => handleSegmentSelect(segment)}
               >
                 {/* Source video name (in All Videos mode) */}
                 {viewMode === "all" && segment.source_video_name && (
@@ -881,6 +923,17 @@ export default function SegmentsPage() {
           )}
         </div>
       </ScrollArea>
+
+      {/* Transform panel - shown when segment is selected */}
+      {selectedSegment && (
+        <div className="border-t border-border p-3">
+          <SegmentTransformPanel
+            transforms={activeTransforms}
+            onChange={setActiveTransforms}
+            onSave={handleSaveTransforms}
+          />
+        </div>
+      )}
     </div>
   );
 
@@ -925,7 +978,8 @@ export default function SegmentsPage() {
             duration={selectedVideo.duration || 0}
             segments={segments}
             onSegmentCreate={handleSegmentCreate}
-            onSegmentClick={(seg) => setSelectedSegment(seg as Segment)}
+            onSegmentClick={(seg) => handleSegmentSelect(seg as Segment)}
+            activeTransforms={selectedSegment ? activeTransforms : undefined}
             currentSegment={selectedSegment || undefined}
             sourceVideoId={selectedVideo.id}
           />

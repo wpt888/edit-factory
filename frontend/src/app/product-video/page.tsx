@@ -31,6 +31,7 @@ import {
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
+import { EmptyState } from "@/components/empty-state";
 
 // ---- Inner component that uses useSearchParams ----
 function ProductVideoContent() {
@@ -178,6 +179,15 @@ function ProductVideoContent() {
           <Video className="h-7 w-7 text-primary" />
           <h1 className="text-2xl font-bold">Generate Product Video</h1>
         </div>
+
+        {/* Empty state when no product is selected */}
+        {!productId && (
+          <EmptyState
+            icon={<Video className="h-6 w-6" />}
+            title="Selecteaza un produs"
+            description="Alege un produs din lista pentru a genera un video."
+          />
+        )}
 
         {/* Product info card */}
         {productId && (

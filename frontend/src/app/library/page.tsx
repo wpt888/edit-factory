@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense, useMemo } from "react";
+import { usePolling } from "@/hooks";
 
 // Config persistence key
 const CONFIG_KEY = "editai_library_config";
@@ -96,6 +97,7 @@ import {
 } from "@/components/video-enhancement-controls";
 import { SubtitleEnhancementControls } from "@/components/subtitle-enhancement-controls";
 import { apiFetch, apiPost, apiPatch, apiDelete, API_URL } from "@/lib/api";
+import { EmptyState } from "@/components/empty-state";
 
 // Types
 interface Project {
@@ -233,7 +235,9 @@ function LibraryPageContent() {
   const [generating, setGenerating] = useState(false);
   const [rendering, setRendering] = useState(false);
 
-  // Generation tracking
+  // Generation tracking - projectId being polled
+  const [pollingProjectId, setPollingProjectId] = useState<string | null>(null);
+  // Keep ref for backwards compat (legacy cleanup)
   const generationIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Progress tracking
@@ -526,60 +530,71 @@ function LibraryPageContent() {
     fetchPresets();
   }, []);
 
-  // Polling când proiectul e în "generating" - SIMPLU
+  // Polling când proiectul e în "generating" - via usePolling
+  // Track which project is being polled and enable polling
   useEffect(() => {
-    if (selectedProject?.status === "generating" && !generationIntervalRef.current) {
+    if (selectedProject?.status === "generating") {
       setGenerating(true);
-      const projectId = selectedProject.id;
+      setPollingProjectId(selectedProject.id);
+    } else {
+      setPollingProjectId(null);
+    }
+  }, [selectedProject?.id, selectedProject?.status]);
 
-      // Poll la fiecare 2 secunde
-      const pollInterval = setInterval(async () => {
+  // usePolling for generation progress endpoint
+  const generationProgressEndpoint = useMemo(
+    () => (pollingProjectId ? `/library/projects/${pollingProjectId}/progress` : ""),
+    [pollingProjectId]
+  );
+
+  const { startPolling: startProgressPolling, stopPolling: stopProgressPolling } = usePolling<{
+    percentage?: number;
+    current_step?: string;
+    estimated_remaining?: number;
+  }>({
+    endpoint: generationProgressEndpoint,
+    interval: 2000,
+    enabled: false, // manually controlled
+    onData: async (progress) => {
+      setGenerationProgress({
+        percentage: progress.percentage || 0,
+        currentStep: progress.current_step ?? null,
+        estimatedRemaining: progress.estimated_remaining ?? null,
+      });
+      // Also fetch project status to check completion
+      if (pollingProjectId) {
         try {
-          const [projectRes, progressRes] = await Promise.all([
-            apiFetch(`/library/projects/${projectId}`),
-            apiFetch(`/library/projects/${projectId}/progress`)
-          ]);
-
+          const projectRes = await apiFetch(`/library/projects/${pollingProjectId}`);
           if (projectRes.ok) {
             const project = await projectRes.json();
             setSelectedProject(project);
             setProjects(prev => prev.map(p => p.id === project.id ? project : p));
-
-            // Generare completă sau eșuată
             if (project.status === "ready_for_triage" || project.status === "failed") {
-              clearInterval(pollInterval);
-              generationIntervalRef.current = null;
+              stopProgressPolling();
               setGenerating(false);
               setGenerationProgress(null);
+              setPollingProjectId(null);
               if (project.status === "ready_for_triage") {
-                fetchClips(projectId);
+                fetchClips(pollingProjectId);
               }
             }
           }
-
-          if (progressRes.ok) {
-            const progress = await progressRes.json();
-            setGenerationProgress({
-              percentage: progress.percentage || 0,
-              currentStep: progress.current_step,
-              estimatedRemaining: progress.estimated_remaining
-            });
-          }
         } catch (error) {
-          console.error("Poll error:", error);
+          console.error("Poll project error:", error);
         }
-      }, 2000);
-
-      generationIntervalRef.current = pollInterval;
-    }
-
-    return () => {
-      if (selectedProject?.status !== "generating" && generationIntervalRef.current) {
-        clearInterval(generationIntervalRef.current);
-        generationIntervalRef.current = null;
       }
-    };
-  }, [selectedProject?.id, selectedProject?.status]);
+    },
+  });
+
+  // Start/stop progress polling when pollingProjectId changes
+  useEffect(() => {
+    if (pollingProjectId && generationProgressEndpoint) {
+      startProgressPolling();
+    } else {
+      stopProgressPolling();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pollingProjectId]);
 
   // Fetch projects
   const fetchProjects = async () => {
@@ -1364,9 +1379,12 @@ function LibraryPageContent() {
               </CardHeader>
               <CardContent className="space-y-2 max-h-[calc(100vh-250px)] overflow-y-auto">
                 {projects.length === 0 ? (
-                  <p className="text-muted-foreground text-sm text-center py-4">
-                    Niciun proiect. Creează unul nou!
-                  </p>
+                  <EmptyState
+                    icon={<FolderOpen className="h-6 w-6" />}
+                    title="Niciun proiect"
+                    description="Creeaza primul proiect pentru a incepe."
+                    action={{ label: "Proiect Nou", onClick: () => setShowNewProject(true) }}
+                  />
                 ) : (
                   projects.map((project) => (
                     <div

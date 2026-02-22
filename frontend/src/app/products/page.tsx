@@ -30,6 +30,7 @@ import {
   Film,
   PlusCircle,
 } from "lucide-react";
+import { EmptyState } from "@/components/empty-state";
 import { CreateFeedDialog } from "@/components/create-feed-dialog";
 
 // Type definitions
@@ -500,24 +501,22 @@ export default function ProductsPage() {
 
         {/* Product card grid */}
         {!selectedFeedId ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <Tag className="h-16 w-16 text-muted-foreground/30 mb-4" />
-            <p className="text-lg text-muted-foreground">
-              Select a feed to browse products
-            </p>
-          </div>
+          <EmptyState
+            icon={<Package className="h-6 w-6" />}
+            title="Niciun produs"
+            description="Importa produse dintr-un feed sau adauga manual."
+            action={{ label: "Adauga Feed", onClick: () => setCreateFeedOpen(true) }}
+          />
         ) : loading ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         ) : products.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <Package className="h-16 w-16 text-muted-foreground/30 mb-4" />
-            <p className="text-lg text-muted-foreground">No products found</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              Try adjusting your search or filter criteria
-            </p>
-          </div>
+          <EmptyState
+            icon={<Package className="h-6 w-6" />}
+            title="Niciun produs"
+            description="Importa produse dintr-un feed sau adauga manual."
+          />
         ) : (
           <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 ${selectedProductIds.size > 0 ? "pb-24" : ""}`}>
             {products.map((product) => (

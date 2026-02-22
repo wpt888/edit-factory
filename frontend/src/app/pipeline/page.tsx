@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -33,7 +33,10 @@ import {
   Film,
   ArrowLeft,
   ArrowRight,
+  Workflow,
 } from "lucide-react";
+import { usePolling } from "@/hooks";
+import { EmptyState } from "@/components/empty-state";
 
 // TypeScript interfaces
 interface MatchPreview {
@@ -111,34 +114,43 @@ export default function PipelinePage() {
     return text.trim().split(/\s+/).filter(Boolean).length;
   };
 
-  // Poll render status
-  useEffect(() => {
-    if (!pipelineId || !isRendering || step !== 4) {
-      return;
-    }
+  // Poll render status via usePolling
+  const renderStatusEndpoint = useMemo(
+    () => (pipelineId ? `/pipeline/status/${pipelineId}` : ""),
+    [pipelineId]
+  );
 
-    const allComplete = variantStatuses.every(
-      (v) => v.status === "completed" || v.status === "failed"
-    );
-    if (allComplete && variantStatuses.length > 0) {
-      setIsRendering(false);
-      return;
-    }
-
-    const interval = setInterval(async () => {
-      try {
-        const res = await apiGet(`/pipeline/status/${pipelineId}`);
-        if (res.ok) {
-          const data = await res.json();
-          setVariantStatuses(data.variants || []);
-        }
-      } catch (err) {
-        console.error("Error polling render status:", err);
+  const { startPolling: startRenderPolling, stopPolling: stopRenderPolling } = usePolling<{
+    variants: VariantStatus[];
+  }>({
+    endpoint: renderStatusEndpoint,
+    interval: 2000,
+    enabled: false,
+    onData: (data) => {
+      const variants = data.variants || [];
+      setVariantStatuses(variants);
+      const allComplete = variants.every(
+        (v) => v.status === "completed" || v.status === "failed"
+      );
+      if (allComplete && variants.length > 0) {
+        stopRenderPolling();
+        setIsRendering(false);
       }
-    }, 2000);
+    },
+    onError: (err) => {
+      console.error("Error polling render status:", err);
+    },
+  });
 
-    return () => clearInterval(interval);
-  }, [pipelineId, isRendering, step, variantStatuses]);
+  // Start/stop render polling when isRendering/step changes
+  useEffect(() => {
+    if (pipelineId && isRendering && step === 4) {
+      startRenderPolling();
+    } else {
+      stopRenderPolling();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipelineId, isRendering, step]);
 
   // Step 1: Generate scripts
   const handleGenerate = async () => {
@@ -706,6 +718,13 @@ export default function PipelinePage() {
             </div>
 
             {/* Variant status grid */}
+            {variantStatuses.length === 0 ? (
+              <EmptyState
+                icon={<Workflow className="h-6 w-6" />}
+                title="Niciun pipeline"
+                description="Configureaza un pipeline pentru a genera video-uri."
+              />
+            ) : null}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {variantStatuses.map((status) => (
                 <Card key={status.variant_index}>
