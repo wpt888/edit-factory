@@ -160,11 +160,11 @@ Plans:
   2. Unit tests for job_storage, cost_tracker, and srt_validator pass with no failures
   3. Backend log output is valid JSON (structured logging) parseable by log aggregators
   4. A data retention command or scheduled task removes temp files and failed jobs older than the retention window
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 29-01: pytest setup, unit tests for critical services
-- [ ] 29-02: Structured JSON logging and data retention policy
+- [ ] 29-01-PLAN.md — pytest setup, conftest fixtures, unit tests for job_storage/cost_tracker/srt_validator
+- [ ] 29-02-PLAN.md — Structured JSON logging (python-json-logger) and data retention cleanup CLI
 
 ## Progress
 
