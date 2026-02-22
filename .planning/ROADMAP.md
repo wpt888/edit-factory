@@ -134,10 +134,10 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. library/page.tsx is split into 5-6 focused components each with a single responsibility
   2. Polling logic exists in exactly one place — the shared hook from Phase 26 — with no inline duplicates
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 27-01: Split library/page.tsx and eliminate polling duplication
+- [ ] 27-01-PLAN.md — Split library/page.tsx into 5-6 components and eliminate polling duplication
 
 ### Phase 28: Code Quality
 **Goal**: The codebase has a single Supabase client and no debug noise in logs
