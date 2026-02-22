@@ -49,24 +49,82 @@ def cleanup_project_lock(project_id: str):
 # ============== PROGRESS TRACKING ==============
 _generation_progress: Dict[str, dict] = {}
 
+from app.db import get_supabase
+
 def update_generation_progress(project_id: str, percentage: int, current_step: str, estimated_remaining: Optional[int] = None):
-    """Update generation progress for a project."""
+    """Update generation progress for a project.
+
+    Writes to both the in-memory dict (fast polling) and Supabase
+    (durability — survives server restarts).
+    """
     _generation_progress[project_id] = {
         "percentage": percentage,
         "current_step": current_step,
         "estimated_remaining": estimated_remaining
     }
+    # Persist to Supabase for durability across server restarts
+    try:
+        supabase = get_supabase()
+        if supabase:
+            supabase.table("editai_generation_progress").upsert({
+                "project_id": project_id,
+                "percentage": percentage,
+                "current_step": current_step,
+                "estimated_remaining": estimated_remaining,
+                "updated_at": datetime.now().isoformat()
+            }).execute()
+    except Exception as e:
+        logger.warning(f"[progress] Failed to persist progress to DB for {project_id}: {e}")
+
 
 def get_generation_progress(project_id: str) -> Optional[dict]:
-    """Get generation progress for a project."""
-    return _generation_progress.get(project_id)
+    """Get generation progress for a project.
+
+    Fast path: in-memory dict.
+    Fallback: Supabase query (used after server restart when memory is cold).
+    """
+    result = _generation_progress.get(project_id)
+    if result is not None:
+        return result
+
+    # Memory miss — try DB (e.g. after server restart)
+    try:
+        supabase = get_supabase()
+        if supabase:
+            db_result = supabase.table("editai_generation_progress")\
+                .select("*")\
+                .eq("project_id", project_id)\
+                .maybe_single()\
+                .execute()
+            if db_result and db_result.data:
+                row = db_result.data
+                progress = {
+                    "percentage": row.get("percentage", 0),
+                    "current_step": row.get("current_step", ""),
+                    "estimated_remaining": row.get("estimated_remaining")
+                }
+                # Warm the in-memory cache
+                _generation_progress[project_id] = progress
+                return progress
+    except Exception as e:
+        logger.warning(f"[progress] Failed to query progress from DB for {project_id}: {e}")
+
+    return None
+
 
 def clear_generation_progress(project_id: str):
-    """Clear generation progress for a project."""
+    """Clear generation progress for a project (memory + DB)."""
     if project_id in _generation_progress:
         del _generation_progress[project_id]
-
-from app.db import get_supabase
+    try:
+        supabase = get_supabase()
+        if supabase:
+            supabase.table("editai_generation_progress")\
+                .delete()\
+                .eq("project_id", project_id)\
+                .execute()
+    except Exception as e:
+        logger.warning(f"[progress] Failed to delete progress from DB for {project_id}: {e}")
 
 
 # ============== PYDANTIC MODELS ==============
