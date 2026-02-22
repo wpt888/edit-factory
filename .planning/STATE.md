@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v6 Production Hardening
 Phase: 25 of 29 (Rate Limiting & Security)
-Plan: 1 of 2 complete
-Status: In progress
-Last activity: 2026-02-22 — Completed 25-01 (Rate Limiting Middleware + TTS Validation) — 2/2 tasks
+Plan: 2 of 2 complete
+Status: Phase complete
+Last activity: 2026-02-22 — Completed 25-02 (SRT Sanitization, Cache-Control Headers, Tenacity Retry) — 2/2 tasks
 
-Progress: [███░░░░░░░] 30% (3/10 plans)
+Progress: [████░░░░░░] 40% (4/10 plans)
 
 ## Performance Metrics
 
@@ -51,6 +51,10 @@ Recent decisions affecting current work:
 - 24-02: json.JSONDecodeError now raises HTTPException 400 at both subtitle_settings parse sites in routes.py
 - 25-01: slowapi default_limits=['60/minute'] on Limiter applies globally without per-route decorators; SlowAPIMiddleware added before CORSMiddleware (FastAPI reverse order)
 - 25-01: MAX_TTS_CHARS=5000 defined once in validators.py — all route files import rather than redefine; validate_tts_text_length() validates, strips, and returns text for downstream use
+- 25-02: sanitize_srt_text placed at module level in srt_validator.py (not in SRTValidator class) so it can be imported without instantiation
+- 25-02: ElevenLabs new service uses _call_elevenlabs_api_new module-level helper (tenacity handles 429/500-504); 402 key failover remains in _post_with_failover for future use
+- 25-02: Cache-Control: public, max-age=3600 added to all 4 media file/stream endpoints
+- 25-02: Gemini retry uses synchronous @retry (Gemini SDK is sync, not async)
 
 ### Pending Todos
 
@@ -66,8 +70,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 25-01-PLAN.md (Rate Limiting + TTS Validation)
+Stopped at: Completed 25-02-PLAN.md (SRT Sanitization, Cache-Control, Tenacity Retry)
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after 24-02 executed*
+*Last updated: 2026-02-22 after 25-02 executed*
