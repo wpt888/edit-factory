@@ -11,9 +11,9 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v6 Production Hardening
 Phase: 29 of 29 (Testing & Observability)
-Plan: — (not yet started)
-Status: Ready to plan
-Last activity: 2026-02-22 — Completed Phase 28 (Code Quality) — 1/1 plans, verified 3/3 must-haves
+Plan: 02 complete
+Status: In progress (2/N plans complete)
+Last activity: 2026-02-22 — Completed Phase 29 Plan 02 (Structured Logging & Data Retention)
 
 Progress: [████████░░] 80% (8/10 plans)
 
@@ -67,6 +67,8 @@ Recent decisions affecting current work:
 - 27-01: SegmentSelectionModal owns its own modal-specific state (sourceVideos, modalSegments) while projectSegments lives in page.tsx
 - 28-01: All backend modules import get_supabase from app.db — no local redefinitions; app.db is the single source of truth for Supabase client initialization
 - 28-01: [MUTE DEBUG] logger.info lines deleted entirely (not downgraded) — they were temporary debug artifacts not intended for long-term use
+- [Phase 29-testing-and-observability]: 29-02: python-json-logger with rename_fields produces timestamp/level/logger keys — matches aggregator conventions
+- [Phase 29-testing-and-observability]: 29-02: setup_logging() replaces logging.basicConfig at app startup — all loggers inherit JSON root handler
 
 ### Pending Todos
 
@@ -82,8 +84,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed Phase 28 (Code Quality)
+Stopped at: Completed 29-02-PLAN.md (Structured JSON Logging and Data Retention)
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after Phase 28 complete*
+*Last updated: 2026-02-22 after Phase 29-02 complete*
