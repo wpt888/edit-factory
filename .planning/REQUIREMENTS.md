@@ -12,8 +12,8 @@ Requirements for production hardening milestone. Each maps to roadmap phases.
 - [x] **STAB-01**: Server persists generation progress to database (survives restart)
 - [x] **STAB-02**: Project render locks are cleaned up after completion (no memory leak)
 - [x] **STAB-03**: Lock timeout returns 409 Conflict to client instead of continuing
-- [ ] **STAB-04**: Invalid JSON in form params returns 400 error (not silent ignore)
-- [ ] **STAB-05**: File uploads are validated for max size (413 Payload Too Large)
+- [x] **STAB-04**: Invalid JSON in form params returns 400 error (not silent ignore)
+- [x] **STAB-05**: File uploads are validated for max size (413 Payload Too Large)
 - [ ] **STAB-06**: External API calls retry with exponential backoff (tenacity)
 
 ### Rate Limiting & Security
@@ -39,7 +39,7 @@ Requirements for production hardening milestone. Each maps to roadmap phases.
 ### Code Quality
 
 - [ ] **QUAL-01**: Single get_supabase() in db.py used everywhere (remove duplicates)
-- [ ] **QUAL-02**: ElevenLabs TTS uses async HTTP client (httpx.AsyncClient)
+- [x] **QUAL-02**: ElevenLabs TTS uses async HTTP client (httpx.AsyncClient)
 - [ ] **QUAL-03**: Debug logs cleaned up ([MUTE DEBUG] removed)
 - [x] **QUAL-04**: Unused cleanup_project_lock integrated into render flow
 
@@ -89,8 +89,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | STAB-01 | Phase 24 | Complete |
 | STAB-02 | Phase 24 | Complete |
 | STAB-03 | Phase 24 | Complete |
-| STAB-04 | Phase 24 | Pending |
-| STAB-05 | Phase 24 | Pending |
+| STAB-04 | Phase 24 | Complete |
+| STAB-05 | Phase 24 | Complete |
 | STAB-06 | Phase 25 | Pending |
 | SEC-01 | Phase 25 | Pending |
 | SEC-02 | Phase 25 | Pending |
@@ -104,7 +104,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REF-01 | Phase 27 | Pending |
 | REF-02 | Phase 27 | Pending |
 | QUAL-01 | Phase 28 | Pending |
-| QUAL-02 | Phase 24 | Pending |
+| QUAL-02 | Phase 24 | Complete |
 | QUAL-03 | Phase 28 | Pending |
 | QUAL-04 | Phase 24 | Complete |
 | TEST-01 | Phase 29 | Pending |
