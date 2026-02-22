@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
-from app.api.validators import validate_upload_size
+from app.api.validators import validate_upload_size, MAX_TTS_CHARS
 from app.services.encoding_presets import get_preset, EncodingPreset
 from app.services.audio_normalizer import measure_loudness, build_loudnorm_filter
 from app.services.video_filters import VideoFilters, DenoiseConfig, SharpenConfig, ColorConfig
@@ -843,6 +843,13 @@ async def generate_from_segments(
         "target_duration": request.target_duration,
         "updated_at": datetime.now().isoformat()
     }).eq("id", project_id).eq("profile_id", profile.profile_id).execute()
+
+    # Validate TTS text length before dispatching background task
+    if request.generate_tts and request.tts_text and len(request.tts_text.strip()) > MAX_TTS_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"TTS text too long: {len(request.tts_text.strip())} characters (maximum {MAX_TTS_CHARS})"
+        )
 
     # Limitări
     variant_count = max(1, min(10, request.variant_count))

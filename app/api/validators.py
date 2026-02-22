@@ -6,6 +6,21 @@ from fastapi import HTTPException, UploadFile
 MAX_UPLOAD_SIZE_MB = 500  # 500 MB limit for video uploads
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
+MAX_TTS_CHARS = 5000  # Maximum TTS text length in characters
+
+
+def validate_tts_text_length(text: str, field_name: str = "text") -> str:
+    """Validate TTS text is non-empty and within character limit. Returns stripped text."""
+    stripped = text.strip() if text else ""
+    if not stripped:
+        raise HTTPException(status_code=400, detail=f"{field_name} cannot be empty")
+    if len(stripped) > MAX_TTS_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Text too long: {len(stripped)} characters (maximum {MAX_TTS_CHARS})"
+        )
+    return stripped
+
 
 async def validate_upload_size(file: UploadFile, max_bytes: int = MAX_UPLOAD_SIZE_BYTES) -> None:
     """Validate file size before reading entire file into memory.

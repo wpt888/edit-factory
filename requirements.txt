@@ -69,6 +69,7 @@ python-dotenv>=1.0.0
 tqdm>=4.65.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
+tenacity>=8.2.0
 
 # Subtitle Processing
 srt>=3.5.0
