@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, handleApiError } from "@/lib/api";
 import {
   Loader2,
   Sparkles,
@@ -138,7 +138,7 @@ export default function PipelinePage() {
       }
     },
     onError: (err) => {
-      console.error("Error polling render status:", err);
+      handleApiError(err, "Eroare la actualizarea statusului pipeline");
     },
   });
 
@@ -179,7 +179,7 @@ export default function PipelinePage() {
         setError(errorData.detail || "Failed to generate scripts");
       }
     } catch (err) {
-      console.error("Error generating scripts:", err);
+      handleApiError(err, "Eroare la generarea scripturilor");
       setError("Network error. Please check if the backend is running.");
     } finally {
       setIsGenerating(false);
@@ -212,7 +212,7 @@ export default function PipelinePage() {
           return;
         }
       } catch (err) {
-        console.error(`Error previewing variant ${i}:`, err);
+        handleApiError(err, "Eroare la previzualizarea variantelor");
         setPreviewError("Network error. Please check if the backend is running.");
         setPreviewingIndex(null);
         return;
@@ -266,7 +266,7 @@ export default function PipelinePage() {
         setIsRendering(false);
       }
     } catch (err) {
-      console.error("Error starting render:", err);
+      handleApiError(err, "Eroare la generarea variantelor");
       setPreviewError("Network error. Please check if the backend is running.");
       setIsRendering(false);
     }

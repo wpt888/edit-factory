@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { EmptyState } from "@/components/empty-state";
+import { handleApiError } from "@/lib/api";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
@@ -109,7 +110,7 @@ export default function UsagePage() {
         setGeminiStatus(data);
       }
     } catch (error) {
-      console.error("Failed to fetch Gemini status:", error);
+      handleApiError(error, "Eroare la verificarea statusului Gemini");
     } finally {
       setTestingGemini(false);
     }
@@ -141,7 +142,7 @@ export default function UsagePage() {
       // Also fetch Gemini status
       await fetchGeminiStatus();
     } catch (err) {
-      console.error("Failed to fetch usage data:", err);
+      handleApiError(err, "Eroare la incarcarea statisticilor");
       setError("Nu s-a putut conecta la server. Verifică că backend-ul rulează pe port 8000.");
     } finally {
       setLoading(false);
@@ -157,7 +158,7 @@ export default function UsagePage() {
         setShowAllEntries(true);
       }
     } catch (error) {
-      console.error("Failed to fetch all entries:", error);
+      handleApiError(error, "Eroare la incarcarea costurilor");
     }
   };
 

@@ -28,7 +28,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { apiGet, apiPost, apiPut, apiDelete, API_URL } from "@/lib/api";
+import { apiGet, apiPost, apiPut, apiDelete, API_URL, handleApiError } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Plus,
@@ -105,7 +105,7 @@ export default function TTSLibraryPage() {
       }
     },
     onError: (err) => {
-      console.error("Error polling TTS assets:", err);
+      handleApiError(err, "Eroare la biblioteca TTS");
     },
   });
 
