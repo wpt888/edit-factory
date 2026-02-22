@@ -86,37 +86,37 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STAB-01 | — | Pending |
-| STAB-02 | — | Pending |
-| STAB-03 | — | Pending |
-| STAB-04 | — | Pending |
-| STAB-05 | — | Pending |
-| STAB-06 | — | Pending |
-| SEC-01 | — | Pending |
-| SEC-02 | — | Pending |
-| SEC-03 | — | Pending |
-| SEC-04 | — | Pending |
-| FE-01 | — | Pending |
-| FE-02 | — | Pending |
-| FE-03 | — | Pending |
-| FE-04 | — | Pending |
-| FE-05 | — | Pending |
-| REF-01 | — | Pending |
-| REF-02 | — | Pending |
-| QUAL-01 | — | Pending |
-| QUAL-02 | — | Pending |
-| QUAL-03 | — | Pending |
-| QUAL-04 | — | Pending |
-| TEST-01 | — | Pending |
-| TEST-02 | — | Pending |
-| TEST-03 | — | Pending |
-| TEST-04 | — | Pending |
+| STAB-01 | Phase 24 | Pending |
+| STAB-02 | Phase 24 | Pending |
+| STAB-03 | Phase 24 | Pending |
+| STAB-04 | Phase 24 | Pending |
+| STAB-05 | Phase 24 | Pending |
+| STAB-06 | Phase 25 | Pending |
+| SEC-01 | Phase 25 | Pending |
+| SEC-02 | Phase 25 | Pending |
+| SEC-03 | Phase 25 | Pending |
+| SEC-04 | Phase 25 | Pending |
+| FE-01 | Phase 26 | Pending |
+| FE-02 | Phase 26 | Pending |
+| FE-03 | Phase 26 | Pending |
+| FE-04 | Phase 26 | Pending |
+| FE-05 | Phase 26 | Pending |
+| REF-01 | Phase 27 | Pending |
+| REF-02 | Phase 27 | Pending |
+| QUAL-01 | Phase 28 | Pending |
+| QUAL-02 | Phase 24 | Pending |
+| QUAL-03 | Phase 28 | Pending |
+| QUAL-04 | Phase 24 | Pending |
+| TEST-01 | Phase 29 | Pending |
+| TEST-02 | Phase 29 | Pending |
+| TEST-03 | Phase 29 | Pending |
+| TEST-04 | Phase 29 | Pending |
 
 **Coverage:**
 - v6 requirements: 25 total
-- Mapped to phases: 0
-- Unmapped: 25 ⚠️
+- Mapped to phases: 25
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-02-22*
-*Last updated: 2026-02-22 after initial definition*
+*Last updated: 2026-02-22 after roadmap created — all 25 requirements mapped*
