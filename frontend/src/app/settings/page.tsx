@@ -11,7 +11,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Loader2, Save, Settings as SettingsIcon, Eye, EyeOff, BarChart3, Trash2, Star, RefreshCw, Plus, Key } from "lucide-react"
-import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api"
+import { apiGet, apiPost, apiPatch, apiDelete, handleApiError } from "@/lib/api"
+import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import { useProfile } from "@/contexts/profile-context"
 
@@ -114,7 +115,7 @@ export default function SettingsPage() {
         setElAccounts(data.accounts || [])
       }
     } catch (error) {
-      console.error("Failed to load ElevenLabs accounts:", error)
+      handleApiError(error, "Eroare la incarcarea conturilor ElevenLabs")
     } finally {
       setElAccountsLoading(false)
     }
@@ -156,7 +157,7 @@ export default function SettingsPage() {
         setAccentColor(videoSettings.accent_color || "#FFFF00")
         setTemplateCta(videoSettings.cta_text || "Comanda acum!")
       } catch (error) {
-        console.error("Failed to load settings:", error)
+        handleApiError(error, "Eroare la incarcarea setarilor")
       } finally {
         setInitialLoad(false)
       }
@@ -195,7 +196,7 @@ export default function SettingsPage() {
         const data = await response.json()
         setDashboard(data)
       } catch (error) {
-        console.error("Failed to load dashboard:", error)
+        handleApiError(error, "Eroare la incarcarea dashboard-ului")
       } finally {
         setDashboardLoading(false)
       }
@@ -222,7 +223,7 @@ export default function SettingsPage() {
           setVoiceId("")
         }
       } catch (error) {
-        console.error("Failed to load voices:", error)
+        handleApiError(error, "Eroare la incarcarea vocilor")
         setVoices([])
       } finally {
         setLoadingVoices(false)
@@ -234,7 +235,7 @@ export default function SettingsPage() {
 
   const handleSave = async () => {
     if (!currentProfile) {
-      alert("No profile selected")
+      toast.error("No profile selected")
       return
     }
 
@@ -278,9 +279,9 @@ export default function SettingsPage() {
 
       if (!response.ok) throw new Error("Failed to save settings")
 
-      alert("Settings saved successfully (TTS, Postiz, and Template)")
+      toast.success("Settings saved successfully (TTS, Postiz, and Template)")
     } catch (error) {
-      alert(error instanceof Error ? error.message : "Failed to save settings")
+      handleApiError(error, "Failed to save settings")
     } finally {
       setSaving(false)
     }
@@ -288,7 +289,7 @@ export default function SettingsPage() {
 
   const handleTestConnection = async () => {
     if (!postizUrl || !postizKey) {
-      alert("Please enter Postiz API URL and API Key first")
+      toast.warning("Please enter Postiz API URL and API Key first")
       return
     }
 
@@ -303,14 +304,14 @@ export default function SettingsPage() {
       const data = await response.json()
       if (data.connected) {
         setConnectionStatus("success")
-        alert(`Connected successfully! Found ${data.integrations_count} social media accounts.`)
+        toast.success(`Connected successfully! Found ${data.integrations_count} social media accounts.`)
       } else {
         setConnectionStatus("error")
-        alert(`Connection failed: ${data.error || "Unknown error"}`)
+        toast.error(`Connection failed: ${data.error || "Unknown error"}`)
       }
     } catch (error) {
       setConnectionStatus("error")
-      alert(error instanceof Error ? error.message : "Connection test failed")
+      handleApiError(error, "Connection test failed")
     } finally {
       setTestingConnection(false)
     }
@@ -319,7 +320,7 @@ export default function SettingsPage() {
   // ElevenLabs account handlers
   const handleAddAccount = async () => {
     if (!newAccountLabel.trim() || !newAccountKey.trim()) {
-      alert("Please enter both a label and API key")
+      toast.warning("Please enter both a label and API key")
       return
     }
 
@@ -337,14 +338,14 @@ export default function SettingsPage() {
 
       const data = await response.json()
       const tier = data.subscription?.tier || "unknown"
-      alert(`Account added! Tier: ${tier}`)
+      toast.success(`Account added! Tier: ${tier}`)
 
       setNewAccountLabel("")
       setNewAccountKey("")
       setShowNewAccountKey(false)
       loadAccounts()
     } catch (error) {
-      alert(error instanceof Error ? error.message : "Failed to add account")
+      handleApiError(error, "Failed to add account")
     } finally {
       setAddingAccount(false)
     }
@@ -359,7 +360,7 @@ export default function SettingsPage() {
       if (!response.ok) throw new Error("Failed to delete account")
       loadAccounts()
     } catch (error) {
-      alert(error instanceof Error ? error.message : "Failed to delete")
+      handleApiError(error, "Failed to delete account")
     } finally {
       setAccountActionLoading(null)
     }
@@ -372,7 +373,7 @@ export default function SettingsPage() {
       if (!response.ok) throw new Error("Failed to set primary")
       loadAccounts()
     } catch (error) {
-      alert(error instanceof Error ? error.message : "Failed to set primary")
+      handleApiError(error, "Failed to set primary account")
     } finally {
       setAccountActionLoading(null)
     }
@@ -385,7 +386,7 @@ export default function SettingsPage() {
       if (!response.ok) throw new Error("Failed to refresh")
       loadAccounts()
     } catch (error) {
-      alert(error instanceof Error ? error.message : "Failed to refresh")
+      handleApiError(error, "Failed to refresh account")
     } finally {
       setAccountActionLoading(null)
     }
