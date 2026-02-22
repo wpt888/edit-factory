@@ -70,7 +70,7 @@ Full details: `.planning/milestones/v5-ROADMAP.md`
 
 **Milestone Goal:** Harden Edit Factory for production stability — fix memory leaks, add error handling, improve security, add tests, and clean up technical debt identified in comprehensive codebase audit.
 
-- [ ] **Phase 24: Backend Stability** - Fix memory leaks, persist progress, validate uploads, async TTS client
+- [x] **Phase 24: Backend Stability** - Fix memory leaks, persist progress, validate uploads, async TTS client (completed 2026-02-22)
 - [ ] **Phase 25: Rate Limiting & Security** - slowapi middleware, XSS prevention, cache headers, retry logic
 - [ ] **Phase 26: Frontend Resilience** - Error boundary, consistent error handling, API client hardening, empty states, polling hook
 - [ ] **Phase 27: Frontend Refactoring** - Split library page, eliminate polling duplication
@@ -177,7 +177,7 @@ Plans:
 | 7-11 | v3 | 12/12 | Complete | 2026-02-06 |
 | 12-16 | v4 | 11/11 | Complete | 2026-02-12 |
 | 17-23 | v5 | 13/13 | Complete | 2026-02-21 |
-| 24. Backend Stability | 1/2 | In Progress|  | - |
+| 24. Backend Stability | 2/2 | Complete   | 2026-02-22 | - |
 | 25. Rate Limiting & Security | v6 | 0/2 | Not started | - |
 | 26. Frontend Resilience | v6 | 0/2 | Not started | - |
 | 27. Frontend Refactoring | v6 | 0/1 | Not started | - |

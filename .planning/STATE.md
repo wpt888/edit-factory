@@ -11,17 +11,17 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v6 Production Hardening
 Phase: 24 of 29 (Backend Stability)
-Plan: 1 of 2 (24-01 complete)
+Plan: 2 of 2 (24-02 complete — phase 24 complete)
 Status: In progress
-Last activity: 2026-02-22 — Completed 24-01: Progress persistence + lock lifecycle fixes
+Last activity: 2026-02-22 — Completed 24-02: Upload validation, JSON error handling, async TTS
 
-Progress: [█░░░░░░░░░] 10% (1/10 plans)
+Progress: [██░░░░░░░░] 20% (2/10 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 63 (across v2-v5)
-- Total phases completed: 23
+- Total plans completed: 65 (across v2-v6)
+- Total phases completed: 24
 - Total milestones shipped: 5
 
 **By Milestone:**
@@ -46,6 +46,9 @@ Recent decisions affecting current work:
 - 24-01: In-memory dict is primary progress source; Supabase is durability layer — all DB calls try/except so DB outage never blocks generation
 - 24-01: 409 Conflict returned at endpoint level (not inside background task) via is_project_locked() non-blocking check
 - 24-01: editai_generation_progress uses TEXT PK for project_id to match backend string UUID usage
+- 24-02: Created app/api/validators.py as shared module for validate_upload_size() rather than duplicating in each route
+- 24-02: generate_audio_trimmed and process_video_with_tts made async to propagate async generate_audio change
+- 24-02: json.JSONDecodeError now raises HTTPException 400 at both subtitle_settings parse sites in routes.py
 
 ### Pending Todos
 
@@ -61,8 +64,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 24-01-PLAN.md (progress persistence + lock lifecycle)
+Stopped at: Completed 24-02-PLAN.md (upload validation, JSON errors, async TTS)
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after 24-01 executed*
+*Last updated: 2026-02-22 after 24-02 executed*
