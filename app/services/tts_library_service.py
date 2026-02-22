@@ -170,11 +170,10 @@ class TTSLibraryService:
         """
         # Lazy import supabase
         try:
-            from supabase import create_client
-            settings = get_settings()
-            if not settings.supabase_url or not settings.supabase_key:
+            from app.db import get_supabase
+            supabase = get_supabase()
+            if not supabase:
                 return None
-            supabase = create_client(settings.supabase_url, settings.supabase_key)
         except Exception as e:
             logger.warning(f"TTS Library save_from_pipeline: no supabase: {e}")
             return None

@@ -3,7 +3,8 @@ Job Storage Service - Persistent job tracking with Supabase.
 Replaces in-memory job_store from routes.py with persistent storage.
 """
 import logging
-from datetime import datetime
+import threading
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from pathlib import Path
 
@@ -24,12 +25,9 @@ class JobStorage:
     def _init_supabase(self):
         """Initialize Supabase client."""
         try:
-            from app.config import get_settings
-            from supabase import create_client
-
-            settings = get_settings()
-            if settings.supabase_url and settings.supabase_key:
-                self._supabase = create_client(settings.supabase_url, settings.supabase_key)
+            from app.db import get_supabase
+            self._supabase = get_supabase()
+            if self._supabase:
                 logger.info("JobStorage: Supabase initialized")
             else:
                 logger.warning("JobStorage: Supabase credentials missing, using in-memory fallback")
@@ -53,8 +51,8 @@ class JobStorage:
             raise ValueError("job_id is required")
 
         # Add timestamps
-        job_data["created_at"] = datetime.now().isoformat()
-        job_data["updated_at"] = datetime.now().isoformat()
+        job_data["created_at"] = datetime.now(timezone.utc).isoformat()
+        job_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         # Store profile_id in job_data for memory fallback
         if profile_id:
@@ -135,7 +133,7 @@ class JobStorage:
 
         # Merge updates
         job.update(updates)
-        job["updated_at"] = datetime.now().isoformat()
+        job["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         if self._supabase:
             try:
@@ -247,7 +245,7 @@ class JobStorage:
 
         try:
             from datetime import timedelta
-            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
             result = self._supabase.table("jobs").delete().lt("created_at", cutoff).execute()
             count = len(result.data) if result.data else 0
@@ -260,11 +258,14 @@ class JobStorage:
 
 # Singleton instance
 _job_storage: Optional[JobStorage] = None
+_job_storage_lock = threading.Lock()
 
 
 def get_job_storage() -> JobStorage:
     """Get the singleton JobStorage instance."""
     global _job_storage
     if _job_storage is None:
-        _job_storage = JobStorage()
+        with _job_storage_lock:
+            if _job_storage is None:
+                _job_storage = JobStorage()
     return _job_storage

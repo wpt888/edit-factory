@@ -5,7 +5,8 @@ Saves to Supabase and local JSON backup.
 """
 import json
 import logging
-from datetime import datetime
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, List
 from dataclasses import dataclass, asdict
@@ -45,12 +46,9 @@ class CostTracker:
     def _init_supabase(self):
         """Initialize Supabase client."""
         try:
-            from app.config import get_settings
-            settings = get_settings()
-
-            if settings.supabase_url and settings.supabase_key:
-                from supabase import create_client
-                self._supabase = create_client(settings.supabase_url, settings.supabase_key)
+            from app.db import get_supabase
+            self._supabase = get_supabase()
+            if self._supabase:
                 logger.info("Supabase client initialized for cost tracking")
             else:
                 logger.warning("Supabase credentials not found, using local storage only")
@@ -114,7 +112,7 @@ class CostTracker:
         cost = characters * ELEVENLABS_COST_PER_CHAR
 
         entry = CostEntry(
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             job_id=job_id,
             service="elevenlabs",
             operation="tts",
@@ -150,7 +148,7 @@ class CostTracker:
         total_cost = image_cost + token_cost
 
         entry = CostEntry(
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             job_id=job_id,
             service="gemini",
             operation="video_analysis",
@@ -174,14 +172,17 @@ class CostTracker:
             logger.info(f"Cost logged: Gemini Analysis - {frames_analyzed} frames = ${total_cost:.4f}")
         return entry
 
+    _log_lock = threading.Lock()
+
     def _add_entry(self, entry: CostEntry):
         """Add entry to local log and update totals."""
-        data = self._load_log()
-        data["entries"].append(asdict(entry))
-        data["totals"][entry.service] = round(
-            data["totals"].get(entry.service, 0) + entry.cost_usd, 6
-        )
-        self._save_log(data)
+        with self._log_lock:
+            data = self._load_log()
+            data["entries"].append(asdict(entry))
+            data["totals"][entry.service] = round(
+                data["totals"].get(entry.service, 0) + entry.cost_usd, 6
+            )
+            self._save_log(data)
 
     def get_summary(self, profile_id: Optional[str] = None) -> Dict:
         """Get cost summary from Supabase or local."""
@@ -196,7 +197,7 @@ class CostTracker:
 
     def _get_summary_from_supabase(self, profile_id: Optional[str] = None) -> Dict:
         """Get summary from Supabase."""
-        today = datetime.now().date().isoformat()
+        today = datetime.now(timezone.utc).date().isoformat()
 
         # Get totals - filter by profile if provided
         query = self._supabase.table("api_costs").select("service, estimated_cost")
@@ -257,7 +258,7 @@ class CostTracker:
         if profile_id:
             entries = [e for e in entries if e.get("details", {}).get("profile_id") == profile_id]
 
-        today = datetime.now().date().isoformat()
+        today = datetime.now(timezone.utc).date().isoformat()
         today_entries = [e for e in entries if e["timestamp"].startswith(today)]
 
         # Recalculate totals from filtered entries
@@ -311,7 +312,7 @@ class CostTracker:
             Total cost in USD for current month
         """
         # Get first day of current month
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
         if self._supabase:
