@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { handleApiError } from "@/lib/api";
 
 /**
  * Hook for persisting state to localStorage with type safety
@@ -25,7 +26,7 @@ export function useLocalStorageConfig<T>(
         setValue(JSON.parse(stored) as T);
       }
     } catch (error) {
-      console.error(`Error reading localStorage key "${key}":`, error);
+      handleApiError(error, "Eroare la setari");
     }
     setHydrated(true);
   }, [key]);
@@ -38,7 +39,7 @@ export function useLocalStorageConfig<T>(
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (error) {
-      console.error(`Error writing localStorage key "${key}":`, error);
+      handleApiError(error, "Eroare la setari");
     }
   }, [key, value, hydrated]);
 

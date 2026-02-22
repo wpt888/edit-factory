@@ -25,7 +25,7 @@ import {
   useMemo,
   ReactNode,
 } from "react";
-import { apiGet } from "@/lib/api";
+import { apiGet, handleApiError } from "@/lib/api";
 
 // Profile interface matching backend schema
 interface Profile {
@@ -99,7 +99,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch (error) {
-      console.error("Failed to fetch profiles:", error);
+      handleApiError(error, "Eroare la incarcarea profilului");
     }
   }, [currentProfile]);
 
@@ -129,7 +129,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
               }
             }
           } catch (e) {
-            console.error("Failed to parse stored profiles:", e);
+            handleApiError(e, "Eroare la context profil");
           }
         }
       }

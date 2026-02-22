@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Job } from "@/types/video-processing";
+import { handleApiError } from "@/lib/api";
 
 function extractProgress(job: Job): number {
   const raw = job.progress;
@@ -155,7 +156,7 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
         pollingRef.current = setTimeout(() => poll(jobId), interval);
       }
     } catch (error) {
-      console.error("Polling error:", error);
+      handleApiError(error, "Eroare la actualizarea statusului");
       // Retry on network errors
       if (!isCancelledRef.current) {
         pollingRef.current = setTimeout(() => poll(jobId), interval * 2);

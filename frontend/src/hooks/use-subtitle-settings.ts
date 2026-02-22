@@ -5,6 +5,7 @@ import {
   SubtitleSettings,
   DEFAULT_SUBTITLE_SETTINGS
 } from "@/types/video-processing";
+import { handleApiError } from "@/lib/api";
 
 const STORAGE_KEY_PREFIX = "editai_subtitle_";
 
@@ -30,7 +31,7 @@ export function useSubtitleSettings(storageKey?: string) {
         setSettings({ ...DEFAULT_SUBTITLE_SETTINGS, ...parsed });
       }
     } catch (error) {
-      console.error("Error loading subtitle settings:", error);
+      handleApiError(error, "Eroare la setari");
     }
   }, [fullKey]);
 
@@ -41,7 +42,7 @@ export function useSubtitleSettings(storageKey?: string) {
     try {
       localStorage.setItem(fullKey, JSON.stringify(settings));
     } catch (error) {
-      console.error("Error saving subtitle settings:", error);
+      handleApiError(error, "Eroare la setari");
     }
   }, [settings, fullKey]);
 

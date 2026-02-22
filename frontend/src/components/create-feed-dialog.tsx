@@ -13,7 +13,7 @@
 "use client";
 
 import { useState } from "react";
-import { apiPost } from "@/lib/api";
+import { apiPost, handleApiError } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -76,7 +76,7 @@ export function CreateFeedDialog({
         toast.error(error.detail || "Failed to create feed");
       }
     } catch (error) {
-      console.error("Failed to create feed:", error);
+      handleApiError(error, "Eroare la crearea feed-ului");
       toast.error("An error occurred while creating the feed");
     } finally {
       setLoading(false);

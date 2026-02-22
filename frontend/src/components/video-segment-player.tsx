@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback } from "react";
+import { handleApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +35,16 @@ interface VoiceRegion {
   confidence: number;
 }
 
+interface SegmentTransformPreview {
+  rotation: number;
+  scale: number;
+  pan_x: number;
+  pan_y: number;
+  flip_h: boolean;
+  flip_v: boolean;
+  opacity: number;
+}
+
 interface VideoSegmentPlayerProps {
   videoUrl: string;
   duration: number;
@@ -42,6 +53,7 @@ interface VideoSegmentPlayerProps {
   onSegmentClick?: (segment: Segment) => void;
   currentSegment?: Segment;
   sourceVideoId?: string;
+  activeTransforms?: SegmentTransformPreview;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
@@ -54,6 +66,7 @@ export function VideoSegmentPlayer({
   onSegmentClick,
   currentSegment,
   sourceVideoId,
+  activeTransforms,
 }: VideoSegmentPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -143,7 +156,7 @@ export function VideoSegmentPlayer({
       containerRef.current.requestFullscreen().then(() => {
         setIsFullscreen(true);
       }).catch((err) => {
-        console.error("Fullscreen error:", err);
+        handleApiError(err, "Eroare la activarea fullscreen");
       });
     } else {
       document.exitFullscreen().then(() => {
@@ -668,6 +681,19 @@ export function VideoSegmentPlayer({
           src={videoUrl}
           className="w-full h-full object-contain"
           onClick={togglePlay}
+          style={activeTransforms ? {
+            transform: [
+              activeTransforms.flip_h ? "scaleX(-1)" : "",
+              activeTransforms.flip_v ? "scaleY(-1)" : "",
+              activeTransforms.rotation ? `rotate(${activeTransforms.rotation}deg)` : "",
+              activeTransforms.scale !== 1.0 ? `scale(${activeTransforms.scale})` : "",
+              (activeTransforms.pan_x || activeTransforms.pan_y)
+                ? `translate(${activeTransforms.pan_x}px, ${activeTransforms.pan_y}px)`
+                : "",
+            ].filter(Boolean).join(" ") || undefined,
+            opacity: activeTransforms.opacity,
+            transition: "transform 0.15s ease, opacity 0.15s ease",
+          } : undefined}
         />
 
         {/* Marking indicator */}
@@ -977,6 +1003,7 @@ export function VideoSegmentPlayer({
         <span><kbd className="px-1 bg-muted rounded">Shift+←</kbd>/<kbd className="px-1 bg-muted rounded">→</kbd> 5s</span>
         <span><kbd className="px-1 bg-muted rounded">J</kbd>/<kbd className="px-1 bg-muted rounded">K</kbd>/<kbd className="px-1 bg-muted rounded">L</kbd> Speed</span>
         <span><kbd className="px-1 bg-muted rounded">F</kbd> Fullscreen</span>
+        <span><kbd className="px-1 bg-muted rounded">Del</kbd> Delete Segment</span>
         <span><kbd className="px-1 bg-muted rounded">Esc</kbd> Cancel/Exit</span>
         <span><kbd className="px-1 bg-muted rounded">Scroll</kbd> Zoom Timeline</span>
       </div>
