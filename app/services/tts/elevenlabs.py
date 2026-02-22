@@ -9,11 +9,34 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 import httpx
 import librosa
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from .base import TTSService, TTSVoice, TTSResult
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception_type((httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.HTTPStatusError)),
+    before_sleep=lambda retry_state: logger.warning(
+        f"ElevenLabs API retry {retry_state.attempt_number}/3: {retry_state.outcome.exception()}"
+    ),
+    reraise=True
+)
+async def _call_elevenlabs_api_new(url: str, headers: dict, data: dict) -> httpx.Response:
+    """Make ElevenLabs API call with automatic retry on transient errors."""
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(url, headers=headers, json=data)
+        if response.status_code in (429, 500, 502, 503, 504):
+            raise httpx.HTTPStatusError(
+                f"Transient error {response.status_code}",
+                request=response.request,
+                response=response
+            )
+        return response
 
 
 class ElevenLabsTTSService(TTSService):
@@ -262,56 +285,55 @@ class ElevenLabsTTSService(TTSService):
         logger.info(f"Generating TTS for {len(text)} characters with voice {voice_id}...")
 
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await self._post_with_failover(client, url, headers, data)
+            response = await _call_elevenlabs_api_new(url, headers, data)
 
-                if response.status_code != 200:
-                    error_detail = response.text
-                    logger.error(f"ElevenLabs API error: {response.status_code} - {error_detail}")
-                    raise Exception(f"ElevenLabs API error: {response.status_code} - {error_detail}")
+            if response.status_code != 200:
+                error_detail = response.text
+                logger.error(f"ElevenLabs API error: {response.status_code} - {error_detail}")
+                raise Exception(f"ElevenLabs API error: {response.status_code} - {error_detail}")
 
-                # Save audio file
-                with open(output_path, "wb") as f:
-                    f.write(response.content)
+            # Save audio file
+            with open(output_path, "wb") as f:
+                f.write(response.content)
 
-                # Calculate duration using librosa
-                try:
-                    duration_seconds = librosa.get_duration(path=str(output_path))
-                except Exception as e:
-                    logger.warning(f"Failed to get audio duration: {e}")
-                    duration_seconds = 0.0
+            # Calculate duration using librosa
+            try:
+                duration_seconds = librosa.get_duration(path=str(output_path))
+            except Exception as e:
+                logger.warning(f"Failed to get audio duration: {e}")
+                duration_seconds = 0.0
 
-                # Calculate cost
-                cost = (len(text) / 1000.0) * self.cost_per_1k_chars
+            # Calculate cost
+            cost = (len(text) / 1000.0) * self.cost_per_1k_chars
 
-                logger.info(f"Audio saved to: {output_path} (duration: {duration_seconds:.2f}s, cost: ${cost:.4f})")
+            logger.info(f"Audio saved to: {output_path} (duration: {duration_seconds:.2f}s, cost: ${cost:.4f})")
 
-                # Log cost to tracker
-                try:
-                    from app.services.cost_tracker import get_cost_tracker
-                    tracker = get_cost_tracker()
-                    tracker.log_elevenlabs_tts(
-                        job_id=output_path.stem,
-                        characters=len(text),
-                        text_preview=text[:100]
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to log cost: {e}")
-
-                # --- Cache store ---
-                cache_store(cache_key, "elevenlabs", output_path, {
-                    "duration_seconds": duration_seconds,
-                    "cost": cost,
-                    "characters": len(text)
-                })
-
-                return TTSResult(
-                    audio_path=output_path,
-                    duration_seconds=duration_seconds,
-                    provider="elevenlabs",
-                    voice_id=voice_id,
-                    cost=cost
+            # Log cost to tracker
+            try:
+                from app.services.cost_tracker import get_cost_tracker
+                tracker = get_cost_tracker()
+                tracker.log_elevenlabs_tts(
+                    job_id=output_path.stem,
+                    characters=len(text),
+                    text_preview=text[:100]
                 )
+            except Exception as e:
+                logger.warning(f"Failed to log cost: {e}")
+
+            # --- Cache store ---
+            cache_store(cache_key, "elevenlabs", output_path, {
+                "duration_seconds": duration_seconds,
+                "cost": cost,
+                "characters": len(text)
+            })
+
+            return TTSResult(
+                audio_path=output_path,
+                duration_seconds=duration_seconds,
+                provider="elevenlabs",
+                voice_id=voice_id,
+                cost=cost
+            )
 
         except httpx.TimeoutException:
             raise Exception("ElevenLabs API timeout - text may be too long")
@@ -390,70 +412,69 @@ class ElevenLabsTTSService(TTSService):
         logger.info(f"Generating TTS with timestamps for {len(text)} characters with voice {voice_id}...")
 
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await self._post_with_failover(client, url, headers, data)
+            response = await _call_elevenlabs_api_new(url, headers, data)
 
-                if response.status_code != 200:
-                    error_detail = response.text
-                    logger.error(f"ElevenLabs API error: {response.status_code} - {error_detail}")
-                    raise Exception(f"ElevenLabs API error: {response.status_code} - {error_detail}")
+            if response.status_code != 200:
+                error_detail = response.text
+                logger.error(f"ElevenLabs API error: {response.status_code} - {error_detail}")
+                raise Exception(f"ElevenLabs API error: {response.status_code} - {error_detail}")
 
-                # Parse JSON response
-                response_data = response.json()
+            # Parse JSON response
+            response_data = response.json()
 
-                # Decode base64 audio and save to file
-                audio_bytes = base64.b64decode(response_data["audio_base64"])
-                with open(output_path, "wb") as f:
-                    f.write(audio_bytes)
+            # Decode base64 audio and save to file
+            audio_bytes = base64.b64decode(response_data["audio_base64"])
+            with open(output_path, "wb") as f:
+                f.write(audio_bytes)
 
-                # Extract alignment data
-                alignment = response_data.get("alignment", {})
+            # Extract alignment data
+            alignment = response_data.get("alignment", {})
 
-                # Calculate duration using librosa
-                try:
-                    duration_seconds = librosa.get_duration(path=str(output_path))
-                except Exception as e:
-                    logger.warning(f"Failed to get audio duration: {e}")
-                    duration_seconds = 0.0
+            # Calculate duration using librosa
+            try:
+                duration_seconds = librosa.get_duration(path=str(output_path))
+            except Exception as e:
+                logger.warning(f"Failed to get audio duration: {e}")
+                duration_seconds = 0.0
 
-                # Calculate cost
-                cost = (len(text) / 1000.0) * self.cost_per_1k_chars
+            # Calculate cost
+            cost = (len(text) / 1000.0) * self.cost_per_1k_chars
 
-                logger.info(
-                    f"Audio with timestamps saved to: {output_path} "
-                    f"(duration: {duration_seconds:.2f}s, cost: ${cost:.4f}, "
-                    f"characters: {len(alignment.get('characters', []))})"
+            logger.info(
+                f"Audio with timestamps saved to: {output_path} "
+                f"(duration: {duration_seconds:.2f}s, cost: ${cost:.4f}, "
+                f"characters: {len(alignment.get('characters', []))})"
+            )
+
+            # Log cost to tracker
+            try:
+                from app.services.cost_tracker import get_cost_tracker
+                tracker = get_cost_tracker()
+                tracker.log_elevenlabs_tts(
+                    job_id=output_path.stem,
+                    characters=len(text),
+                    text_preview=text[:100]
                 )
+            except Exception as e:
+                logger.warning(f"Failed to log cost: {e}")
 
-                # Log cost to tracker
-                try:
-                    from app.services.cost_tracker import get_cost_tracker
-                    tracker = get_cost_tracker()
-                    tracker.log_elevenlabs_tts(
-                        job_id=output_path.stem,
-                        characters=len(text),
-                        text_preview=text[:100]
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to log cost: {e}")
+            # --- Cache store ---
+            cache_store(cache_key, "elevenlabs", output_path, {
+                "duration_seconds": duration_seconds,
+                "cost": cost,
+                "characters": len(text),
+                "alignment": alignment
+            })
 
-                # --- Cache store ---
-                cache_store(cache_key, "elevenlabs", output_path, {
-                    "duration_seconds": duration_seconds,
-                    "cost": cost,
-                    "characters": len(text),
-                    "alignment": alignment
-                })
+            tts_result = TTSResult(
+                audio_path=output_path,
+                duration_seconds=duration_seconds,
+                provider="elevenlabs",
+                voice_id=voice_id,
+                cost=cost
+            )
 
-                tts_result = TTSResult(
-                    audio_path=output_path,
-                    duration_seconds=duration_seconds,
-                    provider="elevenlabs",
-                    voice_id=voice_id,
-                    cost=cost
-                )
-
-                return (tts_result, alignment)
+            return (tts_result, alignment)
 
         except httpx.TimeoutException:
             raise Exception("ElevenLabs API timeout - text may be too long")
