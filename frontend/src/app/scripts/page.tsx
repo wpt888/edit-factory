@@ -26,7 +26,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, handleApiError } from "@/lib/api";
 import { Loader2, ChevronDown, ChevronUp, Sparkles, AlertCircle, FileText } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 
@@ -60,10 +60,10 @@ export default function ScriptsPage() {
         const data = await res.json();
         setKeywords(data.keywords || []);
       } else {
-        console.error("Failed to fetch keywords:", await res.text());
+        handleApiError(new Error(await res.text()), "Eroare la incarcarea cuvintelor cheie");
       }
     } catch (err) {
-      console.error("Error fetching keywords:", err);
+      handleApiError(err, "Eroare la incarcarea cuvintelor cheie");
     } finally {
       setKeywordsLoading(false);
     }
@@ -91,7 +91,7 @@ export default function ScriptsPage() {
         setError(errorData.detail || "Failed to generate scripts");
       }
     } catch (err) {
-      console.error("Error generating scripts:", err);
+      handleApiError(err, "Eroare la generarea scripturilor");
       setError("Network error. Please check if the backend is running.");
     } finally {
       setIsGenerating(false);

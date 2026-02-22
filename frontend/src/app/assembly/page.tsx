@@ -20,7 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, apiPut, handleApiError } from "@/lib/api";
 import {
   Loader2,
   Sparkles,
@@ -38,7 +38,6 @@ import { EmptyState } from "@/components/empty-state";
 import { SegmentTransformPanel } from "@/components/segment-transform-panel";
 import type { SegmentTransform } from "@/types/video-processing";
 import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
-import { apiPut } from "@/lib/api";
 
 interface MatchPreview {
   srt_index: number;
@@ -106,7 +105,7 @@ export default function AssemblyPage() {
       }
     },
     onError: (err) => {
-      console.error("Error polling render status:", err);
+      handleApiError(err, "Eroare la actualizarea statusului asamblarii");
     },
   });
 
@@ -141,7 +140,7 @@ export default function AssemblyPage() {
         setPreviewError(errorData.detail || "Failed to preview matches");
       }
     } catch (err) {
-      console.error("Error previewing matches:", err);
+      handleApiError(err, "Eroare la previzualizarea potrivirilor");
       setPreviewError("Network error. Please check if the backend is running.");
     } finally {
       setIsPreviewLoading(false);
@@ -183,7 +182,7 @@ export default function AssemblyPage() {
         setIsRendering(false);
       }
     } catch (err) {
-      console.error("Error starting render:", err);
+      handleApiError(err, "Eroare la pornirea asamblarii");
       setPreviewError("Network error. Please check if the backend is running.");
       setIsRendering(false);
     }
@@ -397,7 +396,7 @@ export default function AssemblyPage() {
                                       setMatchTransforms((prev) => ({ ...prev, [segKey]: t }));
                                       setTransformingMatchIdx(null);
                                     } catch (err) {
-                                      console.error("Failed to save transforms:", err);
+                                      handleApiError(err, "Eroare la salvarea transformarilor");
                                     }
                                   }}
                                   isOverride={true}
