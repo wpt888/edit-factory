@@ -105,11 +105,11 @@ Plans:
   3. Stream endpoints return Cache-Control headers appropriate for media streaming
   4. TTS text length exceeding the limit is rejected at the endpoint before the background job starts
   5. External API calls (ElevenLabs, Gemini) automatically retry on transient failures with exponential backoff
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 25-01: Rate limiting middleware (slowapi) and TTS length validation
-- [ ] 25-02: XSS prevention in SRT preview, cache headers, retry logic with tenacity
+- [ ] 25-01-PLAN.md — Rate limiting middleware (slowapi) and TTS text length validation
+- [ ] 25-02-PLAN.md — SRT content sanitization, Cache-Control headers, tenacity retry logic
 
 ### Phase 26: Frontend Resilience
 **Goal**: The frontend handles errors gracefully and communicates clearly in every state
