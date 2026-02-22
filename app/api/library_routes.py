@@ -798,10 +798,6 @@ async def generate_from_segments(
         generate_tts: Dacă să genereze audio TTS
         mute_source_voice: Dacă să suprime vocea din video sursă
     """
-    # Log the received request for debugging
-    logger.info(f"[MUTE DEBUG] /generate-from-segments called for project {project_id}")
-    logger.info(f"[MUTE DEBUG] Request parameters: variant_count={request.variant_count}, mute_source_voice={request.mute_source_voice}")
-
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -1088,9 +1084,7 @@ async def _generate_from_segments_task(
 
         # ============== VOICE DETECTION (dacă mute_source_voice este activat) ==============
         voice_segments_by_file = {}
-        logger.info(f"[MUTE DEBUG] Project {project_id}: mute_source_voice={mute_source_voice}")
         if mute_source_voice:
-            logger.info(f"[MUTE DEBUG] Starting voice detection for project {project_id}")
             update_generation_progress(project_id, 8, "Se detectează vocile din video-uri sursă...")
             try:
                 from app.services.voice_detector import VoiceDetector
@@ -1193,7 +1187,6 @@ async def _generate_from_segments_task(
 
                         # ============== VOICE MUTING: Construim filtrul audio dacă e necesar ==============
                         audio_filter_args = []
-                        logger.info(f"[MUTE DEBUG] Segment {seg['id'][:8]}: mute_source_voice={mute_source_voice}, file in voice_map={seg['file_path'] in voice_segments_by_file}")
                         if mute_source_voice and seg["file_path"] in voice_segments_by_file:
                             voice_segs = voice_segments_by_file[seg["file_path"]]
                             overlapping_mutes = _get_overlapping_voice_mutes(
@@ -1201,7 +1194,6 @@ async def _generate_from_segments_task(
                                 seg["end_time"],
                                 voice_segs
                             )
-                            logger.info(f"[MUTE DEBUG] Found {len(overlapping_mutes)} overlapping voice intervals for segment")
                             if overlapping_mutes:
                                 audio_filter = _build_mute_filter(overlapping_mutes)
                                 if audio_filter:
@@ -1213,7 +1205,6 @@ async def _generate_from_segments_task(
                                     noise_filter = "afftdn=nr=25:nf=-20:tn=1"
                                     combined_filter = f"{audio_filter},{noise_filter}"
                                     audio_filter_args = ["-af", combined_filter]
-                                    logger.info(f"[MUTE DEBUG] Applying audio filter with noise cancelling: {combined_filter}")
                                     logger.info(f"    Applying voice mute filter: {len(overlapping_mutes)} intervals + noise reduction")
 
                         # Dacă nu avem mute filter dar avem mute_source_voice activat,
@@ -1221,7 +1212,6 @@ async def _generate_from_segments_task(
                         if mute_source_voice and not audio_filter_args:
                             noise_filter = "afftdn=nr=25:nf=-20:tn=1"
                             audio_filter_args = ["-af", noise_filter]
-                            logger.info(f"[MUTE DEBUG] Applying noise cancelling only: {noise_filter}")
 
                         extract_cmd = [
                             "ffmpeg", "-y",
@@ -1234,9 +1224,6 @@ async def _generate_from_segments_task(
                             "-avoid_negative_ts", "make_zero",
                             str(segment_output)
                         ]
-
-                        # Log the FULL FFmpeg command for debugging
-                        logger.info(f"[MUTE DEBUG] FFmpeg command: {' '.join(extract_cmd)}")
 
                         result = subprocess.run(extract_cmd, capture_output=True, text=True)
                         if result.returncode != 0:
