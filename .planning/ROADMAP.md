@@ -76,7 +76,7 @@ Full details: `.planning/milestones/v5-ROADMAP.md`
 - [x] **Phase 27: Frontend Refactoring** - Split library page, eliminate polling duplication (completed 2026-02-22)
 - [x] **Phase 28: Code Quality** - Centralize Supabase client, remove debug logs (completed 2026-02-22)
 - [x] **Phase 29: Testing & Observability** - pytest setup, unit tests, structured logging, data retention (completed 2026-02-22)
-- [ ] **Phase 30: Frontend Error Handling Adoption** - Wire handleApiError into all catch blocks, adopt ErrorBoundary, switch to apiGetWithRetry (gap closure)
+- [x] **Phase 30: Frontend Error Handling Adoption** - Wire handleApiError into all catch blocks, adopt ErrorBoundary, switch to apiGetWithRetry (gap closure) (completed 2026-02-22)
 
 ## Phase Details
 
@@ -202,7 +202,7 @@ Plans:
 | 27. Frontend Refactoring | 1/1 | Complete    | 2026-02-22 | - |
 | 28. Code Quality | 1/1 | Complete    | 2026-02-22 | - |
 | 29. Testing & Observability | 2/2 | Complete    | 2026-02-22 | - |
-| 30. Frontend Error Handling Adoption | 2/3 | In Progress|  | - |
+| 30. Frontend Error Handling Adoption | 3/3 | Complete   | 2026-02-22 | - |
 
 ---
 *Last updated: 2026-02-22 after v6 Production Hardening roadmap created*

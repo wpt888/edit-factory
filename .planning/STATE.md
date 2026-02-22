@@ -11,9 +11,9 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v6 Production Hardening
 Phase: 30 of 30 (Frontend Error Handling Adoption)
-Plan: 01 complete
-Status: In progress (1/2 plans complete)
-Last activity: 2026-02-22 — Completed Phase 30 Plan 01 (handleApiError adoption across 5 heaviest frontend files)
+Plan: 03 complete
+Status: Complete (3/3 plans complete)
+Last activity: 2026-02-22 — Completed Phase 30 Plan 03 (apiGetWithRetry adoption + ErrorBoundary wiring, FE-02 fully closed)
 
 Progress: [██████████] 100% (10/10 plans)
 
@@ -77,6 +77,9 @@ Recent decisions affecting current work:
 - [Phase 30-02]: use-job-polling and use-batch-polling retain retry logic after handleApiError — polling resilience preserved
 - [Phase 30-02]: FE-02 gap closure complete — all 13 target files use handleApiError() in every catch block
 - [Phase 30-01]: handleApiError replaces console.error in all catch blocks; alert() split by semantic intent into toast.success/warning/error
+- [Phase 30-03]: blob download calls (librarie downloadFile, tts-library fetchAudioBlob/downloadFile) kept as apiGet — binary fetches are not retry candidates
+- [Phase 30-03]: ErrorBoundary wraps 3 logical sections in library/page.tsx (ClipGallery, ClipEditorPanel, SegmentSelectionModal) — granular isolation not page-wide
+- [Phase 30-03]: segments/page.tsx console.error calls (12) are pre-existing out-of-scope — documented as deferred, not fixed
 
 ### Pending Todos
 
@@ -92,8 +95,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 30-01-PLAN.md (handleApiError adoption across 5 heaviest frontend files)
+Stopped at: Completed 30-03-PLAN.md (apiGetWithRetry adoption + ErrorBoundary wiring — Phase 30 complete)
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after Phase 30-02 complete*
+*Last updated: 2026-02-22 after Phase 30-03 complete (Phase 30 fully done)*
