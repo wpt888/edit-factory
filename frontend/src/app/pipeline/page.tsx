@@ -22,7 +22,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { apiGet, apiGetWithRetry, apiPost, apiDelete, API_URL, handleApiError } from "@/lib/api";
+import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, handleApiError } from "@/lib/api";
 import {
   Loader2,
   Sparkles,
@@ -44,12 +44,17 @@ import {
   Package,
   Images,
   X,
+  Star,
+  Layers,
 } from "lucide-react";
 import { usePolling } from "@/hooks";
+import { useProfile } from "@/contexts/profile-context";
 import { EmptyState } from "@/components/empty-state";
 import { ProductPickerDialog } from "@/components/product-picker-dialog";
 import { ImagePickerDialog } from "@/components/image-picker-dialog";
+import { PipOverlayPanel } from "@/components/pip-overlay-panel";
 import type { AssociationResponse } from "@/components/product-picker-dialog";
+import { PipConfig, DEFAULT_PIP_CONFIG } from "@/components/product-picker-dialog";
 
 // TypeScript interfaces
 interface MatchPreview {
@@ -123,6 +128,8 @@ interface ContextProduct {
 }
 
 export default function PipelinePage() {
+  const { currentProfile } = useProfile();
+
   // Step tracking
   const [step, setStep] = useState(1);
 
@@ -147,6 +154,8 @@ export default function PipelinePage() {
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voiceId, setVoiceId] = useState("");
   const [voicesLoading, setVoicesLoading] = useState(false);
+  const [defaultVoiceId, setDefaultVoiceId] = useState("");
+  const [savingDefault, setSavingDefault] = useState(false);
 
   // Step 4: Render
   const [selectedVariants, setSelectedVariants] = useState<Set<number>>(new Set());
@@ -183,6 +192,10 @@ export default function PipelinePage() {
   const [associations, setAssociations] = useState<Record<string, AssociationResponse>>({});
   const [pickerSegmentId, setPickerSegmentId] = useState<string | null>(null);
   const [imagePickerAssoc, setImagePickerAssoc] = useState<AssociationResponse | null>(null);
+
+  // PiP overlay panel state
+  const [pipExpandedSegId, setPipExpandedSegId] = useState<string | null>(null);
+  const [pipSaving, setPipSaving] = useState(false);
 
   // Format helpers
   const formatTime = (seconds: number): string => {
@@ -557,6 +570,56 @@ export default function PipelinePage() {
     loadVoices();
   }, []);
 
+  // Load profile's saved default voice on mount
+  useEffect(() => {
+    if (!currentProfile) return;
+    const loadDefaultVoice = async () => {
+      try {
+        const res = await apiGetWithRetry(`/profiles/${currentProfile.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          const savedVoiceId = data.tts_settings?.voice_id;
+          if (savedVoiceId) {
+            setDefaultVoiceId(savedVoiceId);
+            // Pre-select if user hasn't manually chosen yet
+            setVoiceId((prev) => prev === "" ? savedVoiceId : prev);
+          }
+        }
+      } catch {
+        // Silently fail — voice selector still works with default
+      }
+    };
+    loadDefaultVoice();
+  }, [currentProfile]);
+
+  // Save selected voice as default in profile
+  const handleSetDefaultVoice = async () => {
+    if (!currentProfile || !voiceId || voiceId === "default") return;
+    setSavingDefault(true);
+    try {
+      const selectedVoice = voices.find(v => v.voice_id === voiceId);
+      const res = await apiGetWithRetry(`/profiles/${currentProfile.id}`);
+      if (!res.ok) throw new Error("Failed to load profile");
+      const profileData = await res.json();
+      const existingTts = profileData.tts_settings || {};
+
+      const ttsSettings = {
+        ...existingTts,
+        provider: "elevenlabs",
+        voice_id: voiceId,
+        voice_name: selectedVoice?.name || "",
+      };
+
+      const patchRes = await apiPatch(`/profiles/${currentProfile.id}`, { tts_settings: ttsSettings });
+      if (!patchRes.ok) throw new Error("Failed to save default voice");
+      setDefaultVoiceId(voiceId);
+    } catch (err) {
+      handleApiError(err, "Failed to save default voice");
+    } finally {
+      setSavingDefault(false);
+    }
+  };
+
   // History sidebar: import selected scripts
   const handleHistoryImport = async () => {
     const selected = historyScripts.filter((_, i) => historySelectedScripts.has(i));
@@ -675,6 +738,22 @@ export default function PipelinePage() {
       }
     } catch (error) {
       handleApiError(error, "Failed to remove product association");
+    }
+  };
+
+  // Save PiP config for an association
+  const handleSavePipConfig = async (associationId: string, segmentId: string, config: PipConfig) => {
+    setPipSaving(true);
+    try {
+      const res = await apiPatch(`/associations/${associationId}/pip-config`, config);
+      if (res.ok) {
+        const updated = await res.json();
+        setAssociations(prev => ({ ...prev, [segmentId]: updated }));
+      }
+    } catch (error) {
+      handleApiError(error, "Failed to save PiP config");
+    } finally {
+      setPipSaving(false);
     }
   };
 
@@ -1086,42 +1165,61 @@ export default function PipelinePage() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="tts-voice">Voice</Label>
-                  <Select value={voiceId} onValueChange={setVoiceId}>
-                    <SelectTrigger id="tts-voice" disabled={voicesLoading}>
-                      <SelectValue placeholder={voicesLoading ? "Loading voices..." : "Default voice (from settings)"} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="default">Default voice (from settings)</SelectItem>
-                      {(() => {
-                        const custom = voices.filter(v => v.category && v.category !== "premade");
-                        const premade = voices.filter(v => !v.category || v.category === "premade");
-                        return (
-                          <>
-                            {custom.length > 0 && (
-                              <>
-                                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">My Voices</div>
-                                {custom.map((voice) => (
-                                  <SelectItem key={voice.voice_id} value={voice.voice_id}>
-                                    {voice.name}{voice.language ? ` (${voice.language})` : ""}
-                                  </SelectItem>
-                                ))}
-                              </>
-                            )}
-                            {premade.length > 0 && (
-                              <>
-                                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">Library</div>
-                                {premade.map((voice) => (
-                                  <SelectItem key={voice.voice_id} value={voice.voice_id}>
-                                    {voice.name}{voice.language ? ` (${voice.language})` : ""}
-                                  </SelectItem>
-                                ))}
-                              </>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </SelectContent>
-                  </Select>
+                  <div className="flex gap-2">
+                    <Select value={voiceId} onValueChange={setVoiceId}>
+                      <SelectTrigger id="tts-voice" disabled={voicesLoading} className="flex-1">
+                        <SelectValue placeholder={voicesLoading ? "Loading voices..." : "Select a voice"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(() => {
+                          const custom = voices.filter(v => v.category && v.category !== "premade");
+                          const premade = voices.filter(v => !v.category || v.category === "premade");
+                          return (
+                            <>
+                              {custom.length > 0 && (
+                                <>
+                                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">My Voices</div>
+                                  {custom.map((voice) => (
+                                    <SelectItem key={voice.voice_id} value={voice.voice_id}>
+                                      {voice.name}{voice.language ? ` (${voice.language})` : ""}{voice.voice_id === defaultVoiceId ? " \u2605" : ""}
+                                    </SelectItem>
+                                  ))}
+                                </>
+                              )}
+                              {premade.length > 0 && (
+                                <>
+                                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">Library</div>
+                                  {premade.map((voice) => (
+                                    <SelectItem key={voice.voice_id} value={voice.voice_id}>
+                                      {voice.name}{voice.language ? ` (${voice.language})` : ""}{voice.voice_id === defaultVoiceId ? " \u2605" : ""}
+                                    </SelectItem>
+                                  ))}
+                                </>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      variant={voiceId === defaultVoiceId ? "outline" : "secondary"}
+                      size="icon"
+                      onClick={handleSetDefaultVoice}
+                      disabled={!voiceId || voiceId === "default" || voiceId === defaultVoiceId || savingDefault}
+                      title={voiceId === defaultVoiceId ? "This is your default voice" : "Set as default voice"}
+                    >
+                      {savingDefault ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Star className={`h-4 w-4 ${voiceId === defaultVoiceId ? "fill-yellow-400 text-yellow-400" : ""}`} />
+                      )}
+                    </Button>
+                  </div>
+                  {defaultVoiceId && (
+                    <p className="text-xs text-muted-foreground">
+                      Default: {voices.find(v => v.voice_id === defaultVoiceId)?.name || "Saved voice"}
+                    </p>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -1303,51 +1401,80 @@ export default function PipelinePage() {
                                 const segId = match.segment_id;
                                 const assoc = associations[segId];
                                 return (
-                                  <div className="flex items-center gap-1.5 mt-1 pt-1 border-t border-border/50">
-                                    {assoc ? (
-                                      <>
-                                        {assoc.product_image && (
-                                          // eslint-disable-next-line @next/next/no-img-element
-                                          <img
-                                            src={assoc.product_image}
-                                            alt=""
-                                            className="w-5 h-5 rounded object-cover flex-shrink-0"
+                                  <>
+                                    <div className="flex items-center gap-1.5 mt-1 pt-1 border-t border-border/50">
+                                      {assoc ? (
+                                        <>
+                                          {assoc.product_image && (
+                                            // eslint-disable-next-line @next/next/no-img-element
+                                            <img
+                                              src={assoc.product_image}
+                                              alt=""
+                                              className="w-5 h-5 rounded object-cover flex-shrink-0"
+                                            />
+                                          )}
+                                          <span className="text-[10px] truncate flex-1" title={assoc.product_title || ""}>
+                                            {assoc.product_title || "Product"}
+                                          </span>
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-5 w-5"
+                                            title="Select images"
+                                            onClick={(e) => { e.stopPropagation(); setImagePickerAssoc(assoc); }}
+                                          >
+                                            <Images className="h-3 w-3" />
+                                          </Button>
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-5 w-5 text-destructive"
+                                            title="Remove product"
+                                            onClick={(e) => { e.stopPropagation(); handleRemoveAssociation(segId); }}
+                                          >
+                                            <X className="h-3 w-3" />
+                                          </Button>
+                                        </>
+                                      ) : (
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-5 text-[10px] px-1.5 text-muted-foreground"
+                                          onClick={(e) => { e.stopPropagation(); setPickerSegmentId(segId); }}
+                                        >
+                                          <Package className="h-3 w-3 mr-1" />
+                                          Add Product
+                                        </Button>
+                                      )}
+                                    </div>
+                                    {/* PiP Overlay controls — only for associated segments */}
+                                    {assoc && (
+                                      <div className="mt-1">
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-5 text-[10px] w-full justify-start"
+                                          onClick={(e) => { e.stopPropagation(); setPipExpandedSegId(prev => prev === segId ? null : segId); }}
+                                        >
+                                          <Layers className="h-3 w-3 mr-1" />
+                                          PiP Overlay {assoc.pip_config?.enabled ? "✓" : ""}
+                                        </Button>
+                                        {pipExpandedSegId === segId && (
+                                          <PipOverlayPanel
+                                            config={assoc.pip_config || DEFAULT_PIP_CONFIG}
+                                            onChange={(config) => {
+                                              setAssociations(prev => ({
+                                                ...prev,
+                                                [segId]: { ...prev[segId], pip_config: config }
+                                              }));
+                                            }}
+                                            onSave={(config) => handleSavePipConfig(assoc.id, segId, config)}
+                                            isSaving={pipSaving}
                                           />
                                         )}
-                                        <span className="text-[10px] truncate flex-1" title={assoc.product_title || ""}>
-                                          {assoc.product_title || "Product"}
-                                        </span>
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-5 w-5"
-                                          title="Select images"
-                                          onClick={() => setImagePickerAssoc(assoc)}
-                                        >
-                                          <Images className="h-3 w-3" />
-                                        </Button>
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-5 w-5 text-destructive"
-                                          title="Remove product"
-                                          onClick={() => handleRemoveAssociation(segId)}
-                                        >
-                                          <X className="h-3 w-3" />
-                                        </Button>
-                                      </>
-                                    ) : (
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-5 text-[10px] px-1.5 text-muted-foreground"
-                                        onClick={() => setPickerSegmentId(segId)}
-                                      >
-                                        <Package className="h-3 w-3 mr-1" />
-                                        Add Product
-                                      </Button>
+                                      </div>
                                     )}
-                                  </div>
+                                  </>
                                 );
                               })()}
                             </div>

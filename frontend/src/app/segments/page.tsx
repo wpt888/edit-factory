@@ -44,6 +44,7 @@ import {
   AlertTriangle,
   Package,
   Images,
+  Layers,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -53,7 +54,9 @@ import { SegmentTransformPanel } from "@/components/segment-transform-panel";
 import { EditorLayout } from "@/components/editor-layout";
 import { ProductPickerDialog } from "@/components/product-picker-dialog";
 import { ImagePickerDialog } from "@/components/image-picker-dialog";
+import { PipOverlayPanel } from "@/components/pip-overlay-panel";
 import type { AssociationResponse } from "@/components/product-picker-dialog";
+import { PipConfig, DEFAULT_PIP_CONFIG } from "@/components/product-picker-dialog";
 import { apiGetWithRetry, apiPost, apiPatch, apiPut, apiDelete, apiUpload, handleApiError, API_URL } from "@/lib/api";
 import { useProfile } from "@/contexts/profile-context";
 import type { SegmentTransform } from "@/types/video-processing";
@@ -147,6 +150,10 @@ export default function SegmentsPage() {
   const [associations, setAssociations] = useState<Record<string, AssociationResponse>>({});
   const [pickerSegmentId, setPickerSegmentId] = useState<string | null>(null);
   const [imagePickerAssoc, setImagePickerAssoc] = useState<AssociationResponse | null>(null);
+
+  // PiP overlay panel state
+  const [pipExpandedSegId, setPipExpandedSegId] = useState<string | null>(null);
+  const [pipSaving, setPipSaving] = useState(false);
 
   // Format time as mm:ss
   const formatTime = (time: number): string => {
@@ -628,6 +635,22 @@ export default function SegmentsPage() {
     }
   };
 
+  // Save PiP config for an association
+  const handleSavePipConfig = async (associationId: string, segmentId: string, config: PipConfig) => {
+    setPipSaving(true);
+    try {
+      const res = await apiPatch(`/associations/${associationId}/pip-config`, config);
+      if (res.ok) {
+        const updated = await res.json();
+        setAssociations(prev => ({ ...prev, [segmentId]: updated }));
+      }
+    } catch (error) {
+      handleApiError(error, "Failed to save PiP config");
+    } finally {
+      setPipSaving(false);
+    }
+  };
+
   // Toggle favorite
   const handleToggleFavorite = async (segmentId: string) => {
     try {
@@ -996,6 +1019,34 @@ export default function SegmentsPage() {
                     </Button>
                   )}
                 </div>
+
+                {/* PiP Overlay controls — only for associated segments */}
+                {associations[segment.id] && (
+                  <div className="px-2 pb-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-5 text-[10px] w-full justify-start"
+                      onClick={(e) => { e.stopPropagation(); setPipExpandedSegId(prev => prev === segment.id ? null : segment.id); }}
+                    >
+                      <Layers className="h-3 w-3 mr-1" />
+                      PiP Overlay {associations[segment.id].pip_config?.enabled ? "✓" : ""}
+                    </Button>
+                    {pipExpandedSegId === segment.id && (
+                      <PipOverlayPanel
+                        config={associations[segment.id].pip_config || DEFAULT_PIP_CONFIG}
+                        onChange={(config) => {
+                          setAssociations(prev => ({
+                            ...prev,
+                            [segment.id]: { ...prev[segment.id], pip_config: config }
+                          }));
+                        }}
+                        onSave={(config) => handleSavePipConfig(associations[segment.id].id, segment.id, config)}
+                        isSaving={pipSaving}
+                      />
+                    )}
+                  </div>
+                )}
 
                 {/* Actions */}
                 <div className="flex items-center gap-1 pt-1 border-t border-border">
