@@ -12,7 +12,7 @@ Requirements for v7 Product Image Overlays. Each maps to roadmap phases.
 - [ ] **ASSOC-01**: User can associate a catalog product with a segment
 - [ ] **ASSOC-02**: User can remove a product association from a segment
 - [ ] **ASSOC-03**: User can view which product is associated with each segment (thumbnail + name)
-- [ ] **ASSOC-04**: User can select which image(s) from the product gallery to use on a segment
+- [x] **ASSOC-04**: User can select which image(s) from the product gallery to use on a segment
 
 ### PiP Overlay
 
@@ -63,7 +63,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ASSOC-01 | Phase 32 | Pending |
 | ASSOC-02 | Phase 32 | Pending |
 | ASSOC-03 | Phase 32 | Pending |
-| ASSOC-04 | Phase 32 | Pending |
+| ASSOC-04 | Phase 32 | Complete |
 | OVRL-01 | Phase 35 | Pending |
 | OVRL-02 | Phase 35 | Pending |
 | OVRL-03 | Phase 35 | Pending |

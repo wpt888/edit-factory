@@ -11,9 +11,9 @@ See: .planning/PROJECT.md (updated 2026-02-23)
 
 Milestone: v7 Product Image Overlays
 Phase: 32 — Association Data Layer
-Plan: Not started
-Status: Roadmap created, ready to plan Phase 32
-Last activity: 2026-02-23 — v7 roadmap created (6 phases, 18 requirements mapped)
+Plan: 01 complete (2 plans done)
+Status: Phase 32 in progress — Plan 01 shipped association data layer foundation
+Last activity: 2026-02-23 — Phase 32 Plan 01 completed (migration + images endpoint)
 
 ```
 v7 Progress: [          ] 0% — 0/6 phases complete
@@ -22,7 +22,7 @@ v7 Progress: [          ] 0% — 0/6 phases complete
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 75 (across v2-v6)
+- Total plans completed: 76 (across v2-v7)
 - Total phases completed: 31
 - Total milestones shipped: 6
 
@@ -43,6 +43,8 @@ v7 Progress: [          ] 0% — 0/6 phases complete
 
 Decisions are logged in PROJECT.md Key Decisions table.
 v6 decisions archived to `.planning/milestones/v6-ROADMAP.md`.
+- [Phase 32]: catalog_product_id stored as plain UUID without FK (cross-schema FK to uf.products_catalog avoided)
+- [Phase 32]: get_catalog_product_images() uses SECURITY DEFINER + GRANT EXECUTE for PostgREST anon/authenticated compatibility
 
 ### v7 Architecture Notes
 
@@ -64,14 +66,14 @@ None.
 - Migration 009 (v4 TTS timestamps) requires manual application via Supabase SQL Editor
 - Migration 017 (editai_generation_progress) requires manual application via Supabase SQL Editor
 
-**v7 will add a new migration** (Phase 32) for `segment_product_associations` table.
+**v7 migration 019** (`segment_product_associations`) was applied in Phase 32 Plan 01.
 
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: v7 roadmap created
+Stopped at: Completed 32-01-PLAN.md (association data layer foundation)
 Resume file: None
-Next action: `/gsd:plan-phase 32`
+Next action: Execute Phase 32 Plan 02 (association CRUD routes)
 
 ---
-*Last updated: 2026-02-23 after v7 roadmap created*
+*Last updated: 2026-02-23 after Phase 32 Plan 01 completed*
