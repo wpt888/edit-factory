@@ -105,10 +105,11 @@ Full details: `.planning/milestones/v6-ROADMAP.md`
   2. A product association can be removed from a segment, returning it to unassociated state
   3. The associated product's thumbnail and name are retrievable per segment
   4. One or more product gallery images can be selected for use on a segment (selection persisted)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 32-01: DB migration for segment_product_associations table + backend CRUD API
+- [ ] 32-01-PLAN.md — DB migration + catalog images endpoint
+- [ ] 32-02-PLAN.md — Association CRUD API routes
 
 ### Phase 33: Product and Image Picker Components
 **Goal**: Reusable dialog components exist for searching catalog products and selecting product images, ready to embed in any page
@@ -187,7 +188,7 @@ Plans:
 | 12-16 | v4 | 11/11 | Complete | 2026-02-12 |
 | 17-23 | v5 | 13/13 | Complete | 2026-02-21 |
 | 24-31 | v6 | 16/16 | Complete | 2026-02-22 |
-| 32. Association Data Layer | v7 | 0/1 | Not started | - |
+| 32. Association Data Layer | v7 | 0/2 | Not started | - |
 | 33. Product and Image Picker Components | v7 | 0/1 | Not started | - |
 | 34. Page Integration | v7 | 0/1 | Not started | - |
 | 35. PiP Overlay Controls | v7 | 0/1 | Not started | - |
