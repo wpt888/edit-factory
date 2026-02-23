@@ -11,9 +11,9 @@ See: .planning/PROJECT.md (updated 2026-02-23)
 
 Milestone: v7 Product Image Overlays
 Phase: 34 — Page Integration
-Plan: 01 complete (2/2 plans in flight — plan 02 pending)
-Status: Phase 34 in progress — Plan 01 (Segments page integration) complete
-Last activity: 2026-02-23 — Phase 34 Plan 01 complete (2/2 tasks, UI-01 satisfied)
+Plan: 02 complete (2/2 plans complete — phase 34 complete)
+Status: Phase 34 complete — both plans executed (UI-01 and UI-02 satisfied)
+Last activity: 2026-02-23 — Phase 34 Plan 02 complete (2/2 tasks, UI-02 satisfied)
 
 ```
 v7 Progress: [████      ] 33% — 2/6 phases complete
@@ -49,6 +49,7 @@ v6 decisions archived to `.planning/milestones/v6-ROADMAP.md`.
 - [Phase 33]: AssociationResponse type defined in product-picker-dialog.tsx and re-exported from image-picker-dialog.tsx for single-source convenience
 - [Phase 33]: useRef debounce timer (300ms) used in ProductPickerDialog without external library, per plan specification
 - [Phase 34]: Association UI row placed before Actions div in segment cards; pickerSegmentId/imagePickerAssoc state pattern drives dialog open/close without re-fetching
+- [Phase 34-02]: IIFE pattern in JSX used to capture match.segment_id into const segId for TypeScript null narrowing in onClick callbacks; association controls only shown for matches with non-null segment_id
 
 ### v7 Architecture Notes
 
@@ -75,9 +76,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 34-page-integration-01-PLAN.md
+Stopped at: Completed 34-02-PLAN.md
 Resume file: None
-Next action: Continue Phase 34 Plan 02 (Pipeline page integration)
+Next action: Continue with Phase 35 (overlay rendering)
 
 ---
-*Last updated: 2026-02-23 after Phase 34 Plan 01 completed (Segments page product association integration)*
+*Last updated: 2026-02-23 after Phase 34 Plan 02 completed (Pipeline page product association integration — Phase 34 complete)*

@@ -29,8 +29,8 @@ Requirements for v7 Product Image Overlays. Each maps to roadmap phases.
 
 ### Frontend Integration
 
-- [ ] **UI-01**: Segments page shows product association controls per segment
-- [ ] **UI-02**: Pipeline page shows product association controls per matched segment
+- [x] **UI-01**: Segments page shows product association controls per segment
+- [x] **UI-02**: Pipeline page shows product association controls per matched segment
 - [x] **UI-03**: Product picker dialog searches/filters catalog products
 - [x] **UI-04**: Image picker shows all available images for selected product
 
@@ -71,8 +71,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SLID-01 | Phase 36 | Pending |
 | SLID-02 | Phase 36 | Pending |
 | SLID-03 | Phase 36 | Pending |
-| UI-01 | Phase 34 | Pending |
-| UI-02 | Phase 34 | Pending |
+| UI-01 | Phase 34 | Complete |
+| UI-02 | Phase 34 | Complete |
 | UI-03 | Phase 33 | Complete |
 | UI-04 | Phase 33 | Complete |
 | REND-01 | Phase 37 | Pending |
