@@ -11,7 +11,7 @@ if _ffmpeg_bin.exists():
     os.environ['PATH'] = str(_ffmpeg_bin) + os.pathsep + os.environ.get('PATH', '')
 
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -36,6 +36,8 @@ from app.api.elevenlabs_accounts_routes import router as elevenlabs_accounts_rou
 from app.api.feed_routes import router as feed_router
 from app.api.product_routes import router as product_router
 from app.api.product_generate_routes import router as product_generate_router
+from app.api.catalog_routes import router as catalog_router
+from app.api.association_routes import router as association_router
 
 from app.logging_config import setup_logging
 setup_logging()
@@ -59,7 +61,7 @@ async def _recover_stuck_projects():
             for proj in result.data:
                 supabase.table("editai_projects").update({
                     "status": "failed",
-                    "updated_at": datetime.now().isoformat()
+                    "updated_at": datetime.now(timezone.utc).isoformat()
                 }).eq("id", proj["id"]).execute()
             logger.info(f"Recovered {len(result.data)} stuck projects (generating -> failed)")
     except Exception as e:
@@ -73,7 +75,7 @@ async def _cleanup_expired_pipelines():
         supabase = get_supabase()
         if not supabase:
             return
-        now = datetime.now().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         result1 = supabase.table("editai_pipelines")\
             .delete()\
@@ -148,6 +150,8 @@ app.include_router(elevenlabs_accounts_router, prefix="/api/v1", tags=["ElevenLa
 app.include_router(feed_router, prefix="/api/v1", tags=["feeds"])
 app.include_router(product_router, prefix="/api/v1", tags=["Products"])
 app.include_router(product_generate_router, prefix="/api/v1", tags=["Product Video Generation"])
+app.include_router(catalog_router, prefix="/api/v1", tags=["Catalog"])
+app.include_router(association_router, prefix="/api/v1", tags=["Associations"])
 
 # Static files pentru frontend
 static_path = Path(__file__).parent.parent / "static"
