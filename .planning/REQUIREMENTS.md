@@ -60,30 +60,30 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ASSOC-01 | — | Pending |
-| ASSOC-02 | — | Pending |
-| ASSOC-03 | — | Pending |
-| ASSOC-04 | — | Pending |
-| OVRL-01 | — | Pending |
-| OVRL-02 | — | Pending |
-| OVRL-03 | — | Pending |
-| OVRL-04 | — | Pending |
-| SLID-01 | — | Pending |
-| SLID-02 | — | Pending |
-| SLID-03 | — | Pending |
-| UI-01 | — | Pending |
-| UI-02 | — | Pending |
-| UI-03 | — | Pending |
-| UI-04 | — | Pending |
-| REND-01 | — | Pending |
-| REND-02 | — | Pending |
-| REND-03 | — | Pending |
+| ASSOC-01 | Phase 32 | Pending |
+| ASSOC-02 | Phase 32 | Pending |
+| ASSOC-03 | Phase 32 | Pending |
+| ASSOC-04 | Phase 32 | Pending |
+| OVRL-01 | Phase 35 | Pending |
+| OVRL-02 | Phase 35 | Pending |
+| OVRL-03 | Phase 35 | Pending |
+| OVRL-04 | Phase 35 | Pending |
+| SLID-01 | Phase 36 | Pending |
+| SLID-02 | Phase 36 | Pending |
+| SLID-03 | Phase 36 | Pending |
+| UI-01 | Phase 34 | Pending |
+| UI-02 | Phase 34 | Pending |
+| UI-03 | Phase 33 | Pending |
+| UI-04 | Phase 33 | Pending |
+| REND-01 | Phase 37 | Pending |
+| REND-02 | Phase 37 | Pending |
+| REND-03 | Phase 37 | Pending |
 
 **Coverage:**
 - v7 requirements: 18 total
-- Mapped to phases: 0
-- Unmapped: 18 ⚠️
+- Mapped to phases: 18
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-02-23*
-*Last updated: 2026-02-23 after initial definition*
+*Last updated: 2026-02-23 after roadmap created — all 18 requirements mapped*
