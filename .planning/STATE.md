@@ -5,25 +5,25 @@
 See: .planning/PROJECT.md (updated 2026-02-23)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v7 Product Image Overlays — Phase 34: Page Integration
+**Current focus:** v7 Product Image Overlays — Phase 35: PiP Overlay Controls
 
 ## Current Position
 
 Milestone: v7 Product Image Overlays
-Phase: 34 — Page Integration
-Plan: 02 complete (2/2 plans complete — phase 34 complete)
-Status: Phase 34 complete — both plans executed (UI-01 and UI-02 satisfied)
-Last activity: 2026-02-23 — Phase 34 Plan 02 complete (2/2 tasks, UI-02 satisfied)
+Phase: 35 — PiP Overlay Controls
+Plan: Not started
+Status: Phase 34 complete, ready to plan Phase 35
+Last activity: 2026-02-23 — Phase 34 verified and completed (2/2 plans, 7/7 must-haves)
 
 ```
-v7 Progress: [████      ] 33% — 2/6 phases complete
+v7 Progress: [█████     ] 50% — 3/6 phases complete
 ```
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 78 (across v2-v7)
-- Total phases completed: 33
+- Total plans completed: 80 (across v2-v7)
+- Total phases completed: 34
 - Total milestones shipped: 6
 
 **By Milestone:**
@@ -76,9 +76,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 34-02-PLAN.md
+Stopped at: Phase 34 complete and verified
 Resume file: None
-Next action: Continue with Phase 35 (overlay rendering)
+Next action: `/gsd:plan-phase 35`
 
 ---
-*Last updated: 2026-02-23 after Phase 34 Plan 02 completed (Pipeline page product association integration — Phase 34 complete)*
+*Last updated: 2026-02-23 after Phase 34 completed and verified*
