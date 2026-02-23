@@ -193,7 +193,7 @@ Plans:
 | 32. Association Data Layer | 2/2 | Complete    | 2026-02-23 | - |
 | 33. Product and Image Picker Components | 1/1 | Complete    | 2026-02-23 | - |
 | 34. Page Integration | 2/2 | Complete    | 2026-02-23 | - |
-| 35. PiP Overlay Controls | 2/2 | Complete   | 2026-02-23 | - |
+| 35. PiP Overlay Controls | 2/2 | Complete    | 2026-02-23 | - |
 | 36. Interstitial Slide Controls | v7 | 0/1 | Not started | - |
 | 37. Render Integration | v7 | 0/2 | Not started | - |
 
