@@ -188,7 +188,7 @@ Plans:
 | 12-16 | v4 | 11/11 | Complete | 2026-02-12 |
 | 17-23 | v5 | 13/13 | Complete | 2026-02-21 |
 | 24-31 | v6 | 16/16 | Complete | 2026-02-22 |
-| 32. Association Data Layer | 2/2 | Complete   | 2026-02-23 | - |
+| 32. Association Data Layer | 2/2 | Complete    | 2026-02-23 | - |
 | 33. Product and Image Picker Components | v7 | 0/1 | Not started | - |
 | 34. Page Integration | v7 | 0/1 | Not started | - |
 | 35. PiP Overlay Controls | v7 | 0/1 | Not started | - |
