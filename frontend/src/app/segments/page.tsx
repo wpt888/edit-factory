@@ -951,6 +951,52 @@ export default function SegmentsPage() {
                   </p>
                 )}
 
+                {/* Product association */}
+                <div className="flex items-center gap-1.5 mb-1">
+                  {associations[segment.id] ? (
+                    <>
+                      {associations[segment.id].product_image && (
+                        <img
+                          src={associations[segment.id].product_image!}
+                          alt=""
+                          className="w-6 h-6 rounded object-cover flex-shrink-0"
+                        />
+                      )}
+                      <span className="text-[10px] truncate flex-1" title={associations[segment.id].product_title || ""}>
+                        {associations[segment.id].product_title || "Product"}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-5 w-5"
+                        title="Select images"
+                        onClick={(e) => { e.stopPropagation(); setImagePickerAssoc(associations[segment.id]); }}
+                      >
+                        <Images className="h-3 w-3" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-5 w-5 text-destructive"
+                        title="Remove product"
+                        onClick={(e) => { e.stopPropagation(); handleRemoveAssociation(segment.id); }}
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-[10px] px-2 text-muted-foreground"
+                      onClick={(e) => { e.stopPropagation(); setPickerSegmentId(segment.id); }}
+                    >
+                      <Package className="h-3 w-3 mr-1" />
+                      Add Product
+                    </Button>
+                  )}
+                </div>
+
                 {/* Actions */}
                 <div className="flex items-center gap-1 pt-1 border-t border-border">
                   <Button
@@ -1234,6 +1280,29 @@ export default function SegmentsPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Product Picker Dialog */}
+        {pickerSegmentId && (
+          <ProductPickerDialog
+            open={!!pickerSegmentId}
+            onOpenChange={(open) => { if (!open) setPickerSegmentId(null); }}
+            segmentId={pickerSegmentId}
+            onProductSelected={handleProductSelected}
+          />
+        )}
+
+        {/* Image Picker Dialog */}
+        {imagePickerAssoc && (
+          <ImagePickerDialog
+            open={!!imagePickerAssoc}
+            onOpenChange={(open) => { if (!open) setImagePickerAssoc(null); }}
+            associationId={imagePickerAssoc.id}
+            catalogProductId={imagePickerAssoc.catalog_product_id}
+            currentSelectedUrls={imagePickerAssoc.selected_image_urls}
+            productTitle={imagePickerAssoc.product_title}
+            onImagesUpdated={handleImagesUpdated}
+          />
         )}
     </div>
   );
