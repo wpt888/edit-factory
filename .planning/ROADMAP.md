@@ -133,10 +133,11 @@ Plans:
   1. Each segment row on the Segments page shows the associated product (or "No product") with a button to open the picker
   2. Each matched segment on the Pipeline page shows the same association control inline
   3. Associating a product on either page immediately reflects the change without a full page reload
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 34-01: Segments page and Pipeline page integration of association controls
+- [ ] 34-01-PLAN.md — Segments page product association controls (UI-01)
+- [ ] 34-02-PLAN.md — Pipeline page product association controls (UI-02)
 
 ### Phase 35: PiP Overlay Controls
 **Goal**: Users can configure PiP overlay settings (enabled, position, size, animation) on a per-segment basis, with choices stored in the database
