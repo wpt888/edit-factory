@@ -821,9 +821,10 @@ class VideoEditor:
 
         # Concatenare
         concat_file = self.temp_dir / f"concat_{output_name}.txt"
-        with open(concat_file, 'w') as f:
+        with open(concat_file, 'w', encoding='utf-8') as f:
             for seg_file in segment_files:
-                f.write(f"file '{seg_file}'\n")
+                escaped_path = str(seg_file).replace("'", "'\\''")
+                f.write(f"file '{escaped_path}'\n")
 
         output_video = self.output_dir / f"{output_name}_segments.mp4"
         cmd = [
@@ -858,8 +859,14 @@ class VideoEditor:
             "-of", "json",
             str(audio_path)
         ]
-        result = subprocess.run(probe_cmd, capture_output=True, text=True)
-        audio_duration = float(json.loads(result.stdout)['format']['duration'])
+        result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+        try:
+            if result.returncode != 0:
+                raise ValueError(f"ffprobe failed with code {result.returncode}")
+            audio_duration = float(json.loads(result.stdout)['format']['duration'])
+        except (json.JSONDecodeError, KeyError, ValueError) as probe_err:
+            logger.warning(f"ffprobe failed for {audio_path}: {probe_err}, defaulting to 0")
+            audio_duration = 0
 
         if self.use_gpu:
             cmd = [
@@ -1499,7 +1506,8 @@ class VideoProcessorService:
         # Sortam cronologic pentru export
         selected.sort(key=lambda s: s.start_time)
 
-        logger.info(f"Variant {variant_index + 1}: {len(selected)} segments from {len(set(int(s.start_time/zone_duration) for s in selected))} zones, {total_duration:.1f}s")
+        zone_count = len(set(int(s.start_time / zone_duration) for s in selected)) if zone_duration > 0 else 0
+        logger.info(f"Variant {variant_index + 1}: {len(selected)} segments from {zone_count} zones, {total_duration:.1f}s")
         return selected
 
     def process_video(

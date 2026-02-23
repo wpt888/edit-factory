@@ -283,12 +283,8 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
 
             batch_segments = self.analyze_batch(batch, context)
 
-            # Ajustăm timestamps pentru batch-uri ulterioare
-            if i > 0 and batch_segments:
-                time_offset = frames[i][0]
-                for seg in batch_segments:
-                    seg.start_time += time_offset
-                    seg.end_time += time_offset
+            # Note: no offset adjustment needed — each batch's frames carry
+            # absolute timestamps that Gemini uses directly in its response.
 
             all_segments.extend(batch_segments)
 

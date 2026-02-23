@@ -97,6 +97,10 @@ async def _download_one(
 
                 content_type = response.headers.get("content-type", "").lower()
 
+                if not content_type.startswith("image/"):
+                    logger.warning("Non-image content-type %s for product %s, skipping", content_type, external_id)
+                    return (external_id, None)
+
                 if "image/webp" in content_type:
                     # Save webp first, then convert to jpg via FFmpeg
                     webp_path = dest.with_suffix(".webp")

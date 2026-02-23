@@ -216,8 +216,13 @@ class ElevenLabsTTSService(TTSService):
                         gender=labels.get("gender"),
                         provider="elevenlabs",
                         requires_cloning=False,
-                        cost_per_1k_chars=self.cost_per_1k_chars
+                        cost_per_1k_chars=self.cost_per_1k_chars,
+                        category=v.get("category", "premade")
                     ))
+
+                # Sort: user voices (cloned/generated) first, then premade
+                priority = {"cloned": 0, "generated": 1, "professional": 2, "premade": 3}
+                voices.sort(key=lambda v: (priority.get(v.category or "premade", 99), v.name.lower()))
 
                 logger.info(f"Fetched {len(voices)} ElevenLabs voices")
                 return voices
@@ -270,7 +275,7 @@ class ElevenLabsTTSService(TTSService):
         }
 
         # Prepare request with 192kbps MP3 output format
-        url = f"{self.BASE_URL}/text-to-speech/{voice_id}?output_format=mp3_44100_192"
+        url = f"{self.BASE_URL}/text-to-speech/{voice_id}?output_format=mp3_44100_128"
         headers = {
             "Accept": "audio/mpeg",
             "Content-Type": "application/json",
@@ -398,7 +403,7 @@ class ElevenLabsTTSService(TTSService):
         }
 
         # Prepare request - with-timestamps endpoint returns JSON, not audio stream
-        url = f"{self.BASE_URL}/text-to-speech/{voice_id}/with-timestamps?output_format=mp3_44100_192"
+        url = f"{self.BASE_URL}/text-to-speech/{voice_id}/with-timestamps?output_format=mp3_44100_128"
         headers = {
             "Content-Type": "application/json",
             "xi-api-key": self.api_key

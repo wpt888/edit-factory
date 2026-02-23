@@ -4,6 +4,7 @@ ElevenLabs Multi-Account CRUD Routes
 Manages multiple ElevenLabs API keys per profile with subscription validation.
 """
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -101,6 +102,8 @@ async def delete_account(
     ctx: ProfileContext = Depends(get_profile_context)
 ):
     """Delete an ElevenLabs account."""
+    if account_id == "__env__":
+        raise HTTPException(status_code=400, detail="Cannot delete .env default key. Remove it from .env instead.")
     manager = get_account_manager()
 
     try:
@@ -117,6 +120,8 @@ async def set_primary(
     ctx: ProfileContext = Depends(get_profile_context)
 ):
     """Set an account as the primary key for this profile."""
+    if account_id == "__env__":
+        raise HTTPException(status_code=400, detail="Cannot set .env default key as primary. It is used automatically when no DB accounts exist.")
     manager = get_account_manager()
 
     try:
@@ -134,6 +139,33 @@ async def refresh_subscription(
 ):
     """Refresh subscription info from ElevenLabs API."""
     manager = get_account_manager()
+
+    # Handle .env key refresh without DB
+    if account_id == "__env__":
+        from app.config import get_settings
+        settings = get_settings()
+        env_key = settings.elevenlabs_api_key
+        if not env_key:
+            raise HTTPException(status_code=400, detail="No .env API key configured")
+        try:
+            sub_info = manager.check_subscription(env_key)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        return {"account": {
+            "id": "__env__",
+            "label": ".env default",
+            "api_key_hint": f"...{env_key[-4:]}" if len(env_key) >= 4 else "....",
+            "is_primary": True,
+            "is_active": True,
+            "is_env_default": True,
+            "sort_order": 999,
+            "character_limit": sub_info.get("character_limit"),
+            "characters_used": sub_info.get("character_count"),
+            "tier": sub_info.get("tier"),
+            "last_error": None,
+            "last_checked_at": datetime.now(timezone.utc).isoformat(),
+        }}
 
     try:
         account = manager.update_subscription_info(ctx.profile_id, account_id)

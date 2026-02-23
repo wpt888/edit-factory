@@ -8,7 +8,7 @@ Endpoints for Script-to-Video Assembly pipeline:
 """
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List
 
@@ -24,6 +24,15 @@ router = APIRouter(prefix="/assembly", tags=["assembly"])
 
 # Job storage (in-memory, same pattern as library_routes _generation_progress)
 _assembly_jobs = {}
+_MAX_MEMORY_ENTRIES = 1000
+
+
+def _evict_old_entries(store: dict, max_entries: int = _MAX_MEMORY_ENTRIES):
+    """Remove oldest entries if store exceeds max size."""
+    if len(store) > max_entries:
+        to_remove = sorted(store.keys())[:len(store) - max_entries]
+        for key in to_remove:
+            store.pop(key, None)
 
 
 # ============== DB PERSISTENCE HELPERS ==============
@@ -226,7 +235,7 @@ async def preview_assembly(
 
     except Exception as e:
         logger.error(f"[Profile {profile.profile_id}] Preview failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/render", response_model=AssemblyRenderResponse)
@@ -300,14 +309,15 @@ async def render_assembly(
         "adaptive_sizing": request.adaptive_sizing
     }
 
-    # Initialize job status
+    # Initialize job status (with eviction)
+    _evict_old_entries(_assembly_jobs)
     _assembly_jobs[job_id] = {
         "status": "processing",
         "progress": 0,
         "current_step": "Initializing assembly",
         "final_video_path": None,
         "error": None,
-        "started_at": datetime.now().isoformat()
+        "started_at": datetime.now(timezone.utc).isoformat()
     }
 
     # Persist to DB
@@ -350,7 +360,7 @@ async def render_assembly(
             _assembly_jobs[job_id]["progress"] = 100
             _assembly_jobs[job_id]["current_step"] = "Assembly complete"
             _assembly_jobs[job_id]["final_video_path"] = str(final_video_path)
-            _assembly_jobs[job_id]["completed_at"] = datetime.now().isoformat()
+            _assembly_jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
             logger.info(f"[Profile {profile.profile_id}] Assembly job {job_id} completed: {final_video_path}")
 
@@ -363,7 +373,7 @@ async def render_assembly(
             _assembly_jobs[job_id]["progress"] = 0
             _assembly_jobs[job_id]["current_step"] = "Assembly failed"
             _assembly_jobs[job_id]["error"] = str(e)
-            _assembly_jobs[job_id]["failed_at"] = datetime.now().isoformat()
+            _assembly_jobs[job_id]["failed_at"] = datetime.now(timezone.utc).isoformat()
 
             # Persist to DB
             _db_update_assembly_job(job_id, _assembly_jobs[job_id])

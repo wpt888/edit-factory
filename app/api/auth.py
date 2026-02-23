@@ -212,7 +212,7 @@ async def get_profile_context(
         supabase = _get_supabase()
         if supabase:
             try:
-                result = supabase.table("profiles").select("id").limit(1).execute()
+                result = supabase.table("profiles").select("id").eq("is_default", True).limit(1).execute()
                 if result.data:
                     profile_id = result.data[0]["id"]
                     logger.warning(f"⚠️ Dev mode: using DB profile {profile_id}")

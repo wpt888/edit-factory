@@ -17,7 +17,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Bootstrap JSON logging before any other app imports so cleanup output is
@@ -91,7 +91,7 @@ def _delete_old_files(directory: Path, cutoff: datetime, dry_run: bool) -> int:
 def cleanup_temp_files(days: int, dry_run: bool) -> int:
     """Remove files from the temp/ directory older than *days* days."""
     temp_dir = _PROJECT_ROOT / "temp"
-    cutoff = datetime.now() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     count = _delete_old_files(temp_dir, cutoff, dry_run)
     logger.info(
         "Temp file cleanup complete",
@@ -103,7 +103,7 @@ def cleanup_temp_files(days: int, dry_run: bool) -> int:
 def cleanup_output_files(days: int, dry_run: bool) -> int:
     """Remove files from the output/ directory older than *days* days."""
     output_dir = _PROJECT_ROOT / "output"
-    cutoff = datetime.now() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     count = _delete_old_files(output_dir, cutoff, dry_run)
     logger.info(
         "Output file cleanup complete",
@@ -126,7 +126,7 @@ def cleanup_old_jobs(days: int, dry_run: bool) -> int:
         return 0
 
     storage = get_job_storage()
-    cutoff = datetime.now() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
     if dry_run:
         # Preview: count matching jobs without deleting

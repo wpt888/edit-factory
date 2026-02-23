@@ -90,19 +90,23 @@ def measure_loudness(
             check=False
         )
 
-        # Extract JSON from stderr using regex
-        # The JSON block is at the end of stderr output
-        json_pattern = r'\{[^{}]*"input_i"[^{}]*"input_tp"[^{}]*"input_lra"[^{}]*"input_thresh"[^{}]*"target_offset"[^{}]*\}'
-        match = re.search(json_pattern, result.stderr, re.DOTALL)
-
-        if not match:
-            logger.error(f"No loudnorm JSON found in FFmpeg output")
-            logger.debug(f"FFmpeg stderr: {result.stderr[-500:]}")  # Last 500 chars
+        # Extract JSON from stderr — find the last JSON object in output
+        stderr = result.stderr
+        last_brace = stderr.rfind("{")
+        if last_brace == -1:
+            logger.error("No loudnorm JSON found in FFmpeg output")
+            logger.debug(f"FFmpeg stderr: {stderr[-500:]}")
             return None
 
-        # Parse the JSON measurement data
-        json_str = match.group(0)
-        data = json.loads(json_str)
+        try:
+            json_str = stderr[last_brace:]
+            # Find matching closing brace
+            brace_end = json_str.index("}") + 1
+            data = json.loads(json_str[:brace_end])
+        except (ValueError, json.JSONDecodeError):
+            logger.error("Failed to parse loudnorm JSON from FFmpeg output")
+            logger.debug(f"FFmpeg stderr: {stderr[-500:]}")
+            return None
 
         # Extract required fields
         measurement = LoudnormMeasurement(

@@ -156,8 +156,10 @@ def parse_feed_xml(xml_bytes: bytes) -> list[dict]:
         finally:
             # Memory cleanup — prevent tree accumulation
             elem.clear()
-            while elem.getprevious() is not None:
-                del elem.getparent()[0]
+            parent = elem.getparent()
+            if parent is not None:
+                while elem.getprevious() is not None:
+                    del parent[0]
 
     logger.info("Parsed %d products from feed", len(products))
     return products

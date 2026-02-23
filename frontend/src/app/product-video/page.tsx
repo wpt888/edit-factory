@@ -45,9 +45,10 @@ function ProductVideoContent() {
   const image = searchParams.get("image") || "";
   const price = searchParams.get("price") || "";
   const brand = searchParams.get("brand") || "";
+  const source = searchParams.get("source") || "feed";
 
   // Form state
-  const [voicoverMode, setVoiceoverMode] = useState<"quick" | "elaborate">("quick");
+  const [voiceoverMode, setVoiceoverMode] = useState<"quick" | "elaborate">("quick");
   const [ttsProvider, setTtsProvider] = useState<"edge" | "elevenlabs">("edge");
   const [voiceId, setVoiceId] = useState("");
   const [aiProvider, setAiProvider] = useState<"gemini" | "claude">("gemini");
@@ -64,12 +65,7 @@ function ProductVideoContent() {
   const [isComplete, setIsComplete] = useState(false);
   const [hasError, setHasError] = useState(false);
 
-  // Redirect if no product ID
-  useEffect(() => {
-    if (!productId) {
-      router.push("/products");
-    }
-  }, [productId, router]);
+  // No redirect — show empty state inline when no product ID
 
   // Pre-fill CTA from profile template settings (only if user hasn't changed the default)
   useEffect(() => {
@@ -127,7 +123,8 @@ function ProductVideoContent() {
 
     try {
       const res = await apiPost(`/products/${productId}/generate`, {
-        voiceover_mode: voicoverMode,
+        source,
+        voiceover_mode: voiceoverMode,
         tts_provider: ttsProvider,
         voice_id: voiceId || defaultVoice || null,
         ai_provider: aiProvider,
@@ -182,11 +179,14 @@ function ProductVideoContent() {
 
         {/* Empty state when no product is selected */}
         {!productId && (
-          <EmptyState
-            icon={<Video className="h-6 w-6" />}
-            title="Selecteaza un produs"
-            description="Alege un produs din lista pentru a genera un video."
-          />
+          <div className="flex flex-col items-center justify-center py-20">
+            <EmptyState
+              icon={<Video className="h-6 w-6" />}
+              title="Selecteaza un produs din catalog"
+              description="Alege un produs din pagina de produse pentru a genera un video."
+              action={{ label: "Mergi la Catalog", onClick: () => router.push("/products") }}
+            />
+          </div>
         )}
 
         {/* Product info card */}
@@ -230,7 +230,7 @@ function ProductVideoContent() {
             <div className="space-y-2">
               <Label className="text-sm font-medium">Voiceover Mode</Label>
               <RadioGroup
-                value={voicoverMode}
+                value={voiceoverMode}
                 onValueChange={(v) => setVoiceoverMode(v as "quick" | "elaborate")}
                 disabled={isFormDisabled}
                 className="flex gap-4"
@@ -249,14 +249,14 @@ function ProductVideoContent() {
                 </div>
               </RadioGroup>
               <p className="text-xs text-muted-foreground">
-                {voicoverMode === "quick"
+                {voiceoverMode === "quick"
                   ? "Uses a product template for fast generation — no AI cost."
                   : "Uses Gemini/Claude to write a custom voiceover script — slower but more creative."}
               </p>
             </div>
 
             {/* AI Provider (only for elaborate mode) */}
-            {voicoverMode === "elaborate" && (
+            {voiceoverMode === "elaborate" && (
               <div className="space-y-2">
                 <Label htmlFor="ai-provider" className="text-sm font-medium">
                   AI Script Provider

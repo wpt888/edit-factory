@@ -129,14 +129,7 @@ Text subtitrare..."
                 ...editingSubtitleSettings,
               }}
               onSettingsChange={(newSettings) => {
-                setEditingSubtitleSettings({
-                  fontSize: newSettings.fontSize,
-                  fontFamily: newSettings.fontFamily,
-                  textColor: newSettings.textColor,
-                  outlineColor: newSettings.outlineColor,
-                  outlineWidth: newSettings.outlineWidth,
-                  positionY: newSettings.positionY,
-                });
+                setEditingSubtitleSettings((prev) => ({ ...prev, ...newSettings }));
               }}
               showPreview={true}
               previewHeight={300}

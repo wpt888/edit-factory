@@ -111,6 +111,11 @@ export interface Clip {
   tts_text?: string;
   srt_content?: string;
   subtitle_settings?: SubtitleSettings;
+  is_deleted?: boolean;
+  variant_name?: string;
+  postiz_status?: string;
+  postiz_post_id?: string;
+  postiz_scheduled_at?: string;
 }
 
 export interface ClipContent {
@@ -188,6 +193,27 @@ export interface ElevenLabsModelOption {
   costPer1kChars: number;
   latencyMs: number;
 }
+
+/** Per-segment visual transform properties */
+export interface SegmentTransform {
+  rotation: number;   // 0-360 degrees
+  scale: number;      // 0.1-5.0
+  pan_x: number;      // pixels, horizontal offset
+  pan_y: number;      // pixels, vertical offset
+  flip_h: boolean;    // horizontal flip
+  flip_v: boolean;    // vertical flip
+  opacity: number;    // 0.0-1.0
+}
+
+export const DEFAULT_SEGMENT_TRANSFORM: SegmentTransform = {
+  rotation: 0,
+  scale: 1.0,
+  pan_x: 0,
+  pan_y: 0,
+  flip_h: false,
+  flip_v: false,
+  opacity: 1.0,
+};
 
 export const ELEVENLABS_MODELS: ElevenLabsModelOption[] = [
   {

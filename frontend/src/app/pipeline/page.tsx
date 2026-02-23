@@ -22,7 +22,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, handleApiError } from "@/lib/api";
+import { apiGet, apiGetWithRetry, apiPost, apiPut, apiPatch, apiDelete, API_URL, handleApiError } from "@/lib/api";
 import {
   Loader2,
   Sparkles,
@@ -46,6 +46,7 @@ import {
   X,
   Star,
   Layers,
+  Type,
 } from "lucide-react";
 import { usePolling } from "@/hooks";
 import { useProfile } from "@/contexts/profile-context";
@@ -55,6 +56,8 @@ import { ImagePickerDialog } from "@/components/image-picker-dialog";
 import { PipOverlayPanel } from "@/components/pip-overlay-panel";
 import type { AssociationResponse } from "@/components/product-picker-dialog";
 import { PipConfig, DEFAULT_PIP_CONFIG } from "@/components/product-picker-dialog";
+import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
+import { SubtitleSettings, DEFAULT_SUBTITLE_SETTINGS } from "@/types/video-processing";
 
 // TypeScript interfaces
 interface MatchPreview {
@@ -192,6 +195,11 @@ export default function PipelinePage() {
   const [associations, setAssociations] = useState<Record<string, AssociationResponse>>({});
   const [pickerSegmentId, setPickerSegmentId] = useState<string | null>(null);
   const [imagePickerAssoc, setImagePickerAssoc] = useState<AssociationResponse | null>(null);
+
+  // Subtitle settings state
+  const [subtitleSettings, setSubtitleSettings] = useState<SubtitleSettings>({ ...DEFAULT_SUBTITLE_SETTINGS });
+  const [subtitleSettingsLoaded, setSubtitleSettingsLoaded] = useState(false);
+  const subtitleSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // PiP overlay panel state
   const [pipExpandedSegId, setPipExpandedSegId] = useState<string | null>(null);
@@ -452,17 +460,16 @@ export default function PipelinePage() {
         preset_name: presetName,
         elevenlabs_model: elevenlabsModel,
         voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
-        subtitle_settings: {
-          enable_subtitles: true,
-          font_size: 24,
-          outline_width: 2,
-          position_y: 0.8,
-        },
-        video_filters: {
-          enable_denoise: false,
-          enable_sharpen: false,
-          enable_color_enhancement: false,
-        },
+        font_size: subtitleSettings.fontSize,
+        font_family: subtitleSettings.fontFamily,
+        text_color: subtitleSettings.textColor,
+        outline_color: subtitleSettings.outlineColor,
+        outline_width: subtitleSettings.outlineWidth,
+        position_y: subtitleSettings.positionY,
+        shadow_depth: subtitleSettings.shadowDepth ?? 0,
+        enable_glow: subtitleSettings.enableGlow ?? false,
+        glow_blur: subtitleSettings.glowBlur ?? 0,
+        adaptive_sizing: subtitleSettings.adaptiveSizing ?? false,
       });
 
       if (res.ok) {
@@ -590,6 +597,39 @@ export default function PipelinePage() {
       }
     };
     loadDefaultVoice();
+  }, [currentProfile]);
+
+  // Load subtitle settings from profile
+  useEffect(() => {
+    if (!currentProfile) return;
+    const loadSubtitleSettings = async () => {
+      try {
+        const res = await apiGetWithRetry(`/profiles/${currentProfile.id}/subtitle-settings`);
+        if (res.ok) {
+          const data = await res.json();
+          setSubtitleSettings({ ...DEFAULT_SUBTITLE_SETTINGS, ...data });
+        }
+      } catch {
+        // Use defaults
+      } finally {
+        setSubtitleSettingsLoaded(true);
+      }
+    };
+    loadSubtitleSettings();
+  }, [currentProfile]);
+
+  // Debounced save subtitle settings to profile
+  const handleSubtitleSettingsChange = useCallback((newSettings: SubtitleSettings) => {
+    setSubtitleSettings(newSettings);
+    if (!currentProfile) return;
+    if (subtitleSaveTimer.current) clearTimeout(subtitleSaveTimer.current);
+    subtitleSaveTimer.current = setTimeout(async () => {
+      try {
+        await apiPut(`/profiles/${currentProfile.id}/subtitle-settings`, newSettings);
+      } catch {
+        // Silent — settings still work locally
+      }
+    }, 1000);
   }, [currentProfile]);
 
   // Save selected voice as default in profile
@@ -1323,6 +1363,27 @@ export default function PipelinePage() {
                     </SelectContent>
                   </Select>
                 </div>
+              </CardContent>
+            </Card>
+
+            {/* Subtitle Style */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Type className="h-4 w-4" />
+                  Subtitle Style
+                </CardTitle>
+                <CardDescription>
+                  Configure font, colors, and position for subtitles
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <SubtitleEditor
+                  settings={subtitleSettings}
+                  onSettingsChange={handleSubtitleSettingsChange}
+                  showPreview={true}
+                  compact={false}
+                />
               </CardContent>
             </Card>
 

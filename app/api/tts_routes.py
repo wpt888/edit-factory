@@ -133,7 +133,8 @@ async def list_voices(
                     "voice_id": voice.id,
                     "name": voice.name,
                     "language": voice.language,
-                    "gender": voice.gender
+                    "gender": voice.gender,
+                    "category": voice.category
                 }
                 for voice in voices
             ]

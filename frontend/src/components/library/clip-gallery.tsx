@@ -227,10 +227,13 @@ export function ClipGallery({
   onClipStatusUpdate,
 }: ClipGalleryProps) {
   const handleClipComplete = (clipId: string) => {
-    setRenderingClipIds((prev) => prev.filter((id) => id !== clipId));
-    if (renderingClipIds.length <= 1) {
-      setRendering(false);
-    }
+    setRenderingClipIds((prev) => {
+      const updated = prev.filter((id) => id !== clipId);
+      if (updated.length === 0) {
+        setRendering(false);
+      }
+      return updated;
+    });
   };
 
   if (!selectedProject) {

@@ -678,8 +678,9 @@ def benchmark_zoompan(image_path: Path, duration_s: int = 30) -> dict:
     n_frames = fps * duration_s
     z_inc = 0.5 / n_frames
 
-    bench_simple = Path("/tmp/bench_simple.mp4")
-    bench_zoompan = Path("/tmp/bench_zoompan.mp4")
+    tmp_dir = Path(tempfile.gettempdir())
+    bench_simple = tmp_dir / "bench_simple.mp4"
+    bench_zoompan = tmp_dir / "bench_zoompan.mp4"
 
     results = {}
 

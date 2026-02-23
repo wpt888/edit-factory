@@ -105,6 +105,10 @@ class SRTValidator:
         if not srt_content or not srt_content.strip():
             return False, ["SRT content is empty"]
 
+        # Strip BOM if present
+        if srt_content.startswith('\ufeff'):
+            srt_content = srt_content[1:]
+
         errors = []
         lines = srt_content.strip().split('\n')
 

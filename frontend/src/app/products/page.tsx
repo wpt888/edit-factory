@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -29,6 +29,7 @@ import {
   Tag,
   Film,
   PlusCircle,
+  BookOpen,
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 import { CreateFeedDialog } from "@/components/create-feed-dialog";
@@ -55,6 +56,7 @@ interface Product {
   raw_sale_price_str: string | null;
   is_on_sale: boolean;
   product_url: string | null;
+  variant_count?: number;
 }
 
 interface Pagination {
@@ -69,11 +71,16 @@ interface FilterOptions {
   categories: string[];
 }
 
+type SourceTab = "catalog" | "feed";
+
 export default function ProductsPage() {
   const { currentProfile } = useProfile();
   const router = useRouter();
 
-  // Feed state
+  // Tab state
+  const [activeTab, setActiveTab] = useState<SourceTab>("catalog");
+
+  // Feed state (for "feed" tab)
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [selectedFeedId, setSelectedFeedId] = useState<string | null>(null);
   const [selectedFeed, setSelectedFeed] = useState<Feed | null>(null);
@@ -109,6 +116,9 @@ export default function ProductsPage() {
   // Create feed dialog state
   const [createFeedOpen, setCreateFeedOpen] = useState(false);
 
+  // Ref for sync timeout cleanup
+  const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   // Search debounce — 400ms
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -117,19 +127,40 @@ export default function ProductsPage() {
     return () => clearTimeout(timer);
   }, [search]);
 
+  // Cleanup sync timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Reset filters when tab changes
+  useEffect(() => {
+    setPage(1);
+    setSearch("");
+    setDebouncedSearch("");
+    setOnSale(false);
+    setCategory("all");
+    setBrand("all");
+    setSelectedProductIds(new Set());
+    setProducts([]);
+    setPagination({ page: 1, page_size: 50, total: 0, total_pages: 1 });
+  }, [activeTab]);
+
   // Reset page to 1 when any filter changes
   useEffect(() => {
     setPage(1);
   }, [debouncedSearch, onSale, category, brand]);
 
-  // Fetch feeds when profile loads
+  // ---- Feed tab logic ----
   const fetchFeeds = useCallback(async () => {
     try {
       const res = await apiGetWithRetry("/feeds");
       if (res.ok) {
         const data = await res.json();
         setFeeds(data);
-        // Auto-select first feed if none selected
         if (data.length > 0 && !selectedFeedId) {
           setSelectedFeedId(data[0].id);
           setSelectedFeed(data[0]);
@@ -143,12 +174,11 @@ export default function ProductsPage() {
   }, [selectedFeedId]);
 
   useEffect(() => {
-    if (!currentProfile) return;
+    if (!currentProfile || activeTab !== "feed") return;
     fetchFeeds();
-  }, [currentProfile]);
+  }, [currentProfile, activeTab, fetchFeeds]);
 
-  // Fetch filter options when feed changes
-  const fetchFilterOptions = useCallback(async (feedId: string) => {
+  const fetchFeedFilterOptions = useCallback(async (feedId: string) => {
     try {
       const res = await apiGetWithRetry(`/feeds/${feedId}/products/filters`);
       if (res.ok) {
@@ -156,12 +186,11 @@ export default function ProductsPage() {
         setFilterOptions(data);
       }
     } catch {
-      // Non-fatal — dropdowns will just be empty
+      // Non-fatal
     }
   }, []);
 
-  // Fetch products
-  const fetchProducts = useCallback(async () => {
+  const fetchFeedProducts = useCallback(async () => {
     if (!selectedFeedId) return;
     setLoading(true);
     try {
@@ -188,10 +217,10 @@ export default function ProductsPage() {
     }
   }, [selectedFeedId, debouncedSearch, onSale, category, brand, page]);
 
-  // When feed changes, fetch filter options + reset page + fetch products
+  // When feed changes, fetch filter options + reset
   useEffect(() => {
-    if (!selectedFeedId) return;
-    fetchFilterOptions(selectedFeedId);
+    if (!selectedFeedId || activeTab !== "feed") return;
+    fetchFeedFilterOptions(selectedFeedId);
     setPage(1);
     setCategory("all");
     setBrand("all");
@@ -199,37 +228,84 @@ export default function ProductsPage() {
     setDebouncedSearch("");
     setOnSale(false);
     setSelectedProductIds(new Set());
-  }, [selectedFeedId, fetchFilterOptions]);
+  }, [selectedFeedId, activeTab, fetchFeedFilterOptions]);
 
-  // Fetch products when filters/page change
+  // Fetch feed products when filters/page change
   useEffect(() => {
-    if (!selectedFeedId) return;
-    fetchProducts();
-  }, [selectedFeedId, debouncedSearch, onSale, category, brand, page, fetchProducts]);
+    if (!selectedFeedId || activeTab !== "feed") return;
+    fetchFeedProducts();
+  }, [selectedFeedId, debouncedSearch, onSale, category, brand, page, activeTab, fetchFeedProducts]);
 
-  // Handle feed creation — optimistic update + auto-select
+  // ---- Catalog tab logic ----
+  const fetchCatalogFilterOptions = useCallback(async () => {
+    try {
+      const res = await apiGetWithRetry("/catalog/products/filters");
+      if (res.ok) {
+        const data = await res.json();
+        setFilterOptions(data);
+      }
+    } catch {
+      // Non-fatal
+    }
+  }, []);
+
+  const fetchCatalogProducts = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        page_size: "50",
+        ...(debouncedSearch && { search: debouncedSearch }),
+        ...(onSale && { on_sale: "true" }),
+        ...(category !== "all" && { category }),
+        ...(brand !== "all" && { brand }),
+      });
+      const res = await apiGetWithRetry(`/catalog/products?${params}`);
+      if (res.ok) {
+        const data = await res.json();
+        setProducts(data.products);
+        setPagination(data.pagination);
+      } else {
+        toast.error("Failed to load catalog products");
+      }
+    } catch {
+      toast.error("Network error loading catalog products");
+    } finally {
+      setLoading(false);
+    }
+  }, [debouncedSearch, onSale, category, brand, page]);
+
+  // Fetch catalog filters on tab switch
+  useEffect(() => {
+    if (activeTab !== "catalog" || !currentProfile) return;
+    fetchCatalogFilterOptions();
+  }, [activeTab, currentProfile, fetchCatalogFilterOptions]);
+
+  // Fetch catalog products when filters/page change
+  useEffect(() => {
+    if (activeTab !== "catalog" || !currentProfile) return;
+    fetchCatalogProducts();
+  }, [activeTab, currentProfile, debouncedSearch, onSale, category, brand, page, fetchCatalogProducts]);
+
+  // ---- Shared handlers ----
   const handleFeedCreated = async (newFeed: any) => {
     setFeeds((prev) => [newFeed, ...prev]);
     setSelectedFeedId(newFeed.id);
     setSelectedFeed(newFeed);
-    // Refresh from server for consistency
     await fetchFeeds();
   };
 
-  // Handle feed selection
   const handleFeedChange = (feedId: string) => {
     const feed = feeds.find((f) => f.id === feedId) || null;
     setSelectedFeedId(feedId);
     setSelectedFeed(feed);
   };
 
-  // Handle re-sync
   const handleSync = async (feedId: string) => {
     try {
       const res = await apiPost(`/feeds/${feedId}/sync`);
       if (res.ok) {
         toast.success("Sync started");
-        // Update local feed status
         setFeeds((prev) =>
           prev.map((f) =>
             f.id === feedId ? { ...f, sync_status: "syncing" } : f
@@ -240,8 +316,7 @@ export default function ProductsPage() {
             prev ? { ...prev, sync_status: "syncing" } : prev
           );
         }
-        // Refresh feed data after 3s
-        setTimeout(async () => {
+        syncTimeoutRef.current = setTimeout(async () => {
           const refreshRes = await apiGetWithRetry("/feeds");
           if (refreshRes.ok) {
             const data = await refreshRes.json();
@@ -261,20 +336,19 @@ export default function ProductsPage() {
     }
   };
 
-  // Navigate to product video generation page
   const handleGenerateVideo = (product: Product) => {
     const params = new URLSearchParams({
       id: product.id,
       title: product.title,
+      source: activeTab,
       ...(product.image_link && { image: product.image_link }),
       ...(product.raw_price_str && { price: product.raw_price_str }),
       ...(product.brand && { brand: product.brand }),
-      ...(selectedFeedId && { feed_id: selectedFeedId }),
+      ...(activeTab === "feed" && selectedFeedId ? { feed_id: selectedFeedId } : {}),
     });
     router.push(`/product-video?${params.toString()}`);
   };
 
-  // Multi-select toggle
   const toggleProductSelection = (productId: string) => {
     setSelectedProductIds((prev) => {
       const next = new Set(prev);
@@ -295,12 +369,12 @@ export default function ProductsPage() {
     setSelectedProductIds(new Set());
   };
 
-  // Batch generate handler
   const handleBatchGenerate = async () => {
     setBatchLoading(true);
     try {
       const res = await apiPost("/products/batch-generate", {
         product_ids: Array.from(selectedProductIds),
+        source: activeTab,
         voiceover_mode: "quick",
         tts_provider: "edge",
         duration_s: 30,
@@ -320,7 +394,6 @@ export default function ProductsPage() {
     }
   };
 
-  // Sync status badge color
   const getSyncBadgeVariant = (status: string) => {
     switch (status) {
       case "idle":
@@ -349,6 +422,8 @@ export default function ProductsPage() {
     }
   };
 
+  const showProducts = activeTab === "catalog" || (activeTab === "feed" && selectedFeedId);
+
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -365,83 +440,111 @@ export default function ProductsPage() {
           </div>
         </div>
 
-        {/* Feed selector bar */}
-        <div className="flex flex-wrap items-center gap-3 mb-4 p-4 bg-card border rounded-lg">
-          <div className="flex items-center gap-2 flex-1 min-w-[200px]">
-            <Tag className="h-4 w-4 text-muted-foreground shrink-0" />
-            <Select
-              value={selectedFeedId || ""}
-              onValueChange={handleFeedChange}
-            >
-              <SelectTrigger className="w-[220px]">
-                <SelectValue placeholder="Select a feed..." />
-              </SelectTrigger>
-              <SelectContent>
-                {feeds.map((feed) => (
-                  <SelectItem key={feed.id} value={feed.id}>
-                    {feed.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {selectedFeed && (
-            <>
-              <Badge
-                variant={getSyncBadgeVariant(selectedFeed.sync_status)}
-                className={getSyncBadgeClass(selectedFeed.sync_status)}
-              >
-                {selectedFeed.sync_status === "syncing" && (
-                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                )}
-                {selectedFeed.sync_status}
-              </Badge>
-
-              <span className="text-sm text-muted-foreground">
-                {selectedFeed.product_count.toLocaleString()} products
-              </span>
-
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleSync(selectedFeed.id)}
-                disabled={selectedFeed.sync_status === "syncing"}
-              >
-                <RefreshCw
-                  className={`h-4 w-4 mr-1 ${
-                    selectedFeed.sync_status === "syncing"
-                      ? "animate-spin"
-                      : ""
-                  }`}
-                />
-                Re-sync
-              </Button>
-            </>
-          )}
-
-          {feeds.length > 0 && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setCreateFeedOpen(true)}
-            >
-              <PlusCircle className="h-4 w-4 mr-1" />
-              New Feed
-            </Button>
-          )}
-
-          {feeds.length === 0 && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setCreateFeedOpen(true)}
-            >
-              <PlusCircle className="h-4 w-4 mr-1" />
-              Add Your First Feed
-            </Button>
-          )}
+        {/* Tab switcher */}
+        <div className="flex gap-1 mb-4 p-1 bg-muted rounded-lg w-fit">
+          <button
+            onClick={() => setActiveTab("catalog")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              activeTab === "catalog"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <BookOpen className="h-4 w-4" />
+            Catalog
+          </button>
+          <button
+            onClick={() => setActiveTab("feed")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              activeTab === "feed"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Tag className="h-4 w-4" />
+            Feed
+          </button>
         </div>
+
+        {/* Feed selector bar — only visible on Feed tab */}
+        {activeTab === "feed" && (
+          <div className="flex flex-wrap items-center gap-3 mb-4 p-4 bg-card border rounded-lg">
+            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+              <Tag className="h-4 w-4 text-muted-foreground shrink-0" />
+              <Select
+                value={selectedFeedId || ""}
+                onValueChange={handleFeedChange}
+              >
+                <SelectTrigger className="w-[220px]">
+                  <SelectValue placeholder="Select a feed..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {feeds.map((feed) => (
+                    <SelectItem key={feed.id} value={feed.id}>
+                      {feed.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {selectedFeed && (
+              <>
+                <Badge
+                  variant={getSyncBadgeVariant(selectedFeed.sync_status)}
+                  className={getSyncBadgeClass(selectedFeed.sync_status)}
+                >
+                  {selectedFeed.sync_status === "syncing" && (
+                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                  )}
+                  {selectedFeed.sync_status}
+                </Badge>
+
+                <span className="text-sm text-muted-foreground">
+                  {selectedFeed.product_count.toLocaleString()} products
+                </span>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleSync(selectedFeed.id)}
+                  disabled={selectedFeed.sync_status === "syncing"}
+                >
+                  <RefreshCw
+                    className={`h-4 w-4 mr-1 ${
+                      selectedFeed.sync_status === "syncing"
+                        ? "animate-spin"
+                        : ""
+                    }`}
+                  />
+                  Re-sync
+                </Button>
+              </>
+            )}
+
+            {feeds.length > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setCreateFeedOpen(true)}
+              >
+                <PlusCircle className="h-4 w-4 mr-1" />
+                New Feed
+              </Button>
+            )}
+
+            {feeds.length === 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setCreateFeedOpen(true)}
+              >
+                <PlusCircle className="h-4 w-4 mr-1" />
+                Add Your First Feed
+              </Button>
+            )}
+          </div>
+        )}
 
         {/* Filter bar */}
         <div className="flex flex-wrap items-center gap-3 mb-6 p-4 bg-card border rounded-lg">
@@ -500,7 +603,7 @@ export default function ProductsPage() {
         </div>
 
         {/* Product card grid */}
-        {!selectedFeedId ? (
+        {!showProducts ? (
           <EmptyState
             icon={<Package className="h-6 w-6" />}
             title="Niciun produs"
@@ -515,7 +618,9 @@ export default function ProductsPage() {
           <EmptyState
             icon={<Package className="h-6 w-6" />}
             title="Niciun produs"
-            description="Importa produse dintr-un feed sau adauga manual."
+            description={activeTab === "catalog"
+              ? "Catalogul nu contine produse care sa corespunda filtrelor."
+              : "Importa produse dintr-un feed sau adauga manual."}
           />
         ) : (
           <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 ${selectedProductIds.size > 0 ? "pb-24" : ""}`}>
@@ -549,6 +654,14 @@ export default function ProductsPage() {
                       className="absolute top-2 right-2 text-xs"
                     >
                       SALE
+                    </Badge>
+                  )}
+                  {product.variant_count && product.variant_count > 1 && (
+                    <Badge
+                      variant="secondary"
+                      className="absolute bottom-2 right-2 text-xs"
+                    >
+                      {product.variant_count} variante
                     </Badge>
                   )}
                 </div>
@@ -601,7 +714,7 @@ export default function ProductsPage() {
         )}
 
         {/* Pagination controls */}
-        {selectedFeedId && !loading && products.length > 0 && (
+        {showProducts && !loading && products.length > 0 && (
           <div className="flex flex-col items-center gap-2 mt-8">
             <div className="flex items-center gap-3">
               <Button

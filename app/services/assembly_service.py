@@ -18,6 +18,7 @@ This service bridges:
 - Existing render pipeline (v3 quality settings)
 """
 import logging
+import re
 import subprocess
 import tempfile
 import uuid
@@ -53,6 +54,7 @@ class TimelineEntry:
     end_time: float    # Within source video
     timeline_start: float  # Position in final video
     timeline_duration: float
+    transforms: Optional[dict] = None  # Per-segment visual transforms
 
 
 class AssemblyService:
@@ -75,7 +77,7 @@ class AssemblyService:
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 str(audio_path)
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode == 0:
                 return float(result.stdout.strip())
         except Exception as e:
@@ -123,7 +125,8 @@ class AssemblyService:
         self,
         script_text: str,
         profile_id: str,
-        elevenlabs_model: str = "eleven_flash_v2_5"
+        elevenlabs_model: str = "eleven_flash_v2_5",
+        voice_id: Optional[str] = None
     ) -> Tuple[Path, float, dict]:
         """
         Generate TTS audio with timestamps and apply silence removal.
@@ -141,8 +144,8 @@ class AssemblyService:
         # Generate TTS with timestamps (profile_id enables multi-account failover)
         tts_service = ElevenLabsTTSService(output_dir=temp_dir, model_id=elevenlabs_model, profile_id=profile_id)
 
-        # Use the configured voice ID
-        voice_id = tts_service._voice_id
+        # Use provided voice ID or fall back to configured default
+        voice_id = voice_id or tts_service._voice_id
         raw_audio_path = temp_dir / "tts_raw.mp3"
 
         logger.info(f"Generating TTS for script ({len(script_text)} chars) with model {elevenlabs_model}")
@@ -348,7 +351,8 @@ class AssemblyService:
                 start_time=segment_start,
                 end_time=use_end,
                 timeline_start=current_timeline_pos,
-                timeline_duration=needed_duration
+                timeline_duration=needed_duration,
+                transforms=segment.get("transforms"),
             )
 
             timeline.append(timeline_entry)
@@ -402,28 +406,41 @@ class AssemblyService:
 
         segment_files = []
 
-        # Extract each segment clip
+        # Extract each segment clip (with optional per-segment transforms)
+        from app.services.segment_transforms import SegmentTransform
+
         for i, entry in enumerate(timeline):
             segment_file = temp_dir / f"segment_{i:03d}.mp4"
 
             duration = entry.end_time - entry.start_time
+
+            # Build per-segment transform filters
+            transform = SegmentTransform.from_dict(entry.transforms)
+            # Use 1080x1920 as default; actual dimensions handled by safety net in filter
+            transform_filters = transform.to_ffmpeg_filters(width=1080, height=1920)
 
             cmd = [
                 "ffmpeg", "-y",
                 "-ss", str(entry.start_time),
                 "-i", entry.source_video_path,
                 "-t", str(duration),
+            ]
+
+            if transform_filters:
+                cmd.extend(["-vf", ",".join(transform_filters)])
+
+            cmd.extend([
                 "-c:v", "libx264",
                 "-preset", "fast",
                 "-crf", "23",
                 "-an",  # No audio
                 "-pix_fmt", "yuv420p",
                 str(segment_file)
-            ]
+            ])
 
             logger.debug(f"Extracting segment {i}: {entry.source_video_path} [{entry.start_time:.2f}s - {entry.end_time:.2f}s]")
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode == 0 and segment_file.exists():
                 segment_files.append(segment_file)
             else:
@@ -457,7 +474,7 @@ class AssemblyService:
 
         logger.info(f"Concatenating {len(segment_files)} segments")
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg concatenation failed: {result.stderr}")
 
@@ -472,6 +489,7 @@ class AssemblyService:
         preset_data: dict,
         subtitle_settings: Optional[dict] = None,
         elevenlabs_model: str = "eleven_flash_v2_5",
+        voice_id: Optional[str] = None,
         enable_denoise: bool = False,
         denoise_strength: float = 2.0,
         enable_sharpen: bool = False,
@@ -508,13 +526,14 @@ class AssemblyService:
             audio_path, audio_duration, timestamps = await self.generate_tts_with_timestamps(
                 script_text=script_text,
                 profile_id=profile_id,
-                elevenlabs_model=elevenlabs_model
+                elevenlabs_model=elevenlabs_model,
+                voice_id=voice_id
             )
 
             # Step 2: Generate SRT from timestamps (with cache)
             logger.info("Step 2/7: Generating SRT subtitles from timestamps")
             from app.services.tts_cache import srt_cache_lookup, srt_cache_store
-            _srt_cache_key = {"text": script_text, "voice_id": "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
+            _srt_cache_key = {"text": script_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
             cached_srt = srt_cache_lookup(_srt_cache_key)
             if cached_srt:
                 srt_content = cached_srt
@@ -550,7 +569,7 @@ class AssemblyService:
             # Step 4: Fetch segments from database
             logger.info("Step 4/7: Fetching segments from library")
             segments_result = supabase.table("editai_segments")\
-                .select("id, source_video_id, start_time, end_time, keywords, editai_source_videos(file_path)")\
+                .select("id, source_video_id, start_time, end_time, keywords, transforms, editai_source_videos(file_path)")\
                 .eq("profile_id", profile_id)\
                 .execute()
 
@@ -569,7 +588,8 @@ class AssemblyService:
                         "end_time": seg["end_time"],
                         "duration": seg["end_time"] - seg["start_time"],
                         "keywords": seg.get("keywords") or [],
-                        "source_video_path": source_video_path
+                        "source_video_path": source_video_path,
+                        "transforms": seg.get("transforms"),
                     })
 
             logger.info(f"Loaded {len(segments_data)} segments from library")
@@ -601,7 +621,8 @@ class AssemblyService:
             output_dir = self.settings.output_dir / profile_id
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            final_output_path = output_dir / f"assembly_{uuid.uuid4().hex[:8]}_{preset_data['name']}.mp4"
+            safe_preset_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', preset_data['name'])
+            final_output_path = output_dir / f"assembly_{uuid.uuid4().hex[:8]}_{safe_preset_name}.mp4"
 
             _render_with_preset(
                 video_path=assembled_video_path,
@@ -632,7 +653,8 @@ class AssemblyService:
         self,
         script_text: str,
         profile_id: str,
-        elevenlabs_model: str = "eleven_flash_v2_5"
+        elevenlabs_model: str = "eleven_flash_v2_5",
+        voice_id: Optional[str] = None
     ) -> dict:
         """
         Preview-only: TTS -> SRT -> match -> timeline (no rendering).
@@ -651,7 +673,8 @@ class AssemblyService:
         audio_path, audio_duration, timestamps = await self.generate_tts_with_timestamps(
             script_text=script_text,
             profile_id=profile_id,
-            elevenlabs_model=elevenlabs_model
+            elevenlabs_model=elevenlabs_model,
+            voice_id=voice_id
         )
 
         # Step 2: Generate SRT (with cache)
@@ -670,7 +693,7 @@ class AssemblyService:
         # Step 3: Fetch segments
         logger.info("Preview Step 3/4: Fetching segments from library")
         segments_result = supabase.table("editai_segments")\
-            .select("id, source_video_id, start_time, end_time, keywords, editai_source_videos(file_path)")\
+            .select("id, source_video_id, start_time, end_time, keywords, transforms, editai_source_videos(file_path)")\
             .eq("profile_id", profile_id)\
             .execute()
 
@@ -688,7 +711,8 @@ class AssemblyService:
                     "end_time": seg["end_time"],
                     "duration": seg["end_time"] - seg["start_time"],
                     "keywords": seg.get("keywords") or [],
-                    "source_video_path": source_video_path
+                    "source_video_path": source_video_path,
+                    "transforms": seg.get("transforms"),
                 })
 
         # Step 4: Match and build timeline

@@ -7,7 +7,7 @@ import subprocess
 import json
 import struct
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List
 
@@ -286,7 +286,7 @@ async def upload_source_video(
             fps=video_info.get("fps"),
             file_size_bytes=video_info.get("file_size_bytes"),
             segments_count=0,
-            created_at=datetime.now().isoformat()
+            created_at=datetime.now(timezone.utc).isoformat()
         )
     except Exception as e:
         # Cleanup on failure
@@ -422,12 +422,16 @@ async def delete_source_video(
 @router.get("/source-videos/{video_id}/stream")
 async def stream_source_video(
     video_id: str,
+    profile_id: Optional[str] = Query(None),
+    profile: ProfileContext = Depends(get_profile_context),
 ):
     """Stream source video for playback.
 
-    NOTE: No profile auth required - the <video> element makes direct browser
-    requests without custom headers. Video IDs are UUIDs so they're unguessable.
+    Accepts profile_id as query param (for <video> tags that can't send headers)
+    or X-Profile-Id header.
     """
+    effective_profile_id = profile_id or profile.profile_id
+
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -435,6 +439,7 @@ async def stream_source_video(
     result = supabase.table("editai_source_videos")\
         .select("file_path")\
         .eq("id", video_id)\
+        .eq("profile_id", effective_profile_id)\
         .execute()
 
     if not result.data:
@@ -533,11 +538,12 @@ def _extract_waveform(video_path: str, num_samples: int = 800, duration: float =
 async def get_source_video_waveform(
     video_id: str,
     samples: int = Query(default=800, ge=100, le=4000),
+    profile_id: Optional[str] = Query(None),
+    profile: ProfileContext = Depends(get_profile_context),
 ):
-    """Get audio waveform data for visualization.
+    """Get audio waveform data for visualization."""
+    effective_profile_id = profile_id or profile.profile_id
 
-    No auth required — same pattern as /stream (UUID is unguessable).
-    """
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -545,6 +551,7 @@ async def get_source_video_waveform(
     result = supabase.table("editai_source_videos")\
         .select("file_path, duration")\
         .eq("id", video_id)\
+        .eq("profile_id", effective_profile_id)\
         .execute()
 
     if not result.data:
@@ -678,7 +685,7 @@ async def create_segment(
             is_favorite=False,
             notes=segment.notes,
             transforms=None,
-            created_at=datetime.now().isoformat(),
+            created_at=datetime.now(timezone.utc).isoformat(),
             source_video_name=source_video.get("name")
         )
     except Exception as e:
@@ -834,7 +841,7 @@ async def update_segment(
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Build update dict with only provided fields
-    update_data = {"updated_at": datetime.now().isoformat()}
+    update_data = {"updated_at": datetime.now(timezone.utc).isoformat()}
 
     if update.start_time is not None:
         update_data["start_time"] = update.start_time
@@ -847,7 +854,11 @@ async def update_segment(
     if update.transforms is not None:
         update_data["transforms"] = update.transforms.model_dump()
 
-    # Validate times if both provided
+    # Validate times
+    if update.start_time is not None and update.start_time < 0:
+        raise HTTPException(status_code=400, detail="Start time must be >= 0")
+    if update.end_time is not None and update.end_time < 0:
+        raise HTTPException(status_code=400, detail="End time must be >= 0")
     if update.start_time is not None and update.end_time is not None:
         if update.end_time <= update.start_time:
             raise HTTPException(status_code=400, detail="End time must be after start time")
@@ -927,7 +938,7 @@ async def toggle_favorite(
     new_status = not current
 
     supabase.table("editai_segments")\
-        .update({"is_favorite": new_status, "updated_at": datetime.now().isoformat()})\
+        .update({"is_favorite": new_status, "updated_at": datetime.now(timezone.utc).isoformat()})\
         .eq("id", segment_id)\
         .eq("profile_id", profile.profile_id)\
         .execute()
@@ -1041,7 +1052,7 @@ async def extract_segment(
             supabase.table("editai_segments")\
                 .update({
                     "extracted_video_path": str(output_path),
-                    "updated_at": datetime.now().isoformat()
+                    "updated_at": datetime.now(timezone.utc).isoformat()
                 })\
                 .eq("id", segment_id)\
                 .eq("profile_id", profile.profile_id)\
@@ -1290,6 +1301,11 @@ async def serve_segment_file(file_path: str):
     import os
 
     decoded_path = unquote(file_path)
+
+    # Block path traversal attempts
+    if '..' in decoded_path:
+        raise HTTPException(status_code=403, detail="Invalid path")
+
     full_path = Path(decoded_path)
 
     if not full_path.is_absolute():

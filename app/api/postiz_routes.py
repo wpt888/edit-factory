@@ -4,7 +4,7 @@ Handles video publishing to social media via Postiz API.
 """
 import uuid
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -71,15 +71,25 @@ class PostizStatusResponse(BaseModel):
 
 # ============== PROGRESS TRACKING ==============
 _publish_progress: Dict[str, dict] = {}
+_MAX_PROGRESS_ENTRIES = 1000
+
+
+def _evict_old_progress():
+    """Remove oldest entries if store exceeds max size."""
+    if len(_publish_progress) > _MAX_PROGRESS_ENTRIES:
+        to_remove = sorted(_publish_progress.keys())[:len(_publish_progress) - _MAX_PROGRESS_ENTRIES]
+        for key in to_remove:
+            _publish_progress.pop(key, None)
 
 
 def update_publish_progress(job_id: str, step: str, percentage: int, status: str = "in_progress"):
     """Update progress for a publish job."""
+    _evict_old_progress()
     _publish_progress[job_id] = {
         "step": step,
         "percentage": percentage,
         "status": status,
-        "updated_at": datetime.now().isoformat()
+        "updated_at": datetime.now(timezone.utc).isoformat()
     }
 
 
@@ -173,7 +183,7 @@ async def get_integrations(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"[Profile {profile.profile_id}] Failed to get integrations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/upload")
@@ -214,7 +224,7 @@ async def upload_to_postiz(
             try:
                 supabase.table("editai_clips").update({
                     "postiz_status": "sent",
-                    "updated_at": datetime.now().isoformat()
+                    "updated_at": datetime.now(timezone.utc).isoformat()
                 }).eq("id", request.clip_id).execute()
             except Exception as e:
                 logger.warning(f"Failed to update clip status: {e}")
@@ -232,7 +242,7 @@ async def upload_to_postiz(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"[Profile {profile.profile_id}] Failed to upload to Postiz: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/bulk-upload")
@@ -289,7 +299,7 @@ async def bulk_upload_to_postiz(
                 try:
                     supabase.table("editai_clips").update({
                         "postiz_status": "sent",
-                        "updated_at": datetime.now().isoformat()
+                        "updated_at": datetime.now(timezone.utc).isoformat()
                     }).eq("id", clip_id).execute()
                 except Exception as e:
                     logger.warning(f"Failed to update clip {clip_id} status: {e}")
@@ -538,7 +548,7 @@ async def _publish_clip_task(
                         "platforms": result.platforms or [],
                         "caption": caption[:500],  # Truncate for storage
                         "scheduled_at": schedule_date.isoformat() if schedule_date else None,
-                        "published_at": None if schedule_date else datetime.now().isoformat(),
+                        "published_at": None if schedule_date else datetime.now(timezone.utc).isoformat(),
                         "status": "scheduled" if schedule_date else "published"
                     }).execute()
                 except Exception as e:

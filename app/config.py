@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     # Server
     host: str = "0.0.0.0"
     port: int = 8000
-    debug: bool = True
+    debug: bool = False
 
     # Paths
     base_dir: Path = Path(__file__).parent.parent
@@ -43,6 +43,7 @@ class Settings(BaseSettings):
 
     # Anthropic Claude AI
     anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-4-20250514"
 
     # Supabase
     supabase_url: str = ""

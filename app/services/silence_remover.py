@@ -194,7 +194,7 @@ class SilenceRemover:
 
         # Extragem și concatenăm segmentele
         with tempfile.TemporaryDirectory() as temp_dir:
-            temp_dir = Path(temp_dir)
+            tmp_path = Path(temp_dir)
             segment_files = []
 
             for i, (start, end) in enumerate(merged_segments):
@@ -205,7 +205,7 @@ class SilenceRemover:
                 if end <= start:
                     continue
 
-                segment_file = temp_dir / f"segment_{i:03d}.wav"
+                segment_file = tmp_path / f"segment_{i:03d}.wav"
 
                 cmd = [
                     "ffmpeg", "-y",
@@ -234,7 +234,7 @@ class SilenceRemover:
                 )
 
             # Creăm fișier de concat
-            concat_file = temp_dir / "concat.txt"
+            concat_file = tmp_path / "concat.txt"
             with open(concat_file, 'w', encoding='utf-8') as f:
                 for seg_file in segment_files:
                     # Escape path
@@ -247,6 +247,8 @@ class SilenceRemover:
                 audio_codec = ["-c:a", "libmp3lame", "-b:a", "192k"]
             elif output_ext == '.aac':
                 audio_codec = ["-c:a", "aac", "-b:a", "192k"]
+            elif output_ext == '.wav':
+                audio_codec = ["-c:a", "pcm_s16le"]
             else:
                 audio_codec = ["-c:a", "copy"]
 

@@ -73,7 +73,9 @@ class SubtitleStyleConfig:
             glow_outline = self.outline_width + self.glow_blur
             style_parts.append(f"Outline={glow_outline}")
             # Semi-transparent outline for glow (50% alpha)
-            glow_color = f"&H80{self.outline_color[4:]}"
+            # ASS color format: &HAABBGGRR — strip leading &H before slicing
+            oc = self.outline_color
+            glow_color = f"&H80{oc[4:]}" if len(oc) >= 10 else f"&H80{oc.lstrip('&H')}"
             style_parts.append(f"OutlineColour={glow_color}")
         else:
             style_parts.append(f"Outline={self.outline_width}")

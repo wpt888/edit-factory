@@ -152,8 +152,9 @@ def generate_srt_from_timestamps(
         would_exceed_chars = len(current_phrase_text) + len(word_text) + (1 if current_phrase_text else 0) > max_chars_per_phrase
         would_exceed_words = len(current_phrase_words) >= max_words_per_phrase
 
-        # Check for sentence-ending punctuation
-        ends_sentence = word_text and word_text[-1] in ".!?"
+        # Check for sentence-ending punctuation (strip trailing quotes)
+        stripped_text = word_text.rstrip("\"'""''")
+        ends_sentence = stripped_text and stripped_text[-1] in ".!?"
 
         # Create new phrase if we would exceed limits (but not on first word)
         if current_phrase_words and (would_exceed_chars or would_exceed_words):

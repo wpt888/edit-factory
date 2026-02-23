@@ -185,6 +185,10 @@ class EdgeTTSService:
         audio_path.parent.mkdir(parents=True, exist_ok=True)
         srt_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Truncate audio file to avoid appending on retry
+        if audio_path.exists():
+            audio_path.unlink()
+
         communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate)
 
         srt_content = []

@@ -20,7 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { apiGet, apiPost, apiPut, handleApiError } from "@/lib/api";
+import { apiGet, apiPost, apiPut, API_URL, handleApiError } from "@/lib/api";
 import {
   Loader2,
   Sparkles,
@@ -117,7 +117,7 @@ export default function AssemblyPage() {
       stopRenderPolling();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderJobId]);
+  }, [renderJobId, isRendering]);
 
   const handlePreview = async () => {
     if (!scriptText.trim()) return;
@@ -485,7 +485,7 @@ export default function AssemblyPage() {
                         {renderStatus.status === "completed" && renderStatus.final_video_path && (
                           <Button variant="outline" className="w-full" asChild>
                             <a
-                              href={`http://localhost:8000/api/v1/library/files/${encodeURIComponent(renderStatus.final_video_path)}`}
+                              href={`${API_URL}/library/files/${encodeURIComponent(renderStatus.final_video_path)}`}
                               download
                             >
                               <Download className="h-4 w-4 mr-2" />

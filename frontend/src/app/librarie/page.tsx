@@ -38,7 +38,7 @@ import {
   FileText,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, handleApiError } from "@/lib/api";
+import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, ApiError, handleApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { useProfile } from "@/contexts/profile-context";
 import { EmptyState } from "@/components/empty-state";
@@ -126,14 +126,13 @@ function LibrarieContent() {
     try {
       setLoading(true);
       const res = await apiGetWithRetry("/library/all-clips");
-      if (res.ok) {
-        const data = await res.json();
-        setClips(data.clips || []);
-      } else if (res.status === 401) {
-        // Not authenticated, redirect to login
-        window.location.href = "/login";
-      }
+      const data = await res.json();
+      setClips(data.clips || []);
     } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        window.location.href = "/login";
+        return;
+      }
       handleApiError(error, "Eroare la incarcarea clipurilor");
     } finally {
       setLoading(false);
@@ -241,23 +240,18 @@ function LibrarieContent() {
       const videoPath = clip.final_video_path || clip.raw_video_path;
 
       // Call backend endpoint that handles the upload to Postiz
-      const res = await apiPost("/postiz/upload", {
+      await apiPost("/postiz/upload", {
         clip_id: clip.id,
         video_path: videoPath,
       });
 
-      if (res.ok) {
-        // Update clip status locally
-        setClips((prev) =>
-          prev.map((c) =>
-            c.id === clip.id ? { ...c, postiz_status: "sent" as const } : c
-          )
-        );
-        toast.success("Video trimis în librăria Postiz!");
-      } else {
-        const error = await res.json();
-        toast.error(`Eroare: ${error.detail || "Upload eșuat"}`);
-      }
+      // Update clip status locally
+      setClips((prev) =>
+        prev.map((c) =>
+          c.id === clip.id ? { ...c, postiz_status: "sent" as const } : c
+        )
+      );
+      toast.success("Video trimis în librăria Postiz!");
     } catch (error) {
       handleApiError(error, "Eroare la upload");
     } finally {
@@ -277,18 +271,13 @@ function LibrarieContent() {
   // Rename clip
   const renameClip = async (clipId: string, newName: string) => {
     try {
-      const res = await apiPatch(`/library/clips/${clipId}`, { variant_name: newName });
-      if (res.ok) {
-        setClips((prev) =>
-          prev.map((c) =>
-            c.id === clipId ? { ...c, variant_name: newName } : c
-          )
-        );
-        setRenameClipId(null);
-      } else {
-        toast.error("Nu s-a putut redenumi clipul.");
-        setRenameClipId(null);
-      }
+      await apiPatch(`/library/clips/${clipId}`, { variant_name: newName });
+      setClips((prev) =>
+        prev.map((c) =>
+          c.id === clipId ? { ...c, variant_name: newName } : c
+        )
+      );
+      setRenameClipId(null);
     } catch (error) {
       handleApiError(error, "Eroare la redenumirea clipului");
       setRenameClipId(null);
@@ -304,20 +293,14 @@ function LibrarieContent() {
     setRemovingAudioClipId(clip.id);
     try {
       const res = await apiPost(`/library/clips/${clip.id}/remove-audio`);
-
-      if (res.ok) {
-        const data = await res.json();
-        // Update local state
-        setClips((prev) =>
-          prev.map((c) =>
-            c.id === clip.id ? { ...c, has_audio: false, raw_video_path: data.video_path } : c
-          )
-        );
-        toast.success("Sunetul a fost eliminat cu succes!");
-      } else {
-        const error = await res.json();
-        toast.error(`Eroare: ${error.detail || "Nu s-a putut elimina sunetul"}`);
-      }
+      const data = await res.json();
+      // Update local state
+      setClips((prev) =>
+        prev.map((c) =>
+          c.id === clip.id ? { ...c, has_audio: false, raw_video_path: data.video_path } : c
+        )
+      );
+      toast.success("Sunetul a fost eliminat cu succes!");
     } catch (error) {
       handleApiError(error, "Eroare la eliminarea sunetului");
     } finally {
@@ -333,16 +316,10 @@ function LibrarieContent() {
 
     setDeletingClipId(clip.id);
     try {
-      const res = await apiDelete(`/library/clips/${clip.id}`);
-
-      if (res.ok) {
-        // Remove from local state
-        setClips((prev) => prev.filter((c) => c.id !== clip.id));
-        toast.success("Clipul a fost șters cu succes!");
-      } else {
-        const error = await res.json();
-        toast.error(`Eroare: ${error.detail || "Nu s-a putut șterge clipul"}`);
-      }
+      await apiDelete(`/library/clips/${clip.id}`);
+      // Remove from local state
+      setClips((prev) => prev.filter((c) => c.id !== clip.id));
+      toast.success("Clipul a fost șters cu succes!");
     } catch (error) {
       handleApiError(error, "Eroare la stergerea clipului");
     } finally {
@@ -385,17 +362,11 @@ function LibrarieContent() {
       const res = await apiPost("/library/clips/bulk-delete", {
         clip_ids: Array.from(selectedClipIds),
       });
-
-      if (res.ok) {
-        const data = await res.json();
-        // Remove deleted clips from local state
-        setClips((prev) => prev.filter((c) => !selectedClipIds.has(c.id)));
-        setSelectedClipIds(new Set());
-        toast.success(`${data.deleted_count} clipuri au fost șterse cu succes!${data.failed_count > 0 ? ` ${data.failed_count} au eșuat.` : ""}`);
-      } else {
-        const error = await res.json();
-        toast.error(`Eroare: ${error.detail || "Nu s-au putut șterge clipurile"}`);
-      }
+      const data = await res.json();
+      // Remove deleted clips from local state
+      setClips((prev) => prev.filter((c) => !selectedClipIds.has(c.id)));
+      setSelectedClipIds(new Set());
+      toast.success(`${data.deleted_count} clipuri au fost șterse cu succes!${data.failed_count > 0 ? ` ${data.failed_count} au eșuat.` : ""}`);
     } catch (error) {
       handleApiError(error, "Eroare la stergerea clipurilor");
     } finally {
@@ -407,10 +378,6 @@ function LibrarieContent() {
   const downloadFile = async (url: string, filename: string) => {
     try {
       const res = await apiGet(url);
-      if (!res.ok) {
-        toast.error("Download eșuat");
-        return;
-      }
       const blob = await res.blob();
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -445,22 +412,16 @@ function LibrarieContent() {
       const res = await apiPost("/postiz/bulk-upload", {
         clips: clipsData,
       });
-
-      if (res.ok) {
-        const data = await res.json();
-        // Update postiz_status locally for uploaded clips
-        const uploadedIds = new Set(data.uploaded.map((u: { clip_id: string }) => u.clip_id));
-        setClips((prev) =>
-          prev.map((c) =>
-            uploadedIds.has(c.id) ? { ...c, postiz_status: "sent" as const } : c
-          )
-        );
-        setSelectedClipIds(new Set());
-        toast.success(`${data.uploaded_count} clipuri au fost trimise către Postiz!${data.failed_count > 0 ? ` ${data.failed_count} au eșuat.` : ""}`);
-      } else {
-        const error = await res.json();
-        toast.error(`Eroare: ${error.detail || "Nu s-au putut trimite clipurile"}`);
-      }
+      const data = await res.json();
+      // Update postiz_status locally for uploaded clips
+      const uploadedIds = new Set(data.uploaded.map((u: { clip_id: string }) => u.clip_id));
+      setClips((prev) =>
+        prev.map((c) =>
+          uploadedIds.has(c.id) ? { ...c, postiz_status: "sent" as const } : c
+        )
+      );
+      setSelectedClipIds(new Set());
+      toast.success(`${data.uploaded_count} clipuri au fost trimise către Postiz!${data.failed_count > 0 ? ` ${data.failed_count} au eșuat.` : ""}`);
     } catch (error) {
       handleApiError(error, "Eroare la trimiterea clipurilor catre Postiz");
     } finally {

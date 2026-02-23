@@ -11,7 +11,7 @@ This is the glue layer connecting script generation and assembly into a single w
 """
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Dict
 from pathlib import Path
 
@@ -28,6 +28,15 @@ router = APIRouter(prefix="/pipeline", tags=["Multi-Variant Pipeline"])
 
 # In-memory pipeline state storage
 _pipelines: Dict[str, dict] = {}
+_MAX_PIPELINE_ENTRIES = 1000
+
+
+def _evict_old_pipelines():
+    """Remove oldest entries if store exceeds max size."""
+    if len(_pipelines) > _MAX_PIPELINE_ENTRIES:
+        to_remove = sorted(_pipelines.keys())[:len(_pipelines) - _MAX_PIPELINE_ENTRIES]
+        for key in to_remove:
+            _pipelines.pop(key, None)
 
 
 # ============== DB PERSISTENCE HELPERS ==============
@@ -202,6 +211,8 @@ class PipelineRenderRequest(BaseModel):
     saturation: float = 1.0
     # TTS model
     elevenlabs_model: str = "eleven_flash_v2_5"
+    # TTS voice
+    voice_id: Optional[str] = None
 
 
 class PipelineRenderResponse(BaseModel):
@@ -227,6 +238,14 @@ class PipelineStatusResponse(BaseModel):
     scripts: List[str]
     provider: str
     variants: List[VariantStatus]
+
+
+class PipelineImportRequest(BaseModel):
+    """Request model for importing scripts into a new pipeline (from history)."""
+    scripts: List[str]
+    idea: str = "Imported from history"
+    context: str = ""
+    provider: str = "imported"
 
 
 class PipelineListItem(BaseModel):
@@ -302,6 +321,53 @@ async def list_pipelines(
         ))
 
     return PipelineListResponse(pipelines=items, total=len(items))
+
+
+@router.post("/import", response_model=PipelineGenerateResponse)
+async def import_pipeline(
+    request: PipelineImportRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Import scripts into a new pipeline without AI generation.
+
+    Used by the history sidebar to reload scripts from a previous pipeline,
+    optionally with a subset of the original scripts.
+    """
+    if not request.scripts:
+        raise HTTPException(status_code=400, detail="scripts list cannot be empty")
+
+    pipeline_id = str(uuid.uuid4())
+
+    _evict_old_pipelines()
+    _pipelines[pipeline_id] = {
+        "pipeline_id": pipeline_id,
+        "scripts": request.scripts,
+        "provider": request.provider,
+        "idea": request.idea,
+        "context": request.context,
+        "variant_count": len(request.scripts),
+        "keyword_count": 0,
+        "previews": {},
+        "render_jobs": {},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "profile_id": profile.profile_id
+    }
+
+    _db_save_pipeline(pipeline_id, _pipelines[pipeline_id])
+
+    logger.info(
+        f"[Profile {profile.profile_id}] Imported pipeline {pipeline_id} "
+        f"with {len(request.scripts)} scripts"
+    )
+
+    return PipelineGenerateResponse(
+        pipeline_id=pipeline_id,
+        scripts=request.scripts,
+        provider=request.provider,
+        keyword_count=0,
+        variant_count=len(request.scripts)
+    )
 
 
 @router.post("/generate", response_model=PipelineGenerateResponse)
@@ -382,7 +448,8 @@ async def generate_pipeline(
         # Generate pipeline ID
         pipeline_id = str(uuid.uuid4())
 
-        # Store pipeline state
+        # Store pipeline state (with eviction)
+        _evict_old_pipelines()
         _pipelines[pipeline_id] = {
             "pipeline_id": pipeline_id,
             "scripts": scripts,
@@ -393,7 +460,7 @@ async def generate_pipeline(
             "keyword_count": len(unique_keywords),
             "previews": {},
             "render_jobs": {},
-            "created_at": datetime.now().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "profile_id": profile.profile_id
         }
 
@@ -428,7 +495,8 @@ async def preview_variant(
     pipeline_id: str,
     variant_index: int,
     profile: ProfileContext = Depends(get_profile_context),
-    elevenlabs_model: str = Body("eleven_flash_v2_5", embed=True)
+    elevenlabs_model: str = Body("eleven_flash_v2_5", embed=True),
+    voice_id: Optional[str] = Body(None, embed=True)
 ):
     """
     Preview segment matching for a single variant.
@@ -464,12 +532,13 @@ async def preview_variant(
         preview_data = await assembly_service.preview_matches(
             script_text=script_text,
             profile_id=profile.profile_id,
-            elevenlabs_model=elevenlabs_model
+            elevenlabs_model=elevenlabs_model,
+            voice_id=voice_id
         )
 
         # Store preview result in pipeline state
         pipeline["previews"][variant_index] = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "elevenlabs_model": elevenlabs_model,
             "preview_data": preview_data
         }
@@ -503,7 +572,7 @@ async def preview_variant(
 
     except Exception as e:
         logger.error(f"[Profile {profile.profile_id}] Preview failed for variant {variant_index}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/render/{pipeline_id}", response_model=PipelineRenderResponse)
@@ -603,7 +672,7 @@ async def render_variants(
                 "current_step": "Initializing render",
                 "final_video_path": None,
                 "error": None,
-                "started_at": datetime.now().isoformat()
+                "started_at": datetime.now(timezone.utc).isoformat()
             }
 
             # Create background task for this variant
@@ -630,6 +699,7 @@ async def render_variants(
                         preset_data=preset_data,
                         subtitle_settings=subtitle_settings,
                         elevenlabs_model=request.elevenlabs_model,
+                        voice_id=request.voice_id,
                         enable_denoise=request.enable_denoise,
                         denoise_strength=request.denoise_strength,
                         enable_sharpen=request.enable_sharpen,
@@ -649,7 +719,7 @@ async def render_variants(
                     job["progress"] = 100
                     job["current_step"] = "Render complete"
                     job["final_video_path"] = str(final_video_path)
-                    job["completed_at"] = datetime.now().isoformat()
+                    job["completed_at"] = datetime.now(timezone.utc).isoformat()
 
                     logger.info(
                         f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
@@ -668,7 +738,7 @@ async def render_variants(
                     job["progress"] = 0
                     job["current_step"] = "Render failed"
                     job["error"] = str(e)
-                    job["failed_at"] = datetime.now().isoformat()
+                    job["failed_at"] = datetime.now(timezone.utc).isoformat()
 
                     # Persist failure to DB
                     _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])

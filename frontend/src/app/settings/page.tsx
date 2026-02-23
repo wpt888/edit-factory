@@ -20,6 +20,7 @@ interface Voice {
   voice_id: string
   name: string
   language?: string
+  category?: string
 }
 
 interface TTSSettings {
@@ -55,6 +56,7 @@ interface ElevenLabsAccount {
   api_key_hint: string
   is_primary: boolean
   is_active: boolean
+  is_env_default?: boolean
   sort_order: number
   character_limit: number | null
   characters_used: number | null
@@ -384,7 +386,10 @@ export default function SettingsPage() {
     try {
       const response = await apiPost(`/elevenlabs-accounts/${accountId}/refresh`)
       if (!response.ok) throw new Error("Failed to refresh")
-      loadAccounts()
+      const data = await response.json()
+      if (data.account) {
+        setElAccounts(prev => prev.map(a => a.id === accountId ? { ...a, ...data.account } : a))
+      }
     } catch (error) {
       handleApiError(error, "Failed to refresh account")
     } finally {
@@ -564,6 +569,11 @@ export default function SettingsPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-sm truncate">{account.label}</span>
+                      {account.is_env_default && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
+                          .env
+                        </span>
+                      )}
                       {account.is_primary && (
                         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">
                           Primary
@@ -613,7 +623,7 @@ export default function SettingsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    {!account.is_primary && (
+                    {!account.is_primary && !account.is_env_default && (
                       <Button
                         variant="ghost"
                         size="icon"
@@ -639,16 +649,18 @@ export default function SettingsPage() {
                         <RefreshCw className="h-4 w-4" />
                       )}
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-red-500 hover:text-red-600"
-                      onClick={() => handleDeleteAccount(account.id)}
-                      disabled={accountActionLoading === account.id}
-                      title="Delete account"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    {!account.is_env_default && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-red-500 hover:text-red-600"
+                        onClick={() => handleDeleteAccount(account.id)}
+                        disabled={accountActionLoading === account.id}
+                        title="Delete account"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -656,7 +668,7 @@ export default function SettingsPage() {
           )}
 
           {/* Add Account Form */}
-          {elAccounts.length < 3 && (
+          {elAccounts.filter(a => !a.is_env_default).length < 3 && (
             <div className="pt-3 border-t space-y-3">
               <h4 className="text-sm font-medium flex items-center gap-2">
                 <Plus className="h-4 w-4" />
@@ -714,7 +726,7 @@ export default function SettingsPage() {
               </Button>
             </div>
           )}
-          {elAccounts.length >= 3 && (
+          {elAccounts.filter(a => !a.is_env_default).length >= 3 && (
             <p className="text-xs text-muted-foreground pt-2 border-t">
               Maximum 3 accounts reached. Delete an account to add a new one.
             </p>
@@ -741,12 +753,36 @@ export default function SettingsPage() {
                 <SelectValue placeholder={loadingVoices ? "Loading voices..." : "Select a voice"} />
               </SelectTrigger>
               <SelectContent>
-                {voices.map((voice) => (
-                  <SelectItem key={voice.voice_id} value={voice.voice_id}>
-                    {voice.name}
-                    {voice.language && ` (${voice.language})`}
-                  </SelectItem>
-                ))}
+                {(() => {
+                  const custom = voices.filter(v => v.category && v.category !== "premade");
+                  const premade = voices.filter(v => !v.category || v.category === "premade");
+                  return (
+                    <>
+                      {custom.length > 0 && (
+                        <>
+                          <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">My Voices</div>
+                          {custom.map((voice) => (
+                            <SelectItem key={voice.voice_id} value={voice.voice_id}>
+                              {voice.name}
+                              {voice.language && ` (${voice.language})`}
+                            </SelectItem>
+                          ))}
+                        </>
+                      )}
+                      {premade.length > 0 && (
+                        <>
+                          <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">Library</div>
+                          {premade.map((voice) => (
+                            <SelectItem key={voice.voice_id} value={voice.voice_id}>
+                              {voice.name}
+                              {voice.language && ` (${voice.language})`}
+                            </SelectItem>
+                          ))}
+                        </>
+                      )}
+                    </>
+                  );
+                })()}
               </SelectContent>
             </Select>
             {voices.length === 0 && !loadingVoices && (

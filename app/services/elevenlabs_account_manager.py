@@ -5,7 +5,7 @@ Manages multiple ElevenLabs API keys per profile with auto-failover on 402 (quot
 Provides CRUD operations, key rotation, and subscription checking.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import httpx
@@ -158,7 +158,7 @@ class ElevenLabsAccountManager:
                 account_id = result.data[0]["id"]
                 supabase.table("elevenlabs_accounts").update({
                     "last_error": error_msg,
-                    "last_checked_at": datetime.now().isoformat(),
+                    "last_checked_at": datetime.now(timezone.utc).isoformat(),
                 }).eq("id", account_id).execute()
 
                 logger.info(f"Recorded error on account {account_id}: {error_msg[:80]}")
@@ -198,6 +198,25 @@ class ElevenLabsAccountManager:
             entry = {**a}
             del entry["api_key_encrypted"]
             masked.append(entry)
+
+        # Append synthetic entry for .env key so the UI always shows it
+        env_key = self.settings.elevenlabs_api_key
+        if env_key:
+            masked.append({
+                "id": "__env__",
+                "label": ".env default",
+                "api_key_hint": f"...{env_key[-4:]}" if len(env_key) >= 4 else "....",
+                "is_primary": len(accounts) == 0,
+                "is_active": True,
+                "is_env_default": True,
+                "sort_order": 999,
+                "character_limit": None,
+                "characters_used": None,
+                "tier": None,
+                "last_error": None,
+                "last_checked_at": None,
+            })
+
         return masked
 
     def add_account(self, profile_id: str, label: str, api_key: str) -> dict:
@@ -404,7 +423,7 @@ class ElevenLabsAccountManager:
             "character_limit": sub_info.get("character_limit"),
             "characters_used": sub_info.get("character_count"),
             "tier": sub_info.get("tier"),
-            "last_checked_at": datetime.now().isoformat(),
+            "last_checked_at": datetime.now(timezone.utc).isoformat(),
             "last_error": None,
         }).eq("id", account_id).eq("profile_id", profile_id).execute()
 

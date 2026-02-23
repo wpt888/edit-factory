@@ -5,7 +5,7 @@ Handles CRUD operations for user profiles.
 import logging
 import uuid
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
@@ -26,6 +26,21 @@ class ProfileCreate(BaseModel):
 class ProfileUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+
+class SubtitleSettingsUpdate(BaseModel):
+    """Model for subtitle settings endpoint."""
+    fontSize: int = 48
+    fontFamily: str = "var(--font-montserrat), Montserrat, sans-serif"
+    textColor: str = "#FFFFFF"
+    outlineColor: str = "#000000"
+    outlineWidth: int = 3
+    positionY: int = 85
+    shadowDepth: int = 0
+    shadowColor: str = "#000000"
+    borderStyle: int = 1
+    enableGlow: bool = False
+    glowBlur: int = 0
+    adaptiveSizing: bool = False
 
 class ProfileSettingsUpdate(BaseModel):
     """Model for PATCH endpoint - supports partial updates including tts_settings and video_template_settings."""
@@ -442,7 +457,7 @@ async def get_profile_dashboard(
         monthly_quota = float(profile_result.data.get("monthly_quota_usd", 0) or 0)
 
         # Calculate date filter
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         if time_range == "7d":
             start_date = now - timedelta(days=7)
         elif time_range == "30d":
@@ -504,3 +519,98 @@ async def get_profile_dashboard(
     except Exception as e:
         logger.error(f"Failed to get dashboard for profile {profile_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch dashboard data")
+
+
+# ============== SUBTITLE SETTINGS ==============
+
+DEFAULT_SUBTITLE_SETTINGS = {
+    "fontSize": 48,
+    "fontFamily": "var(--font-montserrat), Montserrat, sans-serif",
+    "textColor": "#FFFFFF",
+    "outlineColor": "#000000",
+    "outlineWidth": 3,
+    "positionY": 85,
+    "shadowDepth": 0,
+    "shadowColor": "#000000",
+    "borderStyle": 1,
+    "enableGlow": False,
+    "glowBlur": 0,
+    "adaptiveSizing": False,
+}
+
+
+@router.get("/{profile_id}/subtitle-settings")
+async def get_subtitle_settings(
+    profile_id: str,
+    current_user: AuthUser = Depends(get_current_user)
+):
+    """Return saved subtitle settings for a profile, or defaults."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        result = supabase.table("profiles")\
+            .select("user_id, subtitle_settings")\
+            .eq("id", profile_id)\
+            .single()\
+            .execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Profile not found")
+
+        if result.data["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+
+        saved = result.data.get("subtitle_settings")
+        return {**DEFAULT_SUBTITLE_SETTINGS, **(saved or {})}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get subtitle settings for profile {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch subtitle settings")
+
+
+@router.put("/{profile_id}/subtitle-settings")
+async def update_subtitle_settings(
+    profile_id: str,
+    settings: SubtitleSettingsUpdate,
+    current_user: AuthUser = Depends(get_current_user)
+):
+    """Save subtitle settings to a profile."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        result = supabase.table("profiles")\
+            .select("id, user_id")\
+            .eq("id", profile_id)\
+            .single()\
+            .execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Profile not found")
+
+        if result.data["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+
+        settings_dict = settings.model_dump()
+
+        supabase.table("profiles")\
+            .update({
+                "subtitle_settings": settings_dict,
+                "updated_at": datetime.utcnow().isoformat()
+            })\
+            .eq("id", profile_id)\
+            .execute()
+
+        logger.info(f"[Profile {profile_id}] Subtitle settings updated by user {current_user.id}")
+        return settings_dict
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update subtitle settings for profile {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save subtitle settings")

@@ -54,6 +54,7 @@ interface VideoSegmentPlayerProps {
   currentSegment?: Segment;
   sourceVideoId?: string;
   activeTransforms?: SegmentTransformPreview;
+  profileId?: string;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
@@ -67,6 +68,7 @@ export function VideoSegmentPlayer({
   currentSegment,
   sourceVideoId,
   activeTransforms,
+  profileId,
 }: VideoSegmentPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -519,7 +521,7 @@ export function VideoSegmentPlayer({
     let cancelled = false;
     setWaveformLoading(true);
 
-    fetch(`${API_URL}/segments/source-videos/${sourceVideoId}/waveform?samples=1200`)
+    fetch(`${API_URL}/segments/source-videos/${sourceVideoId}/waveform?samples=1200${profileId ? `&profile_id=${profileId}` : ''}`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (!cancelled && data?.waveform) {

@@ -149,6 +149,7 @@ class ScriptGenerator:
 - NO brackets or parentheses for actions
 - Use proper punctuation for natural pauses (periods, commas, question marks)
 - Each script should flow naturally when read aloud
+- IMPORTANT: Write each sentence on its own line with a blank line between sentences (one sentence per line, double-newline separated)
 
 **Output Format:**
 Separate each script with "---SCRIPT---" delimiter:
@@ -185,7 +186,7 @@ Begin generation now:"""
         logger.info("Calling Anthropic Claude API")
 
         response = self._anthropic_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=self.settings.anthropic_model if hasattr(self.settings, 'anthropic_model') and self.settings.anthropic_model else "claude-sonnet-4-20250514",
             max_tokens=4096,
             messages=[{
                 "role": "user",
@@ -220,9 +221,23 @@ Begin generation now:"""
                 script = re.sub(r'_([^_]+)_', r'\1', script)        # Italic underscore
                 script = re.sub(r'#+ ', '', script)                 # Headers
 
+                # Ensure each sentence is on its own line for readability
+                script = self._format_sentences(script)
                 cleaned.append(script)
 
         return cleaned
+
+    def _format_sentences(self, text: str) -> str:
+        """Format script so each sentence starts on a new line."""
+        # If already has multiple lines, assume it's formatted
+        lines = [l.strip() for l in text.strip().split('\n') if l.strip()]
+        if len(lines) >= 3:
+            return '\n\n'.join(lines)
+
+        # Otherwise, split by sentence-ending punctuation and put each on its own line
+        # Split on . ! ? followed by a space and uppercase letter (or end of string)
+        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        return '\n\n'.join(s.strip() for s in sentences if s.strip())
 
     def _sanitize_for_tts(self, text: str) -> str:
         """

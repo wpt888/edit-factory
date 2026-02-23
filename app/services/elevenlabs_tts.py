@@ -119,7 +119,7 @@ class ElevenLabsTTS:
 
         # Prepare request
         # Request 192kbps MP3 output (flash v2.5 costs ~$0.11 per 1k chars, half of multilingual v2)
-        url = f"{self.BASE_URL}/text-to-speech/{self.voice_id}?output_format=mp3_44100_192"
+        url = f"{self.BASE_URL}/text-to-speech/{self.voice_id}?output_format=mp3_44100_128"
 
         headers = {
             "Accept": "audio/mpeg",
@@ -317,10 +317,10 @@ class ElevenLabsTTS:
         output_path = Path(output_path)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            temp_dir = Path(temp_dir)
+            tmp_path = Path(temp_dir)
 
             # Generate raw TTS
-            raw_audio = temp_dir / f"raw_{output_path.stem}.mp3"
+            raw_audio = tmp_path / f"raw_{output_path.stem}.mp3"
             await self.generate_audio(
                 text=text,
                 output_path=raw_audio,

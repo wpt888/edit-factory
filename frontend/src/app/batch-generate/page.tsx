@@ -135,7 +135,10 @@ function BatchGenerateContent() {
       .filter((j) => j.status === "failed")
       .map((j) => j.product_id);
 
-    if (failedProductIds.length === 0) return;
+    if (failedProductIds.length === 0) {
+      retryLoadingRef.current = false;
+      return;
+    }
 
     try {
       const res = await apiPost("/products/batch-generate", {

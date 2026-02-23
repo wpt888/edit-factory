@@ -59,9 +59,12 @@ def _utcnow_iso() -> str:
 # Background task: XML download + parse + upsert + image download
 # ---------------------------------------------------------------------------
 
-def _sync_feed_task(feed_id: str, feed_url: str) -> None:
+async def _sync_feed_task(feed_id: str, feed_url: str) -> None:
     """Background task: download feed XML, parse products, upsert, download images."""
     supabase = get_supabase()
+    if not supabase:
+        logger.error("[Feed %s] Supabase client not available", feed_id)
+        return
     settings = get_settings()
 
     try:
@@ -94,9 +97,7 @@ def _sync_feed_task(feed_id: str, feed_url: str) -> None:
             )
 
             cache_dir = Path(settings.output_dir) / "product_images"
-            image_map = asyncio.run(
-                download_product_images(products, cache_dir, feed_id)
-            )
+            image_map = await download_product_images(products, cache_dir, feed_id)
             update_local_image_paths(supabase, image_map, feed_id)
             logger.info("[Feed %s] Downloaded %d images", feed_id, len(image_map))
 
@@ -136,6 +137,8 @@ async def create_feed(
 ):
     """Create a new product feed for the current profile."""
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database unavailable")
 
     result = supabase.table("product_feeds").insert({
         "profile_id": profile.profile_id,
@@ -155,6 +158,8 @@ async def list_feeds(
 ):
     """List all product feeds for the current profile."""
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database unavailable")
 
     result = supabase.table("product_feeds")\
         .select("*")\
@@ -172,6 +177,8 @@ async def get_feed(
 ):
     """Get a single feed with its product_count."""
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database unavailable")
 
     result = supabase.table("product_feeds")\
         .select("*")\
@@ -193,6 +200,8 @@ async def delete_feed(
 ):
     """Delete a feed and all its products (CASCADE)."""
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database unavailable")
 
     # Verify ownership before deleting
     existing = supabase.table("product_feeds")\
@@ -218,6 +227,8 @@ async def sync_feed(
 ):
     """Trigger an async feed sync. Returns immediately; parse runs in background."""
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database unavailable")
 
     # Verify feed exists and belongs to this profile
     result = supabase.table("product_feeds")\

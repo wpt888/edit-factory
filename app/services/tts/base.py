@@ -20,6 +20,7 @@ class TTSVoice:
     provider: str
     requires_cloning: bool = False
     cost_per_1k_chars: float = 0.0
+    category: Optional[str] = None  # "cloned", "generated", "premade", etc.
 
 
 @dataclass

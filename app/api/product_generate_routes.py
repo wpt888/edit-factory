@@ -18,7 +18,7 @@ import asyncio
 import logging
 import traceback
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -40,6 +40,7 @@ router = APIRouter(prefix="/products", tags=["product-video"])
 # ---------------------------------------------------------------------------
 
 class ProductGenerateRequest(BaseModel):
+    source: str = "feed"                    # "feed" | "catalog"
     voiceover_mode: str = "quick"           # "quick" | "elaborate"
     tts_provider: str = "edge"              # "edge" | "elevenlabs"
     voice_id: Optional[str] = None         # Override voice; falls back to profile/default
@@ -60,6 +61,7 @@ class BatchGenerateRequest(BaseModel):
     Per-product customization is explicitly out of scope.
     """
     product_ids: list[str]                  # 2-50 product IDs
+    source: str = "feed"                    # "feed" | "catalog"
     voiceover_mode: str = "quick"           # "quick" | "elaborate"
     tts_provider: str = "edge"              # "edge" default per v5 roadmap decision
     voice_id: Optional[str] = None
@@ -126,12 +128,20 @@ async def generate_product_video(
     """
     supabase = get_supabase()
 
-    # Verify product exists (and belongs to profile's accessible feeds)
-    product_result = supabase.table("products")\
-        .select("id, title, feed_id")\
-        .eq("id", product_id)\
-        .single()\
-        .execute()
+    # Verify product exists — source determines which table to query
+    if request.source == "catalog":
+        product_result = supabase.table("v_catalog_products")\
+            .select("id, title")\
+            .eq("id", product_id)\
+            .single()\
+            .execute()
+    else:
+        product_result = supabase.table("products")\
+            .select("id, title, feed_id, product_feeds!inner(profile_id)")\
+            .eq("id", product_id)\
+            .eq("product_feeds.profile_id", profile.profile_id)\
+            .single()\
+            .execute()
 
     if not product_result.data:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -201,7 +211,8 @@ async def batch_generate_products(
 
     # Fetch product titles in one query for display — non-fatal if it fails
     try:
-        titles_result = supabase.table("products")\
+        titles_table = "v_catalog_products" if request.source == "catalog" else "products"
+        titles_result = supabase.table(titles_table)\
             .select("id, title")\
             .in_("id", request.product_ids)\
             .execute()
@@ -337,6 +348,7 @@ async def _batch_generate_task(
 
             # Build a single-product request from shared batch settings
             single_request = ProductGenerateRequest(
+                source=request.source,
                 voiceover_mode=request.voiceover_mode,
                 tts_provider=request.tts_provider,
                 voice_id=request.voice_id,
@@ -492,8 +504,9 @@ async def _generate_product_video_task(
 
         supabase = get_supabase()
 
-        # Fetch full product row
-        product_result = supabase.table("products")\
+        # Fetch full product row — source determines table
+        product_table = "v_catalog_products" if request.source == "catalog" else "products"
+        product_result = supabase.table(product_table)\
             .select("*")\
             .eq("id", product_id)\
             .single()\
@@ -766,7 +779,7 @@ async def _generate_product_video_task(
         # Stage 6: Library insert (90 -> 100%)
         # ---------------------------------------------------------------
         project_name = f"[Product] {product.get('title', 'Unknown')[:50]}"
-        now = datetime.now().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         # Insert editai_projects row
         project_insert = supabase.table("editai_projects").insert({
