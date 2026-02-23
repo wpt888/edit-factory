@@ -5,11 +5,12 @@ Manages which catalog product is linked to each video segment, including
 the selection of specific product images for overlay use.
 
 Endpoints:
-    POST   /associations                        Associate a product with a segment (upsert)
-    GET    /associations/segment/{segment_id}   Get association for a single segment
-    GET    /associations/segments               Batch get associations for multiple segments
-    PATCH  /associations/{association_id}       Update selected image URLs on an association
-    DELETE /associations/segment/{segment_id}   Remove product association from a segment
+    POST   /associations                              Associate a product with a segment (upsert)
+    GET    /associations/segment/{segment_id}         Get association for a single segment
+    GET    /associations/segments                     Batch get associations for multiple segments
+    PATCH  /associations/{association_id}             Update selected image URLs on an association
+    PATCH  /associations/{association_id}/pip-config  Update PiP overlay configuration on an association
+    DELETE /associations/segment/{segment_id}         Remove product association from a segment
 """
 import logging
 from typing import Optional
@@ -39,6 +40,13 @@ class AssociationCreate(BaseModel):
 
 class AssociationUpdate(BaseModel):
     selected_image_urls: list[str]
+
+
+class PipConfigUpdate(BaseModel):
+    enabled: bool = False
+    position: str = "bottom-right"  # top-left, top-right, bottom-left, bottom-right
+    size: str = "medium"            # small, medium, large
+    animation: str = "static"       # static, fade, kenburns
 
 
 class AssociationResponse(BaseModel):
@@ -283,6 +291,56 @@ async def update_association_images(
     except Exception as exc:
         logger.error("DB error updating association %s: %s", association_id, exc)
         raise HTTPException(status_code=500, detail="Database error updating association")
+
+    if not update_result.data:
+        raise HTTPException(status_code=500, detail="Update returned no data")
+
+    updated_assoc = update_result.data[0]
+    product = _fetch_product(supabase, updated_assoc["catalog_product_id"])
+    return _enrich_association(updated_assoc, product)
+
+
+@router.patch("/{association_id}/pip-config")
+async def update_pip_config(
+    association_id: str,
+    body: PipConfigUpdate,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Update the PiP overlay configuration on an existing association (OVRL-01)."""
+    supabase = get_supabase()
+
+    # Fetch the association to verify it exists and belongs to the profile's segment
+    try:
+        assoc_result = supabase.table(ASSOC_TABLE)\
+            .select("*, editai_segments!segment_id(profile_id)")\
+            .eq("id", association_id)\
+            .limit(1)\
+            .execute()
+    except Exception as exc:
+        logger.error("DB error fetching association %s: %s", association_id, exc)
+        raise HTTPException(status_code=500, detail="Database error fetching association")
+
+    if not assoc_result.data:
+        raise HTTPException(status_code=404, detail="Association not found")
+
+    assoc = assoc_result.data[0]
+
+    # Profile scoping via joined segment
+    joined_segment = assoc.get("editai_segments") or {}
+    if isinstance(joined_segment, list):
+        joined_segment = joined_segment[0] if joined_segment else {}
+    if joined_segment.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Association does not belong to your profile")
+
+    # Update pip_config
+    try:
+        update_result = supabase.table(ASSOC_TABLE)\
+            .update({"pip_config": body.model_dump()})\
+            .eq("id", association_id)\
+            .execute()
+    except Exception as exc:
+        logger.error("DB error updating pip_config for association %s: %s", association_id, exc)
+        raise HTTPException(status_code=500, detail="Database error updating pip config")
 
     if not update_result.data:
         raise HTTPException(status_code=500, detail="Update returned no data")

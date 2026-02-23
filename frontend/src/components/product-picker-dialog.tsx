@@ -45,12 +45,26 @@ import { EmptyState } from "@/components/empty-state";
 
 // ============== TYPE DEFINITIONS ==============
 
+export interface PipConfig {
+  enabled: boolean;
+  position: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  size: "small" | "medium" | "large";
+  animation: "static" | "fade" | "kenburns";
+}
+
+export const DEFAULT_PIP_CONFIG: PipConfig = {
+  enabled: false,
+  position: "bottom-right",
+  size: "medium",
+  animation: "static",
+};
+
 export interface AssociationResponse {
   id: string;
   segment_id: string;
   catalog_product_id: string;
   selected_image_urls: string[];
-  pip_config: Record<string, unknown> | null;
+  pip_config: PipConfig | null;
   slide_config: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
