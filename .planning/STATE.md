@@ -11,9 +11,9 @@ See: .planning/PROJECT.md (updated 2026-02-23)
 
 Milestone: v7 Product Image Overlays
 Phase: 35 — PiP Overlay Controls
-Plan: Not started
-Status: Phase 34 complete, ready to plan Phase 35
-Last activity: 2026-02-23 — Phase 34 verified and completed (2/2 plans, 7/7 must-haves)
+Plan: 1 of 2
+Status: Plan 01 complete — PATCH pip-config endpoint and PipOverlayPanel component delivered
+Last activity: 2026-02-23 — Phase 35 Plan 01 complete (2/2 tasks, 3 files changed)
 
 ```
 v7 Progress: [█████     ] 50% — 3/6 phases complete
@@ -50,6 +50,8 @@ v6 decisions archived to `.planning/milestones/v6-ROADMAP.md`.
 - [Phase 33]: useRef debounce timer (300ms) used in ProductPickerDialog without external library, per plan specification
 - [Phase 34]: Association UI row placed before Actions div in segment cards; pickerSegmentId/imagePickerAssoc state pattern drives dialog open/close without re-fetching
 - [Phase 34-02]: IIFE pattern in JSX used to capture match.segment_id into const segId for TypeScript null narrowing in onClick callbacks; association controls only shown for matches with non-null segment_id
+- [Phase 35-01]: PipConfig interface placed in product-picker-dialog.tsx alongside AssociationResponse for single-source convenience (same pattern as Phase 33)
+- [Phase 35-01]: Save button disabled when PiP is off AND config is at defaults; controls visually muted via opacity-40 + pointer-events-none when PiP disabled
 
 ### v7 Architecture Notes
 
@@ -76,9 +78,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Phase 34 complete and verified
+Stopped at: Completed 35-01-PLAN.md
 Resume file: None
-Next action: `/gsd:plan-phase 35`
+Next action: Execute Phase 35 Plan 02
 
 ---
-*Last updated: 2026-02-23 after Phase 34 completed and verified*
+*Last updated: 2026-02-23 after Phase 35 Plan 01 completed*

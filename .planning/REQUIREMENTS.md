@@ -16,10 +16,10 @@ Requirements for v7 Product Image Overlays. Each maps to roadmap phases.
 
 ### PiP Overlay
 
-- [ ] **OVRL-01**: User can enable PiP overlay of product image on a segment
-- [ ] **OVRL-02**: User can choose PiP position (top-left, top-right, bottom-left, bottom-right)
-- [ ] **OVRL-03**: User can choose PiP size (small, medium, large)
-- [ ] **OVRL-04**: User can choose PiP animation style (static, fade in/out, Ken Burns)
+- [x] **OVRL-01**: User can enable PiP overlay of product image on a segment
+- [x] **OVRL-02**: User can choose PiP position (top-left, top-right, bottom-left, bottom-right)
+- [x] **OVRL-03**: User can choose PiP size (small, medium, large)
+- [x] **OVRL-04**: User can choose PiP animation style (static, fade in/out, Ken Burns)
 
 ### Interstitial Slides
 
@@ -64,10 +64,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ASSOC-02 | Phase 32 | Complete |
 | ASSOC-03 | Phase 32 | Complete |
 | ASSOC-04 | Phase 32 | Complete |
-| OVRL-01 | Phase 35 | Pending |
-| OVRL-02 | Phase 35 | Pending |
-| OVRL-03 | Phase 35 | Pending |
-| OVRL-04 | Phase 35 | Pending |
+| OVRL-01 | Phase 35 | Complete |
+| OVRL-02 | Phase 35 | Complete |
+| OVRL-03 | Phase 35 | Complete |
+| OVRL-04 | Phase 35 | Complete |
 | SLID-01 | Phase 36 | Pending |
 | SLID-02 | Phase 36 | Pending |
 | SLID-03 | Phase 36 | Pending |
