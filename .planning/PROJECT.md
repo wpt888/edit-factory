@@ -86,7 +86,12 @@ Automated video production from any input — an idea, a product feed, or a coll
 
 ### Active
 
-(None — define next milestone with `/gsd:new-milestone`)
+- [ ] User can associate a catalog product with a video segment
+- [ ] User can select which product images to use on a segment
+- [ ] User can enable PiP overlay with position/size/animation controls
+- [ ] User can insert interstitial product slides between segments
+- [ ] Segments page and Pipeline page show product association controls
+- [ ] Assembly/render pipeline applies PiP overlays and interstitial slides
 
 ### Out of Scope
 
@@ -159,9 +164,16 @@ Automated video production from any input — an idea, a product feed, or a coll
 | CSS hex colors in DB, FFmpeg conversion at render | Clean storage, conversion is trivial | ✓ Good |
 | In-memory state for pipeline/assembly | Consistent with patterns, acceptable for single-user | ⚠️ Tech debt |
 
-## Current Milestone
+## Current Milestone: v7 Product Image Overlays
 
-None — all 6 milestones shipped. Start next with `/gsd:new-milestone`.
+**Goal:** Bridge catalog products with video segments — associate products to segments and render them as PiP overlays or interstitial slides, adding visual richness and uniqueness to generated videos.
+
+**Target features:**
+- Product-segment association (link catalog product to video segment, select images)
+- PiP overlay (product image overlay with position, size, animation controls)
+- Interstitial slides (full-screen product image between segments, configurable duration)
+- Frontend integration (product picker on Segments and Pipeline pages)
+- Render integration (FFmpeg overlay/interstitial in assembly pipeline)
 
 ---
-*Last updated: 2026-02-22 after v6 Production Hardening milestone complete*
+*Last updated: 2026-02-23 after v7 Product Image Overlays milestone started*

@@ -2,18 +2,18 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-22)
+See: .planning/PROJECT.md (updated 2026-02-23)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** All milestones complete. Start next with `/gsd:new-milestone`.
+**Current focus:** v7 Product Image Overlays
 
 ## Current Position
 
-Milestone: None (v6 Production Hardening shipped 2026-02-22)
-Phase: —
+Milestone: v7 Product Image Overlays
+Phase: Not started (defining requirements)
 Plan: —
-Status: Between milestones
-Last activity: 2026-02-22 — Shipped v6 Production Hardening (8 phases, 16 plans, 25 requirements)
+Status: Defining requirements
+Last activity: 2026-02-23 — Milestone v7 started
 
 ## Performance Metrics
 
@@ -52,9 +52,9 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-22
-Stopped at: Shipped v6 Production Hardening milestone
+Last session: 2026-02-23
+Stopped at: Starting v7 Product Image Overlays milestone
 Resume file: None
 
 ---
-*Last updated: 2026-02-22 after v6 milestone shipped*
+*Last updated: 2026-02-23 after v7 milestone started*
