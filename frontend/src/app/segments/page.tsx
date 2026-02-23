@@ -42,6 +42,8 @@ import {
   X,
   Merge,
   AlertTriangle,
+  Package,
+  Images,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -49,7 +51,10 @@ import { VideoSegmentPlayer } from "@/components/video-segment-player";
 import { SimpleSegmentPopup } from "@/components/simple-segment-popup";
 import { SegmentTransformPanel } from "@/components/segment-transform-panel";
 import { EditorLayout } from "@/components/editor-layout";
-import { apiGetWithRetry, apiPost, apiPatch, apiPut, apiDelete, handleApiError, API_URL } from "@/lib/api";
+import { ProductPickerDialog } from "@/components/product-picker-dialog";
+import { ImagePickerDialog } from "@/components/image-picker-dialog";
+import type { AssociationResponse } from "@/components/product-picker-dialog";
+import { apiGetWithRetry, apiPost, apiPatch, apiPut, apiDelete, apiUpload, handleApiError, API_URL } from "@/lib/api";
 import { useProfile } from "@/contexts/profile-context";
 import type { SegmentTransform } from "@/types/video-processing";
 import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
@@ -137,6 +142,11 @@ export default function SegmentsPage() {
     newSegment: { start: number; end: number };
     overlappingSegments: Segment[];
   } | null>(null);
+
+  // Product association state
+  const [associations, setAssociations] = useState<Record<string, AssociationResponse>>({});
+  const [pickerSegmentId, setPickerSegmentId] = useState<string | null>(null);
+  const [imagePickerAssoc, setImagePickerAssoc] = useState<AssociationResponse | null>(null);
 
   // Format time as mm:ss
   const formatTime = (time: number): string => {
@@ -330,18 +340,7 @@ export default function SegmentsPage() {
       formData.append("video", uploadFile);
       formData.append("name", uploadName.trim());
 
-      // Use raw fetch for FormData — apiFetch sets Content-Type: application/json
-      // which breaks multipart uploads. We just need the profile ID header.
-      const profileId = typeof window !== "undefined"
-        ? localStorage.getItem("editai_current_profile_id")
-        : null;
-      const res = await fetch(`${API_URL}/segments/source-videos`, {
-        method: "POST",
-        body: formData,
-        headers: {
-          ...(profileId && { "X-Profile-Id": profileId }),
-        },
-      });
+      const res = await apiUpload("/segments/source-videos", formData);
 
       if (res.ok) {
         const newVideo = await res.json();
@@ -570,6 +569,63 @@ export default function SegmentsPage() {
   const handleSegmentSelect = (seg: Segment) => {
     setSelectedSegment(seg);
     setActiveTransforms(seg.transforms || { ...DEFAULT_SEGMENT_TRANSFORM });
+  };
+
+  // Fetch product associations for a batch of segment IDs
+  const fetchAssociations = useCallback(async (segmentIds: string[]) => {
+    if (segmentIds.length === 0) return;
+    try {
+      const params = new URLSearchParams();
+      params.set("segment_ids", segmentIds.join(","));
+      const res = await apiGetWithRetry(`/associations/segments?${params}`);
+      if (res.ok) {
+        const data: AssociationResponse[] = await res.json();
+        const map: Record<string, AssociationResponse> = {};
+        for (const a of data) {
+          map[a.segment_id] = a;
+        }
+        setAssociations(prev => ({ ...prev, ...map }));
+      }
+    } catch (error) {
+      handleApiError(error, "Failed to load product associations");
+    }
+  }, []);
+
+  // Fetch associations when segments list changes
+  useEffect(() => {
+    const ids = segments.map(s => s.id);
+    if (ids.length > 0) fetchAssociations(ids);
+  }, [segments, fetchAssociations]);
+
+  useEffect(() => {
+    const ids = allSegments.map(s => s.id);
+    if (ids.length > 0) fetchAssociations(ids);
+  }, [allSegments, fetchAssociations]);
+
+  // Association handler callbacks
+  const handleProductSelected = (association: AssociationResponse) => {
+    setAssociations(prev => ({ ...prev, [association.segment_id]: association }));
+    setPickerSegmentId(null);
+  };
+
+  const handleImagesUpdated = (updatedAssociation: AssociationResponse) => {
+    setAssociations(prev => ({ ...prev, [updatedAssociation.segment_id]: updatedAssociation }));
+    setImagePickerAssoc(null);
+  };
+
+  const handleRemoveAssociation = async (segmentId: string) => {
+    try {
+      const res = await apiDelete(`/associations/segment/${segmentId}`);
+      if (res.ok) {
+        setAssociations(prev => {
+          const next = { ...prev };
+          delete next[segmentId];
+          return next;
+        });
+      }
+    } catch (error) {
+      handleApiError(error, "Failed to remove product association");
+    }
   };
 
   // Toggle favorite
@@ -972,7 +1028,7 @@ export default function SegmentsPage() {
       <div className="flex-1 min-h-0">
         {selectedVideo ? (
           <VideoSegmentPlayer
-            videoUrl={`${API_URL}/segments/source-videos/${selectedVideo.id}/stream`}
+            videoUrl={`${API_URL}/segments/source-videos/${selectedVideo.id}/stream${currentProfile ? `?profile_id=${currentProfile.id}` : ''}`}
             duration={selectedVideo.duration || 0}
             segments={segments}
             onSegmentCreate={handleSegmentCreate}
@@ -980,6 +1036,7 @@ export default function SegmentsPage() {
             activeTransforms={selectedSegment ? activeTransforms : undefined}
             currentSegment={selectedSegment || undefined}
             sourceVideoId={selectedVideo.id}
+            profileId={currentProfile?.id}
           />
         ) : (
           <div className="aspect-video bg-muted rounded-lg flex items-center justify-center max-h-[60vh]">
