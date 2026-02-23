@@ -135,6 +135,8 @@ CREATE OR REPLACE FUNCTION public.get_catalog_product_images(p_product_id UUID)
 RETURNS TABLE(image_url TEXT)
 LANGUAGE sql
 STABLE
+SECURITY DEFINER
+SET search_path = public, uf
 AS $$
   SELECT DISTINCT pc.image_url
   FROM uf.products_catalog pc
@@ -148,6 +150,9 @@ AS $$
     AND pc.image_url != ''
   ORDER BY pc.image_url
 $$;
+
+-- Grant execute to anon and authenticated roles so the RPC is callable via PostgREST
+GRANT EXECUTE ON FUNCTION public.get_catalog_product_images(UUID) TO anon, authenticated;
 
 -- =====================================================
 -- Migration 019 Complete
