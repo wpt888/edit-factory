@@ -148,10 +148,11 @@ Plans:
   2. User can choose PiP position from four corners (top-left, top-right, bottom-left, bottom-right)
   3. User can choose PiP size from three levels (small, medium, large)
   4. User can choose PiP animation style (static, fade in/out, Ken Burns) and the choice is saved
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 35-01: PiP overlay config UI controls + backend storage for overlay settings
+- [ ] 35-01-PLAN.md — PATCH pip-config endpoint + PipConfig type + PipOverlayPanel component
+- [ ] 35-02-PLAN.md — Wire PipOverlayPanel into Segments and Pipeline pages + visual verification
 
 ### Phase 36: Interstitial Slide Controls
 **Goal**: Users can configure an interstitial product slide for any segment boundary, choosing to enable it and set its duration
