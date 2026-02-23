@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test.describe('Toast notifications and Postiz upload', () => {
   test('should show toast notification instead of browser alert on delete', async ({ page }) => {

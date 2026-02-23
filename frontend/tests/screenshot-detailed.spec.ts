@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Detailed screenshot of segment workflow', async ({ page }) => {
   await page.goto('/library');

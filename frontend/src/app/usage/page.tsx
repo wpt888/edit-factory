@@ -24,7 +24,6 @@ import {
   ChevronLeft,
   AlertCircle,
   CheckCircle2,
-  Settings,
   ExternalLink,
   XCircle,
   Loader2,

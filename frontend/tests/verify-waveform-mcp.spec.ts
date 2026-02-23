@@ -4,9 +4,11 @@ test('Check waveform on segments with profile', async ({ page }) => {
   // First, get profiles to find the right one
   const profilesRes = await page.request.get('http://localhost:8000/api/v1/profiles');
   const profiles = await profilesRes.json();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   console.log('Available profiles:', JSON.stringify(profiles.map((p: any) => ({ id: p.id, name: p.name }))));
 
   // Use first profile (or Nortia if found)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const profile = profiles.find((p: any) => p.name === 'Nortia') || profiles[0];
   if (!profile) {
     console.log('No profiles found, cannot proceed');

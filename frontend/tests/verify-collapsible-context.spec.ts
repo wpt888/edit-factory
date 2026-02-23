@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Verify collapsible context on Pipeline page', async ({ page }) => {
   await page.goto('/pipeline');

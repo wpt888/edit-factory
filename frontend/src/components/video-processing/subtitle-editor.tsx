@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -29,8 +29,9 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogClose,
 } from "@/components/ui/dialog";
-import { Type, Palette } from "lucide-react";
+import { Type } from "lucide-react";
 import {
   SubtitleSettings,
   SubtitleLine,
@@ -74,8 +75,6 @@ export function SubtitleEditor({
   className = "",
   compact = false,
 }: SubtitleEditorProps) {
-  const [editingSubtitle, setEditingSubtitle] = useState<SubtitleLine | null>(null);
-
   // Update a single setting
   const updateSetting = <K extends keyof SubtitleSettings>(
     key: K,
@@ -321,7 +320,6 @@ export function SubtitleEditor({
                         <DialogTrigger asChild>
                           <button
                             className="w-full text-left text-sm hover:text-primary transition-colors"
-                            onClick={() => setEditingSubtitle(line)}
                           >
                             {line.text}
                           </button>
@@ -339,9 +337,11 @@ export function SubtitleEditor({
                             className="min-h-[100px]"
                           />
                           <DialogFooter>
-                            <Button variant="outline" onClick={() => setEditingSubtitle(null)}>
-                              Inchide
-                            </Button>
+                            <DialogClose asChild>
+                              <Button variant="outline">
+                                Inchide
+                              </Button>
+                            </DialogClose>
                           </DialogFooter>
                         </DialogContent>
                       </Dialog>

@@ -288,7 +288,7 @@ export default function ProductsPage() {
   }, [activeTab, currentProfile, debouncedSearch, onSale, category, brand, page, fetchCatalogProducts]);
 
   // ---- Shared handlers ----
-  const handleFeedCreated = async (newFeed: any) => {
+  const handleFeedCreated = async (newFeed: Feed) => {
     setFeeds((prev) => [newFeed, ...prev]);
     setSelectedFeedId(newFeed.id);
     setSelectedFeed(newFeed);

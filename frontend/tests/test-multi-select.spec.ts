@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test.describe('Multi-select functionality', () => {
   test('should show checkboxes on hover and allow selection', async ({ page }) => {

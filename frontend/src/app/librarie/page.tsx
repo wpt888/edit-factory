@@ -24,7 +24,6 @@ import {
   CheckCircle2,
   Subtitles,
   Mic,
-  FolderOpen,
   RefreshCw,
   Pencil,
   Check,
@@ -177,11 +176,12 @@ function LibrarieContent() {
   }, [clips, searchQuery, filterSubtitles, filterVoiceover, filterPostiz]);
 
   // Initial fetch - profile-aware
+  const profileId = currentProfile?.id;
   useEffect(() => {
     if (profileLoading) return; // Wait for profile context
-    if (!currentProfile) return; // No profile selected
+    if (!profileId) return; // No profile selected
     fetchAllClips();
-  }, [profileLoading, currentProfile?.id]);
+  }, [profileLoading, profileId]);
 
   // Handle filter changes with URL update
   const handleSearchChange = (value: string) => {
@@ -637,6 +637,7 @@ function LibrarieContent() {
                   {/* Thumbnail */}
                   <div className="aspect-[9/16] bg-muted relative group">
                     {clip.thumbnail_path ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
                       <img
                         src={`${API_URL}/library/files/${encodeURIComponent(clip.thumbnail_path)}?v=${clip.id}`}
                         alt={clip.variant_name || `Variant ${clip.variant_index}`}

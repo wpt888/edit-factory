@@ -2,18 +2,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
   DialogContent,
@@ -29,16 +21,13 @@ import {
   Trash2,
   Star,
   StarOff,
-  Play,
   Clock,
   Tag,
   Scissors,
   RefreshCw,
   ChevronLeft,
   Search,
-  Filter,
   Edit,
-  MoreHorizontal,
   X,
   Merge,
   AlertTriangle,
@@ -226,7 +215,7 @@ export default function SegmentsPage() {
   // Fetch ALL segments (for library view)
   const fetchAllSegments = useCallback(async () => {
     try {
-      const res = await apiGetWithRetry("/segments");
+      const res = await apiGetWithRetry("/segments/");
       if (res.ok) {
         const data = await res.json();
         setAllSegments(data);
@@ -264,9 +253,10 @@ export default function SegmentsPage() {
   ).sort();
 
   // Initial load — re-fetch when profile changes
+  const profileId = currentProfile?.id;
   useEffect(() => {
     if (profileLoading) return;
-    if (!currentProfile) return;
+    if (!profileId) return;
 
     // Reset state when profile switches
     setSelectedVideo(null);
@@ -276,7 +266,7 @@ export default function SegmentsPage() {
 
     fetchSourceVideos();
     fetchAllSegments();
-  }, [currentProfile?.id, profileLoading, fetchSourceVideos, fetchAllSegments]);
+  }, [profileId, profileLoading, fetchSourceVideos, fetchAllSegments]);
 
   // Actually delete segment
   const handleDeleteSegment = useCallback(async (segmentId: string) => {
@@ -422,11 +412,6 @@ export default function SegmentsPage() {
     const allEnds = [newSegment.end, ...overlappingSegments.map((s) => s.end_time)];
     const mergedStart = Math.min(...allStarts);
     const mergedEnd = Math.max(...allEnds);
-
-    // Combine all keywords from overlapping segments
-    const combinedKeywords = Array.from(
-      new Set(overlappingSegments.flatMap((s) => s.keywords))
-    );
 
     // Delete overlapping segments first
     for (const seg of overlappingSegments) {
@@ -759,6 +744,7 @@ export default function SegmentsPage() {
                 {/* Thumbnail */}
                 <div className="w-14 h-9 bg-muted rounded flex items-center justify-center overflow-hidden flex-shrink-0">
                   {video.thumbnail_path ? (
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={`${API_URL}/segments/files/${encodeURIComponent(video.thumbnail_path)}`}
                       alt={video.name}
@@ -979,6 +965,7 @@ export default function SegmentsPage() {
                   {associations[segment.id] ? (
                     <>
                       {associations[segment.id].product_image && (
+                        /* eslint-disable-next-line @next/next/no-img-element */
                         <img
                           src={associations[segment.id].product_image!}
                           alt=""

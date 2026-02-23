@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Test regeneration creates new database entries', async ({ page, request }) => {
   const API_URL = 'http://localhost:8000/api/v1';
@@ -11,10 +11,12 @@ test('Test regeneration creates new database entries', async ({ page, request })
 
   console.log('=== BEFORE REGENERATION ===');
   console.log('Number of clips:', clipsBefore.length);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   clipsBefore.forEach((clip: any, i: number) => {
     console.log(`Clip ${i + 1}: id=${clip.id.substring(0, 8)}..., name=${clip.variant_name}, created=${clip.created_at}`);
   });
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const clipIdsBefore = clipsBefore.map((c: any) => c.id);
 
   // Navigate to library and trigger regeneration
@@ -79,10 +81,12 @@ test('Test regeneration creates new database entries', async ({ page, request })
 
     console.log('\n=== AFTER REGENERATION ===');
     console.log('Number of clips:', clipsAfter.length);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     clipsAfter.forEach((clip: any, i: number) => {
       console.log(`Clip ${i + 1}: id=${clip.id.substring(0, 8)}..., name=${clip.variant_name}, created=${clip.created_at}`);
     });
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const clipIdsAfter = clipsAfter.map((c: any) => c.id);
 
     // Verify clips have new IDs (regeneration should create new entries)

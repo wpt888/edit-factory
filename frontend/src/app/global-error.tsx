@@ -58,6 +58,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
             >
               Incearca din nou
             </button>
+            {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
             <a
               href="/"
               className="px-6 py-2.5 border border-gray-600 text-gray-300 font-medium rounded-lg hover:bg-gray-800 hover:text-white transition-colors inline-block"

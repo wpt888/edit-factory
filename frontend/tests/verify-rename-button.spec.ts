@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Verify rename button visible in librarie', async ({ page }) => {
   // Go to librarie page

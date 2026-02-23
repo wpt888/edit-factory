@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Mute source voice option is visible and ON by default', async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });

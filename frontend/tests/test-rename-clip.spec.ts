@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Test clip rename functionality', async ({ page }) => {
   // Navigate to library
@@ -15,12 +15,6 @@ test('Test clip rename functionality', async ({ page }) => {
     path: 'screenshots/rename-01-clips-with-badge.png',
     fullPage: true
   });
-
-  // Find the clip name area (under the thumbnail) and use force click
-  const clipNameText = page.locator('text=variant_1').first();
-
-  // Get parent container and find pencil button
-  const clipCard = clipNameText.locator('xpath=ancestor::div[contains(@class, "bg-card")]');
 
   // Click directly on the clip info area using JavaScript
   await page.evaluate(() => {

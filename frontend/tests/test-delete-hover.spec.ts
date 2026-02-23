@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('hover on clip card to reveal delete button', async ({ page }) => {
   await page.goto('/librarie');

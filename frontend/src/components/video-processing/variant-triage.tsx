@@ -131,6 +131,7 @@ export function VariantTriage({
               {/* Thumbnail/preview area */}
               <div className="aspect-[9/16] bg-muted rounded-lg relative overflow-hidden group">
                 {variant.thumbnail ? (
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={`${apiBaseUrl}/files/${encodeURIComponent(variant.thumbnail)}`}
                     alt={`Varianta ${variant.variant_index}`}

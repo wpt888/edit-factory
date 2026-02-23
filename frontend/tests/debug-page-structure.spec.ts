@@ -32,9 +32,6 @@ test('debug page structure', async ({ page }) => {
     }
   }
 
-  // Get a snippet of the page HTML around clip cards
-  const bodyHTML = await page.locator('main').innerHTML();
-
   // Find all buttons and their attributes
   const buttons = await page.locator('button').all();
   console.log(`\nTotal buttons: ${buttons.length}`);
@@ -43,7 +40,6 @@ test('debug page structure', async ({ page }) => {
     const btn = buttons[i];
     const classes = await btn.getAttribute('class');
     const title = await btn.getAttribute('title');
-    const innerText = await btn.innerText().catch(() => '');
     const innerHTML = await btn.innerHTML();
 
     // Check if it has trash icon

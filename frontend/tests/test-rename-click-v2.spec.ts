@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Test rename click via proper navigation', async ({ page }) => {
   // Navigate to library

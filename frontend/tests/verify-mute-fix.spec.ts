@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Verify mute source voice fix - generate new clip', async ({ page }) => {
   test.setTimeout(180000); // 3 minutes for generation

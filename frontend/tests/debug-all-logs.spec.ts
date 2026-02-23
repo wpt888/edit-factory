@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Debug ALL console logs', async ({ page }) => {
   // Capture ALL console messages
@@ -35,7 +35,7 @@ test('Debug ALL console logs', async ({ page }) => {
 
   // Also check if projectSegments length by evaluating in page context
   const segmentCount = await page.evaluate(() => {
-    // @ts-ignore
+    // @ts-expect-error -- accessing Next.js internal data for debug
     return window.__NEXT_DATA__?.props?.pageProps?.projectSegments?.length || 'N/A';
   });
   console.log(`Segment count from page: ${segmentCount}`);

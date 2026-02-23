@@ -1,6 +1,4 @@
-import { test, expect, Page } from '@playwright/test';
-
-const API_URL = 'http://localhost:8001/api/v1';
+import { test, expect } from '@playwright/test';
 
 test.describe('Segment-Based Video Creation Workflow', () => {
   test.beforeEach(async ({ page }) => {
@@ -261,10 +259,6 @@ test.describe('Timeline Scrubbing Functionality', () => {
         await clipItems.first().click();
         await page.waitForTimeout(500);
       }
-
-      // Look for timeline elements - red playhead
-      const playhead = page.locator('.bg-red-500');
-      const hasTimeline = await playhead.isVisible();
 
       // Page loaded successfully
       expect(true).toBeTruthy();

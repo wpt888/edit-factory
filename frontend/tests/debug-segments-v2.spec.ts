@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Debug segment loading v2', async ({ page }) => {
   // Listen to console logs - specifically DEBUG logs

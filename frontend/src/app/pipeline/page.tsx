@@ -210,7 +210,7 @@ export default function PipelinePage() {
 
   // Subtitle settings state
   const [subtitleSettings, setSubtitleSettings] = useState<SubtitleSettings>({ ...DEFAULT_SUBTITLE_SETTINGS });
-  const [subtitleSettingsLoaded, setSubtitleSettingsLoaded] = useState(false);
+  const [, setSubtitleSettingsLoaded] = useState(false);
   const subtitleSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // PiP overlay panel state
@@ -218,13 +218,6 @@ export default function PipelinePage() {
   const [pipSaving, setPipSaving] = useState(false);
 
   // Format helpers
-  const formatTime = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 1000);
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}.${ms.toString().padStart(3, "0")}`;
-  };
-
   const formatDuration = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
@@ -233,6 +226,16 @@ export default function PipelinePage() {
 
   const countWords = (text: string): number => {
     return text.trim().split(/\s+/).filter(Boolean).length;
+  };
+
+  // Format script: ensure each sentence starts on a new line
+  const formatScript = (text: string): string => {
+    // If already has multiple lines (3+), assume it's formatted
+    const lines = text.trim().split('\n').filter(l => l.trim());
+    if (lines.length >= 3) return text;
+    // Split by sentence-ending punctuation followed by space
+    const sentences = text.trim().split(/(?<=[.!?])\s+/);
+    return sentences.map(s => s.trim()).filter(Boolean).join('\n');
   };
 
   // Count products from structured array
@@ -399,7 +402,7 @@ export default function PipelinePage() {
       if (res.ok) {
         const data = await res.json();
         setPipelineId(data.pipeline_id);
-        setScripts(data.scripts || []);
+        setScripts((data.scripts || []).map(formatScript));
         setStep(2);
       } else {
         const errorData = await res.json().catch(() => ({
@@ -596,7 +599,6 @@ export default function PipelinePage() {
   // History sidebar: auto-load on mount
   useEffect(() => {
     fetchHistory();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Fetch ElevenLabs voices on mount
@@ -709,7 +711,7 @@ export default function PipelinePage() {
     // If all scripts are selected, reuse the existing pipeline (no duplicate)
     if (selected.length === historyScripts.length && selectedHistoryId) {
       setPipelineId(selectedHistoryId);
-      setScripts([...historyScripts]);
+      setScripts(historyScripts.map(formatScript));
       setStep(2);
       setSelectedHistoryId(null);
       setHistoryScripts([]);
@@ -733,7 +735,7 @@ export default function PipelinePage() {
       if (res.ok) {
         const data = await res.json();
         setPipelineId(data.pipeline_id);
-        setScripts(data.scripts || []);
+        setScripts((data.scripts || []).map(formatScript));
         setStep(2);
         setSelectedHistoryId(null);
         setHistoryScripts([]);
@@ -1111,6 +1113,7 @@ export default function PipelinePage() {
                                 className="flex-shrink-0"
                               />
                               {product.image_link && (
+                                // eslint-disable-next-line @next/next/no-img-element
                                 <img
                                   src={product.image_link}
                                   alt=""
@@ -1340,8 +1343,8 @@ export default function PipelinePage() {
               </CardContent>
             </Card>
 
-            {/* Scripts grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Scripts list — single column so each sentence has room */}
+            <div className="grid grid-cols-1 gap-4">
               {scripts.map((script, index) => {
                 const wordCount = countWords(script);
                 const estimatedDuration = Math.round(wordCount / 2.5);
@@ -1377,7 +1380,7 @@ export default function PipelinePage() {
                           newScripts[index] = e.target.value;
                           setScripts(newScripts);
                         }}
-                        rows={6}
+                        rows={10}
                         className="resize-y font-mono text-sm"
                       />
                     </CardContent>
@@ -1864,9 +1867,8 @@ export default function PipelinePage() {
                                   onClick={() => {
                                     // Reuse existing pipeline directly (no duplicate creation)
                                     if (!selectedHistoryId) return;
-                                    const historyItem = historyPipelines.find(p => p.pipeline_id === selectedHistoryId);
                                     setPipelineId(selectedHistoryId);
-                                    setScripts([...historyScripts]);
+                                    setScripts(historyScripts.map(formatScript));
                                     setStep(2);
                                     setSelectedHistoryId(null);
                                     setHistoryScripts([]);

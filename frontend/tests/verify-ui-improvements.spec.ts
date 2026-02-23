@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Verify UI improvements: Postiz badges, no checkbox, rename', async ({ page }) => {
   // Navigate to library

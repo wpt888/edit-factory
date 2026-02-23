@@ -25,6 +25,7 @@ export async function apiFetch(
   endpoint: string,
   options: FetchOptions = {}
 ): Promise<Response> {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { headers: customHeaders, timeout = DEFAULT_TIMEOUT_MS, retry: _retry, signal: existingSignal, ...restOptions } = options;
 
   // Auto-inject profile ID from localStorage (SSR-safe)

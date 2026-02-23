@@ -13,23 +13,16 @@ export function useLocalStorageConfig<T>(
   key: string,
   defaultValue: T
 ): [T, (value: T | ((prev: T) => T)) => void] {
-  // Two-phase initialization: always start with defaultValue to match SSR,
-  // then hydrate from localStorage in useEffect to avoid hydration mismatches
-  const [value, setValue] = useState<T>(defaultValue);
-  const [hydrated, setHydrated] = useState(false);
-
-  // Hydrate from localStorage after mount
-  useEffect(() => {
+  // Lazy initialization: read from localStorage on first render to avoid
+  // hydration mismatches and set-state-in-effect lint errors
+  const [value, setValue] = useState<T>(() => {
+    if (typeof window === "undefined") return defaultValue;
     try {
       const stored = localStorage.getItem(key);
-      if (stored) {
-        setValue(JSON.parse(stored) as T);
-      }
-    } catch (error) {
-      handleApiError(error, "Eroare la setari");
-    }
-    setHydrated(true);
-  }, [key]);
+      return stored ? (JSON.parse(stored) as T) : defaultValue;
+    } catch { return defaultValue; }
+  });
+  const [hydrated] = useState(() => typeof window !== "undefined");
 
   // Sync to localStorage when value changes (only after hydration to avoid
   // overwriting stored values with defaults on first render)

@@ -15,14 +15,6 @@ import {
 import { Separator } from "@/components/ui/separator";
 
 export default function EditAILanding() {
-  const navLinks = [
-    { label: "Functionalitati", href: "/functionalitati" },
-    { label: "Cum functioneaza", href: "/cum-functioneaza" },
-    { label: "Preturi", href: "/preturi" },
-    { label: "Testimoniale", href: "/testimoniale" },
-    { label: "Contact", href: "/contact" },
-  ];
-
   const features = [
     {
       title: "Analiza in Timp Real",

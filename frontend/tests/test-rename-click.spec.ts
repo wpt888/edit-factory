@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Test rename click functionality', async ({ page }) => {
   // Go directly to the project with clips

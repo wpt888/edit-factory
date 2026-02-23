@@ -106,7 +106,7 @@ export default function SettingsPage() {
   const [addingAccount, setAddingAccount] = useState(false)
   const [accountActionLoading, setAccountActionLoading] = useState<string | null>(null)
 
-  // Load ElevenLabs accounts
+  // Load ElevenLabs accounts (subscription info auto-fetched by backend)
   const loadAccounts = useCallback(async () => {
     if (!currentProfile) return
     setElAccountsLoading(true)
@@ -233,6 +233,7 @@ export default function SettingsPage() {
     }
 
     loadVoices()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- voiceId intentionally excluded: adding it would cause infinite refetch loop since loadVoices may call setVoiceId("")
   }, [provider, initialLoad])
 
   const handleSave = async () => {
@@ -562,21 +563,25 @@ export default function SettingsPage() {
               {elAccounts.map((account) => (
                 <div
                   key={account.id}
-                  className={`flex items-center gap-3 p-3 rounded-lg border ${
-                    !account.is_active ? "opacity-50 bg-muted/50" : "bg-muted/30"
+                  className={`flex items-center gap-3 p-3 rounded-lg border-2 transition-colors ${
+                    account.is_primary
+                      ? "border-green-500 bg-green-500/5"
+                      : !account.is_active
+                        ? "opacity-50 bg-muted/50 border-transparent"
+                        : "border-muted bg-muted/30"
                   }`}
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-sm truncate">{account.label}</span>
+                      {account.is_primary && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-green-600 text-white">
+                          ACTIV
+                        </span>
+                      )}
                       {account.is_env_default && (
                         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
                           .env
-                        </span>
-                      )}
-                      {account.is_primary && (
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">
-                          Primary
                         </span>
                       )}
                       {!account.is_active && (
@@ -623,16 +628,20 @@ export default function SettingsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    {!account.is_primary && !account.is_env_default && (
+                    {!account.is_primary && account.is_active && (
                       <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
                         onClick={() => handleSetPrimary(account.id)}
                         disabled={accountActionLoading === account.id}
-                        title="Set as primary"
                       >
-                        <Star className="h-4 w-4" />
+                        {accountActionLoading === account.id ? (
+                          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                        ) : (
+                          <Star className="mr-1 h-3 w-3" />
+                        )}
+                        Foloseste
                       </Button>
                     )}
                     <Button

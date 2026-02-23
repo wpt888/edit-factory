@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
-export function proxy(request: NextRequest) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function proxy(_request: NextRequest) {
   // Simplified proxy - just pass through without Supabase session check
   return NextResponse.next()
 }

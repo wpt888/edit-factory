@@ -511,27 +511,23 @@ export function VideoSegmentPlayer({
     };
   }, [isScrubbing, getTimeFromMouseEvent, seekTo]);
 
-  // Fetch waveform data when sourceVideoId changes
+  // Fetch waveform data when sourceVideoId changes + reset voice data
   useEffect(() => {
-    if (!sourceVideoId) {
-      setWaveformData([]);
-      return;
-    }
-
+    if (!sourceVideoId) return;
     let cancelled = false;
     setWaveformLoading(true);
-
     fetch(`${API_URL}/segments/source-videos/${sourceVideoId}/waveform?samples=1200${profileId ? `&profile_id=${profileId}` : ''}`)
-      .then((res) => res.ok ? res.json() : null)
-      .then((data) => {
-        if (!cancelled && data?.waveform) {
-          setWaveformData(data.waveform);
-        }
-      })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => { if (!cancelled && data?.waveform) setWaveformData(data.waveform); })
       .catch(() => {})
       .finally(() => { if (!cancelled) setWaveformLoading(false); });
-
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      setWaveformData([]);
+      setVoiceRegions([]);
+      setShowVoiceOverlay(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceVideoId]);
 
   // Fetch voice detection data when enabled
@@ -546,13 +542,13 @@ export function VideoSegmentPlayer({
     let cancelled = false;
     setVoiceLoading(true);
 
-    const profileId = typeof window !== "undefined"
+    const vpId = typeof window !== "undefined"
       ? localStorage.getItem("editai_current_profile_id")
       : null;
 
     fetch(`${API_URL}/segments/source-videos/${sourceVideoId}/voice-detection`, {
       headers: {
-        ...(profileId && { "X-Profile-Id": profileId }),
+        ...(vpId && { "X-Profile-Id": vpId }),
       },
     })
       .then((res) => res.ok ? res.json() : null)
@@ -565,13 +561,8 @@ export function VideoSegmentPlayer({
       .finally(() => { if (!cancelled) setVoiceLoading(false); });
 
     return () => { cancelled = true; };
-  }, [sourceVideoId, showVoiceOverlay]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Reset voice data when video changes
-  useEffect(() => {
-    setVoiceRegions([]);
-    setShowVoiceOverlay(false);
-  }, [sourceVideoId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceVideoId, showVoiceOverlay]);
 
   // ResizeObserver for timeline redraws
   useEffect(() => {
@@ -666,12 +657,6 @@ export function VideoSegmentPlayer({
   const handleSegmentClick = (e: React.MouseEvent, segment: Segment) => {
     e.stopPropagation(); // Prevent timeline seek
     onSegmentClick?.(segment);
-  };
-
-  // Handle segment mousedown - allows scrubbing to start even when clicking on a segment
-  const handleSegmentMouseDown = (e: React.MouseEvent) => {
-    // Let the event bubble up to the timeline for scrubbing
-    // Don't stop propagation - we want timeline to handle it
   };
 
   return (

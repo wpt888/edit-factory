@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Check new workflow panel', async ({ page }) => {
   await page.goto('/library');

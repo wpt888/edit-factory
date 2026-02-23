@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 // Run against already-running dev server
 test.use({ baseURL: 'http://localhost:3000' });

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Final verification - all fixes working', async ({ page }) => {
   // Navigate to library

@@ -26,10 +26,20 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+interface Feed {
+  id: string;
+  name: string;
+  feed_url: string;
+  sync_status: string;
+  product_count: number;
+  last_synced_at: string | null;
+  sync_error: string | null;
+}
+
 interface CreateFeedDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: (feed: any) => void; // Called with the full feed object from API response
+  onCreated: (feed: Feed) => void; // Called with the full feed object from API response
 }
 
 export function CreateFeedDialog({

@@ -31,6 +31,7 @@ export function SegmentTransformPanel({
   onChange,
   onSave,
   isOverride = false,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   defaultTransforms,
 }: SegmentTransformPanelProps) {
   const update = (partial: Partial<SegmentTransform>) => {

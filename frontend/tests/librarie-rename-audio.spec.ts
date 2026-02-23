@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Librarie page - rename and audio removal features', async ({ page }) => {
   // Navigate to librarie page

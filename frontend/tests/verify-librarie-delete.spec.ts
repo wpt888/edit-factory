@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test.describe('Librarie Page - Delete Functionality', () => {
   test('should load librarie page and show clips with delete button', async ({ page }) => {

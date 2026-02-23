@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Investigate current UI issues', async ({ page }) => {
   // Navigate to library

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Debug 422 error - trigger generation', async ({ page }) => {
   // Enable console logging
@@ -26,7 +26,7 @@ test('Debug 422 error - trigger generation', async ({ page }) => {
       try {
         const body = await response.text();
         console.log('Body:', body);
-      } catch (e) {
+      } catch {
         console.log('Could not read body');
       }
       console.log('=============================================\n');

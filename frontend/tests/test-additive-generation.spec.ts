@@ -11,11 +11,14 @@ test('Test additive generation - keeps existing clips', async ({ page, request }
 
   console.log('=== BEFORE GENERATION ===');
   console.log('Number of clips:', clipsBefore.length);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   clipsBefore.forEach((clip: any, i: number) => {
     console.log(`  Clip ${i + 1}: variant_${clip.variant_index}, id=${clip.id.substring(0, 8)}..., name="${clip.variant_name}"`);
   });
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const clipIdsBefore = clipsBefore.map((c: any) => c.id);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const maxVariantBefore = Math.max(...clipsBefore.map((c: any) => c.variant_index));
   console.log('Max variant index before:', maxVariantBefore);
 
@@ -74,10 +77,12 @@ test('Test additive generation - keeps existing clips', async ({ page, request }
 
   console.log('\n=== AFTER GENERATION ===');
   console.log('Number of clips:', clipsAfter.length);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   clipsAfter.forEach((clip: any, i: number) => {
     console.log(`  Clip ${i + 1}: variant_${clip.variant_index}, id=${clip.id.substring(0, 8)}..., name="${clip.variant_name}"`);
   });
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const clipIdsAfter = clipsAfter.map((c: any) => c.id);
 
   // VERIFY: Old clip IDs should still exist
@@ -90,8 +95,10 @@ test('Test additive generation - keeps existing clips', async ({ page, request }
   console.log('Has more clips:', hasMoreClips ? `✓ YES (${clipsBefore.length} -> ${clipsAfter.length})` : '✗ NO');
 
   // VERIFY: New clips should have higher variant_index
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const newClips = clipsAfter.filter((c: any) => !clipIdsBefore.includes(c.id));
   console.log('New clips added:', newClips.length);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   newClips.forEach((clip: any) => {
     console.log(`  NEW: variant_${clip.variant_index}, id=${clip.id.substring(0, 8)}...`);
   });

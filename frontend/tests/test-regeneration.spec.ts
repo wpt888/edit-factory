@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Test regeneration creates different clips', async ({ page }) => {
   // Navigate to library
