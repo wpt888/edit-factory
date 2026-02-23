@@ -11,9 +11,9 @@ See: .planning/PROJECT.md (updated 2026-02-23)
 
 Milestone: v7 Product Image Overlays
 Phase: 35 — PiP Overlay Controls
-Plan: 1 of 2
-Status: Plan 01 complete — PATCH pip-config endpoint and PipOverlayPanel component delivered
-Last activity: 2026-02-23 — Phase 35 Plan 01 complete (2/2 tasks, 3 files changed)
+Plan: 2 of 2
+Status: Phase 35 complete — PipOverlayPanel wired into Segments and Pipeline pages; PiP config persists via PATCH endpoint
+Last activity: 2026-02-23 — Phase 35 Plan 02 complete (2/2 tasks, 3 files changed)
 
 ```
 v7 Progress: [█████     ] 50% — 3/6 phases complete
@@ -52,6 +52,7 @@ v6 decisions archived to `.planning/milestones/v6-ROADMAP.md`.
 - [Phase 34-02]: IIFE pattern in JSX used to capture match.segment_id into const segId for TypeScript null narrowing in onClick callbacks; association controls only shown for matches with non-null segment_id
 - [Phase 35-01]: PipConfig interface placed in product-picker-dialog.tsx alongside AssociationResponse for single-source convenience (same pattern as Phase 33)
 - [Phase 35-01]: Save button disabled when PiP is off AND config is at defaults; controls visually muted via opacity-40 + pointer-events-none when PiP disabled
+- [Phase 35-02]: pipExpandedSegId shared state used for toggle UX (one panel open at a time per page); Pipeline page uses IIFE + Fragment wrapper to return association row + PiP controls as siblings
 
 ### v7 Architecture Notes
 
@@ -78,9 +79,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 35-01-PLAN.md
+Stopped at: Completed 35-02-PLAN.md
 Resume file: None
-Next action: Execute Phase 35 Plan 02
+Next action: Phase 35 complete — run /gsd:new-phase or /gsd:new-milestone
 
 ---
 *Last updated: 2026-02-23 after Phase 35 Plan 01 completed*

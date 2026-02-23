@@ -90,7 +90,7 @@ Full details: `.planning/milestones/v6-ROADMAP.md`
 - [x] **Phase 32: Association Data Layer** - DB migration + backend API for product-segment associations (completed 2026-02-23)
 - [x] **Phase 33: Product and Image Picker Components** - Reusable product search dialog and image selector (completed 2026-02-23)
 - [x] **Phase 34: Page Integration** - Wire pickers into Segments and Pipeline pages (completed 2026-02-23)
-- [ ] **Phase 35: PiP Overlay Controls** - PiP enable/position/size/animation config stored per segment
+- [x] **Phase 35: PiP Overlay Controls** - PiP enable/position/size/animation config stored per segment (completed 2026-02-23)
 - [ ] **Phase 36: Interstitial Slide Controls** - Interstitial enable/duration config stored per segment
 - [ ] **Phase 37: Render Integration** - FFmpeg applies PiP overlays and interstitial slides in assembly
 
@@ -193,7 +193,7 @@ Plans:
 | 32. Association Data Layer | 2/2 | Complete    | 2026-02-23 | - |
 | 33. Product and Image Picker Components | 1/1 | Complete    | 2026-02-23 | - |
 | 34. Page Integration | 2/2 | Complete    | 2026-02-23 | - |
-| 35. PiP Overlay Controls | 1/2 | In Progress|  | - |
+| 35. PiP Overlay Controls | 2/2 | Complete   | 2026-02-23 | - |
 | 36. Interstitial Slide Controls | v7 | 0/1 | Not started | - |
 | 37. Render Integration | v7 | 0/2 | Not started | - |
 
