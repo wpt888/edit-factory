@@ -87,7 +87,7 @@ Full details: `.planning/milestones/v6-ROADMAP.md`
 
 **Milestone Goal:** Bridge catalog products with video segments — associate products to segments and render them as PiP overlays or interstitial slides, adding visual richness to generated videos.
 
-- [ ] **Phase 32: Association Data Layer** - DB migration + backend API for product-segment associations
+- [x] **Phase 32: Association Data Layer** - DB migration + backend API for product-segment associations (completed 2026-02-23)
 - [ ] **Phase 33: Product and Image Picker Components** - Reusable product search dialog and image selector
 - [ ] **Phase 34: Page Integration** - Wire pickers into Segments and Pipeline pages
 - [ ] **Phase 35: PiP Overlay Controls** - PiP enable/position/size/animation config stored per segment
@@ -188,7 +188,7 @@ Plans:
 | 12-16 | v4 | 11/11 | Complete | 2026-02-12 |
 | 17-23 | v5 | 13/13 | Complete | 2026-02-21 |
 | 24-31 | v6 | 16/16 | Complete | 2026-02-22 |
-| 32. Association Data Layer | 1/2 | In Progress|  | - |
+| 32. Association Data Layer | 2/2 | Complete   | 2026-02-23 | - |
 | 33. Product and Image Picker Components | v7 | 0/1 | Not started | - |
 | 34. Page Integration | v7 | 0/1 | Not started | - |
 | 35. PiP Overlay Controls | v7 | 0/1 | Not started | - |

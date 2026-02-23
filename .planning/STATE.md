@@ -5,15 +5,15 @@
 See: .planning/PROJECT.md (updated 2026-02-23)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v7 Product Image Overlays — Phase 32: Association Data Layer
+**Current focus:** v7 Product Image Overlays — Phase 33: Segment Picker UI
 
 ## Current Position
 
 Milestone: v7 Product Image Overlays
 Phase: 32 — Association Data Layer
-Plan: 01 complete (2 plans done)
-Status: Phase 32 in progress — Plan 01 shipped association data layer foundation
-Last activity: 2026-02-23 — Phase 32 Plan 01 completed (migration + images endpoint)
+Plan: 02 complete (2 plans done, phase complete)
+Status: Phase 32 complete — all ASSOC requirements shipped (DB foundation + CRUD API)
+Last activity: 2026-02-23 — Phase 32 Plan 02 completed (association CRUD routes)
 
 ```
 v7 Progress: [          ] 0% — 0/6 phases complete
@@ -45,6 +45,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 v6 decisions archived to `.planning/milestones/v6-ROADMAP.md`.
 - [Phase 32]: catalog_product_id stored as plain UUID without FK (cross-schema FK to uf.products_catalog avoided)
 - [Phase 32]: get_catalog_product_images() uses SECURITY DEFINER + GRANT EXECUTE for PostgREST anon/authenticated compatibility
+- [Phase 32]: GET /associations/segments placed before GET /associations/segment/{id} to prevent FastAPI routing conflict with literal segments path
 
 ### v7 Architecture Notes
 
@@ -71,9 +72,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 32-01-PLAN.md (association data layer foundation)
+Stopped at: Completed 32-02-PLAN.md (association CRUD routes)
 Resume file: None
-Next action: Execute Phase 32 Plan 02 (association CRUD routes)
+Next action: Execute Phase 33 (segment picker UI)
 
 ---
-*Last updated: 2026-02-23 after Phase 32 Plan 01 completed*
+*Last updated: 2026-02-23 after Phase 32 Plan 02 completed*
