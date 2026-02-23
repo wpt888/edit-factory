@@ -29,11 +29,7 @@ import {
 } from "@/components/ui/collapsible";
 import {
   Clapperboard,
-  FileText,
-  Mic,
-  Layers,
   Film,
-  SlidersHorizontal,
   Scissors,
   ShoppingBag,
   Video,
@@ -49,17 +45,13 @@ const navGroups = [
     label: "Create",
     items: [
       { label: "Pipeline", href: "/pipeline", icon: Clapperboard, desc: "Video processing pipeline" },
-      { label: "Scripts", href: "/scripts", icon: FileText, desc: "AI script generation" },
-      { label: "TTS", href: "/tts-library", icon: Mic, desc: "Text-to-speech library" },
-      { label: "Assembly", href: "/assembly", icon: Layers, desc: "Assemble final videos" },
+      { label: "Segments", href: "/segments", icon: Scissors, desc: "Manual segment selection" },
     ],
   },
   {
     label: "Library",
     items: [
-      { label: "Clips", href: "/librarie", icon: Film, desc: "Browse clip library" },
-      { label: "Editor", href: "/library", icon: SlidersHorizontal, desc: "Export & render clips" },
-      { label: "Segments", href: "/segments", icon: Scissors, desc: "Manual segment selection" },
+      { label: "Clips", href: "/librarie", icon: Film, desc: "Browse all clips" },
     ],
   },
   {

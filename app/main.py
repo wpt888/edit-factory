@@ -28,10 +28,7 @@ from app.api.segments_routes import router as segments_router
 from app.api.postiz_routes import router as postiz_router
 from app.api.profile_routes import router as profile_router
 from app.api import tts_routes
-from app.api.script_routes import router as script_router
-from app.api.assembly_routes import router as assembly_router
 from app.api.pipeline_routes import router as pipeline_router
-from app.api.tts_library_routes import router as tts_library_router
 from app.api.elevenlabs_accounts_routes import router as elevenlabs_accounts_router
 from app.api.feed_routes import router as feed_router
 from app.api.product_routes import router as product_router
@@ -142,10 +139,7 @@ app.include_router(segments_router, prefix="/api/v1", tags=["Segments & Manual S
 app.include_router(postiz_router, prefix="/api/v1", tags=["Postiz Publishing"])
 app.include_router(profile_router, prefix="/api/v1")
 app.include_router(tts_routes.router, prefix="/api/v1")
-app.include_router(script_router, prefix="/api/v1", tags=["AI Script Generation"])
-app.include_router(assembly_router, prefix="/api/v1", tags=["Script-to-Video Assembly"])
 app.include_router(pipeline_router, prefix="/api/v1", tags=["Multi-Variant Pipeline"])
-app.include_router(tts_library_router, prefix="/api/v1", tags=["TTS Library"])
 app.include_router(elevenlabs_accounts_router, prefix="/api/v1", tags=["ElevenLabs Accounts"])
 app.include_router(feed_router, prefix="/api/v1", tags=["feeds"])
 app.include_router(product_router, prefix="/api/v1", tags=["Products"])
