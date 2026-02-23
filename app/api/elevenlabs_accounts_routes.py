@@ -120,9 +120,15 @@ async def set_primary(
     ctx: ProfileContext = Depends(get_profile_context)
 ):
     """Set an account as the primary key for this profile."""
-    if account_id == "__env__":
-        raise HTTPException(status_code=400, detail="Cannot set .env default key as primary. It is used automatically when no DB accounts exist.")
     manager = get_account_manager()
+
+    if account_id == "__env__":
+        # Unset all DB accounts as primary, making .env the default again
+        try:
+            manager.clear_all_primary(ctx.profile_id)
+        except Exception as e:
+            logger.warning(f"Failed to clear primary accounts: {e}")
+        return {"account": {"id": "__env__", "is_primary": True}}
 
     try:
         account = manager.set_primary(ctx.profile_id, account_id)

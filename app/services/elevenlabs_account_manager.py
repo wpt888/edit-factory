@@ -38,10 +38,15 @@ class ElevenLabsAccountManager:
 
     MAX_ACCOUNTS_PER_PROFILE = 3
 
+    _ENV_SUB_CACHE_TTL = 300  # 5 minutes
+
     def __init__(self):
         self.settings = get_settings()
         # In-memory cache: profile_id -> list of account dicts
         self._cache: Dict[str, List[dict]] = {}
+        # Cache for .env key subscription info
+        self._env_sub_cache: Optional[dict] = None
+        self._env_sub_cache_at: float = 0
 
     def _get_supabase(self):
         """Get Supabase client."""
@@ -184,6 +189,23 @@ class ElevenLabsAccountManager:
             logger.error(f"Failed to fetch accounts: {e}")
             return []
 
+    def _get_env_subscription_cached(self, api_key: str) -> dict:
+        """Fetch .env key subscription info with 5-minute cache."""
+        import time
+        now = time.time()
+        if self._env_sub_cache and (now - self._env_sub_cache_at) < self._ENV_SUB_CACHE_TTL:
+            return self._env_sub_cache
+
+        try:
+            sub_info = self.check_subscription(api_key)
+            sub_info["checked_at"] = datetime.now(timezone.utc).isoformat()
+            self._env_sub_cache = sub_info
+            self._env_sub_cache_at = now
+            return sub_info
+        except Exception as e:
+            logger.warning(f"Failed to fetch .env subscription info: {e}")
+            return {"error": str(e)}
+
     def list_accounts(self, profile_id: str) -> List[dict]:
         """
         List all accounts for a profile (keys masked for display).
@@ -202,6 +224,8 @@ class ElevenLabsAccountManager:
         # Append synthetic entry for .env key so the UI always shows it
         env_key = self.settings.elevenlabs_api_key
         if env_key:
+            # Auto-fetch subscription info (cached for 5 minutes)
+            sub_info = self._get_env_subscription_cached(env_key)
             masked.append({
                 "id": "__env__",
                 "label": ".env default",
@@ -210,11 +234,11 @@ class ElevenLabsAccountManager:
                 "is_active": True,
                 "is_env_default": True,
                 "sort_order": 999,
-                "character_limit": None,
-                "characters_used": None,
-                "tier": None,
-                "last_error": None,
-                "last_checked_at": None,
+                "character_limit": sub_info.get("character_limit"),
+                "characters_used": sub_info.get("character_count"),
+                "tier": sub_info.get("tier"),
+                "last_error": sub_info.get("error"),
+                "last_checked_at": sub_info.get("checked_at"),
             })
 
         return masked
@@ -358,6 +382,18 @@ class ElevenLabsAccountManager:
                     .eq("id", remaining.data[0]["id"])\
                     .execute()
 
+        self._invalidate_cache(profile_id)
+
+    def clear_all_primary(self, profile_id: str):
+        """Unset all DB accounts as primary for a profile (makes .env the default)."""
+        supabase = self._get_supabase()
+        if not supabase:
+            return
+        supabase.table("elevenlabs_accounts")\
+            .update({"is_primary": False})\
+            .eq("profile_id", profile_id)\
+            .eq("is_primary", True)\
+            .execute()
         self._invalidate_cache(profile_id)
 
     def set_primary(self, profile_id: str, account_id: str) -> dict:

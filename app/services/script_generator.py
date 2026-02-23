@@ -284,12 +284,14 @@ Begin generation now:"""
         text = re.sub(r'`([^`]+)`', r'\1', text)        # Inline code
         text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)  # Headers
 
-        # Collapse multiple whitespace/newlines into single spaces
-        text = re.sub(r'\s+', ' ', text)
+        # Collapse multiple spaces within lines, but preserve single newlines
+        text = re.sub(r'[^\S\n]+', ' ', text)       # horizontal whitespace → single space
+        text = re.sub(r'\n{3,}', '\n\n', text)      # 3+ newlines → double newline
+        text = re.sub(r' *\n *', '\n', text)         # trim spaces around newlines
 
-        # Clean up spacing around punctuation
-        text = re.sub(r'\s+([.,!?;:])', r'\1', text)
-        text = re.sub(r'([.,!?;:])\s+', r'\1 ', text)
+        # Clean up spacing around punctuation (horizontal only)
+        text = re.sub(r' +([.,!?;:])', r'\1', text)
+        text = re.sub(r'([.,!?;:]) +', r'\1 ', text)
 
         return text.strip()
 
