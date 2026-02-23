@@ -120,10 +120,10 @@ Plans:
   2. Selecting a product in the dialog commits the association and closes the dialog
   3. User can open an image picker that displays all gallery images for the associated product
   4. User can toggle individual images on/off in the image picker and save the selection
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 33-01: ProductPickerDialog and ImagePickerDialog components with catalog API integration
+- [ ] 33-01-PLAN.md — ProductPickerDialog and ImagePickerDialog components with catalog API integration
 
 ### Phase 34: Page Integration
 **Goal**: Segments page and Pipeline page each display product association controls inline per segment, using the picker components from Phase 33
