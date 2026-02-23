@@ -1298,6 +1298,58 @@ export default function PipelinePage() {
                                   </Badge>
                                 )}
                               </div>
+                              {/* Product association for matched segment */}
+                              {match.segment_id && (() => {
+                                const segId = match.segment_id;
+                                const assoc = associations[segId];
+                                return (
+                                  <div className="flex items-center gap-1.5 mt-1 pt-1 border-t border-border/50">
+                                    {assoc ? (
+                                      <>
+                                        {assoc.product_image && (
+                                          // eslint-disable-next-line @next/next/no-img-element
+                                          <img
+                                            src={assoc.product_image}
+                                            alt=""
+                                            className="w-5 h-5 rounded object-cover flex-shrink-0"
+                                          />
+                                        )}
+                                        <span className="text-[10px] truncate flex-1" title={assoc.product_title || ""}>
+                                          {assoc.product_title || "Product"}
+                                        </span>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-5 w-5"
+                                          title="Select images"
+                                          onClick={() => setImagePickerAssoc(assoc)}
+                                        >
+                                          <Images className="h-3 w-3" />
+                                        </Button>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-5 w-5 text-destructive"
+                                          title="Remove product"
+                                          onClick={() => handleRemoveAssociation(segId)}
+                                        >
+                                          <X className="h-3 w-3" />
+                                        </Button>
+                                      </>
+                                    ) : (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-5 text-[10px] px-1.5 text-muted-foreground"
+                                        onClick={() => setPickerSegmentId(segId)}
+                                      >
+                                        <Package className="h-3 w-3 mr-1" />
+                                        Add Product
+                                      </Button>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </div>
                           );
                         })}
@@ -1538,6 +1590,29 @@ export default function PipelinePage() {
 
         </div>{/* end flex container */}
       </div>
+
+      {/* Product Picker Dialog */}
+      {pickerSegmentId && (
+        <ProductPickerDialog
+          open={!!pickerSegmentId}
+          onOpenChange={(open) => { if (!open) setPickerSegmentId(null); }}
+          segmentId={pickerSegmentId}
+          onProductSelected={handleProductSelected}
+        />
+      )}
+
+      {/* Image Picker Dialog */}
+      {imagePickerAssoc && (
+        <ImagePickerDialog
+          open={!!imagePickerAssoc}
+          onOpenChange={(open) => { if (!open) setImagePickerAssoc(null); }}
+          associationId={imagePickerAssoc.id}
+          catalogProductId={imagePickerAssoc.catalog_product_id}
+          currentSelectedUrls={imagePickerAssoc.selected_image_urls}
+          productTitle={imagePickerAssoc.product_title}
+          onImagesUpdated={handleImagesUpdated}
+        />
+      )}
     </div>
   );
 }
