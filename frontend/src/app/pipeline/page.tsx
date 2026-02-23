@@ -47,6 +47,9 @@ import {
   Star,
   Layers,
   Type,
+  Trash2,
+  Volume2,
+  Pause,
 } from "lucide-react";
 import { usePolling } from "@/hooks";
 import { useProfile } from "@/contexts/profile-context";
@@ -96,6 +99,12 @@ interface VariantStatus {
   current_step: string;
   final_video_path?: string;
   error?: string;
+}
+
+interface VariantPreviewInfo {
+  has_audio: boolean;
+  audio_duration: number;
+  has_srt: boolean;
 }
 
 interface CatalogProduct {
@@ -174,6 +183,9 @@ export default function PipelinePage() {
   const [historyScriptsLoading, setHistoryScriptsLoading] = useState(false);
   const [historySelectedScripts, setHistorySelectedScripts] = useState<Set<number>>(new Set());
   const [historyImporting, setHistoryImporting] = useState(false);
+  const [historyPreviewInfo, setHistoryPreviewInfo] = useState<Record<string, VariantPreviewInfo>>({});
+  const [playingAudio, setPlayingAudio] = useState<string | null>(null); // "pipelineId-variantIndex"
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Context collapse state
   const [contextExpanded, setContextExpanded] = useState(true);
@@ -532,6 +544,7 @@ export default function PipelinePage() {
       setSelectedHistoryId(null);
       setHistoryScripts([]);
       setHistorySelectedScripts(new Set());
+      setHistoryPreviewInfo({});
       return;
     }
     setSelectedHistoryId(id);
@@ -544,11 +557,39 @@ export default function PipelinePage() {
         setHistoryScripts(data.scripts || []);
         // Select all by default
         setHistorySelectedScripts(new Set((data.scripts || []).map((_: string, i: number) => i)));
+        // Store preview info for audio indicators
+        if (data.preview_info) {
+          setHistoryPreviewInfo(data.preview_info);
+        } else {
+          setHistoryPreviewInfo({});
+        }
       }
     } catch (err) {
       handleApiError(err, "Failed to load pipeline scripts");
     } finally {
       setHistoryScriptsLoading(false);
+    }
+  };
+
+  // History sidebar: delete a pipeline
+  const handleDeletePipeline = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm("Sigur vrei să ștergi acest set de scripturi?")) return;
+    try {
+      const res = await apiDelete(`/pipeline/${id}`);
+      if (res.ok) {
+        setHistoryPipelines(prev => prev.filter(p => p.pipeline_id !== id));
+        if (selectedHistoryId === id) {
+          setSelectedHistoryId(null);
+          setHistoryScripts([]);
+          setHistorySelectedScripts(new Set());
+        }
+      } else {
+        const errorData = await res.json().catch(() => ({ detail: "Failed to delete pipeline" }));
+        setError(errorData.detail || "Failed to delete pipeline");
+      }
+    } catch (err) {
+      handleApiError(err, "Failed to delete pipeline");
     }
   };
 
@@ -709,6 +750,41 @@ export default function PipelinePage() {
       setHistoryImporting(false);
     }
   };
+
+  // Audio preview: play/pause toggle
+  const handlePlayAudio = (pipelineId: string, variantIndex: number) => {
+    const audioKey = `${pipelineId}-${variantIndex}`;
+
+    if (playingAudio === audioKey) {
+      // Pause current audio
+      audioRef.current?.pause();
+      setPlayingAudio(null);
+      return;
+    }
+
+    // Stop previous audio if playing
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+
+    const audio = new Audio(`${API_URL}/pipeline/audio/${pipelineId}/${variantIndex}`);
+    audio.onended = () => setPlayingAudio(null);
+    audio.onerror = () => setPlayingAudio(null);
+    audio.play().catch(() => setPlayingAudio(null));
+    audioRef.current = audio;
+    setPlayingAudio(audioKey);
+  };
+
+  // Cleanup audio on unmount
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, []);
 
   // Toggle variant selection
   const toggleVariant = (index: number) => {
@@ -1275,9 +1351,22 @@ export default function PipelinePage() {
                     <CardHeader>
                       <div className="flex items-center justify-between">
                         <CardTitle className="text-lg">Script {index + 1}</CardTitle>
-                        <Badge variant="outline">
-                          {wordCount} words (~{estimatedDuration}s)
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline">
+                            {wordCount} words (~{estimatedDuration}s)
+                          </Badge>
+                          {scripts.length > 1 && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                              title="Șterge scriptul"
+                              onClick={() => setScripts(prev => prev.filter((_, i) => i !== index))}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     </CardHeader>
                     <CardContent>
@@ -1687,9 +1776,21 @@ export default function PipelinePage() {
                           <p className="text-sm font-medium truncate flex-1 mr-2">
                             {item.idea.length > 50 ? item.idea.substring(0, 50) + "..." : item.idea}
                           </p>
-                          <ChevronRight className={`h-4 w-4 flex-shrink-0 transition-transform ${
-                            selectedHistoryId === item.pipeline_id ? "rotate-90" : ""
-                          }`} />
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              onClick={(e) => handleDeletePipeline(item.pipeline_id, e)}
+                              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleDeletePipeline(item.pipeline_id, e as unknown as React.MouseEvent); } }}
+                              className="p-1 rounded hover:bg-destructive/10 hover:text-destructive transition-colors"
+                              title="Șterge pipeline"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </span>
+                            <ChevronRight className={`h-4 w-4 transition-transform ${
+                              selectedHistoryId === item.pipeline_id ? "rotate-90" : ""
+                            }`} />
+                          </div>
                         </div>
                         <div className="flex items-center gap-2 mt-1">
                           <Badge variant="outline" className="text-xs">{item.provider}</Badge>
@@ -1711,25 +1812,50 @@ export default function PipelinePage() {
                             </div>
                           ) : (
                             <>
-                              {historyScripts.map((script, idx) => (
-                                <div key={idx} className="flex items-start gap-2">
-                                  <Checkbox
-                                    checked={historySelectedScripts.has(idx)}
-                                    onCheckedChange={() => {
-                                      setHistorySelectedScripts(prev => {
-                                        const next = new Set(prev);
-                                        if (next.has(idx)) next.delete(idx);
-                                        else next.add(idx);
-                                        return next;
-                                      });
-                                    }}
-                                    className="mt-0.5"
-                                  />
-                                  <p className="text-xs text-muted-foreground line-clamp-3">
-                                    {script}
-                                  </p>
-                                </div>
-                              ))}
+                              {historyScripts.map((script, idx) => {
+                                const previewInf = historyPreviewInfo[String(idx)];
+                                const hasAudio = previewInf?.has_audio;
+                                const audioKey = `${item.pipeline_id}-${idx}`;
+                                const isPlaying = playingAudio === audioKey;
+
+                                return (
+                                  <div key={idx} className="flex items-start gap-2">
+                                    <Checkbox
+                                      checked={historySelectedScripts.has(idx)}
+                                      onCheckedChange={() => {
+                                        setHistorySelectedScripts(prev => {
+                                          const next = new Set(prev);
+                                          if (next.has(idx)) next.delete(idx);
+                                          else next.add(idx);
+                                          return next;
+                                        });
+                                      }}
+                                      className="mt-0.5"
+                                    />
+                                    <p className="text-xs text-muted-foreground line-clamp-3 flex-1">
+                                      {script}
+                                    </p>
+                                    {hasAudio && (
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); handlePlayAudio(item.pipeline_id, idx); }}
+                                        className={`flex items-center gap-1 flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] transition-colors ${
+                                          isPlaying
+                                            ? "bg-primary/20 text-primary"
+                                            : "bg-muted text-muted-foreground hover:bg-accent hover:text-foreground"
+                                        }`}
+                                        title={isPlaying ? "Pause audio" : "Play audio preview"}
+                                      >
+                                        {isPlaying ? (
+                                          <Pause className="h-3 w-3" />
+                                        ) : (
+                                          <Volume2 className="h-3 w-3" />
+                                        )}
+                                        <span>{previewInf.audio_duration.toFixed(1)}s</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                );
+                              })}
                               <div className="flex gap-2 pt-1">
                                 <Button
                                   size="sm"

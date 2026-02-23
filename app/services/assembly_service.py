@@ -173,6 +173,20 @@ class AssemblyService:
 
         audio_duration = removal_result.new_duration
 
+        # Remap timestamps to match trimmed audio (fix SRT-audio desync)
+        if removal_result.segments_map and removal_result.removed_duration > 0.01:
+            from app.services.tts_subtitle_generator import remap_timestamps_dict
+            timestamps = remap_timestamps_dict(timestamps, removal_result.segments_map)
+            logger.info(
+                f"Remapped {len(timestamps.get('characters', []))} character timestamps "
+                f"to match trimmed audio"
+            )
+        elif removal_result.removed_duration > 0.01:
+            logger.warning(
+                "Silence was removed but no segments_map available (FFmpeg fallback) — "
+                "SRT timestamps may be slightly desynchronized"
+            )
+
         logger.info(
             f"TTS generation complete: {audio_duration:.2f}s "
             f"(removed {removal_result.removed_duration:.2f}s silence)"

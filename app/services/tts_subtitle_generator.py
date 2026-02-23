@@ -6,9 +6,69 @@ Enables subtitle generation directly from TTS timing data, eliminating the need 
 and providing perfect sync with voiceover audio.
 """
 import logging
-from typing import Optional
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def remap_timestamp(original_time: float, segments_map: List[Tuple[float, float]]) -> float:
+    """
+    Remap a timestamp from original audio space to trimmed audio space.
+
+    The segments_map is a list of (start, end) tuples representing the kept regions
+    from the original audio. In the trimmed audio, these regions are concatenated
+    back-to-back with no gaps. This function finds where `original_time` falls
+    relative to those kept regions and returns its position in the trimmed output.
+
+    Args:
+        original_time: Timestamp in the original (pre-trim) audio
+        segments_map: List of (start, end) tuples of kept regions
+
+    Returns:
+        Corresponding timestamp in the trimmed audio
+    """
+    accumulated = 0.0
+
+    for seg_start, seg_end in segments_map:
+        if original_time <= seg_start:
+            # Time falls before this segment (in a removed gap)
+            return accumulated
+        elif original_time <= seg_end:
+            # Time falls within this kept segment
+            return accumulated + (original_time - seg_start)
+        else:
+            # Time is past this segment, accumulate its duration
+            accumulated += (seg_end - seg_start)
+
+    # Time is past all segments
+    return accumulated
+
+
+def remap_timestamps_dict(
+    timestamps: dict,
+    segments_map: List[Tuple[float, float]]
+) -> dict:
+    """
+    Remap all character timestamps from original audio space to trimmed audio space.
+
+    Args:
+        timestamps: ElevenLabs alignment dict with character_start_times_seconds
+                    and character_end_times_seconds
+        segments_map: List of (start, end) tuples of kept regions
+
+    Returns:
+        New timestamps dict with remapped times (original dict is not mutated)
+    """
+    remapped = dict(timestamps)
+    remapped["character_start_times_seconds"] = [
+        remap_timestamp(t, segments_map)
+        for t in timestamps["character_start_times_seconds"]
+    ]
+    remapped["character_end_times_seconds"] = [
+        remap_timestamp(t, segments_map)
+        for t in timestamps["character_end_times_seconds"]
+    ]
+    return remapped
 
 
 def _seconds_to_srt_time(seconds: float) -> str:

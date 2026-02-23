@@ -29,6 +29,7 @@ class SilenceRemovalResult:
     new_duration: float
     removed_duration: float
     segments_kept: int
+    segments_map: Optional[List[Tuple[float, float]]] = None  # Kept regions (start, end) for timestamp remapping
 
     @property
     def compression_ratio(self) -> float:
@@ -44,7 +45,8 @@ class SilenceRemovalResult:
             "new_duration": round(self.new_duration, 2),
             "removed_duration": round(self.removed_duration, 2),
             "compression_ratio": round(self.compression_ratio * 100, 1),
-            "segments_kept": self.segments_kept
+            "segments_kept": self.segments_kept,
+            "segments_map": [(round(s, 4), round(e, 4)) for s, e in self.segments_map] if self.segments_map else None
         }
 
 
@@ -274,7 +276,8 @@ class SilenceRemover:
             original_duration=original_duration,
             new_duration=new_duration,
             removed_duration=removed_duration,
-            segments_kept=len(merged_segments)
+            segments_kept=len(merged_segments),
+            segments_map=merged_segments
         )
 
     def _detect_voice_in_audio(

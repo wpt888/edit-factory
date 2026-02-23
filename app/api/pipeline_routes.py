@@ -16,6 +16,7 @@ from typing import List, Optional, Dict
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.api.auth import ProfileContext, get_profile_context
@@ -232,12 +233,20 @@ class VariantStatus(BaseModel):
     error: Optional[str] = None
 
 
+class VariantPreviewInfo(BaseModel):
+    """Preview info for a variant (audio/SRT availability)."""
+    has_audio: bool = False
+    audio_duration: float = 0.0
+    has_srt: bool = False
+
+
 class PipelineStatusResponse(BaseModel):
     """Response model for status endpoint."""
     pipeline_id: str
     scripts: List[str]
     provider: str
     variants: List[VariantStatus]
+    preview_info: Dict[str, VariantPreviewInfo] = {}
 
 
 class PipelineImportRequest(BaseModel):
@@ -321,6 +330,47 @@ async def list_pipelines(
         ))
 
     return PipelineListResponse(pipelines=items, total=len(items))
+
+
+@router.delete("/{pipeline_id}")
+async def delete_pipeline(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Delete a pipeline and all its data from DB and in-memory cache.
+    Only the owning profile can delete their pipelines.
+    """
+    # Remove from in-memory cache
+    _pipelines.pop(pipeline_id, None)
+
+    # Remove from DB
+    try:
+        supabase = get_supabase()
+        if supabase:
+            # Verify ownership before deleting
+            result = supabase.table("editai_pipelines")\
+                .select("id, profile_id")\
+                .eq("id", pipeline_id)\
+                .single()\
+                .execute()
+            if result.data:
+                if result.data.get("profile_id") != profile.profile_id:
+                    raise HTTPException(status_code=403, detail="Not authorized to delete this pipeline")
+                supabase.table("editai_pipelines")\
+                    .delete()\
+                    .eq("id", pipeline_id)\
+                    .execute()
+                logger.info(f"Pipeline {pipeline_id} deleted from DB")
+            else:
+                raise HTTPException(status_code=404, detail="Pipeline not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Failed to delete pipeline {pipeline_id} from DB: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete pipeline")
+
+    return {"status": "deleted", "pipeline_id": pipeline_id}
 
 
 @router.post("/import", response_model=PipelineGenerateResponse)
@@ -791,9 +841,64 @@ async def get_pipeline_status(pipeline_id: str):
                 error=None
             ))
 
+    # Build preview_info from stored previews
+    preview_info: Dict[str, VariantPreviewInfo] = {}
+    for idx_key, preview_data in pipeline.get("previews", {}).items():
+        pd = preview_data.get("preview_data", {}) if isinstance(preview_data, dict) else {}
+        audio_path_str = pd.get("audio_path")
+        has_audio = bool(audio_path_str and Path(audio_path_str).exists())
+        audio_duration = pd.get("audio_duration", 0.0) if has_audio else 0.0
+        has_srt = bool(pd.get("srt_content"))
+        preview_info[str(idx_key)] = VariantPreviewInfo(
+            has_audio=has_audio,
+            audio_duration=audio_duration,
+            has_srt=has_srt
+        )
+
     return PipelineStatusResponse(
         pipeline_id=pipeline_id,
         scripts=pipeline["scripts"],
         provider=pipeline["provider"],
-        variants=variants
+        variants=variants,
+        preview_info=preview_info
+    )
+
+
+@router.get("/audio/{pipeline_id}/{variant_index}")
+async def get_pipeline_audio(
+    pipeline_id: str,
+    variant_index: int,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Stream the preview audio MP3 for a specific pipeline variant.
+
+    Requires authentication — only the owning profile can access audio.
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    if pipeline["profile_id"] != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    # Look up audio path from preview data
+    preview = pipeline.get("previews", {}).get(variant_index)
+    if not preview:
+        raise HTTPException(status_code=404, detail="No preview available for this variant")
+
+    preview_data = preview.get("preview_data", {})
+    audio_path_str = preview_data.get("audio_path")
+
+    if not audio_path_str:
+        raise HTTPException(status_code=404, detail="No audio file for this variant")
+
+    audio_path = Path(audio_path_str)
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Audio file no longer exists on disk")
+
+    return FileResponse(
+        path=str(audio_path),
+        media_type="audio/mpeg",
+        filename=f"pipeline_{pipeline_id}_variant_{variant_index}.mp3"
     )
