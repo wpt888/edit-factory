@@ -285,7 +285,7 @@ Plans:
 | 39. Source Selection Frontend | 1/1 | Complete    | 2026-02-24 | - |
 | 40. Video Preview Player | 1/1 | Complete    | 2026-02-24 | - |
 | 41. Timeline Editor | 3/3 | Complete    | 2026-02-24 | - |
-| 42. Available Segments Integration Fix | 1/1 | Complete   | 2026-02-24 | - |
+| 42. Available Segments Integration Fix | 1/1 | Complete    | 2026-02-24 | - |
 
 ---
 *Last updated: 2026-02-24 after v8 Pipeline UX Overhaul roadmap created*
