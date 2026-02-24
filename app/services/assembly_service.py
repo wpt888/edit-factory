@@ -504,6 +504,7 @@ class AssemblyService:
         subtitle_settings: Optional[dict] = None,
         elevenlabs_model: str = "eleven_flash_v2_5",
         voice_id: Optional[str] = None,
+        source_video_ids: Optional[List[str]] = None,
         enable_denoise: bool = False,
         denoise_strength: float = 2.0,
         enable_sharpen: bool = False,
@@ -582,10 +583,14 @@ class AssemblyService:
 
             # Step 4: Fetch segments from database
             logger.info("Step 4/7: Fetching segments from library")
-            segments_result = supabase.table("editai_segments")\
+            if source_video_ids:
+                logger.info(f"Filtering to {len(source_video_ids)} source video(s)")
+            segments_query = supabase.table("editai_segments")\
                 .select("id, source_video_id, start_time, end_time, keywords, transforms, editai_source_videos(file_path)")\
-                .eq("profile_id", profile_id)\
-                .execute()
+                .eq("profile_id", profile_id)
+            if source_video_ids:
+                segments_query = segments_query.in_("source_video_id", source_video_ids)
+            segments_result = segments_query.execute()
 
             if not segments_result.data:
                 raise RuntimeError("No segments found in library. Please create segments first.")
@@ -668,7 +673,8 @@ class AssemblyService:
         script_text: str,
         profile_id: str,
         elevenlabs_model: str = "eleven_flash_v2_5",
-        voice_id: Optional[str] = None
+        voice_id: Optional[str] = None,
+        source_video_ids: Optional[List[str]] = None
     ) -> dict:
         """
         Preview-only: TTS -> SRT -> match -> timeline (no rendering).
@@ -706,10 +712,14 @@ class AssemblyService:
 
         # Step 3: Fetch segments
         logger.info("Preview Step 3/4: Fetching segments from library")
-        segments_result = supabase.table("editai_segments")\
+        if source_video_ids:
+            logger.info(f"Filtering to {len(source_video_ids)} source video(s)")
+        segments_query = supabase.table("editai_segments")\
             .select("id, source_video_id, start_time, end_time, keywords, transforms, editai_source_videos(file_path)")\
-            .eq("profile_id", profile_id)\
-            .execute()
+            .eq("profile_id", profile_id)
+        if source_video_ids:
+            segments_query = segments_query.in_("source_video_id", source_video_ids)
+        segments_result = segments_query.execute()
 
         if not segments_result.data:
             raise RuntimeError("No segments found in library. Please create segments first.")
