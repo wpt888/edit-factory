@@ -8,7 +8,8 @@
 - ✅ **v4 Script-First Pipeline** - Phases 12-16 (shipped 2026-02-12)
 - ✅ **v5 Product Video Generator** - Phases 17-23 (shipped 2026-02-21)
 - ✅ **v6 Production Hardening** - Phases 24-31 (shipped 2026-02-22)
-- 🚧 **v7 Product Image Overlays** - Phases 32-37 (in progress)
+- 🚧 **v7 Product Image Overlays** - Phases 32-37 (paused at 67%)
+- 🚧 **v8 Pipeline UX Overhaul** - Phases 38-41 (in progress)
 
 ## Phases
 
@@ -83,7 +84,7 @@ Full details: `.planning/milestones/v6-ROADMAP.md`
 
 </details>
 
-### 🚧 v7 Product Image Overlays (In Progress)
+### 🚧 v7 Product Image Overlays (Paused)
 
 **Milestone Goal:** Bridge catalog products with video segments — associate products to segments and render them as PiP overlays or interstitial slides, adding visual richness to generated videos.
 
@@ -91,8 +92,17 @@ Full details: `.planning/milestones/v6-ROADMAP.md`
 - [x] **Phase 33: Product and Image Picker Components** - Reusable product search dialog and image selector (completed 2026-02-23)
 - [x] **Phase 34: Page Integration** - Wire pickers into Segments and Pipeline pages (completed 2026-02-23)
 - [x] **Phase 35: PiP Overlay Controls** - PiP enable/position/size/animation config stored per segment (completed 2026-02-23)
-- [ ] **Phase 36: Interstitial Slide Controls** - Interstitial enable/duration config stored per segment
-- [ ] **Phase 37: Render Integration** - FFmpeg applies PiP overlays and interstitial slides in assembly
+- [ ] **Phase 36: Interstitial Slide Controls** - Interstitial enable/duration config stored per segment (paused)
+- [ ] **Phase 37: Render Integration** - FFmpeg applies PiP overlays and interstitial slides in assembly (paused)
+
+### 🚧 v8 Pipeline UX Overhaul (In Progress)
+
+**Milestone Goal:** Fix pipeline Step 4 bugs, add source video selection to Step 3, inline video preview to Step 4, and a visual timeline editor to Step 3 — making the multi-variant pipeline workflow complete from script to published video.
+
+- [ ] **Phase 38: Bug Fixes + Source Selection Backend** - Fix Step 4 flicker and library save, add scoped segment matching API
+- [ ] **Phase 39: Source Selection Frontend** - Step 3 UI for picking source videos with segment counts and DB persistence
+- [ ] **Phase 40: Video Preview Player** - Inline HTML5 player with auto-thumbnails on Step 4 variant cards
+- [ ] **Phase 41: Timeline Editor** - Visual timeline in Step 3 with drag/drop reordering, segment swap, and duration adjustment
 
 ## Phase Details
 
@@ -108,8 +118,8 @@ Full details: `.planning/milestones/v6-ROADMAP.md`
 **Plans**: 2 plans
 
 Plans:
-- [ ] 32-01-PLAN.md — DB migration + catalog images endpoint
-- [ ] 32-02-PLAN.md — Association CRUD API routes
+- [x] 32-01-PLAN.md — DB migration + catalog images endpoint
+- [x] 32-02-PLAN.md — Association CRUD API routes
 
 ### Phase 33: Product and Image Picker Components
 **Goal**: Reusable dialog components exist for searching catalog products and selecting product images, ready to embed in any page
@@ -123,7 +133,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 33-01-PLAN.md — ProductPickerDialog and ImagePickerDialog components with catalog API integration
+- [x] 33-01-PLAN.md — ProductPickerDialog and ImagePickerDialog components with catalog API integration
 
 ### Phase 34: Page Integration
 **Goal**: Segments page and Pipeline page each display product association controls inline per segment, using the picker components from Phase 33
@@ -136,8 +146,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 34-01-PLAN.md — Segments page product association controls (UI-01)
-- [ ] 34-02-PLAN.md — Pipeline page product association controls (UI-02)
+- [x] 34-01-PLAN.md — Segments page product association controls (UI-01)
+- [x] 34-02-PLAN.md — Pipeline page product association controls (UI-02)
 
 ### Phase 35: PiP Overlay Controls
 **Goal**: Users can configure PiP overlay settings (enabled, position, size, animation) on a per-segment basis, with choices stored in the database
@@ -151,8 +161,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 35-01-PLAN.md — PATCH pip-config endpoint + PipConfig type + PipOverlayPanel component
-- [ ] 35-02-PLAN.md — Wire PipOverlayPanel into Segments and Pipeline pages + visual verification
+- [x] 35-01-PLAN.md — PATCH pip-config endpoint + PipConfig type + PipOverlayPanel component
+- [x] 35-02-PLAN.md — Wire PipOverlayPanel into Segments and Pipeline pages + visual verification
 
 ### Phase 36: Interstitial Slide Controls
 **Goal**: Users can configure an interstitial product slide for any segment boundary, choosing to enable it and set its duration
@@ -181,6 +191,64 @@ Plans:
 - [ ] 37-01: Assembly pipeline PiP overlay compositor (FFmpeg overlay filter)
 - [ ] 37-02: Assembly pipeline interstitial slide insertion (FFmpeg concat with Ken Burns)
 
+### Phase 38: Bug Fixes + Source Selection Backend
+**Goal**: Step 4 renders cleanly without empty state flicker, rendered clips are saved to the library, and the backend supports filtering segment matching to user-selected source videos
+**Depends on**: Nothing (builds on existing pipeline backend)
+**Requirements**: BUG-01, BUG-02, SRC-02
+**Success Criteria** (what must be TRUE):
+  1. Entering Step 4 shows render progress immediately without a flash of empty state
+  2. After a pipeline render completes, the rendered clip appears in the Library page without manual intervention
+  3. The segment matching API accepts a list of source video IDs and only matches against segments from those videos
+**Plans**: TBD
+
+Plans:
+- [ ] 38-01: Fix Step 4 empty state flash (BUG-01) + library save for pipeline clips (BUG-02)
+- [ ] 38-02: Source-scoped segment matching API (SRC-02)
+
+### Phase 39: Source Selection Frontend
+**Goal**: Users can select one or more source videos in Step 3 before previewing, see segment counts per video, and have their selection persist across page reloads
+**Depends on**: Phase 38
+**Requirements**: SRC-01, SRC-03, SRC-04
+**Success Criteria** (what must be TRUE):
+  1. Step 3 shows a source video picker listing library projects with their segment counts
+  2. User can select one or more projects as sources and proceed to preview using only those segments
+  3. Selecting no sources is prevented — UI requires at least one source before advancing
+  4. Closing and reopening the pipeline page restores the previously selected source videos
+**Plans**: TBD
+
+Plans:
+- [ ] 39-01: Source video picker UI + segment count display + DB persistence for selection
+
+### Phase 40: Video Preview Player
+**Goal**: Users can watch rendered variant videos inline in Step 4 without downloading, with auto-generated thumbnails shown before playback begins
+**Depends on**: Phase 38
+**Requirements**: PREV-01, PREV-02
+**Success Criteria** (what must be TRUE):
+  1. Each rendered variant card in Step 4 shows an auto-generated thumbnail image
+  2. User can press play on any variant card to watch the rendered video inline via an HTML5 player
+  3. Video playback controls (play/pause, seek, volume) are accessible without leaving the pipeline page
+**Plans**: TBD
+
+Plans:
+- [ ] 40-01: Backend thumbnail generation endpoint + frontend HTML5 inline player on variant cards
+
+### Phase 41: Timeline Editor
+**Goal**: Users see a visual timeline in Step 3 mapping SRT phrases to video segments, can reorder segments by dragging, swap segments from the source library, manually assign segments to unmatched phrases, and adjust segment durations
+**Depends on**: Phase 39
+**Requirements**: TIME-01, TIME-02, TIME-03, TIME-04, TIME-05
+**Success Criteria** (what must be TRUE):
+  1. Step 3 shows a visual timeline where each SRT phrase is displayed alongside its matched video segment
+  2. Unmatched phrases are highlighted in a distinct color with a prompt to manually assign a segment
+  3. User can drag a segment to a different position on the timeline and the reorder persists for rendering
+  4. User can click a segment and swap it for a different clip from the selected source video(s)
+  5. User can adjust a segment's duration on the timeline and the change is reflected in the render
+**Plans**: TBD
+
+Plans:
+- [ ] 41-01: Timeline data model + visual timeline component (phrase-to-segment display + unmatched highlighting)
+- [ ] 41-02: Drag/drop reorder + segment swap from source library
+- [ ] 41-03: Duration adjustment controls + render integration
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -190,12 +258,16 @@ Plans:
 | 12-16 | v4 | 11/11 | Complete | 2026-02-12 |
 | 17-23 | v5 | 13/13 | Complete | 2026-02-21 |
 | 24-31 | v6 | 16/16 | Complete | 2026-02-22 |
-| 32. Association Data Layer | 2/2 | Complete    | 2026-02-23 | - |
-| 33. Product and Image Picker Components | 1/1 | Complete    | 2026-02-23 | - |
-| 34. Page Integration | 2/2 | Complete    | 2026-02-23 | - |
-| 35. PiP Overlay Controls | 2/2 | Complete    | 2026-02-23 | - |
-| 36. Interstitial Slide Controls | v7 | 0/1 | Not started | - |
-| 37. Render Integration | v7 | 0/2 | Not started | - |
+| 32. Association Data Layer | v7 | 2/2 | Complete | 2026-02-23 |
+| 33. Product and Image Picker Components | v7 | 1/1 | Complete | 2026-02-23 |
+| 34. Page Integration | v7 | 2/2 | Complete | 2026-02-23 |
+| 35. PiP Overlay Controls | v7 | 2/2 | Complete | 2026-02-23 |
+| 36. Interstitial Slide Controls | v7 | 0/1 | Deferred (v7 paused) | - |
+| 37. Render Integration | v7 | 0/2 | Deferred (v7 paused) | - |
+| 38. Bug Fixes + Source Selection Backend | v8 | 0/2 | Not started | - |
+| 39. Source Selection Frontend | v8 | 0/1 | Not started | - |
+| 40. Video Preview Player | v8 | 0/1 | Not started | - |
+| 41. Timeline Editor | v8 | 0/3 | Not started | - |
 
 ---
-*Last updated: 2026-02-23 after v7 Product Image Overlays roadmap created*
+*Last updated: 2026-02-24 after v8 Pipeline UX Overhaul roadmap created*

@@ -63,25 +63,25 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BUG-01 | TBD | Pending |
-| BUG-02 | TBD | Pending |
-| SRC-01 | TBD | Pending |
-| SRC-02 | TBD | Pending |
-| SRC-03 | TBD | Pending |
-| SRC-04 | TBD | Pending |
-| PREV-01 | TBD | Pending |
-| PREV-02 | TBD | Pending |
-| TIME-01 | TBD | Pending |
-| TIME-02 | TBD | Pending |
-| TIME-03 | TBD | Pending |
-| TIME-04 | TBD | Pending |
-| TIME-05 | TBD | Pending |
+| BUG-01 | Phase 38 | Pending |
+| BUG-02 | Phase 38 | Pending |
+| SRC-01 | Phase 39 | Pending |
+| SRC-02 | Phase 38 | Pending |
+| SRC-03 | Phase 39 | Pending |
+| SRC-04 | Phase 39 | Pending |
+| PREV-01 | Phase 40 | Pending |
+| PREV-02 | Phase 40 | Pending |
+| TIME-01 | Phase 41 | Pending |
+| TIME-02 | Phase 41 | Pending |
+| TIME-03 | Phase 41 | Pending |
+| TIME-04 | Phase 41 | Pending |
+| TIME-05 | Phase 41 | Pending |
 
 **Coverage:**
 - v8 requirements: 13 total
-- Mapped to phases: 0
-- Unmapped: 13 (roadmap pending)
+- Mapped to phases: 13
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-24*
-*Last updated: 2026-02-24 after initial definition*
+*Last updated: 2026-02-24 after v8 roadmap created (phases 38-41)*
