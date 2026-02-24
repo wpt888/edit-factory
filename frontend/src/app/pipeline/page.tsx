@@ -482,8 +482,19 @@ export default function PipelinePage() {
   const handleRender = async () => {
     if (!pipelineId || selectedVariants.size === 0) return;
 
+    // Build initial variant statuses from selected variants BEFORE the API call.
+    // The render response returns rendering_variants (indices) and total_variants,
+    // NOT a `variants` field — so we must populate this from request data to avoid
+    // an empty-state flash when entering Step 4.
+    const initialStatuses: VariantStatus[] = Array.from(selectedVariants).map(idx => ({
+      variant_index: idx,
+      status: "processing" as const,
+      progress: 0,
+      current_step: "Initializing render...",
+    }));
+
     setIsRendering(true);
-    setVariantStatuses([]);
+    setVariantStatuses(initialStatuses);
 
     try {
       const res = await apiPost(`/pipeline/render/${pipelineId}`, {
@@ -504,14 +515,15 @@ export default function PipelinePage() {
       }, { timeout: 600_000 }); // 10 min — rendering can be very slow
 
       if (res.ok) {
-        const data = await res.json();
-        setVariantStatuses(data.variants || []);
+        // data.variants does not exist on PipelineRenderResponse — initialStatuses
+        // already set above serve as placeholder until polling fills in real data.
         setStep(4);
       } else {
         const errorData = await res.json().catch(() => ({
           detail: "Failed to start render",
         }));
         setPreviewError(errorData.detail || "Failed to start render");
+        setVariantStatuses([]);
         setIsRendering(false);
       }
     } catch (err) {
@@ -521,6 +533,7 @@ export default function PipelinePage() {
       } else {
         setPreviewError("Network error. Please check if the backend is running.");
       }
+      setVariantStatuses([]);
       setIsRendering(false);
     }
   };
