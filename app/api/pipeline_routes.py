@@ -10,6 +10,7 @@ Orchestrates end-to-end pipeline:
 This is the glue layer connecting script generation and assembly into a single workflow.
 """
 import logging
+import subprocess
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional, Dict
@@ -950,6 +951,98 @@ async def render_variants(
 
                     # Persist render result to DB
                     _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+
+                    # Save rendered clip to library (non-critical — wrapped in try/except)
+                    try:
+                        supabase_lib = get_supabase()
+                        if supabase_lib:
+                            # Step A: Get or create a library project for this pipeline.
+                            # Use cached library_project_id if a previous variant already created it.
+                            library_project_id = pipeline.get("library_project_id")
+
+                            if not library_project_id:
+                                pipeline_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
+                                # Check if project already exists for this pipeline
+                                existing = supabase_lib.table("editai_projects")\
+                                    .select("id")\
+                                    .eq("profile_id", profile.profile_id)\
+                                    .eq("name", pipeline_name)\
+                                    .limit(1)\
+                                    .execute()
+
+                                if existing.data:
+                                    library_project_id = existing.data[0]["id"]
+                                else:
+                                    # Create a new project row
+                                    proj_result = supabase_lib.table("editai_projects").insert({
+                                        "profile_id": profile.profile_id,
+                                        "name": pipeline_name,
+                                        "description": f"Auto-generated from pipeline {pipeline_id}",
+                                        "status": "completed",
+                                    }).execute()
+                                    if proj_result.data:
+                                        library_project_id = proj_result.data[0]["id"]
+
+                                if library_project_id:
+                                    # Cache project_id so subsequent variants reuse it
+                                    pipeline["library_project_id"] = library_project_id
+
+                            if library_project_id:
+                                # Step B: Generate thumbnail
+                                thumb_path = None
+                                try:
+                                    thumb_dir = final_video_path.parent / "thumbnails"
+                                    thumb_dir.mkdir(parents=True, exist_ok=True)
+                                    thumb_path = thumb_dir / f"{final_video_path.stem}_thumb.jpg"
+                                    subprocess.run([
+                                        "ffmpeg", "-y", "-ss", "1", "-i", str(final_video_path),
+                                        "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "3",
+                                        str(thumb_path)
+                                    ], capture_output=True, timeout=30)
+                                    if not thumb_path.exists():
+                                        thumb_path = None
+                                except Exception as thumb_err:
+                                    logger.warning(f"Thumbnail generation failed: {thumb_err}")
+                                    thumb_path = None
+
+                                # Step C: Get video duration
+                                duration = None
+                                try:
+                                    dur_result = subprocess.run([
+                                        "ffprobe", "-v", "error", "-show_entries",
+                                        "format=duration",
+                                        "-of", "default=noprint_wrappers=1:nokey=1",
+                                        str(final_video_path)
+                                    ], capture_output=True, text=True, timeout=30)
+                                    if dur_result.returncode == 0:
+                                        duration = float(dur_result.stdout.strip())
+                                except Exception as dur_err:
+                                    logger.warning(f"Duration probe failed: {dur_err}")
+
+                                # Step D: Insert clip row
+                                supabase_lib.table("editai_clips").insert({
+                                    "project_id": library_project_id,
+                                    "profile_id": profile.profile_id,
+                                    "variant_index": vid,
+                                    "variant_name": f"variant_{vid + 1}",
+                                    "raw_video_path": str(final_video_path),
+                                    "final_video_path": str(final_video_path),
+                                    "thumbnail_path": str(thumb_path) if thumb_path else None,
+                                    "duration": duration,
+                                    "is_selected": False,
+                                    "is_deleted": False,
+                                    "final_status": "completed"
+                                }).execute()
+
+                                logger.info(
+                                    f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
+                                    f"variant {vid} saved to library project {library_project_id}"
+                                )
+                    except Exception as lib_err:
+                        logger.warning(
+                            f"[Profile {profile.profile_id}] Failed to save pipeline variant "
+                            f"{vid} to library (non-critical): {lib_err}"
+                        )
 
                 except Exception as e:
                     logger.error(
