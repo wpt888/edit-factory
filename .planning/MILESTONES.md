@@ -149,3 +149,63 @@
 
 ---
 
+
+## v7 Product Image Overlays (Shipped: 2026-02-24, partial)
+
+**Delivered:** Product-to-segment association system with CRUD API, reusable picker dialogs, page integration on Segments and Pipeline pages, and PiP overlay configuration UI. Phases 36-37 (interstitial slides + render integration) deferred.
+
+**Phases completed:** 32-35 (4/6 phases, 7 plans)
+
+**Key accomplishments:**
+- Segment-product association data layer with cross-schema SECURITY DEFINER functions, RLS, and batch CRUD API
+- Reusable ProductPickerDialog and ImagePickerDialog Shadcn components with search, filter, and image toggle
+- Product association controls wired into both Segments page and Pipeline page Step 3
+- PiP overlay config UI (enable, position, size, animation) with PATCH endpoint and per-segment persistence
+
+**Stats:**
+- 4 phases, 7 plans
+- 1 day (2026-02-23)
+- 1 DB migration, 1 new router, 2 new components
+
+**Git range:** `feat(32-01)` → `docs(35-02)`
+
+### Known Gaps
+- SLID-01: Interstitial product slides not implemented (Phase 36 deferred)
+- SLID-02: Interstitial duration config not implemented (Phase 36 deferred)
+- SLID-03: Ken Burns animation on interstitials not implemented (Phase 36 deferred)
+- REND-01: PiP overlay rendering not implemented (Phase 37 deferred)
+- REND-02: Interstitial slide rendering not implemented (Phase 37 deferred)
+- REND-03: Product image animation in render not implemented (Phase 37 deferred)
+
+**What's next:** Resume phases 36-37 in a future milestone
+
+---
+
+
+## v8 Pipeline UX Overhaul (Shipped: 2026-02-24)
+
+**Delivered:** Complete pipeline UX overhaul — Step 4 render flicker fixed with library save, source video selection with segment counts, inline video preview player, visual timeline editor with drag/drop segment reorder and swap, duration adjustment, and match overrides render integration.
+
+**Phases completed:** 38-42 (5 phases, 8 plans)
+
+**Key accomplishments:**
+- Step 4 render flicker eliminated via optimistic UI state; pipeline clips auto-saved to library
+- Source video picker in Step 2 with segment counts, DB persistence, and scoped segment matching
+- Inline HTML5 video preview player with FFmpeg-generated poster thumbnails on Step 4 cards
+- Visual timeline editor: phrase-to-segment mapping, color-coded match status, manual segment assignment
+- Drag/drop segment reorder and hover-reveal swap button using HTML5 native Drag API
+- Duration adjustment controls (+/- buttons) with full match_overrides wired through render pipeline
+- Gap closure: available_segments field added to PipelinePreviewResponse (TIME-03/TIME-04 fix)
+
+**Stats:**
+- 5 phases, 8 plans
+- 1 day (2026-02-24)
+- 13/13 v8 requirements satisfied
+- 1 DB migration, 1 new component (TimelineEditor)
+
+**Git range:** `feat(38-01)` → `docs(phase-42)`
+
+**What's next:** TBD — `/gsd:new-milestone`
+
+---
+

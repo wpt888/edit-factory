@@ -1,3 +1,12 @@
+# Requirements Archive: v7 Product Image Overlays
+
+**Archived:** 2026-02-24
+**Status:** SHIPPED
+
+For current requirements, see `.planning/REQUIREMENTS.md`.
+
+---
+
 # Requirements: Edit Factory
 
 **Defined:** 2026-02-24

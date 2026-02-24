@@ -83,15 +83,28 @@ Automated video production from any input — an idea, a product feed, or a coll
 - ✓ Cache-Control headers on stream endpoints — v6
 - ✓ Debug log noise eliminated — v6
 - ✓ Shared usePolling hook across all pages — v6
+- ✓ Segment-product association CRUD with cross-schema security — v7
+- ✓ Product picker dialog with search and filter — v7
+- ✓ Image picker dialog with toggle selection — v7
+- ✓ Product association controls on Segments and Pipeline pages — v7
+- ✓ PiP overlay config (position, size, animation) per segment — v7
+- ✓ Step 4 render flicker fix (optimistic UI) — v8
+- ✓ Pipeline clips auto-saved to library — v8
+- ✓ Source video picker with segment counts and DB persistence — v8
+- ✓ Scoped segment matching (only selected source videos) — v8
+- ✓ Inline HTML5 video preview player on Step 4 cards — v8
+- ✓ Auto-generated poster thumbnails for rendered variants — v8
+- ✓ Visual timeline editor with phrase-to-segment mapping — v8
+- ✓ Drag/drop segment reorder on timeline — v8
+- ✓ Segment swap from source library — v8
+- ✓ Manual segment assignment for unmatched phrases — v8
+- ✓ Duration adjustment controls on timeline — v8
+- ✓ Match overrides wired through render pipeline — v8
 
 ### Active
 
-- [ ] User can associate a catalog product with a video segment
-- [ ] User can select which product images to use on a segment
-- [ ] User can enable PiP overlay with position/size/animation controls
-- [ ] User can insert interstitial product slides between segments
-- [ ] Segments page and Pipeline page show product association controls
-- [ ] Assembly/render pipeline applies PiP overlays and interstitial slides
+- [ ] User can insert interstitial product slides between segments (deferred from v7)
+- [ ] Assembly/render pipeline applies PiP overlays and interstitial slides (deferred from v7)
 
 ### Out of Scope
 
@@ -114,17 +127,18 @@ Automated video production from any input — an idea, a product feed, or a coll
 - Runs on Windows/WSL development machine
 - Constant iteration — code changes frequently
 - Tech stack: FastAPI backend (Python), Next.js frontend (TypeScript), Supabase DB, FFmpeg
-- ~189K LOC across Python (~168K) + TypeScript (~21K)
-- v6 shipped: Production hardening (stability, security, tests, error handling, code quality)
+- ~42K LOC across Python (~24K) + TypeScript (~18K)
+- 8 milestones shipped: v1 (MVP), v2 (Profiles), v3 (Video Quality), v4 (Script-First), v5 (Product Videos), v6 (Production Hardening), v7 (Product Image Overlays, partial), v8 (Pipeline UX Overhaul)
+- 42 phases, 90 plans executed across all milestones
+- 13 backend services, 9 frontend pages, 14+ API routers
+- DB migrations: 021 total (007/009/017/021 pending manual application)
 - Nortia.ro feed: ~9,987 products, Google Shopping XML format
-- 6 milestones shipped: v1 (MVP), v2 (Profiles), v3 (Video Quality), v4 (Script-First), v5 (Product Videos), v6 (Production Hardening)
-- 31 phases, 75 plans executed across all milestones
-- 13 backend services, 9 frontend pages, 13+ API routers
-- DB migrations: 017 total (007/009/017 pending manual application)
 - ElevenLabs Starter plan: 100k credits/month, flash v2.5 default
 - pytest test suite with unit tests for critical services
 - Structured JSON logging across all backend services
-- Tech debt: In-memory state dicts for pipeline/assembly, no job cancellation, safe_zone fields unused
+- v7 delivered product-segment associations + PiP overlay config UI (render integration deferred)
+- v8 delivered complete pipeline UX: source selection, timeline editor, video preview, library save
+- Tech debt: In-memory state dicts for pipeline/assembly, no job cancellation, safe_zone fields unused, v7 render integration deferred
 
 ## Constraints
 
@@ -163,18 +177,19 @@ Automated video production from any input — an idea, a product feed, or a coll
 | VideoTemplate as Python dataclass | Same proven pattern as service-level config | ✓ Good |
 | CSS hex colors in DB, FFmpeg conversion at render | Clean storage, conversion is trivial | ✓ Good |
 | In-memory state for pipeline/assembly | Consistent with patterns, acceptable for single-user | ⚠️ Tech debt |
+| Cross-schema SECURITY DEFINER for catalog access | RLS-safe catalog queries from PostgREST | ✓ Good |
+| Batch association fetch (no N+1) | Single IN query for all segment associations | ✓ Good |
+| HTML5 native Drag API for timeline | Zero new npm deps, sufficient for vertical swap UX | ✓ Good |
+| Optimistic UI state for Step 4 render | Pre-call card rendering eliminates empty state flash | ✓ Good |
+| match_overrides through render pipeline | Segment swaps + duration edits flow to final video | ✓ Good |
 
-## Current Milestone: v8 Pipeline UX Overhaul
+## Current State
 
-**Goal:** Fix pipeline Step 4 bugs and add video preview + timeline editing — make the multi-variant pipeline workflow feel complete from script to published video.
+No active milestone. v7 + v8 shipped 2026-02-24.
 
-**Target features:**
-- Bug fixes: empty state flash in Step 4, no video preview after render, rendered clips not appearing in library
-- Inline video preview player in Step 4 (watch rendered videos without downloading)
-- Timeline/segment editor with drag & drop reordering in Step 3
-- Library integration: rendered pipeline clips appear in library for publishing
-
-**Paused:** v7 Product Image Overlays (67% — phases 36-37 remaining)
+**Deferred work:**
+- v7 phases 36-37: Interstitial slides + FFmpeg render integration for PiP overlays
+- 4 DB migrations pending manual application (007, 009, 017, 021)
 
 ---
-*Last updated: 2026-02-24 after v8 Pipeline UX Overhaul milestone started*
+*Last updated: 2026-02-24 after v7 + v8 milestone completion*
