@@ -216,6 +216,18 @@ export default function PipelinePage() {
   // Script auto-save timer
   const scriptSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Source video selection
+  const [sourceVideos, setSourceVideos] = useState<Array<{
+    id: string;
+    name: string;
+    thumbnail_path: string | null;
+    duration: number | null;
+    segments_count: number;
+  }>>([]);
+  const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
+  const [sourceVideosLoading, setSourceVideosLoading] = useState(false);
+  const sourceSelectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Subtitle settings state
   const [subtitleSettings, setSubtitleSettings] = useState<SubtitleSettings>({ ...DEFAULT_SUBTITLE_SETTINGS });
   const [, setSubtitleSettingsLoaded] = useState(false);
@@ -282,6 +294,79 @@ export default function PipelinePage() {
       handleApiError(err, "Failed to load catalog filters");
     }
   }, []);
+
+  // Source videos: fetch list with segment counts
+  const fetchSourceVideos = useCallback(async () => {
+    setSourceVideosLoading(true);
+    try {
+      const res = await apiGet("/segments/source-videos");
+      if (res.ok) {
+        const data = await res.json();
+        setSourceVideos(data || []);
+        // Auto-select all if no selection has been made yet
+        setSelectedSourceIds(prev => {
+          if (prev.size === 0 && data.length > 0) {
+            return new Set(data.map((v: { id: string }) => v.id));
+          }
+          return prev;
+        });
+      }
+    } catch (err) {
+      handleApiError(err, "Failed to load source videos");
+    } finally {
+      setSourceVideosLoading(false);
+    }
+  }, []);
+
+  // Source videos: restore selection from a saved pipeline
+  const restoreSourceSelection = useCallback(async (pid: string) => {
+    try {
+      const res = await apiGet(`/pipeline/${pid}/source-selection`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.source_video_ids && data.source_video_ids.length > 0) {
+          setSelectedSourceIds(new Set(data.source_video_ids));
+        }
+      }
+    } catch {
+      // Ignore — fresh pipeline or column not yet migrated
+    }
+  }, []);
+
+  // Source videos: toggle a single video selection
+  const handleSourceToggle = (videoId: string) => {
+    setSelectedSourceIds(prev => {
+      const next = new Set(prev);
+      if (next.has(videoId)) {
+        // Prevent deselecting the last source
+        if (next.size <= 1) return prev;
+        next.delete(videoId);
+      } else {
+        next.add(videoId);
+      }
+      // Debounce save to DB
+      if (sourceSelectionTimer.current) clearTimeout(sourceSelectionTimer.current);
+      sourceSelectionTimer.current = setTimeout(() => {
+        if (pipelineId) {
+          apiPut(`/pipeline/${pipelineId}/source-selection`, {
+            source_video_ids: Array.from(next)
+          }).catch(() => {});
+        }
+      }, 500);
+      return next;
+    });
+  };
+
+  // Source videos: select all
+  const handleSelectAllSources = () => {
+    const allIds = new Set(sourceVideos.map(v => v.id));
+    setSelectedSourceIds(allIds);
+    if (pipelineId) {
+      apiPut(`/pipeline/${pipelineId}/source-selection`, {
+        source_video_ids: Array.from(allIds)
+      }).catch(() => {});
+    }
+  };
 
   // Catalog: open picker
   const handleOpenCatalog = () => {
@@ -443,6 +528,7 @@ export default function PipelinePage() {
         const res = await apiPost(`/pipeline/preview/${pipelineId}/${i}`, {
           elevenlabs_model: elevenlabsModel,
           voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
+          source_video_ids: selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined,
         }, { timeout: 300_000 }); // 5 min — TTS generation + SRT can be slow
 
         if (res.ok) {
@@ -502,6 +588,7 @@ export default function PipelinePage() {
         preset_name: presetName,
         elevenlabs_model: elevenlabsModel,
         voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
+        source_video_ids: selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined,
         font_size: subtitleSettings.fontSize,
         font_family: subtitleSettings.fontFamily,
         text_color: subtitleSettings.textColor,
@@ -558,6 +645,7 @@ export default function PipelinePage() {
     setVoiceId("");
     setTtsResults({});
     setPlayingTtsVariant(null);
+    setSelectedSourceIds(new Set());
     if (ttsAudioRef.current) {
       ttsAudioRef.current.pause();
       ttsAudioRef.current = null;
@@ -639,6 +727,11 @@ export default function PipelinePage() {
   useEffect(() => {
     fetchHistory();
   }, []);
+
+  // Fetch source videos on mount
+  useEffect(() => {
+    fetchSourceVideos();
+  }, [fetchSourceVideos]);
 
   // Fetch ElevenLabs voices on mount
   useEffect(() => {
@@ -761,7 +854,8 @@ export default function PipelinePage() {
 
     // If all scripts are selected, reuse the existing pipeline (no duplicate)
     if (selected.length === historyScripts.length && selectedHistoryId) {
-      setPipelineId(selectedHistoryId);
+      const pid = selectedHistoryId;
+      setPipelineId(pid);
       setScripts(historyScripts.map(formatScript));
       setStep(2);
       setSelectedHistoryId(null);
@@ -769,6 +863,9 @@ export default function PipelinePage() {
       setHistorySelectedScripts(new Set());
       setPreviews({});
       setPreviewError(null);
+      // Restore source video selection from DB
+      setSelectedSourceIds(new Set());
+      restoreSourceSelection(pid);
       return;
     }
 
@@ -785,7 +882,8 @@ export default function PipelinePage() {
 
       if (res.ok) {
         const data = await res.json();
-        setPipelineId(data.pipeline_id);
+        const pid = data.pipeline_id;
+        setPipelineId(pid);
         setScripts((data.scripts || []).map(formatScript));
         setStep(2);
         setSelectedHistoryId(null);
@@ -793,6 +891,9 @@ export default function PipelinePage() {
         setHistorySelectedScripts(new Set());
         setPreviews({});
         setPreviewError(null);
+        // New pipeline — re-apply source video auto-select
+        setSelectedSourceIds(new Set());
+        fetchSourceVideos();
       } else {
         const errorData = await res.json().catch(() => ({ detail: "Failed to import scripts" }));
         setError(errorData.detail || "Failed to import scripts");
@@ -1566,6 +1667,94 @@ export default function PipelinePage() {
               })}
             </div>
 
+            {/* Source Video Selection */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <Film className="h-4 w-4" />
+                      Source Videos
+                    </CardTitle>
+                    <CardDescription>
+                      Select which videos to match segments from ({selectedSourceIds.size} of {sourceVideos.length} selected)
+                    </CardDescription>
+                  </div>
+                  {sourceVideos.length > 1 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSelectAllSources}
+                    >
+                      Select All
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent>
+                {sourceVideosLoading ? (
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading source videos...
+                  </div>
+                ) : sourceVideos.length === 0 ? (
+                  <Alert>
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>
+                      No source videos uploaded yet. Go to the Segments page to add source videos before previewing.
+                    </AlertDescription>
+                  </Alert>
+                ) : (
+                  <div className="space-y-2">
+                    {sourceVideos.map(video => (
+                      <div
+                        key={video.id}
+                        className={`flex items-center gap-3 p-2 rounded-lg border cursor-pointer transition-colors ${
+                          selectedSourceIds.has(video.id)
+                            ? "bg-primary/5 border-primary/30"
+                            : "hover:bg-muted/50"
+                        }`}
+                        onClick={() => handleSourceToggle(video.id)}
+                      >
+                        <Checkbox
+                          checked={selectedSourceIds.has(video.id)}
+                          onCheckedChange={() => handleSourceToggle(video.id)}
+                        />
+                        {video.thumbnail_path ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={`${API_URL.replace('/api/v1', '')}/thumbnails/${video.thumbnail_path.split('/').pop()}`}
+                            alt=""
+                            className="w-10 h-10 rounded object-cover flex-shrink-0"
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                          />
+                        ) : (
+                          <div className="w-10 h-10 rounded bg-muted flex items-center justify-center flex-shrink-0">
+                            <Film className="h-5 w-5 text-muted-foreground" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{video.name}</p>
+                        </div>
+                        {video.duration && (
+                          <Badge variant="outline" className="text-xs flex-shrink-0">
+                            <Clock className="h-3 w-3 mr-1" />
+                            {formatDuration(video.duration)}
+                          </Badge>
+                        )}
+                        <Badge variant="secondary" className="text-xs flex-shrink-0">
+                          {video.segments_count} segments
+                        </Badge>
+                      </div>
+                    ))}
+                    <div className="text-xs text-muted-foreground pt-2 border-t">
+                      Total segments available: {sourceVideos.filter(v => selectedSourceIds.has(v.id)).reduce((sum, v) => sum + v.segments_count, 0)}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             {/* Error display */}
             {previewError && (
               <Alert variant="destructive">
@@ -1577,7 +1766,7 @@ export default function PipelinePage() {
             {/* Preview All button */}
             <Button
               onClick={handlePreviewAll}
-              disabled={previewingIndex !== null}
+              disabled={isGenerating || previewingIndex !== null || sourceVideos.length === 0 || selectedSourceIds.size === 0}
               className="w-full"
               size="lg"
             >
@@ -1593,6 +1782,9 @@ export default function PipelinePage() {
                 </>
               )}
             </Button>
+            {sourceVideos.length > 0 && selectedSourceIds.size === 0 && (
+              <p className="text-xs text-destructive text-center">Select at least one source video above</p>
+            )}
           </div>
         )}
 
