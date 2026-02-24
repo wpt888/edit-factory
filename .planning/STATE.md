@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v8 Pipeline UX Overhaul — Phase 38 Plan 01 complete
+**Current focus:** v8 Pipeline UX Overhaul — Phase 38 complete (both plans done)
 
 ## Current Position
 
 Milestone: v8 Pipeline UX Overhaul
-Phase: 38 of 41 (Bug Fixes + Source Selection Backend)
-Plan: 1 of 2 complete
+Phase: 38 of 41 (Bug Fixes + Source Selection Backend) — COMPLETE
+Plan: 2 of 2 complete
 Status: In progress
-Last activity: 2026-02-24 — Phase 38 Plan 01 executed (BUG-01, BUG-02 fixed)
+Last activity: 2026-02-24 — Phase 38 Plan 02 executed (SRC-02 backend done)
 
-Progress: [█░░░░░░░░░] 10% (v8) | Overall: phases 1-35 complete, 36-37 deferred
+Progress: [██░░░░░░░░] 20% (v8) | Overall: phases 1-35 complete, 36-37 deferred
 
 ## Performance Metrics
 
@@ -34,7 +34,7 @@ Progress: [█░░░░░░░░░] 10% (v8) | Overall: phases 1-35 compl
 | v5 Product Video | 7 (17-23) | 13 | Shipped 2026-02-21 |
 | v6 Hardening | 8 (24-31) | 16 | Shipped 2026-02-22 |
 | v7 Overlays | 6 (32-37) | 7 | Paused at 67% (4/6 phases) |
-| v8 Pipeline UX | 4 (38-41) | ~7 | In progress (1/~7 plans done) |
+| v8 Pipeline UX | 4 (38-41) | ~7 | In progress (2/~7 plans done) |
 
 ## Accumulated Context
 
@@ -52,6 +52,8 @@ Phase 38 Plan 01 decisions:
 - Build optimistic render status from request data (selectedVariants) before API call — PipelineRenderResponse has no variants field
 - Wrap library save in try/except so render completion is never blocked by save failure
 - Cache library_project_id in pipeline dict to prevent duplicate project rows across variants
+- [Phase 38]: source_video_ids defaults to None so existing callers without it continue to match all segments
+- [Phase 38]: Filter applied at DB query level via Supabase .in_() for efficiency
 
 ### Pending Todos
 
@@ -71,9 +73,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Phase 38 Plan 01 complete (BUG-01 + BUG-02 fixed)
+Stopped at: Phase 38 Plan 02 complete (SRC-02 backend done)
 Resume file: None
-Next action: `/gsd:execute-phase 38` (Plan 02 — Source Selection Backend)
+Next action: `/gsd:execute-phase 39` (Source Selection Frontend)
 
 ---
-*Last updated: 2026-02-24 after Phase 38 Plan 01 execution*
+*Last updated: 2026-02-24 after Phase 38 Plan 02 execution*

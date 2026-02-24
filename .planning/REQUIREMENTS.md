@@ -15,7 +15,7 @@ Requirements for v8 Pipeline UX Overhaul. Each maps to roadmap phases.
 ### Video Source Selection
 
 - [ ] **SRC-01**: User can select one or more projects/videos from library as segment source before preview
-- [ ] **SRC-02**: Preview and render only match against segments from selected video(s), not entire library
+- [x] **SRC-02**: Preview and render only match against segments from selected video(s), not entire library
 - [ ] **SRC-03**: User can see how many segments each video has when selecting source
 - [ ] **SRC-04**: Selected source videos persist in pipeline state (survives page reload via DB)
 
@@ -66,7 +66,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BUG-01 | Phase 38 | Complete |
 | BUG-02 | Phase 38 | Complete |
 | SRC-01 | Phase 39 | Pending |
-| SRC-02 | Phase 38 | Pending |
+| SRC-02 | Phase 38 | Complete |
 | SRC-03 | Phase 39 | Pending |
 | SRC-04 | Phase 39 | Pending |
 | PREV-01 | Phase 40 | Pending |

@@ -99,7 +99,7 @@ Full details: `.planning/milestones/v6-ROADMAP.md`
 
 **Milestone Goal:** Fix pipeline Step 4 bugs, add source video selection to Step 3, inline video preview to Step 4, and a visual timeline editor to Step 3 — making the multi-variant pipeline workflow complete from script to published video.
 
-- [ ] **Phase 38: Bug Fixes + Source Selection Backend** - Fix Step 4 flicker and library save, add scoped segment matching API
+- [x] **Phase 38: Bug Fixes + Source Selection Backend** - Fix Step 4 flicker and library save, add scoped segment matching API (completed 2026-02-24)
 - [ ] **Phase 39: Source Selection Frontend** - Step 3 UI for picking source videos with segment counts and DB persistence
 - [ ] **Phase 40: Video Preview Player** - Inline HTML5 player with auto-thumbnails on Step 4 variant cards
 - [ ] **Phase 41: Timeline Editor** - Visual timeline in Step 3 with drag/drop reordering, segment swap, and duration adjustment
@@ -201,7 +201,7 @@ Plans:
   3. The segment matching API accepts a list of source video IDs and only matches against segments from those videos
 **Plans**: TBD
 
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 38-01-PLAN.md — Fix Step 4 empty state flash + library save for pipeline clips (BUG-01, BUG-02)
@@ -266,7 +266,7 @@ Plans:
 | 35. PiP Overlay Controls | v7 | 2/2 | Complete | 2026-02-23 |
 | 36. Interstitial Slide Controls | v7 | 0/1 | Deferred (v7 paused) | - |
 | 37. Render Integration | v7 | 0/2 | Deferred (v7 paused) | - |
-| 38. Bug Fixes + Source Selection Backend | 1/2 | In Progress|  | - |
+| 38. Bug Fixes + Source Selection Backend | 2/2 | Complete   | 2026-02-24 | - |
 | 39. Source Selection Frontend | v8 | 0/1 | Not started | - |
 | 40. Video Preview Player | v8 | 0/1 | Not started | - |
 | 41. Timeline Editor | v8 | 0/3 | Not started | - |
