@@ -744,16 +744,16 @@ export function VideoSegmentPlayer({
           return (
             <div
               key={segment.id || idx}
-              className={`absolute top-4 bottom-0 transition-all z-20 border-l-2 border-r-2 ${
-                isScrubbing
-                  ? "pointer-events-none"
-                  : "cursor-pointer"
-              } ${
+              className={`absolute top-4 bottom-0 transition-all z-20 border-l-2 border-r-2 cursor-pointer ${
                 currentSegment?.id === segment.id
-                  ? "bg-primary/60 border-primary"
+                  ? "bg-blue-500/70 border-blue-400 ring-1 ring-blue-400/50"
                   : "bg-green-500/50 hover:bg-green-500/70 border-green-600"
               }`}
               style={style}
+              onMouseDown={(e) => {
+                // Prevent parent timeline from starting a scrub when clicking segments
+                e.stopPropagation();
+              }}
               onClick={(e) => handleSegmentClick(e, segment)}
               title={`${formatTime(segment.start_time)} - ${formatTime(segment.end_time)}\n${segment.keywords.join(", ")}`}
             >
