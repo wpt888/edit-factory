@@ -35,6 +35,7 @@ from app.api.product_routes import router as product_router
 from app.api.product_generate_routes import router as product_generate_router
 from app.api.catalog_routes import router as catalog_router
 from app.api.association_routes import router as association_router
+from app.api.tts_library_routes import router as tts_library_router
 
 from app.logging_config import setup_logging
 setup_logging()
@@ -146,6 +147,7 @@ app.include_router(product_router, prefix="/api/v1", tags=["Products"])
 app.include_router(product_generate_router, prefix="/api/v1", tags=["Product Video Generation"])
 app.include_router(catalog_router, prefix="/api/v1", tags=["Catalog"])
 app.include_router(association_router, prefix="/api/v1", tags=["Associations"])
+app.include_router(tts_library_router, prefix="/api/v1", tags=["TTS Library"])
 
 # Static files pentru frontend
 static_path = Path(__file__).parent.parent / "static"

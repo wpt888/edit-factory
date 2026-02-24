@@ -204,7 +204,7 @@ export function TimelineEditor({
 
   return (
     <>
-      <ScrollArea className="max-h-[400px] rounded-md border">
+      <ScrollArea className="max-h-[400px] overflow-hidden rounded-md border">
         <div className="divide-y">
           {matches.map((match, idx) => {
             const isMatched = match.segment_id !== null && match.confidence > 0;

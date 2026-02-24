@@ -38,6 +38,7 @@ import {
   BarChart3,
   Menu,
   ChevronDown,
+  Music,
 } from "lucide-react";
 
 const navGroups = [
@@ -52,6 +53,7 @@ const navGroups = [
     label: "Library",
     items: [
       { label: "Clips", href: "/librarie", icon: Film, desc: "Browse all clips" },
+      { label: "TTS", href: "/tts-library", icon: Music, desc: "Text-to-speech assets" },
     ],
   },
   {

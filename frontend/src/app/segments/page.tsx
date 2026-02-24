@@ -571,10 +571,14 @@ export default function SegmentsPage() {
       params.set("segment_ids", segmentIds.join(","));
       const res = await apiGetWithRetry(`/associations/segments?${params}`);
       if (res.ok) {
-        const data: AssociationResponse[] = await res.json();
+        const json = await res.json();
+        // Backend returns { associations: { segment_id: association | null } }
+        const assocMap = json.associations || json;
         const map: Record<string, AssociationResponse> = {};
-        for (const a of data) {
-          map[a.segment_id] = a;
+        for (const [segId, assoc] of Object.entries(assocMap)) {
+          if (assoc) {
+            map[segId] = assoc as AssociationResponse;
+          }
         }
         setAssociations(prev => ({ ...prev, ...map }));
       }

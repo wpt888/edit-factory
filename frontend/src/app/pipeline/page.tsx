@@ -1880,6 +1880,7 @@ export default function PipelinePage() {
                   settings={subtitleSettings}
                   onSettingsChange={handleSubtitleSettingsChange}
                   showPreview={true}
+                  previewHeight={350}
                   compact={false}
                 />
               </CardContent>
@@ -1892,7 +1893,7 @@ export default function PipelinePage() {
                 if (!preview) return null;
 
                 return (
-                  <Card key={index}>
+                  <Card key={index} className="overflow-hidden">
                     <CardHeader>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
