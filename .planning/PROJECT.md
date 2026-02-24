@@ -164,16 +164,17 @@ Automated video production from any input — an idea, a product feed, or a coll
 | CSS hex colors in DB, FFmpeg conversion at render | Clean storage, conversion is trivial | ✓ Good |
 | In-memory state for pipeline/assembly | Consistent with patterns, acceptable for single-user | ⚠️ Tech debt |
 
-## Current Milestone: v7 Product Image Overlays
+## Current Milestone: v8 Pipeline UX Overhaul
 
-**Goal:** Bridge catalog products with video segments — associate products to segments and render them as PiP overlays or interstitial slides, adding visual richness and uniqueness to generated videos.
+**Goal:** Fix pipeline Step 4 bugs and add video preview + timeline editing — make the multi-variant pipeline workflow feel complete from script to published video.
 
 **Target features:**
-- Product-segment association (link catalog product to video segment, select images)
-- PiP overlay (product image overlay with position, size, animation controls)
-- Interstitial slides (full-screen product image between segments, configurable duration)
-- Frontend integration (product picker on Segments and Pipeline pages)
-- Render integration (FFmpeg overlay/interstitial in assembly pipeline)
+- Bug fixes: empty state flash in Step 4, no video preview after render, rendered clips not appearing in library
+- Inline video preview player in Step 4 (watch rendered videos without downloading)
+- Timeline/segment editor with drag & drop reordering in Step 3
+- Library integration: rendered pipeline clips appear in library for publishing
+
+**Paused:** v7 Product Image Overlays (67% — phases 36-37 remaining)
 
 ---
-*Last updated: 2026-02-23 after v7 Product Image Overlays milestone started*
+*Last updated: 2026-02-24 after v8 Pipeline UX Overhaul milestone started*
