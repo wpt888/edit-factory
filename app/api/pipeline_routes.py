@@ -13,7 +13,7 @@ import logging
 import subprocess
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional, Dict
+from typing import Any, List, Optional, Dict
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body, Query
@@ -232,6 +232,8 @@ class PipelineRenderRequest(BaseModel):
     elevenlabs_model: str = "eleven_flash_v2_5"
     # TTS voice
     voice_id: Optional[str] = None
+    # ElevenLabs voice settings overrides
+    voice_settings: Optional[Dict[str, Any]] = None
 
 
 class PipelineRenderResponse(BaseModel):
@@ -668,6 +670,7 @@ class PipelineTtsRequest(BaseModel):
     """Request model for per-script TTS generation."""
     elevenlabs_model: str = "eleven_flash_v2_5"
     voice_id: Optional[str] = None
+    voice_settings: Optional[Dict[str, Any]] = None
 
 
 class PipelineTtsResponse(BaseModel):
@@ -715,10 +718,11 @@ async def generate_variant_tts(
             script_text=script_text,
             profile_id=profile.profile_id,
             elevenlabs_model=request.elevenlabs_model,
-            voice_id=request.voice_id
+            voice_id=request.voice_id,
+            voice_settings=request.voice_settings
         )
 
-        # Store TTS preview result
+        # Store TTS preview result (include voice_settings for reuse invalidation)
         if "tts_previews" not in pipeline:
             pipeline["tts_previews"] = {}
 
@@ -727,6 +731,7 @@ async def generate_variant_tts(
             "audio_duration": audio_duration,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "script_hash": hash(script_text),
+            "voice_settings": request.voice_settings,
         }
 
         # Persist to DB
@@ -786,7 +791,8 @@ async def preview_variant(
     profile: ProfileContext = Depends(get_profile_context),
     elevenlabs_model: str = Body("eleven_flash_v2_5", embed=True),
     voice_id: Optional[str] = Body(None, embed=True),
-    source_video_ids: Optional[List[str]] = Body(None, embed=True)
+    source_video_ids: Optional[List[str]] = Body(None, embed=True),
+    voice_settings: Optional[Dict[str, Any]] = Body(None, embed=True)
 ):
     """
     Preview segment matching for a single variant.
@@ -821,8 +827,10 @@ async def preview_variant(
     reuse_audio_path = None
     reuse_audio_duration = None
     if existing_tts:
-        # Verify script hasn't changed since TTS was generated
-        if existing_tts.get("script_hash") == hash(script_text):
+        # Verify script and voice settings haven't changed since TTS was generated
+        script_match = existing_tts.get("script_hash") == hash(script_text)
+        settings_match = existing_tts.get("voice_settings") == voice_settings
+        if script_match and settings_match:
             audio_path_str = existing_tts.get("audio_path")
             if audio_path_str and Path(audio_path_str).exists():
                 reuse_audio_path = audio_path_str
@@ -842,7 +850,8 @@ async def preview_variant(
             source_video_ids=source_video_ids,
             variant_index=variant_index,
             reuse_audio_path=reuse_audio_path,
-            reuse_audio_duration=reuse_audio_duration
+            reuse_audio_duration=reuse_audio_duration,
+            voice_settings=voice_settings
         )
 
         # Store preview result in pipeline state
@@ -1038,7 +1047,8 @@ async def render_variants(
                         enable_glow=request.enable_glow,
                         glow_blur=request.glow_blur,
                         adaptive_sizing=request.adaptive_sizing,
-                        variant_index=vid
+                        variant_index=vid,
+                        voice_settings=request.voice_settings
                     )
 
                     # Success

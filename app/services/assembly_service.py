@@ -128,7 +128,8 @@ class AssemblyService:
         script_text: str,
         profile_id: str,
         elevenlabs_model: str = "eleven_flash_v2_5",
-        voice_id: Optional[str] = None
+        voice_id: Optional[str] = None,
+        voice_settings: Optional[dict] = None
     ) -> Tuple[Path, float, dict]:
         """
         Generate TTS audio with timestamps and apply silence removal.
@@ -156,7 +157,8 @@ class AssemblyService:
             text=script_text,
             voice_id=voice_id,
             output_path=raw_audio_path,
-            model_id=elevenlabs_model
+            model_id=elevenlabs_model,
+            **(voice_settings or {})
         )
 
         # Apply silence removal (same params as _render_final_clip_task)
@@ -555,7 +557,8 @@ class AssemblyService:
         enable_glow: bool = False,
         glow_blur: int = 0,
         adaptive_sizing: bool = False,
-        variant_index: int = 0
+        variant_index: int = 0,
+        voice_settings: Optional[dict] = None
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
@@ -587,7 +590,8 @@ class AssemblyService:
                 script_text=script_text,
                 profile_id=profile_id,
                 elevenlabs_model=elevenlabs_model,
-                voice_id=voice_id
+                voice_id=voice_id,
+                voice_settings=voice_settings
             )
 
             # Step 2: Generate SRT from timestamps (with cache)
@@ -746,7 +750,8 @@ class AssemblyService:
         source_video_ids: Optional[List[str]] = None,
         variant_index: int = 0,
         reuse_audio_path: Optional[str] = None,
-        reuse_audio_duration: Optional[float] = None
+        reuse_audio_duration: Optional[float] = None,
+        voice_settings: Optional[dict] = None
     ) -> dict:
         """
         Preview-only: TTS -> SRT -> match -> timeline (no rendering).
@@ -772,7 +777,8 @@ class AssemblyService:
                 script_text=script_text,
                 profile_id=profile_id,
                 elevenlabs_model=elevenlabs_model,
-                voice_id=voice_id
+                voice_id=voice_id,
+                voice_settings=voice_settings
             )
 
         # Step 2: Generate SRT (with cache)
@@ -793,7 +799,8 @@ class AssemblyService:
                 script_text=script_text,
                 profile_id=profile_id,
                 elevenlabs_model=elevenlabs_model,
-                voice_id=voice_id
+                voice_id=voice_id,
+                voice_settings=voice_settings
             )
             srt_content = await self.generate_srt_from_timestamps(timestamps)
             if srt_content:

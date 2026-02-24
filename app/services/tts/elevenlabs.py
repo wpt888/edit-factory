@@ -101,7 +101,8 @@ class ElevenLabsTTSService(TTSService):
             "stability": 0.57,
             "similarity_boost": 0.75,
             "style": 0.22,
-            "use_speaker_boost": True
+            "use_speaker_boost": True,
+            "speed": 1.0
         }
 
         logger.info(f"ElevenLabsTTSService initialized with voice: {self._voice_id}, model: {self.model_id}")
@@ -253,9 +254,22 @@ class ElevenLabsTTSService(TTSService):
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # --- Cache check ---
+        # Prepare voice settings with optional overrides
+        voice_settings = {
+            "stability": kwargs.get("stability", self.voice_settings["stability"]),
+            "similarity_boost": kwargs.get("similarity_boost", self.voice_settings["similarity_boost"]),
+            "style": kwargs.get("style", self.voice_settings["style"]),
+            "use_speaker_boost": kwargs.get("use_speaker_boost", self.voice_settings["use_speaker_boost"]),
+            "speed": kwargs.get("speed", self.voice_settings.get("speed", 1.0)),
+        }
+
+        # --- Cache check (includes voice settings so different settings don't return stale audio) ---
         from app.services.tts_cache import cache_lookup, cache_store
-        cache_key = {"text": text, "voice_id": voice_id, "model_id": self.model_id, "provider": "elevenlabs"}
+        vs = voice_settings
+        cache_key = {
+            "text": text, "voice_id": voice_id, "model_id": self.model_id, "provider": "elevenlabs",
+            "vs": f"{vs['stability']:.2f}_{vs['similarity_boost']:.2f}_{vs['style']:.2f}_{vs.get('speed', 1.0):.2f}"
+        }
         cached = cache_lookup(cache_key, "elevenlabs", output_path)
         if cached:
             return TTSResult(
@@ -265,14 +279,6 @@ class ElevenLabsTTSService(TTSService):
                 voice_id=voice_id,
                 cost=0.0
             )
-
-        # Prepare voice settings with optional overrides
-        voice_settings = {
-            "stability": kwargs.get("stability", self.voice_settings["stability"]),
-            "similarity_boost": kwargs.get("similarity_boost", self.voice_settings["similarity_boost"]),
-            "style": kwargs.get("style", self.voice_settings["style"]),
-            "use_speaker_boost": kwargs.get("use_speaker_boost", self.voice_settings["use_speaker_boost"])
-        }
 
         # Prepare request with 192kbps MP3 output format
         url = f"{self.BASE_URL}/text-to-speech/{voice_id}?output_format=mp3_44100_128"
@@ -378,10 +384,23 @@ class ElevenLabsTTSService(TTSService):
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # --- Cache check ---
-        from app.services.tts_cache import cache_lookup, cache_store
+        # Prepare voice settings with optional overrides
         effective_model = model_id or self.model_id
-        cache_key = {"text": text, "voice_id": voice_id, "model_id": effective_model, "provider": "elevenlabs_ts"}
+        voice_settings = {
+            "stability": kwargs.get("stability", self.voice_settings["stability"]),
+            "similarity_boost": kwargs.get("similarity_boost", self.voice_settings["similarity_boost"]),
+            "style": kwargs.get("style", self.voice_settings["style"]),
+            "use_speaker_boost": kwargs.get("use_speaker_boost", self.voice_settings["use_speaker_boost"]),
+            "speed": kwargs.get("speed", self.voice_settings.get("speed", 1.0)),
+        }
+
+        # --- Cache check (includes voice settings so different settings don't return stale audio) ---
+        from app.services.tts_cache import cache_lookup, cache_store
+        vs = voice_settings
+        cache_key = {
+            "text": text, "voice_id": voice_id, "model_id": effective_model, "provider": "elevenlabs_ts",
+            "vs": f"{vs['stability']:.2f}_{vs['similarity_boost']:.2f}_{vs['style']:.2f}_{vs.get('speed', 1.0):.2f}"
+        }
         cached = cache_lookup(cache_key, "elevenlabs", output_path)
         if cached:
             alignment = cached.get("alignment", {})
@@ -393,14 +412,6 @@ class ElevenLabsTTSService(TTSService):
                 cost=0.0
             )
             return (tts_result, alignment)
-
-        # Prepare voice settings with optional overrides
-        voice_settings = {
-            "stability": kwargs.get("stability", self.voice_settings["stability"]),
-            "similarity_boost": kwargs.get("similarity_boost", self.voice_settings["similarity_boost"]),
-            "style": kwargs.get("style", self.voice_settings["style"]),
-            "use_speaker_boost": kwargs.get("use_speaker_boost", self.voice_settings["use_speaker_boost"])
-        }
 
         # Prepare request - with-timestamps endpoint returns JSON, not audio stream
         url = f"{self.BASE_URL}/text-to-speech/{voice_id}/with-timestamps?output_format=mp3_44100_128"

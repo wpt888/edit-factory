@@ -22,6 +22,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
 import { apiGet, apiGetWithRetry, apiPost, apiPut, apiPatch, apiDelete, API_URL, handleApiError, ApiError } from "@/lib/api";
 import {
   Loader2,
@@ -167,6 +168,12 @@ export default function PipelinePage() {
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [defaultVoiceId, setDefaultVoiceId] = useState("");
   const [savingDefault, setSavingDefault] = useState(false);
+  // ElevenLabs voice settings
+  const [voiceStability, setVoiceStability] = useState(0.5);
+  const [voiceSimilarity, setVoiceSimilarity] = useState(0.75);
+  const [voiceStyle, setVoiceStyle] = useState(0.0);
+  const [voiceSpeed, setVoiceSpeed] = useState(1.0);
+  const [voiceSpeakerBoost, setVoiceSpeakerBoost] = useState(true);
 
   // Step 4: Render
   const [selectedVariants, setSelectedVariants] = useState<Set<number>>(new Set());
@@ -536,6 +543,13 @@ export default function PipelinePage() {
           elevenlabs_model: elevenlabsModel,
           voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
           source_video_ids: selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined,
+          voice_settings: {
+            stability: voiceStability,
+            similarity_boost: voiceSimilarity,
+            style: voiceStyle,
+            speed: voiceSpeed,
+            use_speaker_boost: voiceSpeakerBoost,
+          },
         }, { timeout: 300_000 }); // 5 min — TTS generation + SRT can be slow
 
         if (res.ok) {
@@ -611,6 +625,13 @@ export default function PipelinePage() {
         voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
         source_video_ids: selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined,
         match_overrides: Object.keys(matchOverrides).length > 0 ? matchOverrides : undefined,
+        voice_settings: {
+          stability: voiceStability,
+          similarity_boost: voiceSimilarity,
+          style: voiceStyle,
+          speed: voiceSpeed,
+          use_speaker_boost: voiceSpeakerBoost,
+        },
         font_size: subtitleSettings.fontSize,
         font_family: subtitleSettings.fontFamily,
         text_color: subtitleSettings.textColor,
@@ -966,6 +987,19 @@ export default function PipelinePage() {
     };
   }, []);
 
+  // Mark existing TTS results as stale when voice settings change
+  useEffect(() => {
+    setTtsResults(prev => {
+      const hasAny = Object.values(prev).some(r => r.audio_duration > 0 && !r.generating);
+      if (!hasAny) return prev;
+      const next: typeof prev = {};
+      for (const [k, v] of Object.entries(prev)) {
+        next[Number(k)] = v.audio_duration > 0 && !v.generating ? { ...v, stale: true } : v;
+      }
+      return next;
+    });
+  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost]);
+
   // Per-script TTS: generate voice-over for a single script
   const handleGenerateTts = async (variantIndex: number) => {
     if (!pipelineId) return;
@@ -979,6 +1013,13 @@ export default function PipelinePage() {
       const res = await apiPost(`/pipeline/tts/${pipelineId}/${variantIndex}`, {
         elevenlabs_model: elevenlabsModel,
         voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
+        voice_settings: {
+          stability: voiceStability,
+          similarity_boost: voiceSimilarity,
+          style: voiceStyle,
+          speed: voiceSpeed,
+          use_speaker_boost: voiceSpeakerBoost,
+        },
       }, { timeout: 300_000 });
 
       if (res.ok) {
@@ -1558,6 +1599,88 @@ export default function PipelinePage() {
                       Default: {voices.find(v => v.voice_id === defaultVoiceId)?.name || "Saved voice"}
                     </p>
                   )}
+                </div>
+
+                {/* Voice Settings */}
+                <div className="border-t pt-4 space-y-4">
+                  <p className="text-sm font-medium">Voice Settings</p>
+
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between">
+                      <Label className="text-xs">Speed</Label>
+                      <span className="text-xs text-muted-foreground">{voiceSpeed.toFixed(2)}x</span>
+                    </div>
+                    <Slider
+                      value={[voiceSpeed]}
+                      onValueChange={([v]) => setVoiceSpeed(v)}
+                      min={0.7} max={1.2} step={0.01}
+                    />
+                    <div className="flex justify-between text-[10px] text-muted-foreground">
+                      <span>0.7x</span>
+                      <span>1.2x</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between">
+                      <Label className="text-xs">Stability</Label>
+                      <span className="text-xs text-muted-foreground">{Math.round(voiceStability * 100)}%</span>
+                    </div>
+                    <Slider
+                      value={[voiceStability]}
+                      onValueChange={([v]) => setVoiceStability(v)}
+                      min={0} max={1} step={0.01}
+                    />
+                    <div className="flex justify-between text-[10px] text-muted-foreground">
+                      <span>0%</span>
+                      <span>100%</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between">
+                      <Label className="text-xs">Similarity</Label>
+                      <span className="text-xs text-muted-foreground">{Math.round(voiceSimilarity * 100)}%</span>
+                    </div>
+                    <Slider
+                      value={[voiceSimilarity]}
+                      onValueChange={([v]) => setVoiceSimilarity(v)}
+                      min={0} max={1} step={0.01}
+                    />
+                    <div className="flex justify-between text-[10px] text-muted-foreground">
+                      <span>0%</span>
+                      <span>100%</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between">
+                      <Label className="text-xs">Style Exaggeration</Label>
+                      <span className="text-xs text-muted-foreground">{Math.round(voiceStyle * 100)}%</span>
+                    </div>
+                    <Slider
+                      value={[voiceStyle]}
+                      onValueChange={([v]) => setVoiceStyle(v)}
+                      min={0} max={1} step={0.01}
+                    />
+                    <div className="flex justify-between text-[10px] text-muted-foreground">
+                      <span>0%</span>
+                      <span>100%</span>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">High values increase latency</p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="speaker-boost"
+                      checked={voiceSpeakerBoost}
+                      onCheckedChange={(checked) => setVoiceSpeakerBoost(checked === true)}
+                    />
+                    <Label htmlFor="speaker-boost" className="text-xs">
+                      Speaker Boost
+                    </Label>
+                    <span className="text-[10px] text-muted-foreground">Enhances voice clarity</span>
+                  </div>
                 </div>
               </CardContent>
             </Card>
