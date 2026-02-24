@@ -266,7 +266,7 @@ Plans:
 | 35. PiP Overlay Controls | v7 | 2/2 | Complete | 2026-02-23 |
 | 36. Interstitial Slide Controls | v7 | 0/1 | Deferred (v7 paused) | - |
 | 37. Render Integration | v7 | 0/2 | Deferred (v7 paused) | - |
-| 38. Bug Fixes + Source Selection Backend | 2/2 | Complete   | 2026-02-24 | - |
+| 38. Bug Fixes + Source Selection Backend | 2/2 | Complete    | 2026-02-24 | - |
 | 39. Source Selection Frontend | v8 | 0/1 | Not started | - |
 | 40. Video Preview Player | v8 | 0/1 | Not started | - |
 | 41. Timeline Editor | v8 | 0/3 | Not started | - |

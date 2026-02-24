@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v8 Pipeline UX Overhaul — Phase 38 complete (both plans done)
+**Current focus:** v8 Pipeline UX Overhaul — Phase 39 ready to plan
 
 ## Current Position
 
 Milestone: v8 Pipeline UX Overhaul
-Phase: 38 of 41 (Bug Fixes + Source Selection Backend) — COMPLETE
-Plan: 2 of 2 complete
-Status: In progress
-Last activity: 2026-02-24 — Phase 38 Plan 02 executed (SRC-02 backend done)
+Phase: 39 of 41 (Source Selection Frontend)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-02-24 — Phase 38 complete (BUG-01, BUG-02, SRC-02 verified)
 
-Progress: [██░░░░░░░░] 20% (v8) | Overall: phases 1-35 complete, 36-37 deferred
+Progress: [██░░░░░░░░] 25% (v8) | Overall: phases 1-35,38 complete, 36-37 deferred
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 83 (across v2-v8)
-- Total phases completed: 35
+- Total plans completed: 84 (across v2-v8)
+- Total phases completed: 36
 - Total milestones shipped: 6
 
 **By Milestone:**
@@ -34,7 +34,7 @@ Progress: [██░░░░░░░░] 20% (v8) | Overall: phases 1-35 compl
 | v5 Product Video | 7 (17-23) | 13 | Shipped 2026-02-21 |
 | v6 Hardening | 8 (24-31) | 16 | Shipped 2026-02-22 |
 | v7 Overlays | 6 (32-37) | 7 | Paused at 67% (4/6 phases) |
-| v8 Pipeline UX | 4 (38-41) | ~7 | In progress (2/~7 plans done) |
+| v8 Pipeline UX | 4 (38-41) | ~7 | In progress (1/4 phases, 2/~7 plans) |
 
 ## Accumulated Context
 
@@ -73,9 +73,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Phase 38 Plan 02 complete (SRC-02 backend done)
+Stopped at: Phase 38 complete — ready for Phase 39
 Resume file: None
-Next action: `/gsd:execute-phase 39` (Source Selection Frontend)
+Next action: `/gsd:plan-phase 39`
 
 ---
 *Last updated: 2026-02-24 after Phase 38 Plan 02 execution*
