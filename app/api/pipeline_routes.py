@@ -66,6 +66,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
             "previews": previews_json,
             "render_jobs": render_jobs_json,
             "tts_previews": tts_previews_json,
+            "source_video_ids": pipeline_dict.get("source_video_ids", []),
         }
         supabase.table("editai_pipelines").upsert(row).execute()
         logger.debug(f"Pipeline {pipeline_id} saved to DB")
@@ -136,6 +137,7 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "previews": previews,
             "render_jobs": render_jobs,
             "tts_previews": tts_previews,
+            "source_video_ids": row.get("source_video_ids") or [],
             "created_at": row.get("created_at", ""),
         }
 
@@ -285,6 +287,11 @@ class PipelineListResponse(BaseModel):
     total: int
 
 
+class SourceSelectionRequest(BaseModel):
+    """Request model for updating source video selection."""
+    source_video_ids: List[str]
+
+
 # ============== ENDPOINTS ==============
 
 @router.get("/list", response_model=PipelineListResponse)
@@ -383,6 +390,59 @@ async def delete_pipeline(
         raise HTTPException(status_code=500, detail="Failed to delete pipeline")
 
     return {"status": "deleted", "pipeline_id": pipeline_id}
+
+
+@router.get("/{pipeline_id}/source-selection")
+async def get_source_selection(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Return the stored source_video_ids for a given pipeline.
+
+    Used by the frontend to restore the source video selection when reopening the page.
+    Returns an empty list if the column does not exist yet (migration pending).
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline["profile_id"] != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+    return {"source_video_ids": pipeline.get("source_video_ids", [])}
+
+
+@router.put("/{pipeline_id}/source-selection")
+async def update_source_selection(
+    pipeline_id: str,
+    request: SourceSelectionRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Save the selected source video IDs to in-memory state and DB.
+
+    Called whenever the user changes their source video selection on the pipeline page.
+    Gracefully degrades if the DB column does not exist yet (migration pending).
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline["profile_id"] != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    pipeline["source_video_ids"] = request.source_video_ids
+    _pipelines[pipeline_id] = pipeline
+
+    # Persist to DB — gracefully handle missing column (migration 021 not yet applied)
+    try:
+        supabase = get_supabase()
+        if supabase:
+            supabase.table("editai_pipelines").update({
+                "source_video_ids": request.source_video_ids
+            }).eq("id", pipeline_id).execute()
+    except Exception as e:
+        logger.warning(f"Failed to save source selection for {pipeline_id}: {e}")
+
+    return {"source_video_ids": request.source_video_ids}
 
 
 class PipelineUpdateScriptsRequest(BaseModel):
