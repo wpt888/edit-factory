@@ -261,7 +261,7 @@ Plans:
   1. PipelinePreviewResponse includes available_segments field
   2. The preview route handler passes available_segments from the service response to the Pydantic model
   3. Frontend TimelineEditor receives non-empty availableSegments, enabling swap and manual assignment dialogs
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
 - [ ] 42-01-PLAN.md — Add available_segments to PipelinePreviewResponse + wire in route handler
