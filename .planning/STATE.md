@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v8 Pipeline UX Overhaul — Phase 41 in progress (plan 02 of 03 complete)
+**Current focus:** v8 Pipeline UX Overhaul — Phase 41 complete (all 3 plans done)
 
 ## Current Position
 
 Milestone: v8 Pipeline UX Overhaul
 Phase: 41 of 41 (Timeline Editor)
-Plan: 02 of 03 complete
-Status: In progress — plan 03 remaining
-Last activity: 2026-02-24 — Phase 41 plan 02 complete (drag-drop segment swap in TimelineEditor)
+Plan: 03 of 03 complete
+Status: Complete — all plans done
+Last activity: 2026-02-24 — Phase 41 plan 03 complete (duration controls + render integration)
 
-Progress: [███████░░░] 75% (v8) | Overall: phases 1-35,38-40 complete, 36-37 deferred
+Progress: [██████████] 100% (v8) | Overall: phases 1-35,38-41 complete, 36-37 deferred
 
 ## Performance Metrics
 
@@ -34,7 +34,7 @@ Progress: [███████░░░] 75% (v8) | Overall: phases 1-35,38-40
 | v5 Product Video | 7 (17-23) | 13 | Shipped 2026-02-21 |
 | v6 Hardening | 8 (24-31) | 16 | Shipped 2026-02-22 |
 | v7 Overlays | 6 (32-37) | 7 | Paused at 67% (4/6 phases) |
-| v8 Pipeline UX | 4 (38-41) | ~7 | In progress (2/4 phases, 5/~7 plans) |
+| v8 Pipeline UX | 4 (38-41) | 7 | Complete (4/4 phases, 7/7 plans) |
 
 ## Accumulated Context
 
@@ -71,6 +71,9 @@ Phase 40 Plan 01 decisions:
 - [Phase 41]: Use HTML5 native Drag API (no new npm deps) for timeline segment swap
 - [Phase 41]: Swap segment assignments on drop (not reorder rows) — SRT text/timing stays fixed, only segment mapping moves
 - [Phase 41]: Unified assigningIndex state covers both unmatched assignment and matched swap flows in TimelineEditor
+- [Phase 41]: duration_override as optional field on MatchPreview flows naturally through onMatchesChange callback
+- [Phase 41]: Frontend always sends previews.matches as match_overrides so all timeline edits (swaps + duration) flow to render
+- [Phase 41]: duration_overrides extracted as parallel list before build_timeline to avoid MatchResult mutation
 
 ### Pending Todos
 
@@ -91,9 +94,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Phase 41 plan 02 complete — drag-drop segment swap in TimelineEditor (41-02-PLAN.md)
+Stopped at: Phase 41 plan 03 complete — duration controls + render integration (41-03-PLAN.md)
 Resume file: None
-Next action: Execute plan 41-03 (render integration)
+Next action: Phase 41 complete — v8 milestone complete. Run /gsd:new-milestone for next milestone.
 
 ---
-*Last updated: 2026-02-24 after Phase 41 plan 02 complete (drag-drop + segment swap)*
+*Last updated: 2026-02-24 after Phase 41 plan 03 complete (duration controls + render integration)*

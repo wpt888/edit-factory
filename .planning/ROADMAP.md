@@ -102,7 +102,7 @@ Full details: `.planning/milestones/v6-ROADMAP.md`
 - [x] **Phase 38: Bug Fixes + Source Selection Backend** - Fix Step 4 flicker and library save, add scoped segment matching API (completed 2026-02-24)
 - [x] **Phase 39: Source Selection Frontend** - Step 3 UI for picking source videos with segment counts and DB persistence (completed 2026-02-24)
 - [x] **Phase 40: Video Preview Player** - Inline HTML5 player with auto-thumbnails on Step 4 variant cards (completed 2026-02-24)
-- [ ] **Phase 41: Timeline Editor** - Visual timeline in Step 3 with drag/drop reordering, segment swap, and duration adjustment
+- [x] **Phase 41: Timeline Editor** - Visual timeline in Step 3 with drag/drop reordering, segment swap, and duration adjustment (completed 2026-02-24)
 
 ## Phase Details
 
@@ -244,7 +244,7 @@ Plans:
   3. User can drag a segment to a different position on the timeline and the reorder persists for rendering
   4. User can click a segment and swap it for a different clip from the selected source video(s)
   5. User can adjust a segment's duration on the timeline and the change is reflected in the render
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [ ] 41-01-PLAN.md — TimelineEditor component with phrase-to-segment display and manual assignment (TIME-01, TIME-04)
@@ -269,7 +269,7 @@ Plans:
 | 38. Bug Fixes + Source Selection Backend | 2/2 | Complete    | 2026-02-24 | - |
 | 39. Source Selection Frontend | 1/1 | Complete    | 2026-02-24 | - |
 | 40. Video Preview Player | 1/1 | Complete    | 2026-02-24 | - |
-| 41. Timeline Editor | 2/3 | In Progress|  | - |
+| 41. Timeline Editor | 3/3 | Complete   | 2026-02-24 | - |
 
 ---
 *Last updated: 2026-02-24 after v8 Pipeline UX Overhaul roadmap created*

@@ -30,7 +30,7 @@ Requirements for v8 Pipeline UX Overhaul. Each maps to roadmap phases.
 - [x] **TIME-02**: User can drag and drop to reorder segments on the timeline
 - [x] **TIME-03**: User can swap a segment for a different one from the selected source video(s)
 - [x] **TIME-04**: Unmatched phrases are visually highlighted with option to manually assign a segment
-- [ ] **TIME-05**: User can adjust segment duration on the timeline
+- [x] **TIME-05**: User can adjust segment duration on the timeline
 
 ## v7 Requirements (Paused)
 
@@ -75,7 +75,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TIME-02 | Phase 41 | Complete |
 | TIME-03 | Phase 41 | Complete |
 | TIME-04 | Phase 41 | Complete |
-| TIME-05 | Phase 41 | Pending |
+| TIME-05 | Phase 41 | Complete |
 
 **Coverage:**
 - v8 requirements: 13 total
