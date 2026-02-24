@@ -216,10 +216,10 @@ Plans:
   2. User can select one or more projects as sources and proceed to preview using only those segments
   3. Selecting no sources is prevented — UI requires at least one source before advancing
   4. Closing and reopening the pipeline page restores the previously selected source videos
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 39-01: Source video picker UI + segment count display + DB persistence for selection
+- [ ] 39-01-PLAN.md — Source video picker UI + segment count display + DB persistence + preview/render wiring
 
 ### Phase 40: Video Preview Player
 **Goal**: Users can watch rendered variant videos inline in Step 4 without downloading, with auto-generated thumbnails shown before playback begins
