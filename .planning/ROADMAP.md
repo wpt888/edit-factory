@@ -244,7 +244,7 @@ Plans:
   3. User can drag a segment to a different position on the timeline and the reorder persists for rendering
   4. User can click a segment and swap it for a different clip from the selected source video(s)
   5. User can adjust a segment's duration on the timeline and the change is reflected in the render
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 - [ ] 41-01-PLAN.md — TimelineEditor component with phrase-to-segment display and manual assignment (TIME-01, TIME-04)
@@ -269,7 +269,7 @@ Plans:
 | 38. Bug Fixes + Source Selection Backend | 2/2 | Complete    | 2026-02-24 | - |
 | 39. Source Selection Frontend | 1/1 | Complete    | 2026-02-24 | - |
 | 40. Video Preview Player | 1/1 | Complete    | 2026-02-24 | - |
-| 41. Timeline Editor | v8 | 0/3 | Not started | - |
+| 41. Timeline Editor | 1/3 | In Progress|  | - |
 
 ---
 *Last updated: 2026-02-24 after v8 Pipeline UX Overhaul roadmap created*

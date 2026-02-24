@@ -35,6 +35,7 @@ Progress: [███████░░░] 75% (v8) | Overall: phases 1-35,38-40
 | v6 Hardening | 8 (24-31) | 16 | Shipped 2026-02-22 |
 | v7 Overlays | 6 (32-37) | 7 | Paused at 67% (4/6 phases) |
 | v8 Pipeline UX | 4 (38-41) | ~7 | In progress (2/4 phases, 3/~7 plans) |
+| Phase 41 P01 | 497 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -67,6 +68,7 @@ Phase 40 Plan 01 decisions:
 - Keep Download button below the inline player so download capability is preserved
 - poster falls back to undefined (native browser black frame) if thumbnail generation failed — no broken img
 - Store thumbnail_path in render_jobs dict immediately after FFmpeg succeeds, before library save
+- [Phase 41]: Export MatchPreview from pipeline/page.tsx for TimelineEditor import, collect available_segments from first preview response for zero-extra-request design, backend adds available_segments to preview_matches() return dict
 
 ### Pending Todos
 

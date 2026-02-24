@@ -26,10 +26,10 @@ Requirements for v8 Pipeline UX Overhaul. Each maps to roadmap phases.
 
 ### Timeline Editor
 
-- [ ] **TIME-01**: User sees a visual timeline showing matched SRT phrases mapped to video segments in Step 3
+- [x] **TIME-01**: User sees a visual timeline showing matched SRT phrases mapped to video segments in Step 3
 - [ ] **TIME-02**: User can drag and drop to reorder segments on the timeline
 - [ ] **TIME-03**: User can swap a segment for a different one from the selected source video(s)
-- [ ] **TIME-04**: Unmatched phrases are visually highlighted with option to manually assign a segment
+- [x] **TIME-04**: Unmatched phrases are visually highlighted with option to manually assign a segment
 - [ ] **TIME-05**: User can adjust segment duration on the timeline
 
 ## v7 Requirements (Paused)
@@ -71,10 +71,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SRC-04 | Phase 39 | Complete |
 | PREV-01 | Phase 40 | Complete |
 | PREV-02 | Phase 40 | Complete |
-| TIME-01 | Phase 41 | Pending |
+| TIME-01 | Phase 41 | Complete |
 | TIME-02 | Phase 41 | Pending |
 | TIME-03 | Phase 41 | Pending |
-| TIME-04 | Phase 41 | Pending |
+| TIME-04 | Phase 41 | Complete |
 | TIME-05 | Phase 41 | Pending |
 
 **Coverage:**
