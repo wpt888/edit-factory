@@ -98,6 +98,7 @@ interface VariantStatus {
   progress: number;
   current_step: string;
   final_video_path?: string;
+  thumbnail_path?: string;
   error?: string;
 }
 
@@ -2088,19 +2089,37 @@ export default function PipelinePage() {
                     {/* Current step */}
                     <p className="text-sm text-muted-foreground">{status.current_step}</p>
 
-                    {/* Download button */}
+                    {/* Inline video player + download button */}
                     {status.status === "completed" && status.final_video_path && (
-                      <Button variant="outline" className="w-full" asChild>
-                        <a
-                          href={`${API_URL}/library/files/${encodeURIComponent(
-                            status.final_video_path
-                          )}`}
-                          download
+                      <div className="space-y-3">
+                        <video
+                          controls
+                          className="w-full rounded-md bg-black max-h-64 object-contain"
+                          poster={
+                            status.thumbnail_path
+                              ? `${API_URL}/library/files/${encodeURIComponent(status.thumbnail_path)}`
+                              : undefined
+                          }
+                          preload="none"
                         >
-                          <Download className="h-4 w-4 mr-2" />
-                          Download Video
-                        </a>
-                      </Button>
+                          <source
+                            src={`${API_URL}/library/files/${encodeURIComponent(status.final_video_path)}`}
+                            type="video/mp4"
+                          />
+                          Your browser does not support HTML5 video.
+                        </video>
+                        <Button variant="outline" className="w-full" asChild>
+                          <a
+                            href={`${API_URL}/library/files/${encodeURIComponent(
+                              status.final_video_path
+                            )}`}
+                            download
+                          >
+                            <Download className="h-4 w-4 mr-2" />
+                            Download Video
+                          </a>
+                        </Button>
+                      </div>
                     )}
 
                     {/* Error message */}
