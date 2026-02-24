@@ -103,6 +103,7 @@ Full details: `.planning/milestones/v6-ROADMAP.md`
 - [x] **Phase 39: Source Selection Frontend** - Step 3 UI for picking source videos with segment counts and DB persistence (completed 2026-02-24)
 - [x] **Phase 40: Video Preview Player** - Inline HTML5 player with auto-thumbnails on Step 4 variant cards (completed 2026-02-24)
 - [x] **Phase 41: Timeline Editor** - Visual timeline in Step 3 with drag/drop reordering, segment swap, and duration adjustment (completed 2026-02-24)
+- [ ] **Phase 42: Available Segments Integration Fix** - Fix available_segments dropped by Pydantic response model (gap closure)
 
 ## Phase Details
 
@@ -251,6 +252,20 @@ Plans:
 - [ ] 41-02-PLAN.md — Drag/drop segment reorder and segment swap from source library (TIME-02, TIME-03)
 - [ ] 41-03-PLAN.md — Duration adjustment controls and render integration with match overrides (TIME-05)
 
+### Phase 42: Available Segments Integration Fix
+**Goal**: Fix the integration gap where available_segments produced by assembly_service.preview_matches() is dropped by PipelinePreviewResponse, breaking segment swap and manual assignment in the timeline editor
+**Depends on**: Phase 41
+**Requirements**: TIME-03, TIME-04
+**Gap Closure:** Closes gaps from v8 audit
+**Success Criteria** (what must be TRUE):
+  1. PipelinePreviewResponse includes available_segments field
+  2. The preview route handler passes available_segments from the service response to the Pydantic model
+  3. Frontend TimelineEditor receives non-empty availableSegments, enabling swap and manual assignment dialogs
+**Plans**: TBD
+
+Plans:
+- [ ] 42-01-PLAN.md — Add available_segments to PipelinePreviewResponse + wire in route handler
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -270,6 +285,7 @@ Plans:
 | 39. Source Selection Frontend | 1/1 | Complete    | 2026-02-24 | - |
 | 40. Video Preview Player | 1/1 | Complete    | 2026-02-24 | - |
 | 41. Timeline Editor | 3/3 | Complete    | 2026-02-24 | - |
+| 42. Available Segments Integration Fix | v8 | 0/1 | Pending | - |
 
 ---
 *Last updated: 2026-02-24 after v8 Pipeline UX Overhaul roadmap created*
