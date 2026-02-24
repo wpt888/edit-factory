@@ -201,9 +201,11 @@ Plans:
   3. The segment matching API accepts a list of source video IDs and only matches against segments from those videos
 **Plans**: TBD
 
+**Plans:** 2 plans
+
 Plans:
-- [ ] 38-01: Fix Step 4 empty state flash (BUG-01) + library save for pipeline clips (BUG-02)
-- [ ] 38-02: Source-scoped segment matching API (SRC-02)
+- [ ] 38-01-PLAN.md — Fix Step 4 empty state flash + library save for pipeline clips (BUG-01, BUG-02)
+- [ ] 38-02-PLAN.md — Source-scoped segment matching API (SRC-02)
 
 ### Phase 39: Source Selection Frontend
 **Goal**: Users can select one or more source videos in Step 3 before previewing, see segment counts per video, and have their selection persist across page reloads
