@@ -378,3 +378,86 @@
 - Learnings: Verifier passed 8/8 must-haves. Both plans executed cleanly. pip_config column was pre-created in Phase 32's migration 019 — no new migration needed. Same is_last_phase bug as iterations 9, 11, 13, 18, 20, 22, 24, 26, 30, 32, 34 — always manually verify.
 - Status: PHASE COMPLETE — Phase 35 verified (8/8 must-haves), STATE updated to Phase 36
 - Commits: f262d37, 8b42e04, 416ff50, c0391cf, 5999a9d, 65253e2, e20dcb2
+
+## Iteration 37 - 2026-02-24
+- Phase: 38 (Bug Fixes + Source Selection Backend)
+- Action: Planned phase — 2 PLAN.md files created in 2 waves, verified by plan checker
+- Plan 38-01 (Wave 1, autonomous): Fix Step 4 empty state flash (BUG-01) + save rendered clips to library (BUG-02)
+- Plan 38-02 (Wave 2, depends on 38-01, autonomous): Source-scoped segment matching API (SRC-02)
+- Files changed: .planning/phases/38-bug-fixes-source-selection-backend/38-01-PLAN.md, 38-02-PLAN.md
+- Decisions made: Continued without CONTEXT.md (autonomous mode). Research skipped (disabled in config). Plan checker passed all 6 dimensions on first attempt. Root causes identified: BUG-01 reads wrong response field (data.variants vs data.rendering_variants), BUG-02 never inserts into editai_clips/editai_projects tables. SRC-02 adds optional source_video_ids filter with backward compat.
+- Learnings: Planner agent auto-committed plans. Both plans wave-separated due to shared pipeline_routes.py file. Plan checker passed all dimensions on first attempt.
+- Status: PLANNED — ready for /gsd:execute-phase 38
+
+## Iteration 38 - 2026-02-24
+- Phase: 38 (Bug Fixes + Source Selection Backend)
+- Action: Executed all 2 plans across 2 waves, verified phase goal
+- Wave 1: Plan 38-01 (fix Step 4 empty state flash — variantStatuses pre-populated from selectedVariants before API call; library save — editai_clips + editai_projects insert after render with thumbnail + duration)
+- Wave 2: Plan 38-02 (source_video_ids parameter on preview/render endpoints, assembly service .in_() filter on source_video_id, backward compatible None default)
+- Files changed: frontend/src/app/pipeline/page.tsx (modified), app/api/pipeline_routes.py (modified), app/services/assembly_service.py (modified)
+- Decisions made: is_last_phase CLI bug recurred — manually fixed STATE.md to Phase 39. Verifier passed 6/6 must-haves.
+- Learnings: Root cause of BUG-01 was reading nonexistent data.variants field (correct field is rendering_variants/total_variants). Library save wraps in try/except so render success is never blocked. Source video filter uses Supabase .in_() at DB query level for efficiency.
+- Status: PHASE COMPLETE — Phase 38 verified (6/6 must-haves), STATE updated to Phase 39
+- Commits: 21480f6, f935160, 02a3b39, b3a0b1f, 8d816db, a0e1295, 8463aa9
+
+## Iteration 39 - 2026-02-24
+- Phase: 39 (Source Selection Frontend)
+- Action: Planned phase — 1 PLAN.md file created in 1 wave, verified by plan checker
+- Plan 39-01 (Wave 1, autonomous): Source video picker UI in Step 2 with checkbox selection, segment counts, DB persistence via JSONB column + GET/PUT endpoints, wiring source_video_ids into preview/render calls
+- Files changed: .planning/phases/39-source-selection-frontend/39-01-PLAN.md
+- Decisions made: Continued without CONTEXT.md (autonomous mode). Research skipped (disabled in config). Plan checker passed all 8 dimensions on first attempt. Single plan covers all 3 requirements (SRC-01, SRC-03, SRC-04). Picker placed at step===2 matching existing code step numbering.
+- Learnings: Planner correctly identified existing GET /segments/source-videos endpoint with segments_count field. apiPut already imported in pipeline page. formatDuration helper already available. No new packages needed.
+- Status: PLANNED — ready for /gsd:execute-phase 39
+
+## Iteration 40 - 2026-02-24
+- Phase: 39 (Source Selection Frontend)
+- Action: Executed all 1 plan in 1 wave, verified phase goal
+- Wave 1: Plan 39-01 (source video picker card in Step 2 — checkboxes, segment counts, duration badges, thumbnail support; backend source_video_ids JSONB column + GET/PUT endpoints; preview/render wiring; at-least-one enforcement)
+- Files changed: frontend/src/app/pipeline/page.tsx (modified), app/api/pipeline_routes.py (modified), supabase/migrations/021_add_source_video_ids_to_pipelines.sql (new)
+- Decisions made: is_last_phase CLI bug recurred — manually fixed STATE.md to Phase 40. Migration 021 requires manual application. Source picker placed in Step 2 (not Step 3) to match existing 4-step workflow. Debounced PUT with 500ms timer for DB persistence.
+- Learnings: Verifier passed 5/5 must-haves. Clean single-wave execution. Verifier noted Step 2 vs Step 3 discrepancy is a documented design decision (behavioral intent satisfied). 3 human_needed items flagged (visual layout, interaction, DB round-trip). Same is_last_phase CLI bug as all previous iterations.
+- Status: PHASE COMPLETE — Phase 39 verified (5/5 must-haves), STATE updated to Phase 40
+- Commits: 0622d45, 527caa4, aebbdd8, 5a7bae7
+
+## Iteration 41 - 2026-02-24
+- Phase: 40 (Video Preview Player)
+- Action: Planned phase — 1 PLAN.md file created in 1 wave, verified by plan checker
+- Plan 40-01 (Wave 1, has checkpoint): Store thumbnail_path in render jobs + HTML5 inline video player on variant cards with poster thumbnails
+- Files changed: .planning/phases/40-video-preview-player/40-01-PLAN.md
+- Decisions made: Continued without CONTEXT.md (autonomous mode). Research skipped (disabled in config). Plan checker passed all 7 dimensions on first attempt. No new backend endpoint needed — existing /library/files/ serves both video and thumbnail. Thumbnail already generated during render, just needs to be stored in render_jobs dict.
+- Learnings: Planner agent auto-committed (640d374). Key insight: thumbnail_path is already generated during render but not stored in render_jobs — only stored in Supabase clip insert. Task 1 just needs to also store it in the in-memory job dict. Checker verified all line number references match actual codebase.
+- Status: PLANNED — ready for /gsd:execute-phase 40
+
+## Iteration 42 - 2026-02-24
+- Phase: 40 (Video Preview Player)
+- Action: Executed all 1 plan in 1 wave, verified phase goal
+- Wave 1: Plan 40-01 (store thumbnail_path in render job dict + HTML5 inline video player with poster thumbnail on Step 4 variant cards)
+- Files changed: app/api/pipeline_routes.py (modified — VariantStatus.thumbnail_path, job["thumbnail_path"] in do_render, get_pipeline_status passes it), frontend/src/app/pipeline/page.tsx (modified — VariantStatus interface, <video> element with controls and poster)
+- Decisions made: is_last_phase CLI bug recurred — manually fixed STATE.md to Phase 41. Checkpoint auto-approved (autonomous mode, visual verification only). No new backend endpoint needed — existing /library/files/ serves both video and thumbnail.
+- Learnings: Verifier passed 5/5 must-haves with 1 human_needed (visual playback confirmation). Clean single-wave execution. Thumbnail was already generated by FFmpeg during render — just needed to store the path in the in-memory job dict alongside final_video_path.
+- Status: PHASE COMPLETE — Phase 40 verified (5/5 must-haves), STATE updated to Phase 41
+- Commits: 19da5a0, 107ffd5, b19c1f1, 39b4ebb
+
+## Iteration 43 - 2026-02-24
+- Phase: 41 (Timeline Editor)
+- Action: Planned phase — 3 PLAN.md files created in 3 waves, verified by plan checker
+- Plan 41-01 (Wave 1, autonomous): TimelineEditor component with phrase-to-segment display, unmatched highlighting, manual segment assignment dialog, available_segments from preview response (TIME-01, TIME-04)
+- Plan 41-02 (Wave 2, depends on 41-01, autonomous): Drag/drop segment reorder via native HTML5 Drag API + segment swap dialog from source library (TIME-02, TIME-03)
+- Plan 41-03 (Wave 3, depends on 41-01 + 41-02, autonomous): Duration adjustment slider/input + match_overrides on render endpoint + assembly service integration (TIME-05)
+- Files changed: .planning/phases/41-timeline-editor/41-01-PLAN.md, 41-02-PLAN.md, 41-03-PLAN.md
+- Decisions made: No external drag-and-drop library (native HTML5 Drag API). Segment swap = swap assignments not SRT text. match_overrides parameter threads timeline edits to render. Made 41-03 depend on 41-02 (wave 3) to avoid parallel file conflict on pipeline/page.tsx. Added assembly_service.py to 41-01 files_modified (checker warning fix).
+- Learnings: Checker passed all dimensions with 3 warnings (all fixed: frontmatter assembly_service.py, parallel wave conflict resolved by wave 3, min_lines info). Research disabled in config. All 5 TIME requirements covered across 3 plans.
+- Status: PLANNED — ready for /gsd:execute-phase 41
+- Commits: 7ea6529
+
+## Iteration 44 - 2026-02-24
+- Phase: 41 (Timeline Editor)
+- Action: Executed all 3 plans across 3 waves, verified phase goal
+- Wave 1: Plan 41-01 (TimelineEditor component — phrase-to-segment visual list with green/amber rows, manual segment assignment dialog, available_segments from preview response)
+- Wave 2: Plan 41-02 (HTML5 native drag-and-drop with grab handles + segment swap button on hover, unified dialog for both assign and swap flows)
+- Wave 3: Plan 41-03 (Duration +/- controls in 0.5s increments + match_overrides parameter on render endpoint + assembly service override application)
+- Files changed: frontend/src/components/timeline-editor.tsx (new, 387 lines), frontend/src/app/pipeline/page.tsx (modified), app/api/pipeline_routes.py (modified), app/services/assembly_service.py (modified)
+- Decisions made: No external drag library (native HTML5 Drag API). Segment swap swaps assignments not SRT text. Duration clamped 0.5-10s. match_overrides backward compatible (None = old behavior). is_last_phase=true is correct (Phase 41 is last v8 phase).
+- Learnings: Verifier passed 9/9 must-haves with 4 human_needed (visual checks). All 5 TIME requirements satisfied (TIME-01 through TIME-05). All 3 waves executed cleanly — no deviations. Phase 41 is the LAST phase in v8 — milestone complete.
+- Status: PHASE COMPLETE — Phase 41 verified (9/9 must-haves), v8 MILESTONE COMPLETE
+- Commits: 8a38158, 306a04a, d7332f8, 0f7b435, 504b388, e50547c, 4c7685d, 0528773, 2590ecb

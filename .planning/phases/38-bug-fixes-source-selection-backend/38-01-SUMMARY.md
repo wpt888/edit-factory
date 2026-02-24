@@ -101,6 +101,15 @@ None - no external service configuration required.
 - Phase 38 Plan 02 (Source Selection Backend) can proceed without these bugs blocking UX
 - Library page will show pipeline clips after next render — no manual DB intervention needed
 
+## Self-Check: PASSED
+
+- FOUND: `frontend/src/app/pipeline/page.tsx`
+- FOUND: `app/api/pipeline_routes.py`
+- FOUND: `.planning/phases/38-bug-fixes-source-selection-backend/38-01-SUMMARY.md`
+- FOUND commit: `21480f6` (Task 1)
+- FOUND commit: `f935160` (Task 2)
+- FOUND commit: `02a3b39` (docs)
+
 ---
 *Phase: 38-bug-fixes-source-selection-backend*
 *Completed: 2026-02-24*
