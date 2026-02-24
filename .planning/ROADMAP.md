@@ -244,12 +244,12 @@ Plans:
   3. User can drag a segment to a different position on the timeline and the reorder persists for rendering
   4. User can click a segment and swap it for a different clip from the selected source video(s)
   5. User can adjust a segment's duration on the timeline and the change is reflected in the render
-**Plans**: TBD
+**Plans:** 3 plans
 
 Plans:
-- [ ] 41-01: Timeline data model + visual timeline component (phrase-to-segment display + unmatched highlighting)
-- [ ] 41-02: Drag/drop reorder + segment swap from source library
-- [ ] 41-03: Duration adjustment controls + render integration
+- [ ] 41-01-PLAN.md — TimelineEditor component with phrase-to-segment display and manual assignment (TIME-01, TIME-04)
+- [ ] 41-02-PLAN.md — Drag/drop segment reorder and segment swap from source library (TIME-02, TIME-03)
+- [ ] 41-03-PLAN.md — Duration adjustment controls and render integration with match overrides (TIME-05)
 
 ## Progress
 
