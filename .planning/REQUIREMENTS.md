@@ -21,8 +21,8 @@ Requirements for v8 Pipeline UX Overhaul. Each maps to roadmap phases.
 
 ### Video Preview
 
-- [ ] **PREV-01**: User can play rendered videos inline in Step 4 variant cards (HTML5 video player)
-- [ ] **PREV-02**: Auto-generated thumbnail displayed for each rendered variant before playback
+- [x] **PREV-01**: User can play rendered videos inline in Step 4 variant cards (HTML5 video player)
+- [x] **PREV-02**: Auto-generated thumbnail displayed for each rendered variant before playback
 
 ### Timeline Editor
 
@@ -69,8 +69,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SRC-02 | Phase 38 | Complete |
 | SRC-03 | Phase 39 | Complete |
 | SRC-04 | Phase 39 | Complete |
-| PREV-01 | Phase 40 | Pending |
-| PREV-02 | Phase 40 | Pending |
+| PREV-01 | Phase 40 | Complete |
+| PREV-02 | Phase 40 | Complete |
 | TIME-01 | Phase 41 | Pending |
 | TIME-02 | Phase 41 | Pending |
 | TIME-03 | Phase 41 | Pending |

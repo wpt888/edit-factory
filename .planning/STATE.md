@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v8 Pipeline UX Overhaul — Phase 40 ready to plan
+**Current focus:** v8 Pipeline UX Overhaul — Phase 40 complete, Phase 41 ready
 
 ## Current Position
 
 Milestone: v8 Pipeline UX Overhaul
 Phase: 40 of 41 (Video Preview Player)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-02-24 — Phase 39 complete (SRC-01, SRC-03, SRC-04 verified)
+Plan: 1 of 1 complete
+Status: Phase complete — ready for Phase 41
+Last activity: 2026-02-24 — Phase 40 complete (PREV-01, PREV-02 verified)
 
-Progress: [█████░░░░░] 50% (v8) | Overall: phases 1-35,38-39 complete, 36-37 deferred
+Progress: [██████░░░░] 62% (v8) | Overall: phases 1-35,38-40 complete, 36-37 deferred
 
 ## Performance Metrics
 
@@ -62,6 +62,12 @@ Phase 39 Plan 01 decisions:
 - handleSourceToggle uses setState updater form to prevent stale-closure bug in debounce timer
 - restoreSourceSelection called only when loading full-pipeline from history (all scripts selected)
 
+Phase 40 Plan 01 decisions:
+- Use preload=none to prevent auto-downloading all variant videos when Step 4 renders
+- Keep Download button below the inline player so download capability is preserved
+- poster falls back to undefined (native browser black frame) if thumbnail generation failed — no broken img
+- Store thumbnail_path in render_jobs dict immediately after FFmpeg succeeds, before library save
+
 ### Pending Todos
 
 None.
@@ -81,9 +87,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Phase 39 complete — ready for Phase 40
+Stopped at: Phase 40 complete (40-01) — inline video preview player with poster thumbnail
 Resume file: None
-Next action: `/gsd:plan-phase 40`
+Next action: `/gsd:plan-phase 41`
 
 ---
 *Last updated: 2026-02-24 after Phase 39 execution complete*

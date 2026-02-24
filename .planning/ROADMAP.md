@@ -101,7 +101,7 @@ Full details: `.planning/milestones/v6-ROADMAP.md`
 
 - [x] **Phase 38: Bug Fixes + Source Selection Backend** - Fix Step 4 flicker and library save, add scoped segment matching API (completed 2026-02-24)
 - [x] **Phase 39: Source Selection Frontend** - Step 3 UI for picking source videos with segment counts and DB persistence (completed 2026-02-24)
-- [ ] **Phase 40: Video Preview Player** - Inline HTML5 player with auto-thumbnails on Step 4 variant cards
+- [x] **Phase 40: Video Preview Player** - Inline HTML5 player with auto-thumbnails on Step 4 variant cards (completed 2026-02-24)
 - [ ] **Phase 41: Timeline Editor** - Visual timeline in Step 3 with drag/drop reordering, segment swap, and duration adjustment
 
 ## Phase Details
@@ -229,7 +229,7 @@ Plans:
   1. Each rendered variant card in Step 4 shows an auto-generated thumbnail image
   2. User can press play on any variant card to watch the rendered video inline via an HTML5 player
   3. Video playback controls (play/pause, seek, volume) are accessible without leaving the pipeline page
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 - [ ] 40-01-PLAN.md — Store thumbnail_path in render jobs + HTML5 inline video player on Step 4 variant cards
@@ -268,7 +268,7 @@ Plans:
 | 37. Render Integration | v7 | 0/2 | Deferred (v7 paused) | - |
 | 38. Bug Fixes + Source Selection Backend | 2/2 | Complete    | 2026-02-24 | - |
 | 39. Source Selection Frontend | 1/1 | Complete    | 2026-02-24 | - |
-| 40. Video Preview Player | v8 | 0/1 | Not started | - |
+| 40. Video Preview Player | 1/1 | Complete   | 2026-02-24 | - |
 | 41. Timeline Editor | v8 | 0/3 | Not started | - |
 
 ---
