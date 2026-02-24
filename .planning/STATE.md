@@ -5,15 +5,15 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v8 Pipeline UX Overhaul — Phase 41 ready to plan
+**Current focus:** v8 Pipeline UX Overhaul — Phase 41 in progress (plan 02 of 03 complete)
 
 ## Current Position
 
 Milestone: v8 Pipeline UX Overhaul
 Phase: 41 of 41 (Timeline Editor)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-02-24 — Phase 40 complete (PREV-01, PREV-02 verified)
+Plan: 02 of 03 complete
+Status: In progress — plan 03 remaining
+Last activity: 2026-02-24 — Phase 41 plan 02 complete (drag-drop segment swap in TimelineEditor)
 
 Progress: [███████░░░] 75% (v8) | Overall: phases 1-35,38-40 complete, 36-37 deferred
 
@@ -34,8 +34,7 @@ Progress: [███████░░░] 75% (v8) | Overall: phases 1-35,38-40
 | v5 Product Video | 7 (17-23) | 13 | Shipped 2026-02-21 |
 | v6 Hardening | 8 (24-31) | 16 | Shipped 2026-02-22 |
 | v7 Overlays | 6 (32-37) | 7 | Paused at 67% (4/6 phases) |
-| v8 Pipeline UX | 4 (38-41) | ~7 | In progress (2/4 phases, 3/~7 plans) |
-| Phase 41 P01 | 497 | 2 tasks | 3 files |
+| v8 Pipeline UX | 4 (38-41) | ~7 | In progress (2/4 phases, 5/~7 plans) |
 
 ## Accumulated Context
 
@@ -69,6 +68,9 @@ Phase 40 Plan 01 decisions:
 - poster falls back to undefined (native browser black frame) if thumbnail generation failed — no broken img
 - Store thumbnail_path in render_jobs dict immediately after FFmpeg succeeds, before library save
 - [Phase 41]: Export MatchPreview from pipeline/page.tsx for TimelineEditor import, collect available_segments from first preview response for zero-extra-request design, backend adds available_segments to preview_matches() return dict
+- [Phase 41]: Use HTML5 native Drag API (no new npm deps) for timeline segment swap
+- [Phase 41]: Swap segment assignments on drop (not reorder rows) — SRT text/timing stays fixed, only segment mapping moves
+- [Phase 41]: Unified assigningIndex state covers both unmatched assignment and matched swap flows in TimelineEditor
 
 ### Pending Todos
 
@@ -89,9 +91,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Phase 40 complete (40-01) — inline video preview player with poster thumbnail
+Stopped at: Phase 41 plan 02 complete — drag-drop segment swap in TimelineEditor (41-02-PLAN.md)
 Resume file: None
-Next action: `/gsd:plan-phase 41`
+Next action: Execute plan 41-03 (render integration)
 
 ---
-*Last updated: 2026-02-24 after Phase 39 execution complete*
+*Last updated: 2026-02-24 after Phase 41 plan 02 complete (drag-drop + segment swap)*
