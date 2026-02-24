@@ -135,6 +135,7 @@ class MatchPreview(BaseModel):
     segment_keywords: List[str]
     matched_keyword: Optional[str]
     confidence: float
+    is_auto_filled: bool = False
 
 
 class AssemblyPreviewResponse(BaseModel):

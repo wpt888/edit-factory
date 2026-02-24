@@ -34,6 +34,7 @@ export interface MatchPreview {
   matched_keyword: string | null;
   confidence: number;
   duration_override?: number;  // User-adjusted duration in seconds
+  is_auto_filled?: boolean;  // Backend auto-filled from random segment pool
 }
 
 export interface SegmentOption {
@@ -197,8 +198,7 @@ export function TimelineEditor({
   // Determine dialog title based on context
   const isSwapMode =
     assigningIndex !== null &&
-    matches[assigningIndex]?.segment_id !== null &&
-    matches[assigningIndex]?.confidence > 0;
+    matches[assigningIndex]?.segment_id !== null;
   const dialogTitle = isSwapMode ? "Swap Segment" : "Select Segment";
   const dialogSubLabel = isSwapMode ? "Swapping segment for phrase" : "Assigning to phrase";
 
@@ -208,6 +208,7 @@ export function TimelineEditor({
         <div className="divide-y">
           {matches.map((match, idx) => {
             const isMatched = match.segment_id !== null && match.confidence > 0;
+            const isAutoFilled = match.is_auto_filled === true && match.segment_id !== null;
             const isDragging = dragIndex === idx;
             const isDragOver = dragOverIndex === idx && dragIndex !== idx;
             const displayText =
@@ -232,6 +233,8 @@ export function TimelineEditor({
                 className={`group flex items-center gap-3 px-3 py-2.5 min-h-[48px] border-l-4 transition-colors select-none ${
                   isMatched
                     ? "border-l-green-500 bg-green-50 dark:bg-green-950/20"
+                    : isAutoFilled
+                    ? "border-l-blue-500 bg-blue-50 dark:bg-blue-950/20"
                     : "border-l-amber-500 bg-amber-50 dark:bg-amber-950/20"
                 } ${isDragging ? "opacity-50" : ""} ${
                   isDragOver
@@ -265,91 +268,116 @@ export function TimelineEditor({
                   {displayText}
                 </div>
 
-                {/* Duration adjustment control */}
-                <div className="flex-shrink-0 flex items-center gap-1 text-xs">
-                  <span title="Segment duration">
-                    <Clock className="h-3 w-3 text-muted-foreground" />
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-5 w-5"
-                    onClick={() => adjustDuration(idx, -0.5)}
-                    title="Decrease duration by 0.5s"
-                  >
-                    <Minus className="h-3 w-3" />
-                  </Button>
-                  <span
-                    className={`w-10 text-center font-mono tabular-nums ${
-                      isDurationOverridden
-                        ? "text-blue-600 dark:text-blue-400 font-semibold"
-                        : "text-muted-foreground"
-                    }`}
-                    title={
-                      isDurationOverridden
-                        ? `Adjusted from ${naturalDuration.toFixed(1)}s`
-                        : "Natural SRT duration"
-                    }
-                  >
-                    {displayDuration.toFixed(1)}s
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-5 w-5"
-                    onClick={() => adjustDuration(idx, 0.5)}
-                    title="Increase duration by 0.5s"
-                  >
-                    <Plus className="h-3 w-3" />
-                  </Button>
-                </div>
+                {/* Right: Duration + Match status (stacked) */}
+                <div className="flex-shrink-0 flex flex-col items-end gap-1">
+                  {/* Duration adjustment control */}
+                  <div className="flex items-center gap-1 text-xs">
+                    <span title="Segment duration">
+                      <Clock className="h-3 w-3 text-muted-foreground" />
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-5 w-5"
+                      onClick={() => adjustDuration(idx, -0.5)}
+                      title="Decrease duration by 0.5s"
+                    >
+                      <Minus className="h-3 w-3" />
+                    </Button>
+                    <span
+                      className={`w-10 text-center font-mono tabular-nums ${
+                        isDurationOverridden
+                          ? "text-blue-600 dark:text-blue-400 font-semibold"
+                          : "text-muted-foreground"
+                      }`}
+                      title={
+                        isDurationOverridden
+                          ? `Adjusted from ${naturalDuration.toFixed(1)}s`
+                          : "Natural SRT duration"
+                      }
+                    >
+                      {displayDuration.toFixed(1)}s
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-5 w-5"
+                      onClick={() => adjustDuration(idx, 0.5)}
+                      title="Increase duration by 0.5s"
+                    >
+                      <Plus className="h-3 w-3" />
+                    </Button>
+                  </div>
 
-                {/* Right: Match status */}
-                <div className="flex-shrink-0 flex items-center gap-2">
-                  {isMatched ? (
-                    <>
-                      <Badge
-                        variant="secondary"
-                        className="text-xs bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200"
-                      >
-                        <CheckCircle className="h-3 w-3 mr-1" />
-                        {match.matched_keyword}
-                      </Badge>
-                      <span className="text-xs text-green-700 dark:text-green-400 font-medium">
-                        {Math.round(match.confidence * 100)}%
-                      </span>
-                      {/* Swap button — visible on row hover */}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={() => handleOpenDialog(idx)}
-                        disabled={availableSegments.length === 0}
-                        title="Swap segment"
-                      >
-                        <RefreshCw className="h-3 w-3" />
-                      </Button>
-                    </>
-                  ) : (
-                    <>
-                      <Badge
-                        variant="outline"
-                        className="text-xs border-amber-400 text-amber-700 dark:text-amber-300"
-                      >
-                        <AlertTriangle className="h-3 w-3 mr-1" />
-                        Unmatched
-                      </Badge>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs border-amber-400 text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-950/30"
-                        onClick={() => handleOpenDialog(idx)}
-                        disabled={availableSegments.length === 0}
-                      >
-                        Select Segment
-                      </Button>
-                    </>
-                  )}
+                  {/* Match status */}
+                  <div className="flex items-center gap-2">
+                    {isMatched ? (
+                      <>
+                        <Badge
+                          variant="secondary"
+                          className="text-xs bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200 max-w-[90px]"
+                        >
+                          <CheckCircle className="h-3 w-3 mr-1 flex-shrink-0" />
+                          <span className="truncate">{match.matched_keyword}</span>
+                        </Badge>
+                        <span className="text-xs text-green-700 dark:text-green-400 font-medium">
+                          {Math.round(match.confidence * 100)}%
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={() => handleOpenDialog(idx)}
+                          disabled={availableSegments.length === 0}
+                          title="Swap segment"
+                        >
+                          <RefreshCw className="h-3 w-3" />
+                        </Button>
+                      </>
+                    ) : isAutoFilled ? (
+                      <>
+                        <Badge
+                          variant="secondary"
+                          className="text-xs bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200 max-w-[90px]"
+                        >
+                          <Film className="h-3 w-3 mr-1 flex-shrink-0" />
+                          <span className="truncate">{match.segment_keywords[0] ?? "auto"}</span>
+                        </Badge>
+                        <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">
+                          auto
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={() => handleOpenDialog(idx)}
+                          disabled={availableSegments.length === 0}
+                          title="Swap segment"
+                        >
+                          <RefreshCw className="h-3 w-3" />
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Badge
+                          variant="outline"
+                          className="text-xs border-amber-400 text-amber-700 dark:text-amber-300"
+                        >
+                          <AlertTriangle className="h-3 w-3 mr-1" />
+                          Unmatched
+                        </Badge>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs border-amber-400 text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-950/30"
+                          onClick={() => handleOpenDialog(idx)}
+                          disabled={availableSegments.length === 0}
+                        >
+                          Select Segment
+                        </Button>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
             );

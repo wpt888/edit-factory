@@ -18,6 +18,7 @@ This service bridges:
 - Existing render pipeline (v3 quality settings)
 """
 import logging
+import random
 import re
 import subprocess
 import tempfile
@@ -44,6 +45,7 @@ class MatchResult:
     segment_keywords: List[str]
     matched_keyword: Optional[str]
     confidence: float
+    is_auto_filled: bool = False
 
 
 @dataclass
@@ -216,7 +218,8 @@ class AssemblyService:
         self,
         srt_entries: List[dict],
         segments_data: List[dict],
-        min_confidence: float = 0.3
+        min_confidence: float = 0.3,
+        variant_index: int = 0
     ) -> List[MatchResult]:
         """
         Match SRT subtitle phrases against segment keywords.
@@ -293,6 +296,28 @@ class AssemblyService:
 
             matches.append(match)
 
+        # Auto-fill unmatched entries with seeded random segments
+        if segments_data:
+            unmatched_indices = [i for i, m in enumerate(matches) if m.segment_id is None]
+            if unmatched_indices:
+                rng = random.Random(variant_index)
+                pool = list(segments_data)
+                rng.shuffle(pool)
+                for i, um_idx in enumerate(unmatched_indices):
+                    seg = pool[i % len(pool)]
+                    matches[um_idx] = MatchResult(
+                        srt_index=matches[um_idx].srt_index,
+                        srt_text=matches[um_idx].srt_text,
+                        srt_start=matches[um_idx].srt_start,
+                        srt_end=matches[um_idx].srt_end,
+                        segment_id=seg["id"],
+                        segment_keywords=seg.get("keywords") or [],
+                        matched_keyword=None,
+                        confidence=0.0,
+                        is_auto_filled=True
+                    )
+                logger.info(f"Auto-filled {len(unmatched_indices)} unmatched entries (seed={variant_index})")
+
         matched_count = sum(1 for m in matches if m.segment_id is not None)
         logger.info(f"Matched {matched_count}/{len(matches)} SRT entries to segments")
 
@@ -303,7 +328,8 @@ class AssemblyService:
         match_results: List[MatchResult],
         segments_data: List[dict],
         audio_duration: float,
-        duration_overrides: Optional[List[Optional[float]]] = None
+        duration_overrides: Optional[List[Optional[float]]] = None,
+        variant_index: int = 0
     ) -> List[TimelineEntry]:
         """
         Build video timeline from match results.
@@ -386,9 +412,11 @@ class AssemblyService:
             gap = audio_duration - current_timeline_pos
             logger.info(f"Extending timeline by {gap:.2f}s to match audio duration")
 
-            # Extend last segment or loop fallback
-            if timeline and fallback_segment:
-                last_segment = fallback_segment
+            # Use seeded random segment for gap fill (varies per variant)
+            if timeline and segments_data:
+                rng = random.Random(variant_index + 1000)
+                gap_segment = rng.choice(segments_data)
+                last_segment = gap_segment
                 source_video_path = last_segment.get("source_video_path")
                 segment_start = last_segment.get("start_time", 0.0)
                 segment_end = last_segment.get("end_time", segment_start + gap)
@@ -526,7 +554,8 @@ class AssemblyService:
         shadow_depth: int = 0,
         enable_glow: bool = False,
         glow_blur: int = 0,
-        adaptive_sizing: bool = False
+        adaptive_sizing: bool = False,
+        variant_index: int = 0
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
@@ -654,7 +683,8 @@ class AssemblyService:
                 match_results = self.match_srt_to_segments(
                     srt_entries=srt_entries,
                     segments_data=segments_data,
-                    min_confidence=0.3
+                    min_confidence=0.3,
+                    variant_index=variant_index
                 )
                 duration_overrides = None
 
@@ -664,7 +694,8 @@ class AssemblyService:
                 match_results=match_results,
                 segments_data=segments_data,
                 audio_duration=audio_duration,
-                duration_overrides=duration_overrides
+                duration_overrides=duration_overrides,
+                variant_index=variant_index
             )
 
             # Step 7: Assemble video
@@ -712,7 +743,8 @@ class AssemblyService:
         profile_id: str,
         elevenlabs_model: str = "eleven_flash_v2_5",
         voice_id: Optional[str] = None,
-        source_video_ids: Optional[List[str]] = None
+        source_video_ids: Optional[List[str]] = None,
+        variant_index: int = 0
     ) -> dict:
         """
         Preview-only: TTS -> SRT -> match -> timeline (no rendering).
@@ -782,13 +814,15 @@ class AssemblyService:
         match_results = self.match_srt_to_segments(
             srt_entries=srt_entries,
             segments_data=segments_data,
-            min_confidence=0.3
+            min_confidence=0.3,
+            variant_index=variant_index
         )
 
         timeline = self.build_timeline(
             match_results=match_results,
             segments_data=segments_data,
-            audio_duration=audio_duration
+            audio_duration=audio_duration,
+            variant_index=variant_index
         )
 
         # Count matched vs unmatched
@@ -805,7 +839,8 @@ class AssemblyService:
                 "segment_id": m.segment_id,
                 "segment_keywords": m.segment_keywords,
                 "matched_keyword": m.matched_keyword,
-                "confidence": m.confidence
+                "confidence": m.confidence,
+                "is_auto_filled": m.is_auto_filled
             }
             for m in match_results
         ]

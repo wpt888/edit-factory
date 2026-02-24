@@ -187,6 +187,7 @@ class MatchPreview(BaseModel):
     segment_keywords: List[str]
     matched_keyword: Optional[str]
     confidence: float
+    is_auto_filled: bool = False
 
 
 class PipelinePreviewResponse(BaseModel):
@@ -823,7 +824,8 @@ async def preview_variant(
             profile_id=profile.profile_id,
             elevenlabs_model=elevenlabs_model,
             voice_id=voice_id,
-            source_video_ids=source_video_ids
+            source_video_ids=source_video_ids,
+            variant_index=variant_index
         )
 
         # Store preview result in pipeline state
@@ -846,7 +848,8 @@ async def preview_variant(
                 segment_id=m["segment_id"],
                 segment_keywords=m["segment_keywords"],
                 matched_keyword=m["matched_keyword"],
-                confidence=m["confidence"]
+                confidence=m["confidence"],
+                is_auto_filled=m.get("is_auto_filled", False)
             )
             for m in preview_data["matches"]
         ]
@@ -1017,7 +1020,8 @@ async def render_variants(
                         shadow_depth=request.shadow_depth,
                         enable_glow=request.enable_glow,
                         glow_blur=request.glow_blur,
-                        adaptive_sizing=request.adaptive_sizing
+                        adaptive_sizing=request.adaptive_sizing,
+                        variant_index=vid
                     )
 
                     # Success

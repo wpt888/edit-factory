@@ -68,6 +68,7 @@ export interface MatchPreview {
   segment_keywords: string[];
   matched_keyword: string | null;
   confidence: number;
+  is_auto_filled?: boolean;
 }
 
 interface PreviewData {
@@ -224,6 +225,7 @@ export default function PipelinePage() {
   }>>([]);
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
   const [sourceVideosLoading, setSourceVideosLoading] = useState(false);
+  const [sourceVideoSearch, setSourceVideoSearch] = useState("");
   const sourceSelectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Available segments for timeline editor (collected from preview response)
@@ -335,8 +337,6 @@ export default function PipelinePage() {
     setSelectedSourceIds(prev => {
       const next = new Set(prev);
       if (next.has(videoId)) {
-        // Prevent deselecting the last source
-        if (next.size <= 1) return prev;
         next.delete(videoId);
       } else {
         next.add(videoId);
@@ -361,6 +361,16 @@ export default function PipelinePage() {
     if (pipelineId) {
       apiPut(`/pipeline/${pipelineId}/source-selection`, {
         source_video_ids: Array.from(allIds)
+      }).catch(() => {});
+    }
+  };
+
+  // Source videos: deselect all
+  const handleDeselectAllSources = () => {
+    setSelectedSourceIds(new Set());
+    if (pipelineId) {
+      apiPut(`/pipeline/${pipelineId}/source-selection`, {
+        source_video_ids: []
       }).catch(() => {});
     }
   };
@@ -1662,13 +1672,24 @@ export default function PipelinePage() {
                     </CardDescription>
                   </div>
                   {sourceVideos.length > 1 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleSelectAllSources}
-                    >
-                      Select All
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleDeselectAllSources}
+                        disabled={selectedSourceIds.size === 0}
+                      >
+                        Deselect All
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleSelectAllSources}
+                        disabled={selectedSourceIds.size === sourceVideos.length}
+                      >
+                        Select All
+                      </Button>
+                    </div>
                   )}
                 </div>
               </CardHeader>
@@ -1687,7 +1708,28 @@ export default function PipelinePage() {
                   </Alert>
                 ) : (
                   <div className="space-y-2">
-                    {sourceVideos.map(video => (
+                    {sourceVideos.length > 3 && (
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search videos by name..."
+                          value={sourceVideoSearch}
+                          onChange={(e) => setSourceVideoSearch(e.target.value)}
+                          className="pl-9 pr-9"
+                        />
+                        {sourceVideoSearch && (
+                          <button
+                            onClick={() => setSourceVideoSearch("")}
+                            className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {sourceVideos
+                      .filter(video => !sourceVideoSearch.trim() || video.name.toLowerCase().includes(sourceVideoSearch.toLowerCase()))
+                      .map(video => (
                       <div
                         key={video.id}
                         className={`flex items-center gap-3 p-2 rounded-lg border cursor-pointer transition-colors ${
