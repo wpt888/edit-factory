@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v8 Pipeline UX Overhaul — Phase 41 complete (all 3 plans done)
+**Current focus:** Phase 42 gap closure complete — available_segments fix shipped
 
 ## Current Position
 
-Milestone: v8 Pipeline UX Overhaul
-Phase: 41 of 41 (Timeline Editor)
-Plan: 03 of 03 complete
+Milestone: Gap Closure (Phase 42)
+Phase: 42 of 42 (Available Segments Fix)
+Plan: 01 of 01 complete
 Status: Complete — all plans done
-Last activity: 2026-02-24 — Phase 41 plan 03 complete (duration controls + render integration)
+Last activity: 2026-02-24 — Phase 42 plan 01 complete (available_segments gap closure in PipelinePreviewResponse)
 
-Progress: [██████████] 100% (v8) | Overall: phases 1-35,38-41 complete, 36-37 deferred
+Progress: [██████████] 100% (gap closure) | Overall: phases 1-35,38-42 complete, 36-37 deferred
 
 ## Performance Metrics
 
@@ -35,6 +35,7 @@ Progress: [██████████] 100% (v8) | Overall: phases 1-35,38-4
 | v6 Hardening | 8 (24-31) | 16 | Shipped 2026-02-22 |
 | v7 Overlays | 6 (32-37) | 7 | Paused at 67% (4/6 phases) |
 | v8 Pipeline UX | 4 (38-41) | 7 | Complete (4/4 phases, 7/7 plans) |
+| Phase 42 Gap Closure | 1 (42) | 1 | Complete (2026-02-24) |
 
 ## Accumulated Context
 
@@ -74,6 +75,7 @@ Phase 40 Plan 01 decisions:
 - [Phase 41]: duration_override as optional field on MatchPreview flows naturally through onMatchesChange callback
 - [Phase 41]: Frontend always sends previews.matches as match_overrides so all timeline edits (swaps + duration) flow to render
 - [Phase 41]: duration_overrides extracted as parallel list before build_timeline to avoid MatchResult mutation
+- [Phase 42-available-segments-fix]: Two-line gap closure: model field + constructor kwarg in pipeline_routes.py — assembly_service and frontend required no changes
 
 ### Pending Todos
 
@@ -94,9 +96,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Phase 41 plan 03 complete — duration controls + render integration (41-03-PLAN.md)
+Stopped at: Phase 42 plan 01 complete — available_segments gap closure (42-01-PLAN.md)
 Resume file: None
-Next action: Phase 41 complete — v8 milestone complete. Run /gsd:new-milestone for next milestone.
+Next action: Phase 42 gap closure complete — TIME-03 and TIME-04 unblocked. Run /gsd:new-milestone for next milestone.
 
 ---
-*Last updated: 2026-02-24 after Phase 41 plan 03 complete (duration controls + render integration)*
+*Last updated: 2026-02-24 after Phase 42 plan 01 complete (available_segments gap closure in PipelinePreviewResponse)*

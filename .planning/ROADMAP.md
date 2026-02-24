@@ -103,7 +103,7 @@ Full details: `.planning/milestones/v6-ROADMAP.md`
 - [x] **Phase 39: Source Selection Frontend** - Step 3 UI for picking source videos with segment counts and DB persistence (completed 2026-02-24)
 - [x] **Phase 40: Video Preview Player** - Inline HTML5 player with auto-thumbnails on Step 4 variant cards (completed 2026-02-24)
 - [x] **Phase 41: Timeline Editor** - Visual timeline in Step 3 with drag/drop reordering, segment swap, and duration adjustment (completed 2026-02-24)
-- [ ] **Phase 42: Available Segments Integration Fix** - Fix available_segments dropped by Pydantic response model (gap closure)
+- [x] **Phase 42: Available Segments Integration Fix** - Fix available_segments dropped by Pydantic response model (gap closure) (completed 2026-02-24)
 
 ## Phase Details
 
@@ -261,7 +261,7 @@ Plans:
   1. PipelinePreviewResponse includes available_segments field
   2. The preview route handler passes available_segments from the service response to the Pydantic model
   3. Frontend TimelineEditor receives non-empty availableSegments, enabling swap and manual assignment dialogs
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 - [ ] 42-01-PLAN.md — Add available_segments to PipelinePreviewResponse + wire in route handler
@@ -285,7 +285,7 @@ Plans:
 | 39. Source Selection Frontend | 1/1 | Complete    | 2026-02-24 | - |
 | 40. Video Preview Player | 1/1 | Complete    | 2026-02-24 | - |
 | 41. Timeline Editor | 3/3 | Complete    | 2026-02-24 | - |
-| 42. Available Segments Integration Fix | v8 | 0/1 | Pending | - |
+| 42. Available Segments Integration Fix | 1/1 | Complete   | 2026-02-24 | - |
 
 ---
 *Last updated: 2026-02-24 after v8 Pipeline UX Overhaul roadmap created*
