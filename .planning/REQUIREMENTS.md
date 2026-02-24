@@ -9,8 +9,8 @@ Requirements for v8 Pipeline UX Overhaul. Each maps to roadmap phases.
 
 ### Bug Fixes
 
-- [ ] **BUG-01**: User does not see empty state flash when entering Step 4 (render progress loads cleanly without flicker)
-- [ ] **BUG-02**: Rendered pipeline clips are saved to Supabase clips table and appear in library for publishing
+- [x] **BUG-01**: User does not see empty state flash when entering Step 4 (render progress loads cleanly without flicker)
+- [x] **BUG-02**: Rendered pipeline clips are saved to Supabase clips table and appear in library for publishing
 
 ### Video Source Selection
 
@@ -63,8 +63,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BUG-01 | Phase 38 | Pending |
-| BUG-02 | Phase 38 | Pending |
+| BUG-01 | Phase 38 | Complete |
+| BUG-02 | Phase 38 | Complete |
 | SRC-01 | Phase 39 | Pending |
 | SRC-02 | Phase 38 | Pending |
 | SRC-03 | Phase 39 | Pending |

@@ -201,7 +201,7 @@ Plans:
   3. The segment matching API accepts a list of source video IDs and only matches against segments from those videos
 **Plans**: TBD
 
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 38-01-PLAN.md — Fix Step 4 empty state flash + library save for pipeline clips (BUG-01, BUG-02)
@@ -266,7 +266,7 @@ Plans:
 | 35. PiP Overlay Controls | v7 | 2/2 | Complete | 2026-02-23 |
 | 36. Interstitial Slide Controls | v7 | 0/1 | Deferred (v7 paused) | - |
 | 37. Render Integration | v7 | 0/2 | Deferred (v7 paused) | - |
-| 38. Bug Fixes + Source Selection Backend | v8 | 0/2 | Not started | - |
+| 38. Bug Fixes + Source Selection Backend | 1/2 | In Progress|  | - |
 | 39. Source Selection Frontend | v8 | 0/1 | Not started | - |
 | 40. Video Preview Player | v8 | 0/1 | Not started | - |
 | 41. Timeline Editor | v8 | 0/3 | Not started | - |

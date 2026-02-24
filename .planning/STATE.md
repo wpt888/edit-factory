@@ -5,22 +5,22 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v8 Pipeline UX Overhaul — Phase 38 ready to plan
+**Current focus:** v8 Pipeline UX Overhaul — Phase 38 Plan 01 complete
 
 ## Current Position
 
 Milestone: v8 Pipeline UX Overhaul
 Phase: 38 of 41 (Bug Fixes + Source Selection Backend)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-02-24 — v8 roadmap created (phases 38-41)
+Plan: 1 of 2 complete
+Status: In progress
+Last activity: 2026-02-24 — Phase 38 Plan 01 executed (BUG-01, BUG-02 fixed)
 
-Progress: [░░░░░░░░░░] 0% (v8) | Overall: phases 1-35 complete, 36-37 deferred
+Progress: [█░░░░░░░░░] 10% (v8) | Overall: phases 1-35 complete, 36-37 deferred
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 82 (across v2-v7)
+- Total plans completed: 83 (across v2-v8)
 - Total phases completed: 35
 - Total milestones shipped: 6
 
@@ -34,7 +34,7 @@ Progress: [░░░░░░░░░░] 0% (v8) | Overall: phases 1-35 comple
 | v5 Product Video | 7 (17-23) | 13 | Shipped 2026-02-21 |
 | v6 Hardening | 8 (24-31) | 16 | Shipped 2026-02-22 |
 | v7 Overlays | 6 (32-37) | 7 | Paused at 67% (4/6 phases) |
-| v8 Pipeline UX | 4 (38-41) | ~7 | Roadmap created |
+| v8 Pipeline UX | 4 (38-41) | ~7 | In progress (1/~7 plans done) |
 
 ## Accumulated Context
 
@@ -47,6 +47,11 @@ Recent decisions affecting v8:
 - Phase 38 bundles BUG fixes with SRC backend to avoid a thin single-fix phase
 - Phase 40 (PREV) depends only on Phase 38, not Phase 39 — can potentially run in parallel
 - Phase 41 (TIME) is the most complex — 5 requirements, split into 3 plans (data model, drag/drop, render)
+
+Phase 38 Plan 01 decisions:
+- Build optimistic render status from request data (selectedVariants) before API call — PipelineRenderResponse has no variants field
+- Wrap library save in try/except so render completion is never blocked by save failure
+- Cache library_project_id in pipeline dict to prevent duplicate project rows across variants
 
 ### Pending Todos
 
@@ -66,9 +71,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: v8 roadmap created — ready to plan Phase 38
+Stopped at: Phase 38 Plan 01 complete (BUG-01 + BUG-02 fixed)
 Resume file: None
-Next action: `/gsd:plan-phase 38`
+Next action: `/gsd:execute-phase 38` (Plan 02 — Source Selection Backend)
 
 ---
-*Last updated: 2026-02-24 after v8 Pipeline UX Overhaul roadmap created*
+*Last updated: 2026-02-24 after Phase 38 Plan 01 execution*
