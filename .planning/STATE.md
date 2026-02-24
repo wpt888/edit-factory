@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v8 Pipeline UX Overhaul — Phase 40 complete, Phase 41 ready
+**Current focus:** v8 Pipeline UX Overhaul — Phase 41 ready to plan
 
 ## Current Position
 
 Milestone: v8 Pipeline UX Overhaul
-Phase: 40 of 41 (Video Preview Player)
-Plan: 1 of 1 complete
-Status: Phase complete — ready for Phase 41
+Phase: 41 of 41 (Timeline Editor)
+Plan: Not started
+Status: Ready to plan
 Last activity: 2026-02-24 — Phase 40 complete (PREV-01, PREV-02 verified)
 
-Progress: [██████░░░░] 62% (v8) | Overall: phases 1-35,38-40 complete, 36-37 deferred
+Progress: [███████░░░] 75% (v8) | Overall: phases 1-35,38-40 complete, 36-37 deferred
 
 ## Performance Metrics
 

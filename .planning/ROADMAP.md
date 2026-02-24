@@ -268,7 +268,7 @@ Plans:
 | 37. Render Integration | v7 | 0/2 | Deferred (v7 paused) | - |
 | 38. Bug Fixes + Source Selection Backend | 2/2 | Complete    | 2026-02-24 | - |
 | 39. Source Selection Frontend | 1/1 | Complete    | 2026-02-24 | - |
-| 40. Video Preview Player | 1/1 | Complete   | 2026-02-24 | - |
+| 40. Video Preview Player | 1/1 | Complete    | 2026-02-24 | - |
 | 41. Timeline Editor | v8 | 0/3 | Not started | - |
 
 ---
