@@ -816,6 +816,21 @@ async def preview_variant(
         f"[Profile {profile.profile_id}] Previewing pipeline {pipeline_id} variant {variant_index}"
     )
 
+    # Check if TTS audio already exists from Step 2 preview
+    existing_tts = pipeline.get("tts_previews", {}).get(variant_index)
+    reuse_audio_path = None
+    reuse_audio_duration = None
+    if existing_tts:
+        # Verify script hasn't changed since TTS was generated
+        if existing_tts.get("script_hash") == hash(script_text):
+            audio_path_str = existing_tts.get("audio_path")
+            if audio_path_str and Path(audio_path_str).exists():
+                reuse_audio_path = audio_path_str
+                reuse_audio_duration = existing_tts.get("audio_duration")
+                logger.info(
+                    f"[Profile {profile.profile_id}] Reusing Step 2 TTS audio for variant {variant_index}"
+                )
+
     try:
         assembly_service = get_assembly_service()
 
@@ -825,7 +840,9 @@ async def preview_variant(
             elevenlabs_model=elevenlabs_model,
             voice_id=voice_id,
             source_video_ids=source_video_ids,
-            variant_index=variant_index
+            variant_index=variant_index,
+            reuse_audio_path=reuse_audio_path,
+            reuse_audio_duration=reuse_audio_duration
         )
 
         # Store preview result in pipeline state

@@ -1123,9 +1123,12 @@ export default function PipelinePage() {
                       step === s.num
                         ? "bg-primary text-primary-foreground"
                         : step > s.num
-                        ? "bg-green-600 text-white"
+                        ? "bg-green-600 text-white cursor-pointer hover:bg-green-700 transition-colors"
                         : "bg-secondary text-muted-foreground"
                     }`}
+                    onClick={() => {
+                      if (step > s.num) setStep(s.num);
+                    }}
                   >
                     {step > s.num ? <CheckCircle className="h-5 w-5" /> : s.num}
                   </div>
@@ -1805,6 +1808,17 @@ export default function PipelinePage() {
                 </>
               )}
             </Button>
+            {Object.keys(previews).length > 0 && (
+              <Button
+                variant="outline"
+                onClick={() => setStep(3)}
+                className="w-full"
+                size="lg"
+              >
+                <ArrowRight className="h-4 w-4 mr-2" />
+                Continue to Preview (already generated)
+              </Button>
+            )}
             {sourceVideos.length > 0 && selectedSourceIds.size === 0 && (
               <p className="text-xs text-destructive text-center">Select at least one source video above</p>
             )}
@@ -1888,9 +1902,42 @@ export default function PipelinePage() {
                           />
                           <CardTitle className="text-lg">Variant {index + 1}</CardTitle>
                         </div>
-                        <Badge variant="secondary">
-                          {formatDuration(preview.audio_duration)}
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => {
+                              const audioKey = `${pipelineId}-${index}`;
+                              if (playingAudio === audioKey) {
+                                // Stop
+                                const audios = document.querySelectorAll('audio');
+                                audios.forEach(a => { a.pause(); a.remove(); });
+                                setPlayingAudio(null);
+                              } else {
+                                // Stop any previous
+                                const audios = document.querySelectorAll('audio');
+                                audios.forEach(a => { a.pause(); a.remove(); });
+                                // Play from pipeline audio endpoint
+                                const audio = new Audio(`${API_URL}/pipeline/audio/${pipelineId}/${index}`);
+                                audio.onended = () => setPlayingAudio(null);
+                                audio.onerror = () => setPlayingAudio(null);
+                                audio.play().catch(() => setPlayingAudio(null));
+                                setPlayingAudio(audioKey);
+                              }
+                            }}
+                            title={playingAudio === `${pipelineId}-${index}` ? "Stop audio" : "Play voiceover"}
+                          >
+                            {playingAudio === `${pipelineId}-${index}` ? (
+                              <Pause className="h-4 w-4" />
+                            ) : (
+                              <Volume2 className="h-4 w-4" />
+                            )}
+                          </Button>
+                          <Badge variant="secondary">
+                            {formatDuration(preview.audio_duration)}
+                          </Badge>
+                        </div>
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-3">

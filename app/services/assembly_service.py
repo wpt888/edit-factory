@@ -744,7 +744,9 @@ class AssemblyService:
         elevenlabs_model: str = "eleven_flash_v2_5",
         voice_id: Optional[str] = None,
         source_video_ids: Optional[List[str]] = None,
-        variant_index: int = 0
+        variant_index: int = 0,
+        reuse_audio_path: Optional[str] = None,
+        reuse_audio_duration: Optional[float] = None
     ) -> dict:
         """
         Preview-only: TTS -> SRT -> match -> timeline (no rendering).
@@ -758,14 +760,20 @@ class AssemblyService:
         if not supabase:
             raise RuntimeError("Supabase not available")
 
-        # Step 1: Generate TTS with timestamps
-        logger.info("Preview Step 1/4: Generating TTS audio")
-        audio_path, audio_duration, timestamps = await self.generate_tts_with_timestamps(
-            script_text=script_text,
-            profile_id=profile_id,
-            elevenlabs_model=elevenlabs_model,
-            voice_id=voice_id
-        )
+        # Step 1: Generate TTS with timestamps (or reuse existing)
+        if reuse_audio_path and reuse_audio_duration:
+            logger.info("Preview Step 1/4: Reusing existing TTS audio from Step 2")
+            audio_path = Path(reuse_audio_path)
+            audio_duration = reuse_audio_duration
+            timestamps = {}  # Will rely on SRT cache or regenerate below
+        else:
+            logger.info("Preview Step 1/4: Generating TTS audio")
+            audio_path, audio_duration, timestamps = await self.generate_tts_with_timestamps(
+                script_text=script_text,
+                profile_id=profile_id,
+                elevenlabs_model=elevenlabs_model,
+                voice_id=voice_id
+            )
 
         # Step 2: Generate SRT (with cache)
         logger.info("Preview Step 2/4: Generating SRT subtitles")
@@ -774,7 +782,19 @@ class AssemblyService:
         cached_srt = srt_cache_lookup(_srt_cache_key)
         if cached_srt:
             srt_content = cached_srt
+        elif timestamps:
+            srt_content = await self.generate_srt_from_timestamps(timestamps)
+            if srt_content:
+                srt_cache_store(_srt_cache_key, srt_content)
         else:
+            # Reusing audio but no SRT cache hit — must regenerate TTS for timestamps
+            logger.info("Preview Step 2/4: SRT cache miss, regenerating TTS for timestamps")
+            audio_path, audio_duration, timestamps = await self.generate_tts_with_timestamps(
+                script_text=script_text,
+                profile_id=profile_id,
+                elevenlabs_model=elevenlabs_model,
+                voice_id=voice_id
+            )
             srt_content = await self.generate_srt_from_timestamps(timestamps)
             if srt_content:
                 srt_cache_store(_srt_cache_key, srt_content)
