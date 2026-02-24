@@ -229,10 +229,10 @@ Plans:
   1. Each rendered variant card in Step 4 shows an auto-generated thumbnail image
   2. User can press play on any variant card to watch the rendered video inline via an HTML5 player
   3. Video playback controls (play/pause, seek, volume) are accessible without leaving the pipeline page
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 40-01: Backend thumbnail generation endpoint + frontend HTML5 inline player on variant cards
+- [ ] 40-01-PLAN.md — Store thumbnail_path in render jobs + HTML5 inline video player on Step 4 variant cards
 
 ### Phase 41: Timeline Editor
 **Goal**: Users see a visual timeline in Step 3 mapping SRT phrases to video segments, can reorder segments by dragging, swap segments from the source library, manually assign segments to unmatched phrases, and adjust segment durations
