@@ -244,6 +244,7 @@ class VariantStatus(BaseModel):
     progress: int                       # 0-100
     current_step: str
     final_video_path: Optional[str] = None
+    thumbnail_path: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -1067,7 +1068,9 @@ async def render_variants(
                                         "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "3",
                                         str(thumb_path)
                                     ], capture_output=True, timeout=30)
-                                    if not thumb_path.exists():
+                                    if thumb_path.exists():
+                                        job["thumbnail_path"] = str(thumb_path)
+                                    else:
                                         thumb_path = None
                                 except Exception as thumb_err:
                                     logger.warning(f"Thumbnail generation failed: {thumb_err}")
@@ -1161,6 +1164,7 @@ async def get_pipeline_status(pipeline_id: str):
                 progress=job["progress"],
                 current_step=job["current_step"],
                 final_video_path=job.get("final_video_path"),
+                thumbnail_path=job.get("thumbnail_path"),
                 error=job.get("error")
             ))
         else:
