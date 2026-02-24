@@ -197,6 +197,7 @@ class PipelinePreviewResponse(BaseModel):
     total_phrases: int
     matched_count: int
     unmatched_count: int
+    available_segments: List[dict] = []
 
 
 class PipelineRenderRequest(BaseModel):
@@ -856,7 +857,8 @@ async def preview_variant(
             matches=matches,
             total_phrases=preview_data["total_phrases"],
             matched_count=preview_data["matched_count"],
-            unmatched_count=preview_data["unmatched_count"]
+            unmatched_count=preview_data["unmatched_count"],
+            available_segments=preview_data.get("available_segments", [])
         )
 
     except Exception as e:
