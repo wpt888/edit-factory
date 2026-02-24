@@ -1,6 +1,7 @@
 """Shared Supabase client singleton."""
 import logging
 import threading
+import httpx
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -14,10 +15,14 @@ def get_supabase():
             if _supabase_client is None:
                 try:
                     from supabase import create_client
+                    from supabase.lib.client_options import SyncClientOptions
                     settings = get_settings()
                     if settings.supabase_url and settings.supabase_key:
                         key = settings.supabase_service_role_key or settings.supabase_key
-                        _supabase_client = create_client(settings.supabase_url, key)
+                        options = SyncClientOptions(
+                            httpx_client=httpx.Client(verify=False),
+                        )
+                        _supabase_client = create_client(settings.supabase_url, key, options)
                         logger.info("Shared Supabase client initialized")
                     else:
                         logger.warning("Supabase credentials not configured")

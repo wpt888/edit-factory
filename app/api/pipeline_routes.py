@@ -51,6 +51,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
         # Convert int keys in previews/render_jobs to strings for JSON
         previews_json = {str(k): v for k, v in pipeline_dict.get("previews", {}).items()}
         render_jobs_json = {str(k): v for k, v in pipeline_dict.get("render_jobs", {}).items()}
+        tts_previews_json = {str(k): v for k, v in pipeline_dict.get("tts_previews", {}).items()}
 
         row = {
             "id": pipeline_id,
@@ -63,6 +64,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
             "scripts": pipeline_dict.get("scripts", []),
             "previews": previews_json,
             "render_jobs": render_jobs_json,
+            "tts_previews": tts_previews_json,
         }
         supabase.table("editai_pipelines").upsert(row).execute()
         logger.debug(f"Pipeline {pipeline_id} saved to DB")
@@ -114,6 +116,13 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
         for k, v in (row.get("render_jobs") or {}).items():
             render_jobs[int(k)] = v
 
+        tts_previews = {}
+        for k, v in (row.get("tts_previews") or {}).items():
+            tts_previews[int(k)] = v
+            # Verify audio_path still exists on disk
+            if isinstance(v, dict) and v.get("audio_path") and not Path(v["audio_path"]).exists():
+                v["audio_path"] = None
+
         pipeline = {
             "pipeline_id": pipeline_id,
             "profile_id": row["profile_id"],
@@ -125,6 +134,7 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "scripts": row.get("scripts") or [],
             "previews": previews,
             "render_jobs": render_jobs,
+            "tts_previews": tts_previews,
             "created_at": row.get("created_at", ""),
         }
 
@@ -373,6 +383,53 @@ async def delete_pipeline(
     return {"status": "deleted", "pipeline_id": pipeline_id}
 
 
+class PipelineUpdateScriptsRequest(BaseModel):
+    """Request model for updating scripts in an existing pipeline."""
+    scripts: List[str]
+
+
+@router.put("/{pipeline_id}/scripts")
+async def update_pipeline_scripts(
+    pipeline_id: str,
+    request: PipelineUpdateScriptsRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Update scripts for an existing pipeline.
+
+    Used by the frontend auto-save when the user edits script text in Step 2 (Review Scripts).
+    Updates both in-memory cache and Supabase.
+    """
+    if not request.scripts:
+        raise HTTPException(status_code=400, detail="scripts list cannot be empty")
+
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Pipeline {pipeline_id} not found")
+
+    # Update scripts in memory
+    pipeline["scripts"] = request.scripts
+    pipeline["variant_count"] = len(request.scripts)
+
+    # Persist to DB
+    try:
+        supabase = get_supabase()
+        if supabase:
+            supabase.table("editai_pipelines").update({
+                "scripts": request.scripts,
+                "variant_count": len(request.scripts),
+            }).eq("id", pipeline_id).execute()
+    except Exception as e:
+        logger.warning(f"Failed to update scripts for pipeline {pipeline_id} in DB: {e}")
+
+    logger.info(
+        f"[Profile {profile.profile_id}] Updated scripts for pipeline {pipeline_id} "
+        f"({len(request.scripts)} scripts)"
+    )
+
+    return {"status": "updated", "pipeline_id": pipeline_id, "script_count": len(request.scripts)}
+
+
 @router.post("/import", response_model=PipelineGenerateResponse)
 async def import_pipeline(
     request: PipelineImportRequest,
@@ -538,6 +595,121 @@ async def generate_pipeline(
             status_code=503,
             detail=f"Pipeline generation service unavailable: {str(e)}"
         )
+
+
+class PipelineTtsRequest(BaseModel):
+    """Request model for per-script TTS generation."""
+    elevenlabs_model: str = "eleven_flash_v2_5"
+    voice_id: Optional[str] = None
+
+
+class PipelineTtsResponse(BaseModel):
+    """Response model for per-script TTS generation."""
+    status: str
+    audio_duration: float
+
+
+@router.post("/tts/{pipeline_id}/{variant_index}", response_model=PipelineTtsResponse)
+async def generate_variant_tts(
+    pipeline_id: str,
+    variant_index: int,
+    request: PipelineTtsRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Generate TTS audio for a single script variant without segment matching.
+
+    Lightweight endpoint for Step 2 per-script voice-over preview.
+    Stores result in pipeline["tts_previews"] for later playback.
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    if pipeline["profile_id"] != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    if variant_index < 0 or variant_index >= len(pipeline["scripts"]):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid variant_index: {variant_index}. Must be between 0 and {len(pipeline['scripts']) - 1}"
+        )
+
+    script_text = pipeline["scripts"][variant_index]
+
+    logger.info(
+        f"[Profile {profile.profile_id}] Generating TTS for pipeline {pipeline_id} variant {variant_index}"
+    )
+
+    try:
+        assembly_service = get_assembly_service()
+
+        audio_path, audio_duration, _timestamps = await assembly_service.generate_tts_with_timestamps(
+            script_text=script_text,
+            profile_id=profile.profile_id,
+            elevenlabs_model=request.elevenlabs_model,
+            voice_id=request.voice_id
+        )
+
+        # Store TTS preview result
+        if "tts_previews" not in pipeline:
+            pipeline["tts_previews"] = {}
+
+        pipeline["tts_previews"][variant_index] = {
+            "audio_path": str(audio_path),
+            "audio_duration": audio_duration,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "script_hash": hash(script_text),
+        }
+
+        # Persist to DB
+        _db_save_pipeline(pipeline_id, pipeline)
+
+        return PipelineTtsResponse(
+            status="ok",
+            audio_duration=audio_duration
+        )
+
+    except Exception as e:
+        logger.error(f"[Profile {profile.profile_id}] TTS generation failed for variant {variant_index}: {e}")
+        raise HTTPException(status_code=500, detail=f"TTS generation failed: {str(e)}")
+
+
+@router.get("/tts-audio/{pipeline_id}/{variant_index}")
+async def get_variant_tts_audio(
+    pipeline_id: str,
+    variant_index: int,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Stream the TTS preview audio for a specific pipeline variant.
+
+    Reads from tts_previews (Step 2 per-script TTS) rather than previews (Step 3 full preview).
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    if pipeline["profile_id"] != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    tts_preview = pipeline.get("tts_previews", {}).get(variant_index)
+    if not tts_preview:
+        raise HTTPException(status_code=404, detail="No TTS preview available for this variant")
+
+    audio_path_str = tts_preview.get("audio_path")
+    if not audio_path_str:
+        raise HTTPException(status_code=404, detail="No audio file for this variant")
+
+    audio_path = Path(audio_path_str)
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Audio file no longer exists on disk")
+
+    return FileResponse(
+        path=str(audio_path),
+        media_type="audio/mpeg",
+        filename=f"pipeline_{pipeline_id}_tts_variant_{variant_index}.mp3"
+    )
 
 
 @router.post("/preview/{pipeline_id}/{variant_index}", response_model=PipelinePreviewResponse)

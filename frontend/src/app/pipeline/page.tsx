@@ -22,7 +22,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { apiGet, apiGetWithRetry, apiPost, apiPut, apiPatch, apiDelete, API_URL, handleApiError } from "@/lib/api";
+import { apiGet, apiGetWithRetry, apiPost, apiPut, apiPatch, apiDelete, API_URL, handleApiError, ApiError } from "@/lib/api";
 import {
   Loader2,
   Sparkles,
@@ -207,6 +207,14 @@ export default function PipelinePage() {
   const [associations, setAssociations] = useState<Record<string, AssociationResponse>>({});
   const [pickerSegmentId, setPickerSegmentId] = useState<string | null>(null);
   const [imagePickerAssoc, setImagePickerAssoc] = useState<AssociationResponse | null>(null);
+
+  // Step 2: Per-script TTS previews
+  const [ttsResults, setTtsResults] = useState<Record<number, { audio_duration: number; generating: boolean; stale: boolean }>>({});
+  const [playingTtsVariant, setPlayingTtsVariant] = useState<number | null>(null);
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Script auto-save timer
+  const scriptSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Subtitle settings state
   const [subtitleSettings, setSubtitleSettings] = useState<SubtitleSettings>({ ...DEFAULT_SUBTITLE_SETTINGS });
@@ -397,7 +405,7 @@ export default function PipelinePage() {
         context: fullContext || undefined,
         variant_count: variantCount,
         provider,
-      });
+      }, { timeout: 300_000 }); // 5 min — AI script generation is slow
 
       if (res.ok) {
         const data = await res.json();
@@ -412,7 +420,11 @@ export default function PipelinePage() {
       }
     } catch (err) {
       handleApiError(err, "Eroare la generarea scripturilor");
-      setError("Network error. Please check if the backend is running.");
+      if (err instanceof ApiError && err.isTimeout) {
+        setError("Generarea scripturilor a expirat. Încearcă din nou.");
+      } else {
+        setError("Network error. Please check if the backend is running.");
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -431,7 +443,7 @@ export default function PipelinePage() {
         const res = await apiPost(`/pipeline/preview/${pipelineId}/${i}`, {
           elevenlabs_model: elevenlabsModel,
           voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
-        });
+        }, { timeout: 300_000 }); // 5 min — TTS generation + SRT can be slow
 
         if (res.ok) {
           const data = await res.json();
@@ -446,7 +458,11 @@ export default function PipelinePage() {
         }
       } catch (err) {
         handleApiError(err, "Eroare la previzualizarea variantelor");
-        setPreviewError("Network error. Please check if the backend is running.");
+        if (err instanceof ApiError && err.isTimeout) {
+          setPreviewError("Previzualizarea a expirat. Încearcă din nou.");
+        } else {
+          setPreviewError("Network error. Please check if the backend is running.");
+        }
         setPreviewingIndex(null);
         return;
       }
@@ -485,7 +501,7 @@ export default function PipelinePage() {
         enable_glow: subtitleSettings.enableGlow ?? false,
         glow_blur: subtitleSettings.glowBlur ?? 0,
         adaptive_sizing: subtitleSettings.adaptiveSizing ?? false,
-      });
+      }, { timeout: 600_000 }); // 10 min — rendering can be very slow
 
       if (res.ok) {
         const data = await res.json();
@@ -500,7 +516,11 @@ export default function PipelinePage() {
       }
     } catch (err) {
       handleApiError(err, "Eroare la generarea variantelor");
-      setPreviewError("Network error. Please check if the backend is running.");
+      if (err instanceof ApiError && err.isTimeout) {
+        setPreviewError("Randarea a expirat. Încearcă din nou.");
+      } else {
+        setPreviewError("Network error. Please check if the backend is running.");
+      }
       setIsRendering(false);
     }
   };
@@ -523,6 +543,12 @@ export default function PipelinePage() {
     setIsRendering(false);
     setVariantStatuses([]);
     setVoiceId("");
+    setTtsResults({});
+    setPlayingTtsVariant(null);
+    if (ttsAudioRef.current) {
+      ttsAudioRef.current.pause();
+      ttsAudioRef.current = null;
+    }
   };
 
   // History sidebar: fetch pipeline list
@@ -675,6 +701,18 @@ export default function PipelinePage() {
     }, 1000);
   }, [currentProfile]);
 
+  // Debounced auto-save scripts to backend
+  const saveScriptsToBackend = useCallback((pId: string, updatedScripts: string[]) => {
+    if (scriptSaveTimer.current) clearTimeout(scriptSaveTimer.current);
+    scriptSaveTimer.current = setTimeout(async () => {
+      try {
+        await apiPut(`/pipeline/${pId}/scripts`, { scripts: updatedScripts });
+      } catch {
+        // Silent — scripts still work locally, will retry on next edit
+      }
+    }, 1000);
+  }, []);
+
   // Save selected voice as default in profile
   const handleSetDefaultVoice = async () => {
     if (!currentProfile || !voiceId || voiceId === "default") return;
@@ -785,8 +823,81 @@ export default function PipelinePage() {
         audioRef.current.pause();
         audioRef.current = null;
       }
+      if (ttsAudioRef.current) {
+        ttsAudioRef.current.pause();
+        ttsAudioRef.current = null;
+      }
     };
   }, []);
+
+  // Per-script TTS: generate voice-over for a single script
+  const handleGenerateTts = async (variantIndex: number) => {
+    if (!pipelineId) return;
+
+    setTtsResults(prev => ({
+      ...prev,
+      [variantIndex]: { audio_duration: 0, generating: true, stale: false }
+    }));
+
+    try {
+      const res = await apiPost(`/pipeline/tts/${pipelineId}/${variantIndex}`, {
+        elevenlabs_model: elevenlabsModel,
+        voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
+      }, { timeout: 300_000 });
+
+      if (res.ok) {
+        const data = await res.json();
+        setTtsResults(prev => ({
+          ...prev,
+          [variantIndex]: { audio_duration: data.audio_duration, generating: false, stale: false }
+        }));
+      } else {
+        const errorData = await res.json().catch(() => ({ detail: "TTS generation failed" }));
+        setPreviewError(errorData.detail || "TTS generation failed");
+        setTtsResults(prev => {
+          const next = { ...prev };
+          delete next[variantIndex];
+          return next;
+        });
+      }
+    } catch (err) {
+      handleApiError(err, "TTS generation error");
+      if (err instanceof ApiError && err.isTimeout) {
+        setPreviewError("TTS generation timed out. Try again.");
+      } else {
+        setPreviewError("Network error. Please check if the backend is running.");
+      }
+      setTtsResults(prev => {
+        const next = { ...prev };
+        delete next[variantIndex];
+        return next;
+      });
+    }
+  };
+
+  // Per-script TTS: play/pause audio
+  const handlePlayTts = (variantIndex: number) => {
+    if (!pipelineId) return;
+
+    if (playingTtsVariant === variantIndex) {
+      ttsAudioRef.current?.pause();
+      setPlayingTtsVariant(null);
+      return;
+    }
+
+    // Stop previous
+    if (ttsAudioRef.current) {
+      ttsAudioRef.current.pause();
+      ttsAudioRef.current = null;
+    }
+
+    const audio = new Audio(`${API_URL}/pipeline/tts-audio/${pipelineId}/${variantIndex}`);
+    audio.onended = () => setPlayingTtsVariant(null);
+    audio.onerror = () => setPlayingTtsVariant(null);
+    audio.play().catch(() => setPlayingTtsVariant(null));
+    ttsAudioRef.current = audio;
+    setPlayingTtsVariant(variantIndex);
+  };
 
   // Toggle variant selection
   const toggleVariant = (index: number) => {
@@ -1364,7 +1475,11 @@ export default function PipelinePage() {
                               size="icon"
                               className="h-7 w-7 text-muted-foreground hover:text-destructive"
                               title="Șterge scriptul"
-                              onClick={() => setScripts(prev => prev.filter((_, i) => i !== index))}
+                              onClick={() => {
+                                const newScripts = scripts.filter((_, i) => i !== index);
+                                setScripts(newScripts);
+                                if (pipelineId) saveScriptsToBackend(pipelineId, newScripts);
+                              }}
                             >
                               <X className="h-4 w-4" />
                             </Button>
@@ -1372,17 +1487,66 @@ export default function PipelinePage() {
                         </div>
                       </div>
                     </CardHeader>
-                    <CardContent>
+                    <CardContent className="space-y-3">
                       <Textarea
                         value={script}
                         onChange={(e) => {
                           const newScripts = [...scripts];
                           newScripts[index] = e.target.value;
                           setScripts(newScripts);
+                          if (pipelineId) saveScriptsToBackend(pipelineId, newScripts);
+                          // Mark TTS as stale if it exists
+                          if (ttsResults[index] && !ttsResults[index].generating) {
+                            setTtsResults(prev => ({
+                              ...prev,
+                              [index]: { ...prev[index], stale: true }
+                            }));
+                          }
                         }}
                         rows={10}
                         className="resize-y font-mono text-sm"
                       />
+
+                      {/* Per-script TTS controls */}
+                      <div className="flex items-center gap-2">
+                        {ttsResults[index]?.generating ? (
+                          <Button variant="outline" size="sm" disabled>
+                            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                            Generating...
+                          </Button>
+                        ) : ttsResults[index] && !ttsResults[index].stale ? (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handlePlayTts(index)}
+                            >
+                              {playingTtsVariant === index ? (
+                                <><Pause className="h-3.5 w-3.5 mr-1.5" />Pause</>
+                              ) : (
+                                <><Play className="h-3.5 w-3.5 mr-1.5" />Play</>
+                              )}
+                            </Button>
+                            <Badge variant="secondary" className="text-xs">
+                              {formatDuration(ttsResults[index].audio_duration)}
+                            </Badge>
+                          </>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleGenerateTts(index)}
+                          >
+                            <Volume2 className="h-3.5 w-3.5 mr-1.5" />
+                            {ttsResults[index]?.stale ? "Regenerate Voice-over" : "Generate Voice-over"}
+                          </Button>
+                        )}
+                        {ttsResults[index]?.stale && (
+                          <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">
+                            Script changed — audio outdated
+                          </Badge>
+                        )}
+                      </div>
                     </CardContent>
                   </Card>
                 );
