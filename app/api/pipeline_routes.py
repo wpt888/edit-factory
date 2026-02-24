@@ -201,6 +201,7 @@ class PipelineRenderRequest(BaseModel):
     """Request model for batch render."""
     variant_indices: List[int]          # Which variants to render
     preset_name: str = "TikTok"
+    source_video_ids: Optional[List[str]] = None  # Filter segments to these source videos
     # Subtitle settings
     font_size: int = 48
     font_family: str = "Montserrat"
@@ -719,7 +720,8 @@ async def preview_variant(
     variant_index: int,
     profile: ProfileContext = Depends(get_profile_context),
     elevenlabs_model: str = Body("eleven_flash_v2_5", embed=True),
-    voice_id: Optional[str] = Body(None, embed=True)
+    voice_id: Optional[str] = Body(None, embed=True),
+    source_video_ids: Optional[List[str]] = Body(None, embed=True)
 ):
     """
     Preview segment matching for a single variant.
@@ -756,7 +758,8 @@ async def preview_variant(
             script_text=script_text,
             profile_id=profile.profile_id,
             elevenlabs_model=elevenlabs_model,
-            voice_id=voice_id
+            voice_id=voice_id,
+            source_video_ids=source_video_ids
         )
 
         # Store preview result in pipeline state
@@ -886,6 +889,10 @@ async def render_variants(
         "adaptive_sizing": request.adaptive_sizing
     }
 
+    # Store source_video_ids in pipeline state for reference
+    if request.source_video_ids:
+        pipeline["source_video_ids"] = request.source_video_ids
+
     # Initialize render jobs for each variant
     for variant_index in request.variant_indices:
         if variant_index not in pipeline["render_jobs"]:
@@ -923,6 +930,7 @@ async def render_variants(
                         subtitle_settings=subtitle_settings,
                         elevenlabs_model=request.elevenlabs_model,
                         voice_id=request.voice_id,
+                        source_video_ids=request.source_video_ids,
                         enable_denoise=request.enable_denoise,
                         denoise_strength=request.denoise_strength,
                         enable_sharpen=request.enable_sharpen,
