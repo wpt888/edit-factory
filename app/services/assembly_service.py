@@ -46,6 +46,7 @@ class MatchResult:
     matched_keyword: Optional[str]
     confidence: float
     is_auto_filled: bool = False
+    product_group: Optional[str] = None
 
 
 @dataclass
@@ -235,6 +236,7 @@ class AssemblyService:
             List of MatchResult objects (one per SRT entry)
         """
         matches = []
+        current_product_group = None  # Track product group context across SRT entries
 
         for idx, entry in enumerate(srt_entries):
             srt_text = entry["text"]
@@ -258,6 +260,15 @@ class AssemblyService:
                         exact_match = keyword_lower in words
                         confidence = 1.0 if exact_match else 0.7
 
+                        # Product group label boost: if keyword matches a product group label
+                        seg_group = segment.get("product_group")
+                        if seg_group and keyword_lower == seg_group.lower():
+                            confidence += 0.5
+
+                        # Context affinity: prefer segments from the current product group
+                        if current_product_group and seg_group == current_product_group:
+                            confidence += 0.2
+
                         # Pick best match (highest confidence, then longest duration)
                         if confidence > best_confidence:
                             best_segment = segment
@@ -273,6 +284,7 @@ class AssemblyService:
 
             # Create match result (may be unmatched)
             if best_segment and best_confidence >= min_confidence:
+                seg_group = best_segment.get("product_group")
                 match = MatchResult(
                     srt_index=idx,
                     srt_text=srt_text,
@@ -281,8 +293,12 @@ class AssemblyService:
                     segment_id=best_segment["id"],
                     segment_keywords=best_segment.get("keywords") or [],
                     matched_keyword=best_keyword,
-                    confidence=best_confidence
+                    confidence=best_confidence,
+                    product_group=seg_group
                 )
+                # Update context tracker
+                if seg_group:
+                    current_product_group = seg_group
             else:
                 # Unmatched entry
                 match = MatchResult(
@@ -298,15 +314,32 @@ class AssemblyService:
 
             matches.append(match)
 
-        # Auto-fill unmatched entries with seeded random segments
+        # Auto-fill unmatched entries — prefer segments from current/nearest product group
         if segments_data:
             unmatched_indices = [i for i, m in enumerate(matches) if m.segment_id is None]
             if unmatched_indices:
                 rng = random.Random(variant_index)
-                pool = list(segments_data)
-                rng.shuffle(pool)
-                for i, um_idx in enumerate(unmatched_indices):
-                    seg = pool[i % len(pool)]
+
+                for um_idx in unmatched_indices:
+                    # Find nearest product group context
+                    nearest_group = None
+                    for offset in range(1, len(matches)):
+                        for check_idx in [um_idx - offset, um_idx + offset]:
+                            if 0 <= check_idx < len(matches) and matches[check_idx].product_group:
+                                nearest_group = matches[check_idx].product_group
+                                break
+                        if nearest_group:
+                            break
+
+                    # Build pool: prefer segments from nearest group
+                    if nearest_group:
+                        group_pool = [s for s in segments_data if s.get("product_group") == nearest_group]
+                        pool = group_pool if group_pool else list(segments_data)
+                    else:
+                        pool = list(segments_data)
+
+                    rng.shuffle(pool)
+                    seg = pool[0]
                     matches[um_idx] = MatchResult(
                         srt_index=matches[um_idx].srt_index,
                         srt_text=matches[um_idx].srt_text,
@@ -316,7 +349,8 @@ class AssemblyService:
                         segment_keywords=seg.get("keywords") or [],
                         matched_keyword=None,
                         confidence=0.0,
-                        is_auto_filled=True
+                        is_auto_filled=True,
+                        product_group=seg.get("product_group")
                     )
                 logger.info(f"Auto-filled {len(unmatched_indices)} unmatched entries (seed={variant_index})")
 
@@ -635,7 +669,7 @@ class AssemblyService:
             if source_video_ids:
                 logger.info(f"Filtering to {len(source_video_ids)} source video(s)")
             segments_query = supabase.table("editai_segments")\
-                .select("id, source_video_id, start_time, end_time, keywords, transforms, editai_source_videos(file_path)")\
+                .select("id, source_video_id, start_time, end_time, keywords, transforms, product_group, editai_source_videos(file_path)")\
                 .eq("profile_id", profile_id)
             if source_video_ids:
                 segments_query = segments_query.in_("source_video_id", source_video_ids)
@@ -658,6 +692,7 @@ class AssemblyService:
                         "keywords": seg.get("keywords") or [],
                         "source_video_path": source_video_path,
                         "transforms": seg.get("transforms"),
+                        "product_group": seg.get("product_group"),
                     })
 
             logger.info(f"Loaded {len(segments_data)} segments from library")
@@ -867,7 +902,8 @@ class AssemblyService:
                 "segment_keywords": m.segment_keywords,
                 "matched_keyword": m.matched_keyword,
                 "confidence": m.confidence,
-                "is_auto_filled": m.is_auto_filled
+                "is_auto_filled": m.is_auto_filled,
+                "product_group": m.product_group
             }
             for m in match_results
         ]
@@ -889,7 +925,8 @@ class AssemblyService:
                 "id": seg["id"],
                 "keywords": seg.get("keywords") or [],
                 "source_video_id": seg["source_video_id"],
-                "duration": seg.get("duration", 0)
+                "duration": seg.get("duration", 0),
+                "product_group": seg.get("product_group")
             }
             for seg in segments_data
         ]

@@ -27,6 +27,10 @@ from app.db import get_supabase
 # ============== PYDANTIC MODELS ==============
 
 
+class CheckDuplicatesRequest(BaseModel):
+    texts: List[str]
+
+
 class TTSAssetCreate(BaseModel):
     tts_text: str
     tts_model: str = "eleven_flash_v2_5"
@@ -52,6 +56,50 @@ class TTSAssetResponse(BaseModel):
 
 
 # ============== ENDPOINTS ==============
+
+
+@router.post("/check-duplicates")
+async def check_duplicates(
+    request: CheckDuplicatesRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Check if any of the provided texts already exist in the TTS library."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    if not request.texts:
+        return {"matches": {}}
+
+    # Fetch all ready assets for the profile
+    result = (
+        supabase.table("editai_tts_assets")
+        .select("id, tts_text, audio_duration")
+        .eq("profile_id", profile.profile_id)
+        .eq("status", "ready")
+        .execute()
+    )
+
+    assets = result.data or []
+
+    # Build lookup: normalized text -> asset info
+    asset_lookup = {}
+    for asset in assets:
+        normalized = (asset.get("tts_text") or "").strip()
+        if normalized:
+            asset_lookup[normalized] = {
+                "asset_id": asset["id"],
+                "audio_duration": asset.get("audio_duration", 0.0),
+            }
+
+    # Match each input text by index
+    matches = {}
+    for i, text in enumerate(request.texts):
+        normalized = text.strip()
+        if normalized in asset_lookup:
+            matches[str(i)] = asset_lookup[normalized]
+
+    return {"matches": matches}
 
 
 @router.get("/", response_model=List[TTSAssetResponse])

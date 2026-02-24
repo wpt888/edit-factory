@@ -79,8 +79,20 @@ interface Segment {
   is_favorite: boolean;
   notes?: string;
   transforms?: SegmentTransform | null;
+  product_group?: string | null;
   created_at: string;
   source_video_name?: string;
+}
+
+interface ProductGroup {
+  id: string;
+  source_video_id: string;
+  label: string;
+  start_time: number;
+  end_time: number;
+  color: string | null;
+  segments_count: number;
+  created_at: string;
 }
 
 export default function SegmentsPage() {
@@ -144,6 +156,14 @@ export default function SegmentsPage() {
   const [pipExpandedSegId, setPipExpandedSegId] = useState<string | null>(null);
   const [pipSaving, setPipSaving] = useState(false);
 
+  // Product group state
+  const [productGroups, setProductGroups] = useState<ProductGroup[]>([]);
+  const [showGroupDialog, setShowGroupDialog] = useState(false);
+  const [groupLabel, setGroupLabel] = useState("");
+  const [groupStartTime, setGroupStartTime] = useState(0);
+  const [groupEndTime, setGroupEndTime] = useState(0);
+  const [editingGroup, setEditingGroup] = useState<ProductGroup | null>(null);
+
   // Format time as mm:ss
   const formatTime = (time: number): string => {
     const minutes = Math.floor(time / 60);
@@ -193,6 +213,19 @@ export default function SegmentsPage() {
       }
     } catch (error) {
       handleApiError(error, "Eroare la incarcarea video-urilor sursa");
+    }
+  }, []);
+
+  // Fetch product groups for a video
+  const fetchProductGroups = useCallback(async (videoId: string) => {
+    try {
+      const res = await apiGetWithRetry(`/segments/source-videos/${videoId}/product-groups`);
+      if (res.ok) {
+        const data = await res.json();
+        setProductGroups(data);
+      }
+    } catch {
+      // Silently ignore — groups are optional
     }
   }, []);
 
@@ -317,14 +350,16 @@ export default function SegmentsPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedSegment, handleDeleteSegment]);
 
-  // Load segments when video selected
+  // Load segments and product groups when video selected
   useEffect(() => {
     if (selectedVideo) {
       fetchSegments(selectedVideo.id);
+      fetchProductGroups(selectedVideo.id);
     } else {
       setSegments([]);
+      setProductGroups([]);
     }
-  }, [selectedVideo, fetchSegments]);
+  }, [selectedVideo, fetchSegments, fetchProductGroups]);
 
   // Upload source video
   const handleUpload = async () => {
@@ -658,6 +693,75 @@ export default function SegmentsPage() {
     }
   };
 
+  // Product group handlers
+  const handleCreateGroup = async () => {
+    if (!selectedVideo || !groupLabel.trim()) return;
+    try {
+      const res = await apiPost(`/segments/source-videos/${selectedVideo.id}/product-groups`, {
+        label: groupLabel.trim(),
+        start_time: groupStartTime,
+        end_time: groupEndTime,
+      });
+      if (res.ok) {
+        setShowGroupDialog(false);
+        setGroupLabel("");
+        setEditingGroup(null);
+        await fetchProductGroups(selectedVideo.id);
+        await fetchSegments(selectedVideo.id);
+      }
+    } catch (error) {
+      handleApiError(error, "Eroare la crearea grupului de produse");
+    }
+  };
+
+  const handleUpdateGroup = async () => {
+    if (!editingGroup || !selectedVideo) return;
+    try {
+      const res = await apiPatch(`/segments/product-groups/${editingGroup.id}`, {
+        label: groupLabel.trim() || undefined,
+        start_time: groupStartTime,
+        end_time: groupEndTime,
+      });
+      if (res.ok) {
+        setShowGroupDialog(false);
+        setGroupLabel("");
+        setEditingGroup(null);
+        await fetchProductGroups(selectedVideo.id);
+        await fetchSegments(selectedVideo.id);
+      }
+    } catch (error) {
+      handleApiError(error, "Eroare la actualizarea grupului");
+    }
+  };
+
+  const handleDeleteGroup = async (groupId: string) => {
+    if (!selectedVideo) return;
+    try {
+      const res = await apiDelete(`/segments/product-groups/${groupId}`);
+      if (res.ok) {
+        await fetchProductGroups(selectedVideo.id);
+        await fetchSegments(selectedVideo.id);
+      }
+    } catch (error) {
+      handleApiError(error, "Eroare la stergerea grupului");
+    }
+  };
+
+  const openGroupDialog = (group?: ProductGroup) => {
+    if (group) {
+      setEditingGroup(group);
+      setGroupLabel(group.label);
+      setGroupStartTime(group.start_time);
+      setGroupEndTime(group.end_time);
+    } else {
+      setEditingGroup(null);
+      setGroupLabel("");
+      setGroupStartTime(0);
+      setGroupEndTime(selectedVideo?.duration || 0);
+    }
+    setShowGroupDialog(true);
+  };
+
   // Left panel content - Source Videos
   const leftPanelContent = (
     <div className="h-full flex flex-col">
@@ -881,6 +985,54 @@ export default function SegmentsPage() {
         </div>
       )}
 
+      {/* Product Groups */}
+      {selectedVideo && viewMode === "current" && (
+        <div className="px-2 py-1.5 border-b border-border">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[11px] font-medium text-muted-foreground flex items-center gap-1">
+              <Layers className="h-3 w-3" />
+              Product Groups
+              {productGroups.length > 0 && (
+                <Badge variant="secondary" className="text-[9px] h-4 px-1">{productGroups.length}</Badge>
+              )}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 text-[10px] px-1"
+              onClick={() => openGroupDialog()}
+            >
+              + Add
+            </Button>
+          </div>
+          {productGroups.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {productGroups.map((group) => (
+                <div
+                  key={group.id}
+                  className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-white cursor-pointer hover:opacity-80"
+                  style={{ backgroundColor: group.color || "#4ECDC4" }}
+                  onClick={() => openGroupDialog(group)}
+                  title={`${formatTime(group.start_time)} - ${formatTime(group.end_time)} (${group.segments_count} segments)\nClick to edit`}
+                >
+                  <span className="font-medium">{group.label}</span>
+                  <span className="opacity-70">({group.segments_count})</span>
+                  <button
+                    className="ml-0.5 opacity-60 hover:opacity-100"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteGroup(group.id);
+                    }}
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Segments list */}
       <ScrollArea className="flex-1 min-h-0">
         <div className="space-y-2 p-2">
@@ -941,10 +1093,23 @@ export default function SegmentsPage() {
                   </Button>
                 </div>
 
-                {/* Duration badge */}
-                <Badge variant="outline" className="text-[10px] mb-1">
-                  {segment.duration.toFixed(1)}s
-                </Badge>
+                {/* Duration badge + product group */}
+                <div className="flex items-center gap-1 mb-1">
+                  <Badge variant="outline" className="text-[10px]">
+                    {segment.duration.toFixed(1)}s
+                  </Badge>
+                  {segment.product_group && (() => {
+                    const group = productGroups.find(g => g.label === segment.product_group);
+                    return (
+                      <Badge
+                        className="text-[10px] text-white"
+                        style={{ backgroundColor: group?.color || "#4ECDC4" }}
+                      >
+                        {segment.product_group}
+                      </Badge>
+                    );
+                  })()}
+                </div>
 
                 {/* Keywords */}
                 {segment.keywords.length > 0 && (
@@ -1125,6 +1290,7 @@ export default function SegmentsPage() {
             currentSegment={selectedSegment || undefined}
             sourceVideoId={selectedVideo.id}
             profileId={currentProfile?.id}
+            productGroups={productGroups}
           />
         ) : (
           <div className="aspect-video bg-muted rounded-lg flex items-center justify-center max-h-[60vh]">
@@ -1174,6 +1340,66 @@ export default function SegmentsPage() {
             initialNotes={editingSegment.notes || ""}
             isEditing={true}
           />
+        )}
+
+        {/* Product Group dialog */}
+        {showGroupDialog && (
+          <Dialog open={showGroupDialog} onOpenChange={setShowGroupDialog}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>{editingGroup ? "Edit Product Group" : "New Product Group"}</DialogTitle>
+                <DialogDescription>
+                  Define a time range on the video timeline to group segments by product.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3">
+                <div>
+                  <Label htmlFor="group-label">Label</Label>
+                  <Input
+                    id="group-label"
+                    value={groupLabel}
+                    onChange={(e) => setGroupLabel(e.target.value)}
+                    placeholder="e.g., Product A"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label htmlFor="group-start">Start Time (s)</Label>
+                    <Input
+                      id="group-start"
+                      type="number"
+                      step="0.1"
+                      min={0}
+                      value={groupStartTime}
+                      onChange={(e) => setGroupStartTime(parseFloat(e.target.value) || 0)}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="group-end">End Time (s)</Label>
+                    <Input
+                      id="group-end"
+                      type="number"
+                      step="0.1"
+                      min={0}
+                      value={groupEndTime}
+                      onChange={(e) => setGroupEndTime(parseFloat(e.target.value) || 0)}
+                    />
+                  </div>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowGroupDialog(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={editingGroup ? handleUpdateGroup : handleCreateGroup}
+                  disabled={!groupLabel.trim() || groupEndTime <= groupStartTime}
+                >
+                  {editingGroup ? "Update" : "Create"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         )}
 
         {/* Delete confirmation dialog */}

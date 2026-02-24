@@ -35,6 +35,7 @@ export interface MatchPreview {
   confidence: number;
   duration_override?: number;  // User-adjusted duration in seconds
   is_auto_filled?: boolean;  // Backend auto-filled from random segment pool
+  product_group?: string | null;
 }
 
 export interface SegmentOption {
@@ -42,6 +43,7 @@ export interface SegmentOption {
   keywords: string[];
   source_video_id: string;
   duration: number;
+  product_group?: string | null;
 }
 
 interface TimelineEditorProps {
@@ -323,6 +325,11 @@ export function TimelineEditor({
                         <span className="text-xs text-green-700 dark:text-green-400 font-medium">
                           {Math.round(match.confidence * 100)}%
                         </span>
+                        {match.product_group && (
+                          <Badge variant="outline" className="text-[9px] h-4 px-1 border-purple-400 text-purple-600 dark:text-purple-300">
+                            {match.product_group}
+                          </Badge>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"

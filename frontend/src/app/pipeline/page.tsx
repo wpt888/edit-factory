@@ -48,6 +48,7 @@ import {
   Trash2,
   Volume2,
   Pause,
+  Info,
 } from "lucide-react";
 import { usePolling } from "@/hooks";
 import { useProfile } from "@/contexts/profile-context";
@@ -70,6 +71,7 @@ export interface MatchPreview {
   matched_keyword: string | null;
   confidence: number;
   is_auto_filled?: boolean;
+  product_group?: string | null;
 }
 
 interface PreviewData {
@@ -218,6 +220,9 @@ export default function PipelinePage() {
   const [ttsResults, setTtsResults] = useState<Record<number, { audio_duration: number; generating: boolean; stale: boolean }>>({});
   const [playingTtsVariant, setPlayingTtsVariant] = useState<number | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // TTS Library duplicate detection
+  const [libraryMatches, setLibraryMatches] = useState<Record<number, { asset_id: string; audio_duration: number }>>({});
 
   // Script auto-save timer
   const scriptSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -687,6 +692,7 @@ export default function PipelinePage() {
     setVariantStatuses([]);
     setVoiceId("");
     setTtsResults({});
+    setLibraryMatches({});
     setPlayingTtsVariant(null);
     setSelectedSourceIds(new Set());
     if (ttsAudioRef.current) {
@@ -861,6 +867,32 @@ export default function PipelinePage() {
       }
     }, 1000);
   }, []);
+
+  // Check TTS library for duplicate texts when scripts load
+  useEffect(() => {
+    if (step !== 2 || scripts.length === 0) {
+      setLibraryMatches({});
+      return;
+    }
+
+    const checkDuplicates = async () => {
+      try {
+        const res = await apiPost("/tts-library/check-duplicates", { texts: scripts });
+        if (res.ok) {
+          const data = await res.json();
+          const parsed: Record<number, { asset_id: string; audio_duration: number }> = {};
+          for (const [key, val] of Object.entries(data.matches || {})) {
+            parsed[parseInt(key)] = val as { asset_id: string; audio_duration: number };
+          }
+          setLibraryMatches(parsed);
+        }
+      } catch {
+        // Silent — duplicate check is advisory only
+      }
+    };
+
+    checkDuplicates();
+  }, [step, scripts]);
 
   // Save selected voice as default in profile
   const handleSetDefaultVoice = async () => {
@@ -1775,6 +1807,12 @@ export default function PipelinePage() {
                         {ttsResults[index]?.stale && (
                           <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">
                             Script changed — audio outdated
+                          </Badge>
+                        )}
+                        {libraryMatches[index] && !ttsResults[index] && (
+                          <Badge variant="outline" className="text-xs text-blue-600 border-blue-300">
+                            <Info className="h-3 w-3 mr-1" />
+                            Exists in TTS Library ({formatDuration(libraryMatches[index].audio_duration)})
                           </Badge>
                         )}
                       </div>

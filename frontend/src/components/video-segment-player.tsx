@@ -45,6 +45,17 @@ interface SegmentTransformPreview {
   opacity: number;
 }
 
+interface ProductGroup {
+  id: string;
+  source_video_id: string;
+  label: string;
+  start_time: number;
+  end_time: number;
+  color: string | null;
+  segments_count: number;
+  created_at: string;
+}
+
 interface VideoSegmentPlayerProps {
   videoUrl: string;
   duration: number;
@@ -55,6 +66,8 @@ interface VideoSegmentPlayerProps {
   sourceVideoId?: string;
   activeTransforms?: SegmentTransformPreview;
   profileId?: string;
+  productGroups?: ProductGroup[];
+  showGroupBands?: boolean;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
@@ -69,6 +82,8 @@ export function VideoSegmentPlayer({
   sourceVideoId,
   activeTransforms,
   profileId,
+  productGroups = [],
+  showGroupBands = true,
 }: VideoSegmentPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -719,6 +734,40 @@ export function VideoSegmentPlayer({
             className="absolute top-4 left-0 right-0 bottom-0 pointer-events-none z-0"
           />
         )}
+
+        {/* Product group bands */}
+        {showGroupBands && productGroups.map((group) => {
+          const bandStart = ((group.start_time - visibleStart) / visibleDuration) * 100;
+          const bandEnd = ((group.end_time - visibleStart) / visibleDuration) * 100;
+          const left = Math.max(0, bandStart);
+          const right = Math.min(100, bandEnd);
+          const width = right - left;
+          if (width <= 0 || bandEnd < 0 || bandStart > 100) return null;
+          const color = group.color || "#4ECDC4";
+          return (
+            <div
+              key={group.id}
+              className="absolute bottom-0 z-[5] pointer-events-none"
+              style={{
+                left: `${left}%`,
+                width: `${width}%`,
+                height: "6px",
+                backgroundColor: color,
+                opacity: 0.8,
+              }}
+              title={`${group.label} (${group.segments_count} segments)`}
+            >
+              {width > 4 && (
+                <span
+                  className="absolute -top-3.5 left-0.5 text-[8px] font-bold truncate"
+                  style={{ color, maxWidth: `${width}%` }}
+                >
+                  {group.label}
+                </span>
+              )}
+            </div>
+          );
+        })}
 
         {/* Time scale markers - pointer-events-none so clicks pass through to timeline */}
         <div className="absolute top-0 left-0 right-0 h-4 bg-background/50 flex items-center text-[10px] text-muted-foreground font-mono pointer-events-none">

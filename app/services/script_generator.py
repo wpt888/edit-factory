@@ -4,7 +4,7 @@ Generates TTS-safe scripts using Gemini or Claude AI with segment keyword awaren
 """
 import re
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict
 from google import genai
 import anthropic
 
@@ -49,7 +49,8 @@ class ScriptGenerator:
         context: str,
         keywords: List[str],
         variant_count: int,
-        provider: str
+        provider: str,
+        product_groups: Optional[Dict[str, List[str]]] = None
     ) -> List[str]:
         """
         Generate N script variants using specified AI provider.
@@ -88,7 +89,7 @@ class ScriptGenerator:
         )
 
         # Build prompt
-        prompt = self._build_prompt(idea, context, keywords, variant_count)
+        prompt = self._build_prompt(idea, context, keywords, variant_count, product_groups)
 
         # Generate with selected provider
         try:
@@ -121,10 +122,19 @@ class ScriptGenerator:
         idea: str,
         context: str,
         keywords: List[str],
-        variant_count: int
+        variant_count: int,
+        product_groups: Optional[Dict[str, List[str]]] = None
     ) -> str:
         """Build AI prompt for script generation."""
         keyword_list = ", ".join(keywords) if keywords else "none available"
+
+        # Build product groups section if available
+        product_groups_section = ""
+        if product_groups:
+            groups_text = []
+            for group_label, group_keywords in product_groups.items():
+                groups_text.append(f"  - {group_label}: {', '.join(group_keywords)}")
+            product_groups_section = f"\n**Product Groups (video segments organized by product):**\n" + "\n".join(groups_text) + "\n"
 
         prompt = f"""Generate {variant_count} script variants for a social media video (reel/TikTok/YouTube Short).
 
@@ -133,6 +143,7 @@ class ScriptGenerator:
 **Product/Brand Context:** {context or "Not provided"}
 
 **Available Visual Keywords:** {keyword_list}
+{product_groups_section}
 
 **Instructions:**
 1. Generate EXACTLY {variant_count} unique script variants

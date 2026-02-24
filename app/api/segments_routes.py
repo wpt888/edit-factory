@@ -51,6 +51,7 @@ class SegmentCreate(BaseModel):
     end_time: float
     keywords: List[str] = []
     notes: Optional[str] = None
+    product_group: Optional[str] = None
 
 class SegmentTransformInput(BaseModel):
     rotation: float = 0.0
@@ -74,6 +75,7 @@ class SegmentResponse(BaseModel):
     is_favorite: bool
     notes: Optional[str]
     transforms: Optional[dict] = None
+    product_group: Optional[str] = None
     created_at: str
     # Joined data
     source_video_name: Optional[str] = None
@@ -84,6 +86,29 @@ class SegmentUpdate(BaseModel):
     keywords: Optional[List[str]] = None
     notes: Optional[str] = None
     transforms: Optional[SegmentTransformInput] = None
+    product_group: Optional[str] = None
+
+class ProductGroupCreate(BaseModel):
+    label: str
+    start_time: float
+    end_time: float
+    color: Optional[str] = None
+
+class ProductGroupUpdate(BaseModel):
+    label: Optional[str] = None
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+    color: Optional[str] = None
+
+class ProductGroupResponse(BaseModel):
+    id: str
+    source_video_id: str
+    label: str
+    start_time: float
+    end_time: float
+    color: Optional[str]
+    segments_count: int = 0
+    created_at: str
 
 class SRTMatchRequest(BaseModel):
     srt_content: str
@@ -188,6 +213,80 @@ def _sanitize_filename(filename: str) -> str:
     if len(safe_name) > 100:
         safe_name = safe_name[:100]
     return safe_name or "unnamed"
+
+
+# Product group color palette
+_PRODUCT_GROUP_COLORS = [
+    "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4",
+    "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F"
+]
+
+
+async def _assign_product_group(
+    supabase, video_id: str, profile_id: str,
+    seg_start: float, seg_end: float
+) -> Optional[str]:
+    """Auto-assign segment to product group if >50% overlap.
+
+    Returns the group label if assigned, None otherwise.
+    """
+    groups = supabase.table("editai_product_groups")\
+        .select("label, start_time, end_time")\
+        .eq("source_video_id", video_id)\
+        .eq("profile_id", profile_id)\
+        .execute()
+
+    if not groups.data:
+        return None
+
+    seg_duration = seg_end - seg_start
+    if seg_duration <= 0:
+        return None
+
+    best_label = None
+    best_overlap = 0.0
+
+    for g in groups.data:
+        overlap_start = max(seg_start, g["start_time"])
+        overlap_end = min(seg_end, g["end_time"])
+        overlap = max(0, overlap_end - overlap_start)
+        ratio = overlap / seg_duration
+
+        if ratio > 0.5 and overlap > best_overlap:
+            best_overlap = overlap
+            best_label = g["label"]
+
+    return best_label
+
+
+async def _reassign_all_segments(supabase, video_id: str, profile_id: str):
+    """Reassign all segments for a video to their matching product groups."""
+    segments = supabase.table("editai_segments")\
+        .select("id, start_time, end_time, keywords, product_group")\
+        .eq("source_video_id", video_id)\
+        .eq("profile_id", profile_id)\
+        .execute()
+
+    for seg in segments.data:
+        new_label = await _assign_product_group(
+            supabase, video_id, profile_id,
+            seg["start_time"], seg["end_time"]
+        )
+        old_group = seg.get("product_group")
+        update_fields = {"product_group": new_label}
+
+        # Manage keywords: remove old group label, add new one
+        kw = list(seg.get("keywords") or [])
+        if old_group and old_group in kw:
+            kw.remove(old_group)
+        if new_label and new_label not in kw:
+            kw.append(new_label)
+        update_fields["keywords"] = kw
+
+        supabase.table("editai_segments")\
+            .update(update_fields)\
+            .eq("id", seg["id"])\
+            .execute()
 
 
 # ============== SOURCE VIDEOS ENDPOINTS ==============
@@ -672,19 +771,33 @@ async def create_segment(
             "is_favorite": False
         }).execute()
 
+        # Auto-assign product group if groups exist
+        assigned_group = await _assign_product_group(supabase, video_id, profile.profile_id, segment.start_time, segment.end_time)
+        product_group_label = assigned_group or segment.product_group
+
+        # If assigned, store in DB and add label as keyword
+        if product_group_label:
+            update_fields = {"product_group": product_group_label}
+            kw = list(segment.keywords)
+            if product_group_label not in kw:
+                kw.append(product_group_label)
+                update_fields["keywords"] = kw
+            supabase.table("editai_segments").update(update_fields).eq("id", segment_id).execute()
+
         return SegmentResponse(
             id=segment_id,
             source_video_id=video_id,
             start_time=segment.start_time,
             end_time=segment.end_time,
             duration=duration,
-            keywords=segment.keywords,
+            keywords=segment.keywords if not product_group_label else (segment.keywords + [product_group_label] if product_group_label not in segment.keywords else segment.keywords),
             extracted_video_path=None,
             thumbnail_path=str(thumbnail_path) if thumbnail_path.exists() else None,
             usage_count=0,
             is_favorite=False,
             notes=segment.notes,
             transforms=None,
+            product_group=product_group_label,
             created_at=datetime.now(timezone.utc).isoformat(),
             source_video_name=source_video.get("name")
         )
@@ -724,6 +837,7 @@ async def list_video_segments(
             is_favorite=s.get("is_favorite", False),
             notes=s.get("notes"),
             transforms=s.get("transforms"),
+            product_group=s.get("product_group"),
             created_at=s["created_at"],
             source_video_name=s.get("editai_source_videos", {}).get("name")
         )
@@ -784,6 +898,7 @@ async def list_all_segments(
             is_favorite=s.get("is_favorite", False),
             notes=s.get("notes"),
             transforms=s.get("transforms"),
+            product_group=s.get("product_group"),
             created_at=s["created_at"],
             source_video_name=s.get("editai_source_videos", {}).get("name")
         ))
@@ -824,6 +939,7 @@ async def get_segment(
         is_favorite=s.get("is_favorite", False),
         notes=s.get("notes"),
         transforms=s.get("transforms"),
+        product_group=s.get("product_group"),
         created_at=s["created_at"],
         source_video_name=s.get("editai_source_videos", {}).get("name")
     )
@@ -853,6 +969,8 @@ async def update_segment(
         update_data["notes"] = update.notes
     if update.transforms is not None:
         update_data["transforms"] = update.transforms.model_dump()
+    if update.product_group is not None:
+        update_data["product_group"] = update.product_group
 
     # Validate times
     if update.start_time is not None and update.start_time < 0:
@@ -871,6 +989,24 @@ async def update_segment(
 
     if not result.data:
         raise HTTPException(status_code=404, detail="Segment not found")
+
+    # Re-check product group assignment if times changed
+    if update.start_time is not None or update.end_time is not None:
+        updated = result.data[0]
+        new_label = await _assign_product_group(
+            supabase, updated["source_video_id"], profile.profile_id,
+            updated["start_time"], updated["end_time"]
+        )
+        if new_label != updated.get("product_group"):
+            pg_update = {"product_group": new_label}
+            kw = list(updated.get("keywords") or [])
+            old_pg = updated.get("product_group")
+            if old_pg and old_pg in kw:
+                kw.remove(old_pg)
+            if new_label and new_label not in kw:
+                kw.append(new_label)
+            pg_update["keywords"] = kw
+            supabase.table("editai_segments").update(pg_update).eq("id", segment_id).execute()
 
     # Fetch updated segment
     return await get_segment(segment_id, profile)
@@ -1099,6 +1235,277 @@ async def stream_segment(
     )
 
 
+# ============== PRODUCT GROUPS ENDPOINTS ==============
+
+@router.post("/source-videos/{video_id}/product-groups", response_model=ProductGroupResponse)
+async def create_product_group(
+    video_id: str,
+    group: ProductGroupCreate,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Create a product group for a source video."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Verify source video
+    video = supabase.table("editai_source_videos")\
+        .select("id")\
+        .eq("id", video_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
+    if not video.data:
+        raise HTTPException(status_code=404, detail="Source video not found")
+
+    if group.end_time <= group.start_time:
+        raise HTTPException(status_code=400, detail="End time must be after start time")
+
+    # Auto-assign color from palette if not provided
+    if not group.color:
+        existing = supabase.table("editai_product_groups")\
+            .select("color")\
+            .eq("source_video_id", video_id)\
+            .eq("profile_id", profile.profile_id)\
+            .execute()
+        used_colors = {g["color"] for g in existing.data if g.get("color")}
+        group.color = next(
+            (c for c in _PRODUCT_GROUP_COLORS if c not in used_colors),
+            _PRODUCT_GROUP_COLORS[len(existing.data) % len(_PRODUCT_GROUP_COLORS)]
+        )
+
+    group_id = str(uuid.uuid4())
+    result = supabase.table("editai_product_groups").insert({
+        "id": group_id,
+        "source_video_id": video_id,
+        "profile_id": profile.profile_id,
+        "label": group.label,
+        "start_time": group.start_time,
+        "end_time": group.end_time,
+        "color": group.color,
+    }).execute()
+
+    # Reassign all segments for this video
+    await _reassign_all_segments(supabase, video_id, profile.profile_id)
+
+    # Count segments in this group
+    seg_count = supabase.table("editai_segments")\
+        .select("id", count="exact")\
+        .eq("source_video_id", video_id)\
+        .eq("profile_id", profile.profile_id)\
+        .eq("product_group", group.label)\
+        .execute()
+
+    return ProductGroupResponse(
+        id=group_id,
+        source_video_id=video_id,
+        label=group.label,
+        start_time=group.start_time,
+        end_time=group.end_time,
+        color=group.color,
+        segments_count=seg_count.count or 0,
+        created_at=datetime.now(timezone.utc).isoformat()
+    )
+
+
+@router.get("/source-videos/{video_id}/product-groups", response_model=List[ProductGroupResponse])
+async def list_product_groups(
+    video_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """List all product groups for a source video."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    result = supabase.table("editai_product_groups")\
+        .select("*")\
+        .eq("source_video_id", video_id)\
+        .eq("profile_id", profile.profile_id)\
+        .order("start_time")\
+        .execute()
+
+    groups = []
+    for g in result.data:
+        seg_count = supabase.table("editai_segments")\
+            .select("id", count="exact")\
+            .eq("source_video_id", video_id)\
+            .eq("profile_id", profile.profile_id)\
+            .eq("product_group", g["label"])\
+            .execute()
+
+        groups.append(ProductGroupResponse(
+            id=g["id"],
+            source_video_id=g["source_video_id"],
+            label=g["label"],
+            start_time=g["start_time"],
+            end_time=g["end_time"],
+            color=g.get("color"),
+            segments_count=seg_count.count or 0,
+            created_at=g["created_at"]
+        ))
+
+    return groups
+
+
+@router.patch("/product-groups/{group_id}", response_model=ProductGroupResponse)
+async def update_product_group(
+    group_id: str,
+    update: ProductGroupUpdate,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Update a product group."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    update_data = {}
+    if update.label is not None:
+        update_data["label"] = update.label
+    if update.start_time is not None:
+        update_data["start_time"] = update.start_time
+    if update.end_time is not None:
+        update_data["end_time"] = update.end_time
+    if update.color is not None:
+        update_data["color"] = update.color
+
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    # Get current group to know old label and video_id
+    current = supabase.table("editai_product_groups")\
+        .select("*")\
+        .eq("id", group_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
+
+    if not current.data:
+        raise HTTPException(status_code=404, detail="Product group not found")
+
+    old = current.data[0]
+    old_label = old["label"]
+
+    result = supabase.table("editai_product_groups")\
+        .update(update_data)\
+        .eq("id", group_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Product group not found")
+
+    # If label changed, update segments that had the old label
+    if update.label and update.label != old_label:
+        segments = supabase.table("editai_segments")\
+            .select("id, keywords")\
+            .eq("source_video_id", old["source_video_id"])\
+            .eq("profile_id", profile.profile_id)\
+            .eq("product_group", old_label)\
+            .execute()
+        for seg in segments.data:
+            kw = list(seg.get("keywords") or [])
+            if old_label in kw:
+                kw[kw.index(old_label)] = update.label
+            supabase.table("editai_segments")\
+                .update({"product_group": update.label, "keywords": kw})\
+                .eq("id", seg["id"]).execute()
+
+    # If time range changed, reassign
+    if update.start_time is not None or update.end_time is not None:
+        await _reassign_all_segments(supabase, old["source_video_id"], profile.profile_id)
+
+    g = result.data[0]
+    seg_count = supabase.table("editai_segments")\
+        .select("id", count="exact")\
+        .eq("source_video_id", g["source_video_id"])\
+        .eq("profile_id", profile.profile_id)\
+        .eq("product_group", g["label"])\
+        .execute()
+
+    return ProductGroupResponse(
+        id=g["id"],
+        source_video_id=g["source_video_id"],
+        label=g["label"],
+        start_time=g["start_time"],
+        end_time=g["end_time"],
+        color=g.get("color"),
+        segments_count=seg_count.count or 0,
+        created_at=g["created_at"]
+    )
+
+
+@router.delete("/product-groups/{group_id}")
+async def delete_product_group(
+    group_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Delete a product group and unassign its segments."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Get group info
+    group = supabase.table("editai_product_groups")\
+        .select("*")\
+        .eq("id", group_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
+
+    if not group.data:
+        raise HTTPException(status_code=404, detail="Product group not found")
+
+    g = group.data[0]
+
+    # Clear product_group from affected segments
+    segments = supabase.table("editai_segments")\
+        .select("id, keywords")\
+        .eq("source_video_id", g["source_video_id"])\
+        .eq("profile_id", profile.profile_id)\
+        .eq("product_group", g["label"])\
+        .execute()
+
+    for seg in segments.data:
+        kw = [k for k in (seg.get("keywords") or []) if k != g["label"]]
+        supabase.table("editai_segments")\
+            .update({"product_group": None, "keywords": kw})\
+            .eq("id", seg["id"]).execute()
+
+    # Delete group
+    supabase.table("editai_product_groups")\
+        .delete()\
+        .eq("id", group_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
+
+    # Reassign remaining segments (might match other groups)
+    await _reassign_all_segments(supabase, g["source_video_id"], profile.profile_id)
+
+    return {"status": "deleted", "id": group_id}
+
+
+@router.post("/source-videos/{video_id}/product-groups/reassign")
+async def reassign_product_groups(
+    video_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Batch reassign all segments to product groups based on overlap."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Verify video
+    video = supabase.table("editai_source_videos")\
+        .select("id")\
+        .eq("id", video_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
+    if not video.data:
+        raise HTTPException(status_code=404, detail="Source video not found")
+
+    await _reassign_all_segments(supabase, video_id, profile.profile_id)
+
+    return {"status": "reassigned", "video_id": video_id}
+
+
 # ============== SRT MATCHING ==============
 
 @router.post("/match-srt", response_model=List[SegmentMatch])
@@ -1283,6 +1690,7 @@ async def get_project_segments(
                 is_favorite=s.get("is_favorite", False),
                 notes=s.get("notes"),
                 transforms=effective_transforms,
+                product_group=s.get("product_group"),
                 created_at=s["created_at"],
                 source_video_name=s.get("editai_source_videos", {}).get("name")
             ))

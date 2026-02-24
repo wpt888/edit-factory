@@ -576,29 +576,37 @@ async def generate_pipeline(
             detail="idea cannot be empty"
         )
 
-    # Fetch unique keywords from editai_segments table
+    # Fetch unique keywords from editai_segments table, grouped by product_group
     supabase = get_supabase()
     unique_keywords = []
+    product_groups_dict = {}  # {group_label: [keywords]}
 
     if supabase:
         try:
             result = supabase.table("editai_segments")\
-                .select("keywords")\
+                .select("keywords, product_group")\
                 .eq("profile_id", profile.profile_id)\
                 .execute()
 
-            # Flatten and deduplicate keywords
+            # Flatten and deduplicate keywords, and group by product_group
             all_keywords = set()
             for seg in result.data:
                 keywords_list = seg.get("keywords") or []
+                pg = seg.get("product_group")
                 for kw in keywords_list:
                     all_keywords.add(kw)
+                    if pg:
+                        if pg not in product_groups_dict:
+                            product_groups_dict[pg] = set()
+                        product_groups_dict[pg].add(kw)
 
             unique_keywords = sorted(all_keywords)
+            # Convert sets to sorted lists
+            product_groups_dict = {k: sorted(v) for k, v in product_groups_dict.items()}
 
             logger.info(
                 f"[Profile {profile.profile_id}] Fetched {len(unique_keywords)} unique keywords "
-                f"from {len(result.data)} segments"
+                f"from {len(result.data)} segments, {len(product_groups_dict)} product groups"
             )
         except Exception as e:
             logger.warning(f"Failed to fetch keywords from database: {e}")
@@ -618,7 +626,8 @@ async def generate_pipeline(
             context=request.context,
             keywords=unique_keywords,
             variant_count=request.variant_count,
-            provider=request.provider
+            provider=request.provider,
+            product_groups=product_groups_dict if product_groups_dict else None
         )
 
         # Generate pipeline ID
