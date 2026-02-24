@@ -302,7 +302,8 @@ class AssemblyService:
         self,
         match_results: List[MatchResult],
         segments_data: List[dict],
-        audio_duration: float
+        audio_duration: float,
+        duration_overrides: Optional[List[Optional[float]]] = None
     ) -> List[TimelineEntry]:
         """
         Build video timeline from match results.
@@ -314,6 +315,9 @@ class AssemblyService:
             match_results: List of MatchResult from matching step
             segments_data: Full segment data for lookup
             audio_duration: Total audio duration to cover
+            duration_overrides: Optional list (parallel to match_results) of user-adjusted
+                                 durations in seconds. None at a position means use natural SRT
+                                 duration for that entry.
 
         Returns:
             List of TimelineEntry objects
@@ -332,7 +336,7 @@ class AssemblyService:
 
         current_timeline_pos = 0.0
 
-        for match in match_results:
+        for idx, match in enumerate(match_results):
             # Determine which segment to use
             if match.segment_id and match.segment_id in segment_lookup:
                 segment = segment_lookup[match.segment_id]
@@ -343,8 +347,13 @@ class AssemblyService:
                 logger.warning(f"No segment available for SRT entry: '{match.srt_text}'")
                 continue
 
-            # Calculate duration needed for this SRT entry
-            needed_duration = match.srt_end - match.srt_start
+            # Calculate duration needed for this SRT entry (user override takes priority)
+            override = (
+                duration_overrides[idx]
+                if duration_overrides and idx < len(duration_overrides)
+                else None
+            )
+            needed_duration = override if override else (match.srt_end - match.srt_start)
 
             # Get segment video path from source_video_id
             source_video_path = segment.get("source_video_path")
@@ -505,6 +514,7 @@ class AssemblyService:
         elevenlabs_model: str = "eleven_flash_v2_5",
         voice_id: Optional[str] = None,
         source_video_ids: Optional[List[str]] = None,
+        match_overrides: Optional[List[dict]] = None,
         enable_denoise: bool = False,
         denoise_strength: float = 2.0,
         enable_sharpen: bool = False,
@@ -520,6 +530,12 @@ class AssemblyService:
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
+
+        Args:
+            match_overrides: Optional list of match dicts from the timeline editor.
+                             When provided, replaces automatic segment matching (Step 5).
+                             Each dict has the same shape as MatchResult with an optional
+                             duration_override field.
 
         Returns:
             Path to final rendered video
@@ -613,20 +629,42 @@ class AssemblyService:
 
             logger.info(f"Loaded {len(segments_data)} segments from library")
 
-            # Step 5: Match SRT to segments
-            logger.info("Step 5/7: Matching SRT phrases to segments")
-            match_results = self.match_srt_to_segments(
-                srt_entries=srt_entries,
-                segments_data=segments_data,
-                min_confidence=0.3
-            )
+            # Step 5: Match SRT to segments (or apply timeline editor overrides)
+            if match_overrides:
+                logger.info(
+                    f"Step 5/7: Applying {len(match_overrides)} match overrides from timeline editor"
+                )
+                match_results = [
+                    MatchResult(
+                        srt_index=m["srt_index"],
+                        srt_text=m["srt_text"],
+                        srt_start=m["srt_start"],
+                        srt_end=m["srt_end"],
+                        segment_id=m.get("segment_id"),
+                        segment_keywords=m.get("segment_keywords") or [],
+                        matched_keyword=m.get("matched_keyword"),
+                        confidence=m.get("confidence", 0.0),
+                    )
+                    for m in match_overrides
+                ]
+                # Extract duration overrides (parallel list, None where not overridden)
+                duration_overrides = [m.get("duration_override") for m in match_overrides]
+            else:
+                logger.info("Step 5/7: Matching SRT phrases to segments")
+                match_results = self.match_srt_to_segments(
+                    srt_entries=srt_entries,
+                    segments_data=segments_data,
+                    min_confidence=0.3
+                )
+                duration_overrides = None
 
             # Step 6: Build timeline
             logger.info("Step 6/7: Building video timeline")
             timeline = self.build_timeline(
                 match_results=match_results,
                 segments_data=segments_data,
-                audio_duration=audio_duration
+                audio_duration=audio_duration,
+                duration_overrides=duration_overrides
             )
 
             # Step 7: Assemble video

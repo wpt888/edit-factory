@@ -585,6 +585,14 @@ export default function PipelinePage() {
     setIsRendering(true);
     setVariantStatuses(initialStatuses);
 
+    // Collect match overrides from timeline editor for each selected variant
+    const matchOverrides: Record<number, MatchPreview[]> = {};
+    for (const idx of Array.from(selectedVariants)) {
+      if (previews[idx]?.matches && previews[idx].matches.length > 0) {
+        matchOverrides[idx] = previews[idx].matches;
+      }
+    }
+
     try {
       const res = await apiPost(`/pipeline/render/${pipelineId}`, {
         variant_indices: Array.from(selectedVariants),
@@ -592,6 +600,7 @@ export default function PipelinePage() {
         elevenlabs_model: elevenlabsModel,
         voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
         source_video_ids: selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined,
+        match_overrides: Object.keys(matchOverrides).length > 0 ? matchOverrides : undefined,
         font_size: subtitleSettings.fontSize,
         font_family: subtitleSettings.fontFamily,
         text_color: subtitleSettings.textColor,

@@ -204,6 +204,8 @@ class PipelineRenderRequest(BaseModel):
     variant_indices: List[int]          # Which variants to render
     preset_name: str = "TikTok"
     source_video_ids: Optional[List[str]] = None  # Filter segments to these source videos
+    # Timeline editor overrides: variant_index -> list of match dicts (with optional duration_override)
+    match_overrides: Optional[Dict[int, List[dict]]] = None
     # Subtitle settings
     font_size: int = 48
     font_family: str = "Montserrat"
@@ -983,6 +985,15 @@ async def render_variants(
 
                     assembly_service = get_assembly_service()
 
+                    # Extract match overrides for this variant (from timeline editor)
+                    variant_match_overrides = None
+                    if request.match_overrides and vid in request.match_overrides:
+                        variant_match_overrides = request.match_overrides[vid]
+                        logger.info(
+                            f"[Profile {profile.profile_id}] Using {len(variant_match_overrides)} "
+                            f"match overrides for variant {vid}"
+                        )
+
                     # Run full assembly
                     final_video_path = await assembly_service.assemble_and_render(
                         script_text=script_text,
@@ -992,6 +1003,7 @@ async def render_variants(
                         elevenlabs_model=request.elevenlabs_model,
                         voice_id=request.voice_id,
                         source_video_ids=request.source_video_ids,
+                        match_overrides=variant_match_overrides,
                         enable_denoise=request.enable_denoise,
                         denoise_strength=request.denoise_strength,
                         enable_sharpen=request.enable_sharpen,
