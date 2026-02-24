@@ -1,58 +1,61 @@
 # Requirements: Edit Factory
 
-**Defined:** 2026-02-23
+**Defined:** 2026-02-24
 **Core Value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
 
-## v7 Requirements
+## v8 Requirements
 
-Requirements for v7 Product Image Overlays. Each maps to roadmap phases.
+Requirements for v8 Pipeline UX Overhaul. Each maps to roadmap phases.
 
-### Product-Segment Association
+### Bug Fixes
 
-- [x] **ASSOC-01**: User can associate a catalog product with a segment
-- [x] **ASSOC-02**: User can remove a product association from a segment
-- [x] **ASSOC-03**: User can view which product is associated with each segment (thumbnail + name)
-- [x] **ASSOC-04**: User can select which image(s) from the product gallery to use on a segment
+- [ ] **BUG-01**: User does not see empty state flash when entering Step 4 (render progress loads cleanly without flicker)
+- [ ] **BUG-02**: Rendered pipeline clips are saved to Supabase clips table and appear in library for publishing
 
-### PiP Overlay
+### Video Source Selection
 
-- [x] **OVRL-01**: User can enable PiP overlay of product image on a segment
-- [x] **OVRL-02**: User can choose PiP position (top-left, top-right, bottom-left, bottom-right)
-- [x] **OVRL-03**: User can choose PiP size (small, medium, large)
-- [x] **OVRL-04**: User can choose PiP animation style (static, fade in/out, Ken Burns)
+- [ ] **SRC-01**: User can select one or more projects/videos from library as segment source before preview
+- [ ] **SRC-02**: Preview and render only match against segments from selected video(s), not entire library
+- [ ] **SRC-03**: User can see how many segments each video has when selecting source
+- [ ] **SRC-04**: Selected source videos persist in pipeline state (survives page reload via DB)
 
-### Interstitial Slides
+### Video Preview
+
+- [ ] **PREV-01**: User can play rendered videos inline in Step 4 variant cards (HTML5 video player)
+- [ ] **PREV-02**: Auto-generated thumbnail displayed for each rendered variant before playback
+
+### Timeline Editor
+
+- [ ] **TIME-01**: User sees a visual timeline showing matched SRT phrases mapped to video segments in Step 3
+- [ ] **TIME-02**: User can drag and drop to reorder segments on the timeline
+- [ ] **TIME-03**: User can swap a segment for a different one from the selected source video(s)
+- [ ] **TIME-04**: Unmatched phrases are visually highlighted with option to manually assign a segment
+- [ ] **TIME-05**: User can adjust segment duration on the timeline
+
+## v7 Requirements (Paused)
+
+v7 Product Image Overlays — 4/6 phases complete. Remaining:
 
 - [ ] **SLID-01**: User can insert an interstitial product slide between segments
 - [ ] **SLID-02**: User can configure interstitial slide duration (0.5s - 5s)
 - [ ] **SLID-03**: Interstitial slide displays product image full-screen with Ken Burns animation
-
-### Frontend Integration
-
-- [x] **UI-01**: Segments page shows product association controls per segment
-- [x] **UI-02**: Pipeline page shows product association controls per matched segment
-- [x] **UI-03**: Product picker dialog searches/filters catalog products
-- [x] **UI-04**: Image picker shows all available images for selected product
-
-### Render Integration
-
 - [ ] **REND-01**: Assembly/render pipeline applies PiP overlays during video composition
 - [ ] **REND-02**: Assembly/render pipeline inserts interstitial slides at segment boundaries
 - [ ] **REND-03**: Rendered video uses selected product images with chosen animation style
 
 ## Future Requirements
 
-None deferred — all identified features scoped to v7.
+v7 remaining phases (36-37) deferred — resume after v8.
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Auto-associate products based on video content | AI matching is complex and error-prone; user picks manually |
-| Product overlay on product-first videos | Product videos already have product visuals; overlays are for upload/script workflows |
-| Animated text overlays on PiP | Keep PiP simple — image only, text overlays are a separate feature |
-| Multiple products per segment | One product per segment keeps UI and render simple |
-| PiP on interstitial slides | Interstitials are full-screen by definition |
+| Multi-track audio mixing | Single TTS voiceover is sufficient for shorts |
+| Frame-level segment trimming | Duration adjustment (TIME-05) is granular enough |
+| Collaborative timeline editing | Single-user app |
+| Real-time preview rendering | Too compute-heavy; preview via generated thumbnails |
+| Automatic segment matching without source selection | Current pain point — user must choose source |
 
 ## Traceability
 
@@ -60,30 +63,25 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ASSOC-01 | Phase 32 | Complete |
-| ASSOC-02 | Phase 32 | Complete |
-| ASSOC-03 | Phase 32 | Complete |
-| ASSOC-04 | Phase 32 | Complete |
-| OVRL-01 | Phase 35 | Complete |
-| OVRL-02 | Phase 35 | Complete |
-| OVRL-03 | Phase 35 | Complete |
-| OVRL-04 | Phase 35 | Complete |
-| SLID-01 | Phase 36 | Pending |
-| SLID-02 | Phase 36 | Pending |
-| SLID-03 | Phase 36 | Pending |
-| UI-01 | Phase 34 | Complete |
-| UI-02 | Phase 34 | Complete |
-| UI-03 | Phase 33 | Complete |
-| UI-04 | Phase 33 | Complete |
-| REND-01 | Phase 37 | Pending |
-| REND-02 | Phase 37 | Pending |
-| REND-03 | Phase 37 | Pending |
+| BUG-01 | TBD | Pending |
+| BUG-02 | TBD | Pending |
+| SRC-01 | TBD | Pending |
+| SRC-02 | TBD | Pending |
+| SRC-03 | TBD | Pending |
+| SRC-04 | TBD | Pending |
+| PREV-01 | TBD | Pending |
+| PREV-02 | TBD | Pending |
+| TIME-01 | TBD | Pending |
+| TIME-02 | TBD | Pending |
+| TIME-03 | TBD | Pending |
+| TIME-04 | TBD | Pending |
+| TIME-05 | TBD | Pending |
 
 **Coverage:**
-- v7 requirements: 18 total
-- Mapped to phases: 18
-- Unmapped: 0 ✓
+- v8 requirements: 13 total
+- Mapped to phases: 0
+- Unmapped: 13 (roadmap pending)
 
 ---
-*Requirements defined: 2026-02-23*
-*Last updated: 2026-02-23 after roadmap created — all 18 requirements mapped*
+*Requirements defined: 2026-02-24*
+*Last updated: 2026-02-24 after initial definition*
