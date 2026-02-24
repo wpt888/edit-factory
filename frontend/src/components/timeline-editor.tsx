@@ -18,6 +18,9 @@ import {
   Film,
   GripVertical,
   RefreshCw,
+  Clock,
+  Plus,
+  Minus,
 } from "lucide-react";
 
 // MatchPreview interface (mirrors pipeline/page.tsx)
@@ -30,6 +33,7 @@ export interface MatchPreview {
   segment_keywords: string[];
   matched_keyword: string | null;
   confidence: number;
+  duration_override?: number;  // User-adjusted duration in seconds
 }
 
 export interface SegmentOption {
@@ -169,6 +173,18 @@ export function TimelineEditor({
     setDragOverIndex(null);
   };
 
+  // --- Duration adjustment handlers ---
+
+  const adjustDuration = (index: number, delta: number) => {
+    const match = matches[index];
+    const naturalDuration = match.srt_end - match.srt_start;
+    const currentDuration = match.duration_override ?? naturalDuration;
+    const newDuration = Math.max(0.5, Math.min(10, currentDuration + delta));
+    const updated = [...matches];
+    updated[index] = { ...updated[index], duration_override: newDuration };
+    onMatchesChange(updated);
+  };
+
   if (matches.length === 0) {
     return (
       <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
@@ -198,6 +214,11 @@ export function TimelineEditor({
               match.srt_text.length > 60
                 ? match.srt_text.substring(0, 60) + "..."
                 : match.srt_text;
+            const naturalDuration = match.srt_end - match.srt_start;
+            const displayDuration = match.duration_override ?? naturalDuration;
+            const isDurationOverridden =
+              match.duration_override !== undefined &&
+              Math.abs(match.duration_override - naturalDuration) > 0.05;
 
             return (
               <div
@@ -242,6 +263,45 @@ export function TimelineEditor({
                   title={match.srt_text}
                 >
                   {displayText}
+                </div>
+
+                {/* Duration adjustment control */}
+                <div className="flex-shrink-0 flex items-center gap-1 text-xs">
+                  <span title="Segment duration">
+                    <Clock className="h-3 w-3 text-muted-foreground" />
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-5 w-5"
+                    onClick={() => adjustDuration(idx, -0.5)}
+                    title="Decrease duration by 0.5s"
+                  >
+                    <Minus className="h-3 w-3" />
+                  </Button>
+                  <span
+                    className={`w-10 text-center font-mono tabular-nums ${
+                      isDurationOverridden
+                        ? "text-blue-600 dark:text-blue-400 font-semibold"
+                        : "text-muted-foreground"
+                    }`}
+                    title={
+                      isDurationOverridden
+                        ? `Adjusted from ${naturalDuration.toFixed(1)}s`
+                        : "Natural SRT duration"
+                    }
+                  >
+                    {displayDuration.toFixed(1)}s
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-5 w-5"
+                    onClick={() => adjustDuration(idx, 0.5)}
+                    title="Increase duration by 0.5s"
+                  >
+                    <Plus className="h-3 w-3" />
+                  </Button>
                 </div>
 
                 {/* Right: Match status */}
