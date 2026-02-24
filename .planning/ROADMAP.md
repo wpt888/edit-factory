@@ -100,7 +100,7 @@ Full details: `.planning/milestones/v6-ROADMAP.md`
 **Milestone Goal:** Fix pipeline Step 4 bugs, add source video selection to Step 3, inline video preview to Step 4, and a visual timeline editor to Step 3 — making the multi-variant pipeline workflow complete from script to published video.
 
 - [x] **Phase 38: Bug Fixes + Source Selection Backend** - Fix Step 4 flicker and library save, add scoped segment matching API (completed 2026-02-24)
-- [ ] **Phase 39: Source Selection Frontend** - Step 3 UI for picking source videos with segment counts and DB persistence
+- [x] **Phase 39: Source Selection Frontend** - Step 3 UI for picking source videos with segment counts and DB persistence (completed 2026-02-24)
 - [ ] **Phase 40: Video Preview Player** - Inline HTML5 player with auto-thumbnails on Step 4 variant cards
 - [ ] **Phase 41: Timeline Editor** - Visual timeline in Step 3 with drag/drop reordering, segment swap, and duration adjustment
 
@@ -267,7 +267,7 @@ Plans:
 | 36. Interstitial Slide Controls | v7 | 0/1 | Deferred (v7 paused) | - |
 | 37. Render Integration | v7 | 0/2 | Deferred (v7 paused) | - |
 | 38. Bug Fixes + Source Selection Backend | 2/2 | Complete    | 2026-02-24 | - |
-| 39. Source Selection Frontend | v8 | 0/1 | Not started | - |
+| 39. Source Selection Frontend | 1/1 | Complete   | 2026-02-24 | - |
 | 40. Video Preview Player | v8 | 0/1 | Not started | - |
 | 41. Timeline Editor | v8 | 0/3 | Not started | - |
 
