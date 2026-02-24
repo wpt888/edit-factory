@@ -783,6 +783,17 @@ class AssemblyService:
             for e in timeline
         ]
 
+        # Build available segments summary for the timeline editor picker
+        available_segments = [
+            {
+                "id": seg["id"],
+                "keywords": seg.get("keywords") or [],
+                "source_video_id": seg["source_video_id"],
+                "duration": seg.get("duration", 0)
+            }
+            for seg in segments_data
+        ]
+
         return {
             "audio_path": str(audio_path),
             "audio_duration": audio_duration,
@@ -791,7 +802,8 @@ class AssemblyService:
             "timeline": timeline_data,
             "total_phrases": len(match_results),
             "matched_count": matched_count,
-            "unmatched_count": unmatched_count
+            "unmatched_count": unmatched_count,
+            "available_segments": available_segments
         }
 
 

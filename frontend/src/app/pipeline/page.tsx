@@ -41,11 +41,8 @@ import {
   Search,
   ChevronDown,
   ChevronUp,
-  Package,
-  Images,
   X,
   Star,
-  Layers,
   Type,
   Trash2,
   Volume2,
@@ -56,14 +53,13 @@ import { useProfile } from "@/contexts/profile-context";
 import { EmptyState } from "@/components/empty-state";
 import { ProductPickerDialog } from "@/components/product-picker-dialog";
 import { ImagePickerDialog } from "@/components/image-picker-dialog";
-import { PipOverlayPanel } from "@/components/pip-overlay-panel";
 import type { AssociationResponse } from "@/components/product-picker-dialog";
-import { PipConfig, DEFAULT_PIP_CONFIG } from "@/components/product-picker-dialog";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { SubtitleSettings, DEFAULT_SUBTITLE_SETTINGS } from "@/types/video-processing";
+import { TimelineEditor, SegmentOption } from "@/components/timeline-editor";
 
 // TypeScript interfaces
-interface MatchPreview {
+export interface MatchPreview {
   srt_index: number;
   srt_text: string;
   srt_start: number;
@@ -81,6 +77,7 @@ interface PreviewData {
   total_phrases: number;
   matched_count: number;
   unmatched_count: number;
+  available_segments?: SegmentOption[];
 }
 
 interface PipelineListItem {
@@ -229,14 +226,13 @@ export default function PipelinePage() {
   const [sourceVideosLoading, setSourceVideosLoading] = useState(false);
   const sourceSelectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Available segments for timeline editor (collected from preview response)
+  const [availableSegments, setAvailableSegments] = useState<SegmentOption[]>([]);
+
   // Subtitle settings state
   const [subtitleSettings, setSubtitleSettings] = useState<SubtitleSettings>({ ...DEFAULT_SUBTITLE_SETTINGS });
   const [, setSubtitleSettingsLoaded] = useState(false);
   const subtitleSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // PiP overlay panel state
-  const [pipExpandedSegId, setPipExpandedSegId] = useState<string | null>(null);
-  const [pipSaving, setPipSaving] = useState(false);
 
   // Format helpers
   const formatDuration = (seconds: number): string => {
@@ -557,6 +553,12 @@ export default function PipelinePage() {
 
     setPreviews(newPreviews);
     setPreviewingIndex(null);
+
+    // Collect available segments from the first preview response (all previews share same segment pool)
+    const firstPreview = Object.values(newPreviews)[0];
+    if (firstPreview?.available_segments && firstPreview.available_segments.length > 0) {
+      setAvailableSegments(firstPreview.available_segments);
+    }
 
     // Select all variants by default
     const allIndices = new Set(scripts.map((_, i) => i));
@@ -1068,37 +1070,6 @@ export default function PipelinePage() {
   const handleImagesUpdated = (updatedAssociation: AssociationResponse) => {
     setAssociations(prev => ({ ...prev, [updatedAssociation.segment_id]: updatedAssociation }));
     setImagePickerAssoc(null);
-  };
-
-  const handleRemoveAssociation = async (segmentId: string) => {
-    try {
-      const res = await apiDelete(`/associations/segment/${segmentId}`);
-      if (res.ok) {
-        setAssociations(prev => {
-          const next = { ...prev };
-          delete next[segmentId];
-          return next;
-        });
-      }
-    } catch (error) {
-      handleApiError(error, "Failed to remove product association");
-    }
-  };
-
-  // Save PiP config for an association
-  const handleSavePipConfig = async (associationId: string, segmentId: string, config: PipConfig) => {
-    setPipSaving(true);
-    try {
-      const res = await apiPatch(`/associations/${associationId}/pip-config`, config);
-      if (res.ok) {
-        const updated = await res.json();
-        setAssociations(prev => ({ ...prev, [segmentId]: updated }));
-      }
-    } catch (error) {
-      handleApiError(error, "Failed to save PiP config");
-    } finally {
-      setPipSaving(false);
-    }
   };
 
   return (
@@ -1855,8 +1826,6 @@ export default function PipelinePage() {
                 const preview = previews[index];
                 if (!preview) return null;
 
-                const topMatches = preview.matches.slice(0, 3);
-
                 return (
                   <Card key={index}>
                     <CardHeader>
@@ -1874,7 +1843,7 @@ export default function PipelinePage() {
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-3">
-                      {/* Match summary */}
+                      {/* Match summary counts */}
                       <div className="flex items-center gap-4 text-sm">
                         <div className="flex items-center gap-1 text-green-600">
                           <CheckCircle className="h-4 w-4" />
@@ -1886,124 +1855,29 @@ export default function PipelinePage() {
                           <span className="font-semibold">{preview.unmatched_count}</span>
                           <span className="text-muted-foreground">unmatched</span>
                         </div>
+                        <span className="text-xs text-muted-foreground ml-auto">
+                          {preview.total_phrases} phrases total
+                        </span>
                       </div>
 
-                      {/* Top matches */}
-                      <div className="space-y-2">
-                        <p className="text-sm font-medium text-muted-foreground">
-                          Top 3 Matches:
-                        </p>
-                        {topMatches.map((match, mIndex) => {
-                          const isMatched = match.confidence > 0;
-                          const textPreview =
-                            match.srt_text.length > 40
-                              ? match.srt_text.substring(0, 40) + "..."
-                              : match.srt_text;
-
-                          return (
-                            <div
-                              key={mIndex}
-                              className="p-2 border rounded text-xs space-y-1"
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <p className="text-muted-foreground flex-1">
-                                  {textPreview}
-                                </p>
-                                {isMatched ? (
-                                  <Badge variant="default" className="text-xs">
-                                    {Math.round(match.confidence * 100)}%
-                                  </Badge>
-                                ) : (
-                                  <Badge variant="destructive" className="text-xs">
-                                    No match
-                                  </Badge>
-                                )}
-                              </div>
-                              {/* Product association for matched segment */}
-                              {match.segment_id && (() => {
-                                const segId = match.segment_id;
-                                const assoc = associations[segId];
-                                return (
-                                  <>
-                                    <div className="flex items-center gap-1.5 mt-1 pt-1 border-t border-border/50">
-                                      {assoc ? (
-                                        <>
-                                          {assoc.product_image && (
-                                            // eslint-disable-next-line @next/next/no-img-element
-                                            <img
-                                              src={assoc.product_image}
-                                              alt=""
-                                              className="w-5 h-5 rounded object-cover flex-shrink-0"
-                                            />
-                                          )}
-                                          <span className="text-[10px] truncate flex-1" title={assoc.product_title || ""}>
-                                            {assoc.product_title || "Product"}
-                                          </span>
-                                          <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            className="h-5 w-5"
-                                            title="Select images"
-                                            onClick={(e) => { e.stopPropagation(); setImagePickerAssoc(assoc); }}
-                                          >
-                                            <Images className="h-3 w-3" />
-                                          </Button>
-                                          <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            className="h-5 w-5 text-destructive"
-                                            title="Remove product"
-                                            onClick={(e) => { e.stopPropagation(); handleRemoveAssociation(segId); }}
-                                          >
-                                            <X className="h-3 w-3" />
-                                          </Button>
-                                        </>
-                                      ) : (
-                                        <Button
-                                          variant="ghost"
-                                          size="sm"
-                                          className="h-5 text-[10px] px-1.5 text-muted-foreground"
-                                          onClick={(e) => { e.stopPropagation(); setPickerSegmentId(segId); }}
-                                        >
-                                          <Package className="h-3 w-3 mr-1" />
-                                          Add Product
-                                        </Button>
-                                      )}
-                                    </div>
-                                    {/* PiP Overlay controls — only for associated segments */}
-                                    {assoc && (
-                                      <div className="mt-1">
-                                        <Button
-                                          variant="ghost"
-                                          size="sm"
-                                          className="h-5 text-[10px] w-full justify-start"
-                                          onClick={(e) => { e.stopPropagation(); setPipExpandedSegId(prev => prev === segId ? null : segId); }}
-                                        >
-                                          <Layers className="h-3 w-3 mr-1" />
-                                          PiP Overlay {assoc.pip_config?.enabled ? "✓" : ""}
-                                        </Button>
-                                        {pipExpandedSegId === segId && (
-                                          <PipOverlayPanel
-                                            config={assoc.pip_config || DEFAULT_PIP_CONFIG}
-                                            onChange={(config) => {
-                                              setAssociations(prev => ({
-                                                ...prev,
-                                                [segId]: { ...prev[segId], pip_config: config }
-                                              }));
-                                            }}
-                                            onSave={(config) => handleSavePipConfig(assoc.id, segId, config)}
-                                            isSaving={pipSaving}
-                                          />
-                                        )}
-                                      </div>
-                                    )}
-                                  </>
-                                );
-                              })()}
-                            </div>
-                          );
-                        })}
-                      </div>
+                      {/* Full timeline editor */}
+                      <TimelineEditor
+                        matches={preview.matches}
+                        audioDuration={preview.audio_duration}
+                        sourceVideoIds={Array.from(selectedSourceIds)}
+                        availableSegments={availableSegments}
+                        onMatchesChange={(updatedMatches) => {
+                          setPreviews(prev => ({
+                            ...prev,
+                            [index]: {
+                              ...prev[index],
+                              matches: updatedMatches,
+                              matched_count: updatedMatches.filter(m => m.segment_id !== null).length,
+                              unmatched_count: updatedMatches.filter(m => m.segment_id === null).length,
+                            }
+                          }));
+                        }}
+                      />
                     </CardContent>
                   </Card>
                 );
