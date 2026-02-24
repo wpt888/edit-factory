@@ -11,7 +11,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { CheckCircle, AlertTriangle, Search, Film } from "lucide-react";
+import {
+  CheckCircle,
+  AlertTriangle,
+  Search,
+  Film,
+  GripVertical,
+  RefreshCw,
+} from "lucide-react";
 
 // MatchPreview interface (mirrors pipeline/page.tsx)
 export interface MatchPreview {
@@ -53,8 +60,13 @@ export function TimelineEditor({
   availableSegments,
   onMatchesChange,
 }: TimelineEditorProps) {
-  const [dialogOpenForIndex, setDialogOpenForIndex] = useState<number | null>(null);
+  // Dialog state (used for both unmatched assignment and swap)
+  const [assigningIndex, setAssigningIndex] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Drag-and-drop state
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   // Filtered segments based on search
   const filteredSegments = availableSegments.filter((seg) => {
@@ -63,21 +75,23 @@ export function TimelineEditor({
     return seg.keywords.some((kw) => kw.toLowerCase().includes(q));
   });
 
+  // --- Dialog handlers ---
+
   const handleOpenDialog = (matchIndex: number) => {
-    setDialogOpenForIndex(matchIndex);
+    setAssigningIndex(matchIndex);
     setSearchQuery("");
   };
 
   const handleCloseDialog = () => {
-    setDialogOpenForIndex(null);
+    setAssigningIndex(null);
     setSearchQuery("");
   };
 
   const handleSelectSegment = (segment: SegmentOption) => {
-    if (dialogOpenForIndex === null) return;
+    if (assigningIndex === null) return;
 
     const updatedMatches = matches.map((match, idx) => {
-      if (idx === dialogOpenForIndex) {
+      if (idx === assigningIndex) {
         return {
           ...match,
           segment_id: segment.id,
@@ -93,6 +107,68 @@ export function TimelineEditor({
     handleCloseDialog();
   };
 
+  // --- Drag-and-drop handlers ---
+
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
+    setDragIndex(index);
+    e.dataTransfer.effectAllowed = "move";
+    // Required for Firefox
+    e.dataTransfer.setData("text/plain", String(index));
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverIndex !== index) {
+      setDragOverIndex(index);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    // Only clear if leaving the row entirely (not entering a child)
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setDragOverIndex(null);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>, dropIndex: number) => {
+    e.preventDefault();
+    if (dragIndex === null || dragIndex === dropIndex) {
+      setDragIndex(null);
+      setDragOverIndex(null);
+      return;
+    }
+
+    const updated = [...matches];
+
+    // Swap segment assignments between dragged and dropped positions
+    // SRT text/timing stays in place — only the segment mapping moves
+    const dragSegment = {
+      segment_id: updated[dragIndex].segment_id,
+      segment_keywords: updated[dragIndex].segment_keywords,
+      matched_keyword: updated[dragIndex].matched_keyword,
+      confidence: updated[dragIndex].confidence,
+    };
+    const dropSegment = {
+      segment_id: updated[dropIndex].segment_id,
+      segment_keywords: updated[dropIndex].segment_keywords,
+      matched_keyword: updated[dropIndex].matched_keyword,
+      confidence: updated[dropIndex].confidence,
+    };
+
+    updated[dragIndex] = { ...updated[dragIndex], ...dropSegment };
+    updated[dropIndex] = { ...updated[dropIndex], ...dragSegment };
+
+    onMatchesChange(updated);
+    setDragIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleDragEnd = () => {
+    setDragIndex(null);
+    setDragOverIndex(null);
+  };
+
   if (matches.length === 0) {
     return (
       <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
@@ -102,12 +178,22 @@ export function TimelineEditor({
     );
   }
 
+  // Determine dialog title based on context
+  const isSwapMode =
+    assigningIndex !== null &&
+    matches[assigningIndex]?.segment_id !== null &&
+    matches[assigningIndex]?.confidence > 0;
+  const dialogTitle = isSwapMode ? "Swap Segment" : "Select Segment";
+  const dialogSubLabel = isSwapMode ? "Swapping segment for phrase" : "Assigning to phrase";
+
   return (
     <>
       <ScrollArea className="max-h-[400px] rounded-md border">
         <div className="divide-y">
           {matches.map((match, idx) => {
             const isMatched = match.segment_id !== null && match.confidence > 0;
+            const isDragging = dragIndex === idx;
+            const isDragOver = dragOverIndex === idx && dragIndex !== idx;
             const displayText =
               match.srt_text.length > 60
                 ? match.srt_text.substring(0, 60) + "..."
@@ -116,12 +202,30 @@ export function TimelineEditor({
             return (
               <div
                 key={idx}
-                className={`flex items-center gap-3 px-3 py-2.5 min-h-[48px] border-l-4 transition-colors ${
+                draggable
+                onDragStart={(e) => handleDragStart(e, idx)}
+                onDragOver={(e) => handleDragOver(e, idx)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, idx)}
+                onDragEnd={handleDragEnd}
+                className={`group flex items-center gap-3 px-3 py-2.5 min-h-[48px] border-l-4 transition-colors select-none ${
                   isMatched
                     ? "border-l-green-500 bg-green-50 dark:bg-green-950/20"
                     : "border-l-amber-500 bg-amber-50 dark:bg-amber-950/20"
+                } ${isDragging ? "opacity-50" : ""} ${
+                  isDragOver
+                    ? "border-t-2 border-t-blue-500"
+                    : "border-t-transparent"
                 }`}
               >
+                {/* Drag handle */}
+                <div
+                  className="flex-shrink-0 cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+                  title="Drag to swap segment assignment"
+                >
+                  <GripVertical className="h-4 w-4" />
+                </div>
+
                 {/* Left: Index + time range */}
                 <div className="flex-shrink-0 text-xs text-muted-foreground w-24 space-y-0.5">
                   <div className="font-mono font-semibold text-foreground">
@@ -154,6 +258,17 @@ export function TimelineEditor({
                       <span className="text-xs text-green-700 dark:text-green-400 font-medium">
                         {Math.round(match.confidence * 100)}%
                       </span>
+                      {/* Swap button — visible on row hover */}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={() => handleOpenDialog(idx)}
+                        disabled={availableSegments.length === 0}
+                        title="Swap segment"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                      </Button>
                     </>
                   ) : (
                     <>
@@ -182,27 +297,27 @@ export function TimelineEditor({
         </div>
       </ScrollArea>
 
-      {/* Segment assignment dialog */}
+      {/* Segment assignment / swap dialog */}
       <Dialog
-        open={dialogOpenForIndex !== null}
+        open={assigningIndex !== null}
         onOpenChange={(open) => {
           if (!open) handleCloseDialog();
         }}
       >
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Select Segment</DialogTitle>
+            <DialogTitle>{dialogTitle}</DialogTitle>
           </DialogHeader>
 
-          {dialogOpenForIndex !== null && (
+          {assigningIndex !== null && (
             <div className="space-y-3">
               {/* Phrase being assigned */}
               <div className="rounded-md bg-muted/50 px-3 py-2 text-sm">
                 <span className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-                  Assigning to phrase
+                  {dialogSubLabel}
                 </span>
                 <p className="mt-0.5 font-medium">
-                  &ldquo;{matches[dialogOpenForIndex]?.srt_text}&rdquo;
+                  &ldquo;{matches[assigningIndex]?.srt_text}&rdquo;
                 </p>
               </div>
 
