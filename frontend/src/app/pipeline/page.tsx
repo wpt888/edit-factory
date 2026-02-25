@@ -52,6 +52,7 @@ import {
   Info,
   Library,
   Eye,
+  AlertTriangle,
 } from "lucide-react";
 import { usePolling } from "@/hooks";
 import { useProfile } from "@/contexts/profile-context";
@@ -109,6 +110,8 @@ interface VariantStatus {
   final_video_path?: string;
   thumbnail_path?: string;
   error?: string;
+  library_saved?: boolean;
+  library_error?: string;
 }
 
 interface VariantPreviewInfo {
@@ -201,42 +204,13 @@ function PipelinePage() {
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [defaultVoiceId, setDefaultVoiceId] = useState("");
   const [savingDefault, setSavingDefault] = useState(false);
-  // ElevenLabs voice settings (persisted to localStorage)
-  const [voiceStability, setVoiceStability] = useState(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("ef_voice_stability");
-      return saved !== null ? parseFloat(saved) : 0.5;
-    }
-    return 0.5;
-  });
-  const [voiceSimilarity, setVoiceSimilarity] = useState(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("ef_voice_similarity");
-      return saved !== null ? parseFloat(saved) : 0.75;
-    }
-    return 0.75;
-  });
-  const [voiceStyle, setVoiceStyle] = useState(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("ef_voice_style");
-      return saved !== null ? parseFloat(saved) : 0.0;
-    }
-    return 0.0;
-  });
-  const [voiceSpeed, setVoiceSpeed] = useState(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("ef_voice_speed");
-      return saved !== null ? parseFloat(saved) : 1.0;
-    }
-    return 1.0;
-  });
-  const [voiceSpeakerBoost, setVoiceSpeakerBoost] = useState(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("ef_voice_speaker_boost");
-      return saved !== null ? saved === "true" : true;
-    }
-    return true;
-  });
+  // ElevenLabs voice settings (persisted to localStorage, loaded after hydration)
+  const [voiceStability, setVoiceStability] = useState(0.5);
+  const [voiceSimilarity, setVoiceSimilarity] = useState(0.75);
+  const [voiceStyle, setVoiceStyle] = useState(0.0);
+  const [voiceSpeed, setVoiceSpeed] = useState(1.0);
+  const [voiceSpeakerBoost, setVoiceSpeakerBoost] = useState(true);
+  const voiceSettingsLoaded = useRef(false);
 
   // Step 4: Render
   const [selectedVariants, setSelectedVariants] = useState<Set<number>>(new Set());
@@ -282,6 +256,8 @@ function PipelinePage() {
   const [ttsResults, setTtsResults] = useState<Record<number, { audio_duration: number; generating: boolean; stale: boolean }>>({});
   const [playingTtsVariant, setPlayingTtsVariant] = useState<number | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const voiceSettingsInitialized = useRef(false);
+  const previewAbortRef = useRef<AbortController | null>(null);
 
   // TTS Library duplicate detection
   const [libraryMatches, setLibraryMatches] = useState<Record<number, { asset_id: string; audio_duration: number }>>({});
@@ -307,7 +283,7 @@ function PipelinePage() {
 
   // Subtitle settings state
   const [subtitleSettings, setSubtitleSettings] = useState<SubtitleSettings>({ ...DEFAULT_SUBTITLE_SETTINGS });
-  const [, setSubtitleSettingsLoaded] = useState(false);
+  const [subtitleSettingsLoaded, setSubtitleSettingsLoaded] = useState(false);
   const subtitleSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Format helpers
@@ -389,7 +365,8 @@ function PipelinePage() {
     } finally {
       setSourceVideosLoading(false);
     }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProfile?.id]);
 
   // Source videos: restore selection from a saved pipeline
   const restoreSourceSelection = useCallback(async (pid: string) => {
@@ -552,6 +529,26 @@ function PipelinePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipelineId, isRendering, step]);
 
+  // One-time status check when entering Step 4 (detect already-complete variants)
+  useEffect(() => {
+    if (step === 4 && pipelineId && isRendering) {
+      apiGet(`/pipeline/status/${pipelineId}`)
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+          if (!data?.variants) return;
+          setVariantStatuses(data.variants);
+          const allDone = data.variants.every(
+            (v: { status: string }) => v.status === "completed" || v.status === "failed"
+          );
+          if (allDone && data.variants.length > 0) {
+            setIsRendering(false);
+          }
+        })
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, pipelineId]); // intentionally exclude isRendering to run only on step change
+
   // Step 1: Generate scripts
   const handleGenerate = async () => {
     if (!idea.trim()) return;
@@ -600,10 +597,16 @@ function PipelinePage() {
   const handlePreviewAll = async () => {
     if (!pipelineId) return;
 
+    // Cancel any in-flight preview requests from a previous run
+    previewAbortRef.current?.abort();
+    const abortController = new AbortController();
+    previewAbortRef.current = abortController;
+
     setPreviewError(null);
     const newPreviews: Record<number, PreviewData> = {};
 
     for (let i = 0; i < scripts.length; i++) {
+      if (abortController.signal.aborted) return;
       setPreviewingIndex(i);
       try {
         const res = await apiPost(`/pipeline/preview/${pipelineId}/${i}`, {
@@ -617,7 +620,9 @@ function PipelinePage() {
             speed: voiceSpeed,
             use_speaker_boost: voiceSpeakerBoost,
           },
-        }, { timeout: 300_000 }); // 5 min — TTS generation + SRT can be slow
+        }, { timeout: 300_000, signal: abortController.signal }); // 5 min — TTS generation + SRT can be slow
+
+        if (abortController.signal.aborted) return;
 
         if (res.ok) {
           const data = await res.json();
@@ -631,6 +636,7 @@ function PipelinePage() {
           return;
         }
       } catch (err) {
+        if (abortController.signal.aborted) return;
         handleApiError(err, "Eroare la previzualizarea variantelor");
         if (err instanceof ApiError && err.isTimeout) {
           setPreviewError("Previzualizarea a expirat. Încearcă din nou.");
@@ -837,10 +843,16 @@ function PipelinePage() {
     }
   };
 
-  // History sidebar: auto-load on mount
+  // History sidebar: auto-load on mount and when profile changes
   useEffect(() => {
     fetchHistory();
-  }, []);
+    // Reset expanded history when profile changes
+    setSelectedHistoryId(null);
+    setHistoryScripts([]);
+    setHistorySelectedScripts(new Set());
+    setHistoryPreviewInfo({});
+    setHistoryTtsInfo({});
+  }, [currentProfile?.id]);
 
   // Fetch source videos on mount
   useEffect(() => {
@@ -951,8 +963,8 @@ function PipelinePage() {
           }
           setLibraryMatches(parsed);
         }
-      } catch {
-        // Silent — duplicate check is advisory only
+      } catch (err) {
+        console.warn("TTS library duplicate check failed:", err);
       }
     };
 
@@ -1092,22 +1104,32 @@ function PipelinePage() {
       .catch(() => setPlayingAudio(null));
   };
 
-  // Cleanup audio on unmount
+  // Cleanup audio, timers, and abort in-flight requests on unmount
   useEffect(() => {
     return () => {
       if (audioRef.current) {
+        const src = audioRef.current.src;
         audioRef.current.pause();
         audioRef.current = null;
+        if (src.startsWith("blob:")) URL.revokeObjectURL(src);
       }
       if (ttsAudioRef.current) {
+        const src = ttsAudioRef.current.src;
         ttsAudioRef.current.pause();
         ttsAudioRef.current = null;
+        if (src.startsWith("blob:")) URL.revokeObjectURL(src);
       }
+      if (sourceSelectionTimer.current) clearTimeout(sourceSelectionTimer.current);
+      previewAbortRef.current?.abort();
     };
   }, []);
 
-  // Mark existing TTS results as stale when voice settings change
+  // Mark existing TTS results as stale when voice settings change (skip initial mount)
   useEffect(() => {
+    if (!voiceSettingsInitialized.current) {
+      voiceSettingsInitialized.current = true;
+      return;
+    }
     setTtsResults(prev => {
       const hasAny = Object.values(prev).some(r => r.audio_duration > 0 && !r.generating);
       if (!hasAny) return prev;
@@ -1119,8 +1141,24 @@ function PipelinePage() {
     });
   }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost]);
 
-  // Persist voice settings to localStorage
+  // Load voice settings from localStorage after hydration
   useEffect(() => {
+    const stability = localStorage.getItem("ef_voice_stability");
+    const similarity = localStorage.getItem("ef_voice_similarity");
+    const style = localStorage.getItem("ef_voice_style");
+    const speed = localStorage.getItem("ef_voice_speed");
+    const boost = localStorage.getItem("ef_voice_speaker_boost");
+    if (stability !== null) setVoiceStability(parseFloat(stability));
+    if (similarity !== null) setVoiceSimilarity(parseFloat(similarity));
+    if (style !== null) setVoiceStyle(parseFloat(style));
+    if (speed !== null) setVoiceSpeed(parseFloat(speed));
+    if (boost !== null) setVoiceSpeakerBoost(boost === "true");
+    voiceSettingsLoaded.current = true;
+  }, []);
+
+  // Persist voice settings to localStorage (skip initial render before load)
+  useEffect(() => {
+    if (!voiceSettingsLoaded.current) return;
     localStorage.setItem("ef_voice_stability", String(voiceStability));
     localStorage.setItem("ef_voice_similarity", String(voiceSimilarity));
     localStorage.setItem("ef_voice_style", String(voiceStyle));
@@ -1255,7 +1293,7 @@ function PipelinePage() {
       .then(playBlob)
       .catch(() => {
         // Fallback: try preview audio (Step 3)
-        apiGet(`/pipeline/preview-audio/${pipelineId}/${variantIndex}`)
+        apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}`)
           .then(res => res.blob())
           .then(playBlob)
           .catch(() => setPlayingTtsVariant(null));
@@ -2149,7 +2187,9 @@ function PipelinePage() {
                   <CheckCircle className="h-4 w-4 text-green-600" />
                   <AlertDescription className="flex items-center justify-between flex-wrap gap-2">
                     <span className="text-green-800 dark:text-green-300">
-                      {ttsCount} din {scripts.length} scripturi au deja voice-over generat
+                      {ttsCount === scripts.length
+                        ? "Toate scripturile au voice-over generat"
+                        : `${ttsCount} din ${scripts.length} scripturi au voice-over. Restul de ${scripts.length - ttsCount} vor fi generate automat.`}
                     </span>
                     <div className="flex items-center gap-2">
                       {selectedSourceIds.size === 0 && (
@@ -2174,24 +2214,32 @@ function PipelinePage() {
             })()}
 
             {/* Preview All button */}
-            <Button
-              onClick={handlePreviewAll}
-              disabled={isGenerating || previewingIndex !== null || sourceVideos.length === 0 || selectedSourceIds.size === 0}
-              className="w-full"
-              size="lg"
-            >
-              {previewingIndex !== null ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Generating voice-over {previewingIndex + 1} of {scripts.length}...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4 mr-2" />
-                  Generate Voice-Overs
-                </>
-              )}
-            </Button>
+            {(() => {
+              const readyTtsCount = Object.values(ttsResults).filter(r => !r.generating && !r.stale).length;
+              const allTtsReady = readyTtsCount === scripts.length && scripts.length > 0;
+              return (
+                <Button
+                  onClick={handlePreviewAll}
+                  disabled={isGenerating || previewingIndex !== null || sourceVideos.length === 0 || selectedSourceIds.size === 0}
+                  className="w-full"
+                  size="lg"
+                >
+                  {previewingIndex !== null ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      {allTtsReady
+                        ? `Generare preview ${previewingIndex + 1} din ${scripts.length}...`
+                        : `Generating voice-over ${previewingIndex + 1} of ${scripts.length}...`}
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-4 w-4 mr-2" />
+                      {allTtsReady ? "Generează Preview-uri" : "Generate Voice-Overs"}
+                    </>
+                  )}
+                </Button>
+              );
+            })()}
             {Object.keys(previews).length > 0 && (
               <Button
                 variant="outline"
@@ -2249,11 +2297,12 @@ function PipelinePage() {
             </Card>
 
             {/* Subtitle Style */}
-            <Card>
+            <Card className={!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""}>
               <CardHeader>
                 <CardTitle className="text-lg flex items-center gap-2">
                   <Type className="h-4 w-4" />
                   Subtitle Style
+                  {!subtitleSettingsLoaded && <Loader2 className="h-3 w-3 animate-spin" />}
                 </CardTitle>
                 <CardDescription>
                   Configure font, colors, and position for subtitles
@@ -2509,6 +2558,36 @@ function PipelinePage() {
                           </a>
                         </Button>
                       </div>
+                    )}
+
+                    {/* Library save warning */}
+                    {status.status === "completed" && status.library_saved === false && (
+                      <Alert className="border-yellow-500/50 bg-yellow-500/10">
+                        <AlertTriangle className="h-4 w-4 text-yellow-500" />
+                        <AlertDescription className="text-yellow-700 dark:text-yellow-400">
+                          Video renderizat cu succes, dar nu a fost salvat în library.
+                          {status.library_error && <span className="block text-xs mt-1 opacity-75">{status.library_error}</span>}
+                          <Button
+                            variant="link"
+                            size="sm"
+                            className="p-0 h-auto text-yellow-700 dark:text-yellow-400 underline ml-1"
+                            onClick={async () => {
+                              try {
+                                await apiPost(`/pipeline/sync-to-library/${pipelineId}`);
+                                const res = await apiGet(`/pipeline/status/${pipelineId}`);
+                                if (res.ok) {
+                                  const data = await res.json();
+                                  if (data?.variants) setVariantStatuses(data.variants);
+                                }
+                              } catch {
+                                // ignore — user can retry
+                              }
+                            }}
+                          >
+                            Retry salvare
+                          </Button>
+                        </AlertDescription>
+                      </Alert>
                     )}
 
                     {/* Error message */}

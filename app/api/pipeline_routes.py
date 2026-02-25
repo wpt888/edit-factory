@@ -12,6 +12,7 @@ This is the glue layer connecting script generation and assembly into a single w
 import hashlib
 import logging
 import subprocess
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Dict
@@ -38,11 +39,15 @@ router = APIRouter(prefix="/pipeline", tags=["Multi-Variant Pipeline"])
 _pipelines: Dict[str, dict] = {}
 _MAX_PIPELINE_ENTRIES = 1000
 
+# Lock for library project creation (prevents duplicate projects from concurrent renders)
+_library_project_lock = threading.Lock()
+
 
 def _evict_old_pipelines():
     """Remove oldest entries if store exceeds max size."""
     if len(_pipelines) > _MAX_PIPELINE_ENTRIES:
         to_remove = sorted(_pipelines.keys())[:len(_pipelines) - _MAX_PIPELINE_ENTRIES]
+        logger.info(f"Evicting {len(to_remove)} old pipelines (cache size: {len(_pipelines)})")
         for key in to_remove:
             _pipelines.pop(key, None)
 
@@ -262,6 +267,8 @@ class VariantStatus(BaseModel):
     final_video_path: Optional[str] = None
     thumbnail_path: Optional[str] = None
     error: Optional[str] = None
+    library_saved: Optional[bool] = None
+    library_error: Optional[str] = None
 
 
 class VariantPreviewInfo(BaseModel):
@@ -457,16 +464,18 @@ async def update_source_selection(
     _pipelines[pipeline_id] = pipeline
 
     # Persist to DB — gracefully handle missing column (migration 021 not yet applied)
+    db_persisted = False
     try:
         supabase = get_supabase()
         if supabase:
             supabase.table("editai_pipelines").update({
                 "source_video_ids": request.source_video_ids
             }).eq("id", pipeline_id).execute()
+            db_persisted = True
     except Exception as e:
         logger.warning(f"Failed to save source selection for {pipeline_id}: {e}")
 
-    return {"source_video_ids": request.source_video_ids}
+    return {"source_video_ids": request.source_video_ids, "db_persisted": db_persisted}
 
 
 class PipelineUpdateScriptsRequest(BaseModel):
@@ -492,6 +501,15 @@ async def update_pipeline_scripts(
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail=f"Pipeline {pipeline_id} not found")
+
+    # Invalidate TTS cache for scripts that changed
+    old_scripts = pipeline.get("scripts", [])
+    tts_previews = pipeline.get("tts_previews", {})
+    for i, new_script in enumerate(request.scripts):
+        if i < len(old_scripts) and _stable_hash(new_script) != _stable_hash(old_scripts[i]):
+            tts_previews.pop(str(i), None)
+            tts_previews.pop(i, None)
+            logger.info(f"Invalidated TTS cache for pipeline {pipeline_id} variant {i} (script changed)")
 
     # Update scripts in memory
     pipeline["scripts"] = request.scripts
@@ -1233,40 +1251,41 @@ async def render_variants(
                     # Persist render result to DB
                     _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
-                    # Save rendered clip to library (non-critical — wrapped in try/except)
+                    # Save rendered clip to library
+                    job["library_saved"] = False
                     try:
                         supabase_lib = get_supabase()
                         if supabase_lib:
-                            # Step A: Get or create a library project for this pipeline.
-                            # Use cached library_project_id if a previous variant already created it.
+                            # Step A: Get or create a library project (locked to prevent duplicates)
                             library_project_id = pipeline.get("library_project_id")
 
                             if not library_project_id:
-                                pipeline_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
-                                # Check if project already exists for this pipeline
-                                existing = supabase_lib.table("editai_projects")\
-                                    .select("id")\
-                                    .eq("profile_id", profile.profile_id)\
-                                    .eq("name", pipeline_name)\
-                                    .limit(1)\
-                                    .execute()
+                                with _library_project_lock:
+                                    # Re-check after acquiring lock (another variant may have created it)
+                                    library_project_id = pipeline.get("library_project_id")
+                                    if not library_project_id:
+                                        pipeline_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
+                                        existing = supabase_lib.table("editai_projects")\
+                                            .select("id")\
+                                            .eq("profile_id", profile.profile_id)\
+                                            .eq("name", pipeline_name)\
+                                            .limit(1)\
+                                            .execute()
 
-                                if existing.data:
-                                    library_project_id = existing.data[0]["id"]
-                                else:
-                                    # Create a new project row
-                                    proj_result = supabase_lib.table("editai_projects").insert({
-                                        "profile_id": profile.profile_id,
-                                        "name": pipeline_name,
-                                        "description": f"Auto-generated from pipeline {pipeline_id}",
-                                        "status": "completed",
-                                    }).execute()
-                                    if proj_result.data:
-                                        library_project_id = proj_result.data[0]["id"]
+                                        if existing.data:
+                                            library_project_id = existing.data[0]["id"]
+                                        else:
+                                            proj_result = supabase_lib.table("editai_projects").insert({
+                                                "profile_id": profile.profile_id,
+                                                "name": pipeline_name,
+                                                "description": f"Auto-generated from pipeline {pipeline_id}",
+                                                "status": "completed",
+                                            }).execute()
+                                            if proj_result.data:
+                                                library_project_id = proj_result.data[0]["id"]
 
-                                if library_project_id:
-                                    # Cache project_id so subsequent variants reuse it
-                                    pipeline["library_project_id"] = library_project_id
+                                        if library_project_id:
+                                            pipeline["library_project_id"] = library_project_id
 
                             if library_project_id:
                                 # Step B: Generate thumbnail
@@ -1317,11 +1336,17 @@ async def render_variants(
                                     "final_status": "completed"
                                 }).execute()
 
+                                job["library_saved"] = True
                                 logger.info(
                                     f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
                                     f"variant {vid} saved to library project {library_project_id}"
                                 )
+                            else:
+                                job["library_error"] = "Failed to create or find library project"
+                        else:
+                            job["library_error"] = "Supabase unavailable"
                     except Exception as lib_err:
+                        job["library_error"] = str(lib_err)
                         logger.error(
                             f"[Profile {profile.profile_id}] Failed to save pipeline variant "
                             f"{vid} to library: {lib_err}",
@@ -1357,8 +1382,12 @@ async def get_pipeline_status(pipeline_id: str):
     """
     Get status of all variants in a pipeline.
 
-    Public endpoint (no auth) - pipeline_id is the secret.
-    Returns status for all variants (rendered and not-yet-rendered).
+    **Intentionally public** (no auth) — the pipeline UUID acts as an
+    unguessable capability token, enabling status polling without
+    re-authenticating on every request.  This is safe because:
+    - UUIDs are 128-bit random (2^122 entropy with v4)
+    - Pipeline IDs are never exposed in URLs visible to other users
+    - Pipelines auto-expire after 30 days
     """
     # Try in-memory first, then DB fallback
     pipeline = _get_pipeline_or_load(pipeline_id)
@@ -1378,7 +1407,9 @@ async def get_pipeline_status(pipeline_id: str):
                 current_step=job["current_step"],
                 final_video_path=job.get("final_video_path"),
                 thumbnail_path=job.get("thumbnail_path"),
-                error=job.get("error")
+                error=job.get("error"),
+                library_saved=job.get("library_saved"),
+                library_error=job.get("library_error")
             ))
         else:
             # Variant not yet rendered
@@ -1544,8 +1575,16 @@ async def sync_pipeline_to_library(
             "final_status": "completed"
         }).execute()
 
+        # Mark as saved in render_jobs so status endpoint reflects it
+        job["library_saved"] = True
+        job.pop("library_error", None)
+
         synced += 1
         logger.info(f"Pipeline {pipeline_id} variant {vid} synced to library project {library_project_id}")
+
+    # Persist updated render_jobs (with library_saved flags)
+    if synced > 0:
+        _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
     # Update project variants_count
     if synced > 0:
