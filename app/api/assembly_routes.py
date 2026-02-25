@@ -155,6 +155,9 @@ class AssemblyRenderRequest(BaseModel):
     script_text: str
     elevenlabs_model: str = "eleven_flash_v2_5"
     preset_name: str = "TikTok"
+    # Voice settings
+    voice_id: Optional[str] = None
+    voice_settings: Optional[dict] = None
     # Subtitle settings
     font_size: int = 48
     font_family: str = "Montserrat"
@@ -346,6 +349,8 @@ async def render_assembly(
                 preset_data=preset_data,
                 subtitle_settings=subtitle_settings,
                 elevenlabs_model=request.elevenlabs_model,
+                voice_id=request.voice_id,
+                voice_settings=request.voice_settings,
                 enable_denoise=request.enable_denoise,
                 denoise_strength=request.denoise_strength,
                 enable_sharpen=request.enable_sharpen,

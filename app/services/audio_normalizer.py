@@ -2,6 +2,7 @@
 Audio Normalization Service.
 Implements two-pass EBU R128 loudness normalization using FFmpeg's loudnorm filter.
 """
+import asyncio
 import json
 import logging
 import re
@@ -39,7 +40,7 @@ class LoudnormMeasurement:
         )
 
 
-def measure_loudness(
+async def measure_loudness(
     audio_path: Path,
     target_lufs: float = -14.0,
     target_tp: float = -1.5,
@@ -82,7 +83,8 @@ def measure_loudness(
 
     try:
         # Execute FFmpeg and capture stderr (where loudnorm outputs JSON)
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             cmd,
             capture_output=True,
             text=True,

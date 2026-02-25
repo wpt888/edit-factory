@@ -105,10 +105,10 @@ class SegmentTransform:
             filters.append(f"pad={pad_w}:{pad_h}:{pad_x}:{pad_y}:black")
             filters.append(f"crop={width}:{height}")
 
-        # 5. Opacity via format=rgba + colorchannelmixer
+        # 5. Opacity via RGB channel dimming (compatible with yuv420p)
         if abs(self.opacity - 1.0) >= 0.01:
             a = max(0.0, min(1.0, self.opacity))
-            filters.append(f"format=rgba,colorchannelmixer=aa={a:.2f}")
+            filters.append(f"colorchannelmixer=rr={a:.2f}:gg={a:.2f}:bb={a:.2f}")
 
         # 6. Safety net: ensure output matches target dimensions (crop, not letterbox)
         filters.append(f"scale={width}:{height}:force_original_aspect_ratio=increase")

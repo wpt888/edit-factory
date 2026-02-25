@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import type { MatchPreview } from "@/components/timeline-editor";
+import type { SubtitleSettings } from "@/types/video-processing";
 
 interface VariantPreviewPlayerProps {
   open: boolean;
@@ -20,6 +21,7 @@ interface VariantPreviewPlayerProps {
   pipelineId: string;
   variantIndex: number;
   profileId: string;
+  subtitleSettings?: SubtitleSettings;
 }
 
 function formatTime(seconds: number): string {
@@ -35,6 +37,7 @@ export function VariantPreviewPlayer({
   pipelineId,
   variantIndex,
   profileId,
+  subtitleSettings,
 }: VariantPreviewPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
@@ -82,48 +85,118 @@ export function VariantPreviewPlayer({
     [] // stable — reads from refs
   );
 
-  // Stable syncVideoToMatch — reads from refs, no isPlaying/activeMatchIndex deps
+  // Pre-seek the next segment's video so it's ready when we transition
+  const preSeekNext = useCallback((afterIdx: number) => {
+    const nextIdx = afterIdx + 1;
+    const ms = matchesRef.current;
+    if (nextIdx >= ms.length) return;
+
+    const nextMatch = ms[nextIdx];
+    if (!nextMatch?.source_video_id || nextMatch.segment_start_time == null) return;
+
+    // Only pre-seek if it's a different source video than the current one
+    const currentMatch = ms[afterIdx];
+    if (nextMatch.source_video_id === currentMatch?.source_video_id) return;
+
+    const nextVideo = videoRefs.current[nextMatch.source_video_id];
+    if (nextVideo) {
+      nextVideo.currentTime = nextMatch.segment_start_time;
+    }
+  }, []);
+
+  // Stable syncVideoToMatch — seeks incoming, waits for seeked, then switches
   const syncVideoToMatch = useCallback(
     (matchIdx: number) => {
       const match = matchesRef.current[matchIdx];
       if (!match?.source_video_id || match.segment_start_time == null) return;
 
-      // Pause ALL videos first (fix: old video kept playing silently)
-      for (const vid of Object.values(videoRefs.current)) {
-        if (vid) vid.pause();
-      }
+      const incomingVideo = videoRefs.current[match.source_video_id];
+      if (!incomingVideo) return;
 
-      const activeVideo = videoRefs.current[match.source_video_id];
-      if (!activeVideo) return;
+      // Find the outgoing video (from the previous active match)
+      const prevIdx = activeMatchIndexRef.current;
+      const prevMatch = matchesRef.current[prevIdx];
+      const outgoingVideo = prevMatch?.source_video_id
+        ? videoRefs.current[prevMatch.source_video_id]
+        : null;
 
-      // Seek to segment start and set end boundary
-      activeVideo.currentTime = match.segment_start_time;
       segmentEndTimeRef.current = match.segment_end_time ?? undefined;
 
-      // Play if audio is playing (read from ref, not stale closure)
-      if (isPlayingRef.current) {
-        activeVideo.play().catch(() => {});
+      const finishSwitch = () => {
+        // Update active match (triggers React re-render for display toggle)
+        setActiveMatchIndex(matchIdx);
+        activeMatchIndexRef.current = matchIdx;
+
+        if (isPlayingRef.current) {
+          incomingVideo.play().catch(() => {});
+        }
+
+        // Pause outgoing AFTER incoming is visible and playing
+        if (outgoingVideo && outgoingVideo !== incomingVideo) {
+          outgoingVideo.pause();
+        }
+
+        // Pre-seek the next segment's video
+        preSeekNext(matchIdx);
+      };
+
+      // Check if video is already at the right position (pre-seeked)
+      const alreadySeeked =
+        Math.abs(incomingVideo.currentTime - match.segment_start_time) < 0.05;
+
+      if (alreadySeeked) {
+        finishSwitch();
+      } else {
+        // Seek and wait for seeked event before switching
+        const onSeeked = () => {
+          incomingVideo.removeEventListener("seeked", onSeeked);
+          finishSwitch();
+        };
+        incomingVideo.addEventListener("seeked", onSeeked);
+        incomingVideo.currentTime = match.segment_start_time;
       }
     },
-    [] // stable — reads from refs
+    [preSeekNext] // preSeekNext is stable
   );
 
-  // Single stable audio effect — no activeMatchIndex in deps
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
+  // rAF ref for cleanup
+  const rafIdRef = useRef<number | null>(null);
 
-    const onTimeUpdate = () => {
+  // rAF loop — tracks audio.currentTime at ~60fps for near-instant segment detection
+  const startRafLoop = useCallback(() => {
+    const loop = () => {
+      const audio = audioRef.current;
+      if (!audio || !isPlayingRef.current) {
+        rafIdRef.current = null;
+        return;
+      }
+
       const time = audio.currentTime;
       setCurrentTime(time);
 
       const newIdx = findActiveMatch(time);
       if (newIdx !== activeMatchIndexRef.current) {
-        setActiveMatchIndex(newIdx);
-        activeMatchIndexRef.current = newIdx;
         syncVideoToMatch(newIdx);
       }
+
+      rafIdRef.current = requestAnimationFrame(loop);
     };
+    // Cancel any existing loop before starting a new one
+    if (rafIdRef.current != null) cancelAnimationFrame(rafIdRef.current);
+    rafIdRef.current = requestAnimationFrame(loop);
+  }, [findActiveMatch, syncVideoToMatch]);
+
+  const stopRafLoop = useCallback(() => {
+    if (rafIdRef.current != null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+  }, []);
+
+  // Audio metadata + ended events (no timeupdate — rAF replaces it)
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
 
     const onLoadedMetadata = () => {
       setDuration(audio.duration);
@@ -132,21 +205,21 @@ export function VariantPreviewPlayer({
     const onEnded = () => {
       setIsPlaying(false);
       isPlayingRef.current = false;
+      stopRafLoop();
       for (const vid of Object.values(videoRefs.current)) {
         if (vid) vid.pause();
       }
     };
 
-    audio.addEventListener("timeupdate", onTimeUpdate);
     audio.addEventListener("loadedmetadata", onLoadedMetadata);
     audio.addEventListener("ended", onEnded);
 
     return () => {
-      audio.removeEventListener("timeupdate", onTimeUpdate);
       audio.removeEventListener("loadedmetadata", onLoadedMetadata);
       audio.removeEventListener("ended", onEnded);
+      stopRafLoop();
     };
-  }, [findActiveMatch, syncVideoToMatch]); // both are stable (no deps)
+  }, [stopRafLoop]);
 
   // Video timeupdate listeners for segment_end_time enforcement
   // Re-register only when the set of video elements changes
@@ -180,11 +253,15 @@ export function VariantPreviewPlayer({
 
     if (isPlayingRef.current) {
       audio.pause();
+      stopRafLoop();
       for (const vid of Object.values(videoRefs.current)) {
         if (vid) vid.pause();
       }
       setIsPlaying(false);
+      isPlayingRef.current = false;
     } else {
+      setIsPlaying(true);
+      isPlayingRef.current = true;
       audio.play().catch(() => {});
       // Resume active video
       const match = matchesRef.current[activeMatchIndexRef.current];
@@ -195,9 +272,9 @@ export function VariantPreviewPlayer({
           vid.play().catch(() => {});
         }
       }
-      setIsPlaying(true);
+      startRafLoop();
     }
-  }, []);
+  }, [startRafLoop, stopRafLoop]);
 
   // Seek to previous segment
   const prevSegment = useCallback(() => {
@@ -246,6 +323,7 @@ export function VariantPreviewPlayer({
   const handleOpenChange = useCallback(
     (newOpen: boolean) => {
       if (!newOpen) {
+        stopRafLoop();
         const audio = audioRef.current;
         if (audio) {
           audio.pause();
@@ -255,6 +333,7 @@ export function VariantPreviewPlayer({
           if (vid) vid.pause();
         }
         setIsPlaying(false);
+        isPlayingRef.current = false;
         setCurrentTime(0);
         setActiveMatchIndex(0);
         activeMatchIndexRef.current = 0;
@@ -262,7 +341,7 @@ export function VariantPreviewPlayer({
       }
       onOpenChange(newOpen);
     },
-    [onOpenChange]
+    [onOpenChange, stopRafLoop]
   );
 
   const activeMatch = matches[activeMatchIndex];
@@ -321,12 +400,25 @@ export function VariantPreviewPlayer({
 
           {/* Subtitle overlay */}
           {activeMatch?.srt_text && (
-            <div className="absolute bottom-4 left-2 right-2 text-center pointer-events-none">
+            <div
+              className="absolute left-2 right-2 text-center pointer-events-none"
+              style={{
+                top: `${subtitleSettings?.positionY ?? 85}%`,
+                transform: "translateY(-50%)",
+              }}
+            >
               <p
-                className="text-white text-sm font-semibold px-2 py-1 inline-block"
+                className="font-semibold px-2 py-1 inline-block"
                 style={{
-                  textShadow:
-                    "0 1px 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.7)",
+                  fontFamily: subtitleSettings?.fontFamily ?? "var(--font-montserrat), Montserrat, sans-serif",
+                  fontSize: `${Math.max(10, (subtitleSettings?.fontSize ?? 48) * 0.28)}px`,
+                  color: subtitleSettings?.textColor ?? "#FFFFFF",
+                  textShadow: subtitleSettings?.enableGlow
+                    ? `0 1px 4px rgba(0,0,0,0.9), 0 0 ${subtitleSettings?.glowBlur ?? 8}px rgba(0,0,0,0.7)`
+                    : "0 1px 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.7)",
+                  WebkitTextStroke: subtitleSettings?.outlineWidth
+                    ? `${Math.max(0.5, subtitleSettings.outlineWidth * 0.3)}px ${subtitleSettings?.outlineColor ?? "#000000"}`
+                    : undefined,
                 }}
               >
                 {activeMatch.srt_text}
