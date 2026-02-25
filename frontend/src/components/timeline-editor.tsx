@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,11 @@ import {
   Minus,
   List,
   LayoutPanelLeft,
+  Play,
+  Pause,
+  SkipBack,
+  SkipForward,
+  Square,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
 
@@ -80,6 +85,8 @@ export function TimelineEditor({
   availableSegments,
   onMatchesChange,
   profileId,
+  pipelineId,
+  variantIndex,
 }: TimelineEditorProps) {
   // View mode: "timeline" (horizontal) or "list" (vertical)
   const [viewMode, setViewMode] = useState<"timeline" | "list">("timeline");
@@ -92,10 +99,266 @@ export function TimelineEditor({
   const [selectedBlockIndex, setSelectedBlockIndex] = useState<number | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSourceVideoId = useRef<string | null>(null);
+  const lastStartTime = useRef<number | null>(null);
 
   // Drag-and-drop state
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  // --- Inline continuous preview player state ---
+  const [isPreviewActive, setIsPreviewActive] = useState(false);
+  const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
+  const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
+  const [previewDuration, setPreviewDuration] = useState(0);
+  const [previewActiveIndex, setPreviewActiveIndex] = useState(0);
+
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const isPreviewPlayingRef = useRef(false);
+  const previewActiveIndexRef = useRef(0);
+  const previewSegmentEndTimeRef = useRef<number | undefined>(undefined);
+  const matchesRef = useRef(matches);
+
+  // Keep refs in sync
+  useEffect(() => { isPreviewPlayingRef.current = isPreviewPlaying; }, [isPreviewPlaying]);
+  useEffect(() => { previewActiveIndexRef.current = previewActiveIndex; }, [previewActiveIndex]);
+  useEffect(() => { matchesRef.current = matches; }, [matches]);
+
+  // Cleanup: pause all audio/video on unmount
+  useEffect(() => {
+    return () => {
+      const audio = previewAudioRef.current;
+      if (audio) {
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+      }
+      for (const vid of Object.values(previewVideoRefs.current)) {
+        if (vid) vid.pause();
+      }
+    };
+  }, []);
+
+  // Unique source video IDs for video pooling
+  const videoMatches = matches.filter((m) => m.segment_id && m.source_video_id);
+  const uniqueSourceVideoIds = Array.from(
+    new Set(videoMatches.map((m) => m.source_video_id!))
+  );
+  const videoIdsKey = uniqueSourceVideoIds.join(",");
+
+  // Prune stale entries from previewVideoRefs when source video IDs change
+  useEffect(() => {
+    const validIds = new Set(uniqueSourceVideoIds);
+    for (const key of Object.keys(previewVideoRefs.current)) {
+      if (!validIds.has(key)) {
+        const vid = previewVideoRefs.current[key];
+        if (vid) vid.pause();
+        delete previewVideoRefs.current[key];
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoIdsKey]);
+
+  // Can we show the preview? Need pipelineId and at least one video match
+  const canPreview = !!(pipelineId && variantIndex !== undefined && videoMatches.length > 0);
+
+  // --- Continuous preview helpers (same pattern as VariantPreviewPlayer) ---
+
+  const findActiveMatch = useCallback((time: number): number => {
+    const ms = matchesRef.current;
+    const idx = ms.findIndex((m) => m.srt_start <= time && time < m.srt_end);
+    return idx >= 0 ? idx : previewActiveIndexRef.current;
+  }, []);
+
+  const syncPreviewVideo = useCallback((matchIdx: number) => {
+    const match = matchesRef.current[matchIdx];
+    if (!match?.source_video_id || match.segment_start_time == null) return;
+
+    for (const vid of Object.values(previewVideoRefs.current)) {
+      if (vid) vid.pause();
+    }
+
+    const activeVideo = previewVideoRefs.current[match.source_video_id];
+    if (!activeVideo) return;
+
+    activeVideo.currentTime = match.segment_start_time;
+    previewSegmentEndTimeRef.current = match.segment_end_time ?? undefined;
+
+    if (isPreviewPlayingRef.current) {
+      activeVideo.play().catch(() => {});
+    }
+  }, []);
+
+  // Audio event listeners for continuous preview
+  useEffect(() => {
+    if (!isPreviewActive) return;
+    const audio = previewAudioRef.current;
+    if (!audio) return;
+
+    const onTimeUpdate = () => {
+      const time = audio.currentTime;
+      setPreviewCurrentTime(time);
+
+      const newIdx = findActiveMatch(time);
+      if (newIdx !== previewActiveIndexRef.current) {
+        setPreviewActiveIndex(newIdx);
+        previewActiveIndexRef.current = newIdx;
+        syncPreviewVideo(newIdx);
+      }
+    };
+
+    const onLoadedMetadata = () => {
+      setPreviewDuration(audio.duration);
+    };
+
+    const onEnded = () => {
+      setIsPreviewPlaying(false);
+      isPreviewPlayingRef.current = false;
+      for (const vid of Object.values(previewVideoRefs.current)) {
+        if (vid) vid.pause();
+      }
+    };
+
+    audio.addEventListener("timeupdate", onTimeUpdate);
+    audio.addEventListener("loadedmetadata", onLoadedMetadata);
+    audio.addEventListener("ended", onEnded);
+
+    return () => {
+      audio.removeEventListener("timeupdate", onTimeUpdate);
+      audio.removeEventListener("loadedmetadata", onLoadedMetadata);
+      audio.removeEventListener("ended", onEnded);
+    };
+  }, [isPreviewActive, findActiveMatch, syncPreviewVideo]);
+
+  // Video segment_end_time enforcement
+  useEffect(() => {
+    if (!isPreviewActive) return;
+    const handlers: Array<[HTMLVideoElement, () => void]> = [];
+
+    for (const vid of Object.values(previewVideoRefs.current)) {
+      if (!vid) continue;
+      const handler = () => {
+        if (
+          previewSegmentEndTimeRef.current != null &&
+          vid.currentTime >= previewSegmentEndTimeRef.current
+        ) {
+          vid.pause();
+        }
+      };
+      vid.addEventListener("timeupdate", handler);
+      handlers.push([vid, handler]);
+    }
+
+    return () => {
+      handlers.forEach(([vid, h]) => vid.removeEventListener("timeupdate", h));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPreviewActive, videoIdsKey]);
+
+  const togglePreviewPlayPause = useCallback(() => {
+    const audio = previewAudioRef.current;
+    if (!audio) return;
+
+    if (isPreviewPlayingRef.current) {
+      audio.pause();
+      for (const vid of Object.values(previewVideoRefs.current)) {
+        if (vid) vid.pause();
+      }
+      setIsPreviewPlaying(false);
+    } else {
+      audio.play().catch(() => {});
+      const match = matchesRef.current[previewActiveIndexRef.current];
+      if (match?.source_video_id) {
+        const vid = previewVideoRefs.current[match.source_video_id];
+        if (vid) {
+          vid.currentTime = match.segment_start_time ?? vid.currentTime;
+          vid.play().catch(() => {});
+        }
+      }
+      setIsPreviewPlaying(true);
+    }
+  }, []);
+
+  const previewPrevSegment = useCallback(() => {
+    const audio = previewAudioRef.current;
+    if (!audio || previewActiveIndexRef.current <= 0) return;
+    const prevIdx = previewActiveIndexRef.current - 1;
+    audio.currentTime = matchesRef.current[prevIdx].srt_start;
+    setPreviewActiveIndex(prevIdx);
+    previewActiveIndexRef.current = prevIdx;
+    syncPreviewVideo(prevIdx);
+  }, [syncPreviewVideo]);
+
+  const previewNextSegment = useCallback(() => {
+    const audio = previewAudioRef.current;
+    if (!audio || previewActiveIndexRef.current >= matchesRef.current.length - 1) return;
+    const nextIdx = previewActiveIndexRef.current + 1;
+    audio.currentTime = matchesRef.current[nextIdx].srt_start;
+    setPreviewActiveIndex(nextIdx);
+    previewActiveIndexRef.current = nextIdx;
+    syncPreviewVideo(nextIdx);
+  }, [syncPreviewVideo]);
+
+  const handlePreviewSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const audio = previewAudioRef.current;
+    if (!audio) return;
+    const time = parseFloat(e.target.value);
+    audio.currentTime = time;
+    setPreviewCurrentTime(time);
+    const newIdx = findActiveMatch(time);
+    setPreviewActiveIndex(newIdx);
+    previewActiveIndexRef.current = newIdx;
+    syncPreviewVideo(newIdx);
+  }, [findActiveMatch, syncPreviewVideo]);
+
+  const handleSeekToSegment = useCallback((idx: number) => {
+    if (!isPreviewActive) return;
+    const audio = previewAudioRef.current;
+    if (!audio) return;
+    const match = matchesRef.current[idx];
+    if (!match) return;
+    audio.currentTime = match.srt_start;
+    setPreviewCurrentTime(match.srt_start);
+    setPreviewActiveIndex(idx);
+    previewActiveIndexRef.current = idx;
+    syncPreviewVideo(idx);
+  }, [isPreviewActive, syncPreviewVideo]);
+
+  const activatePreview = useCallback(() => {
+    setIsPreviewActive(true);
+    setPreviewActiveIndex(0);
+    previewActiveIndexRef.current = 0;
+    setPreviewCurrentTime(0);
+    // Auto-play after a short delay to let audio element load
+    setTimeout(() => {
+      const audio = previewAudioRef.current;
+      if (audio) {
+        audio.currentTime = 0;
+        audio.play().then(() => {
+          setIsPreviewPlaying(true);
+          isPreviewPlayingRef.current = true;
+          syncPreviewVideo(0);
+        }).catch(() => {});
+      }
+    }, 100);
+  }, [syncPreviewVideo]);
+
+  const deactivatePreview = useCallback(() => {
+    const audio = previewAudioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+    for (const vid of Object.values(previewVideoRefs.current)) {
+      if (vid) vid.pause();
+    }
+    setIsPreviewActive(false);
+    setIsPreviewPlaying(false);
+    setPreviewCurrentTime(0);
+    setPreviewActiveIndex(0);
+    previewActiveIndexRef.current = 0;
+    previewSegmentEndTimeRef.current = undefined;
+  }, []);
 
   // Filtered segments based on search
   const filteredSegments = availableSegments.filter((seg) => {
@@ -239,9 +502,10 @@ export function TimelineEditor({
     const startTime = match.segment_start_time ?? 0;
     const endTime = match.segment_end_time;
 
-    // Only change src when source_video_id actually changes
-    if (sourceVideoId && sourceVideoId !== lastSourceVideoId.current && profileId) {
+    // Change src when source_video_id or start time changes (handles same-source segments)
+    if (sourceVideoId && (sourceVideoId !== lastSourceVideoId.current || startTime !== lastStartTime.current) && profileId) {
       lastSourceVideoId.current = sourceVideoId;
+      lastStartTime.current = startTime;
       video.src = `${API_URL}/segments/source-videos/${sourceVideoId}/stream?profile_id=${profileId}`;
       video.load();
     }
@@ -298,7 +562,7 @@ export function TimelineEditor({
 
   return (
     <>
-      {/* View toggle */}
+      {/* View toggle + Play Preview */}
       <div className="flex items-center gap-1 mb-3">
         <Button
           variant={viewMode === "timeline" ? "default" : "outline"}
@@ -318,7 +582,151 @@ export function TimelineEditor({
           <List className="h-3.5 w-3.5" />
           List
         </Button>
+
+        {canPreview && (
+          <div className="ml-auto">
+            {isPreviewActive ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs gap-1.5 border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950/30"
+                onClick={deactivatePreview}
+              >
+                <Square className="h-3 w-3" />
+                Stop Preview
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs gap-1.5 border-green-300 text-green-700 hover:bg-green-50 dark:border-green-700 dark:text-green-400 dark:hover:bg-green-950/30"
+                onClick={activatePreview}
+              >
+                <Play className="h-3 w-3" />
+                Play Preview
+              </Button>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Inline continuous preview player */}
+      {isPreviewActive && pipelineId && variantIndex !== undefined && profileId && (
+        <div className="rounded-lg border bg-card mb-3 overflow-hidden">
+          {/* Hidden audio element */}
+          <audio
+            ref={previewAudioRef}
+            src={`${API_URL}/pipeline/audio/${pipelineId}/${variantIndex}`}
+            preload="auto"
+          />
+
+          {/* Video display with subtitle overlay */}
+          <div
+            className="relative mx-auto bg-black flex items-center justify-center"
+            style={{ aspectRatio: "9/16", maxHeight: "360px" }}
+          >
+            {uniqueSourceVideoIds.map((sourceVideoId) => (
+              <video
+                key={sourceVideoId}
+                ref={(el) => { previewVideoRefs.current[sourceVideoId] = el; }}
+                src={`${API_URL}/segments/source-videos/${sourceVideoId}/stream?profile_id=${profileId}`}
+                muted
+                playsInline
+                preload="auto"
+                className="absolute inset-0 w-full h-full object-cover"
+                style={{
+                  display:
+                    matches[previewActiveIndex]?.source_video_id === sourceVideoId
+                      ? "block"
+                      : "none",
+                }}
+              />
+            ))}
+
+            {/* No video fallback */}
+            {!matches[previewActiveIndex]?.source_video_id && (
+              <div className="flex items-center justify-center text-muted-foreground text-sm">
+                No video for this segment
+              </div>
+            )}
+
+            {/* Subtitle overlay */}
+            {matches[previewActiveIndex]?.srt_text && (
+              <div className="absolute bottom-4 left-2 right-2 text-center pointer-events-none">
+                <p
+                  className="text-white text-sm font-semibold px-2 py-1 inline-block"
+                  style={{
+                    textShadow: "0 1px 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.7)",
+                  }}
+                >
+                  {matches[previewActiveIndex].srt_text}
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Controls */}
+          <div className="px-3 py-2 space-y-1.5">
+            {/* Progress bar */}
+            <input
+              type="range"
+              min={0}
+              max={previewDuration || 1}
+              step={0.1}
+              value={previewCurrentTime}
+              onChange={handlePreviewSeek}
+              className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-secondary accent-primary"
+            />
+
+            {/* Time + segment info + buttons */}
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-muted-foreground font-mono tabular-nums">
+                {formatTime(previewCurrentTime)} / {formatTime(previewDuration || audioDuration)}
+              </span>
+
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={previewPrevSegment}
+                  disabled={previewActiveIndex <= 0}
+                  title="Previous segment"
+                >
+                  <SkipBack className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="default"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={togglePreviewPlayPause}
+                  title={isPreviewPlaying ? "Pause" : "Play"}
+                >
+                  {isPreviewPlaying ? (
+                    <Pause className="h-4 w-4" />
+                  ) : (
+                    <Play className="h-4 w-4" />
+                  )}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={previewNextSegment}
+                  disabled={previewActiveIndex >= matches.length - 1}
+                  title="Next segment"
+                >
+                  <SkipForward className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+
+              <span className="text-[11px] text-muted-foreground">
+                {previewActiveIndex + 1}/{matches.length}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {viewMode === "timeline" ? (
         /* ========== TIMELINE VIEW ========== */
@@ -365,14 +773,21 @@ export function TimelineEditor({
                     onDragLeave={handleDragLeave}
                     onDrop={(e) => handleDrop(e, idx)}
                     onDragEnd={handleDragEnd}
-                    onClick={() => setSelectedBlockIndex(idx === selectedBlockIndex ? null : idx)}
+                    onClick={() => {
+                      if (isPreviewActive) {
+                        handleSeekToSegment(idx);
+                      } else {
+                        setSelectedBlockIndex(idx === selectedBlockIndex ? null : idx);
+                      }
+                    }}
                     className={`
                       relative flex-shrink-0 rounded-md border-2 cursor-pointer
                       transition-all select-none overflow-hidden
                       ${borderColor} ${bgColor}
                       ${isDragging ? "opacity-50" : ""}
                       ${isDragOver ? "ring-2 ring-blue-400 ring-offset-1" : ""}
-                      ${isSelected ? "ring-2 ring-primary ring-offset-1" : ""}
+                      ${isSelected && !isPreviewActive ? "ring-2 ring-primary ring-offset-1" : ""}
+                      ${isPreviewActive && previewActiveIndex === idx ? "ring-2 ring-green-400 ring-offset-1 animate-pulse" : ""}
                     `}
                     style={{
                       width: `max(60px, ${widthPercent}%)`,
