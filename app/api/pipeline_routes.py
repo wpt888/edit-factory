@@ -9,6 +9,7 @@ Orchestrates end-to-end pipeline:
 
 This is the glue layer connecting script generation and assembly into a single workflow.
 """
+import hashlib
 import logging
 import subprocess
 import uuid
@@ -21,6 +22,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.api.auth import ProfileContext, get_profile_context
+
+
+def _stable_hash(text: str) -> str:
+    """Stable hash that persists across Python process restarts (unlike built-in hash())."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 from app.db import get_supabase
 from app.services.script_generator import get_script_generator
 from app.services.assembly_service import get_assembly_service
@@ -755,7 +761,7 @@ async def adopt_library_tts(
         "audio_path": audio_path,
         "audio_duration": audio_duration,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "script_hash": hash(script_text),
+        "script_hash": _stable_hash(script_text),
         "voice_settings": None,  # Not applicable for library audio
         "library_asset_id": request.asset_id,
         "srt_content": asset.get("srt_content"),
@@ -827,7 +833,7 @@ async def generate_variant_tts(
             "audio_path": str(audio_path),
             "audio_duration": audio_duration,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "script_hash": hash(script_text),
+            "script_hash": _stable_hash(script_text),
             "voice_settings": request.voice_settings,
         }
 
@@ -925,8 +931,10 @@ async def preview_variant(
     reuse_audio_duration = None
     if existing_tts:
         # Verify script and voice settings haven't changed since TTS was generated
-        script_match = existing_tts.get("script_hash") == hash(script_text)
-        settings_match = existing_tts.get("voice_settings") == voice_settings
+        script_match = existing_tts.get("script_hash") == _stable_hash(script_text)
+        # For library audio: skip voice_settings check (same logic as render endpoint)
+        is_library = bool(existing_tts.get("library_asset_id"))
+        settings_match = is_library or existing_tts.get("voice_settings") == voice_settings
         if script_match and settings_match:
             audio_path_str = existing_tts.get("audio_path")
             if audio_path_str and Path(audio_path_str).exists():
@@ -1129,7 +1137,7 @@ async def render_variants(
 
                     existing_tts = pipeline.get("tts_previews", {}).get(vid)
                     if existing_tts:
-                        script_match = existing_tts.get("script_hash") == hash(script_text)
+                        script_match = existing_tts.get("script_hash") == _stable_hash(script_text)
                         if script_match:
                             # For library audio: skip voice_settings check
                             # For generated audio: compare voice_settings

@@ -2083,19 +2083,27 @@ export default function PipelinePage() {
               return (
                 <Alert className="border-green-300 bg-green-50 dark:bg-green-950/30 dark:border-green-800">
                   <CheckCircle className="h-4 w-4 text-green-600" />
-                  <AlertDescription className="flex items-center justify-between">
+                  <AlertDescription className="flex items-center justify-between flex-wrap gap-2">
                     <span className="text-green-800 dark:text-green-300">
                       {ttsCount} din {scripts.length} scripturi au deja voice-over generat
                     </span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="ml-2 border-green-400 text-green-700 hover:bg-green-100 dark:text-green-300 dark:hover:bg-green-900"
-                      onClick={() => setStep(3)}
-                    >
-                      <ArrowRight className="h-3.5 w-3.5 mr-1" />
-                      Skip to Preview
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      {selectedSourceIds.size === 0 && (
+                        <span className="text-xs text-amber-600 dark:text-amber-400">
+                          Selectează un videoclip cu segmente mai sus ↑
+                        </span>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-green-400 text-green-700 hover:bg-green-100 dark:text-green-300 dark:hover:bg-green-900"
+                        onClick={handlePreviewAll}
+                        disabled={isGenerating || previewingIndex !== null || sourceVideos.length === 0 || selectedSourceIds.size === 0}
+                      >
+                        <ArrowRight className="h-3.5 w-3.5 mr-1" />
+                        {previewingIndex !== null ? "Se generează preview..." : "Continuă la Preview"}
+                      </Button>
+                    </div>
                   </AlertDescription>
                 </Alert>
               );
@@ -2111,12 +2119,12 @@ export default function PipelinePage() {
               {previewingIndex !== null ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Previewing variant {previewingIndex + 1} of {scripts.length}...
+                  Generating voice-over {previewingIndex + 1} of {scripts.length}...
                 </>
               ) : (
                 <>
                   <Sparkles className="h-4 w-4 mr-2" />
-                  Preview All Matches
+                  Generate Voice-Overs
                 </>
               )}
             </Button>

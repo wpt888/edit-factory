@@ -206,7 +206,7 @@ export function TimelineEditor({
 
   return (
     <>
-      <ScrollArea className="max-h-[400px] overflow-hidden rounded-md border">
+      <div className="max-h-[500px] overflow-y-auto rounded-md border">
         <div className="divide-y">
           {matches.map((match, idx) => {
             const isMatched = match.segment_id !== null && match.confidence > 0;
@@ -390,7 +390,7 @@ export function TimelineEditor({
             );
           })}
         </div>
-      </ScrollArea>
+      </div>
 
       {/* Segment assignment / swap dialog */}
       <Dialog
