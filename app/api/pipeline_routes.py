@@ -271,6 +271,12 @@ class VariantPreviewInfo(BaseModel):
     has_srt: bool = False
 
 
+class VariantTtsInfo(BaseModel):
+    """TTS preview info for a variant (Step 2 per-script TTS)."""
+    has_audio: bool = False
+    audio_duration: float = 0.0
+
+
 class PipelineStatusResponse(BaseModel):
     """Response model for status endpoint."""
     pipeline_id: str
@@ -278,6 +284,7 @@ class PipelineStatusResponse(BaseModel):
     provider: str
     variants: List[VariantStatus]
     preview_info: Dict[str, VariantPreviewInfo] = {}
+    tts_info: Dict[str, VariantTtsInfo] = {}
 
 
 class PipelineImportRequest(BaseModel):
@@ -935,10 +942,23 @@ async def preview_variant(
     reuse_audio_duration = None
     if existing_tts:
         # Verify script and voice settings haven't changed since TTS was generated
-        script_match = existing_tts.get("script_hash") == _stable_hash(script_text)
+        stored_hash = existing_tts.get("script_hash")
+        current_hash = _stable_hash(script_text)
+        script_match = stored_hash == current_hash
         # For library audio: skip voice_settings check (same logic as render endpoint)
         is_library = bool(existing_tts.get("library_asset_id"))
-        settings_match = is_library or existing_tts.get("voice_settings") == voice_settings
+        stored_settings = existing_tts.get("voice_settings")
+        settings_match = is_library or stored_settings == voice_settings
+        if not script_match:
+            logger.info(
+                f"[Profile {profile.profile_id}] TTS reuse SKIP for variant {variant_index}: "
+                f"script_hash mismatch (stored={stored_hash}, current={current_hash})"
+            )
+        if not settings_match:
+            logger.info(
+                f"[Profile {profile.profile_id}] TTS reuse SKIP for variant {variant_index}: "
+                f"voice_settings mismatch (stored={stored_settings}, incoming={voice_settings})"
+            )
         if script_match and settings_match:
             audio_path_str = existing_tts.get("audio_path")
             if audio_path_str and Path(audio_path_str).exists():
@@ -946,6 +966,11 @@ async def preview_variant(
                 reuse_audio_duration = existing_tts.get("audio_duration")
                 logger.info(
                     f"[Profile {profile.profile_id}] Reusing Step 2 TTS audio for variant {variant_index}"
+                )
+            else:
+                logger.info(
+                    f"[Profile {profile.profile_id}] TTS reuse SKIP for variant {variant_index}: "
+                    f"audio_path missing or not on disk (path={audio_path_str})"
                 )
 
     try:
@@ -1297,9 +1322,10 @@ async def render_variants(
                                     f"variant {vid} saved to library project {library_project_id}"
                                 )
                     except Exception as lib_err:
-                        logger.warning(
+                        logger.error(
                             f"[Profile {profile.profile_id}] Failed to save pipeline variant "
-                            f"{vid} to library (non-critical): {lib_err}"
+                            f"{vid} to library: {lib_err}",
+                            exc_info=True
                         )
 
                 except Exception as e:
@@ -1379,13 +1405,164 @@ async def get_pipeline_status(pipeline_id: str):
             has_srt=has_srt
         )
 
+    # Build tts_info from stored tts_previews (Step 2 per-script TTS)
+    tts_info: Dict[str, VariantTtsInfo] = {}
+    for idx_key, tts_data in pipeline.get("tts_previews", {}).items():
+        if isinstance(tts_data, dict):
+            audio_path_str = tts_data.get("audio_path")
+            has_audio = bool(audio_path_str and Path(audio_path_str).exists())
+            audio_duration = tts_data.get("audio_duration", 0.0) if has_audio else 0.0
+            tts_info[str(idx_key)] = VariantTtsInfo(
+                has_audio=has_audio,
+                audio_duration=audio_duration,
+            )
+
     return PipelineStatusResponse(
         pipeline_id=pipeline_id,
         scripts=pipeline["scripts"],
         provider=pipeline["provider"],
         variants=variants,
-        preview_info=preview_info
+        preview_info=preview_info,
+        tts_info=tts_info,
     )
+
+
+@router.post("/sync-to-library/{pipeline_id}")
+async def sync_pipeline_to_library(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Sync completed pipeline render jobs to the library.
+
+    Creates a library project (if not exists) and inserts clips for each
+    completed variant that doesn't already have a clip row.  This is a
+    recovery mechanism for when the post-render library-save step failed
+    silently.
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    if pipeline["profile_id"] != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    render_jobs: dict = pipeline.get("render_jobs", {})
+    completed_variants = {
+        int(k): v for k, v in render_jobs.items()
+        if isinstance(v, dict) and v.get("status") == "completed" and v.get("final_video_path")
+    }
+
+    if not completed_variants:
+        return {"synced": 0, "message": "No completed variants to sync"}
+
+    # Get or create a library project for this pipeline
+    pipeline_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
+    existing = supabase.table("editai_projects")\
+        .select("id")\
+        .eq("profile_id", profile.profile_id)\
+        .eq("name", pipeline_name)\
+        .limit(1)\
+        .execute()
+
+    if existing.data:
+        library_project_id = existing.data[0]["id"]
+    else:
+        proj_result = supabase.table("editai_projects").insert({
+            "profile_id": profile.profile_id,
+            "name": pipeline_name,
+            "description": f"Auto-generated from pipeline {pipeline_id}",
+            "status": "completed",
+        }).execute()
+        if not proj_result.data:
+            raise HTTPException(status_code=500, detail="Failed to create library project")
+        library_project_id = proj_result.data[0]["id"]
+
+    # Check which clips already exist
+    existing_clips = supabase.table("editai_clips")\
+        .select("variant_index")\
+        .eq("project_id", library_project_id)\
+        .execute()
+    existing_indices = {c["variant_index"] for c in (existing_clips.data or [])}
+
+    synced = 0
+    for vid, job in sorted(completed_variants.items()):
+        if vid in existing_indices:
+            continue
+
+        final_video_path = Path(job["final_video_path"])
+        if not final_video_path.exists():
+            logger.warning(f"Pipeline {pipeline_id} variant {vid}: video file not found at {final_video_path}")
+            continue
+
+        # Thumbnail
+        thumb_path = None
+        try:
+            thumb_dir = final_video_path.parent / "thumbnails"
+            thumb_dir.mkdir(parents=True, exist_ok=True)
+            thumb_path = thumb_dir / f"{final_video_path.stem}_thumb.jpg"
+            if not thumb_path.exists():
+                subprocess.run([
+                    "ffmpeg", "-y", "-ss", "1", "-i", str(final_video_path),
+                    "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "3",
+                    str(thumb_path)
+                ], capture_output=True, timeout=30)
+            if not thumb_path.exists():
+                thumb_path = None
+        except Exception:
+            thumb_path = None
+
+        # Duration
+        duration = None
+        try:
+            dur_result = subprocess.run([
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(final_video_path)
+            ], capture_output=True, text=True, timeout=30)
+            if dur_result.returncode == 0:
+                duration = float(dur_result.stdout.strip())
+        except Exception:
+            pass
+
+        # Insert clip
+        supabase.table("editai_clips").insert({
+            "project_id": library_project_id,
+            "profile_id": profile.profile_id,
+            "variant_index": vid,
+            "variant_name": f"variant_{vid + 1}",
+            "raw_video_path": str(final_video_path),
+            "final_video_path": str(final_video_path),
+            "thumbnail_path": str(thumb_path) if thumb_path else None,
+            "duration": duration,
+            "is_selected": False,
+            "is_deleted": False,
+            "final_status": "completed"
+        }).execute()
+
+        synced += 1
+        logger.info(f"Pipeline {pipeline_id} variant {vid} synced to library project {library_project_id}")
+
+    # Update project variants_count
+    if synced > 0:
+        total_clips = supabase.table("editai_clips")\
+            .select("id", count="exact")\
+            .eq("project_id", library_project_id)\
+            .execute()
+        supabase.table("editai_projects")\
+            .update({"variants_count": total_clips.count or synced})\
+            .eq("id", library_project_id)\
+            .execute()
+
+    return {
+        "synced": synced,
+        "library_project_id": library_project_id,
+        "message": f"Synced {synced} variant(s) to library"
+    }
 
 
 @router.get("/audio/{pipeline_id}/{variant_index}")

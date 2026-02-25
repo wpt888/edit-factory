@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from "react";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -148,11 +149,33 @@ interface ContextProduct {
   description: string;
 }
 
-export default function PipelinePage() {
-  const { currentProfile } = useProfile();
+export default function PipelinePageWrapper() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><Loader2 className="h-8 w-8 animate-spin" /></div>}>
+      <PipelinePage />
+    </Suspense>
+  );
+}
 
-  // Step tracking
-  const [step, setStep] = useState(1);
+function PipelinePage() {
+  const { currentProfile } = useProfile();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  // Step tracking — synced with URL ?step=N
+  const [step, setStepRaw] = useState(() => {
+    const param = searchParams.get("step");
+    const n = param ? parseInt(param, 10) : NaN;
+    return n >= 1 && n <= 4 ? n : 1;
+  });
+
+  const setStep = useCallback((n: number) => {
+    setStepRaw(n);
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("step", String(n));
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  }, [searchParams, router, pathname]);
 
   // Step 1: Input
   const [idea, setIdea] = useState("");
@@ -230,6 +253,7 @@ export default function PipelinePage() {
   const [historySelectedScripts, setHistorySelectedScripts] = useState<Set<number>>(new Set());
   const [historyImporting, setHistoryImporting] = useState(false);
   const [historyPreviewInfo, setHistoryPreviewInfo] = useState<Record<string, VariantPreviewInfo>>({});
+  const [historyTtsInfo, setHistoryTtsInfo] = useState<Record<string, { has_audio: boolean; audio_duration: number }>>({});
   const [playingAudio, setPlayingAudio] = useState<string | null>(null); // "pipelineId-variantIndex"
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -762,6 +786,7 @@ export default function PipelinePage() {
       setHistoryScripts([]);
       setHistorySelectedScripts(new Set());
       setHistoryPreviewInfo({});
+      setHistoryTtsInfo({});
       return;
     }
     setSelectedHistoryId(id);
@@ -780,6 +805,8 @@ export default function PipelinePage() {
         } else {
           setHistoryPreviewInfo({});
         }
+        // Store TTS info (Step 2 per-script TTS)
+        setHistoryTtsInfo(data.tts_info || {});
       }
     } catch (err) {
       handleApiError(err, "Failed to load pipeline scripts");
@@ -970,13 +997,21 @@ export default function PipelinePage() {
       const pid = selectedHistoryId;
       setPipelineId(pid);
       setScripts(historyScripts.map(formatScript));
-      // Carry over TTS results from history preview info
+      // Carry over TTS results: prefer tts_info (Step 2) over preview_info (Step 3)
       const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
-      Object.entries(historyPreviewInfo).forEach(([key, info]) => {
+      Object.entries(historyTtsInfo).forEach(([key, info]) => {
         if (info.has_audio) {
           restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
         }
       });
+      // Fall back to preview_info if no tts_info available
+      if (Object.keys(restoredTts).length === 0) {
+        Object.entries(historyPreviewInfo).forEach(([key, info]) => {
+          if (info.has_audio) {
+            restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
+          }
+        });
+      }
       setTtsResults(restoredTts);
       setStep(2);
       setSelectedHistoryId(null);
@@ -1043,12 +1078,18 @@ export default function PipelinePage() {
       audioRef.current = null;
     }
 
-    const audio = new Audio(`${API_URL}/pipeline/audio/${pipelineId}/${variantIndex}`);
-    audio.onended = () => setPlayingAudio(null);
-    audio.onerror = () => setPlayingAudio(null);
-    audio.play().catch(() => setPlayingAudio(null));
-    audioRef.current = audio;
     setPlayingAudio(audioKey);
+    apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}`)
+      .then(res => res.blob())
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.onended = () => { setPlayingAudio(null); URL.revokeObjectURL(url); };
+        audio.onerror = () => { setPlayingAudio(null); URL.revokeObjectURL(url); };
+        audio.play().catch(() => { setPlayingAudio(null); URL.revokeObjectURL(url); });
+        audioRef.current = audio;
+      })
+      .catch(() => setPlayingAudio(null));
   };
 
   // Cleanup audio on unmount
@@ -1197,12 +1238,28 @@ export default function PipelinePage() {
       ttsAudioRef.current = null;
     }
 
-    const audio = new Audio(`${API_URL}/pipeline/tts-audio/${pipelineId}/${variantIndex}`);
-    audio.onended = () => setPlayingTtsVariant(null);
-    audio.onerror = () => setPlayingTtsVariant(null);
-    audio.play().catch(() => setPlayingTtsVariant(null));
-    ttsAudioRef.current = audio;
     setPlayingTtsVariant(variantIndex);
+
+    const playBlob = (blob: Blob) => {
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => { setPlayingTtsVariant(null); URL.revokeObjectURL(url); };
+      audio.onerror = () => { setPlayingTtsVariant(null); URL.revokeObjectURL(url); };
+      audio.play().catch(() => { setPlayingTtsVariant(null); URL.revokeObjectURL(url); });
+      ttsAudioRef.current = audio;
+    };
+
+    // Try Step 2 TTS audio first, fall back to Step 3 preview audio
+    apiGet(`/pipeline/tts-audio/${pipelineId}/${variantIndex}`)
+      .then(res => res.blob())
+      .then(playBlob)
+      .catch(() => {
+        // Fallback: try preview audio (Step 3)
+        apiGet(`/pipeline/preview-audio/${pipelineId}/${variantIndex}`)
+          .then(res => res.blob())
+          .then(playBlob)
+          .catch(() => setPlayingTtsVariant(null));
+      });
   };
 
   // Toggle variant selection
@@ -2238,20 +2295,28 @@ export default function PipelinePage() {
                             onClick={() => {
                               const audioKey = `${pipelineId}-${index}`;
                               if (playingAudio === audioKey) {
-                                // Stop
-                                const audios = document.querySelectorAll('audio');
-                                audios.forEach(a => { a.pause(); a.remove(); });
+                                if (audioRef.current) {
+                                  audioRef.current.pause();
+                                  audioRef.current = null;
+                                }
                                 setPlayingAudio(null);
                               } else {
-                                // Stop any previous
-                                const audios = document.querySelectorAll('audio');
-                                audios.forEach(a => { a.pause(); a.remove(); });
-                                // Play from pipeline audio endpoint
-                                const audio = new Audio(`${API_URL}/pipeline/audio/${pipelineId}/${index}`);
-                                audio.onended = () => setPlayingAudio(null);
-                                audio.onerror = () => setPlayingAudio(null);
-                                audio.play().catch(() => setPlayingAudio(null));
+                                if (audioRef.current) {
+                                  audioRef.current.pause();
+                                  audioRef.current = null;
+                                }
                                 setPlayingAudio(audioKey);
+                                apiGet(`/pipeline/audio/${pipelineId}/${index}`)
+                                  .then(res => res.blob())
+                                  .then(blob => {
+                                    const url = URL.createObjectURL(blob);
+                                    const audio = new Audio(url);
+                                    audio.onended = () => { setPlayingAudio(null); URL.revokeObjectURL(url); };
+                                    audio.onerror = () => { setPlayingAudio(null); URL.revokeObjectURL(url); };
+                                    audio.play().catch(() => { setPlayingAudio(null); URL.revokeObjectURL(url); });
+                                    audioRef.current = audio;
+                                  })
+                                  .catch(() => setPlayingAudio(null));
                               }
                             }}
                             title={playingAudio === `${pipelineId}-${index}` ? "Stop audio" : "Play voiceover"}
@@ -2581,13 +2646,20 @@ export default function PipelinePage() {
                                     if (!selectedHistoryId) return;
                                     setPipelineId(selectedHistoryId);
                                     setScripts(historyScripts.map(formatScript));
-                                    // Carry over TTS results from history preview info
+                                    // Carry over TTS results: prefer tts_info (Step 2) over preview_info (Step 3)
                                     const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
-                                    Object.entries(historyPreviewInfo).forEach(([key, info]) => {
+                                    Object.entries(historyTtsInfo).forEach(([key, info]) => {
                                       if (info.has_audio) {
                                         restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
                                       }
                                     });
+                                    if (Object.keys(restoredTts).length === 0) {
+                                      Object.entries(historyPreviewInfo).forEach(([key, info]) => {
+                                        if (info.has_audio) {
+                                          restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
+                                        }
+                                      });
+                                    }
                                     setTtsResults(restoredTts);
                                     setStep(2);
                                     setSelectedHistoryId(null);
