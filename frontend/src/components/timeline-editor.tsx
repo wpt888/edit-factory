@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -21,7 +21,10 @@ import {
   Clock,
   Plus,
   Minus,
+  List,
+  LayoutPanelLeft,
 } from "lucide-react";
+import { API_URL } from "@/lib/api";
 
 // MatchPreview interface (mirrors pipeline/page.tsx)
 export interface MatchPreview {
@@ -36,6 +39,10 @@ export interface MatchPreview {
   duration_override?: number;  // User-adjusted duration in seconds
   is_auto_filled?: boolean;  // Backend auto-filled from random segment pool
   product_group?: string | null;
+  source_video_id?: string;
+  segment_start_time?: number;
+  segment_end_time?: number;
+  thumbnail_path?: string;
 }
 
 export interface SegmentOption {
@@ -44,6 +51,9 @@ export interface SegmentOption {
   source_video_id: string;
   duration: number;
   product_group?: string | null;
+  start_time?: number;
+  end_time?: number;
+  thumbnail_path?: string;
 }
 
 interface TimelineEditorProps {
@@ -52,6 +62,9 @@ interface TimelineEditorProps {
   sourceVideoIds: string[];
   availableSegments: SegmentOption[];
   onMatchesChange: (matches: MatchPreview[]) => void;
+  profileId?: string;
+  pipelineId?: string;
+  variantIndex?: number;
 }
 
 function formatTime(seconds: number): string {
@@ -62,14 +75,23 @@ function formatTime(seconds: number): string {
 
 export function TimelineEditor({
   matches,
-  audioDuration: _audioDuration,
+  audioDuration,
   sourceVideoIds: _sourceVideoIds,
   availableSegments,
   onMatchesChange,
+  profileId,
 }: TimelineEditorProps) {
+  // View mode: "timeline" (horizontal) or "list" (vertical)
+  const [viewMode, setViewMode] = useState<"timeline" | "list">("timeline");
+
   // Dialog state (used for both unmatched assignment and swap)
   const [assigningIndex, setAssigningIndex] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Timeline view state
+  const [selectedBlockIndex, setSelectedBlockIndex] = useState<number | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const lastSourceVideoId = useRef<string | null>(null);
 
   // Drag-and-drop state
   const [dragIndex, setDragIndex] = useState<number | null>(null);
@@ -105,6 +127,12 @@ export function TimelineEditor({
           segment_keywords: segment.keywords,
           matched_keyword: segment.keywords[0] ?? null,
           confidence: 1.0,
+          source_video_id: segment.source_video_id,
+          segment_start_time: segment.start_time,
+          segment_end_time: segment.end_time,
+          thumbnail_path: segment.thumbnail_path,
+          product_group: segment.product_group,
+          is_auto_filled: false,
         };
       }
       return match;
@@ -155,12 +183,24 @@ export function TimelineEditor({
       segment_keywords: updated[dragIndex].segment_keywords,
       matched_keyword: updated[dragIndex].matched_keyword,
       confidence: updated[dragIndex].confidence,
+      is_auto_filled: updated[dragIndex].is_auto_filled,
+      product_group: updated[dragIndex].product_group,
+      source_video_id: updated[dragIndex].source_video_id,
+      segment_start_time: updated[dragIndex].segment_start_time,
+      segment_end_time: updated[dragIndex].segment_end_time,
+      thumbnail_path: updated[dragIndex].thumbnail_path,
     };
     const dropSegment = {
       segment_id: updated[dropIndex].segment_id,
       segment_keywords: updated[dropIndex].segment_keywords,
       matched_keyword: updated[dropIndex].matched_keyword,
       confidence: updated[dropIndex].confidence,
+      is_auto_filled: updated[dropIndex].is_auto_filled,
+      product_group: updated[dropIndex].product_group,
+      source_video_id: updated[dropIndex].source_video_id,
+      segment_start_time: updated[dropIndex].segment_start_time,
+      segment_end_time: updated[dropIndex].segment_end_time,
+      thumbnail_path: updated[dropIndex].thumbnail_path,
     };
 
     updated[dragIndex] = { ...updated[dragIndex], ...dropSegment };
@@ -188,6 +228,50 @@ export function TimelineEditor({
     onMatchesChange(updated);
   };
 
+  // --- Video preview effect for timeline view ---
+  useEffect(() => {
+    if (viewMode !== "timeline" || selectedBlockIndex === null) return;
+    const match = matches[selectedBlockIndex];
+    if (!match || !videoRef.current) return;
+
+    const video = videoRef.current;
+    const sourceVideoId = match.source_video_id;
+    const startTime = match.segment_start_time ?? 0;
+    const endTime = match.segment_end_time;
+
+    // Only change src when source_video_id actually changes
+    if (sourceVideoId && sourceVideoId !== lastSourceVideoId.current && profileId) {
+      lastSourceVideoId.current = sourceVideoId;
+      video.src = `${API_URL}/segments/source-videos/${sourceVideoId}/stream?profile_id=${profileId}`;
+      video.load();
+    }
+
+    const handleLoaded = () => {
+      video.currentTime = startTime;
+      video.play().catch(() => {});
+    };
+
+    const handleTimeUpdate = () => {
+      if (endTime !== undefined && video.currentTime >= endTime) {
+        video.pause();
+      }
+    };
+
+    video.addEventListener("loadeddata", handleLoaded);
+    video.addEventListener("timeupdate", handleTimeUpdate);
+
+    // If video is already loaded (same source), just seek
+    if (video.readyState >= 2) {
+      video.currentTime = startTime;
+      video.play().catch(() => {});
+    }
+
+    return () => {
+      video.removeEventListener("loadeddata", handleLoaded);
+      video.removeEventListener("timeupdate", handleTimeUpdate);
+    };
+  }, [viewMode, selectedBlockIndex, matches, profileId]);
+
   if (matches.length === 0) {
     return (
       <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
@@ -204,193 +288,393 @@ export function TimelineEditor({
   const dialogTitle = isSwapMode ? "Swap Segment" : "Select Segment";
   const dialogSubLabel = isSwapMode ? "Swapping segment for phrase" : "Assigning to phrase";
 
+  // Calculate total duration for proportional widths in timeline view
+  const totalDuration = audioDuration > 0
+    ? audioDuration
+    : matches.reduce((sum, m) => sum + (m.duration_override ?? (m.srt_end - m.srt_start)), 0);
+
+  // Selected match for inline preview
+  const selectedMatch = selectedBlockIndex !== null ? matches[selectedBlockIndex] : null;
+
   return (
     <>
-      <div className="max-h-[500px] overflow-y-auto rounded-md border">
-        <div className="divide-y">
-          {matches.map((match, idx) => {
-            const isMatched = match.segment_id !== null && match.confidence > 0;
-            const isAutoFilled = match.is_auto_filled === true && match.segment_id !== null;
-            const isDragging = dragIndex === idx;
-            const isDragOver = dragOverIndex === idx && dragIndex !== idx;
-            const displayText =
-              match.srt_text.length > 60
-                ? match.srt_text.substring(0, 60) + "..."
-                : match.srt_text;
-            const naturalDuration = match.srt_end - match.srt_start;
-            const displayDuration = match.duration_override ?? naturalDuration;
-            const isDurationOverridden =
-              match.duration_override !== undefined &&
-              Math.abs(match.duration_override - naturalDuration) > 0.05;
+      {/* View toggle */}
+      <div className="flex items-center gap-1 mb-3">
+        <Button
+          variant={viewMode === "timeline" ? "default" : "outline"}
+          size="sm"
+          className="h-7 text-xs gap-1.5"
+          onClick={() => setViewMode("timeline")}
+        >
+          <LayoutPanelLeft className="h-3.5 w-3.5" />
+          Timeline
+        </Button>
+        <Button
+          variant={viewMode === "list" ? "default" : "outline"}
+          size="sm"
+          className="h-7 text-xs gap-1.5"
+          onClick={() => setViewMode("list")}
+        >
+          <List className="h-3.5 w-3.5" />
+          List
+        </Button>
+      </div>
 
-            return (
-              <div
-                key={idx}
-                draggable
-                onDragStart={(e) => handleDragStart(e, idx)}
-                onDragOver={(e) => handleDragOver(e, idx)}
-                onDragLeave={handleDragLeave}
-                onDrop={(e) => handleDrop(e, idx)}
-                onDragEnd={handleDragEnd}
-                className={`group flex items-center gap-3 px-3 py-2.5 min-h-[48px] border-l-4 transition-colors select-none ${
-                  isMatched
-                    ? "border-l-green-500 bg-green-50 dark:bg-green-950/20"
-                    : isAutoFilled
-                    ? "border-l-blue-500 bg-blue-50 dark:bg-blue-950/20"
-                    : "border-l-amber-500 bg-amber-50 dark:bg-amber-950/20"
-                } ${isDragging ? "opacity-50" : ""} ${
-                  isDragOver
-                    ? "border-t-2 border-t-blue-500"
-                    : "border-t-transparent"
-                }`}
-              >
-                {/* Drag handle */}
-                <div
-                  className="flex-shrink-0 cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground transition-colors"
-                  title="Drag to swap segment assignment"
-                >
-                  <GripVertical className="h-4 w-4" />
-                </div>
+      {viewMode === "timeline" ? (
+        /* ========== TIMELINE VIEW ========== */
+        <div className="space-y-3">
+          {/* Horizontal scrollable strip */}
+          <div className="overflow-x-auto rounded-md border bg-muted/30 p-2">
+            <div className="flex gap-1" style={{ minWidth: "100%" }}>
+              {matches.map((match, idx) => {
+                const isMatched = match.segment_id !== null && match.confidence > 0;
+                const isAutoFilled = match.is_auto_filled === true && match.segment_id !== null;
+                const isDragging = dragIndex === idx;
+                const isDragOver = dragOverIndex === idx && dragIndex !== idx;
+                const naturalDuration = match.srt_end - match.srt_start;
+                const segDuration = match.duration_override ?? naturalDuration;
+                const widthPercent = totalDuration > 0 ? (segDuration / totalDuration) * 100 : 10;
+                const isSelected = selectedBlockIndex === idx;
 
-                {/* Left: Index + time range */}
-                <div className="flex-shrink-0 text-xs text-muted-foreground w-24 space-y-0.5">
-                  <div className="font-mono font-semibold text-foreground">
-                    #{match.srt_index + 1}
+                const borderColor = isMatched
+                  ? "border-green-500"
+                  : isAutoFilled
+                  ? "border-blue-500"
+                  : "border-amber-500";
+
+                const bgColor = isSelected
+                  ? "bg-accent"
+                  : isMatched
+                  ? "bg-green-50 dark:bg-green-950/20"
+                  : isAutoFilled
+                  ? "bg-blue-50 dark:bg-blue-950/20"
+                  : "bg-amber-50 dark:bg-amber-950/20";
+
+                const label = isMatched
+                  ? (match.matched_keyword ?? "matched")
+                  : isAutoFilled
+                  ? (match.segment_keywords[0] ?? "auto")
+                  : "?";
+
+                return (
+                  <div
+                    key={idx}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, idx)}
+                    onDragOver={(e) => handleDragOver(e, idx)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, idx)}
+                    onDragEnd={handleDragEnd}
+                    onClick={() => setSelectedBlockIndex(idx === selectedBlockIndex ? null : idx)}
+                    className={`
+                      relative flex-shrink-0 rounded-md border-2 cursor-pointer
+                      transition-all select-none overflow-hidden
+                      ${borderColor} ${bgColor}
+                      ${isDragging ? "opacity-50" : ""}
+                      ${isDragOver ? "ring-2 ring-blue-400 ring-offset-1" : ""}
+                      ${isSelected ? "ring-2 ring-primary ring-offset-1" : ""}
+                    `}
+                    style={{
+                      width: `max(60px, ${widthPercent}%)`,
+                      height: "80px",
+                    }}
+                    title={match.srt_text}
+                  >
+                    {/* Thumbnail background */}
+                    {match.thumbnail_path && (
+                      <img
+                        src={`${API_URL}/segments/files/${encodeURIComponent(match.thumbnail_path)}`}
+                        alt=""
+                        className="absolute inset-0 w-full h-full object-cover opacity-40"
+                        loading="lazy"
+                      />
+                    )}
+                    {/* Content overlay */}
+                    <div className="relative z-10 flex flex-col items-center justify-center h-full px-1 py-1 text-center">
+                      <span className="text-[10px] font-mono font-bold leading-none">
+                        #{match.srt_index + 1}
+                      </span>
+                      <span className="text-[10px] font-medium leading-tight mt-0.5 truncate max-w-full">
+                        {segDuration.toFixed(1)}s
+                      </span>
+                      <span className="text-[9px] text-muted-foreground leading-tight mt-0.5 truncate max-w-full">
+                        {label}
+                      </span>
+                    </div>
                   </div>
-                  <div>
-                    {formatTime(match.srt_start)} – {formatTime(match.srt_end)}
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Inline preview panel (shown when a block is selected) */}
+          {selectedBlockIndex !== null && selectedMatch && (
+            <div className="rounded-md border bg-card p-4 space-y-3">
+              <div className="flex items-start gap-4">
+                {/* Video preview */}
+                {selectedMatch.source_video_id && profileId ? (
+                  <div className="flex-shrink-0 w-48 rounded overflow-hidden bg-black">
+                    <video
+                      ref={videoRef}
+                      className="w-full h-auto"
+                      controls
+                      muted
+                    />
                   </div>
-                </div>
+                ) : (
+                  <div className="flex-shrink-0 w-48 h-28 rounded bg-muted flex items-center justify-center">
+                    <Film className="h-6 w-6 text-muted-foreground" />
+                  </div>
+                )}
 
-                {/* Center: SRT text */}
-                <div
-                  className="flex-1 min-w-0 text-sm"
-                  title={match.srt_text}
-                >
-                  {displayText}
-                </div>
+                {/* Details */}
+                <div className="flex-1 min-w-0 space-y-2">
+                  <div className="text-sm font-medium">
+                    #{selectedMatch.srt_index + 1}: {selectedMatch.srt_text}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {formatTime(selectedMatch.srt_start)} – {formatTime(selectedMatch.srt_end)}
+                  </div>
 
-                {/* Right: Duration + Match status (stacked) */}
-                <div className="flex-shrink-0 flex flex-col items-end gap-1">
-                  {/* Duration adjustment control */}
+                  {/* Keyword badge */}
+                  {selectedMatch.matched_keyword && (
+                    <Badge
+                      variant="secondary"
+                      className="text-xs bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200"
+                    >
+                      <CheckCircle className="h-3 w-3 mr-1" />
+                      {selectedMatch.matched_keyword}
+                    </Badge>
+                  )}
+
+                  {/* Duration controls */}
                   <div className="flex items-center gap-1 text-xs">
-                    <span title="Segment duration">
-                      <Clock className="h-3 w-3 text-muted-foreground" />
-                    </span>
+                    <Clock className="h-3 w-3 text-muted-foreground" />
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-5 w-5"
-                      onClick={() => adjustDuration(idx, -0.5)}
-                      title="Decrease duration by 0.5s"
+                      onClick={() => adjustDuration(selectedBlockIndex, -0.5)}
                     >
                       <Minus className="h-3 w-3" />
                     </Button>
-                    <span
-                      className={`w-10 text-center font-mono tabular-nums ${
-                        isDurationOverridden
-                          ? "text-blue-600 dark:text-blue-400 font-semibold"
-                          : "text-muted-foreground"
-                      }`}
-                      title={
-                        isDurationOverridden
-                          ? `Adjusted from ${naturalDuration.toFixed(1)}s`
-                          : "Natural SRT duration"
-                      }
-                    >
-                      {displayDuration.toFixed(1)}s
+                    <span className="w-10 text-center font-mono tabular-nums">
+                      {(selectedMatch.duration_override ?? (selectedMatch.srt_end - selectedMatch.srt_start)).toFixed(1)}s
                     </span>
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-5 w-5"
-                      onClick={() => adjustDuration(idx, 0.5)}
-                      title="Increase duration by 0.5s"
+                      onClick={() => adjustDuration(selectedBlockIndex, 0.5)}
                     >
                       <Plus className="h-3 w-3" />
                     </Button>
                   </div>
 
-                  {/* Match status */}
-                  <div className="flex items-center gap-2">
-                    {isMatched ? (
-                      <>
-                        <Badge
-                          variant="secondary"
-                          className="text-xs bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200 max-w-[90px]"
-                        >
-                          <CheckCircle className="h-3 w-3 mr-1 flex-shrink-0" />
-                          <span className="truncate">{match.matched_keyword}</span>
-                        </Badge>
-                        <span className="text-xs text-green-700 dark:text-green-400 font-medium">
-                          {Math.round(match.confidence * 100)}%
-                        </span>
-                        {match.product_group && (
-                          <Badge variant="outline" className="text-[9px] h-4 px-1 border-purple-400 text-purple-600 dark:text-purple-300">
-                            {match.product_group}
-                          </Badge>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={() => handleOpenDialog(idx)}
-                          disabled={availableSegments.length === 0}
-                          title="Swap segment"
-                        >
-                          <RefreshCw className="h-3 w-3" />
-                        </Button>
-                      </>
-                    ) : isAutoFilled ? (
-                      <>
-                        <Badge
-                          variant="secondary"
-                          className="text-xs bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200 max-w-[90px]"
-                        >
-                          <Film className="h-3 w-3 mr-1 flex-shrink-0" />
-                          <span className="truncate">{match.segment_keywords[0] ?? "auto"}</span>
-                        </Badge>
-                        <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">
-                          auto
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={() => handleOpenDialog(idx)}
-                          disabled={availableSegments.length === 0}
-                          title="Swap segment"
-                        >
-                          <RefreshCw className="h-3 w-3" />
-                        </Button>
-                      </>
-                    ) : (
-                      <>
-                        <Badge
-                          variant="outline"
-                          className="text-xs border-amber-400 text-amber-700 dark:text-amber-300"
-                        >
-                          <AlertTriangle className="h-3 w-3 mr-1" />
-                          Unmatched
-                        </Badge>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-xs border-amber-400 text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-950/30"
-                          onClick={() => handleOpenDialog(idx)}
-                          disabled={availableSegments.length === 0}
-                        >
-                          Select Segment
-                        </Button>
-                      </>
-                    )}
-                  </div>
+                  {/* Swap button */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs gap-1"
+                    onClick={() => handleOpenDialog(selectedBlockIndex)}
+                    disabled={availableSegments.length === 0}
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    {selectedMatch.segment_id ? "Swap Segment" : "Assign Segment"}
+                  </Button>
                 </div>
               </div>
-            );
-          })}
+            </div>
+          )}
         </div>
-      </div>
+      ) : (
+        /* ========== LIST VIEW (existing) ========== */
+        <div className="max-h-[500px] overflow-y-auto rounded-md border">
+          <div className="divide-y">
+            {matches.map((match, idx) => {
+              const isMatched = match.segment_id !== null && match.confidence > 0;
+              const isAutoFilled = match.is_auto_filled === true && match.segment_id !== null;
+              const isDragging = dragIndex === idx;
+              const isDragOver = dragOverIndex === idx && dragIndex !== idx;
+              const displayText =
+                match.srt_text.length > 60
+                  ? match.srt_text.substring(0, 60) + "..."
+                  : match.srt_text;
+              const naturalDuration = match.srt_end - match.srt_start;
+              const displayDuration = match.duration_override ?? naturalDuration;
+              const isDurationOverridden =
+                match.duration_override !== undefined &&
+                Math.abs(match.duration_override - naturalDuration) > 0.05;
+
+              return (
+                <div
+                  key={idx}
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, idx)}
+                  onDragOver={(e) => handleDragOver(e, idx)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, idx)}
+                  onDragEnd={handleDragEnd}
+                  className={`group flex items-center gap-3 px-3 py-2.5 min-h-[48px] border-l-4 transition-colors select-none ${
+                    isMatched
+                      ? "border-l-green-500 bg-green-50 dark:bg-green-950/20"
+                      : isAutoFilled
+                      ? "border-l-blue-500 bg-blue-50 dark:bg-blue-950/20"
+                      : "border-l-amber-500 bg-amber-50 dark:bg-amber-950/20"
+                  } ${isDragging ? "opacity-50" : ""} ${
+                    isDragOver
+                      ? "border-t-2 border-t-blue-500"
+                      : "border-t-transparent"
+                  }`}
+                >
+                  {/* Drag handle */}
+                  <div
+                    className="flex-shrink-0 cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+                    title="Drag to swap segment assignment"
+                  >
+                    <GripVertical className="h-4 w-4" />
+                  </div>
+
+                  {/* Left: Index + time range */}
+                  <div className="flex-shrink-0 text-xs text-muted-foreground w-24 space-y-0.5">
+                    <div className="font-mono font-semibold text-foreground">
+                      #{match.srt_index + 1}
+                    </div>
+                    <div>
+                      {formatTime(match.srt_start)} – {formatTime(match.srt_end)}
+                    </div>
+                  </div>
+
+                  {/* Center: SRT text */}
+                  <div
+                    className="flex-1 min-w-0 text-sm"
+                    title={match.srt_text}
+                  >
+                    {displayText}
+                  </div>
+
+                  {/* Right: Duration + Match status (stacked) */}
+                  <div className="flex-shrink-0 flex flex-col items-end gap-1">
+                    {/* Duration adjustment control */}
+                    <div className="flex items-center gap-1 text-xs">
+                      <span title="Segment duration">
+                        <Clock className="h-3 w-3 text-muted-foreground" />
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-5 w-5"
+                        onClick={() => adjustDuration(idx, -0.5)}
+                        title="Decrease duration by 0.5s"
+                      >
+                        <Minus className="h-3 w-3" />
+                      </Button>
+                      <span
+                        className={`w-10 text-center font-mono tabular-nums ${
+                          isDurationOverridden
+                            ? "text-blue-600 dark:text-blue-400 font-semibold"
+                            : "text-muted-foreground"
+                        }`}
+                        title={
+                          isDurationOverridden
+                            ? `Adjusted from ${naturalDuration.toFixed(1)}s`
+                            : "Natural SRT duration"
+                        }
+                      >
+                        {displayDuration.toFixed(1)}s
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-5 w-5"
+                        onClick={() => adjustDuration(idx, 0.5)}
+                        title="Increase duration by 0.5s"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </Button>
+                    </div>
+
+                    {/* Match status */}
+                    <div className="flex items-center gap-2">
+                      {isMatched ? (
+                        <>
+                          <Badge
+                            variant="secondary"
+                            className="text-xs bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200 max-w-[90px]"
+                          >
+                            <CheckCircle className="h-3 w-3 mr-1 flex-shrink-0" />
+                            <span className="truncate">{match.matched_keyword}</span>
+                          </Badge>
+                          <span className="text-xs text-green-700 dark:text-green-400 font-medium">
+                            {Math.round(match.confidence * 100)}%
+                          </span>
+                          {match.product_group && (
+                            <Badge variant="outline" className="text-[9px] h-4 px-1 border-purple-400 text-purple-600 dark:text-purple-300">
+                              {match.product_group}
+                            </Badge>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                            onClick={() => handleOpenDialog(idx)}
+                            disabled={availableSegments.length === 0}
+                            title="Swap segment"
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                          </Button>
+                        </>
+                      ) : isAutoFilled ? (
+                        <>
+                          <Badge
+                            variant="secondary"
+                            className="text-xs bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200 max-w-[90px]"
+                          >
+                            <Film className="h-3 w-3 mr-1 flex-shrink-0" />
+                            <span className="truncate">{match.segment_keywords[0] ?? "auto"}</span>
+                          </Badge>
+                          <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">
+                            auto
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                            onClick={() => handleOpenDialog(idx)}
+                            disabled={availableSegments.length === 0}
+                            title="Swap segment"
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Badge
+                            variant="outline"
+                            className="text-xs border-amber-400 text-amber-700 dark:text-amber-300"
+                          >
+                            <AlertTriangle className="h-3 w-3 mr-1" />
+                            Unmatched
+                          </Badge>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs border-amber-400 text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-950/30"
+                            onClick={() => handleOpenDialog(idx)}
+                            disabled={availableSegments.length === 0}
+                          >
+                            Select Segment
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Segment assignment / swap dialog */}
       <Dialog

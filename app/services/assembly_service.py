@@ -47,6 +47,10 @@ class MatchResult:
     confidence: float
     is_auto_filled: bool = False
     product_group: Optional[str] = None
+    source_video_id: Optional[str] = None
+    segment_start_time: Optional[float] = None
+    segment_end_time: Optional[float] = None
+    thumbnail_path: Optional[str] = None
 
 
 @dataclass
@@ -237,6 +241,7 @@ class AssemblyService:
         """
         matches = []
         current_product_group = None  # Track product group context across SRT entries
+        prev_segment_id = None  # Track previous segment to avoid consecutive duplicates
 
         for idx, entry in enumerate(srt_entries):
             srt_text = entry["text"]
@@ -245,6 +250,10 @@ class AssemblyService:
             best_segment = None
             best_keyword = None
             best_confidence = 0.0
+            # Track runner-up in case best is same as previous
+            runner_up_segment = None
+            runner_up_keyword = None
+            runner_up_confidence = 0.0
 
             # Find best matching segment for this SRT entry
             for segment in segments_data:
@@ -271,16 +280,34 @@ class AssemblyService:
 
                         # Pick best match (highest confidence, then longest duration)
                         if confidence > best_confidence:
+                            # Demote current best to runner-up
+                            runner_up_segment = best_segment
+                            runner_up_keyword = best_keyword
+                            runner_up_confidence = best_confidence
                             best_segment = segment
                             best_keyword = keyword
                             best_confidence = confidence
+                        elif confidence > runner_up_confidence:
+                            runner_up_segment = segment
+                            runner_up_keyword = keyword
+                            runner_up_confidence = confidence
                         elif confidence == best_confidence and best_segment:
                             # Tie-breaker: prefer longer segment (more visual content)
                             current_duration = segment.get("duration", 0)
                             best_duration = best_segment.get("duration", 0)
                             if current_duration > best_duration:
+                                runner_up_segment = best_segment
+                                runner_up_keyword = best_keyword
+                                runner_up_confidence = best_confidence
                                 best_segment = segment
                                 best_keyword = keyword
+
+            # Avoid consecutive duplicate: if best is same as previous, use runner-up
+            if (best_segment and best_segment["id"] == prev_segment_id
+                    and runner_up_segment and runner_up_confidence >= min_confidence):
+                best_segment = runner_up_segment
+                best_keyword = runner_up_keyword
+                best_confidence = runner_up_confidence
 
             # Create match result (may be unmatched)
             if best_segment and best_confidence >= min_confidence:
@@ -294,9 +321,14 @@ class AssemblyService:
                     segment_keywords=best_segment.get("keywords") or [],
                     matched_keyword=best_keyword,
                     confidence=best_confidence,
-                    product_group=seg_group
+                    product_group=seg_group,
+                    source_video_id=best_segment.get("source_video_id"),
+                    segment_start_time=best_segment.get("start_time"),
+                    segment_end_time=best_segment.get("end_time"),
+                    thumbnail_path=best_segment.get("thumbnail_path"),
                 )
-                # Update context tracker
+                # Update context trackers
+                prev_segment_id = best_segment["id"]
                 if seg_group:
                     current_product_group = seg_group
             else:
@@ -338,6 +370,11 @@ class AssemblyService:
                     else:
                         pool = list(segments_data)
 
+                    # Avoid consecutive duplicate: exclude previous segment from pool
+                    prev_seg_id = matches[um_idx - 1].segment_id if um_idx > 0 else None
+                    if prev_seg_id and len(pool) > 1:
+                        pool = [s for s in pool if s["id"] != prev_seg_id]
+
                     rng.shuffle(pool)
                     seg = pool[0]
                     matches[um_idx] = MatchResult(
@@ -350,7 +387,11 @@ class AssemblyService:
                         matched_keyword=None,
                         confidence=0.0,
                         is_auto_filled=True,
-                        product_group=seg.get("product_group")
+                        product_group=seg.get("product_group"),
+                        source_video_id=seg.get("source_video_id"),
+                        segment_start_time=seg.get("start_time"),
+                        segment_end_time=seg.get("end_time"),
+                        thumbnail_path=seg.get("thumbnail_path"),
                     )
                 logger.info(f"Auto-filled {len(unmatched_indices)} unmatched entries (seed={variant_index})")
 
@@ -493,6 +534,9 @@ class AssemblyService:
 
         segment_files = []
 
+        # Target output dimensions (portrait)
+        target_w, target_h = 1080, 1920
+
         # Extract each segment clip (with optional per-segment transforms)
         from app.services.segment_transforms import SegmentTransform
 
@@ -503,24 +547,28 @@ class AssemblyService:
 
             # Build per-segment transform filters
             transform = SegmentTransform.from_dict(entry.transforms)
-            # Use 1080x1920 as default; actual dimensions handled by safety net in filter
-            transform_filters = transform.to_ffmpeg_filters(width=1080, height=1920)
+            transform_filters = transform.to_ffmpeg_filters(width=target_w, height=target_h)
+
+            # Always force consistent portrait dimensions, even without transforms
+            if not transform_filters:
+                transform_filters = [
+                    f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease",
+                    f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black",
+                ]
 
             cmd = [
                 "ffmpeg", "-y",
                 "-ss", str(entry.start_time),
                 "-i", entry.source_video_path,
                 "-t", str(duration),
+                "-vf", ",".join(transform_filters),
             ]
-
-            if transform_filters:
-                cmd.extend(["-vf", ",".join(transform_filters)])
 
             cmd.extend([
                 "-c:v", "libx264",
                 "-preset", "fast",
                 "-crf", "23",
-                "-an",  # No audio
+                "-an",
                 "-pix_fmt", "yuv420p",
                 str(segment_file)
             ])
@@ -877,7 +925,7 @@ class AssemblyService:
         if source_video_ids:
             logger.info(f"Filtering to {len(source_video_ids)} source video(s)")
         segments_query = supabase.table("editai_segments")\
-            .select("id, source_video_id, start_time, end_time, keywords, transforms, editai_source_videos(file_path)")\
+            .select("id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, editai_source_videos(file_path)")\
             .eq("profile_id", profile_id)
         if source_video_ids:
             segments_query = segments_query.in_("source_video_id", source_video_ids)
@@ -899,6 +947,8 @@ class AssemblyService:
                     "keywords": seg.get("keywords") or [],
                     "source_video_path": source_video_path,
                     "transforms": seg.get("transforms"),
+                    "thumbnail_path": seg.get("thumbnail_path"),
+                    "product_group": seg.get("product_group"),
                 })
 
         # Step 4: Match and build timeline
@@ -933,7 +983,11 @@ class AssemblyService:
                 "matched_keyword": m.matched_keyword,
                 "confidence": m.confidence,
                 "is_auto_filled": m.is_auto_filled,
-                "product_group": m.product_group
+                "product_group": m.product_group,
+                "source_video_id": m.source_video_id,
+                "segment_start_time": m.segment_start_time,
+                "segment_end_time": m.segment_end_time,
+                "thumbnail_path": m.thumbnail_path,
             }
             for m in match_results
         ]
@@ -956,7 +1010,10 @@ class AssemblyService:
                 "keywords": seg.get("keywords") or [],
                 "source_video_id": seg["source_video_id"],
                 "duration": seg.get("duration", 0),
-                "product_group": seg.get("product_group")
+                "product_group": seg.get("product_group"),
+                "start_time": seg.get("start_time"),
+                "end_time": seg.get("end_time"),
+                "thumbnail_path": seg.get("thumbnail_path"),
             }
             for seg in segments_data
         ]

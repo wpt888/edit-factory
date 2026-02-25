@@ -136,6 +136,10 @@ class MatchPreview(BaseModel):
     matched_keyword: Optional[str]
     confidence: float
     is_auto_filled: bool = False
+    source_video_id: Optional[str] = None
+    segment_start_time: Optional[float] = None
+    segment_end_time: Optional[float] = None
+    thumbnail_path: Optional[str] = None
 
 
 class AssemblyPreviewResponse(BaseModel):
@@ -296,18 +300,18 @@ async def render_assembly(
             "audio_bitrate": "192k"
         }
 
-    # Build subtitle settings dict
+    # Build subtitle settings dict (camelCase keys to match SubtitleStyleConfig.from_dict)
     subtitle_settings = {
-        "font_size": request.font_size,
-        "font_family": request.font_family,
-        "text_color": request.text_color,
-        "outline_color": request.outline_color,
-        "outline_width": request.outline_width,
-        "position_y": request.position_y,
-        "shadow_depth": request.shadow_depth,
-        "enable_glow": request.enable_glow,
-        "glow_blur": request.glow_blur,
-        "adaptive_sizing": request.adaptive_sizing
+        "fontSize": request.font_size,
+        "fontFamily": request.font_family,
+        "textColor": request.text_color,
+        "outlineColor": request.outline_color,
+        "outlineWidth": request.outline_width,
+        "positionY": request.position_y,
+        "shadowDepth": request.shadow_depth,
+        "enableGlow": request.enable_glow,
+        "glowBlur": request.glow_blur,
+        "adaptiveSizing": request.adaptive_sizing
     }
 
     # Initialize job status (with eviction)

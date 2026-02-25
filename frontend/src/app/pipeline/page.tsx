@@ -50,6 +50,7 @@ import {
   Pause,
   Info,
   Library,
+  Eye,
 } from "lucide-react";
 import { usePolling } from "@/hooks";
 import { useProfile } from "@/contexts/profile-context";
@@ -60,6 +61,7 @@ import type { AssociationResponse } from "@/components/product-picker-dialog";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { SubtitleSettings, DEFAULT_SUBTITLE_SETTINGS } from "@/types/video-processing";
 import { TimelineEditor, SegmentOption } from "@/components/timeline-editor";
+import { VariantPreviewPlayer } from "@/components/variant-preview-player";
 
 // TypeScript interfaces
 export interface MatchPreview {
@@ -73,6 +75,10 @@ export interface MatchPreview {
   confidence: number;
   is_auto_filled?: boolean;
   product_group?: string | null;
+  source_video_id?: string;
+  segment_start_time?: number;
+  segment_end_time?: number;
+  thumbnail_path?: string;
 }
 
 interface PreviewData {
@@ -162,6 +168,7 @@ export default function PipelinePage() {
   const [scripts, setScripts] = useState<string[]>([]);
 
   // Step 3: Preview
+  const [previewVariant, setPreviewVariant] = useState<number | null>(null);
   const [previewingIndex, setPreviewingIndex] = useState<number | null>(null);
   const [previews, setPreviews] = useState<Record<number, PreviewData>>({});
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -2255,6 +2262,15 @@ export default function PipelinePage() {
                               <Volume2 className="h-4 w-4" />
                             )}
                           </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => setPreviewVariant(index)}
+                            title="Preview variant with video"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
                           <Badge variant="secondary">
                             {formatDuration(preview.audio_duration)}
                           </Badge>
@@ -2285,6 +2301,9 @@ export default function PipelinePage() {
                         audioDuration={preview.audio_duration}
                         sourceVideoIds={Array.from(selectedSourceIds)}
                         availableSegments={availableSegments}
+                        profileId={currentProfile?.id}
+                        pipelineId={pipelineId ?? undefined}
+                        variantIndex={index}
                         onMatchesChange={(updatedMatches) => {
                           setPreviews(prev => ({
                             ...prev,
@@ -2302,6 +2321,18 @@ export default function PipelinePage() {
                 );
               })}
             </div>
+
+            {/* Variant preview player dialog */}
+            {previewVariant !== null && pipelineId && currentProfile && (
+              <VariantPreviewPlayer
+                open={true}
+                onOpenChange={(open) => { if (!open) setPreviewVariant(null); }}
+                matches={previews[previewVariant]?.matches ?? []}
+                pipelineId={pipelineId}
+                variantIndex={previewVariant}
+                profileId={currentProfile.id}
+              />
+            )}
 
             {/* Error display */}
             {previewError && (
