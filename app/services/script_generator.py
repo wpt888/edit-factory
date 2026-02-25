@@ -23,7 +23,8 @@ class ScriptGenerator:
         self,
         gemini_api_key: Optional[str] = None,
         anthropic_api_key: Optional[str] = None,
-        gemini_model: str = "gemini-2.5-flash"
+        gemini_model: str = "gemini-2.5-flash",
+        anthropic_model: str = "claude-sonnet-4-6"
     ):
         """
         Initialize script generator with API keys.
@@ -32,10 +33,12 @@ class ScriptGenerator:
             gemini_api_key: Google Gemini API key
             anthropic_api_key: Anthropic Claude API key
             gemini_model: Gemini model to use (default: gemini-2.5-flash)
+            anthropic_model: Anthropic model to use (default: claude-sonnet-4-6)
         """
         self.gemini_api_key = gemini_api_key
         self.anthropic_api_key = anthropic_api_key
         self.gemini_model = gemini_model
+        self.anthropic_model = anthropic_model
 
         # Lazy-initialized clients
         self._gemini_client = None
@@ -85,7 +88,7 @@ class ScriptGenerator:
 
         logger.info(
             f"Generating {variant_count} scripts with {provider} "
-            f"(idea: {idea[:50]}..., {len(keywords)} keywords available)"
+            f"(idea: {idea[:50]}{'...' if len(idea) > 50 else ''}, {len(keywords)} keywords available)"
         )
 
         # Build prompt
@@ -197,7 +200,7 @@ Begin generation now:"""
         logger.info("Calling Anthropic Claude API")
 
         response = self._anthropic_client.messages.create(
-            model=self.settings.anthropic_model if hasattr(self.settings, 'anthropic_model') and self.settings.anthropic_model else "claude-sonnet-4-20250514",
+            model=self.anthropic_model,
             max_tokens=4096,
             messages=[{
                 "role": "user",
@@ -326,7 +329,8 @@ def get_script_generator() -> ScriptGenerator:
         _script_generator = ScriptGenerator(
             gemini_api_key=settings.gemini_api_key,
             anthropic_api_key=settings.anthropic_api_key,
-            gemini_model=settings.gemini_model
+            gemini_model=settings.gemini_model,
+            anthropic_model=settings.anthropic_model
         )
 
     return _script_generator
