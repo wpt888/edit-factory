@@ -49,6 +49,7 @@ import {
   Volume2,
   Pause,
   Info,
+  Library,
 } from "lucide-react";
 import { usePolling } from "@/hooks";
 import { useProfile } from "@/contexts/profile-context";
@@ -1131,6 +1132,48 @@ export default function PipelinePage() {
     }
   };
 
+  // Per-script TTS: adopt library audio instead of generating
+  const handleUseLibraryTts = async (variantIndex: number) => {
+    if (!pipelineId) return;
+    const match = libraryMatches[variantIndex];
+    if (!match) return;
+
+    setTtsResults(prev => ({
+      ...prev,
+      [variantIndex]: { audio_duration: 0, generating: true, stale: false }
+    }));
+
+    try {
+      const res = await apiPost(`/pipeline/tts-from-library/${pipelineId}/${variantIndex}`, {
+        asset_id: match.asset_id,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setTtsResults(prev => ({
+          ...prev,
+          [variantIndex]: { audio_duration: data.audio_duration, generating: false, stale: false }
+        }));
+      } else {
+        const errorData = await res.json().catch(() => ({ detail: "Failed to load library audio" }));
+        setPreviewError(errorData.detail || "Failed to load library audio");
+        setTtsResults(prev => {
+          const next = { ...prev };
+          delete next[variantIndex];
+          return next;
+        });
+      }
+    } catch (err) {
+      handleApiError(err, "Library TTS adoption error");
+      setPreviewError("Failed to load library audio. Please try generating instead.");
+      setTtsResults(prev => {
+        const next = { ...prev };
+        delete next[variantIndex];
+        return next;
+      });
+    }
+  };
+
   // Per-script TTS: play/pause audio
   const handlePlayTts = (variantIndex: number) => {
     if (!pipelineId) return;
@@ -1857,10 +1900,15 @@ export default function PipelinePage() {
                           </Badge>
                         )}
                         {libraryMatches[index] && !ttsResults[index] && (
-                          <Badge variant="outline" className="text-xs text-blue-600 border-blue-300">
-                            <Info className="h-3 w-3 mr-1" />
-                            Exists in TTS Library ({formatDuration(libraryMatches[index].audio_duration)})
-                          </Badge>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs text-blue-600 border-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950"
+                            onClick={() => handleUseLibraryTts(index)}
+                          >
+                            <Library className="h-3.5 w-3.5 mr-1.5" />
+                            Use Library Audio ({formatDuration(libraryMatches[index].audio_duration)})
+                          </Button>
                         )}
                       </div>
                     </CardContent>
@@ -1879,7 +1927,9 @@ export default function PipelinePage() {
                       Source Videos
                     </CardTitle>
                     <CardDescription>
-                      Select which videos to match segments from ({selectedSourceIds.size} of {sourceVideos.length} selected)
+                      {sourceVideos.length <= 1
+                        ? "Source video for segment matching"
+                        : `Select which videos to match segments from (${selectedSourceIds.size} of ${sourceVideos.length} selected)`}
                     </CardDescription>
                   </div>
                   {sourceVideos.length > 1 && (
@@ -1917,6 +1967,35 @@ export default function PipelinePage() {
                       No source videos uploaded yet. Go to the Segments page to add source videos before previewing.
                     </AlertDescription>
                   </Alert>
+                ) : sourceVideos.length === 1 ? (
+                  <div className="flex items-center gap-3 p-3 rounded-lg bg-primary/5 border border-primary/20">
+                    <CheckCircle className="h-4 w-4 text-primary flex-shrink-0" />
+                    {sourceVideos[0].thumbnail_path ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={`${API_URL.replace('/api/v1', '')}/thumbnails/${sourceVideos[0].thumbnail_path.split('/').pop()}`}
+                        alt=""
+                        className="w-10 h-10 rounded object-cover flex-shrink-0"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                      />
+                    ) : (
+                      <div className="w-10 h-10 rounded bg-muted flex items-center justify-center flex-shrink-0">
+                        <Film className="h-5 w-5 text-muted-foreground" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{sourceVideos[0].name}</p>
+                    </div>
+                    {sourceVideos[0].duration && (
+                      <Badge variant="outline" className="text-xs flex-shrink-0">
+                        <Clock className="h-3 w-3 mr-1" />
+                        {formatDuration(sourceVideos[0].duration)}
+                      </Badge>
+                    )}
+                    <Badge variant="secondary" className="text-xs flex-shrink-0">
+                      {sourceVideos[0].segments_count} segments
+                    </Badge>
+                  </div>
                 ) : (
                   <div className="space-y-2">
                     {sourceVideos.length > 3 && (

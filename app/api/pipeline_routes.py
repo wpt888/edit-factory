@@ -688,6 +688,94 @@ class PipelineTtsResponse(BaseModel):
     audio_duration: float
 
 
+class PipelineTtsFromLibraryRequest(BaseModel):
+    """Request model for adopting a TTS library asset into the pipeline."""
+    asset_id: str
+
+
+@router.post("/tts-from-library/{pipeline_id}/{variant_index}", response_model=PipelineTtsResponse)
+async def adopt_library_tts(
+    pipeline_id: str,
+    variant_index: int,
+    request: PipelineTtsFromLibraryRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Adopt a TTS library asset into the pipeline for a specific variant.
+
+    Skips TTS generation by reusing an existing voice-over from the TTS library.
+    The adopted audio is stored in pipeline["tts_previews"] with the same shape
+    as generated TTS, plus a library_asset_id flag.
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    if pipeline["profile_id"] != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    if variant_index < 0 or variant_index >= len(pipeline["scripts"]):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid variant_index: {variant_index}"
+        )
+
+    # Fetch the TTS asset from the library
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        result = supabase.table("editai_tts_assets")\
+            .select("*")\
+            .eq("id", request.asset_id)\
+            .eq("profile_id", profile.profile_id)\
+            .eq("status", "ready")\
+            .single()\
+            .execute()
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="TTS asset not found in library")
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="TTS asset not found in library")
+
+    asset = result.data
+    audio_path = asset.get("mp3_path")
+    if not audio_path or not Path(audio_path).exists():
+        raise HTTPException(status_code=404, detail="TTS audio file no longer exists on disk")
+
+    audio_duration = asset.get("audio_duration", 0.0)
+    script_text = pipeline["scripts"][variant_index]
+
+    # Store into pipeline tts_previews with library flag
+    if "tts_previews" not in pipeline:
+        pipeline["tts_previews"] = {}
+
+    pipeline["tts_previews"][variant_index] = {
+        "audio_path": audio_path,
+        "audio_duration": audio_duration,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "script_hash": hash(script_text),
+        "voice_settings": None,  # Not applicable for library audio
+        "library_asset_id": request.asset_id,
+        "srt_content": asset.get("srt_content"),
+        "tts_timestamps": asset.get("tts_timestamps"),
+    }
+
+    # Persist to DB
+    _db_save_pipeline(pipeline_id, pipeline)
+
+    logger.info(
+        f"[Profile {profile.profile_id}] Adopted library TTS asset {request.asset_id} "
+        f"for pipeline {pipeline_id} variant {variant_index} ({audio_duration:.1f}s)"
+    )
+
+    return PipelineTtsResponse(
+        status="ok",
+        audio_duration=audio_duration
+    )
+
+
 @router.post("/tts/{pipeline_id}/{variant_index}", response_model=PipelineTtsResponse)
 async def generate_variant_tts(
     pipeline_id: str,
@@ -1034,6 +1122,32 @@ async def render_variants(
                             f"match overrides for variant {vid}"
                         )
 
+                    # Check for reusable TTS audio from pipeline state
+                    reuse_audio_path = None
+                    reuse_audio_duration = None
+                    reuse_srt_content = None
+
+                    existing_tts = pipeline.get("tts_previews", {}).get(vid)
+                    if existing_tts:
+                        script_match = existing_tts.get("script_hash") == hash(script_text)
+                        if script_match:
+                            # For library audio: skip voice_settings check
+                            # For generated audio: compare voice_settings
+                            is_library = bool(existing_tts.get("library_asset_id"))
+                            settings_match = is_library or existing_tts.get("voice_settings") == request.voice_settings
+
+                            if settings_match:
+                                audio_path_str = existing_tts.get("audio_path")
+                                if audio_path_str and Path(audio_path_str).exists():
+                                    reuse_audio_path = audio_path_str
+                                    reuse_audio_duration = existing_tts.get("audio_duration")
+                                    reuse_srt_content = existing_tts.get("srt_content")
+                                    logger.info(
+                                        f"[Profile {profile.profile_id}] Reusing "
+                                        f"{'library' if is_library else 'cached'} TTS audio "
+                                        f"for variant {vid}"
+                                    )
+
                     # Run full assembly
                     final_video_path = await assembly_service.assemble_and_render(
                         script_text=script_text,
@@ -1057,7 +1171,10 @@ async def render_variants(
                         glow_blur=request.glow_blur,
                         adaptive_sizing=request.adaptive_sizing,
                         variant_index=vid,
-                        voice_settings=request.voice_settings
+                        voice_settings=request.voice_settings,
+                        reuse_audio_path=reuse_audio_path,
+                        reuse_audio_duration=reuse_audio_duration,
+                        reuse_srt_content=reuse_srt_content
                     )
 
                     # Success

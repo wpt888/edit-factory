@@ -592,7 +592,10 @@ class AssemblyService:
         glow_blur: int = 0,
         adaptive_sizing: bool = False,
         variant_index: int = 0,
-        voice_settings: Optional[dict] = None
+        voice_settings: Optional[dict] = None,
+        reuse_audio_path: Optional[str] = None,
+        reuse_audio_duration: Optional[float] = None,
+        reuse_srt_content: Optional[str] = None
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
@@ -602,6 +605,9 @@ class AssemblyService:
                              When provided, replaces automatic segment matching (Step 5).
                              Each dict has the same shape as MatchResult with an optional
                              duration_override field.
+            reuse_audio_path: Path to existing TTS audio to reuse (skips TTS generation).
+            reuse_audio_duration: Duration of the reused audio.
+            reuse_srt_content: SRT content to reuse with the audio.
 
         Returns:
             Path to final rendered video
@@ -618,47 +624,71 @@ class AssemblyService:
         temp_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            # Step 1: Generate TTS with timestamps
-            logger.info("Step 1/7: Generating TTS audio with timestamps")
-            audio_path, audio_duration, timestamps = await self.generate_tts_with_timestamps(
-                script_text=script_text,
-                profile_id=profile_id,
-                elevenlabs_model=elevenlabs_model,
-                voice_id=voice_id,
-                voice_settings=voice_settings
-            )
+            # Step 1: Generate TTS with timestamps (or reuse existing)
+            skip_library_save = False
+            if reuse_audio_path and reuse_audio_duration and Path(reuse_audio_path).exists():
+                logger.info("Step 1/7: Reusing existing TTS audio (library or cached)")
+                audio_path = Path(reuse_audio_path)
+                audio_duration = reuse_audio_duration
+                timestamps = {}
+                skip_library_save = True
+            else:
+                logger.info("Step 1/7: Generating TTS audio with timestamps")
+                audio_path, audio_duration, timestamps = await self.generate_tts_with_timestamps(
+                    script_text=script_text,
+                    profile_id=profile_id,
+                    elevenlabs_model=elevenlabs_model,
+                    voice_id=voice_id,
+                    voice_settings=voice_settings
+                )
 
             # Step 2: Generate SRT from timestamps (with cache)
             logger.info("Step 2/7: Generating SRT subtitles from timestamps")
-            from app.services.tts_cache import srt_cache_lookup, srt_cache_store
-            _srt_cache_key = {"text": script_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
-            cached_srt = srt_cache_lookup(_srt_cache_key)
-            if cached_srt:
-                srt_content = cached_srt
+            if reuse_srt_content and skip_library_save:
+                srt_content = reuse_srt_content
+                logger.info("Step 2/7: Reusing existing SRT content")
             else:
-                srt_content = await self.generate_srt_from_timestamps(timestamps)
-                if srt_content:
-                    srt_cache_store(_srt_cache_key, srt_content)
+                from app.services.tts_cache import srt_cache_lookup, srt_cache_store
+                _srt_cache_key = {"text": script_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
+                cached_srt = srt_cache_lookup(_srt_cache_key)
+                if cached_srt:
+                    srt_content = cached_srt
+                elif timestamps:
+                    srt_content = await self.generate_srt_from_timestamps(timestamps)
+                    if srt_content:
+                        srt_cache_store(_srt_cache_key, srt_content)
+                else:
+                    # Reusing audio but no SRT available — must regenerate TTS for timestamps
+                    logger.info("Step 2/7: SRT not available, regenerating TTS for timestamps")
+                    _, _, timestamps = await self.generate_tts_with_timestamps(
+                        script_text=script_text,
+                        profile_id=profile_id,
+                        elevenlabs_model=elevenlabs_model,
+                        voice_id=voice_id,
+                        voice_settings=voice_settings
+                    )
+                    srt_content = await self.generate_srt_from_timestamps(timestamps)
 
             srt_path = temp_dir / "subtitles.srt"
             with open(srt_path, 'w', encoding='utf-8') as f:
                 f.write(srt_content)
 
-            # Auto-save to TTS Library (non-blocking)
-            try:
-                from app.services.tts_library_service import get_tts_library_service
-                tts_lib = get_tts_library_service()
-                tts_lib.save_from_pipeline(
-                    profile_id=profile_id,
-                    text=script_text,
-                    audio_path=str(audio_path),
-                    srt_content=srt_content,
-                    timestamps=timestamps,
-                    model=elevenlabs_model,
-                    duration=audio_duration,
-                )
-            except Exception as e:
-                logger.warning(f"Failed to save TTS to library: {e}")
+            # Auto-save to TTS Library (non-blocking, skip if reusing library audio)
+            if not skip_library_save:
+                try:
+                    from app.services.tts_library_service import get_tts_library_service
+                    tts_lib = get_tts_library_service()
+                    tts_lib.save_from_pipeline(
+                        profile_id=profile_id,
+                        text=script_text,
+                        audio_path=str(audio_path),
+                        srt_content=srt_content,
+                        timestamps=timestamps,
+                        model=elevenlabs_model,
+                        duration=audio_duration,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to save TTS to library: {e}")
 
             # Step 3: Parse SRT
             logger.info("Step 3/7: Parsing SRT entries")
