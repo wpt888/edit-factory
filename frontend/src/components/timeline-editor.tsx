@@ -30,6 +30,7 @@ import {
   Square,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
+import type { SubtitleSettings } from "@/types/video-processing";
 
 // MatchPreview interface (mirrors pipeline/page.tsx)
 export interface MatchPreview {
@@ -70,6 +71,7 @@ interface TimelineEditorProps {
   profileId?: string;
   pipelineId?: string;
   variantIndex?: number;
+  subtitleSettings?: SubtitleSettings;
 }
 
 function formatTime(seconds: number): string {
@@ -87,6 +89,7 @@ export function TimelineEditor({
   profileId,
   pipelineId,
   variantIndex,
+  subtitleSettings,
 }: TimelineEditorProps) {
   // View mode: "timeline" (horizontal) or "list" (vertical)
   const [viewMode, setViewMode] = useState<"timeline" | "list">("timeline");
@@ -118,15 +121,21 @@ export function TimelineEditor({
   const previewActiveIndexRef = useRef(0);
   const previewSegmentEndTimeRef = useRef<number | undefined>(undefined);
   const matchesRef = useRef(matches);
+  const previewRafIdRef = useRef<number | null>(null);
 
-  // Keep refs in sync
+  // Keep refs in sync (state → ref for use in callbacks)
+  // Note: isPreviewPlayingRef is also set synchronously in togglePreviewPlayPause to avoid 1-frame stale reads
   useEffect(() => { isPreviewPlayingRef.current = isPreviewPlaying; }, [isPreviewPlaying]);
   useEffect(() => { previewActiveIndexRef.current = previewActiveIndex; }, [previewActiveIndex]);
   useEffect(() => { matchesRef.current = matches; }, [matches]);
 
-  // Cleanup: pause all audio/video on unmount
+  // Cleanup: pause all audio/video and stop rAF on unmount
   useEffect(() => {
     return () => {
+      if (previewRafIdRef.current != null) {
+        cancelAnimationFrame(previewRafIdRef.current);
+        previewRafIdRef.current = null;
+      }
       const audio = previewAudioRef.current;
       if (audio) {
         audio.pause();
@@ -189,13 +198,15 @@ export function TimelineEditor({
     }
   }, []);
 
-  // Audio event listeners for continuous preview
-  useEffect(() => {
-    if (!isPreviewActive) return;
-    const audio = previewAudioRef.current;
-    if (!audio) return;
-
-    const onTimeUpdate = () => {
+  // rAF loop — tracks audio.currentTime at ~60fps for near-instant segment switching
+  // This replaces timeupdate (which only fires ~4Hz) to eliminate ~250ms segment switch lag
+  const startPreviewRafLoop = useCallback(() => {
+    const loop = () => {
+      const audio = previewAudioRef.current;
+      if (!audio || !isPreviewPlayingRef.current) {
+        previewRafIdRef.current = null;
+        return;
+      }
       const time = audio.currentTime;
       setPreviewCurrentTime(time);
 
@@ -205,7 +216,25 @@ export function TimelineEditor({
         previewActiveIndexRef.current = newIdx;
         syncPreviewVideo(newIdx);
       }
+
+      previewRafIdRef.current = requestAnimationFrame(loop);
     };
+    if (previewRafIdRef.current != null) cancelAnimationFrame(previewRafIdRef.current);
+    previewRafIdRef.current = requestAnimationFrame(loop);
+  }, [findActiveMatch, syncPreviewVideo]);
+
+  const stopPreviewRafLoop = useCallback(() => {
+    if (previewRafIdRef.current != null) {
+      cancelAnimationFrame(previewRafIdRef.current);
+      previewRafIdRef.current = null;
+    }
+  }, []);
+
+  // Audio metadata + ended events (no timeupdate — rAF replaces it)
+  useEffect(() => {
+    if (!isPreviewActive) return;
+    const audio = previewAudioRef.current;
+    if (!audio) return;
 
     const onLoadedMetadata = () => {
       setPreviewDuration(audio.duration);
@@ -214,21 +243,21 @@ export function TimelineEditor({
     const onEnded = () => {
       setIsPreviewPlaying(false);
       isPreviewPlayingRef.current = false;
+      stopPreviewRafLoop();
       for (const vid of Object.values(previewVideoRefs.current)) {
         if (vid) vid.pause();
       }
     };
 
-    audio.addEventListener("timeupdate", onTimeUpdate);
     audio.addEventListener("loadedmetadata", onLoadedMetadata);
     audio.addEventListener("ended", onEnded);
 
     return () => {
-      audio.removeEventListener("timeupdate", onTimeUpdate);
       audio.removeEventListener("loadedmetadata", onLoadedMetadata);
       audio.removeEventListener("ended", onEnded);
+      stopPreviewRafLoop();
     };
-  }, [isPreviewActive, findActiveMatch, syncPreviewVideo]);
+  }, [isPreviewActive, stopPreviewRafLoop]);
 
   // Video segment_end_time enforcement
   useEffect(() => {
@@ -261,11 +290,17 @@ export function TimelineEditor({
 
     if (isPreviewPlayingRef.current) {
       audio.pause();
+      stopPreviewRafLoop();
       for (const vid of Object.values(previewVideoRefs.current)) {
         if (vid) vid.pause();
       }
+      // Set ref synchronously to prevent 1-frame stale read in rAF loop
+      isPreviewPlayingRef.current = false;
       setIsPreviewPlaying(false);
     } else {
+      // Set ref synchronously before starting rAF loop
+      isPreviewPlayingRef.current = true;
+      setIsPreviewPlaying(true);
       audio.play().catch(() => {});
       const match = matchesRef.current[previewActiveIndexRef.current];
       if (match?.source_video_id) {
@@ -275,9 +310,9 @@ export function TimelineEditor({
           vid.play().catch(() => {});
         }
       }
-      setIsPreviewPlaying(true);
+      startPreviewRafLoop();
     }
-  }, []);
+  }, [startPreviewRafLoop, stopPreviewRafLoop]);
 
   const previewPrevSegment = useCallback(() => {
     const audio = previewAudioRef.current;
@@ -335,15 +370,17 @@ export function TimelineEditor({
       if (audio) {
         audio.currentTime = 0;
         audio.play().then(() => {
-          setIsPreviewPlaying(true);
           isPreviewPlayingRef.current = true;
+          setIsPreviewPlaying(true);
           syncPreviewVideo(0);
+          startPreviewRafLoop();
         }).catch(() => {});
       }
     }, 100);
-  }, [syncPreviewVideo]);
+  }, [syncPreviewVideo, startPreviewRafLoop]);
 
   const deactivatePreview = useCallback(() => {
+    stopPreviewRafLoop();
     const audio = previewAudioRef.current;
     if (audio) {
       audio.pause();
@@ -352,13 +389,14 @@ export function TimelineEditor({
     for (const vid of Object.values(previewVideoRefs.current)) {
       if (vid) vid.pause();
     }
+    isPreviewPlayingRef.current = false;
     setIsPreviewActive(false);
     setIsPreviewPlaying(false);
     setPreviewCurrentTime(0);
     setPreviewActiveIndex(0);
     previewActiveIndexRef.current = 0;
     previewSegmentEndTimeRef.current = undefined;
-  }, []);
+  }, [stopPreviewRafLoop]);
 
   // Filtered segments based on search
   const filteredSegments = availableSegments.filter((seg) => {
@@ -650,13 +688,27 @@ export function TimelineEditor({
               </div>
             )}
 
-            {/* Subtitle overlay */}
+            {/* Subtitle overlay — respects subtitleSettings if provided */}
             {matches[previewActiveIndex]?.srt_text && (
-              <div className="absolute bottom-4 left-2 right-2 text-center pointer-events-none">
+              <div
+                className="absolute left-2 right-2 text-center pointer-events-none"
+                style={{
+                  top: `${subtitleSettings?.positionY ?? 85}%`,
+                  transform: "translateY(-50%)",
+                }}
+              >
                 <p
-                  className="text-white text-sm font-semibold px-2 py-1 inline-block"
+                  className="font-semibold px-2 py-1 inline-block"
                   style={{
-                    textShadow: "0 1px 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.7)",
+                    fontFamily: subtitleSettings?.fontFamily ?? "var(--font-montserrat), Montserrat, sans-serif",
+                    fontSize: `${Math.max(8, (subtitleSettings?.fontSize ?? 48) * 0.22)}px`,
+                    color: subtitleSettings?.textColor ?? "#FFFFFF",
+                    textShadow: subtitleSettings?.enableGlow
+                      ? `0 1px 4px rgba(0,0,0,0.9), 0 0 ${subtitleSettings?.glowBlur ?? 8}px rgba(0,0,0,0.7)`
+                      : "0 1px 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.7)",
+                    WebkitTextStroke: subtitleSettings?.outlineWidth
+                      ? `${Math.max(0.5, subtitleSettings.outlineWidth * 0.3)}px ${subtitleSettings?.outlineColor ?? "#000000"}`
+                      : undefined,
                   }}
                 >
                   {matches[previewActiveIndex].srt_text}
