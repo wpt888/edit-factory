@@ -423,6 +423,49 @@ async def delete_tts_asset(
     return {"detail": "Asset deleted"}
 
 
+class BatchDeleteRequest(BaseModel):
+    ids: List[str]
+
+
+@router.post("/batch-delete")
+async def batch_delete_tts_assets(
+    request: BatchDeleteRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Delete multiple TTS assets at once."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    if not request.ids:
+        return {"deleted": 0}
+
+    # Fetch all matching assets owned by this profile
+    result = (
+        supabase.table("editai_tts_assets")
+        .select("id, mp3_path, srt_path")
+        .eq("profile_id", profile.profile_id)
+        .in_("id", request.ids)
+        .execute()
+    )
+
+    assets = result.data or []
+    if not assets:
+        return {"deleted": 0}
+
+    # Delete files from disk
+    tts_lib = get_tts_library_service()
+    for asset in assets:
+        tts_lib.delete_asset_files(asset.get("mp3_path"), asset.get("srt_path"))
+
+    # Delete from DB
+    asset_ids = [a["id"] for a in assets]
+    supabase.table("editai_tts_assets").delete().in_("id", asset_ids).execute()
+
+    logger.info(f"Batch deleted {len(asset_ids)} TTS assets")
+    return {"deleted": len(asset_ids)}
+
+
 @router.get("/{asset_id}/audio")
 async def serve_audio(
     asset_id: str,

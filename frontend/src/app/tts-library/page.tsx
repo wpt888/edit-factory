@@ -39,6 +39,7 @@ import {
   ChevronDown,
   ChevronUp,
   Package,
+  AlertTriangle,
 } from "lucide-react";
 import { AudioWaveform } from "@/components/audio-waveform";
 
@@ -128,6 +129,10 @@ export default function TTSLibraryPage() {
 
   // SRT copy state
   const [copied, setCopied] = useState(false);
+
+  // Cleanup state
+  const [cleanupConfirm, setCleanupConfirm] = useState<"failed" | "duplicates" | null>(null);
+  const [cleaning, setCleaning] = useState(false);
 
   // Expanded text tracking
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -286,6 +291,59 @@ export default function TTSLibraryPage() {
     setDeleteConfirm(null);
   }
 
+  // Compute failed and duplicate IDs
+  const failedAssets = assets.filter((a) => a.status === "failed");
+
+  const duplicateIds = (() => {
+    const textMap = new Map<string, TTSAsset[]>();
+    for (const a of assets) {
+      const key = a.tts_text.trim();
+      if (!key) continue;
+      const group = textMap.get(key) || [];
+      group.push(a);
+      textMap.set(key, group);
+    }
+    const ids = new Set<string>();
+    for (const group of textMap.values()) {
+      if (group.length <= 1) continue;
+      // Sort: prefer ready over others, then newest first
+      const sorted = [...group].sort((a, b) => {
+        if (a.status === "ready" && b.status !== "ready") return -1;
+        if (b.status === "ready" && a.status !== "ready") return 1;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
+      // Mark all except the first (best) as duplicates
+      for (let i = 1; i < sorted.length; i++) {
+        ids.add(sorted[i].id);
+      }
+    }
+    return ids;
+  })();
+
+  async function handleCleanup(type: "failed" | "duplicates") {
+    const idsToDelete =
+      type === "failed"
+        ? failedAssets.map((a) => a.id)
+        : Array.from(duplicateIds);
+
+    if (idsToDelete.length === 0) return;
+    setCleaning(true);
+    try {
+      await apiPost("/tts-library/batch-delete", { ids: idsToDelete });
+      setAssets((prev) => prev.filter((a) => !idsToDelete.includes(a.id)));
+      // Stop playback if deleted
+      if (playingId && idsToDelete.includes(playingId)) {
+        audioRef.current?.pause();
+        setPlayingId(null);
+      }
+    } catch {
+      // silent
+    } finally {
+      setCleaning(false);
+      setCleanupConfirm(null);
+    }
+  }
+
   function openEdit(asset: TTSAsset) {
     setEditText(asset.tts_text);
     setEditingAsset(asset);
@@ -327,6 +385,28 @@ export default function TTSLibraryPage() {
           <Badge variant="outline">{assets.length} assets</Badge>
         </div>
         <div className="flex items-center gap-2">
+          {failedAssets.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              onClick={() => setCleanupConfirm("failed")}
+            >
+              <AlertTriangle className="size-4 mr-1" />
+              Delete Failed ({failedAssets.length})
+            </Button>
+          )}
+          {duplicateIds.size > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-orange-600 hover:text-orange-700"
+              onClick={() => setCleanupConfirm("duplicates")}
+            >
+              <Copy className="size-4 mr-1" />
+              Delete Duplicates ({duplicateIds.size})
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={fetchAssets}>
             <RefreshCw className="size-4 mr-1" />
             Refresh
@@ -395,6 +475,11 @@ export default function TTSLibraryPage() {
                             {/* Top row: badges */}
                             <div className="flex items-center gap-2 flex-wrap">
                               {statusBadge(asset.status)}
+                              {duplicateIds.has(asset.id) && (
+                                <Badge variant="outline" className="text-orange-600 border-orange-300">
+                                  Duplicate
+                                </Badge>
+                              )}
                               {asset.is_used && (
                                 <Badge variant="outline" className="text-blue-600 border-blue-300">
                                   In Use
@@ -649,6 +734,40 @@ export default function TTSLibraryPage() {
               variant="destructive"
               onClick={handleDelete}
             >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Cleanup Confirmation */}
+      <Dialog
+        open={!!cleanupConfirm}
+        onOpenChange={(open) => !open && setCleanupConfirm(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {cleanupConfirm === "failed"
+                ? `Delete ${failedAssets.length} Failed Asset${failedAssets.length !== 1 ? "s" : ""}?`
+                : `Delete ${duplicateIds.size} Duplicate Asset${duplicateIds.size !== 1 ? "s" : ""}?`}
+            </DialogTitle>
+            <DialogDescription>
+              {cleanupConfirm === "failed"
+                ? "This will remove all assets that failed to generate. No audio files will be lost."
+                : "This will keep the newest ready version of each text and remove older duplicates. Audio files will be deleted from disk."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCleanupConfirm(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={cleaning}
+              onClick={() => cleanupConfirm && handleCleanup(cleanupConfirm)}
+            >
+              {cleaning && <Loader2 className="size-4 mr-1 animate-spin" />}
               Delete
             </Button>
           </DialogFooter>
