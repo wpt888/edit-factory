@@ -110,9 +110,9 @@ class SegmentTransform:
             a = max(0.0, min(1.0, self.opacity))
             filters.append(f"format=rgba,colorchannelmixer=aa={a:.2f}")
 
-        # 6. Safety net: ensure output matches target dimensions
-        filters.append(f"scale={width}:{height}:force_original_aspect_ratio=decrease")
-        filters.append(f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black")
+        # 6. Safety net: ensure output matches target dimensions (crop, not letterbox)
+        filters.append(f"scale={width}:{height}:force_original_aspect_ratio=increase")
+        filters.append(f"crop={width}:{height}")
 
         logger.debug(f"Transform filters: {','.join(filters)}")
         return filters

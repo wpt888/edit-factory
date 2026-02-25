@@ -235,6 +235,8 @@ class AssemblyService:
             srt_entries: List of {start_time, end_time, text} from SRT
             segments_data: List of segment dicts with {id, keywords, ...}
             min_confidence: Minimum confidence score to accept a match
+            variant_index: Used to seed randomization for tied matches,
+                           giving each variant different segment selections.
 
         Returns:
             List of MatchResult objects (one per SRT entry)
@@ -242,20 +244,16 @@ class AssemblyService:
         matches = []
         current_product_group = None  # Track product group context across SRT entries
         prev_segment_id = None  # Track previous segment to avoid consecutive duplicates
+        variant_rng = random.Random(variant_index)  # Seeded RNG for variant differentiation
 
         for idx, entry in enumerate(srt_entries):
             srt_text = entry["text"]
             srt_text_lower = srt_text.lower()
 
-            best_segment = None
-            best_keyword = None
-            best_confidence = 0.0
-            # Track runner-up in case best is same as previous
-            runner_up_segment = None
-            runner_up_keyword = None
-            runner_up_confidence = 0.0
+            # Collect all candidates with their confidence scores
+            candidates = []
 
-            # Find best matching segment for this SRT entry
+            # Find all matching segments for this SRT entry
             for segment in segments_data:
                 keywords = segment.get("keywords") or []
 
@@ -278,29 +276,37 @@ class AssemblyService:
                         if current_product_group and seg_group == current_product_group:
                             confidence += 0.2
 
-                        # Pick best match (highest confidence, then longest duration)
-                        if confidence > best_confidence:
-                            # Demote current best to runner-up
-                            runner_up_segment = best_segment
-                            runner_up_keyword = best_keyword
-                            runner_up_confidence = best_confidence
-                            best_segment = segment
-                            best_keyword = keyword
-                            best_confidence = confidence
-                        elif confidence > runner_up_confidence:
-                            runner_up_segment = segment
-                            runner_up_keyword = keyword
-                            runner_up_confidence = confidence
-                        elif confidence == best_confidence and best_segment:
-                            # Tie-breaker: prefer longer segment (more visual content)
-                            current_duration = segment.get("duration", 0)
-                            best_duration = best_segment.get("duration", 0)
-                            if current_duration > best_duration:
-                                runner_up_segment = best_segment
-                                runner_up_keyword = best_keyword
-                                runner_up_confidence = best_confidence
-                                best_segment = segment
-                                best_keyword = keyword
+                        candidates.append((segment, keyword, confidence))
+
+            # Among top candidates (within 0.1 of best), pick using variant-seeded RNG
+            best_segment = None
+            best_keyword = None
+            best_confidence = 0.0
+            runner_up_segment = None
+            runner_up_keyword = None
+            runner_up_confidence = 0.0
+
+            if candidates:
+                # Sort by confidence descending
+                candidates.sort(key=lambda c: c[2], reverse=True)
+                top_confidence = candidates[0][2]
+
+                # Gather near-tied candidates (within 0.1 of best)
+                top_candidates = [c for c in candidates if c[2] >= top_confidence - 0.1]
+
+                # Use variant-seeded RNG to pick among near-tied candidates
+                if len(top_candidates) > 1:
+                    chosen = variant_rng.choice(top_candidates)
+                else:
+                    chosen = top_candidates[0]
+
+                best_segment, best_keyword, best_confidence = chosen
+
+                # Find runner-up (best candidate that isn't the chosen one)
+                for c in candidates:
+                    if c[0]["id"] != best_segment["id"]:
+                        runner_up_segment, runner_up_keyword, runner_up_confidence = c
+                        break
 
             # Avoid consecutive duplicate: if best is same as previous, use runner-up
             if (best_segment and best_segment["id"] == prev_segment_id
@@ -543,26 +549,36 @@ class AssemblyService:
         for i, entry in enumerate(timeline):
             segment_file = temp_dir / f"segment_{i:03d}.mp4"
 
-            duration = entry.end_time - entry.start_time
+            segment_duration = entry.end_time - entry.start_time
+            needed_duration = entry.timeline_duration
 
             # Build per-segment transform filters
             transform = SegmentTransform.from_dict(entry.transforms)
             transform_filters = transform.to_ffmpeg_filters(width=target_w, height=target_h)
 
             # Always force consistent portrait dimensions, even without transforms
+            # Use increase+crop to fill frame (no black bars) instead of decrease+pad
             if not transform_filters:
                 transform_filters = [
-                    f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease",
-                    f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black",
+                    f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase",
+                    f"crop={target_w}:{target_h}",
                 ]
 
-            cmd = [
-                "ffmpeg", "-y",
+            # When segment is shorter than needed, loop it to fill the duration
+            use_loop = segment_duration < needed_duration - 0.05
+
+            cmd = ["ffmpeg", "-y"]
+
+            if use_loop:
+                # Loop the segment seamlessly to fill needed duration
+                cmd.extend(["-stream_loop", "-1"])
+
+            cmd.extend([
                 "-ss", str(entry.start_time),
                 "-i", entry.source_video_path,
-                "-t", str(duration),
+                "-t", str(needed_duration if use_loop else segment_duration),
                 "-vf", ",".join(transform_filters),
-            ]
+            ])
 
             cmd.extend([
                 "-c:v", "libx264",
