@@ -2,6 +2,7 @@
 EditAI Library & Workflow Routes
 Gestionează proiecte, clipuri, asocieri și exporturi pentru noul workflow.
 """
+import asyncio
 import uuid
 import shutil
 import subprocess
@@ -2262,7 +2263,7 @@ async def _render_final_clip_task(
         # 4. Randăm cu FFmpeg folosind preset-ul
         output_path = output_dir / f"final_{clip_id}_{preset_data['name']}.mp4"
 
-        _render_with_preset(
+        await _render_with_preset(
             video_path=final_video_path,
             audio_path=audio_path,
             srt_path=srt_path,
@@ -2792,7 +2793,7 @@ def _hex_to_ass_color(hex_color: str) -> str:
         return f"&H{b}{g}{r}&".upper()
     return "&HFFFFFF&"
 
-def _render_with_preset(
+async def _render_with_preset(
     video_path: Path,
     audio_path: Optional[Path],
     srt_path: Optional[Path],
@@ -2901,7 +2902,7 @@ def _render_with_preset(
             logger.info(f"Performing two-pass audio normalization (target: {encoding_preset.target_lufs} LUFS)")
 
             # First pass: Measure loudness
-            measurement = measure_loudness(
+            measurement = await measure_loudness(
                 audio_path,
                 target_lufs=encoding_preset.target_lufs,
                 target_tp=encoding_preset.target_tp,
@@ -2970,7 +2971,8 @@ def _render_with_preset(
     if audio_path and audio_path.exists():
         cmd.extend([
             "-map", "0:v:0",
-            "-map", "1:a:0"
+            "-map", "1:a:0",
+            "-shortest"  # Trim to shorter of audio/video to prevent mismatched lengths
         ])
     else:
         # Silent audio - map video from 0, audio from lavfi 1
@@ -2990,7 +2992,7 @@ def _render_with_preset(
 
     logger.info(f"Rendering with command: {' '.join(cmd)}")
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=1200)
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg render failed: {result.stderr}")
 

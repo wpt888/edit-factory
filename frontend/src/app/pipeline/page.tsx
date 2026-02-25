@@ -258,12 +258,16 @@ function PipelinePage() {
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const voiceSettingsInitialized = useRef(false);
   const previewAbortRef = useRef<AbortController | null>(null);
+  const pendingBlobUrl = useRef<string | null>(null);
 
   // TTS Library duplicate detection
   const [libraryMatches, setLibraryMatches] = useState<Record<number, { asset_id: string; audio_duration: number }>>({});
 
   // Script auto-save timer
   const scriptSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // TTS library duplicate check debounce timer
+  const ttsLibraryCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Source video selection
   const [sourceVideos, setSourceVideos] = useState<Array<{
@@ -277,6 +281,7 @@ function PipelinePage() {
   const [sourceVideosLoading, setSourceVideosLoading] = useState(false);
   const [sourceVideoSearch, setSourceVideoSearch] = useState("");
   const sourceSelectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pipelineIdRef = useRef<string | null>(null);
 
   // Available segments for timeline editor (collected from preview response)
   const [availableSegments, setAvailableSegments] = useState<SegmentOption[]>([]);
@@ -285,6 +290,9 @@ function PipelinePage() {
   const [subtitleSettings, setSubtitleSettings] = useState<SubtitleSettings>({ ...DEFAULT_SUBTITLE_SETTINGS });
   const [subtitleSettingsLoaded, setSubtitleSettingsLoaded] = useState(false);
   const subtitleSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Keep pipelineIdRef in sync for use in closures/timeouts
+  useEffect(() => { pipelineIdRef.current = pipelineId; }, [pipelineId]);
 
   // Format helpers
   const formatDuration = (seconds: number): string => {
@@ -395,8 +403,8 @@ function PipelinePage() {
       // Debounce save to DB
       if (sourceSelectionTimer.current) clearTimeout(sourceSelectionTimer.current);
       sourceSelectionTimer.current = setTimeout(() => {
-        if (pipelineId) {
-          apiPut(`/pipeline/${pipelineId}/source-selection`, {
+        if (pipelineIdRef.current) {
+          apiPut(`/pipeline/${pipelineIdRef.current}/source-selection`, {
             source_video_ids: Array.from(next)
           }).catch(() => {});
         }
@@ -504,12 +512,19 @@ function PipelinePage() {
     interval: 2000,
     enabled: false,
     onData: (data) => {
-      const variants = data.variants || [];
-      setVariantStatuses(variants);
-      const allComplete = variants.every(
-        (v) => v.status === "completed" || v.status === "failed"
+      const allVariants = data.variants || [];
+      // Only show variants that have been submitted for rendering (not "not_started")
+      const renderedVariants = allVariants.filter(
+        (v) => v.status !== "not_started"
       );
-      if (allComplete && variants.length > 0) {
+      setVariantStatuses(renderedVariants);
+      // Stop polling only when every rendered variant is done (ignore not_started ones)
+      const allComplete =
+        renderedVariants.length > 0 &&
+        renderedVariants.every(
+          (v) => v.status === "completed" || v.status === "failed"
+        );
+      if (allComplete) {
         stopRenderPolling();
         setIsRendering(false);
       }
@@ -536,11 +551,17 @@ function PipelinePage() {
         .then(res => res.ok ? res.json() : null)
         .then(data => {
           if (!data?.variants) return;
-          setVariantStatuses(data.variants);
-          const allDone = data.variants.every(
-            (v: { status: string }) => v.status === "completed" || v.status === "failed"
+          // Filter out not_started variants (same logic as polling onData)
+          const rendered = data.variants.filter(
+            (v: { status: string }) => v.status !== "not_started"
           );
-          if (allDone && data.variants.length > 0) {
+          setVariantStatuses(rendered);
+          const allDone =
+            rendered.length > 0 &&
+            rendered.every(
+              (v: { status: string }) => v.status === "completed" || v.status === "failed"
+            );
+          if (allDone) {
             setIsRendering(false);
           }
         })
@@ -583,8 +604,12 @@ function PipelinePage() {
       }
     } catch (err) {
       handleApiError(err, "Eroare la generarea scripturilor");
-      if (err instanceof ApiError && err.isTimeout) {
-        setError("Generarea scripturilor a expirat. Încearcă din nou.");
+      if (err instanceof ApiError) {
+        if (err.isTimeout) {
+          setError("Generarea scripturilor a expirat. Încearcă din nou.");
+        } else {
+          setError(err.detail || err.message || "Script generation failed. Please try again.");
+        }
       } else {
         setError("Network error. Please check if the backend is running.");
       }
@@ -638,8 +663,12 @@ function PipelinePage() {
       } catch (err) {
         if (abortController.signal.aborted) return;
         handleApiError(err, "Eroare la previzualizarea variantelor");
-        if (err instanceof ApiError && err.isTimeout) {
-          setPreviewError("Previzualizarea a expirat. Încearcă din nou.");
+        if (err instanceof ApiError) {
+          if (err.isTimeout) {
+            setPreviewError("Previzualizarea a expirat. Încearcă din nou.");
+          } else {
+            setPreviewError(err.detail || err.message || `Failed to preview variant ${i + 1}.`);
+          }
         } else {
           setPreviewError("Network error. Please check if the backend is running.");
         }
@@ -667,6 +696,7 @@ function PipelinePage() {
   // Step 3: Render selected variants
   const handleRender = async () => {
     if (!pipelineId || selectedVariants.size === 0) return;
+    setPreviewError(null);
 
     // Build initial variant statuses from selected variants BEFORE the API call.
     // The render response returns rendering_variants (indices) and total_variants,
@@ -731,8 +761,12 @@ function PipelinePage() {
       }
     } catch (err) {
       handleApiError(err, "Eroare la generarea variantelor");
-      if (err instanceof ApiError && err.isTimeout) {
-        setPreviewError("Randarea a expirat. Încearcă din nou.");
+      if (err instanceof ApiError) {
+        if (err.isTimeout) {
+          setPreviewError("Randarea a expirat. Încearcă din nou.");
+        } else {
+          setPreviewError(err.detail || err.message || "Failed to start render. Please try again.");
+        }
       } else {
         setPreviewError("Network error. Please check if the backend is running.");
       }
@@ -946,6 +980,7 @@ function PipelinePage() {
   }, []);
 
   // Check TTS library for duplicate texts when scripts load
+  // Debounced 1.5s so rapid edits don't flood the API
   useEffect(() => {
     if (step !== 2 || scripts.length === 0) {
       setLibraryMatches({});
@@ -968,7 +1003,12 @@ function PipelinePage() {
       }
     };
 
-    checkDuplicates();
+    if (ttsLibraryCheckTimer.current) clearTimeout(ttsLibraryCheckTimer.current);
+    ttsLibraryCheckTimer.current = setTimeout(checkDuplicates, 1500);
+
+    return () => {
+      if (ttsLibraryCheckTimer.current) clearTimeout(ttsLibraryCheckTimer.current);
+    };
   }, [step, scripts]);
 
   // Save selected voice as default in profile
@@ -1095,10 +1135,11 @@ function PipelinePage() {
       .then(res => res.blob())
       .then(blob => {
         const url = URL.createObjectURL(blob);
+        pendingBlobUrl.current = url;
         const audio = new Audio(url);
-        audio.onended = () => { setPlayingAudio(null); URL.revokeObjectURL(url); };
-        audio.onerror = () => { setPlayingAudio(null); URL.revokeObjectURL(url); };
-        audio.play().catch(() => { setPlayingAudio(null); URL.revokeObjectURL(url); });
+        audio.onended = () => { setPlayingAudio(null); pendingBlobUrl.current = null; URL.revokeObjectURL(url); };
+        audio.onerror = () => { setPlayingAudio(null); pendingBlobUrl.current = null; URL.revokeObjectURL(url); };
+        audio.play().catch(() => { setPlayingAudio(null); pendingBlobUrl.current = null; URL.revokeObjectURL(url); });
         audioRef.current = audio;
       })
       .catch(() => setPlayingAudio(null));
@@ -1119,7 +1160,12 @@ function PipelinePage() {
         ttsAudioRef.current = null;
         if (src.startsWith("blob:")) URL.revokeObjectURL(src);
       }
+      if (pendingBlobUrl.current) {
+        URL.revokeObjectURL(pendingBlobUrl.current);
+        pendingBlobUrl.current = null;
+      }
       if (sourceSelectionTimer.current) clearTimeout(sourceSelectionTimer.current);
+      if (ttsLibraryCheckTimer.current) clearTimeout(ttsLibraryCheckTimer.current);
       previewAbortRef.current?.abort();
     };
   }, []);
@@ -1913,7 +1959,7 @@ function PipelinePage() {
             <div className="grid grid-cols-1 gap-4">
               {scripts.map((script, index) => {
                 const wordCount = countWords(script);
-                const estimatedDuration = Math.round(wordCount / 2.5);
+                const estimatedDuration = Math.round(wordCount / 2.3);
 
                 return (
                   <Card key={index}>
@@ -1922,7 +1968,7 @@ function PipelinePage() {
                         <CardTitle className="text-lg">Script {index + 1}</CardTitle>
                         <div className="flex items-center gap-2">
                           <Badge variant="outline">
-                            {wordCount} words (~{estimatedDuration}s)
+                            {wordCount} words (~{formatDuration(estimatedDuration)})
                           </Badge>
                           {scripts.length > 1 && (
                             <Button
@@ -1934,6 +1980,27 @@ function PipelinePage() {
                                 const newScripts = scripts.filter((_, i) => i !== index);
                                 setScripts(newScripts);
                                 if (pipelineId) saveScriptsToBackend(pipelineId, newScripts);
+                                // Remap ttsResults: remove deleted index, shift higher indices down
+                                setTtsResults(prev => {
+                                  const next: typeof prev = {};
+                                  for (const [k, v] of Object.entries(prev)) {
+                                    const ki = Number(k);
+                                    if (ki < index) next[ki] = v;
+                                    else if (ki > index) next[ki - 1] = v;
+                                    // ki === index is dropped
+                                  }
+                                  return next;
+                                });
+                                // Remap libraryMatches: remove deleted index, shift higher indices down
+                                setLibraryMatches(prev => {
+                                  const next: typeof prev = {};
+                                  for (const [k, v] of Object.entries(prev)) {
+                                    const ki = Number(k);
+                                    if (ki < index) next[ki] = v;
+                                    else if (ki > index) next[ki - 1] = v;
+                                  }
+                                  return next;
+                                });
                               }}
                             >
                               <X className="h-4 w-4" />
@@ -1957,6 +2024,8 @@ function PipelinePage() {
                               [index]: { ...prev[index], stale: true }
                             }));
                           }
+                          // Clear any stale preview error so the banner doesn't persist during editing
+                          if (previewError) setPreviewError(null);
                         }}
                         rows={10}
                         className="resize-y font-mono text-sm"
@@ -2341,33 +2410,7 @@ function PipelinePage() {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8"
-                            onClick={() => {
-                              const audioKey = `${pipelineId}-${index}`;
-                              if (playingAudio === audioKey) {
-                                if (audioRef.current) {
-                                  audioRef.current.pause();
-                                  audioRef.current = null;
-                                }
-                                setPlayingAudio(null);
-                              } else {
-                                if (audioRef.current) {
-                                  audioRef.current.pause();
-                                  audioRef.current = null;
-                                }
-                                setPlayingAudio(audioKey);
-                                apiGet(`/pipeline/audio/${pipelineId}/${index}`)
-                                  .then(res => res.blob())
-                                  .then(blob => {
-                                    const url = URL.createObjectURL(blob);
-                                    const audio = new Audio(url);
-                                    audio.onended = () => { setPlayingAudio(null); URL.revokeObjectURL(url); };
-                                    audio.onerror = () => { setPlayingAudio(null); URL.revokeObjectURL(url); };
-                                    audio.play().catch(() => { setPlayingAudio(null); URL.revokeObjectURL(url); });
-                                    audioRef.current = audio;
-                                  })
-                                  .catch(() => setPlayingAudio(null));
-                              }
-                            }}
+                            onClick={() => handlePlayAudio(pipelineId!, index)}
                             title={playingAudio === `${pipelineId}-${index}` ? "Stop audio" : "Play voiceover"}
                           >
                             {playingAudio === `${pipelineId}-${index}` ? (
@@ -2380,7 +2423,15 @@ function PipelinePage() {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8"
-                            onClick={() => setPreviewVariant(index)}
+                            onClick={() => {
+                              // Stop any playing audio before opening preview player
+                              if (audioRef.current) {
+                                audioRef.current.pause();
+                                audioRef.current = null;
+                              }
+                              setPlayingAudio(null);
+                              setPreviewVariant(index);
+                            }}
                             title="Preview variant with video"
                           >
                             <Eye className="h-4 w-4" />
@@ -2418,6 +2469,7 @@ function PipelinePage() {
                         profileId={currentProfile?.id}
                         pipelineId={pipelineId ?? undefined}
                         variantIndex={index}
+                        subtitleSettings={subtitleSettings}
                         onMatchesChange={(updatedMatches) => {
                           setPreviews(prev => ({
                             ...prev,
@@ -2445,6 +2497,7 @@ function PipelinePage() {
                 pipelineId={pipelineId}
                 variantIndex={previewVariant}
                 profileId={currentProfile.id}
+                subtitleSettings={subtitleSettings}
               />
             )}
 

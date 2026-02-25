@@ -17,6 +17,7 @@ This service bridges:
 - Manual segment selection system
 - Existing render pipeline (v3 quality settings)
 """
+import asyncio
 import logging
 import random
 import re
@@ -75,7 +76,7 @@ class AssemblyService:
         self.settings = get_settings()
         self.settings.ensure_dirs()
 
-    def _get_audio_duration(self, audio_path: Path) -> float:
+    async def _get_audio_duration(self, audio_path: Path) -> float:
         """Get audio duration in seconds using ffprobe."""
         try:
             cmd = [
@@ -84,7 +85,7 @@ class AssemblyService:
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 str(audio_path)
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=300)
             if result.returncode == 0:
                 return float(result.stdout.strip())
         except Exception as e:
@@ -518,7 +519,7 @@ class AssemblyService:
 
         return timeline
 
-    def assemble_video(
+    async def assemble_video(
         self,
         timeline: List[TimelineEntry],
         temp_dir: Path
@@ -591,7 +592,7 @@ class AssemblyService:
 
             logger.debug(f"Extracting segment {i}: {entry.source_video_path} [{entry.start_time:.2f}s - {entry.end_time:.2f}s]")
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=600)
             if result.returncode == 0 and segment_file.exists():
                 segment_files.append(segment_file)
             else:
@@ -625,7 +626,7 @@ class AssemblyService:
 
         logger.info(f"Concatenating {len(segment_files)} segments")
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg concatenation failed: {result.stderr}")
 
@@ -659,7 +660,8 @@ class AssemblyService:
         voice_settings: Optional[dict] = None,
         reuse_audio_path: Optional[str] = None,
         reuse_audio_duration: Optional[float] = None,
-        reuse_srt_content: Optional[str] = None
+        reuse_srt_content: Optional[str] = None,
+        on_progress=None  # Optional[Callable[[str, int], None]]
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
@@ -687,6 +689,14 @@ class AssemblyService:
         temp_dir = self.settings.base_dir / "temp" / profile_id / f"assembly_{uuid.uuid4().hex[:8]}"
         temp_dir.mkdir(parents=True, exist_ok=True)
 
+        def _report(step_name: str, pct: int):
+            """Fire progress callback if provided."""
+            if on_progress:
+                try:
+                    on_progress(step_name, pct)
+                except Exception:
+                    pass
+
         try:
             # Step 1: Generate TTS with timestamps (or reuse existing)
             skip_library_save = False
@@ -696,8 +706,10 @@ class AssemblyService:
                 audio_duration = reuse_audio_duration
                 timestamps = {}
                 skip_library_save = True
+                _report("Reusing cached TTS audio", 20)
             else:
                 logger.info("Step 1/7: Generating TTS audio with timestamps")
+                _report("Generating TTS audio", 10)
                 audio_path, audio_duration, timestamps = await self.generate_tts_with_timestamps(
                     script_text=script_text,
                     profile_id=profile_id,
@@ -705,9 +717,11 @@ class AssemblyService:
                     voice_id=voice_id,
                     voice_settings=voice_settings
                 )
+                _report("TTS audio ready", 25)
 
             # Step 2: Generate SRT from timestamps (with cache)
             logger.info("Step 2/7: Generating SRT subtitles from timestamps")
+            _report("Generating subtitles", 30)
             if reuse_srt_content and skip_library_save:
                 srt_content = reuse_srt_content
                 logger.info("Step 2/7: Reusing existing SRT content")
@@ -760,6 +774,7 @@ class AssemblyService:
 
             # Step 4: Fetch segments from database
             logger.info("Step 4/7: Fetching segments from library")
+            _report("Fetching segments from library", 40)
             if source_video_ids:
                 logger.info(f"Filtering to {len(source_video_ids)} source video(s)")
             segments_query = supabase.table("editai_segments")\
@@ -791,7 +806,14 @@ class AssemblyService:
 
             logger.info(f"Loaded {len(segments_data)} segments from library")
 
+            if not segments_data:
+                raise RuntimeError(
+                    "No usable segments found — all segments are missing source video file paths. "
+                    "Please re-upload source videos or re-create segments."
+                )
+
             # Step 5: Match SRT to segments (or apply timeline editor overrides)
+            _report("Matching segments to script", 50)
             if match_overrides:
                 logger.info(
                     f"Step 5/7: Applying {len(match_overrides)} match overrides from timeline editor"
@@ -823,6 +845,7 @@ class AssemblyService:
 
             # Step 6: Build timeline
             logger.info("Step 6/7: Building video timeline")
+            _report("Building video timeline", 60)
             timeline = self.build_timeline(
                 match_results=match_results,
                 segments_data=segments_data,
@@ -833,19 +856,21 @@ class AssemblyService:
 
             # Step 7: Assemble video
             logger.info("Step 7/7: Assembling and rendering final video")
-            assembled_video_path = self.assemble_video(
+            _report("Assembling video segments", 70)
+            assembled_video_path = await self.assemble_video(
                 timeline=timeline,
                 temp_dir=temp_dir
             )
 
             # Render with preset and subtitle settings
+            _report("Rendering final video", 85)
             output_dir = self.settings.output_dir / profile_id
             output_dir.mkdir(parents=True, exist_ok=True)
 
             safe_preset_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', preset_data['name'])
             final_output_path = output_dir / f"assembly_{uuid.uuid4().hex[:8]}_{safe_preset_name}.mp4"
 
-            _render_with_preset(
+            await _render_with_preset(
                 video_path=assembled_video_path,
                 audio_path=audio_path,
                 srt_path=srt_path,
@@ -913,7 +938,7 @@ class AssemblyService:
         # Step 2: Generate SRT (with cache)
         logger.info("Preview Step 2/4: Generating SRT subtitles")
         from app.services.tts_cache import srt_cache_lookup, srt_cache_store
-        _srt_cache_key = {"text": script_text, "voice_id": "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
+        _srt_cache_key = {"text": script_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
         cached_srt = srt_cache_lookup(_srt_cache_key)
         if cached_srt:
             srt_content = cached_srt
@@ -966,6 +991,12 @@ class AssemblyService:
                     "thumbnail_path": seg.get("thumbnail_path"),
                     "product_group": seg.get("product_group"),
                 })
+
+        if not segments_data:
+            raise RuntimeError(
+                "No usable segments found — all segments are missing source video file paths. "
+                "Please re-upload source videos or re-create segments."
+            )
 
         # Step 4: Match and build timeline
         logger.info("Preview Step 4/4: Matching and building timeline")
