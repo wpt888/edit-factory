@@ -170,12 +170,42 @@ export default function PipelinePage() {
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [defaultVoiceId, setDefaultVoiceId] = useState("");
   const [savingDefault, setSavingDefault] = useState(false);
-  // ElevenLabs voice settings
-  const [voiceStability, setVoiceStability] = useState(0.5);
-  const [voiceSimilarity, setVoiceSimilarity] = useState(0.75);
-  const [voiceStyle, setVoiceStyle] = useState(0.0);
-  const [voiceSpeed, setVoiceSpeed] = useState(1.0);
-  const [voiceSpeakerBoost, setVoiceSpeakerBoost] = useState(true);
+  // ElevenLabs voice settings (persisted to localStorage)
+  const [voiceStability, setVoiceStability] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("ef_voice_stability");
+      return saved !== null ? parseFloat(saved) : 0.5;
+    }
+    return 0.5;
+  });
+  const [voiceSimilarity, setVoiceSimilarity] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("ef_voice_similarity");
+      return saved !== null ? parseFloat(saved) : 0.75;
+    }
+    return 0.75;
+  });
+  const [voiceStyle, setVoiceStyle] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("ef_voice_style");
+      return saved !== null ? parseFloat(saved) : 0.0;
+    }
+    return 0.0;
+  });
+  const [voiceSpeed, setVoiceSpeed] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("ef_voice_speed");
+      return saved !== null ? parseFloat(saved) : 1.0;
+    }
+    return 1.0;
+  });
+  const [voiceSpeakerBoost, setVoiceSpeakerBoost] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("ef_voice_speaker_boost");
+      return saved !== null ? saved === "true" : true;
+    }
+    return true;
+  });
 
   // Step 4: Render
   const [selectedVariants, setSelectedVariants] = useState<Set<number>>(new Set());
@@ -932,6 +962,14 @@ export default function PipelinePage() {
       const pid = selectedHistoryId;
       setPipelineId(pid);
       setScripts(historyScripts.map(formatScript));
+      // Carry over TTS results from history preview info
+      const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
+      Object.entries(historyPreviewInfo).forEach(([key, info]) => {
+        if (info.has_audio) {
+          restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
+        }
+      });
+      setTtsResults(restoredTts);
       setStep(2);
       setSelectedHistoryId(null);
       setHistoryScripts([]);
@@ -1030,6 +1068,15 @@ export default function PipelinePage() {
       }
       return next;
     });
+  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost]);
+
+  // Persist voice settings to localStorage
+  useEffect(() => {
+    localStorage.setItem("ef_voice_stability", String(voiceStability));
+    localStorage.setItem("ef_voice_similarity", String(voiceSimilarity));
+    localStorage.setItem("ef_voice_style", String(voiceStyle));
+    localStorage.setItem("ef_voice_speed", String(voiceSpeed));
+    localStorage.setItem("ef_voice_speaker_boost", String(voiceSpeakerBoost));
   }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost]);
 
   // Per-script TTS: generate voice-over for a single script
@@ -1950,6 +1997,31 @@ export default function PipelinePage() {
               </Alert>
             )}
 
+            {/* Existing TTS banner */}
+            {(() => {
+              const ttsCount = Object.values(ttsResults).filter(r => !r.generating && !r.stale).length;
+              if (ttsCount === 0) return null;
+              return (
+                <Alert className="border-green-300 bg-green-50 dark:bg-green-950/30 dark:border-green-800">
+                  <CheckCircle className="h-4 w-4 text-green-600" />
+                  <AlertDescription className="flex items-center justify-between">
+                    <span className="text-green-800 dark:text-green-300">
+                      {ttsCount} din {scripts.length} scripturi au deja voice-over generat
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="ml-2 border-green-400 text-green-700 hover:bg-green-100 dark:text-green-300 dark:hover:bg-green-900"
+                      onClick={() => setStep(3)}
+                    >
+                      <ArrowRight className="h-3.5 w-3.5 mr-1" />
+                      Skip to Preview
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              );
+            })()}
+
             {/* Preview All button */}
             <Button
               onClick={handlePreviewAll}
@@ -2363,10 +2435,10 @@ export default function PipelinePage() {
                                     {hasAudio && (
                                       <button
                                         onClick={(e) => { e.stopPropagation(); handlePlayAudio(item.pipeline_id, idx); }}
-                                        className={`flex items-center gap-1 flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] transition-colors ${
+                                        className={`flex items-center gap-1 flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
                                           isPlaying
-                                            ? "bg-primary/20 text-primary"
-                                            : "bg-muted text-muted-foreground hover:bg-accent hover:text-foreground"
+                                            ? "bg-green-500 text-white"
+                                            : "bg-green-500/90 text-white hover:bg-green-600"
                                         }`}
                                         title={isPlaying ? "Pause audio" : "Play audio preview"}
                                       >
@@ -2391,6 +2463,14 @@ export default function PipelinePage() {
                                     if (!selectedHistoryId) return;
                                     setPipelineId(selectedHistoryId);
                                     setScripts(historyScripts.map(formatScript));
+                                    // Carry over TTS results from history preview info
+                                    const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
+                                    Object.entries(historyPreviewInfo).forEach(([key, info]) => {
+                                      if (info.has_audio) {
+                                        restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
+                                      }
+                                    });
+                                    setTtsResults(restoredTts);
                                     setStep(2);
                                     setSelectedHistoryId(null);
                                     setHistoryScripts([]);
