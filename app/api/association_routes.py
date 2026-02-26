@@ -107,6 +107,8 @@ async def create_association(
     replaces the previous association for that segment.
     """
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
 
     # Validate segment belongs to the current profile
     try:
@@ -163,6 +165,8 @@ async def get_associations_batch(
     Prevents N+1 queries when loading the segments page.
     """
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
 
     ids = [s.strip() for s in segment_ids.split(",") if s.strip()]
     if not ids:
@@ -211,6 +215,8 @@ async def get_association_for_segment(
 ):
     """Get the product association for a single segment (ASSOC-03)."""
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
 
     # Validate segment belongs to current profile
     try:
@@ -257,6 +263,8 @@ async def update_association_images(
 ):
     """Update the selected image URLs on an existing association (ASSOC-04)."""
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
 
     # Fetch the association to verify it exists and belongs to the profile's segment
     try:
@@ -308,6 +316,8 @@ async def update_pip_config(
 ):
     """Update the PiP overlay configuration on an existing association (OVRL-01)."""
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
 
     # Fetch the association to verify it exists and belongs to the profile's segment
     try:
@@ -357,6 +367,8 @@ async def delete_association_for_segment(
 ):
     """Remove the product association from a segment (ASSOC-02)."""
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
 
     # Validate segment belongs to current profile
     try:

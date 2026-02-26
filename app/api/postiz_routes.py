@@ -84,7 +84,7 @@ _MAX_PROGRESS_ENTRIES = 1000
 def _evict_old_progress():
     """Remove oldest entries if store exceeds max size."""
     if len(_publish_progress) > _MAX_PROGRESS_ENTRIES:
-        to_remove = sorted(_publish_progress.keys())[:len(_publish_progress) - _MAX_PROGRESS_ENTRIES]
+        to_remove = sorted(_publish_progress.keys(), key=lambda k: _publish_progress[k].get("updated_at", ""))[:len(_publish_progress) - _MAX_PROGRESS_ENTRIES]
         for key in to_remove:
             _publish_progress.pop(key, None)
 
@@ -443,29 +443,33 @@ async def bulk_publish_clips(
 
     settings = get_settings()
 
-    # Verify all clips exist, have final_video_path, and belong to profile
+    # Fetch all clips at once instead of one-by-one (N+1 fix)
     valid_clips = []
+    try:
+        result = supabase.table("editai_clips")\
+            .select("id, final_video_path, editai_projects!inner(profile_id)")\
+            .in_("id", request.clip_ids)\
+            .execute()
+        clips_by_id = {c["id"]: c for c in (result.data or [])}
+    except Exception as e:
+        logger.error(f"Failed to fetch clips for bulk publish: {e}")
+        clips_by_id = {}
+
     for clip_id in request.clip_ids:
-        try:
-            result = supabase.table("editai_clips")\
-                .select("*, editai_projects!inner(profile_id)")\
-                .eq("id", clip_id)\
-                .single()\
-                .execute()
-        except Exception:
+        clip_data = clips_by_id.get(clip_id)
+        if not clip_data or not clip_data.get("final_video_path"):
             continue
-        if result.data and result.data.get("final_video_path"):
-            # Verify ownership
-            if result.data["editai_projects"]["profile_id"] != profile.profile_id:
-                continue
-            video_path = Path(result.data["final_video_path"])
-            if not video_path.exists():
-                video_path = settings.output_dir / result.data["final_video_path"]
-            if video_path.exists():
-                valid_clips.append({
-                    "id": clip_id,
-                    "video_path": str(video_path)
-                })
+        # Verify ownership
+        if clip_data["editai_projects"]["profile_id"] != profile.profile_id:
+            continue
+        video_path = Path(clip_data["final_video_path"])
+        if not video_path.exists():
+            video_path = settings.output_dir / clip_data["final_video_path"]
+        if video_path.exists():
+            valid_clips.append({
+                "id": clip_id,
+                "video_path": str(video_path)
+            })
 
     if not valid_clips:
         raise HTTPException(

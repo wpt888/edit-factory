@@ -42,6 +42,8 @@ async def get_product_filters(
     excluded from both lists. Returns sorted lists.
     """
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
 
     # Verify feed ownership
     feed_check = supabase.table("product_feeds")\
@@ -95,6 +97,8 @@ async def list_products(
         brand: Filter by brand (exact match)
     """
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
 
     # Verify feed ownership and get stored product_count for unfiltered totals
     feed_check = supabase.table("product_feeds")\

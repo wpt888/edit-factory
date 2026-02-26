@@ -63,17 +63,30 @@ class CostTracker:
                 json.dump({"entries": [], "totals": {"elevenlabs": 0, "gemini": 0}}, f)
 
     def _load_log(self) -> Dict:
-        """Load the cost log."""
+        """Load the cost log with file-level locking."""
         try:
             with open(self.log_file, 'r', encoding='utf-8') as f:
+                try:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                except (ImportError, OSError):
+                    pass  # Windows fallback - rely on threading lock only
                 return json.load(f)
         except Exception:
             return {"entries": [], "totals": {"elevenlabs": 0, "gemini": 0}}
 
     def _save_log(self, data: Dict):
-        """Save the cost log."""
-        with open(self.log_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        """Save the cost log with file-level locking."""
+        try:
+            with open(self.log_file, 'w', encoding='utf-8') as f:
+                try:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                except (ImportError, OSError):
+                    pass  # Windows fallback - rely on threading lock only
+                json.dump(data, f, indent=2, default=str)
+        except Exception as e:
+            logger.error(f"Failed to save cost log: {e}")
 
     def _save_to_supabase(self, entry: CostEntry, profile_id: Optional[str] = None) -> bool:
         """Save entry to Supabase."""
@@ -259,7 +272,7 @@ class CostTracker:
             entries = [e for e in entries if e.get("details", {}).get("profile_id") == profile_id]
 
         today = datetime.now(timezone.utc).date().isoformat()
-        today_entries = [e for e in entries if e["timestamp"].startswith(today)]
+        today_entries = [e for e in entries if e.get("timestamp", "").startswith(today)]
 
         # Recalculate totals from filtered entries
         totals = {"elevenlabs": 0, "gemini": 0}
@@ -273,8 +286,8 @@ class CostTracker:
             "totals": {k: round(v, 4) for k, v in totals.items()},
             "total_all": round(sum(totals.values()), 4),
             "today": {
-                "elevenlabs": round(sum(e["cost_usd"] for e in today_entries if e["service"] == "elevenlabs"), 4),
-                "gemini": round(sum(e["cost_usd"] for e in today_entries if e["service"] == "gemini"), 4),
+                "elevenlabs": round(sum(e.get("cost_usd", 0) for e in today_entries if e.get("service") == "elevenlabs"), 4),
+                "gemini": round(sum(e.get("cost_usd", 0) for e in today_entries if e.get("service") == "gemini"), 4),
             },
             "entry_count": len(entries),
             "last_entries": entries[-10:][::-1]
@@ -364,15 +377,18 @@ class CostTracker:
 
 # Singleton instance
 _tracker: Optional[CostTracker] = None
+_tracker_lock = threading.Lock()
 
 
 def get_cost_tracker() -> CostTracker:
     """Get the cost tracker instance."""
     global _tracker
     if _tracker is None:
-        from app.config import get_settings
-        settings = get_settings()
-        _tracker = CostTracker(settings.logs_dir)
+        with _tracker_lock:
+            if _tracker is None:
+                from app.config import get_settings
+                settings = get_settings()
+                _tracker = CostTracker(settings.logs_dir)
     # Reinitialize supabase if not connected
     elif _tracker._supabase is None:
         _tracker._init_supabase()

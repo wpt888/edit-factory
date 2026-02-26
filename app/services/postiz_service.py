@@ -315,6 +315,7 @@ class PostizPublisher:
 # Profile-aware factory pattern with instance caching + TTL
 _postiz_instances: Dict[str, Tuple[PostizPublisher, float]] = {}  # profile_id -> (instance, created_at)
 _POSTIZ_CACHE_TTL = 300  # 5 minutes
+_MAX_POSTIZ_INSTANCES = 100
 
 
 def get_postiz_publisher(profile_id: str) -> PostizPublisher:
@@ -368,6 +369,11 @@ def get_postiz_publisher(profile_id: str) -> PostizPublisher:
             f"Profile {profile_id} has no Postiz credentials configured. "
             "Configurează Postiz în Settings."
         )
+
+    # Evict oldest entry if cache is full
+    if len(_postiz_instances) >= _MAX_POSTIZ_INSTANCES:
+        oldest_key = next(iter(_postiz_instances))
+        _postiz_instances.pop(oldest_key, None)
 
     # Create and cache instance with timestamp
     publisher = PostizPublisher(api_url=api_url, api_key=api_key)

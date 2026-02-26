@@ -59,7 +59,7 @@ def _utcnow_iso() -> str:
 # Background task: XML download + parse + upsert + image download
 # ---------------------------------------------------------------------------
 
-async def _sync_feed_task(feed_id: str, feed_url: str) -> None:
+async def _sync_feed_task(feed_id: str, feed_url: str, profile_id: str) -> None:
     """Background task: download feed XML, parse products, upsert, download images."""
     supabase = get_supabase()
     if not supabase:
@@ -71,12 +71,12 @@ async def _sync_feed_task(feed_id: str, feed_url: str) -> None:
         logger.info("[Feed %s] Starting sync from %s", feed_id, feed_url)
 
         # 1. Download XML
-        with httpx.Client(
+        async with httpx.AsyncClient(
             follow_redirects=True,
             timeout=httpx.Timeout(60.0, connect=10.0),
             headers={"User-Agent": _FEED_USER_AGENT},
         ) as client:
-            response = client.get(feed_url)
+            response = await client.get(feed_url)
             response.raise_for_status()
             xml_bytes = response.content
 
@@ -111,7 +111,7 @@ async def _sync_feed_task(feed_id: str, feed_url: str) -> None:
             "product_count": len(products),
             "last_synced_at": _utcnow_iso(),
             "sync_error": None,
-        }).eq("id", feed_id).execute()
+        }).eq("id", feed_id).eq("profile_id", profile_id).execute()
 
         logger.info("[Feed %s] Sync complete — %d products", feed_id, len(products))
 
@@ -121,7 +121,7 @@ async def _sync_feed_task(feed_id: str, feed_url: str) -> None:
             supabase.table("product_feeds").update({
                 "sync_status": "error",
                 "sync_error": str(exc),
-            }).eq("id", feed_id).execute()
+            }).eq("id", feed_id).eq("profile_id", profile_id).execute()
         except Exception as update_exc:
             logger.error("[Feed %s] Failed to set error status: %s", feed_id, update_exc)
 
@@ -254,7 +254,7 @@ async def sync_feed(
     }).eq("id", feed_id).execute()
 
     # Enqueue background task
-    background_tasks.add_task(_sync_feed_task, feed_id, feed["feed_url"])
+    background_tasks.add_task(_sync_feed_task, feed_id, feed["feed_url"], profile.profile_id)
 
     return {
         "feed_id": feed_id,

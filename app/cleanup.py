@@ -54,7 +54,7 @@ def _delete_old_files(directory: Path, cutoff: datetime, dry_run: bool) -> int:
         for filename in files:
             file_path = root_path / filename
             try:
-                mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc)
                 if mtime < cutoff:
                     if dry_run:
                         logger.info(

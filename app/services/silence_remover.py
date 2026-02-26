@@ -103,7 +103,7 @@ class SilenceRemover:
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 str(audio_path)
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode == 0:
                 return float(result.stdout.strip())
         except Exception as e:
@@ -218,7 +218,7 @@ class SilenceRemover:
                     str(segment_file)
                 ]
 
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                 if result.returncode == 0 and segment_file.exists():
                     segment_files.append(segment_file)
                     logger.debug(f"Extracted segment {i}: {start:.2f}s - {end:.2f}s")
@@ -262,7 +262,7 @@ class SilenceRemover:
                 str(output_path)
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode != 0:
                 raise RuntimeError(f"FFmpeg concat failed: {result.stderr}")
 
@@ -377,7 +377,7 @@ class SilenceRemover:
 
         logger.info(f"Removing silence with FFmpeg: {audio_path.name}")
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             logger.error(f"FFmpeg silenceremove failed: {result.stderr}")
             # Fallback: copiem originalul

@@ -3,6 +3,7 @@ EditAI Library & Workflow Routes
 Gestionează proiecte, clipuri, asocieri și exporturi pentru noul workflow.
 """
 import asyncio
+import time as _time_mod
 import uuid
 import shutil
 import subprocess
@@ -35,7 +36,18 @@ router = APIRouter(prefix="/library", tags=["library"])
 # ============== PROJECT LOCKS (prevent race conditions) ==============
 _project_locks: Dict[str, threading.Lock] = {}
 _locks_lock = threading.Lock()  # Meta-lock for managing project locks
-_cancelled_projects: set = set()  # Set of project IDs that have been cancelled
+_cancelled_projects: Dict[str, float] = {}  # project_id -> timestamp of cancellation
+_MAX_CANCELLED = 200
+
+
+def _evict_old_cancelled():
+    """Evict oldest entries when _cancelled_projects exceeds limit."""
+    if len(_cancelled_projects) <= _MAX_CANCELLED:
+        return
+    sorted_ids = sorted(_cancelled_projects, key=_cancelled_projects.get)
+    to_remove = sorted_ids[:len(_cancelled_projects) - _MAX_CANCELLED]
+    for pid in to_remove:
+        _cancelled_projects.pop(pid, None)
 
 
 def is_project_cancelled(project_id: str) -> bool:
@@ -45,12 +57,13 @@ def is_project_cancelled(project_id: str) -> bool:
 
 def mark_project_cancelled(project_id: str):
     """Flag a project for cancellation."""
-    _cancelled_projects.add(project_id)
+    _cancelled_projects[project_id] = _time_mod.monotonic()
+    _evict_old_cancelled()
 
 
 def clear_project_cancelled(project_id: str):
     """Clear the cancellation flag for a project."""
-    _cancelled_projects.discard(project_id)
+    _cancelled_projects.pop(project_id, None)
 
 
 def _cleanup_stale_locks():
@@ -107,8 +120,21 @@ def cleanup_project_lock(project_id: str):
 
 # ============== PROGRESS TRACKING ==============
 _generation_progress: Dict[str, dict] = {}
+_MAX_PROGRESS_ENTRIES = 500
 
 from app.db import get_supabase
+
+
+def _evict_old_progress():
+    """Evict oldest entries when _generation_progress exceeds limit."""
+    if len(_generation_progress) <= _MAX_PROGRESS_ENTRIES:
+        return
+    # Sort by insertion order approximation: keys added first are oldest
+    sorted_keys = sorted(_generation_progress.keys())
+    to_remove = sorted_keys[:len(_generation_progress) - _MAX_PROGRESS_ENTRIES]
+    for key in to_remove:
+        _generation_progress.pop(key, None)
+
 
 def update_generation_progress(project_id: str, percentage: int, current_step: str, estimated_remaining: Optional[int] = None):
     """Update generation progress for a project (in-memory only)."""
@@ -117,6 +143,7 @@ def update_generation_progress(project_id: str, percentage: int, current_step: s
         "current_step": current_step,
         "estimated_remaining": estimated_remaining
     }
+    _evict_old_progress()
 
 
 def get_generation_progress(project_id: str) -> Optional[dict]:
@@ -532,8 +559,15 @@ async def delete_project(
         for clip in clips.data or []:
             _delete_clip_files(clip)
 
+        # Delete orphaned clip_content rows before project deletion
+        if clips.data:
+            clip_ids = [c["id"] for c in clips.data]
+            supabase.table("editai_clip_content").delete().in_("clip_id", clip_ids).execute()
+
         # Ștergem proiectul
         result = supabase.table("editai_projects").delete().eq("id", project_id).eq("profile_id", profile.profile_id).execute()
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Project not found")
         return {"status": "deleted", "project_id": project_id}
     except HTTPException:
         raise
@@ -710,18 +744,22 @@ async def _generate_raw_clips_task(
                 thumbnail_path = _generate_thumbnail(video_file)
 
                 # Inserăm în DB
-                supabase.table("editai_clips").insert({
-                    "project_id": project_id,
-                    "profile_id": profile_id,
-                    "variant_index": variant["variant_index"],
-                    "variant_name": variant["variant_name"],
-                    "raw_video_path": str(video_file),
-                    "thumbnail_path": str(thumbnail_path) if thumbnail_path else None,
-                    "duration": duration,
-                    "is_selected": False,
-                    "is_deleted": False,
-                    "final_status": "pending"
-                }).execute()
+                try:
+                    supabase.table("editai_clips").insert({
+                        "project_id": project_id,
+                        "profile_id": profile_id,
+                        "variant_index": variant["variant_index"],
+                        "variant_name": variant["variant_name"],
+                        "raw_video_path": str(video_file),
+                        "thumbnail_path": str(thumbnail_path) if thumbnail_path else None,
+                        "duration": duration,
+                        "is_selected": False,
+                        "is_deleted": False,
+                        "final_status": "pending"
+                    }).execute()
+                except Exception as clip_err:
+                    logger.error(f"Failed to insert clip {variant['variant_index']}: {clip_err}")
+                    continue  # Continue with next clip instead of aborting
 
             # Actualizăm proiectul
             supabase.table("editai_projects").update({
@@ -2003,7 +2041,7 @@ async def _render_final_clip_task(
     supabase.table("editai_clips").update({
         "final_status": "processing",
         "updated_at": datetime.now(timezone.utc).isoformat()
-    }).eq("id", clip_id).execute()
+    }).eq("id", clip_id).eq("profile_id", profile_id).execute()
 
     # Initialize temp file paths for cleanup in finally block
     audio_path = None
@@ -2092,7 +2130,7 @@ async def _render_final_clip_task(
                     supabase.table("editai_clip_content").update({
                         "tts_timestamps": tts_timestamps,
                         "tts_model": elevenlabs_model
-                    }).eq("clip_id", clip_id).execute()
+                    }).eq("clip_id", clip_id).eq("profile_id", profile_id).execute()
                     logger.info(f"TTS timestamps persisted for clip {clip_id}")
                 except Exception as e:
                     logger.warning(f"Failed to persist TTS timestamps: {e}")
@@ -2129,7 +2167,7 @@ async def _render_final_clip_task(
                 shutil.copy2(str(audio_path), str(tts_persist_path))
                 supabase.table("editai_clip_content").update({
                     "tts_audio_path": str(tts_persist_path)
-                }).eq("clip_id", clip_id).execute()
+                }).eq("clip_id", clip_id).eq("profile_id", profile_id).execute()
                 logger.info(f"TTS audio persisted for clip {clip_id}: {tts_persist_path}")
             except Exception as e:
                 tts_persist_failed = True
@@ -2463,15 +2501,26 @@ def _update_project_counts(project_id: str, profile_id: Optional[str] = None):
         return
 
     try:
-        # Count total clips (not deleted)
-        query = supabase.table("editai_clips").select("id, is_selected, final_status").eq("project_id", project_id).eq("is_deleted", False)
+        # Count total clips (not deleted) using count queries instead of fetching all rows
+        total_query = supabase.table("editai_clips").select("id", count="exact").eq("project_id", project_id).eq("is_deleted", False)
         if profile_id:
-            query = query.eq("profile_id", profile_id)
-        clips = query.execute()
+            total_query = total_query.eq("profile_id", profile_id)
+        total_result = total_query.execute()
+        total = total_result.count or 0
 
-        total = len(clips.data) if clips.data else 0
-        selected = len([c for c in (clips.data or []) if c.get("is_selected")])
-        exported = len([c for c in (clips.data or []) if c.get("final_status") == "completed"])
+        # Count selected clips
+        selected_query = supabase.table("editai_clips").select("id", count="exact").eq("project_id", project_id).eq("is_selected", True).eq("is_deleted", False)
+        if profile_id:
+            selected_query = selected_query.eq("profile_id", profile_id)
+        selected_result = selected_query.execute()
+        selected = selected_result.count or 0
+
+        # Count rendered clips
+        rendered_query = supabase.table("editai_clips").select("id", count="exact").eq("project_id", project_id).eq("final_status", "completed").eq("is_deleted", False)
+        if profile_id:
+            rendered_query = rendered_query.eq("profile_id", profile_id)
+        rendered_result = rendered_query.execute()
+        exported = rendered_result.count or 0
 
         update_query = supabase.table("editai_projects").update({
             "variants_count": total,

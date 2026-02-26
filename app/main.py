@@ -13,7 +13,7 @@ if _ffmpeg_bin.exists():
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -97,6 +97,8 @@ async def _cleanup_expired_pipelines():
 async def lifespan(app: FastAPI):
     # Startup
     settings.ensure_dirs()
+    if settings.auth_disabled and not settings.debug:
+        logger.critical("⚠️ AUTH_DISABLED=true in non-debug mode! This is a security risk.")
     logger.info("Edit Factory started")
     logger.info(f"  Input dir: {settings.input_dir.absolute()}")
     logger.info(f"  Output dir: {settings.output_dir.absolute()}")
@@ -117,10 +119,17 @@ app = FastAPI(
 # Register rate limiter on app
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-app.add_middleware(SlowAPIMiddleware)
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 # CORS - configurat din environment variables
 # În producție: ALLOWED_ORIGINS=https://editai.obsid.ro
+# NOTE: CORS must be added BEFORE SlowAPI so it wraps as the outermost middleware,
+# ensuring CORS headers are present even on 429 rate-limit responses.
 allowed_origins = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()]
 logger.info(f"CORS allowed origins: {allowed_origins}")
 
@@ -130,8 +139,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Profile-Id"],
-    expose_headers=["Content-Disposition"],
+    expose_headers=["Content-Disposition", "X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"],
 )
+
+app.add_middleware(SlowAPIMiddleware)
 
 # Include API routes
 app.include_router(api_router, prefix="/api/v1", tags=["Video Processing"])

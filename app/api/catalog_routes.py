@@ -34,6 +34,8 @@ async def list_catalog_products(
 ):
     """Paginated catalog products with optional filters."""
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
 
     query = supabase.table(TABLE).select("*", count="exact")
 
@@ -75,6 +77,8 @@ async def get_catalog_filters(
 ):
     """Return distinct brands and categories for filter dropdowns."""
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
 
     brands: list[str] = []
     categories: list[str] = []
@@ -127,6 +131,8 @@ async def get_product_images(
         {"product_id": "...", "images": ["https://...", ...]}
     """
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
 
     # Attempt to call the DB function for grouped variant images
     try:
@@ -163,6 +169,8 @@ async def get_catalog_product(
 ):
     """Fetch a single catalog product by ID."""
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
 
     result = supabase.table(TABLE)\
         .select("*")\

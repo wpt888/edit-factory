@@ -5,6 +5,7 @@ Manages multiple ElevenLabs API keys per profile with auto-failover on 402 (quot
 Provides CRUD operations, key rotation, and subscription checking.
 """
 import logging
+import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -16,13 +17,16 @@ logger = logging.getLogger(__name__)
 
 # Singleton
 _instance = None
+_instance_lock = threading.Lock()
 
 
 def get_account_manager() -> "ElevenLabsAccountManager":
     """Get singleton ElevenLabsAccountManager instance."""
     global _instance
     if _instance is None:
-        _instance = ElevenLabsAccountManager()
+        with _instance_lock:
+            if _instance is None:
+                _instance = ElevenLabsAccountManager()
     return _instance
 
 
@@ -229,7 +233,7 @@ class ElevenLabsAccountManager:
         masked = []
         for a in accounts:
             entry = {**a}
-            del entry["api_key_encrypted"]
+            entry.pop("api_key_encrypted", None)
             masked.append(entry)
 
         # Append synthetic entry for .env key so the UI always shows it

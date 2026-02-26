@@ -96,7 +96,7 @@ class VoiceDetector:
             str(output_path)
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             logger.error(f"FFmpeg audio extraction failed: {result.stderr}")
             return False
@@ -113,7 +113,7 @@ class VoiceDetector:
             "-ac", "1",  # Mono
             str(output_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             logger.error(f"FFmpeg audio conversion failed: {result.stderr}")
             return False
@@ -330,7 +330,7 @@ def mute_voice_segments(
     logger.info(f"Muting {len(voice_segments)} voice segments in video")
     logger.debug(f"FFmpeg command: {' '.join(cmd)}")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
         logger.error(f"FFmpeg mute failed: {result.stderr}")
         return False

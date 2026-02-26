@@ -51,8 +51,13 @@ async def download_product_images(
 
     semaphore = asyncio.Semaphore(CONCURRENT_DOWNLOADS)
 
-    tasks = [_download_one(product, feed_cache, semaphore) for product in products]
-    results = await asyncio.gather(*tasks)
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=DOWNLOAD_TIMEOUT,
+        headers={"User-Agent": _USER_AGENT},
+    ) as client:
+        tasks = [_download_one(product, feed_cache, semaphore, client) for product in products]
+        results = await asyncio.gather(*tasks)
 
     return dict(results)
 
@@ -61,6 +66,7 @@ async def _download_one(
     product: dict,
     cache_dir: Path,
     semaphore: asyncio.Semaphore,
+    client: httpx.AsyncClient = None,
 ) -> tuple[str, str]:
     """Download a single product image or return a placeholder path.
 
@@ -87,32 +93,27 @@ async def _download_one(
 
     try:
         async with semaphore:
-            async with httpx.AsyncClient(
-                follow_redirects=True,
-                timeout=DOWNLOAD_TIMEOUT,
-                headers={"User-Agent": _USER_AGENT},
-            ) as client:
-                response = await client.get(image_link)
-                response.raise_for_status()
+            response = await client.get(image_link)
+            response.raise_for_status()
 
-                content_type = response.headers.get("content-type", "").lower()
+            content_type = response.headers.get("content-type", "").lower()
 
-                if not content_type.startswith("image/"):
-                    logger.warning("Non-image content-type %s for product %s, skipping", content_type, external_id)
-                    return (external_id, None)
+            if not content_type.startswith("image/"):
+                logger.warning("Non-image content-type %s for product %s, skipping", content_type, external_id)
+                return (external_id, None)
 
-                if "image/webp" in content_type:
-                    # Save webp first, then convert to jpg via FFmpeg
-                    webp_path = dest.with_suffix(".webp")
-                    webp_path.write_bytes(response.content)
-                    _convert_webp_to_jpg(webp_path, dest)
-                    if webp_path.exists():
-                        webp_path.unlink()
-                else:
-                    dest.write_bytes(response.content)
+            if "image/webp" in content_type:
+                # Save webp first, then convert to jpg via FFmpeg
+                webp_path = dest.with_suffix(".webp")
+                webp_path.write_bytes(response.content)
+                _convert_webp_to_jpg(webp_path, dest)
+                if webp_path.exists():
+                    webp_path.unlink()
+            else:
+                dest.write_bytes(response.content)
 
-                logger.debug("Downloaded image for product %s -> %s", external_id, dest)
-                return (external_id, str(dest))
+            logger.debug("Downloaded image for product %s -> %s", external_id, dest)
+            return (external_id, str(dest))
 
     except Exception as exc:
         logger.warning(
@@ -169,6 +170,9 @@ def _make_placeholder(dest: Path) -> str:
             dest,
             result.stderr.decode(errors="replace"),
         )
+    if not dest.exists():
+        logger.error(f"Placeholder generation failed for {dest}")
+        return None
     return str(dest)
 
 

@@ -4,6 +4,7 @@ Generates TTS-safe scripts using Gemini or Claude AI with segment keyword awaren
 """
 import re
 import logging
+import threading
 from typing import List, Optional, Dict
 from google import genai
 import anthropic
@@ -341,6 +342,7 @@ Begin generation now:"""
 
 # Singleton instance
 _script_generator = None
+_script_generator_lock = threading.Lock()
 
 
 def get_script_generator() -> ScriptGenerator:
@@ -352,14 +354,16 @@ def get_script_generator() -> ScriptGenerator:
     """
     global _script_generator
     if _script_generator is None:
-        from app.config import get_settings
-        settings = get_settings()
+        with _script_generator_lock:
+            if _script_generator is None:
+                from app.config import get_settings
+                settings = get_settings()
 
-        _script_generator = ScriptGenerator(
-            gemini_api_key=settings.gemini_api_key,
-            anthropic_api_key=settings.anthropic_api_key,
-            gemini_model=settings.gemini_model,
-            anthropic_model=settings.anthropic_model
-        )
+                _script_generator = ScriptGenerator(
+                    gemini_api_key=settings.gemini_api_key,
+                    anthropic_api_key=settings.anthropic_api_key,
+                    gemini_model=settings.gemini_model,
+                    anthropic_model=settings.anthropic_model
+                )
 
     return _script_generator

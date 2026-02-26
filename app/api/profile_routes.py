@@ -120,7 +120,7 @@ async def create_profile(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         profile_data = {
             "user_id": current_user.id,
             "name": profile.name,
@@ -218,7 +218,7 @@ async def update_profile(
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
         # Build update data
-        update_data = {"updated_at": datetime.utcnow().isoformat()}
+        update_data = {"updated_at": datetime.now(timezone.utc).isoformat()}
         if profile_update.name is not None:
             update_data["name"] = profile_update.name
         if profile_update.description is not None:
@@ -275,7 +275,7 @@ async def patch_profile(
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
         # Build update data from non-None fields
-        update_data = {"updated_at": datetime.utcnow().isoformat()}
+        update_data = {"updated_at": datetime.now(timezone.utc).isoformat()}
         tts_settings_updated = False
 
         if updates.name is not None:
@@ -405,13 +405,13 @@ async def set_default_profile(
 
         # Unset default on all user's profiles
         supabase.table("profiles")\
-            .update({"is_default": False, "updated_at": datetime.utcnow().isoformat()})\
+            .update({"is_default": False, "updated_at": datetime.now(timezone.utc).isoformat()})\
             .eq("user_id", current_user.id)\
             .execute()
 
         # Set this profile as default
         result = supabase.table("profiles")\
-            .update({"is_default": True, "updated_at": datetime.utcnow().isoformat()})\
+            .update({"is_default": True, "updated_at": datetime.now(timezone.utc).isoformat()})\
             .eq("id", profile_id)\
             .execute()
 
@@ -605,7 +605,7 @@ async def update_subtitle_settings(
         supabase.table("profiles")\
             .update({
                 "subtitle_settings": settings_dict,
-                "updated_at": datetime.utcnow().isoformat()
+                "updated_at": datetime.now(timezone.utc).isoformat()
             })\
             .eq("id", profile_id)\
             .execute()
@@ -688,7 +688,7 @@ async def update_ai_instructions(
         supabase.table("profiles")\
             .update({
                 "ai_instructions": body.ai_instructions,
-                "updated_at": datetime.utcnow().isoformat()
+                "updated_at": datetime.now(timezone.utc).isoformat()
             })\
             .eq("id", profile_id)\
             .execute()

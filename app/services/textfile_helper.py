@@ -82,7 +82,7 @@ def build_drawtext_filter(
     tmp_path = tmp.name
 
     # Build filter — escape single quotes in file path for FFmpeg filter syntax
-    escaped_path = tmp_path.replace("'", "\\'")
+    escaped_path = tmp_path.replace("\\", "/").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]").replace("'", "\\'")
     parts = [
         f"drawtext=textfile='{escaped_path}'",
         f"fontsize={fontsize}",

@@ -13,6 +13,8 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+MAX_CACHE_ENTRIES = 5000
+
 def _get_cache_root() -> Path:
     return Path(__file__).parent.parent.parent / "cache" / "tts"
 
@@ -58,6 +60,19 @@ def cache_lookup(key_data: dict, provider_dir: str, output_path: Path) -> Option
         return None
 
 
+def _evict_if_needed(cache_dir: Path) -> None:
+    """Remove oldest cache entries if cache exceeds max size."""
+    try:
+        cache_files = sorted(cache_dir.glob("*.mp3"), key=lambda f: f.stat().st_mtime)
+        if len(cache_files) > MAX_CACHE_ENTRIES:
+            for f in cache_files[:len(cache_files) - MAX_CACHE_ENTRIES]:
+                f.unlink(missing_ok=True)
+                meta = f.with_suffix('.meta.json')
+                meta.unlink(missing_ok=True)
+    except Exception as e:
+        logger.warning(f"Cache eviction error: {e}")
+
+
 def cache_store(key_data: dict, provider_dir: str, audio_path: Path, metadata: dict) -> None:
     """
     Store TTS audio and metadata in cache.
@@ -77,6 +92,7 @@ def cache_store(key_data: dict, provider_dir: str, audio_path: Path, metadata: d
         with open(cache_dir / f"{h}.meta.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False)
         logger.info(f"TTS cache STORE [{provider_dir}]: {h[:12]}...")
+        _evict_if_needed(cache_dir)
     except Exception as e:
         logger.warning(f"TTS cache write error: {e}")
 

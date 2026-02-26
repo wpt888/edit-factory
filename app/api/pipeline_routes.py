@@ -43,6 +43,9 @@ _MAX_PIPELINE_ENTRIES = 1000
 # Lock for library project creation (prevents duplicate projects from concurrent renders)
 _library_project_lock = threading.Lock()
 
+# Per-pipeline render locks (prevents race conditions in concurrent variant renders)
+_render_locks: Dict[str, asyncio.Lock] = {}
+
 
 def _evict_old_pipelines():
     """Remove oldest entries if store exceeds max size."""
@@ -1242,7 +1245,10 @@ async def render_variants(
         pipeline["source_video_ids"] = request.source_video_ids
 
     # Lock to guard concurrent writes to pipeline["render_jobs"]
-    render_jobs_lock = asyncio.Lock()
+    pipeline_id_str = str(pipeline_id)
+    if pipeline_id_str not in _render_locks:
+        _render_locks[pipeline_id_str] = asyncio.Lock()
+    render_jobs_lock = _render_locks[pipeline_id_str]
 
     # Initialize render jobs for each variant
     for variant_index in request.variant_indices:

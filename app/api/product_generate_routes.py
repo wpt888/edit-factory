@@ -127,6 +127,8 @@ async def generate_product_video(
         {"job_id": str, "status": "pending"}
     """
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
 
     # Verify product exists — source determines which table to query
     if request.source == "catalog":
@@ -192,6 +194,8 @@ async def batch_generate_products(
         {"batch_id": str, "total": int}
     """
     supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
     job_storage = get_job_storage()
 
     batch_id = str(uuid.uuid4())
@@ -277,6 +281,9 @@ async def get_batch_status(
     batch = job_storage.get_job(batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
+
+    if batch.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     product_statuses = []
     for pj in batch.get("product_jobs", []):
@@ -599,16 +606,13 @@ async def _generate_product_video_task(
                 anthropic_api_key=getattr(settings, "anthropic_api_key", None),
             )
 
-            loop = asyncio.get_event_loop()
-            scripts = await loop.run_in_executor(
-                None,
-                lambda: generator.generate_scripts(
-                    idea=product.get("title", "Product"),
-                    context=product.get("description", ""),
-                    keywords=[],
-                    variant_count=1,
-                    provider=request.ai_provider,
-                ),
+            scripts = await asyncio.to_thread(
+                generator.generate_scripts,
+                idea=product.get("title", "Product"),
+                context=product.get("description", ""),
+                keywords=[],
+                variant_count=1,
+                provider=request.ai_provider,
             )
 
             if scripts:
@@ -716,15 +720,12 @@ async def _generate_product_video_task(
         )
 
         # compose_product_video is synchronous (FFmpeg subprocess)
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: compose_product_video(
-                image_path=image_path,
-                output_path=composed_path,
-                product=product,
-                config=compositor_config,
-            ),
+        await asyncio.to_thread(
+            compose_product_video,
+            image_path=image_path,
+            output_path=composed_path,
+            product=product,
+            config=compositor_config,
         )
 
         logger.info("[%s] Composition complete: %s", job_id, composed_path)

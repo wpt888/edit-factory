@@ -265,7 +265,7 @@ class JobStorage:
         # Clean up Supabase
         if self._supabase:
             try:
-                result = self._supabase.table("jobs").delete().lt("created_at", cutoff).execute()
+                result = self._supabase.table("jobs").delete().in_("status", ["failed", "completed", "cancelled"]).lt("created_at", cutoff).execute()
                 db_count = len(result.data) if result.data else 0
                 logger.info(f"JobStorage: Cleaned up {db_count} old jobs from Supabase (older than {days} days)")
                 count += db_count

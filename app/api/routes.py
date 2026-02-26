@@ -1,6 +1,7 @@
 """
 Edit Factory - API Routes
 """
+import asyncio
 import uuid
 import shutil
 import subprocess
@@ -238,7 +239,7 @@ async def health_check():
     # Check ffmpeg
     ffmpeg_ok = False
     try:
-        result = subprocess.run(["ffmpeg", "-version"], capture_output=True)
+        result = await asyncio.to_thread(subprocess.run, ["ffmpeg", "-version"], capture_output=True, timeout=5)
         ffmpeg_ok = result.returncode == 0
     except Exception:
         pass
@@ -303,7 +304,7 @@ async def get_video_info(video: UploadFile = File(...)):
             str(temp_video)
         ]
 
-        result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+        result = await asyncio.to_thread(subprocess.run, probe_cmd, capture_output=True, text=True, timeout=30)
 
         if result.returncode != 0:
             raise HTTPException(status_code=400, detail="Could not analyze video")
@@ -570,8 +571,8 @@ async def get_job(job_id: str, profile: ProfileContext = Depends(get_profile_con
 
 @router.get("/jobs")
 async def list_jobs(profile: ProfileContext = Depends(get_profile_context)):
-    """Lista toate job-urile."""
-    all_jobs = get_job_storage().list_jobs()
+    """Lista toate job-urile pentru profilul curent."""
+    all_jobs = get_job_storage().list_jobs(profile_id=profile.profile_id)
     return {
         "jobs": [
             {
@@ -586,7 +587,7 @@ async def list_jobs(profile: ProfileContext = Depends(get_profile_context)):
 
 
 @router.get("/jobs/{job_id}/download")
-async def download_result(job_id: str):
+async def download_result(job_id: str, profile: ProfileContext = Depends(get_profile_context)):
     """Descarca rezultatul unui job finalizat."""
     job = get_job_storage().get_job(job_id)
     if not job:
@@ -993,24 +994,26 @@ async def serve_file(file_path: str, download: bool = False):
     if not full_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Determine content disposition
+    # Determine content disposition and media type
+    import mimetypes
     filename = full_path.name
+    media_type = mimetypes.guess_type(str(full_path))[0] or "application/octet-stream"
     if download:
         return FileResponse(
             path=str(full_path),
-            media_type="video/mp4",
+            media_type=media_type,
             filename=filename,
             headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
         )
     else:
         return FileResponse(
             path=str(full_path),
-            media_type="video/mp4"
+            media_type=media_type
         )
 
 
 @router.delete("/jobs/{job_id}")
-async def delete_job(job_id: str):
+async def delete_job(job_id: str, profile: ProfileContext = Depends(get_profile_context)):
     """Sterge un job si fisierele asociate."""
     job = get_job_storage().get_job(job_id)
     if not job:

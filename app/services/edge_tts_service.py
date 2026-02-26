@@ -3,6 +3,7 @@ Edge TTS Service - Text-to-Speech GRATUIT folosind Microsoft Edge.
 Calitate excelentă, multe voci, fără costuri.
 """
 import asyncio
+import concurrent.futures
 import logging
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -102,9 +103,13 @@ class EdgeTTSService:
     def list_voices_sync(self, language: Optional[str] = None) -> List[Voice]:
         """Versiune sincronă pentru list_voices."""
         try:
-            loop = asyncio.get_running_loop()
-            return loop.run_until_complete(self.list_voices(language))
+            asyncio.get_running_loop()
+            # We're inside an async context - run in a separate thread to avoid deadlock
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(asyncio.run, self.list_voices(language))
+                return future.result(timeout=60)
         except RuntimeError:
+            # No running loop - safe to use asyncio.run
             return asyncio.run(self.list_voices(language))
 
     async def generate_audio(
@@ -159,11 +164,15 @@ class EdgeTTSService:
     ) -> Path:
         """Versiune sincronă pentru generate_audio."""
         try:
-            loop = asyncio.get_running_loop()
-            return loop.run_until_complete(self.generate_audio(
-                text, output_path, voice, rate, volume, pitch
-            ))
+            asyncio.get_running_loop()
+            # We're inside an async context - run in a separate thread to avoid deadlock
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(asyncio.run, self.generate_audio(
+                    text, output_path, voice, rate, volume, pitch
+                ))
+                return future.result(timeout=60)
         except RuntimeError:
+            # No running loop - safe to use asyncio.run
             return asyncio.run(self.generate_audio(
                 text, output_path, voice, rate, volume, pitch
             ))
@@ -243,10 +252,12 @@ class EdgeTTSService:
     ) -> Dict[str, Path]:
         """Versiune sincronă pentru generate_with_subtitles."""
         try:
-            loop = asyncio.get_running_loop()
-            return loop.run_until_complete(self.generate_with_subtitles(
-                text, audio_path, srt_path, voice, rate
-            ))
+            asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(asyncio.run, self.generate_with_subtitles(
+                    text, audio_path, srt_path, voice, rate
+                ))
+                return future.result(timeout=120)
         except RuntimeError:
             return asyncio.run(self.generate_with_subtitles(
                 text, audio_path, srt_path, voice, rate
@@ -319,10 +330,12 @@ class EdgeTTSService:
     ) -> List[Dict]:
         """Versiune sincronă pentru generate_variants."""
         try:
-            loop = asyncio.get_running_loop()
-            return loop.run_until_complete(self.generate_variants(
-                texts, output_dir, voices, base_name
-            ))
+            asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(asyncio.run, self.generate_variants(
+                    texts, output_dir, voices, base_name
+                ))
+                return future.result(timeout=300)
         except RuntimeError:
             return asyncio.run(self.generate_variants(
                 texts, output_dir, voices, base_name

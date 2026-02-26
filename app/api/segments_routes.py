@@ -324,10 +324,14 @@ async def upload_source_video(
 
     video_path = source_dir / f"{video_id}_{safe_filename}"
 
-    # Save uploaded file
+    # Reject oversized uploads before saving (STAB-05)
+    from app.api.validators import validate_upload_size
+    await validate_upload_size(video)
+
+    # Save uploaded file via streaming (avoid loading entire file into memory)
+    import shutil as _shutil
     with open(video_path, "wb") as f:
-        content = await video.read()
-        f.write(content)
+        _shutil.copyfileobj(video.file, f)
 
     # Auto-transcode non-mp4 formats to .mp4 for browser compatibility
     non_mp4_formats = {'.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm'}

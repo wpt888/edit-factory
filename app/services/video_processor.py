@@ -462,6 +462,13 @@ class VideoAnalyzer:
             "rotation": getattr(self, 'rotation', 0)  # Rotația pentru corecție output
         }
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
     def close(self):
         """Elibereaza resursele."""
         self.cap.release()
@@ -592,7 +599,7 @@ class VideoEditor:
         """
         logger.debug(f"FFmpeg command ({operation}): {' '.join(cmd)}")
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
         if result.returncode != 0:
             # Parse FFmpeg stderr for useful info
@@ -808,7 +815,8 @@ class VideoEditor:
             except RuntimeError as e:
                 error_lower = str(e).lower()
                 # Fallback pe CPU pentru erori NVENC sau filtergraph (combinația GPU + audio filter poate cauza probleme)
-                if self.use_gpu and ("nvenc" in error_lower or "filtergraph" in error_lower or "filter not found" in error_lower):
+                gpu_error_indicators = ["filtergraph", "cuda", "nvenc", "gpu", "device", "hwaccel", "out of memory", "cuvid", "filter not found"]
+                if self.use_gpu and any(indicator in error_lower for indicator in gpu_error_indicators):
                     logger.warning(f"GPU encoding failed for segment {i+1}, falling back to CPU: {str(e)[:100]}")
                     cmd = build_cmd(False)
                     self._run_ffmpeg(cmd, f"extract segment {i+1}/{len(segments)} (CPU fallback)")
@@ -1159,9 +1167,8 @@ class VideoProcessorService:
             gemini = GeminiVideoAnalyzer()
 
             # Obținem info despre video folosind VideoAnalyzer clasic
-            classic_analyzer = VideoAnalyzer(video_path)
-            video_info = classic_analyzer.get_video_info()
-            classic_analyzer.close()
+            with VideoAnalyzer(video_path) as classic_analyzer:
+                video_info = classic_analyzer.get_video_info()
 
             # Analizăm cu Gemini
             gemini_segments = gemini.get_best_segments(
@@ -1543,37 +1550,48 @@ class VideoProcessorService:
             # Analiza video
             report_progress("Analyzing video")
             analyzer = VideoAnalyzer(video_path)
-            video_info = analyzer.get_video_info()
+            try:
+                video_info = analyzer.get_video_info()
 
-            # Folosim Gemini AI pentru selecție inteligentă dacă avem context
-            if context_text and GEMINI_AVAILABLE:
-                report_progress("AI Analysis with Gemini")
-                logger.info(f"Using Gemini AI for context-based frame selection: {context_text[:100]}...")
-                try:
-                    gemini_analyzer = GeminiVideoAnalyzer()
-                    ai_segments = gemini_analyzer.get_best_segments(
-                        video_path=video_path,
-                        target_duration=target_duration * variant_count * 2,
-                        min_score=50,
-                        context=context_text
-                    )
-                    # Convertim AnalyzedSegment în VideoSegment
-                    all_segments = []
-                    for ai_seg in ai_segments:
-                        seg = VideoSegment(
-                            start_time=ai_seg.start_time,
-                            end_time=ai_seg.end_time,
-                            motion_score=ai_seg.score / 100.0,
-                            variance_score=0.8,
-                            avg_brightness=0.5
+                # Folosim Gemini AI pentru selecție inteligentă dacă avem context
+                if context_text and GEMINI_AVAILABLE:
+                    report_progress("AI Analysis with Gemini")
+                    logger.info(f"Using Gemini AI for context-based frame selection: {context_text[:100]}...")
+                    try:
+                        gemini_analyzer = GeminiVideoAnalyzer()
+                        ai_segments = gemini_analyzer.get_best_segments(
+                            video_path=video_path,
+                            target_duration=target_duration * variant_count * 2,
+                            min_score=50,
+                            context=context_text
                         )
-                        all_segments.append(seg)
-                    logger.info(f"Gemini found {len(all_segments)} context-matched segments")
-                    report_progress("AI Analysis completed", "completed")
-                except Exception as e:
-                    logger.warning(f"Gemini analysis failed, falling back to motion analysis: {e}")
-                    report_progress("Motion Analysis (fallback)")
-                    # Fallback la analiza clasică
+                        # Convertim AnalyzedSegment în VideoSegment
+                        all_segments = []
+                        for ai_seg in ai_segments:
+                            seg = VideoSegment(
+                                start_time=ai_seg.start_time,
+                                end_time=ai_seg.end_time,
+                                motion_score=ai_seg.score / 100.0,
+                                variance_score=0.8,
+                                avg_brightness=0.5
+                            )
+                            all_segments.append(seg)
+                        logger.info(f"Gemini found {len(all_segments)} context-matched segments")
+                        report_progress("AI Analysis completed", "completed")
+                    except Exception as e:
+                        logger.warning(f"Gemini analysis failed, falling back to motion analysis: {e}")
+                        report_progress("Motion Analysis (fallback)")
+                        # Fallback la analiza clasică
+                        required_duration = target_duration * variant_count * 2
+                        all_segments = analyzer.select_best_segments(
+                            required_duration,
+                            min_motion=0.008,
+                            similarity_threshold=10,
+                            progress_callback=progress_callback
+                        )
+                else:
+                    # Analizam tot video-ul cu metoda clasică (motion-based)
+                    report_progress("Motion Analysis")
                     required_duration = target_duration * variant_count * 2
                     all_segments = analyzer.select_best_segments(
                         required_duration,
@@ -1581,18 +1599,8 @@ class VideoProcessorService:
                         similarity_threshold=10,
                         progress_callback=progress_callback
                     )
-            else:
-                # Analizam tot video-ul cu metoda clasică (motion-based)
-                report_progress("Motion Analysis")
-                required_duration = target_duration * variant_count * 2
-                all_segments = analyzer.select_best_segments(
-                    required_duration,
-                    min_motion=0.008,
-                    similarity_threshold=10,
-                    progress_callback=progress_callback
-                )
-
-            analyzer.close()
+            finally:
+                analyzer.close()
 
             results["video_info"] = video_info
             results["segments"] = [s.to_dict() for s in all_segments]
@@ -1768,16 +1776,15 @@ class VideoProcessorService:
         try:
             # PASUL 1: Analizăm videoclipul principal
             report_progress("Analyzing main video")
-            main_analyzer = VideoAnalyzer(main_video_path)
-            main_video_info = main_analyzer.get_video_info()
+            with VideoAnalyzer(main_video_path) as main_analyzer:
+                main_video_info = main_analyzer.get_video_info()
 
-            required_duration = target_duration * variant_count * 2
-            main_segments = main_analyzer.select_best_segments(
-                required_duration,
-                min_motion=0.008,
-                similarity_threshold=10
-            )
-            main_analyzer.close()
+                required_duration = target_duration * variant_count * 2
+                main_segments = main_analyzer.select_best_segments(
+                    required_duration,
+                    min_motion=0.008,
+                    similarity_threshold=10
+                )
 
             results["main_video_info"] = main_video_info
             report_progress("Analyzing main video", "completed")
@@ -1811,16 +1818,15 @@ class VideoProcessorService:
                     logger.warning(f"Secondary video not found: {sv_path}")
                     continue
 
-                analyzer = VideoAnalyzer(sv_path)
-                # IMPORTANT: Analizăm segmente cu durata EXACT cât e setat secondary_segment_duration
-                # Astfel ne asigurăm că întreaga durată extrasă este dinamică, nu doar începutul
-                segments = analyzer.select_best_segments(
-                    target_duration,  # Suficiente segmente pentru toate variantele
-                    min_segment=secondary_segment_duration,  # Minim durata setată
-                    max_segment=secondary_segment_duration,  # Maxim tot durata setată
-                    min_motion=0.008
-                )
-                analyzer.close()
+                with VideoAnalyzer(sv_path) as analyzer:
+                    # IMPORTANT: Analizăm segmente cu durata EXACT cât e setat secondary_segment_duration
+                    # Astfel ne asigurăm că întreaga durată extrasă este dinamică, nu doar începutul
+                    segments = analyzer.select_best_segments(
+                        target_duration,  # Suficiente segmente pentru toate variantele
+                        min_segment=secondary_segment_duration,  # Minim durata setată
+                        max_segment=secondary_segment_duration,  # Maxim tot durata setată
+                        min_motion=0.008
+                    )
 
                 # Asociem segmentele cu keywords
                 for kw in keywords:

@@ -6,6 +6,7 @@ import os
 import logging
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Optional, Tuple
 import httpx
@@ -421,6 +422,15 @@ class ElevenLabsTTS:
         return result, stats
 
 
+_elevenlabs_instance = None
+_elevenlabs_lock = threading.Lock()
+
+
 def get_elevenlabs_tts() -> ElevenLabsTTS:
-    """Factory function to get ElevenLabsTTS instance."""
-    return ElevenLabsTTS()
+    """Factory function to get ElevenLabsTTS singleton instance."""
+    global _elevenlabs_instance
+    if _elevenlabs_instance is None:
+        with _elevenlabs_lock:
+            if _elevenlabs_instance is None:
+                _elevenlabs_instance = ElevenLabsTTS()
+    return _elevenlabs_instance

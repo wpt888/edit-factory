@@ -23,6 +23,7 @@ import random
 import re
 import subprocess
 import tempfile
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -1041,6 +1042,12 @@ class AssemblyService:
         except Exception as e:
             logger.error(f"Assembly failed: {e}")
             raise
+        finally:
+            try:
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
 
     async def preview_matches(
         self,
@@ -1235,10 +1242,13 @@ class AssemblyService:
 
 # Singleton instance
 _assembly_service = None
+_assembly_service_lock = threading.Lock()
 
 def get_assembly_service() -> AssemblyService:
     """Get singleton AssemblyService instance."""
     global _assembly_service
     if _assembly_service is None:
-        _assembly_service = AssemblyService()
+        with _assembly_service_lock:
+            if _assembly_service is None:
+                _assembly_service = AssemblyService()
     return _assembly_service
