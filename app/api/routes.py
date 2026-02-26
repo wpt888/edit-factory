@@ -543,7 +543,7 @@ def _cleanup_input_files(job: dict):
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
-async def get_job(job_id: str):
+async def get_job(job_id: str, profile: ProfileContext = Depends(get_profile_context)):
     """Obtine statusul unui job."""
     job = get_job_storage().get_job(job_id)
     if not job:
@@ -569,7 +569,7 @@ async def get_job(job_id: str):
 
 
 @router.get("/jobs")
-async def list_jobs():
+async def list_jobs(profile: ProfileContext = Depends(get_profile_context)):
     """Lista toate job-urile."""
     all_jobs = get_job_storage().list_jobs()
     return {

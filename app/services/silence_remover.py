@@ -388,7 +388,8 @@ class SilenceRemover:
                 original_duration=original_duration,
                 new_duration=original_duration,
                 removed_duration=0,
-                segments_kept=1
+                segments_kept=1,
+                segments_map=[(0.0, original_duration)]
             )
 
         new_duration = self._get_audio_duration(output_path)
@@ -401,7 +402,8 @@ class SilenceRemover:
             original_duration=original_duration,
             new_duration=new_duration,
             removed_duration=removed_duration,
-            segments_kept=1  # FFmpeg nu ne dă numărul de segmente
+            segments_kept=1,  # FFmpeg nu ne dă numărul de segmente
+            segments_map=[(0.0, new_duration)]
         )
 
     def remove_silence(

@@ -6,6 +6,9 @@ from pydantic_settings import BaseSettings
 from functools import lru_cache
 
 
+_BASE_DIR = Path(__file__).parent.parent
+
+
 class Settings(BaseSettings):
     # Server
     host: str = "0.0.0.0"
@@ -13,10 +16,10 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # Paths
-    base_dir: Path = Path(__file__).parent.parent
-    input_dir: Path = Path("./input")
-    output_dir: Path = Path("./output")
-    logs_dir: Path = Path("./logs")
+    base_dir: Path = _BASE_DIR
+    input_dir: Path = _BASE_DIR / "input"
+    output_dir: Path = _BASE_DIR / "output"
+    logs_dir: Path = _BASE_DIR / "logs"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
