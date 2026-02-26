@@ -912,6 +912,59 @@ async def list_all_segments(
     return segments
 
 
+@router.get("/product-groups-bulk", response_model=List[ProductGroupResponse])
+async def list_product_groups_bulk(
+    source_video_ids: str = Query(..., description="Comma-separated source video IDs"),
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """List all product groups for multiple source videos in one query.
+
+    Avoids N+1 queries when the pipeline page needs groups for all selected source videos.
+    Must be placed before /{segment_id} to avoid the catch-all parameterized route matching
+    the literal string "product-groups-bulk".
+    """
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    ids = [vid.strip() for vid in source_video_ids.split(",") if vid.strip()]
+    if not ids:
+        return []
+
+    try:
+        result = supabase.table("editai_product_groups")\
+            .select("*")\
+            .in_("source_video_id", ids)\
+            .eq("profile_id", profile.profile_id)\
+            .order("start_time")\
+            .execute()
+
+        groups = []
+        for g in result.data:
+            seg_count = supabase.table("editai_segments")\
+                .select("id", count="exact")\
+                .eq("source_video_id", g["source_video_id"])\
+                .eq("profile_id", profile.profile_id)\
+                .eq("product_group", g["label"])\
+                .execute()
+
+            groups.append(ProductGroupResponse(
+                id=g["id"],
+                source_video_id=g["source_video_id"],
+                label=g["label"],
+                start_time=g["start_time"],
+                end_time=g["end_time"],
+                color=g.get("color"),
+                segments_count=seg_count.count or 0,
+                created_at=g["created_at"]
+            ))
+
+        return groups
+    except Exception as e:
+        logger.error(f"Failed to fetch product groups bulk: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch product groups")
+
+
 @router.get("/{segment_id}", response_model=SegmentResponse)
 async def get_segment(
     segment_id: str,
@@ -1516,55 +1569,6 @@ async def reassign_product_groups(
     await _reassign_all_segments(supabase, video_id, profile.profile_id)
 
     return {"status": "reassigned", "video_id": video_id}
-
-
-# ============== BULK PRODUCT GROUPS ==============
-
-@router.get("/product-groups-bulk", response_model=List[ProductGroupResponse])
-async def list_product_groups_bulk(
-    source_video_ids: str = Query(..., description="Comma-separated source video IDs"),
-    profile: ProfileContext = Depends(get_profile_context)
-):
-    """List all product groups for multiple source videos in one query.
-
-    Avoids N+1 queries when the pipeline page needs groups for all selected source videos.
-    """
-    supabase = get_supabase()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
-
-    ids = [vid.strip() for vid in source_video_ids.split(",") if vid.strip()]
-    if not ids:
-        return []
-
-    result = supabase.table("editai_product_groups")\
-        .select("*")\
-        .in_("source_video_id", ids)\
-        .eq("profile_id", profile.profile_id)\
-        .order("start_time")\
-        .execute()
-
-    groups = []
-    for g in result.data:
-        seg_count = supabase.table("editai_segments")\
-            .select("id", count="exact")\
-            .eq("source_video_id", g["source_video_id"])\
-            .eq("profile_id", profile.profile_id)\
-            .eq("product_group", g["label"])\
-            .execute()
-
-        groups.append(ProductGroupResponse(
-            id=g["id"],
-            source_video_id=g["source_video_id"],
-            label=g["label"],
-            start_time=g["start_time"],
-            end_time=g["end_time"],
-            color=g.get("color"),
-            segments_count=seg_count.count or 0,
-            created_at=g["created_at"]
-        ))
-
-    return groups
 
 
 # ============== SRT MATCHING ==============
