@@ -30,7 +30,7 @@ def _stable_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 from app.db import get_supabase
 from app.services.script_generator import get_script_generator
-from app.services.assembly_service import get_assembly_service
+from app.services.assembly_service import get_assembly_service, strip_product_group_tags
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/pipeline", tags=["Multi-Variant Pipeline"])
@@ -251,6 +251,8 @@ class PipelineRenderRequest(BaseModel):
     voice_id: Optional[str] = None
     # ElevenLabs voice settings overrides
     voice_settings: Optional[Dict[str, Any]] = None
+    # Subtitle word grouping
+    words_per_subtitle: int = 2
 
 
 class PipelineRenderResponse(BaseModel):
@@ -393,10 +395,7 @@ async def delete_pipeline(
     Delete a pipeline and all its data from DB and in-memory cache.
     Only the owning profile can delete their pipelines.
     """
-    # Remove from in-memory cache
-    _pipelines.pop(pipeline_id, None)
-
-    # Remove from DB
+    # Remove from DB (verify ownership first, then clean up in-memory cache)
     try:
         supabase = get_supabase()
         if supabase:
@@ -421,6 +420,9 @@ async def delete_pipeline(
     except Exception as e:
         logger.warning(f"Failed to delete pipeline {pipeline_id} from DB: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete pipeline")
+
+    # Remove from in-memory cache only after ownership verified and DB delete succeeded
+    _pipelines.pop(pipeline_id, None)
 
     return {"status": "deleted", "pipeline_id": pipeline_id}
 
@@ -505,13 +507,17 @@ async def update_pipeline_scripts(
         raise HTTPException(status_code=404, detail=f"Pipeline {pipeline_id} not found")
 
     # Invalidate TTS cache for scripts that changed
+    # Compare cleaned text (tags stripped) — tag-only changes don't invalidate TTS
     old_scripts = pipeline.get("scripts", [])
     tts_previews = pipeline.setdefault("tts_previews", {})
     for i, new_script in enumerate(request.scripts):
-        if i < len(old_scripts) and _stable_hash(new_script) != _stable_hash(old_scripts[i]):
-            tts_previews.pop(str(i), None)
-            tts_previews.pop(i, None)
-            logger.info(f"Invalidated TTS cache for pipeline {pipeline_id} variant {i} (script changed)")
+        if i < len(old_scripts):
+            old_cleaned = strip_product_group_tags(old_scripts[i])
+            new_cleaned = strip_product_group_tags(new_script)
+            if _stable_hash(new_cleaned) != _stable_hash(old_cleaned):
+                tts_previews.pop(str(i), None)
+                tts_previews.pop(i, None)
+                logger.info(f"Invalidated TTS cache for pipeline {pipeline_id} variant {i} (script changed)")
 
     # Update scripts in memory
     pipeline["scripts"] = request.scripts
@@ -652,6 +658,20 @@ async def generate_pipeline(
     else:
         logger.warning("Supabase not available, continuing without keywords")
 
+    # Fetch AI instructions from profile
+    ai_instructions = ""
+    if supabase:
+        try:
+            profile_result = supabase.table("profiles")\
+                .select("ai_instructions")\
+                .eq("id", profile.profile_id)\
+                .single()\
+                .execute()
+            if profile_result.data:
+                ai_instructions = profile_result.data.get("ai_instructions") or ""
+        except Exception as e:
+            logger.warning(f"Failed to fetch AI instructions for profile {profile.profile_id}: {e}")
+
     # Generate scripts
     logger.info(
         f"[Profile {profile.profile_id}] Generating pipeline with {request.variant_count} variants "
@@ -666,7 +686,8 @@ async def generate_pipeline(
             keywords=unique_keywords,
             variant_count=request.variant_count,
             provider=request.provider,
-            product_groups=product_groups_dict if product_groups_dict else None
+            product_groups=product_groups_dict if product_groups_dict else None,
+            ai_instructions=ai_instructions
         )
 
         # Generate pipeline ID
@@ -719,6 +740,7 @@ class PipelineTtsRequest(BaseModel):
     elevenlabs_model: str = "eleven_flash_v2_5"
     voice_id: Optional[str] = None
     voice_settings: Optional[Dict[str, Any]] = None
+    words_per_subtitle: int = 2
 
 
 class PipelineTtsResponse(BaseModel):
@@ -842,6 +864,8 @@ async def generate_variant_tts(
         )
 
     script_text = pipeline["scripts"][variant_index]
+    # Strip [ProductGroup] tags before TTS — tags must not be spoken
+    cleaned_text = strip_product_group_tags(script_text)
 
     logger.info(
         f"[Profile {profile.profile_id}] Generating TTS for pipeline {pipeline_id} variant {variant_index}"
@@ -851,7 +875,7 @@ async def generate_variant_tts(
         assembly_service = get_assembly_service()
 
         audio_path, audio_duration, _timestamps = await assembly_service.generate_tts_with_timestamps(
-            script_text=script_text,
+            script_text=cleaned_text,
             profile_id=profile.profile_id,
             elevenlabs_model=request.elevenlabs_model,
             voice_id=request.voice_id,
@@ -859,6 +883,7 @@ async def generate_variant_tts(
         )
 
         # Store TTS preview result (include voice_settings for reuse invalidation)
+        # Use cleaned_text hash so tag changes don't invalidate audio cache
         if "tts_previews" not in pipeline:
             pipeline["tts_previews"] = {}
 
@@ -866,8 +891,9 @@ async def generate_variant_tts(
             "audio_path": str(audio_path),
             "audio_duration": audio_duration,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "script_hash": _stable_hash(script_text),
+            "script_hash": _stable_hash(cleaned_text),
             "voice_settings": request.voice_settings,
+            "words_per_subtitle": request.words_per_subtitle,
         }
 
         # Persist to DB
@@ -928,7 +954,8 @@ async def preview_variant(
     elevenlabs_model: str = Body("eleven_flash_v2_5", embed=True),
     voice_id: Optional[str] = Body(None, embed=True),
     source_video_ids: Optional[List[str]] = Body(None, embed=True),
-    voice_settings: Optional[Dict[str, Any]] = Body(None, embed=True)
+    voice_settings: Optional[Dict[str, Any]] = Body(None, embed=True),
+    words_per_subtitle: int = Body(2, embed=True)
 ):
     """
     Preview segment matching for a single variant.
@@ -953,6 +980,7 @@ async def preview_variant(
         )
 
     script_text = pipeline["scripts"][variant_index]
+    cleaned_text = strip_product_group_tags(script_text)
 
     logger.info(
         f"[Profile {profile.profile_id}] Previewing pipeline {pipeline_id} variant {variant_index}"
@@ -964,8 +992,9 @@ async def preview_variant(
     reuse_audio_duration = None
     if existing_tts:
         # Verify script and voice settings haven't changed since TTS was generated
+        # TTS hashes use cleaned text (tags stripped) so tag edits don't invalidate
         stored_hash = existing_tts.get("script_hash")
-        current_hash = _stable_hash(script_text)
+        current_hash = _stable_hash(cleaned_text)
         script_match = stored_hash == current_hash
         # For library audio: skip voice_settings check (same logic as render endpoint)
         is_library = bool(existing_tts.get("library_asset_id"))
@@ -1007,7 +1036,8 @@ async def preview_variant(
             variant_index=variant_index,
             reuse_audio_path=reuse_audio_path,
             reuse_audio_duration=reuse_audio_duration,
-            voice_settings=voice_settings
+            voice_settings=voice_settings,
+            max_words_per_phrase=words_per_subtitle
         )
 
         # Store preview result in pipeline state
@@ -1194,9 +1224,11 @@ async def render_variants(
                 reuse_audio_duration = None
                 reuse_srt_content = None
 
+                # Hash comparison uses cleaned text (tags stripped) to match stored hash
+                cleaned_render_text = strip_product_group_tags(script_text)
                 existing_tts = pipeline.get("tts_previews", {}).get(vid)
                 if existing_tts:
-                    script_match = existing_tts.get("script_hash") == _stable_hash(script_text)
+                    script_match = existing_tts.get("script_hash") == _stable_hash(cleaned_render_text)
                     if script_match:
                         # For library audio: skip voice_settings check
                         # For generated audio: compare voice_settings
@@ -1250,7 +1282,8 @@ async def render_variants(
                     reuse_audio_path=reuse_audio_path,
                     reuse_audio_duration=reuse_audio_duration,
                     reuse_srt_content=reuse_srt_content,
-                    on_progress=on_progress
+                    on_progress=on_progress,
+                    max_words_per_phrase=request.words_per_subtitle
                 )
 
                 # Success

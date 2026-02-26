@@ -349,16 +349,10 @@ def get_postiz_publisher(profile_id: str) -> PostizPublisher:
         except Exception as e:
             logger.warning(f"[Profile {profile_id}] Failed to load Postiz config: {e}")
 
-    # Fallback to global env vars if profile doesn't have Postiz configured
-    if not api_url:
-        api_url = os.getenv("POSTIZ_API_URL")
-    if not api_key:
-        api_key = os.getenv("POSTIZ_API_KEY")
-
     if not api_url or not api_key:
         raise ValueError(
             f"Profile {profile_id} has no Postiz credentials configured. "
-            "Configure in Settings page or set POSTIZ_API_URL and POSTIZ_API_KEY environment variables."
+            "Configurează Postiz în Settings."
         )
 
     # Create and cache instance
@@ -418,9 +412,4 @@ def is_postiz_configured(profile_id: Optional[str] = None) -> bool:
             except Exception:
                 pass
 
-        # Fall through to check global env vars
-
-    # Check global env vars
-    api_url = os.getenv("POSTIZ_API_URL", "")
-    api_key = os.getenv("POSTIZ_API_KEY", "")
-    return bool(api_url and api_key)
+    return False

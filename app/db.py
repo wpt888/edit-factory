@@ -20,7 +20,7 @@ def get_supabase():
                     if settings.supabase_url and settings.supabase_key:
                         key = settings.supabase_service_role_key or settings.supabase_key
                         options = SyncClientOptions(
-                            httpx_client=httpx.Client(verify=False),
+                            httpx_client=httpx.Client(),
                         )
                         _supabase_client = create_client(settings.supabase_url, key, options)
                         logger.info("Shared Supabase client initialized")

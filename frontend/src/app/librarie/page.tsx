@@ -35,6 +35,8 @@ import {
   XCircle,
   User,
   FileText,
+  AlertCircle,
+  Link,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, ApiError, handleApiError } from "@/lib/api";
@@ -94,6 +96,16 @@ function LibrarieContent() {
 
   // Delete state
   const [deletingClipId, setDeletingClipId] = useState<string | null>(null);
+
+  // Postiz connection status
+  const [postizStatus, setPostizStatus] = useState<{
+    configured: boolean;
+    connected: boolean;
+    api_url?: string;
+    integrations_count: number;
+    integrations: { name: string; type: string; picture?: string }[];
+    error?: string;
+  } | null>(null);
 
   // Postiz upload state (simplified - just upload, no scheduling)
   const [postizClip, setPostizClip] = useState<ClipWithProject | null>(null);
@@ -175,12 +187,24 @@ function LibrarieContent() {
     setFilteredClips(result);
   }, [clips, searchQuery, filterSubtitles, filterVoiceover, filterPostiz]);
 
+  // Fetch Postiz connection status
+  const fetchPostizStatus = async () => {
+    try {
+      const res = await apiGet("/postiz/status");
+      const data = await res.json();
+      setPostizStatus(data);
+    } catch {
+      setPostizStatus({ configured: false, connected: false, integrations_count: 0, integrations: [] });
+    }
+  };
+
   // Initial fetch - profile-aware
   const profileId = currentProfile?.id;
   useEffect(() => {
     if (profileLoading) return; // Wait for profile context
     if (!profileId) return; // No profile selected
     fetchAllClips();
+    fetchPostizStatus();
   }, [profileLoading, profileId]);
 
   // Handle filter changes with URL update
@@ -466,6 +490,30 @@ function LibrarieContent() {
           </Button>
         </div>
 
+        {/* Postiz connection indicator */}
+        {postizStatus && (
+          <div className="mb-4">
+            {postizStatus.connected ? (
+              <div className="flex items-center gap-2 text-sm">
+                <Badge variant="outline" className="border-green-500 text-green-600 gap-1">
+                  <Link className="h-3 w-3" />
+                  {postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")} — {postizStatus.integrations_count} {postizStatus.integrations_count === 1 ? "cont" : "conturi"}
+                </Badge>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-sm">
+                <Badge variant="destructive" className="gap-1">
+                  <AlertCircle className="h-3 w-3" />
+                  Postiz neconfigurat
+                </Badge>
+                <a href="/settings" className="text-xs text-muted-foreground hover:underline">
+                  Configurează în Settings
+                </a>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Filters */}
         <Card className="mb-6">
           <CardContent className="pt-6">
@@ -594,9 +642,10 @@ function LibrarieContent() {
                   </Button>
                   <Button
                     size="sm"
-                    className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
+                    className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600 disabled:opacity-50"
                     onClick={bulkUploadToPostiz}
-                    disabled={bulkDeleting || bulkUploading}
+                    disabled={bulkDeleting || bulkUploading || !postizStatus?.connected}
+                    title={postizStatus?.connected ? `Trimite la ${postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")}` : "Postiz neconfigurat — configurează în Settings"}
                   >
                     {bulkUploading ? (
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -749,13 +798,13 @@ function LibrarieContent() {
                         )}
                         <Button
                           size="sm"
-                          className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
-                          disabled={publishing && postizClip?.id === clip.id}
+                          className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600 disabled:opacity-50"
+                          disabled={(publishing && postizClip?.id === clip.id) || !postizStatus?.connected}
                           onClick={(e) => {
                             e.stopPropagation();
                             uploadToPostiz(clip);
                           }}
-                          title="Trimite în Postiz"
+                          title={postizStatus?.connected ? `Trimite în Postiz (${postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")})` : "Postiz neconfigurat — configurează în Settings"}
                         >
                           {publishing && postizClip?.id === clip.id ? (
                             <Loader2 className="h-4 w-4 animate-spin" />

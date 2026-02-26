@@ -91,8 +91,8 @@ def _seconds_to_srt_time(seconds: float) -> str:
 
 def generate_srt_from_timestamps(
     timestamps: Optional[dict],
-    max_chars_per_phrase: int = 40,
-    max_words_per_phrase: int = 7
+    max_chars_per_phrase: int = 20,
+    max_words_per_phrase: int = 2
 ) -> str:
     """
     Generate SRT subtitle content from ElevenLabs character-level timestamps.

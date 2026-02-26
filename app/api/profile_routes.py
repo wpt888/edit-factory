@@ -49,6 +49,7 @@ class ProfileSettingsUpdate(BaseModel):
     tts_settings: Optional[Dict[str, Any]] = None
     monthly_quota_usd: Optional[float] = None
     video_template_settings: Optional[Dict[str, Any]] = None
+    ai_instructions: Optional[str] = None
 
 class ProfileResponse(BaseModel):
     id: str
@@ -57,6 +58,7 @@ class ProfileResponse(BaseModel):
     is_default: bool
     tts_settings: Optional[Dict[str, Any]] = None
     monthly_quota_usd: Optional[float] = None
+    ai_instructions: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -287,6 +289,8 @@ async def patch_profile(
             update_data["monthly_quota_usd"] = updates.monthly_quota_usd
         if updates.video_template_settings is not None:
             update_data["video_template_settings"] = updates.video_template_settings
+        if updates.ai_instructions is not None:
+            update_data["ai_instructions"] = updates.ai_instructions
 
         # Update profile
         result = supabase.table("profiles")\
@@ -614,3 +618,84 @@ async def update_subtitle_settings(
     except Exception as e:
         logger.error(f"Failed to update subtitle settings for profile {profile_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to save subtitle settings")
+
+
+# ============== AI INSTRUCTIONS ==============
+
+class AiInstructionsUpdate(BaseModel):
+    """Model for AI instructions endpoint."""
+    ai_instructions: str = ""
+
+
+@router.get("/{profile_id}/ai-instructions")
+async def get_ai_instructions(
+    profile_id: str,
+    current_user: AuthUser = Depends(get_current_user)
+):
+    """Return saved AI instructions for a profile, or empty string default."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        result = supabase.table("profiles")\
+            .select("user_id, ai_instructions")\
+            .eq("id", profile_id)\
+            .single()\
+            .execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Profile not found")
+
+        if result.data["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+
+        return {"ai_instructions": result.data.get("ai_instructions") or ""}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get AI instructions for profile {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch AI instructions")
+
+
+@router.put("/{profile_id}/ai-instructions")
+async def update_ai_instructions(
+    profile_id: str,
+    body: AiInstructionsUpdate,
+    current_user: AuthUser = Depends(get_current_user)
+):
+    """Save AI instructions for a profile."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        result = supabase.table("profiles")\
+            .select("id, user_id")\
+            .eq("id", profile_id)\
+            .single()\
+            .execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Profile not found")
+
+        if result.data["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+
+        supabase.table("profiles")\
+            .update({
+                "ai_instructions": body.ai_instructions,
+                "updated_at": datetime.utcnow().isoformat()
+            })\
+            .eq("id", profile_id)\
+            .execute()
+
+        logger.info(f"[Profile {profile_id}] AI instructions updated by user {current_user.id}")
+        return {"ai_instructions": body.ai_instructions}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update AI instructions for profile {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save AI instructions")

@@ -65,6 +65,118 @@ class TimelineEntry:
     transforms: Optional[dict] = None  # Per-segment visual transforms
 
 
+def strip_product_group_tags(text: str) -> str:
+    """Remove [ProductGroup] tags from script text, leaving only speakable content."""
+    return re.sub(r'\[([^\[\]]+)\]', '', text).strip()
+
+
+def build_word_to_group_map(text: str) -> List[Optional[str]]:
+    """Map each word (after tag removal) to its product group (or None).
+
+    Tags like [iPhone 15] set the current group for all words that follow
+    until the next tag appears.
+
+    Returns a list parallel to the cleaned words (tags excluded).
+    """
+    current_group: Optional[str] = None
+    word_groups: List[Optional[str]] = []
+    tag_pattern = re.compile(r'\[([^\[\]]+)\]')
+
+    # Process text token by token, tracking current group
+    pos = 0
+    while pos < len(text):
+        tag_match = tag_pattern.match(text, pos)
+        if tag_match:
+            current_group = tag_match.group(1).strip()
+            pos = tag_match.end()
+            continue
+
+        # Find next non-whitespace run (a word)
+        ws_match = re.match(r'\s+', text[pos:])
+        if ws_match:
+            pos += ws_match.end()
+            continue
+
+        # Find end of word (up to whitespace or tag)
+        word_end = pos
+        while word_end < len(text) and not text[word_end].isspace() and text[word_end] != '[':
+            word_end += 1
+
+        if word_end > pos:
+            word_groups.append(current_group)
+            pos = word_end
+        else:
+            pos += 1
+
+    return word_groups
+
+
+def assign_groups_to_srt(
+    script_text: str,
+    srt_entries: List[dict]
+) -> List[Optional[str]]:
+    """Assign a product_group to each SRT entry based on word-index mapping.
+
+    Uses build_word_to_group_map to figure out which group each word belongs to,
+    then maps SRT entries (which contain subsets of words) to groups by finding
+    the majority group of the words in each entry.
+
+    Returns a list parallel to srt_entries.
+    """
+    word_groups = build_word_to_group_map(script_text)
+    if not word_groups or not any(g is not None for g in word_groups):
+        return [None] * len(srt_entries)
+
+    cleaned_text = strip_product_group_tags(script_text)
+    cleaned_words = cleaned_text.split()
+
+    # Build a simple word-position tracker: for each SRT entry, find which
+    # cleaned words it covers by sequential matching
+    srt_groups: List[Optional[str]] = []
+    word_cursor = 0
+
+    for entry in srt_entries:
+        entry_words = entry["text"].split()
+        entry_group_counts: Dict[Optional[str], int] = {}
+
+        for ew in entry_words:
+            ew_lower = ew.strip(".,!?;:\"'").lower()
+            # Scan forward in cleaned_words to find this word
+            found = False
+            for scan_idx in range(word_cursor, min(word_cursor + 10, len(cleaned_words))):
+                cw_lower = cleaned_words[scan_idx].strip(".,!?;:\"'").lower()
+                if cw_lower == ew_lower:
+                    if scan_idx < len(word_groups):
+                        g = word_groups[scan_idx]
+                        entry_group_counts[g] = entry_group_counts.get(g, 0) + 1
+                    word_cursor = scan_idx + 1
+                    found = True
+                    break
+
+            if not found:
+                # Word not found in lookahead; try broader scan
+                for scan_idx in range(word_cursor, len(cleaned_words)):
+                    cw_lower = cleaned_words[scan_idx].strip(".,!?;:\"'").lower()
+                    if cw_lower == ew_lower:
+                        if scan_idx < len(word_groups):
+                            g = word_groups[scan_idx]
+                            entry_group_counts[g] = entry_group_counts.get(g, 0) + 1
+                        word_cursor = scan_idx + 1
+                        break
+
+        # Pick majority group (ignoring None)
+        non_none = {k: v for k, v in entry_group_counts.items() if k is not None}
+        if non_none:
+            srt_groups.append(max(non_none, key=non_none.get))  # type: ignore
+        elif entry_group_counts:
+            srt_groups.append(None)
+        else:
+            # Inherit from previous entry
+            srt_groups.append(srt_groups[-1] if srt_groups else None)
+
+    return srt_groups
+
+
 class AssemblyService:
     """
     Script-to-Video Assembly Service.
@@ -206,17 +318,22 @@ class AssemblyService:
 
     async def generate_srt_from_timestamps(
         self,
-        timestamps: dict
+        timestamps: dict,
+        max_words_per_phrase: int = 2
     ) -> str:
         """
         Generate SRT content from ElevenLabs timestamps.
+
+        Args:
+            timestamps: ElevenLabs alignment dict
+            max_words_per_phrase: Max words per subtitle entry (default: 2)
 
         Returns:
             SRT-formatted string
         """
         from app.services.tts_subtitle_generator import generate_srt_from_timestamps
 
-        srt_content = generate_srt_from_timestamps(timestamps)
+        srt_content = generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
 
         logger.info(f"Generated SRT with {len(srt_content.split(chr(10) + chr(10)))} entries")
 
@@ -227,7 +344,8 @@ class AssemblyService:
         srt_entries: List[dict],
         segments_data: List[dict],
         min_confidence: float = 0.3,
-        variant_index: int = 0
+        variant_index: int = 0,
+        srt_product_groups: Optional[List[Optional[str]]] = None
     ) -> List[MatchResult]:
         """
         Match SRT subtitle phrases against segment keywords.
@@ -238,6 +356,9 @@ class AssemblyService:
             min_confidence: Minimum confidence score to accept a match
             variant_index: Used to seed randomization for tied matches,
                            giving each variant different segment selections.
+            srt_product_groups: Optional list (parallel to srt_entries) of product
+                                group labels from script tags. When set for an entry,
+                                only segments from that group are considered.
 
         Returns:
             List of MatchResult objects (one per SRT entry)
@@ -251,11 +372,23 @@ class AssemblyService:
             srt_text = entry["text"]
             srt_text_lower = srt_text.lower()
 
+            # If this SRT entry has a forced product group from tags, filter segments
+            forced_group = srt_product_groups[idx] if srt_product_groups and idx < len(srt_product_groups) else None
+            if forced_group:
+                group_segments = [s for s in segments_data if s.get("product_group") == forced_group]
+                if not group_segments:
+                    logger.warning(f"No segments found for forced group '{forced_group}', falling back to all segments")
+                    search_segments = segments_data
+                else:
+                    search_segments = group_segments
+            else:
+                search_segments = segments_data
+
             # Collect all candidates with their confidence scores
             candidates = []
 
             # Find all matching segments for this SRT entry
-            for segment in segments_data:
+            for segment in search_segments:
                 keywords = segment.get("keywords") or []
 
                 for keyword in keywords:
@@ -360,15 +493,21 @@ class AssemblyService:
                 rng = random.Random(variant_index)
 
                 for um_idx in unmatched_indices:
-                    # Find nearest product group context
-                    nearest_group = None
-                    for offset in range(1, len(matches)):
-                        for check_idx in [um_idx - offset, um_idx + offset]:
-                            if 0 <= check_idx < len(matches) and matches[check_idx].product_group:
-                                nearest_group = matches[check_idx].product_group
+                    # If forced group from tags, use that strictly
+                    forced_group = srt_product_groups[um_idx] if srt_product_groups and um_idx < len(srt_product_groups) else None
+
+                    if forced_group:
+                        nearest_group = forced_group
+                    else:
+                        # Find nearest product group context
+                        nearest_group = None
+                        for offset in range(1, len(matches)):
+                            for check_idx in [um_idx - offset, um_idx + offset]:
+                                if 0 <= check_idx < len(matches) and matches[check_idx].product_group:
+                                    nearest_group = matches[check_idx].product_group
+                                    break
+                            if nearest_group:
                                 break
-                        if nearest_group:
-                            break
 
                     # Build pool: prefer segments from nearest group
                     if nearest_group:
@@ -661,7 +800,8 @@ class AssemblyService:
         reuse_audio_path: Optional[str] = None,
         reuse_audio_duration: Optional[float] = None,
         reuse_srt_content: Optional[str] = None,
-        on_progress=None  # Optional[Callable[[str, int], None]]
+        on_progress=None,  # Optional[Callable[[str, int], None]]
+        max_words_per_phrase: int = 2
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
@@ -698,6 +838,9 @@ class AssemblyService:
                     pass
 
         try:
+            # Strip [ProductGroup] tags before TTS (tags must not be spoken)
+            cleaned_text = strip_product_group_tags(script_text)
+
             # Step 1: Generate TTS with timestamps (or reuse existing)
             skip_library_save = False
             if reuse_audio_path and reuse_audio_duration and Path(reuse_audio_path).exists():
@@ -711,7 +854,7 @@ class AssemblyService:
                 logger.info("Step 1/7: Generating TTS audio with timestamps")
                 _report("Generating TTS audio", 10)
                 audio_path, audio_duration, timestamps = await self.generate_tts_with_timestamps(
-                    script_text=script_text,
+                    script_text=cleaned_text,
                     profile_id=profile_id,
                     elevenlabs_model=elevenlabs_model,
                     voice_id=voice_id,
@@ -719,7 +862,7 @@ class AssemblyService:
                 )
                 _report("TTS audio ready", 25)
 
-            # Step 2: Generate SRT from timestamps (with cache)
+            # Step 2: Generate SRT from timestamps (with cache — use cleaned text for cache key)
             logger.info("Step 2/7: Generating SRT subtitles from timestamps")
             _report("Generating subtitles", 30)
             if reuse_srt_content and skip_library_save:
@@ -727,25 +870,25 @@ class AssemblyService:
                 logger.info("Step 2/7: Reusing existing SRT content")
             else:
                 from app.services.tts_cache import srt_cache_lookup, srt_cache_store
-                _srt_cache_key = {"text": script_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
+                _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
                 cached_srt = srt_cache_lookup(_srt_cache_key)
                 if cached_srt:
                     srt_content = cached_srt
                 elif timestamps:
-                    srt_content = await self.generate_srt_from_timestamps(timestamps)
+                    srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
                     if srt_content:
                         srt_cache_store(_srt_cache_key, srt_content)
                 else:
                     # Reusing audio but no SRT available — must regenerate TTS for timestamps
                     logger.info("Step 2/7: SRT not available, regenerating TTS for timestamps")
                     _, _, timestamps = await self.generate_tts_with_timestamps(
-                        script_text=script_text,
+                        script_text=cleaned_text,
                         profile_id=profile_id,
                         elevenlabs_model=elevenlabs_model,
                         voice_id=voice_id,
                         voice_settings=voice_settings
                     )
-                    srt_content = await self.generate_srt_from_timestamps(timestamps)
+                    srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
 
             srt_path = temp_dir / "subtitles.srt"
             with open(srt_path, 'w', encoding='utf-8') as f:
@@ -758,7 +901,7 @@ class AssemblyService:
                     tts_lib = get_tts_library_service()
                     tts_lib.save_from_pipeline(
                         profile_id=profile_id,
-                        text=script_text,
+                        text=cleaned_text,
                         audio_path=str(audio_path),
                         srt_content=srt_content,
                         timestamps=timestamps,
@@ -812,6 +955,9 @@ class AssemblyService:
                     "Please re-upload source videos or re-create segments."
                 )
 
+            # Assign product groups from script tags to SRT entries
+            srt_product_groups = assign_groups_to_srt(script_text, srt_entries)
+
             # Step 5: Match SRT to segments (or apply timeline editor overrides)
             _report("Matching segments to script", 50)
             if match_overrides:
@@ -839,7 +985,8 @@ class AssemblyService:
                     srt_entries=srt_entries,
                     segments_data=segments_data,
                     min_confidence=0.3,
-                    variant_index=variant_index
+                    variant_index=variant_index,
+                    srt_product_groups=srt_product_groups
                 )
                 duration_overrides = None
 
@@ -905,7 +1052,8 @@ class AssemblyService:
         variant_index: int = 0,
         reuse_audio_path: Optional[str] = None,
         reuse_audio_duration: Optional[float] = None,
-        voice_settings: Optional[dict] = None
+        voice_settings: Optional[dict] = None,
+        max_words_per_phrase: int = 2
     ) -> dict:
         """
         Preview-only: TTS -> SRT -> match -> timeline (no rendering).
@@ -919,6 +1067,9 @@ class AssemblyService:
         if not supabase:
             raise RuntimeError("Supabase not available")
 
+        # Strip [ProductGroup] tags before TTS (tags must not be spoken)
+        cleaned_text = strip_product_group_tags(script_text)
+
         # Step 1: Generate TTS with timestamps (or reuse existing)
         if reuse_audio_path and reuse_audio_duration:
             logger.info("Preview Step 1/4: Reusing existing TTS audio from Step 2")
@@ -928,38 +1079,41 @@ class AssemblyService:
         else:
             logger.info("Preview Step 1/4: Generating TTS audio")
             audio_path, audio_duration, timestamps = await self.generate_tts_with_timestamps(
-                script_text=script_text,
+                script_text=cleaned_text,
                 profile_id=profile_id,
                 elevenlabs_model=elevenlabs_model,
                 voice_id=voice_id,
                 voice_settings=voice_settings
             )
 
-        # Step 2: Generate SRT (with cache)
+        # Step 2: Generate SRT (with cache — use cleaned text for cache key)
         logger.info("Preview Step 2/4: Generating SRT subtitles")
         from app.services.tts_cache import srt_cache_lookup, srt_cache_store
-        _srt_cache_key = {"text": script_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
+        _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
         cached_srt = srt_cache_lookup(_srt_cache_key)
         if cached_srt:
             srt_content = cached_srt
         elif timestamps:
-            srt_content = await self.generate_srt_from_timestamps(timestamps)
+            srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
             if srt_content:
                 srt_cache_store(_srt_cache_key, srt_content)
         else:
             # Reusing audio but no SRT cache hit — must regenerate TTS for timestamps
             logger.info("Preview Step 2/4: SRT cache miss, regenerating TTS for timestamps")
             audio_path, audio_duration, timestamps = await self.generate_tts_with_timestamps(
-                script_text=script_text,
+                script_text=cleaned_text,
                 profile_id=profile_id,
                 elevenlabs_model=elevenlabs_model,
                 voice_id=voice_id,
                 voice_settings=voice_settings
             )
-            srt_content = await self.generate_srt_from_timestamps(timestamps)
+            srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
             if srt_content:
                 srt_cache_store(_srt_cache_key, srt_content)
         srt_entries = self._parse_srt(srt_content)
+
+        # Assign product groups from script tags to SRT entries
+        srt_product_groups = assign_groups_to_srt(script_text, srt_entries)
 
         # Step 3: Fetch segments
         logger.info("Preview Step 3/4: Fetching segments from library")
@@ -1004,7 +1158,8 @@ class AssemblyService:
             srt_entries=srt_entries,
             segments_data=segments_data,
             min_confidence=0.3,
-            variant_index=variant_index
+            variant_index=variant_index,
+            srt_product_groups=srt_product_groups
         )
 
         timeline = self.build_timeline(

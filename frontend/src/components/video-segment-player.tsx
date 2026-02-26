@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback } from "react";
-import { handleApiError } from "@/lib/api";
+import { handleApiError, API_URL } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,7 @@ import {
   AudioLines,
   Mic,
   Loader2,
+  Layers,
 } from "lucide-react";
 
 interface Segment {
@@ -62,6 +63,7 @@ interface VideoSegmentPlayerProps {
   segments: Segment[];
   onSegmentCreate: (start: number, end: number) => void;
   onSegmentClick?: (segment: Segment) => void;
+  onGroupCreate?: (start: number, end: number) => void;
   currentSegment?: Segment;
   sourceVideoId?: string;
   activeTransforms?: SegmentTransformPreview;
@@ -70,14 +72,13 @@ interface VideoSegmentPlayerProps {
   showGroupBands?: boolean;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
-
 export function VideoSegmentPlayer({
   videoUrl,
   duration,
   segments,
   onSegmentCreate,
   onSegmentClick,
+  onGroupCreate,
   currentSegment,
   sourceVideoId,
   activeTransforms,
@@ -108,6 +109,10 @@ export function VideoSegmentPlayer({
   // Marking state
   const [markStart, setMarkStart] = useState<number | null>(null);
   const [isMarking, setIsMarking] = useState(false);
+
+  // Group marking state
+  const [groupMarkStart, setGroupMarkStart] = useState<number | null>(null);
+  const [isGroupMarking, setIsGroupMarking] = useState(false);
 
   // Scrubbing state (drag on timeline)
   const [isScrubbing, setIsScrubbing] = useState(false);
@@ -225,7 +230,32 @@ export function VideoSegmentPlayer({
   const cancelMark = useCallback(() => {
     setMarkStart(null);
     setIsMarking(false);
+    setGroupMarkStart(null);
+    setIsGroupMarking(false);
   }, []);
+
+  // Toggle group mark (G key)
+  const toggleGroupMark = useCallback(() => {
+    if (!onGroupCreate) return;
+    if (groupMarkStart === null) {
+      // Cancel any segment marking in progress
+      setMarkStart(null);
+      setIsMarking(false);
+      // Set group start
+      setGroupMarkStart(currentTime);
+      setIsGroupMarking(true);
+    } else {
+      const start = groupMarkStart;
+      const end = currentTime;
+      if (end > start) {
+        onGroupCreate(start, end);
+      } else if (start > end) {
+        onGroupCreate(end, start);
+      }
+      setGroupMarkStart(null);
+      setIsGroupMarking(false);
+    }
+  }, [groupMarkStart, currentTime, onGroupCreate]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -292,6 +322,10 @@ export function VideoSegmentPlayer({
           e.preventDefault();
           setPlaybackRate((prev) => Math.min(2, prev + 0.25));
           break;
+        case "g": // G - Toggle group mark start/end
+          e.preventDefault();
+          toggleGroupMark();
+          break;
         case "f": // Fullscreen
           e.preventDefault();
           toggleFullscreen();
@@ -301,7 +335,7 @@ export function VideoSegmentPlayer({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [togglePlay, toggleMark, cancelMark, currentTime, markStart, seekTo, frameStep, onSegmentCreate, toggleFullscreen]);
+  }, [togglePlay, toggleMark, toggleGroupMark, cancelMark, currentTime, markStart, seekTo, frameStep, onSegmentCreate, toggleFullscreen]);
 
   // Video event handlers with smooth playhead updates
   useEffect(() => {
@@ -469,6 +503,29 @@ export function VideoSegmentPlayer({
   const getMarkStartPosition = () => {
     if (markStart === null) return null;
     const pos = ((markStart - visibleStart) / visibleDuration) * 100;
+    if (pos < -1 || pos > 101) return null;
+    return pos;
+  };
+
+  // Get group marking range style (purple band)
+  const getGroupMarkStyle = () => {
+    if (groupMarkStart === null) return null;
+    const markEnd = currentTime;
+    const actualStart = Math.min(groupMarkStart, markEnd);
+    const actualEnd = Math.max(groupMarkStart, markEnd);
+    const left = ((actualStart - visibleStart) / visibleDuration) * 100;
+    const right = ((actualEnd - visibleStart) / visibleDuration) * 100;
+    const clampedLeft = Math.max(0, left);
+    const clampedRight = Math.min(100, right);
+    const width = clampedRight - clampedLeft;
+    if (width <= 0) return null;
+    return { left: `${clampedLeft}%`, width: `${width}%` };
+  };
+
+  // Get group mark start position
+  const getGroupMarkStartPosition = () => {
+    if (groupMarkStart === null) return null;
+    const pos = ((groupMarkStart - visibleStart) / visibleDuration) * 100;
     if (pos < -1 || pos > 101) return null;
     return pos;
   };
@@ -832,6 +889,24 @@ export function VideoSegmentPlayer({
           />
         )}
 
+        {/* Group marking range (purple) */}
+        {getGroupMarkStyle() && (
+          <div
+            className="absolute top-4 bottom-0 bg-purple-500/40 border-2 border-purple-500 border-dashed z-10"
+            style={getGroupMarkStyle()!}
+          >
+            <span className="absolute top-0.5 left-1 text-[9px] text-purple-200 font-medium">Group</span>
+          </div>
+        )}
+
+        {/* Group mark start point */}
+        {getGroupMarkStartPosition() !== null && (
+          <div
+            className="absolute top-4 bottom-0 w-1 bg-purple-500 z-30"
+            style={{ left: `${getGroupMarkStartPosition()}%` }}
+          />
+        )}
+
         {/* Playhead with draggable handle */}
         {getPlayheadPosition() >= 0 && getPlayheadPosition() <= 100 && (
           <div
@@ -1014,6 +1089,19 @@ export function VideoSegmentPlayer({
           {isMarking ? "Set End (C)" : "Mark (C)"}
         </Button>
 
+        {/* Group mark button */}
+        {onGroupCreate && (
+          <Button
+            variant={isGroupMarking ? "destructive" : "outline"}
+            size="sm"
+            onClick={toggleGroupMark}
+            className="gap-1"
+          >
+            <Layers className="h-4 w-4" />
+            {isGroupMarking ? "Set End (G)" : "Group (G)"}
+          </Button>
+        )}
+
         {/* Fullscreen button */}
         <Button
           variant="ghost"
@@ -1033,7 +1121,8 @@ export function VideoSegmentPlayer({
       {/* Keyboard shortcuts help */}
       <div className="text-xs text-muted-foreground px-2 flex flex-wrap gap-x-4 gap-y-1">
         <span><kbd className="px-1 bg-muted rounded">Space</kbd> Play/Pause</span>
-        <span><kbd className="px-1 bg-muted rounded">C</kbd> Toggle Mark</span>
+        <span><kbd className="px-1 bg-muted rounded">C</kbd> Mark Segment</span>
+        <span><kbd className="px-1 bg-muted rounded">G</kbd> Mark Group</span>
         <span><kbd className="px-1 bg-muted rounded">I</kbd>/<kbd className="px-1 bg-muted rounded">O</kbd> In/Out</span>
         <span><kbd className="px-1 bg-muted rounded">←</kbd>/<kbd className="px-1 bg-muted rounded">→</kbd> Frame</span>
         <span><kbd className="px-1 bg-muted rounded">Shift+←</kbd>/<kbd className="px-1 bg-muted rounded">→</kbd> 5s</span>

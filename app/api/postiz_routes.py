@@ -61,11 +61,18 @@ class PublishResponse(BaseModel):
     post_id: Optional[str] = None
 
 
+class PostizIntegrationSummary(BaseModel):
+    name: str
+    type: str
+    picture: Optional[str] = None
+
+
 class PostizStatusResponse(BaseModel):
     configured: bool
     connected: bool
     api_url: Optional[str] = None
     integrations_count: int = 0
+    integrations: List[PostizIntegrationSummary] = []
     error: Optional[str] = None
 
 
@@ -138,6 +145,14 @@ async def get_postiz_status(
 
         result.connected = True
         result.integrations_count = len(integrations)
+        result.integrations = [
+            PostizIntegrationSummary(
+                name=i.name,
+                type=i.type,
+                picture=i.picture
+            )
+            for i in integrations if not i.disabled
+        ]
 
     except ValueError as e:
         # No credentials configured
@@ -545,7 +560,7 @@ async def _publish_clip_task(
                     supabase.table("editai_postiz_publications").insert({
                         "clip_id": clip_id,
                         "postiz_post_id": result.post_id,
-                        "platforms": result.platforms or [],
+                        "platform": ", ".join(result.platforms) if result.platforms else None,
                         "caption": caption[:500],  # Truncate for storage
                         "scheduled_at": schedule_date.isoformat() if schedule_date else None,
                         "published_at": None if schedule_date else datetime.now(timezone.utc).isoformat(),

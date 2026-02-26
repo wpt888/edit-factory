@@ -130,6 +130,12 @@ Tmux-Orchestrator/
 # Dev mode profile store (local state, not for VCS)
 .planning/dev-profiles.json
 
+# Dev artifacts
+.backend.pid
+.venv-wsl/
+*.backup
+supabase/.temp/
+
 # Keep directory structure
 !.gitkeep
 !input/.gitkeep

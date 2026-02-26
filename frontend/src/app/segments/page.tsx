@@ -747,6 +747,15 @@ export default function SegmentsPage() {
     }
   };
 
+  // Called from timeline G key — pre-fills start/end and opens label dialog
+  const handleGroupCreateFromTimeline = (start: number, end: number) => {
+    setEditingGroup(null);
+    setGroupLabel("");
+    setGroupStartTime(parseFloat(start.toFixed(2)));
+    setGroupEndTime(parseFloat(end.toFixed(2)));
+    setShowGroupDialog(true);
+  };
+
   const openGroupDialog = (group?: ProductGroup) => {
     if (group) {
       setEditingGroup(group);
@@ -1286,6 +1295,7 @@ export default function SegmentsPage() {
             segments={segments}
             onSegmentCreate={handleSegmentCreate}
             onSegmentClick={(seg) => handleSegmentSelect(seg as Segment)}
+            onGroupCreate={handleGroupCreateFromTimeline}
             activeTransforms={selectedSegment ? activeTransforms : undefined}
             currentSegment={selectedSegment || undefined}
             sourceVideoId={selectedVideo.id}
@@ -1360,6 +1370,13 @@ export default function SegmentsPage() {
                     value={groupLabel}
                     onChange={(e) => setGroupLabel(e.target.value)}
                     placeholder="e.g., Product A"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && groupLabel.trim() && groupEndTime > groupStartTime) {
+                        e.preventDefault();
+                        editingGroup ? handleUpdateGroup() : handleCreateGroup();
+                      }
+                    }}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-2">

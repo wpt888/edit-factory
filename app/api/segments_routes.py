@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional, List
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Depends
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.config import get_settings
@@ -134,7 +134,7 @@ def _get_video_info(video_path: Path) -> dict:
             "-of", "json",
             str(video_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             return {}
 
@@ -172,8 +172,11 @@ def _generate_thumbnail(video_path: Path, output_path: Path, timestamp: float = 
             "-vf", "scale=320:-1",
             str(output_path)
         ]
-        result = subprocess.run(cmd, capture_output=True)
+        result = subprocess.run(cmd, capture_output=True, timeout=300)
         return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        logger.error(f"Thumbnail generation timed out for {video_path}")
+        return False
     except Exception as e:
         logger.error(f"Failed to generate thumbnail: {e}")
         return False
@@ -197,8 +200,11 @@ def _extract_segment_video(
             "-preset", "fast",
             str(output_path)
         ]
-        result = subprocess.run(cmd, capture_output=True)
+        result = subprocess.run(cmd, capture_output=True, timeout=300)
         return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        logger.error(f"Segment extraction timed out for {source_path}")
+        return False
     except Exception as e:
         logger.error(f"Failed to extract segment: {e}")
         return False
@@ -1177,22 +1183,28 @@ async def extract_segment(
 
     # Extract in background
     def do_extract():
-        logger.info(f"[Profile {profile.profile_id}] Background extraction started for segment: {segment_id}")
-        success = _extract_segment_video(
-            source_path,
-            output_path,
-            seg["start_time"],
-            seg["end_time"]
-        )
-        if success:
-            supabase.table("editai_segments")\
-                .update({
-                    "extracted_video_path": str(output_path),
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                })\
-                .eq("id", segment_id)\
-                .eq("profile_id", profile.profile_id)\
-                .execute()
+        try:
+            logger.info(f"[Profile {profile.profile_id}] Background extraction started for segment: {segment_id}")
+            success = _extract_segment_video(
+                source_path,
+                output_path,
+                seg["start_time"],
+                seg["end_time"]
+            )
+            if success:
+                supabase.table("editai_segments")\
+                    .update({
+                        "extracted_video_path": str(output_path),
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    })\
+                    .eq("id", segment_id)\
+                    .eq("profile_id", profile.profile_id)\
+                    .execute()
+                logger.info(f"[Profile {profile.profile_id}] Segment {segment_id} extraction completed successfully")
+            else:
+                logger.error(f"[Profile {profile.profile_id}] Segment {segment_id} extraction failed (FFmpeg returned non-zero)")
+        except Exception as e:
+            logger.error(f"[Profile {profile.profile_id}] Segment {segment_id} extraction error: {e}", exc_info=True)
 
     background_tasks.add_task(do_extract)
 
@@ -1504,6 +1516,55 @@ async def reassign_product_groups(
     await _reassign_all_segments(supabase, video_id, profile.profile_id)
 
     return {"status": "reassigned", "video_id": video_id}
+
+
+# ============== BULK PRODUCT GROUPS ==============
+
+@router.get("/product-groups-bulk", response_model=List[ProductGroupResponse])
+async def list_product_groups_bulk(
+    source_video_ids: str = Query(..., description="Comma-separated source video IDs"),
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """List all product groups for multiple source videos in one query.
+
+    Avoids N+1 queries when the pipeline page needs groups for all selected source videos.
+    """
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    ids = [vid.strip() for vid in source_video_ids.split(",") if vid.strip()]
+    if not ids:
+        return []
+
+    result = supabase.table("editai_product_groups")\
+        .select("*")\
+        .in_("source_video_id", ids)\
+        .eq("profile_id", profile.profile_id)\
+        .order("start_time")\
+        .execute()
+
+    groups = []
+    for g in result.data:
+        seg_count = supabase.table("editai_segments")\
+            .select("id", count="exact")\
+            .eq("source_video_id", g["source_video_id"])\
+            .eq("profile_id", profile.profile_id)\
+            .eq("product_group", g["label"])\
+            .execute()
+
+        groups.append(ProductGroupResponse(
+            id=g["id"],
+            source_video_id=g["source_video_id"],
+            label=g["label"],
+            start_time=g["start_time"],
+            end_time=g["end_time"],
+            color=g.get("color"),
+            segments_count=seg_count.count or 0,
+            created_at=g["created_at"]
+        ))
+
+    return groups
 
 
 # ============== SRT MATCHING ==============

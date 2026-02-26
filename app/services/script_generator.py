@@ -53,7 +53,8 @@ class ScriptGenerator:
         keywords: List[str],
         variant_count: int,
         provider: str,
-        product_groups: Optional[Dict[str, List[str]]] = None
+        product_groups: Optional[Dict[str, List[str]]] = None,
+        ai_instructions: str = ""
     ) -> List[str]:
         """
         Generate N script variants using specified AI provider.
@@ -92,7 +93,7 @@ class ScriptGenerator:
         )
 
         # Build prompt
-        prompt = self._build_prompt(idea, context, keywords, variant_count, product_groups)
+        prompt = self._build_prompt(idea, context, keywords, variant_count, product_groups, ai_instructions)
 
         # Generate with selected provider
         try:
@@ -126,7 +127,8 @@ class ScriptGenerator:
         context: str,
         keywords: List[str],
         variant_count: int,
-        product_groups: Optional[Dict[str, List[str]]] = None
+        product_groups: Optional[Dict[str, List[str]]] = None,
+        ai_instructions: str = ""
     ) -> str:
         """Build AI prompt for script generation."""
         keyword_list = ", ".join(keywords) if keywords else "none available"
@@ -139,6 +141,11 @@ class ScriptGenerator:
                 groups_text.append(f"  - {group_label}: {', '.join(group_keywords)}")
             product_groups_section = f"\n**Product Groups (video segments organized by product):**\n" + "\n".join(groups_text) + "\n"
 
+        # Build creator rules section if ai_instructions provided
+        ai_rules_section = ""
+        if ai_instructions.strip():
+            ai_rules_section = f"\n**Creator's Rules & Guidelines:**\n{ai_instructions.strip()}\n"
+
         prompt = f"""Generate {variant_count} script variants for a social media video (reel/TikTok/YouTube Short).
 
 **User's Idea:** {idea}
@@ -147,7 +154,7 @@ class ScriptGenerator:
 
 **Available Visual Keywords:** {keyword_list}
 {product_groups_section}
-
+{ai_rules_section}
 **Instructions:**
 1. Generate EXACTLY {variant_count} unique script variants
 2. Each script is a standalone voiceover narration

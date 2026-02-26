@@ -188,6 +188,9 @@ function PipelinePage() {
   const [provider, setProvider] = useState("gemini");
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [aiInstructions, setAiInstructions] = useState("");
+  const [aiRulesExpanded, setAiRulesExpanded] = useState(false);
+  const aiInstructionsSaveTimer = useRef<NodeJS.Timeout | null>(null);
 
   // Step 2: Scripts
   const [pipelineId, setPipelineId] = useState<string | null>(null);
@@ -210,6 +213,7 @@ function PipelinePage() {
   const [voiceStyle, setVoiceStyle] = useState(0.0);
   const [voiceSpeed, setVoiceSpeed] = useState(1.0);
   const [voiceSpeakerBoost, setVoiceSpeakerBoost] = useState(true);
+  const [wordsPerSubtitle, setWordsPerSubtitle] = useState(2);
   const voiceSettingsLoaded = useRef(false);
 
   // Step 4: Render
@@ -228,6 +232,7 @@ function PipelinePage() {
   const [historyImporting, setHistoryImporting] = useState(false);
   const [historyPreviewInfo, setHistoryPreviewInfo] = useState<Record<string, VariantPreviewInfo>>({});
   const [historyTtsInfo, setHistoryTtsInfo] = useState<Record<string, { has_audio: boolean; audio_duration: number }>>({});
+  const [expandedIdeas, setExpandedIdeas] = useState<Set<string>>(new Set());
   const [playingAudio, setPlayingAudio] = useState<string | null>(null); // "pipelineId-variantIndex"
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -283,6 +288,15 @@ function PipelinePage() {
   const sourceSelectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipelineIdRef = useRef<string | null>(null);
 
+  // Product groups for tag insertion (fetched when source videos are selected)
+  const [productGroups, setProductGroups] = useState<Array<{
+    id: string;
+    label: string;
+    color: string | null;
+    source_video_id: string;
+    segments_count: number;
+  }>>([]);
+
   // Available segments for timeline editor (collected from preview response)
   const [availableSegments, setAvailableSegments] = useState<SegmentOption[]>([]);
 
@@ -302,7 +316,9 @@ function PipelinePage() {
   };
 
   const countWords = (text: string): number => {
-    return text.trim().split(/\s+/).filter(Boolean).length;
+    // Strip [ProductGroup] tags before counting words
+    const cleaned = text.replace(/\[([^\[\]]+)\]/g, "");
+    return cleaned.trim().split(/\s+/).filter(Boolean).length;
   };
 
   // Format script: ensure each sentence starts on a new line
@@ -376,6 +392,35 @@ function PipelinePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProfile?.id]);
 
+  // Fetch AI instructions on profile load
+  useEffect(() => {
+    if (!currentProfile?.id) return;
+    apiGet(`/profiles/${currentProfile.id}/ai-instructions`)
+      .then(async (res) => {
+        if (res.ok) {
+          const data = await res.json();
+          setAiInstructions(data.ai_instructions || "");
+          if (data.ai_instructions) setAiRulesExpanded(true);
+        }
+      })
+      .catch(() => {});
+  }, [currentProfile?.id]);
+
+  // Save AI instructions (debounced)
+  const saveAiInstructions = useCallback((text: string) => {
+    if (!currentProfile?.id) return;
+    if (aiInstructionsSaveTimer.current) clearTimeout(aiInstructionsSaveTimer.current);
+    aiInstructionsSaveTimer.current = setTimeout(async () => {
+      try {
+        await apiPut(`/profiles/${currentProfile.id}/ai-instructions`, {
+          ai_instructions: text,
+        });
+      } catch {
+        // Silent — non-critical save
+      }
+    }, 1000);
+  }, [currentProfile?.id]);
+
   // Source videos: restore selection from a saved pipeline
   const restoreSourceSelection = useCallback(async (pid: string) => {
     try {
@@ -432,6 +477,46 @@ function PipelinePage() {
         source_video_ids: []
       }).catch(() => {});
     }
+  };
+
+  // Fetch product groups when source video selection changes
+  useEffect(() => {
+    if (selectedSourceIds.size === 0) {
+      setProductGroups([]);
+      return;
+    }
+    const ids = Array.from(selectedSourceIds).join(",");
+    apiGet(`/segments/product-groups-bulk?source_video_ids=${encodeURIComponent(ids)}`)
+      .then(async (res) => {
+        if (res.ok) {
+          const data = await res.json();
+          setProductGroups(data);
+        }
+      })
+      .catch(() => setProductGroups([]));
+  }, [selectedSourceIds]);
+
+  // Insert a [GroupLabel] tag at cursor position in a script textarea
+  const insertGroupTag = (scriptIndex: number, groupLabel: string) => {
+    const tag = `[${groupLabel}]\n`;
+    const textarea = document.querySelector(`#script-textarea-${scriptIndex}`) as HTMLTextAreaElement | null;
+    const newScripts = [...scripts];
+    if (textarea) {
+      const pos = textarea.selectionStart ?? scripts[scriptIndex].length;
+      const text = scripts[scriptIndex];
+      newScripts[scriptIndex] = text.slice(0, pos) + tag + text.slice(pos);
+    } else {
+      newScripts[scriptIndex] = scripts[scriptIndex] + "\n" + tag;
+    }
+    setScripts(newScripts);
+    if (pipelineId) saveScriptsToBackend(pipelineId, newScripts);
+  };
+
+  // Detect [GroupLabel] tags in a script
+  const detectGroupTags = (text: string): string[] => {
+    const matches = text.match(/\[([^\[\]]+)\]/g);
+    if (!matches) return [];
+    return [...new Set(matches.map(m => m.slice(1, -1)))];
   };
 
   // Catalog: open picker
@@ -645,6 +730,7 @@ function PipelinePage() {
             speed: voiceSpeed,
             use_speaker_boost: voiceSpeakerBoost,
           },
+          words_per_subtitle: wordsPerSubtitle,
         }, { timeout: 300_000, signal: abortController.signal }); // 5 min — TTS generation + SRT can be slow
 
         if (abortController.signal.aborted) return;
@@ -735,6 +821,7 @@ function PipelinePage() {
           speed: voiceSpeed,
           use_speaker_boost: voiceSpeakerBoost,
         },
+        words_per_subtitle: wordsPerSubtitle,
         font_size: subtitleSettings.fontSize,
         font_family: subtitleSettings.fontFamily,
         text_color: subtitleSettings.textColor,
@@ -1194,11 +1281,13 @@ function PipelinePage() {
     const style = localStorage.getItem("ef_voice_style");
     const speed = localStorage.getItem("ef_voice_speed");
     const boost = localStorage.getItem("ef_voice_speaker_boost");
+    const wps = localStorage.getItem("ef_words_per_subtitle");
     if (stability !== null) setVoiceStability(parseFloat(stability));
     if (similarity !== null) setVoiceSimilarity(parseFloat(similarity));
     if (style !== null) setVoiceStyle(parseFloat(style));
     if (speed !== null) setVoiceSpeed(parseFloat(speed));
     if (boost !== null) setVoiceSpeakerBoost(boost === "true");
+    if (wps !== null) setWordsPerSubtitle(parseInt(wps, 10));
     voiceSettingsLoaded.current = true;
   }, []);
 
@@ -1210,7 +1299,8 @@ function PipelinePage() {
     localStorage.setItem("ef_voice_style", String(voiceStyle));
     localStorage.setItem("ef_voice_speed", String(voiceSpeed));
     localStorage.setItem("ef_voice_speaker_boost", String(voiceSpeakerBoost));
-  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost]);
+    localStorage.setItem("ef_words_per_subtitle", String(wordsPerSubtitle));
+  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle]);
 
   // Per-script TTS: generate voice-over for a single script
   const handleGenerateTts = async (variantIndex: number) => {
@@ -1232,6 +1322,7 @@ function PipelinePage() {
           speed: voiceSpeed,
           use_speaker_boost: voiceSpeakerBoost,
         },
+        words_per_subtitle: wordsPerSubtitle,
       }, { timeout: 300_000 });
 
       if (res.ok) {
@@ -1478,6 +1569,45 @@ function PipelinePage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                {/* AI Rules (collapsible) */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 -ml-2"
+                      onClick={() => setAiRulesExpanded(!aiRulesExpanded)}
+                    >
+                      {aiRulesExpanded ? (
+                        <ChevronDown className="h-3.5 w-3.5 mr-1" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5 mr-1" />
+                      )}
+                      <BookOpen className="h-3.5 w-3.5 mr-1" />
+                      AI Rules
+                    </Button>
+                    {aiInstructions.trim() && (
+                      <Badge variant="secondary" className="text-xs">
+                        {aiInstructions.trim().length} chars
+                      </Badge>
+                    )}
+                  </div>
+                  {aiRulesExpanded && (
+                    <Textarea
+                      id="ai-instructions"
+                      placeholder="Persistent rules for AI script generation (tone, style, phrases, formatting)..."
+                      rows={4}
+                      value={aiInstructions}
+                      onChange={(e) => {
+                        setAiInstructions(e.target.value);
+                        saveAiInstructions(e.target.value);
+                      }}
+                      className="resize-y text-sm"
+                    />
+                  )}
+                </div>
+
                 {/* Idea textarea */}
                 <div className="space-y-2">
                   <Label htmlFor="idea">Video Idea *</Label>
@@ -1951,6 +2081,23 @@ function PipelinePage() {
                     </Label>
                     <span className="text-[10px] text-muted-foreground">Enhances voice clarity</span>
                   </div>
+
+                  <div className="border-t pt-3 space-y-1.5">
+                    <div className="flex justify-between">
+                      <Label className="text-xs">Cuvinte per subtitrare</Label>
+                      <span className="text-xs text-muted-foreground">{wordsPerSubtitle}</span>
+                    </div>
+                    <Slider
+                      value={[wordsPerSubtitle]}
+                      onValueChange={([v]) => setWordsPerSubtitle(v)}
+                      min={1} max={4} step={1}
+                    />
+                    <div className="flex justify-between text-[10px] text-muted-foreground">
+                      <span>1</span>
+                      <span>4</span>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">Mai putine cuvinte = subtitrari mai dinamice (TikTok style)</p>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -2011,6 +2158,7 @@ function PipelinePage() {
                     </CardHeader>
                     <CardContent className="space-y-3">
                       <Textarea
+                        id={`script-textarea-${index}`}
                         value={script}
                         onChange={(e) => {
                           const newScripts = [...scripts];
@@ -2030,6 +2178,46 @@ function PipelinePage() {
                         rows={10}
                         className="resize-y font-mono text-sm"
                       />
+
+                      {/* Insert Group Tag + detected tags */}
+                      {productGroups.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Select onValueChange={(val) => insertGroupTag(index, val)}>
+                            <SelectTrigger className="w-[200px] h-8 text-xs">
+                              <SelectValue placeholder="Insert Group Tag" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {productGroups.map((g) => (
+                                <SelectItem key={g.id} value={g.label}>
+                                  <span className="flex items-center gap-1.5">
+                                    {g.color && (
+                                      <span
+                                        className="inline-block w-2.5 h-2.5 rounded-full"
+                                        style={{ backgroundColor: g.color }}
+                                      />
+                                    )}
+                                    {g.label}
+                                    <span className="text-muted-foreground ml-1">({g.segments_count})</span>
+                                  </span>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {detectGroupTags(script).map((tag) => {
+                            const group = productGroups.find((g) => g.label === tag);
+                            return (
+                              <Badge
+                                key={tag}
+                                variant="secondary"
+                                className="text-xs"
+                                style={group?.color ? { borderLeft: `3px solid ${group.color}` } : undefined}
+                              >
+                                {tag}
+                              </Badge>
+                            );
+                          })}
+                        </div>
+                      )}
 
                       {/* Per-script TTS controls */}
                       <div className="flex items-center gap-2">
@@ -2678,16 +2866,50 @@ function PipelinePage() {
                 ) : (
                   historyPipelines.map((item) => (
                     <div key={item.pipeline_id} className="space-y-2">
-                      <button
-                        onClick={() => fetchHistoryScripts(item.pipeline_id)}
+                      <div
                         className={`w-full text-left p-3 rounded-lg border transition-colors hover:bg-accent ${
                           selectedHistoryId === item.pipeline_id ? "border-primary bg-accent" : "border-border"
                         }`}
                       >
-                        <div className="flex items-center justify-between">
-                          <p className="text-sm font-medium truncate flex-1 mr-2">
-                            {item.idea.length > 50 ? item.idea.substring(0, 50) + "..." : item.idea}
-                          </p>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <p
+                              className={`text-sm font-medium cursor-pointer ${
+                                expandedIdeas.has(item.pipeline_id) ? "whitespace-pre-wrap break-words" : "truncate"
+                              }`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setExpandedIdeas(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(item.pipeline_id)) next.delete(item.pipeline_id);
+                                  else next.add(item.pipeline_id);
+                                  return next;
+                                });
+                              }}
+                              title={expandedIdeas.has(item.pipeline_id) ? "Click to collapse" : item.idea}
+                            >
+                              {expandedIdeas.has(item.pipeline_id)
+                                ? item.idea
+                                : item.idea.length > 50 ? item.idea.substring(0, 50) + "..." : item.idea
+                              }
+                            </p>
+                            {item.idea.length > 50 && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExpandedIdeas(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(item.pipeline_id)) next.delete(item.pipeline_id);
+                                    else next.add(item.pipeline_id);
+                                    return next;
+                                  });
+                                }}
+                                className="text-[11px] text-primary/70 hover:text-primary mt-0.5"
+                              >
+                                {expandedIdeas.has(item.pipeline_id) ? "Show less" : "Show more"}
+                              </button>
+                            )}
+                          </div>
                           <div className="flex items-center gap-1 flex-shrink-0">
                             <span
                               role="button"
@@ -2699,12 +2921,18 @@ function PipelinePage() {
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                             </span>
-                            <ChevronRight className={`h-4 w-4 transition-transform ${
-                              selectedHistoryId === item.pipeline_id ? "rotate-90" : ""
-                            }`} />
+                            <ChevronRight
+                              className={`h-4 w-4 transition-transform cursor-pointer ${
+                                selectedHistoryId === item.pipeline_id ? "rotate-90" : ""
+                              }`}
+                              onClick={() => fetchHistoryScripts(item.pipeline_id)}
+                            />
                           </div>
                         </div>
-                        <div className="flex items-center gap-2 mt-1">
+                        <div
+                          className="flex items-center gap-2 mt-1 cursor-pointer"
+                          onClick={() => fetchHistoryScripts(item.pipeline_id)}
+                        >
                           <Badge variant="outline" className="text-xs">{item.provider}</Badge>
                           <span className="text-xs text-muted-foreground">
                             {item.variant_count} scripts
@@ -2713,7 +2941,7 @@ function PipelinePage() {
                             {new Date(item.created_at).toLocaleDateString()}
                           </span>
                         </div>
-                      </button>
+                      </div>
 
                       {/* Expanded: show scripts with checkboxes */}
                       {selectedHistoryId === item.pipeline_id && (
