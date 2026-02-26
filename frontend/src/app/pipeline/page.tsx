@@ -288,6 +288,7 @@ function PipelinePage() {
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
   const [sourceVideosLoading, setSourceVideosLoading] = useState(false);
   const [sourceVideoSearch, setSourceVideoSearch] = useState("");
+  const [groupTagSearch, setGroupTagSearch] = useState("");
   const sourceSelectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipelineIdRef = useRef<string | null>(null);
 
@@ -545,6 +546,23 @@ function PipelinePage() {
     const matches = text.match(/\[([^\[\]]+)\]/g);
     if (!matches) return [];
     return [...new Set(matches.map(m => m.slice(1, -1)))];
+  };
+
+  // Analyze pairing state of group tags in a script
+  const analyzeGroupTags = (text: string): Array<{ label: string; isPaired: boolean; isOpen: boolean; occurrences: number }> => {
+    const matches = text.match(/\[([^\[\]]+)\]/g);
+    if (!matches) return [];
+    const counts: Record<string, number> = {};
+    for (const m of matches) {
+      const label = m.slice(1, -1);
+      counts[label] = (counts[label] || 0) + 1;
+    }
+    return Object.entries(counts).map(([label, occurrences]) => ({
+      label,
+      occurrences,
+      isPaired: occurrences % 2 === 0,
+      isOpen: occurrences % 2 === 1,
+    }));
   };
 
   // Catalog: open picker
@@ -2263,45 +2281,66 @@ function PipelinePage() {
                         className="resize-y font-mono text-sm"
                       />
 
-                      {/* Insert Group Tag + detected tags */}
-                      {productGroups.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Select onValueChange={(val) => insertGroupTag(index, val)}>
-                            <SelectTrigger className="w-[200px] h-8 text-xs">
-                              <SelectValue placeholder="Insert Group Tag" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {productGroups.map((g) => (
-                                <SelectItem key={g.id} value={g.label}>
-                                  <span className="flex items-center gap-1.5">
+                      {/* Insert Group Tag — searchable button grid */}
+                      {productGroups.length > 0 && (() => {
+                        const tagStates = analyzeGroupTags(script);
+                        const filtered = productGroups.filter(
+                          (g) => !groupTagSearch.trim() || g.label.toLowerCase().includes(groupTagSearch.toLowerCase())
+                        );
+                        return (
+                          <div className="space-y-1.5">
+                            {productGroups.length > 4 && (
+                              <div className="relative w-48">
+                                <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-muted-foreground" />
+                                <Input
+                                  placeholder="Filter groups..."
+                                  value={groupTagSearch}
+                                  onChange={(e) => setGroupTagSearch(e.target.value)}
+                                  className="h-7 pl-7 text-xs"
+                                />
+                              </div>
+                            )}
+                            <div className="flex flex-wrap gap-1.5">
+                              {filtered.map((g) => {
+                                const state = tagStates.find((t) => t.label === g.label);
+                                const isOpen = state?.isOpen ?? false;
+                                const isPaired = state?.isPaired ?? false;
+                                return (
+                                  <button
+                                    key={g.id}
+                                    type="button"
+                                    onClick={() => insertGroupTag(index, g.label)}
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border transition-colors hover:bg-accent ${
+                                      isOpen
+                                        ? "ring-2 ring-amber-400 bg-amber-50 dark:bg-amber-950/30 border-amber-300"
+                                        : isPaired
+                                        ? "ring-2 ring-green-400 bg-green-50 dark:bg-green-950/30 border-green-300"
+                                        : "border-border"
+                                    }`}
+                                  >
                                     {g.color && (
                                       <span
-                                        className="inline-block w-2.5 h-2.5 rounded-full"
+                                        className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0"
                                         style={{ backgroundColor: g.color }}
                                       />
                                     )}
                                     {g.label}
-                                    <span className="text-muted-foreground ml-1">({g.segments_count})</span>
-                                  </span>
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          {detectGroupTags(script).map((tag) => {
-                            const group = productGroups.find((g) => g.label === tag);
-                            return (
-                              <Badge
-                                key={tag}
-                                variant="secondary"
-                                className="text-xs"
-                                style={group?.color ? { borderLeft: `3px solid ${group.color}` } : undefined}
-                              >
-                                {tag}
-                              </Badge>
-                            );
-                          })}
-                        </div>
-                      )}
+                                    <span className="text-muted-foreground">({g.segments_count})</span>
+                                    {isPaired && <CheckCircle className="h-3 w-3 text-green-600 flex-shrink-0" />}
+                                    {isOpen && <span className="text-amber-600 font-bold flex-shrink-0">…</span>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {tagStates.length > 0 && (
+                              <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                                <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" /> Open</span>
+                                <span className="inline-flex items-center gap-1"><CheckCircle className="h-2.5 w-2.5 text-green-600" /> Paired</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       {/* Per-script TTS controls */}
                       <div className="flex items-center gap-2">
@@ -3105,6 +3144,9 @@ function PipelinePage() {
                                       });
                                     }
                                     setTtsResults(restoredTts);
+                                    // Restore source video selection so product groups load
+                                    setSelectedSourceIds(new Set());
+                                    restoreSourceSelection(selectedHistoryId);
                                     setStep(2);
                                     setSelectedHistoryId(null);
                                     setHistoryScripts([]);

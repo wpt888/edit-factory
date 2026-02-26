@@ -744,15 +744,18 @@ class AssemblyService:
         if not timeline:
             raise ValueError("Timeline is empty, cannot assemble video")
 
-        segment_files = []
-
         # Target output dimensions (portrait)
         target_w, target_h = 1080, 1920
 
-        # Extract each segment clip (with optional per-segment transforms)
+        # Extract each segment clip in parallel (up to 6 concurrent FFmpeg processes)
         from app.services.segment_transforms import SegmentTransform
 
-        for i, entry in enumerate(timeline):
+        max_parallel = min(6, len(timeline))
+        semaphore = asyncio.Semaphore(max_parallel)
+        # Pre-allocate ordered results list (None = failed)
+        results: List[Optional[Path]] = [None] * len(timeline)
+
+        async def extract_segment(i: int, entry: TimelineEntry):
             segment_file = temp_dir / f"segment_{i:03d}.mp4"
 
             segment_duration = entry.end_time - entry.start_time
@@ -804,11 +807,19 @@ class AssemblyService:
 
             logger.debug(f"Extracting segment {i}: {entry.source_video_path} [{entry.start_time:.2f}s - {entry.end_time:.2f}s]")
 
-            result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=600)
+            async with semaphore:
+                result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=600)
+
             if result.returncode == 0 and segment_file.exists():
-                segment_files.append(segment_file)
+                results[i] = segment_file
             else:
                 logger.error(f"Failed to extract segment {i}: {result.stderr}")
+
+        logger.info(f"Extracting {len(timeline)} segments in parallel (max {max_parallel} concurrent)")
+        await asyncio.gather(*(extract_segment(i, entry) for i, entry in enumerate(timeline)))
+
+        # Collect successful segments in order
+        segment_files = [f for f in results if f is not None]
 
         if not segment_files:
             raise RuntimeError("No segments were extracted successfully")

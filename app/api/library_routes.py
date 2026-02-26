@@ -1728,7 +1728,7 @@ async def delete_clip(
             # Delete from database
             supabase.table("editai_clips").delete().eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
             # Also delete associated clip content
-            supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).eq("profile_id", profile.profile_id).execute()
+            supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
             logger.info(f"Deleted clip {clip_id} and associated files")
 
         return {"status": "deleted", "clip_id": clip_id}

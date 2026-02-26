@@ -261,12 +261,14 @@ def build_subtitle_filter(
 
     force_style = style_config.to_force_style_string()
 
-    # Escape SRT path for FFmpeg (Windows compatibility)
+    # Escape SRT path for FFmpeg subtitles filter
+    # Order matters: backslashes first, then special chars
     srt_path_escaped = str(srt_path).replace('\\', '/')
     srt_path_escaped = srt_path_escaped.replace("'", "'\\''")
     srt_path_escaped = srt_path_escaped.replace(':', '\\:')
     srt_path_escaped = srt_path_escaped.replace('[', '\\[')
     srt_path_escaped = srt_path_escaped.replace(']', '\\]')
+    srt_path_escaped = srt_path_escaped.replace(' ', '\\ ')
 
     # Build filter
     filter_str = f"subtitles='{srt_path_escaped}':force_style='{force_style}'"
