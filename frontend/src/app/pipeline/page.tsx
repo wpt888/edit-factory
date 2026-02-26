@@ -1247,6 +1247,11 @@ function PipelinePage() {
     }
 
     setPlayingAudio(audioKey);
+    // Revoke any pending blob URL before creating a new one to prevent memory leaks
+    if (pendingBlobUrl.current) {
+      URL.revokeObjectURL(pendingBlobUrl.current);
+      pendingBlobUrl.current = null;
+    }
     apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}`)
       .then(res => res.blob())
       .then(blob => {
@@ -2779,12 +2784,12 @@ function PipelinePage() {
             {/* Render button */}
             <Button
               onClick={handleRender}
-              disabled={selectedVariants.size === 0}
+              disabled={isRendering || selectedVariants.size === 0}
               className="w-full"
               size="lg"
             >
               <Play className="h-4 w-4 mr-2" />
-              Render Selected ({selectedVariants.size})
+              {isRendering ? "Rendering..." : `Render Selected (${selectedVariants.size})`}
             </Button>
           </div>
         )}

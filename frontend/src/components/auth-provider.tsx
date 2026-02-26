@@ -6,6 +6,7 @@ import {
   useEffect,
   useState,
   useCallback,
+  useRef,
   type ReactNode,
 } from "react";
 import { useRouter, usePathname } from "next/navigation";
@@ -48,6 +49,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [loading, setLoading] = useState(true);
 
   const supabase = createClient();
+  const pathnameRef = useRef(pathname);
+  pathnameRef.current = pathname;
 
   const refreshSession = useCallback(async () => {
     try {
@@ -106,7 +109,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       if (event === "SIGNED_OUT") {
         // Redirect to login on sign out
-        if (pathname !== "/login" && pathname !== "/signup") {
+        if (pathnameRef.current !== "/login" && pathnameRef.current !== "/signup") {
           router.push("/login");
         }
       } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
@@ -118,7 +121,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return () => {
       subscription.unsubscribe();
     };
-  }, [supabase, router, pathname]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supabase, router]);
 
   return (
     <AuthContext.Provider

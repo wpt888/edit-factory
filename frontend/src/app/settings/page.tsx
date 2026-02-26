@@ -296,11 +296,13 @@ export default function SettingsPage() {
       return
     }
 
+    // Warn user that test uses saved credentials, not current form values
+    toast.info("Testing uses saved credentials. Please save settings first if you changed them.", { duration: 4000 })
+
     setTestingConnection(true)
     setConnectionStatus("idle")
 
     try {
-      // Test using the current profile's credentials (will use saved or env fallback)
       const response = await apiGetWithRetry("/postiz/status")
       if (!response.ok) throw new Error("Connection failed")
 
