@@ -74,21 +74,28 @@ def strip_product_group_tags(text: str) -> str:
 def build_word_to_group_map(text: str) -> List[Optional[str]]:
     """Map each word (after tag removal) to its product group (or None).
 
-    Tags like [iPhone 15] set the current group for all words that follow
-    until the next tag appears.
+    Supports paired tags: first [Tag] opens a group section, second [Tag]
+    closes it.  Unpaired tags stay open for the rest of the script
+    (backwards-compatible with old single-tag behaviour).
 
     Returns a list parallel to the cleaned words (tags excluded).
     """
-    current_group: Optional[str] = None
+    open_stack: List[str] = []
     word_groups: List[Optional[str]] = []
     tag_pattern = re.compile(r'\[([^\[\]]+)\]')
 
-    # Process text token by token, tracking current group
+    # Process text token by token, toggling groups on/off
     pos = 0
     while pos < len(text):
         tag_match = tag_pattern.match(text, pos)
         if tag_match:
-            current_group = tag_match.group(1).strip()
+            label = tag_match.group(1).strip()
+            if label in open_stack:
+                # Second occurrence — close this group
+                open_stack.remove(label)
+            else:
+                # First occurrence — open this group
+                open_stack.append(label)
             pos = tag_match.end()
             continue
 
@@ -104,7 +111,8 @@ def build_word_to_group_map(text: str) -> List[Optional[str]]:
             word_end += 1
 
         if word_end > pos:
-            word_groups.append(current_group)
+            # Assign the most recently opened group (top of stack), or None
+            word_groups.append(open_stack[-1] if open_stack else None)
             pos = word_end
         else:
             pos += 1
@@ -350,131 +358,239 @@ class AssemblyService:
         srt_product_groups: Optional[List[Optional[str]]] = None
     ) -> List[MatchResult]:
         """
-        Match SRT subtitle phrases against segment keywords.
+        Match SRT subtitle phrases against segment keywords using round-robin.
+
+        Round-robin is the primary allocation mechanism. The pointer advances
+        through a fixed cyclical order (A→B→C→D→E→A→…). Keyword matches
+        "consume" a segment from the current cycle without advancing the pointer,
+        so the matched segment is skipped when the pointer reaches it, and it
+        does NOT get priority at the start of the next cycle — it comes back at
+        its natural position in the rotation.
+
+        Example with segments A,B,C,D,E and keyword match on C at pos 0:
+          pos 0: keyword→C  (consumed, pointer stays at A)
+          pos 1: rr→A       (pointer→B)
+          pos 2: rr→B       (pointer→C, but C used → skip → D)
+          pos 3: rr→D       (pointer→E)
+          pos 4: rr→E       (cycle complete, pointer→A)
+          pos 5: rr→A       (new cycle, pointer→B)
+          pos 6: rr→B       (pointer→C)
+          pos 7: rr→C       (7 positions since last use — maximum spacing!)
+          pos 8: rr→D
+          pos 9: rr→E
 
         Args:
             srt_entries: List of {start_time, end_time, text} from SRT
             segments_data: List of segment dicts with {id, keywords, ...}
-            min_confidence: Minimum confidence score to accept a match
-            variant_index: Used to seed randomization for tied matches,
-                           giving each variant different segment selections.
-            srt_product_groups: Optional list (parallel to srt_entries) of product
-                                group labels from script tags. When set for an entry,
-                                only segments from that group are considered.
+            min_confidence: Minimum confidence score to accept a keyword match
+            variant_index: Offsets round-robin start position per variant
+            srt_product_groups: Optional product group labels per SRT entry
 
         Returns:
             List of MatchResult objects (one per SRT entry)
         """
-        matches = []
-        current_product_group = None  # Track product group context across SRT entries
-        prev_segment_id = None  # Track previous segment to avoid consecutive duplicates
-        variant_rng = random.Random(variant_index)  # Seeded RNG for variant differentiation
+        matches: List[MatchResult] = []
+        current_product_group: Optional[str] = None
+        prev_segment_id: Optional[str] = None
+        variant_rng = random.Random(variant_index)
+
+        # --- Build ordered segment lists per product group ---
+        group_seg_ids: Dict[Optional[str], List[str]] = {}
+        segment_lookup: Dict[str, dict] = {}
+        for seg in segments_data:
+            g = seg.get("product_group")
+            group_seg_ids.setdefault(g, []).append(seg["id"])
+            segment_lookup[seg["id"]] = seg
+        for g in group_seg_ids:
+            group_seg_ids[g].sort()
+
+        def _resolve_group(group: Optional[str]) -> Optional[str]:
+            """Return group key that has segments, with fallback."""
+            if group in group_seg_ids and group_seg_ids[group]:
+                return group
+            if None in group_seg_ids:
+                return None
+            return list(group_seg_ids.keys())[0] if group_seg_ids else None
+
+        # --- Round-robin state per group ---
+        # Pointer: fixed cyclical position (only advances on round-robin picks)
+        rr_pointer: Dict[Optional[str], int] = {}
+        # Cycle used: segments consumed in the current cycle (by keyword OR round-robin)
+        cycle_used: Dict[Optional[str], set] = {}
+
+        for g, ids in group_seg_ids.items():
+            rr_pointer[g] = variant_index % len(ids) if ids else 0
+            cycle_used[g] = set()
+
+        def _start_new_cycle_if_needed(grp: Optional[str]):
+            """If all segments in group have been used this cycle, reset."""
+            ids = group_seg_ids.get(grp, [])
+            if ids and len(cycle_used.get(grp, set())) >= len(ids):
+                cycle_used[grp] = set()
+
+        def _rr_next(group: Optional[str], exclude_id: Optional[str] = None) -> Optional[dict]:
+            """
+            Get next segment by advancing the round-robin pointer.
+            Skips segments already consumed in this cycle. Starts a new cycle
+            if all segments have been used.
+            """
+            grp = _resolve_group(group)
+            ids = group_seg_ids.get(grp)
+            if not ids:
+                return segments_data[0] if segments_data else None
+
+            n = len(ids)
+            _start_new_cycle_if_needed(grp)
+            used = cycle_used.get(grp, set())
+
+            ptr = rr_pointer.get(grp, 0) % n
+            for attempt in range(n * 2):  # *2 to handle cycle reset mid-scan
+                idx = (ptr + attempt) % n
+                sid = ids[idx]
+
+                # Skip if already used in this cycle or is consecutive duplicate
+                if sid in used:
+                    continue
+                if sid == exclude_id and n > 1:
+                    continue
+
+                # Advance pointer past this segment
+                rr_pointer[grp] = (idx + 1) % n
+                used.add(sid)
+                return segment_lookup[sid]
+
+            # All exhausted (shouldn't happen) — force reset and pick
+            cycle_used[grp] = set()
+            ptr = rr_pointer.get(grp, 0) % n
+            sid = ids[ptr]
+            rr_pointer[grp] = (ptr + 1) % n
+            cycle_used[grp].add(sid)
+            return segment_lookup[sid]
+
+        def _mark_keyword_consumed(seg_id: str, group: Optional[str]):
+            """
+            Mark segment as consumed in current cycle (keyword match).
+            Does NOT advance the round-robin pointer — the pointer will
+            skip this segment when it naturally reaches it.
+            """
+            grp = _resolve_group(group)
+            _start_new_cycle_if_needed(grp)
+            used = cycle_used.get(grp, set())
+            used.add(seg_id)
+
+        def _is_available_in_cycle(seg_id: str, group: Optional[str]) -> bool:
+            """Check if segment hasn't been consumed in the current cycle."""
+            grp = _resolve_group(group)
+            _start_new_cycle_if_needed(grp)
+            return seg_id not in cycle_used.get(grp, set())
+
+        # --- Single-pass: keyword match + round-robin in one loop ---
+        keyword_matched = 0
+        auto_filled = 0
 
         for idx, entry in enumerate(srt_entries):
             srt_text = entry["text"]
             srt_text_lower = srt_text.lower()
 
-            # If this SRT entry has a forced product group from tags, filter segments
+            # Determine target group
             forced_group = srt_product_groups[idx] if srt_product_groups and idx < len(srt_product_groups) else None
+            target_group = forced_group or current_product_group
+
+            # --- Try keyword matching (only among cycle-available segments) ---
             if forced_group:
-                group_segments = [s for s in segments_data if s.get("product_group") == forced_group]
-                if not group_segments:
-                    logger.warning(f"No segments found for forced group '{forced_group}', falling back to all segments")
+                search_segments = [s for s in segments_data if s.get("product_group") == forced_group]
+                if not search_segments:
                     search_segments = segments_data
-                else:
-                    search_segments = group_segments
             else:
                 search_segments = segments_data
 
-            # Collect all candidates with their confidence scores
             candidates = []
-
-            # Find all matching segments for this SRT entry
             for segment in search_segments:
-                keywords = segment.get("keywords") or []
+                seg_group = segment.get("product_group")
+                check_group = forced_group or seg_group or target_group
 
+                # Only consider segments available in the current cycle
+                if not _is_available_in_cycle(segment["id"], check_group):
+                    continue
+
+                keywords = segment.get("keywords") or []
                 for keyword in keywords:
                     keyword_lower = keyword.lower()
-
-                    # Check if keyword appears in SRT text
                     if keyword_lower in srt_text_lower:
-                        # Calculate confidence
                         words = srt_text_lower.split()
                         exact_match = keyword_lower in words
                         confidence = 1.0 if exact_match else 0.7
 
-                        # Product group label boost: if keyword matches a product group label
-                        seg_group = segment.get("product_group")
                         if seg_group and keyword_lower == seg_group.lower():
                             confidence += 0.5
-
-                        # Context affinity: prefer segments from the current product group
                         if current_product_group and seg_group == current_product_group:
                             confidence += 0.2
 
                         candidates.append((segment, keyword, confidence))
 
-            # Among top candidates (within 0.1 of best), pick using variant-seeded RNG
-            best_segment = None
-            best_keyword = None
-            best_confidence = 0.0
-            runner_up_segment = None
-            runner_up_keyword = None
-            runner_up_confidence = 0.0
+            chosen_segment = None
+            chosen_keyword = None
+            chosen_confidence = 0.0
+            is_auto = False
 
             if candidates:
-                # Sort by confidence descending
                 candidates.sort(key=lambda c: c[2], reverse=True)
                 top_confidence = candidates[0][2]
-
-                # Gather near-tied candidates (within 0.1 of best)
                 top_candidates = [c for c in candidates if c[2] >= top_confidence - 0.1]
 
-                # Use variant-seeded RNG to pick among near-tied candidates
-                if len(top_candidates) > 1:
-                    chosen = variant_rng.choice(top_candidates)
+                # Exclude consecutive duplicate
+                non_prev = [c for c in top_candidates if c[0]["id"] != prev_segment_id]
+                pool = non_prev if non_prev else top_candidates
+
+                chosen_seg_tuple = variant_rng.choice(pool) if len(pool) > 1 else pool[0]
+                seg, kw, conf = chosen_seg_tuple
+
+                if conf >= min_confidence:
+                    chosen_segment = seg
+                    chosen_keyword = kw
+                    chosen_confidence = conf
+                    keyword_matched += 1
+
+            # --- No keyword match → round-robin auto-fill ---
+            if not chosen_segment:
+                seg = _rr_next(target_group, exclude_id=prev_segment_id)
+                if seg:
+                    chosen_segment = seg
+                    is_auto = True
+                    auto_filled += 1
                 else:
-                    chosen = top_candidates[0]
+                    chosen_segment = segments_data[0] if segments_data else None
+                    is_auto = True
+                    auto_filled += 1
 
-                best_segment, best_keyword, best_confidence = chosen
+            # --- Build match result ---
+            if chosen_segment:
+                seg_group = chosen_segment.get("product_group")
 
-                # Find runner-up (best candidate that isn't the chosen one)
-                for c in candidates:
-                    if c[0]["id"] != best_segment["id"]:
-                        runner_up_segment, runner_up_keyword, runner_up_confidence = c
-                        break
+                # Keyword match: consume from cycle without advancing pointer
+                if not is_auto:
+                    _mark_keyword_consumed(chosen_segment["id"], seg_group)
 
-            # Avoid consecutive duplicate: if best is same as previous, use runner-up
-            if (best_segment and best_segment["id"] == prev_segment_id
-                    and runner_up_segment and runner_up_confidence >= min_confidence):
-                best_segment = runner_up_segment
-                best_keyword = runner_up_keyword
-                best_confidence = runner_up_confidence
-
-            # Create match result (may be unmatched)
-            if best_segment and best_confidence >= min_confidence:
-                seg_group = best_segment.get("product_group")
                 match = MatchResult(
                     srt_index=idx,
                     srt_text=srt_text,
                     srt_start=entry["start_time"],
                     srt_end=entry["end_time"],
-                    segment_id=best_segment["id"],
-                    segment_keywords=best_segment.get("keywords") or [],
-                    matched_keyword=best_keyword,
-                    confidence=best_confidence,
+                    segment_id=chosen_segment["id"],
+                    segment_keywords=chosen_segment.get("keywords") or [],
+                    matched_keyword=chosen_keyword,
+                    confidence=chosen_confidence,
+                    is_auto_filled=is_auto,
                     product_group=seg_group,
-                    source_video_id=best_segment.get("source_video_id"),
-                    segment_start_time=best_segment.get("start_time"),
-                    segment_end_time=best_segment.get("end_time"),
-                    thumbnail_path=best_segment.get("thumbnail_path"),
+                    source_video_id=chosen_segment.get("source_video_id"),
+                    segment_start_time=chosen_segment.get("start_time"),
+                    segment_end_time=chosen_segment.get("end_time"),
+                    thumbnail_path=chosen_segment.get("thumbnail_path"),
                 )
-                # Update context trackers
-                prev_segment_id = best_segment["id"]
+                prev_segment_id = chosen_segment["id"]
                 if seg_group:
                     current_product_group = seg_group
             else:
-                # Unmatched entry
                 match = MatchResult(
                     srt_index=idx,
                     srt_text=srt_text,
@@ -483,68 +599,16 @@ class AssemblyService:
                     segment_id=None,
                     segment_keywords=[],
                     matched_keyword=None,
-                    confidence=0.0
+                    confidence=0.0,
                 )
 
             matches.append(match)
 
-        # Auto-fill unmatched entries — prefer segments from current/nearest product group
-        if segments_data:
-            unmatched_indices = [i for i, m in enumerate(matches) if m.segment_id is None]
-            if unmatched_indices:
-                rng = random.Random(variant_index)
-
-                for um_idx in unmatched_indices:
-                    # If forced group from tags, use that strictly
-                    forced_group = srt_product_groups[um_idx] if srt_product_groups and um_idx < len(srt_product_groups) else None
-
-                    if forced_group:
-                        nearest_group = forced_group
-                    else:
-                        # Find nearest product group context
-                        nearest_group = None
-                        for offset in range(1, len(matches)):
-                            for check_idx in [um_idx - offset, um_idx + offset]:
-                                if 0 <= check_idx < len(matches) and matches[check_idx].product_group:
-                                    nearest_group = matches[check_idx].product_group
-                                    break
-                            if nearest_group:
-                                break
-
-                    # Build pool: prefer segments from nearest group
-                    if nearest_group:
-                        group_pool = [s for s in segments_data if s.get("product_group") == nearest_group]
-                        pool = group_pool if group_pool else list(segments_data)
-                    else:
-                        pool = list(segments_data)
-
-                    # Avoid consecutive duplicate: exclude previous segment from pool
-                    prev_seg_id = matches[um_idx - 1].segment_id if um_idx > 0 else None
-                    if prev_seg_id and len(pool) > 1:
-                        pool = [s for s in pool if s["id"] != prev_seg_id]
-
-                    rng.shuffle(pool)
-                    seg = pool[0]
-                    matches[um_idx] = MatchResult(
-                        srt_index=matches[um_idx].srt_index,
-                        srt_text=matches[um_idx].srt_text,
-                        srt_start=matches[um_idx].srt_start,
-                        srt_end=matches[um_idx].srt_end,
-                        segment_id=seg["id"],
-                        segment_keywords=seg.get("keywords") or [],
-                        matched_keyword=None,
-                        confidence=0.0,
-                        is_auto_filled=True,
-                        product_group=seg.get("product_group"),
-                        source_video_id=seg.get("source_video_id"),
-                        segment_start_time=seg.get("start_time"),
-                        segment_end_time=seg.get("end_time"),
-                        thumbnail_path=seg.get("thumbnail_path"),
-                    )
-                logger.info(f"Auto-filled {len(unmatched_indices)} unmatched entries (seed={variant_index})")
-
-        matched_count = sum(1 for m in matches if m.segment_id is not None)
-        logger.info(f"Matched {matched_count}/{len(matches)} SRT entries to segments")
+        logger.info(
+            f"Segment allocation: {keyword_matched} keyword-matched, "
+            f"{auto_filled} round-robin auto-filled, "
+            f"{len(matches)} total (variant={variant_index})"
+        )
 
         return matches
 
