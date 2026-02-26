@@ -221,6 +221,7 @@ function PipelinePage() {
   const [voiceSpeed, setVoiceSpeed] = useState(1.0);
   const [voiceSpeakerBoost, setVoiceSpeakerBoost] = useState(true);
   const [wordsPerSubtitle, setWordsPerSubtitle] = useState(2);
+  const [minSegmentDuration, setMinSegmentDuration] = useState(2.0);
   const voiceSettingsLoaded = useRef(false);
 
   // Step 4: Render
@@ -803,6 +804,7 @@ function PipelinePage() {
             use_speaker_boost: voiceSpeakerBoost,
           },
           words_per_subtitle: wordsPerSubtitle,
+          min_segment_duration: minSegmentDuration,
         }, { timeout: 300_000, signal: abortController.signal }); // 5 min — TTS generation + SRT can be slow
 
         if (abortController.signal.aborted) return;
@@ -894,6 +896,7 @@ function PipelinePage() {
           use_speaker_boost: voiceSpeakerBoost,
         },
         words_per_subtitle: wordsPerSubtitle,
+        min_segment_duration: minSegmentDuration,
         font_size: subtitleSettings.fontSize,
         font_family: subtitleSettings.fontFamily,
         text_color: subtitleSettings.textColor,
@@ -1081,6 +1084,7 @@ function PipelinePage() {
           if (tts?.voice_speed !== undefined) setVoiceSpeed(tts.voice_speed);
           if (tts?.voice_speaker_boost !== undefined) setVoiceSpeakerBoost(tts.voice_speaker_boost);
           if (tts?.words_per_subtitle !== undefined) setWordsPerSubtitle(tts.words_per_subtitle);
+          if (tts?.min_segment_duration !== undefined) setMinSegmentDuration(tts.min_segment_duration);
         }
       } catch {
         // Silently fail — voice selector still works with default
@@ -1371,6 +1375,8 @@ function PipelinePage() {
     if (speed !== null) setVoiceSpeed(parseFloat(speed));
     if (boost !== null) setVoiceSpeakerBoost(boost === "true");
     if (wps !== null) setWordsPerSubtitle(parseInt(wps, 10));
+    const msd = localStorage.getItem("ef_min_segment_duration");
+    if (msd !== null) setMinSegmentDuration(parseFloat(msd));
     voiceSettingsLoaded.current = true;
     // If no voice values were stored, hydration won't trigger a re-render,
     // so pre-mark as hydrated to avoid skipping the first real user change
@@ -1386,7 +1392,8 @@ function PipelinePage() {
     localStorage.setItem("ef_voice_speed", String(voiceSpeed));
     localStorage.setItem("ef_voice_speaker_boost", String(voiceSpeakerBoost));
     localStorage.setItem("ef_words_per_subtitle", String(wordsPerSubtitle));
-  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle]);
+    localStorage.setItem("ef_min_segment_duration", String(minSegmentDuration));
+  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration]);
 
   // Debounced auto-save voice settings to profile
   useEffect(() => {
@@ -1408,13 +1415,14 @@ function PipelinePage() {
             voice_speed: voiceSpeed,
             voice_speaker_boost: voiceSpeakerBoost,
             words_per_subtitle: wordsPerSubtitle,
+            min_segment_duration: minSegmentDuration,
           },
         });
       } catch {
         // Silent — settings still work locally via localStorage
       }
     }, 1000);
-  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, currentProfile]);
+  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, currentProfile]);
 
   // Per-script TTS: generate voice-over for a single script
   const handleGenerateTts = async (variantIndex: number) => {
@@ -1437,6 +1445,7 @@ function PipelinePage() {
           use_speaker_boost: voiceSpeakerBoost,
         },
         words_per_subtitle: wordsPerSubtitle,
+        min_segment_duration: minSegmentDuration,
       }, { timeout: 300_000 });
 
       if (res.ok) {
@@ -2238,6 +2247,23 @@ function PipelinePage() {
                       <span>4</span>
                     </div>
                     <p className="text-[10px] text-muted-foreground">Mai putine cuvinte = subtitrari mai dinamice (TikTok style)</p>
+                  </div>
+
+                  <div className="border-t pt-3 space-y-1.5">
+                    <div className="flex justify-between">
+                      <Label className="text-xs">Durată minimă segment (sec)</Label>
+                      <span className="text-xs text-muted-foreground">{minSegmentDuration}s</span>
+                    </div>
+                    <Slider
+                      value={[minSegmentDuration]}
+                      onValueChange={([v]) => setMinSegmentDuration(v)}
+                      min={0.5} max={5} step={0.5}
+                    />
+                    <div className="flex justify-between text-[10px] text-muted-foreground">
+                      <span>0.5s</span>
+                      <span>5s</span>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">Segmentele video nu se schimbă mai repede de această durată</p>
                   </div>
                 </div>
               </CardContent>

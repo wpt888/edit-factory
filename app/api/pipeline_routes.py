@@ -296,6 +296,8 @@ class PipelineRenderRequest(BaseModel):
     voice_settings: Optional[Dict[str, Any]] = None
     # Subtitle word grouping
     words_per_subtitle: int = 2
+    # Minimum video segment duration (seconds) — groups short SRT phrases
+    min_segment_duration: float = 2.0
 
 
 class PipelineRenderResponse(BaseModel):
@@ -1029,7 +1031,8 @@ async def preview_variant(
     voice_id: Optional[str] = Body(None, embed=True),
     source_video_ids: Optional[List[str]] = Body(None, embed=True),
     voice_settings: Optional[Dict[str, Any]] = Body(None, embed=True),
-    words_per_subtitle: int = Body(2, embed=True)
+    words_per_subtitle: int = Body(2, embed=True),
+    min_segment_duration: float = Body(2.0, embed=True)
 ):
     """
     Preview segment matching for a single variant.
@@ -1111,7 +1114,8 @@ async def preview_variant(
             reuse_audio_path=reuse_audio_path,
             reuse_audio_duration=reuse_audio_duration,
             voice_settings=voice_settings,
-            max_words_per_phrase=words_per_subtitle
+            max_words_per_phrase=words_per_subtitle,
+            min_segment_duration=min_segment_duration
         )
 
         # Store preview result in pipeline state
@@ -1369,7 +1373,8 @@ async def render_variants(
                         reuse_audio_duration=reuse_audio_duration,
                         reuse_srt_content=reuse_srt_content,
                         on_progress=on_progress,
-                        max_words_per_phrase=request.words_per_subtitle
+                        max_words_per_phrase=request.words_per_subtitle,
+                        min_segment_duration=request.min_segment_duration
                     ),
                     timeout=900
                 )

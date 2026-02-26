@@ -618,7 +618,8 @@ class AssemblyService:
         segments_data: List[dict],
         audio_duration: float,
         duration_overrides: Optional[List[Optional[float]]] = None,
-        variant_index: int = 0
+        variant_index: int = 0,
+        min_segment_duration: float = 2.0
     ) -> List[TimelineEntry]:
         """
         Build video timeline from match results.
@@ -718,6 +719,38 @@ class AssemblyService:
                     timeline_duration=gap
                 )
                 timeline.append(gap_entry)
+
+        # Post-process: merge short consecutive entries to meet min_segment_duration
+        if min_segment_duration > 0 and len(timeline) > 1:
+            merged = []
+            i = 0
+            while i < len(timeline):
+                current = timeline[i]
+                accumulated_duration = current.timeline_duration
+                last_merged_idx = i
+
+                # Absorb following entries while under minimum
+                while accumulated_duration < min_segment_duration and last_merged_idx + 1 < len(timeline):
+                    last_merged_idx += 1
+                    accumulated_duration += timeline[last_merged_idx].timeline_duration
+
+                # Create merged entry: keep first entry's video source, extend its duration
+                merged_entry = TimelineEntry(
+                    source_video_path=current.source_video_path,
+                    start_time=current.start_time,
+                    end_time=current.start_time + accumulated_duration,
+                    timeline_start=current.timeline_start,
+                    timeline_duration=accumulated_duration,
+                    transforms=current.transforms,
+                )
+                merged.append(merged_entry)
+                i = last_merged_idx + 1
+
+            logger.info(
+                f"Merged timeline: {len(timeline)} entries -> {len(merged)} entries "
+                f"(min_segment_duration={min_segment_duration}s)"
+            )
+            timeline = merged
 
         total_duration = sum(e.timeline_duration for e in timeline)
         logger.info(f"Built timeline with {len(timeline)} entries, total duration: {total_duration:.2f}s")
@@ -885,7 +918,8 @@ class AssemblyService:
         reuse_audio_duration: Optional[float] = None,
         reuse_srt_content: Optional[str] = None,
         on_progress=None,  # Optional[Callable[[str, int], None]]
-        max_words_per_phrase: int = 2
+        max_words_per_phrase: int = 2,
+        min_segment_duration: float = 2.0
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
@@ -1082,7 +1116,8 @@ class AssemblyService:
                 segments_data=segments_data,
                 audio_duration=audio_duration,
                 duration_overrides=duration_overrides,
-                variant_index=variant_index
+                variant_index=variant_index,
+                min_segment_duration=min_segment_duration
             )
 
             # Step 7: Assemble video
@@ -1143,7 +1178,8 @@ class AssemblyService:
         reuse_audio_path: Optional[str] = None,
         reuse_audio_duration: Optional[float] = None,
         voice_settings: Optional[dict] = None,
-        max_words_per_phrase: int = 2
+        max_words_per_phrase: int = 2,
+        min_segment_duration: float = 2.0
     ) -> dict:
         """
         Preview-only: TTS -> SRT -> match -> timeline (no rendering).
@@ -1256,7 +1292,8 @@ class AssemblyService:
             match_results=match_results,
             segments_data=segments_data,
             audio_duration=audio_duration,
-            variant_index=variant_index
+            variant_index=variant_index,
+            min_segment_duration=min_segment_duration
         )
 
         # Count matched vs unmatched
