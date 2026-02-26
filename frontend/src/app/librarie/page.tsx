@@ -43,6 +43,7 @@ import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, ApiErro
 import { toast } from "sonner";
 import { useProfile } from "@/contexts/profile-context";
 import { EmptyState } from "@/components/empty-state";
+import { PublishDialog } from "@/components/PublishDialog";
 
 interface ClipWithProject {
   id: string;
@@ -107,9 +108,8 @@ function LibrarieContent() {
     error?: string;
   } | null>(null);
 
-  // Postiz upload state (simplified - just upload, no scheduling)
-  const [postizClip, setPostizClip] = useState<ClipWithProject | null>(null);
-  const [publishing, setPublishing] = useState(false);
+  // Publish dialog state
+  const [publishDialogClip, setPublishDialogClip] = useState<ClipWithProject | null>(null);
 
   // Multi-select state
   const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
@@ -253,35 +253,9 @@ function LibrarieContent() {
     }
   };
 
-  // Upload to Postiz library (simple upload, no scheduling)
-  const uploadToPostiz = async (clip: ClipWithProject) => {
-    if (publishing) return;
-
-    setPublishing(true);
-    setPostizClip(clip);
-
-    try {
-      const videoPath = clip.final_video_path || clip.raw_video_path;
-
-      // Call backend endpoint that handles the upload to Postiz
-      await apiPost("/postiz/upload", {
-        clip_id: clip.id,
-        video_path: videoPath,
-      });
-
-      // Update clip status locally
-      setClips((prev) =>
-        prev.map((c) =>
-          c.id === clip.id ? { ...c, postiz_status: "sent" as const } : c
-        )
-      );
-      toast.success("Video trimis în librăria Postiz!");
-    } catch (error) {
-      handleApiError(error, "Eroare la upload");
-    } finally {
-      setPublishing(false);
-      setPostizClip(null);
-    }
+  // Open publish dialog for a clip
+  const openPublishDialog = (clip: ClipWithProject) => {
+    setPublishDialogClip(clip);
   };
 
   // Format duration
@@ -799,18 +773,14 @@ function LibrarieContent() {
                         <Button
                           size="sm"
                           className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600 disabled:opacity-50"
-                          disabled={(publishing && postizClip?.id === clip.id) || !postizStatus?.connected}
+                          disabled={!postizStatus?.connected}
                           onClick={(e) => {
                             e.stopPropagation();
-                            uploadToPostiz(clip);
+                            openPublishDialog(clip);
                           }}
-                          title={postizStatus?.connected ? `Trimite în Postiz (${postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")})` : "Postiz neconfigurat — configurează în Settings"}
+                          title={postizStatus?.connected ? "Publica pe Social Media" : "Postiz neconfigurat — configureaza in Settings"}
                         >
-                          {publishing && postizClip?.id === clip.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Share2 className="h-4 w-4" />
-                          )}
+                          <Share2 className="h-4 w-4" />
                         </Button>
                       </div>
                       {/* Remove audio button */}
@@ -924,6 +894,26 @@ function LibrarieContent() {
               );
             })}
           </div>
+        )}
+        {/* Publish Dialog */}
+        {publishDialogClip && (
+          <PublishDialog
+            clipId={publishDialogClip.id}
+            videoPath={publishDialogClip.final_video_path || publishDialogClip.raw_video_path}
+            open={!!publishDialogClip}
+            onOpenChange={(open) => {
+              if (!open) setPublishDialogClip(null);
+            }}
+            onPublished={() => {
+              setClips((prev) =>
+                prev.map((c) =>
+                  c.id === publishDialogClip.id
+                    ? { ...c, postiz_status: "sent" as const }
+                    : c
+                )
+              );
+            }}
+          />
         )}
       </main>
     </div>

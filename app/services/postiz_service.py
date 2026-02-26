@@ -221,7 +221,8 @@ class PostizPublisher:
         integration_ids: List[str],
         schedule_date: Optional[datetime] = None,
         integrations_info: Optional[Dict[str, str]] = None,
-        profile_id: Optional[str] = None
+        profile_id: Optional[str] = None,
+        captions_per_platform: Optional[Dict[str, str]] = None
     ) -> PublishResult:
         """
         Create a post on selected platforms.
@@ -229,11 +230,12 @@ class PostizPublisher:
         Args:
             media_id: Media ID from upload_video
             media_path: Media path from upload_video
-            caption: Post caption/description
+            caption: Post caption/description (default for all platforms)
             integration_ids: List of integration IDs to post to
             schedule_date: Optional datetime to schedule post (None = post now)
             integrations_info: Dict mapping integration_id to platform type for settings
             profile_id: Optional profile ID for logging context
+            captions_per_platform: Optional dict mapping integration_id to specific caption
 
         Returns:
             PublishResult with success status and post details
@@ -242,17 +244,20 @@ class PostizPublisher:
             raise ValueError("At least one integration must be selected")
 
         integrations_info = integrations_info or {}
+        captions_per_platform = captions_per_platform or {}
 
         # Build posts array for each integration
         posts = []
         for int_id in integration_ids:
             platform_type = integrations_info.get(int_id, "")
             settings = self._get_platform_settings(platform_type)
+            # Use platform-specific caption if provided, otherwise fall back to default
+            post_caption = captions_per_platform.get(int_id, caption)
 
             posts.append({
                 "integration": {"id": int_id},
                 "value": [{
-                    "content": caption,
+                    "content": post_caption,
                     "image": [{"id": media_id, "path": media_path}]
                 }],
                 "settings": settings
@@ -293,7 +298,7 @@ class PostizPublisher:
 
             try:
                 data = response.json()
-            except (ValueError, Exception) as e:
+            except Exception as e:
                 logger.error(f"Failed to parse Postiz create_post response: {e}, raw: {response.text[:500]}")
                 return PublishResult(
                     success=False,
@@ -310,6 +315,49 @@ class PostizPublisher:
                 scheduled_date=schedule_date.isoformat() if schedule_date else None,
                 platforms=[integrations_info.get(i, "unknown") for i in integration_ids]
             )
+
+
+    async def get_post_status(self, post_id: str, profile_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get the status of a published post from Postiz API.
+
+        Args:
+            post_id: The Postiz post ID
+            profile_id: Optional profile ID for logging context
+
+        Returns:
+            Dict with post status info (state, platforms, scheduled date, etc.)
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{self.api_url}/posts/{post_id}",
+                headers=self.headers
+            )
+
+            if response.status_code == 404:
+                return {"status": "not_found", "post_id": post_id}
+
+            if response.status_code != 200:
+                logger.error(f"Failed to get post status: {response.status_code} - {response.text}")
+                return {"status": "error", "post_id": post_id, "error": f"API error: {response.status_code}"}
+
+            data = response.json()
+            # integration can be a list of dicts or a single dict
+            integration_raw = data.get("integration", [])
+            if isinstance(integration_raw, dict):
+                integration_raw = [integration_raw]
+            platforms = [
+                p.get("identifier", "unknown")
+                for p in integration_raw
+                if isinstance(p, dict)
+            ]
+            return {
+                "status": "found",
+                "post_id": post_id,
+                "state": data.get("state", "unknown"),
+                "scheduled_date": data.get("publishDate"),
+                "platforms": platforms,
+            }
 
 
 # Profile-aware factory pattern with instance caching + TTL

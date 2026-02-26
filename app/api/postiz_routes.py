@@ -44,6 +44,7 @@ class PublishRequest(BaseModel):
     caption: str
     integration_ids: List[str]
     schedule_date: Optional[str] = None  # ISO format datetime
+    captions_per_platform: Optional[Dict[str, str]] = None  # integration_id → caption
 
 
 class BulkPublishRequest(BaseModel):
@@ -414,7 +415,8 @@ async def publish_clip(
         video_path=str(video_path),
         caption=request.caption,
         integration_ids=request.integration_ids,
-        schedule_date=schedule_dt
+        schedule_date=schedule_dt,
+        captions_per_platform=request.captions_per_platform
     )
 
     return PublishResponse(
@@ -520,6 +522,25 @@ async def get_publish_job_progress(job_id: str):
     return result
 
 
+@router.get("/posts/{post_id}/status")
+async def get_post_status(
+    post_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Get status of a published post from Postiz API."""
+    logger.info(f"[Profile {profile.profile_id}] Checking post status: {post_id}")
+    try:
+        from app.services.postiz_service import get_postiz_publisher
+        publisher = get_postiz_publisher(profile.profile_id)
+        status = await publisher.get_post_status(post_id, profile_id=profile.profile_id)
+        return status
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[Profile {profile.profile_id}] Failed to get post status: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get post status")
+
+
 # ============== BACKGROUND TASKS ==============
 
 async def _publish_clip_task(
@@ -529,7 +550,8 @@ async def _publish_clip_task(
     video_path: str,
     caption: str,
     integration_ids: List[str],
-    schedule_date: Optional[datetime]
+    schedule_date: Optional[datetime],
+    captions_per_platform: Optional[Dict[str, str]] = None
 ):
     """Background task to publish a single clip using profile-specific Postiz."""
     from app.services.postiz_service import get_postiz_publisher
@@ -559,7 +581,8 @@ async def _publish_clip_task(
             integration_ids=integration_ids,
             schedule_date=schedule_date,
             integrations_info=integrations_info,
-            profile_id=profile_id
+            profile_id=profile_id,
+            captions_per_platform=captions_per_platform
         )
 
         if result.success:
