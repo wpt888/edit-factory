@@ -406,6 +406,8 @@ async def upload_source_video(
 
 @router.get("/source-videos", response_model=List[SourceVideoResponse])
 async def list_source_videos(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """List all source videos for the current profile."""
@@ -419,6 +421,8 @@ async def list_source_videos(
         .select("*")\
         .eq("profile_id", profile.profile_id)\
         .order("created_at", desc=True)\
+        .limit(limit)\
+        .offset(offset)\
         .execute()
 
     return [
@@ -819,6 +823,8 @@ async def create_segment(
 @router.get("/source-videos/{video_id}/segments", response_model=List[SegmentResponse])
 async def list_video_segments(
     video_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """List all segments for a source video."""
@@ -831,6 +837,8 @@ async def list_video_segments(
         .eq("source_video_id", video_id)\
         .eq("profile_id", profile.profile_id)\
         .order("start_time")\
+        .limit(limit)\
+        .offset(offset)\
         .execute()
 
     return [
@@ -862,6 +870,8 @@ async def list_all_segments(
     favorites_only: bool = Query(default=False, description="Only show favorites"),
     min_duration: Optional[float] = Query(default=None, description="Minimum duration in seconds"),
     max_duration: Optional[float] = Query(default=None, description="Maximum duration in seconds"),
+    limit: int = Query(default=100, ge=1, le=500, description="Max segments to return"),
+    offset: int = Query(default=0, ge=0, description="Number of segments to skip"),
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """List all segments (library view) with optional filters, scoped to current profile."""
@@ -883,7 +893,7 @@ async def list_all_segments(
         # PostgreSQL array contains
         query = query.contains("keywords", [keyword])
 
-    result = query.order("created_at", desc=True).execute()
+    result = query.order("created_at", desc=True).limit(limit).offset(offset).execute()
 
     segments = []
     for s in result.data:

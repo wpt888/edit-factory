@@ -18,8 +18,9 @@ def sanitize_srt_text(srt_content: str) -> str:
         return srt_content
     # Remove HTML tags (including <script>...</script> with content)
     cleaned = re.sub(r'<script[^>]*>.*?</script>', '', srt_content, flags=re.DOTALL | re.IGNORECASE)
-    # Remove remaining HTML tags but preserve SRT arrow (-->)
-    cleaned = re.sub(r'<[^>]+>', '', cleaned)
+    # Remove non-SRT HTML tags but preserve standard SRT formatting tags (i, b, u, font)
+    # and the SRT arrow (-->)
+    cleaned = re.sub(r'<(?!/?(?:i|b|u|font)\b)[^>]+>', '', cleaned)
     return cleaned
 
 logger = logging.getLogger(__name__)

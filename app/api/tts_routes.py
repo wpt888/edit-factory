@@ -379,8 +379,9 @@ async def clone_voice_endpoint(
     temp_dir = settings.base_dir / "temp" / profile.profile_id
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save to temp file
-    temp_path = temp_dir / f"voice_sample_{uuid.uuid4()}.{audio_file.filename.split('.')[-1]}"
+    # Save to temp file (safe extension extraction)
+    ext = Path(audio_file.filename or "sample.wav").suffix or ".wav"
+    temp_path = temp_dir / f"voice_sample_{uuid.uuid4()}{ext}"
 
     try:
         # Read and validate size

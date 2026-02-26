@@ -212,14 +212,15 @@ class AssemblyService:
 
         for block in blocks:
             lines = block.strip().split("\n")
-            if len(lines) >= 3:
+            if len(lines) >= 2:
                 # Parse timestamp line (format: 00:00:01,000 --> 00:00:03,000)
                 time_line = lines[1]
                 if " --> " in time_line:
                     start_str, end_str = time_line.split(" --> ")
                     start_time = self._srt_time_to_seconds(start_str.strip())
                     end_time = self._srt_time_to_seconds(end_str.strip())
-                    text = " ".join(lines[2:])
+                    # Handle 2-line blocks (index + timestamp, no text)
+                    text = " ".join(lines[2:]) if len(lines) >= 3 else ""
 
                     entries.append({
                         "start_time": start_time,
@@ -711,15 +712,22 @@ class AssemblyService:
             cmd = ["ffmpeg", "-y"]
 
             if use_loop:
-                # Loop the segment seamlessly to fill needed duration
-                cmd.extend(["-stream_loop", "-1"])
-
-            cmd.extend([
-                "-ss", str(entry.start_time),
-                "-i", entry.source_video_path,
-                "-t", str(needed_duration if use_loop else segment_duration),
-                "-vf", ",".join(transform_filters),
-            ])
+                # When looping, -ss must come AFTER -i to work with -stream_loop
+                cmd.extend([
+                    "-stream_loop", "-1",
+                    "-i", entry.source_video_path,
+                    "-ss", str(entry.start_time),
+                    "-t", str(needed_duration),
+                    "-vf", ",".join(transform_filters),
+                ])
+            else:
+                # Without loop, -ss before -i enables fast seeking
+                cmd.extend([
+                    "-ss", str(entry.start_time),
+                    "-i", entry.source_video_path,
+                    "-t", str(segment_duration),
+                    "-vf", ",".join(transform_filters),
+                ])
 
             cmd.extend([
                 "-c:v", "libx264",

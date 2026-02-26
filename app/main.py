@@ -105,7 +105,9 @@ async def lifespan(app: FastAPI):
     await _recover_stuck_projects()
     await _cleanup_expired_pipelines()
     yield
-    # Shutdown (nothing needed)
+    # Shutdown
+    from app.db import close_supabase
+    close_supabase()
 
 
 # Cream aplicatia

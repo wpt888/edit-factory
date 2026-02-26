@@ -214,6 +214,19 @@ async def delete_feed(
     if not existing.data:
         raise HTTPException(status_code=404, detail="Feed not found")
 
+    # Clean up product images before deleting
+    try:
+        products = supabase.table("editai_products").select("local_image_path").eq("feed_id", feed_id).execute()
+        if products.data:
+            for p in products.data:
+                if p.get("local_image_path"):
+                    try:
+                        Path(p["local_image_path"]).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+    except Exception as e:
+        logger.warning(f"Failed to clean up product images for feed {feed_id}: {e}")
+
     supabase.table("product_feeds").delete().eq("id", feed_id).execute()
 
     return {"deleted": True, "feed_id": feed_id}

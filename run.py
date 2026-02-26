@@ -3,15 +3,6 @@
 Edit Factory - Run Script
 Porneste serverul FastAPI.
 """
-import os
-from pathlib import Path
-
-# Add local FFmpeg to PATH if exists
-ffmpeg_bin = Path(__file__).parent / "ffmpeg" / "ffmpeg-master-latest-win64-gpl" / "bin"
-if ffmpeg_bin.exists():
-    os.environ['PATH'] = str(ffmpeg_bin) + os.pathsep + os.environ.get('PATH', '')
-    print(f"[FFmpeg] Added to PATH: {ffmpeg_bin}")
-
 import uvicorn
 from app.config import get_settings
 

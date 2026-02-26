@@ -1549,6 +1549,9 @@ async def get_pipeline_status(pipeline_id: str):
         if idx in pipeline["render_jobs"]:
             # Variant has a render job
             job = pipeline["render_jobs"][idx]
+            # Sanitize error details for public endpoint
+            sanitized_error = "Processing failed. Check server logs for details." if job.get("error") else None
+            sanitized_lib_error = "Library save failed. Check server logs for details." if job.get("library_error") else None
             variants.append(VariantStatus(
                 variant_index=idx,
                 status=job["status"],
@@ -1556,9 +1559,9 @@ async def get_pipeline_status(pipeline_id: str):
                 current_step=job["current_step"],
                 final_video_path=job.get("final_video_path"),
                 thumbnail_path=job.get("thumbnail_path"),
-                error=job.get("error"),
+                error=sanitized_error,
                 library_saved=job.get("library_saved"),
-                library_error=job.get("library_error")
+                library_error=sanitized_lib_error
             ))
         else:
             # Variant not yet rendered

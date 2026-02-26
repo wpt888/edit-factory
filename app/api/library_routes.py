@@ -394,6 +394,8 @@ async def create_project(
 @router.get("/projects")
 async def list_projects(
     status: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Listează toate proiectele."""
@@ -402,11 +404,13 @@ async def list_projects(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        query = supabase.table("editai_projects").select("*").eq("profile_id", profile.profile_id).order("created_at", desc=True)
+        query = supabase.table("editai_projects").select("*", count="exact").eq("profile_id", profile.profile_id).order("created_at", desc=True)
         if status:
             query = query.eq("status", status)
+        query = query.limit(limit).offset(offset)
         result = query.execute()
-        return {"projects": result.data}
+        total = result.count if result.count is not None else len(result.data or [])
+        return {"projects": result.data, "total": total, "limit": limit, "offset": offset}
     except Exception as e:
         logger.error(f"Error listing projects: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -762,27 +766,36 @@ async def _generate_raw_clips_task(
                     continue  # Continue with next clip instead of aborting
 
             # Actualizăm proiectul
-            supabase.table("editai_projects").update({
+            status_result = supabase.table("editai_projects").update({
                 "status": "ready_for_triage",
                 "variants_count": len(variants),
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }).eq("id", project_id).eq("profile_id", profile_id).execute()
+            if not status_result.data:
+                logger.warning(f"Status update returned no data for project {project_id}")
 
             logger.info(f"Generated {len(variants)} raw clips for project {project_id}")
         else:
             # Eroare
-            supabase.table("editai_projects").update({
+            status_result = supabase.table("editai_projects").update({
                 "status": "failed",
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }).eq("id", project_id).eq("profile_id", profile_id).execute()
+            if not status_result.data:
+                logger.warning(f"Status update returned no data for project {project_id}")
             logger.error(f"Failed to generate clips for project {project_id}: {result.get('error')}")
 
     except Exception as e:
         logger.error(f"Error generating raw clips for {project_id}: {e}")
-        supabase.table("editai_projects").update({
-            "status": "failed",
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", project_id).eq("profile_id", profile_id).execute()
+        try:
+            status_result = supabase.table("editai_projects").update({
+                "status": "failed",
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", project_id).eq("profile_id", profile_id).execute()
+            if not status_result.data:
+                logger.warning(f"Status update returned no data for project {project_id}")
+        except Exception as db_err:
+            logger.error(f"Failed to update project {project_id} status to failed: {db_err}")
     finally:
         # Always release and cleanup the lock
         lock.release()
@@ -1335,25 +1348,34 @@ async def _generate_from_segments_task(
             total_clips = supabase.table("editai_clips").select("id", count="exact").eq("project_id", project_id).eq("is_deleted", False).execute()
             total_count = total_clips.count if total_clips.count else len(variants_created)
 
-            supabase.table("editai_projects").update({
+            status_result = supabase.table("editai_projects").update({
                 "status": "ready_for_triage",
                 "variants_count": total_count,
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }).eq("id", project_id).eq("profile_id", profile_id).execute()
+            if not status_result.data:
+                logger.warning(f"Status update returned no data for project {project_id}")
             logger.info(f"Added {len(variants_created)} new clips (total: {total_count}) for project {project_id}")
         else:
-            supabase.table("editai_projects").update({
+            status_result = supabase.table("editai_projects").update({
                 "status": "failed",
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }).eq("id", project_id).eq("profile_id", profile_id).execute()
+            if not status_result.data:
+                logger.warning(f"Status update returned no data for project {project_id}")
             logger.error(f"Failed to generate any clips for project {project_id}")
 
     except Exception as e:
         logger.error(f"Error generating from segments for {project_id}: {e}")
-        supabase.table("editai_projects").update({
-            "status": "failed",
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", project_id).eq("profile_id", profile_id).execute()
+        try:
+            status_result = supabase.table("editai_projects").update({
+                "status": "failed",
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", project_id).eq("profile_id", profile_id).execute()
+            if not status_result.data:
+                logger.warning(f"Status update returned no data for project {project_id}")
+        except Exception as db_err:
+            logger.error(f"Failed to update project {project_id} status to failed: {db_err}")
     finally:
         lock.release()
         cleanup_project_lock(project_id)
@@ -1389,7 +1411,11 @@ async def list_project_clips(
 
 
 @router.get("/all-clips")
-async def list_all_clips(profile: ProfileContext = Depends(get_profile_context)):
+async def list_all_clips(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    profile: ProfileContext = Depends(get_profile_context),
+):
     """Listează toate clipurile pentru librărie."""
     supabase = get_supabase()
     if not supabase:
@@ -1398,10 +1424,12 @@ async def list_all_clips(profile: ProfileContext = Depends(get_profile_context))
     try:
         # Get all clips with project info
         clips_result = supabase.table("editai_clips")\
-            .select("*, editai_projects!inner(name)")\
+            .select("*, editai_projects!inner(name)", count="exact")\
             .eq("is_deleted", False)\
             .eq("profile_id", profile.profile_id)\
             .order("created_at", desc=True)\
+            .limit(limit)\
+            .offset(offset)\
             .execute()
 
         if not clips_result.data:
@@ -1449,7 +1477,8 @@ async def list_all_clips(profile: ProfileContext = Depends(get_profile_context))
                 "has_audio": has_audio,
             })
 
-        return {"clips": clips_with_info}
+        total = clips_result.count if clips_result.count is not None else len(clips_with_info)
+        return {"clips": clips_with_info, "total": total, "limit": limit, "offset": offset}
     except Exception as e:
         logger.error(f"Error listing all clips: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -1724,25 +1753,45 @@ async def bulk_delete_clips(
 
     deleted = []
     failed = []
+    clip_ids = request.clip_ids
 
-    for clip_id in request.clip_ids:
-        try:
-            # Get clip data first
-            clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
-            if clip.data:
-                # Delete physical files
-                _delete_clip_files(clip.data)
-                # Delete from database
-                supabase.table("editai_clips").delete().eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
-                # Also delete associated clip content
-                supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).eq("profile_id", profile.profile_id).execute()
-                deleted.append(clip_id)
-                logger.info(f"Bulk delete: deleted clip {clip_id}")
-            else:
+    try:
+        # Fetch all clips at once
+        result = supabase.table("editai_clips")\
+            .select("id, raw_video_path, thumbnail_path, final_video_path")\
+            .in_("id", clip_ids)\
+            .eq("profile_id", profile.profile_id)\
+            .execute()
+
+        found_clips = result.data or []
+        found_ids = {clip["id"] for clip in found_clips}
+
+        # Mark missing clips as failed
+        for clip_id in clip_ids:
+            if clip_id not in found_ids:
                 failed.append({"id": clip_id, "error": "Not found"})
-        except Exception as e:
-            logger.error(f"Error deleting clip {clip_id}: {e}")
-            failed.append({"id": clip_id, "error": str(e)})
+
+        # Delete physical files for all found clips
+        for clip in found_clips:
+            _delete_clip_files(clip)
+
+        if found_ids:
+            found_id_list = list(found_ids)
+            # Batch delete clip_content
+            supabase.table("editai_clip_content").delete().in_("clip_id", found_id_list).execute()
+            # Batch delete clips
+            supabase.table("editai_clips").delete().in_("id", found_id_list).eq("profile_id", profile.profile_id).execute()
+
+        deleted = list(found_ids)
+        for clip_id in deleted:
+            logger.info(f"Bulk delete: deleted clip {clip_id}")
+
+    except Exception as e:
+        logger.error(f"Error in bulk delete: {e}")
+        # If batch operation failed, mark all non-already-failed as failed
+        for clip_id in clip_ids:
+            if clip_id not in [f["id"] for f in failed] and clip_id not in deleted:
+                failed.append({"id": clip_id, "error": str(e)})
 
     return {
         "status": "completed",

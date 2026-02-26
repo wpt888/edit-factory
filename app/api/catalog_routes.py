@@ -151,7 +151,7 @@ async def get_product_images(
         product_result = supabase.table(TABLE)\
             .select("image_link")\
             .eq("id", product_id)\
-            .single()\
+            .maybe_single()\
             .execute()
         if product_result.data and product_result.data.get("image_link"):
             return {"product_id": product_id, "images": [product_result.data["image_link"]]}
@@ -175,7 +175,7 @@ async def get_catalog_product(
     result = supabase.table(TABLE)\
         .select("*")\
         .eq("id", product_id)\
-        .single()\
+        .maybe_single()\
         .execute()
 
     if not result.data:

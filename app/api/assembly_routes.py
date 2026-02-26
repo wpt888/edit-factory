@@ -412,10 +412,15 @@ async def get_assembly_status(job_id: str):
 
     job = _assembly_jobs[job_id]
 
+    # Sanitize error details for public endpoint
+    error_msg = None
+    if job.get("error"):
+        error_msg = "Processing failed. Check server logs for details."
+
     return AssemblyStatusResponse(
         status=job["status"],
         progress=job["progress"],
         current_step=job["current_step"],
         final_video_path=job.get("final_video_path"),
-        error=job.get("error")
+        error=error_msg
     )

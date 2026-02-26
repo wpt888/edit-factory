@@ -511,7 +511,13 @@ async def get_publish_job_progress(job_id: str):
     progress = get_publish_progress(job_id)
     if not progress:
         return {"status": "not_found", "percentage": 0}
-    return progress
+    # Sanitize error details for public endpoint
+    result = dict(progress)
+    if result.get("status") == "failed" and result.get("step", "").startswith("Error:"):
+        result["step"] = "Publishing failed. Check server logs for details."
+    if result.get("status") == "failed" and result.get("step", "").startswith("Failed:"):
+        result["step"] = "Publishing failed. Check server logs for details."
+    return result
 
 
 # ============== BACKGROUND TASKS ==============

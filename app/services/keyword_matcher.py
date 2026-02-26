@@ -156,12 +156,56 @@ def find_keyword_timestamps(
     subtitles = parse_srt(srt_content)
     matches = []
 
+    # Pre-compute normalized keywords for quick exact/contains matching
+    keywords_lower = {kw: normalize_word(kw) for kw in keywords}
+
     for sub in subtitles:
         text = sub['text']
         words = text.split()
 
         for word in words:
+            word_norm = normalize_word(word)
+            matched_keywords = set()  # Track which keywords already matched this word
+
+            # Quick exact/contains pre-filter before expensive fuzzy matching
             for keyword in keywords:
+                kw_norm = keywords_lower[keyword]
+
+                # Exact match
+                if word_norm == kw_norm:
+                    matched_keywords.add(keyword)
+                    match = KeywordMatch(
+                        keyword=keyword,
+                        matched_text=word,
+                        start_time=sub['start_time'],
+                        end_time=sub['end_time'],
+                        confidence=1.0
+                    )
+                    matches.append(match)
+                    logger.debug(f"Keyword match (exact): '{keyword}' -> '{word}' at {sub['start_time']:.2f}s (confidence: 1.00)")
+                    continue
+
+                # Contains match (keyword in word or word starts with keyword)
+                if kw_norm in word_norm:
+                    matched_keywords.add(keyword)
+                    conf = 0.95 if word_norm.startswith(kw_norm) else 0.9
+                    if conf >= min_confidence:
+                        match = KeywordMatch(
+                            keyword=keyword,
+                            matched_text=word,
+                            start_time=sub['start_time'],
+                            end_time=sub['end_time'],
+                            confidence=conf
+                        )
+                        matches.append(match)
+                        logger.debug(f"Keyword match (contains): '{keyword}' -> '{word}' at {sub['start_time']:.2f}s (confidence: {conf:.2f})")
+                    continue
+
+            # Only use expensive fuzzy matching for remaining unmatched keywords
+            for keyword in keywords:
+                if keyword in matched_keywords:
+                    continue
+
                 confidence = fuzzy_match(word, keyword, threshold=min_confidence)
 
                 if confidence >= min_confidence:
@@ -173,7 +217,7 @@ def find_keyword_timestamps(
                         confidence=confidence
                     )
                     matches.append(match)
-                    logger.debug(f"Keyword match: '{keyword}' -> '{word}' at {sub['start_time']:.2f}s (confidence: {confidence:.2f})")
+                    logger.debug(f"Keyword match (fuzzy): '{keyword}' -> '{word}' at {sub['start_time']:.2f}s (confidence: {confidence:.2f})")
 
     # Sortăm după timp
     matches.sort(key=lambda m: m.start_time)

@@ -122,13 +122,15 @@ async def list_tts_assets(
 
     assets = result.data or []
 
-    # Fetch used texts from clip_content for this profile's clips
+    # Fetch used texts from clip_content for this profile's recent clips
     used_texts = set()
     try:
         clips_result = (
             supabase.table("editai_clips")
             .select("id")
             .eq("profile_id", profile.profile_id)
+            .order("created_at", desc=True)
+            .limit(500)
             .execute()
         )
         clip_ids = [c["id"] for c in (clips_result.data or [])]

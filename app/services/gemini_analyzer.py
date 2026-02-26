@@ -283,8 +283,21 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
 
             batch_segments = self.analyze_batch(batch, context)
 
-            # Note: no offset adjustment needed — each batch's frames carry
-            # absolute timestamps that Gemini uses directly in its response.
+            # Fix batch offset: Gemini may return start_time/end_time relative
+            # to the batch's first frame (starting at 0) instead of absolute
+            # video timestamps. Detect this by checking if all segments fall
+            # within the batch's local time range and adjust if needed.
+            if i > 0 and batch_segments:
+                batch_start_time = batch[0][0]  # First frame timestamp in this batch
+                batch_end_time = batch[-1][0] + self.frame_interval
+                max_seg_time = max(s.end_time for s in batch_segments)
+
+                # If all segment times are below the batch's first frame timestamp,
+                # Gemini likely used batch-relative times — add the offset
+                if max_seg_time < batch_start_time:
+                    for seg in batch_segments:
+                        seg.start_time += batch_start_time
+                        seg.end_time += batch_start_time
 
             all_segments.extend(batch_segments)
 

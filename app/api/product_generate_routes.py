@@ -135,14 +135,14 @@ async def generate_product_video(
         product_result = supabase.table("v_catalog_products")\
             .select("id, title")\
             .eq("id", product_id)\
-            .single()\
+            .maybe_single()\
             .execute()
     else:
         product_result = supabase.table("products")\
             .select("id, title, feed_id, product_feeds!inner(profile_id)")\
             .eq("id", product_id)\
             .eq("product_feeds.profile_id", profile.profile_id)\
-            .single()\
+            .maybe_single()\
             .execute()
 
     if not product_result.data:
@@ -516,7 +516,7 @@ async def _generate_product_video_task(
         product_result = supabase.table(product_table)\
             .select("*")\
             .eq("id", product_id)\
-            .single()\
+            .maybe_single()\
             .execute()
 
         if not product_result.data:
@@ -529,7 +529,7 @@ async def _generate_product_video_task(
             profile_result = get_supabase().table("profiles")\
                 .select("video_template_settings")\
                 .eq("id", profile_id)\
-                .single()\
+                .maybe_single()\
                 .execute()
             tmpl_cfg = (profile_result.data or {}).get("video_template_settings") or {}
         except Exception as _tmpl_exc:
