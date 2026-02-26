@@ -63,6 +63,9 @@ class EdgeTTSService:
     100% GRATUIT, calitate excelentă.
     """
 
+    # Class-level cache shared across all instances
+    _voices_cache: Optional[List[Voice]] = None
+
     def __init__(self, output_dir: Optional[Path] = None):
         """
         Args:
@@ -70,7 +73,6 @@ class EdgeTTSService:
         """
         self.output_dir = Path(output_dir) if output_dir else Path("./output")
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self._voices_cache: Optional[List[Voice]] = None
 
     async def list_voices(self, language: Optional[str] = None) -> List[Voice]:
         """
@@ -82,9 +84,9 @@ class EdgeTTSService:
         Returns:
             Lista de voci disponibile
         """
-        if self._voices_cache is None:
+        if EdgeTTSService._voices_cache is None:
             voices_list = await edge_tts.list_voices()
-            self._voices_cache = [
+            EdgeTTSService._voices_cache = [
                 Voice(
                     name=v["FriendlyName"],
                     short_name=v["ShortName"],
@@ -96,9 +98,9 @@ class EdgeTTSService:
             ]
 
         if language:
-            return [v for v in self._voices_cache if v.language.lower() == language.lower()]
+            return [v for v in EdgeTTSService._voices_cache if v.language.lower() == language.lower()]
 
-        return self._voices_cache
+        return EdgeTTSService._voices_cache
 
     def list_voices_sync(self, language: Optional[str] = None) -> List[Voice]:
         """Versiune sincronă pentru list_voices."""

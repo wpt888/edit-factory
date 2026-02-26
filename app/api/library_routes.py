@@ -2673,6 +2673,7 @@ def _extend_video_with_segments(
     supabase,
     profile_id: Optional[str] = "default"
 ) -> bool:
+    profile_id = profile_id or "default"
     """
     Extinde video-ul cu segmente adiționale din proiect pentru a atinge durata țintă.
 

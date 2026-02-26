@@ -61,7 +61,7 @@ class VideoSegment:
     avg_brightness: float     # Luminozitate medie (0-1)
     blur_score: float = 1.0       # Sharpness: 1.0 = sharp, 0.0 = blurry (Laplacian variance normalized)
     contrast_score: float = 0.5   # Contrast level: 0-1 (std dev normalized)
-    visual_hashes: List[np.ndarray] = None
+    visual_hashes: Optional[List[np.ndarray]] = None
 
     @property
     def duration(self) -> float:

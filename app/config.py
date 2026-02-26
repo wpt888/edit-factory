@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = ""
     elevenlabs_model: str = "eleven_flash_v2_5"
+    elevenlabs_encryption_key: str = ""  # Fernet key for encrypting API keys; if empty, derived from SUPABASE_KEY
 
     # Anthropic Claude AI
     anthropic_api_key: str = ""

@@ -73,8 +73,11 @@ class EncodingPreset(BaseModel):
             "-g", str(self.gop_size),  # GOP size (keyframe interval)
             "-keyint_min", str(self.keyint_min),  # Minimum keyframe interval
             "-sc_threshold", "0",  # Disable scene change detection
-            "-bf", "2",  # Use 2 B-frames for better compression
         ])
+
+        # B-frames: only safe for CPU (libx264). Some NVENC GPUs don't support -bf.
+        if not use_gpu:
+            params.extend(["-bf", "2"])  # Use 2 B-frames for better compression
 
         # Audio settings
         params.extend([

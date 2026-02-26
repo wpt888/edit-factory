@@ -4,14 +4,58 @@ ElevenLabs Account Manager
 Manages multiple ElevenLabs API keys per profile with auto-failover on 402 (quota exceeded).
 Provides CRUD operations, key rotation, and subscription checking.
 """
+import base64
+import hashlib
 import logging
 import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import httpx
+from cryptography.fernet import Fernet
 
 from app.config import get_settings
+
+
+def _get_fernet():
+    """Get Fernet instance using ELEVENLABS_ENCRYPTION_KEY or derive from SUPABASE_KEY."""
+    settings = get_settings()
+    key = getattr(settings, 'elevenlabs_encryption_key', None)
+    if not key:
+        # Derive a key from SUPABASE_KEY as fallback
+        base_key = settings.supabase_key or "edit-factory-default-key"
+        derived = hashlib.sha256(base_key.encode()).digest()
+        key = base64.urlsafe_b64encode(derived)
+    else:
+        # Ensure proper Fernet key format
+        if isinstance(key, str):
+            try:
+                key = key.encode()
+                Fernet(key)  # validate
+            except Exception:
+                derived = hashlib.sha256(key).digest()
+                key = base64.urlsafe_b64encode(derived)
+    return Fernet(key)
+
+
+def _encrypt_api_key(api_key: str) -> str:
+    """Encrypt an API key."""
+    try:
+        f = _get_fernet()
+        return f.encrypt(api_key.encode()).decode()
+    except Exception:
+        # Fallback: store as-is (backwards compatible)
+        return api_key
+
+
+def _decrypt_api_key(encrypted: str) -> str:
+    """Decrypt an API key. Handles both encrypted and plaintext (legacy) keys."""
+    try:
+        f = _get_fernet()
+        return f.decrypt(encrypted.encode()).decode()
+    except Exception:
+        # Not encrypted (legacy) — return as-is
+        return encrypted
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +149,7 @@ class ElevenLabsAccountManager:
         result = []
         for a in active:
             result.append({
-                "api_key": a["api_key_encrypted"],
+                "api_key": _decrypt_api_key(a["api_key_encrypted"]),
                 "account_id": a["id"],
                 "label": a["label"],
                 "api_key_hint": a["api_key_hint"],
@@ -166,16 +210,19 @@ class ElevenLabsAccountManager:
             return
 
         try:
-            # Find account by key
+            # Find account by decrypting keys (can't use .eq on encrypted column)
             result = supabase.table("elevenlabs_accounts")\
-                .select("id")\
+                .select("id, api_key_encrypted")\
                 .eq("profile_id", profile_id)\
-                .eq("api_key_encrypted", api_key)\
-                .limit(1)\
                 .execute()
 
-            if result.data:
-                account_id = result.data[0]["id"]
+            account_id = None
+            for row in (result.data or []):
+                if _decrypt_api_key(row["api_key_encrypted"]) == api_key:
+                    account_id = row["id"]
+                    break
+
+            if account_id:
                 supabase.table("elevenlabs_accounts").update({
                     "last_error": error_msg,
                     "last_checked_at": datetime.now(timezone.utc).isoformat(),
@@ -292,11 +339,11 @@ class ElevenLabsAccountManager:
         # Generate hint
         api_key_hint = f"...{api_key[-4:]}" if len(api_key) >= 4 else "..."
 
-        # Insert
+        # Insert (encrypt the API key)
         row = {
             "profile_id": profile_id,
             "label": label,
-            "api_key_encrypted": api_key,
+            "api_key_encrypted": _encrypt_api_key(api_key),
             "api_key_hint": api_key_hint,
             "is_primary": is_primary,
             "is_active": True,
@@ -466,7 +513,7 @@ class ElevenLabsAccountManager:
         if not account.data:
             raise ValueError("Account not found")
 
-        api_key = account.data[0]["api_key_encrypted"]
+        api_key = _decrypt_api_key(account.data[0]["api_key_encrypted"])
         sub_info = self.check_subscription(api_key)
 
         # Update DB

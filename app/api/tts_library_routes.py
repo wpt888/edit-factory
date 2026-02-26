@@ -491,7 +491,8 @@ async def serve_audio(
         raise HTTPException(status_code=404, detail="Audio not found")
 
     settings = get_settings()
-    file_path = settings.base_dir / result.data["mp3_path"]
+    mp3_path = Path(result.data["mp3_path"])
+    file_path = mp3_path if mp3_path.is_absolute() else settings.base_dir / mp3_path
 
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Audio file missing from disk")
@@ -526,7 +527,8 @@ async def serve_srt(
         raise HTTPException(status_code=404, detail="SRT not found")
 
     settings = get_settings()
-    file_path = settings.base_dir / result.data["srt_path"]
+    srt_path = Path(result.data["srt_path"])
+    file_path = srt_path if srt_path.is_absolute() else settings.base_dir / srt_path
 
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="SRT file missing from disk")

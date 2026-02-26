@@ -570,7 +570,13 @@ async def update_pipeline_scripts(
 
     # Clean up orphan TTS entries for removed script indices
     new_count = len(request.scripts)
-    orphan_keys = [k for k in list(tts_previews.keys()) if int(str(k)) >= new_count]
+    orphan_keys = []
+    for k in list(tts_previews.keys()):
+        try:
+            if int(str(k)) >= new_count:
+                orphan_keys.append(k)
+        except (ValueError, TypeError):
+            orphan_keys.append(k)  # Remove invalid keys
     for k in orphan_keys:
         tts_previews.pop(k, None)
 
@@ -1395,16 +1401,11 @@ async def render_variants(
                                 library_project_id = pipeline.get("library_project_id")
                                 if not library_project_id:
                                     pipeline_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
-                                    existing = supabase_lib.table("editai_projects")\
-                                        .select("id")\
-                                        .eq("profile_id", profile.profile_id)\
-                                        .eq("name", pipeline_name)\
-                                        .limit(1)\
-                                        .execute()
 
-                                    if existing.data:
-                                        library_project_id = existing.data[0]["id"]
-                                    else:
+                                    # Insert-or-fetch: attempt insert first, fall back to
+                                    # select if a concurrent request already created the row.
+                                    # This eliminates the TOCTOU race between SELECT and INSERT.
+                                    try:
                                         proj_result = supabase_lib.table("editai_projects").insert({
                                             "profile_id": profile.profile_id,
                                             "name": pipeline_name,
@@ -1413,6 +1414,22 @@ async def render_variants(
                                         }).execute()
                                         if proj_result.data:
                                             library_project_id = proj_result.data[0]["id"]
+                                    except Exception as insert_err:
+                                        # Likely a unique-constraint violation (duplicate).
+                                        # Fetch the existing project instead.
+                                        logger.debug(
+                                            f"Project insert conflict, fetching existing: {insert_err}"
+                                        )
+                                        existing = supabase_lib.table("editai_projects")\
+                                            .select("id")\
+                                            .eq("profile_id", profile.profile_id)\
+                                            .eq("name", pipeline_name)\
+                                            .limit(1)\
+                                            .execute()
+                                        if existing.data:
+                                            library_project_id = existing.data[0]["id"]
+                                        else:
+                                            raise
 
                                     if library_project_id:
                                         pipeline["library_project_id"] = library_project_id

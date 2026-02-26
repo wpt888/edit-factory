@@ -412,6 +412,12 @@ def is_postiz_configured(profile_id: Optional[str] = None) -> bool:
         True if Postiz API URL and key are configured
     """
     if profile_id:
+        # Fast path: if we already have a cached instance, it's configured
+        if profile_id in _postiz_instances:
+            _, created_at = _postiz_instances[profile_id]
+            if (time.time() - created_at) < _POSTIZ_CACHE_TTL:
+                return True
+
         # Check profile's tts_settings.postiz
         supabase = get_supabase()
         if supabase:

@@ -263,6 +263,9 @@ Begin generation now:"""
                 script = self._format_sentences(script)
                 cleaned.append(script)
 
+        # Truncate to requested variant_count to avoid returning excess scripts
+        cleaned = cleaned[:variant_count]
+
         return cleaned
 
     def _format_sentences(self, text: str) -> str:
