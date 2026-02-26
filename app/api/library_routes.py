@@ -2146,7 +2146,7 @@ async def _render_final_clip_task(
                 # Apply silence removal to timestamped audio
                 try:
                     from app.services.silence_remover import SilenceRemover
-                    remover = SilenceRemover(min_silence_duration=0.25, padding=0.06)
+                    remover = SilenceRemover(min_silence_duration=0.25, padding=0.06, target_pause_duration=0.1)
                     trimmed_path = temp_dir / f"tts_trimmed_{clip_id}.mp3"
                     silence_result = remover.remove_silence(audio_path, trimmed_path)
                     audio_path = trimmed_path
@@ -2155,6 +2155,12 @@ async def _render_final_clip_task(
                         'removed_duration': silence_result.removed_duration
                     }
                     logger.info(f"Silence removal: {silence_result.original_duration:.1f}s -> {silence_result.new_duration:.1f}s")
+
+                    # Remap TTS timestamps to match the trimmed audio
+                    if silence_result.segments_map and tts_timestamps:
+                        from app.services.tts_subtitle_generator import remap_timestamps_dict
+                        tts_timestamps = remap_timestamps_dict(tts_timestamps, silence_result.segments_map)
+                        logger.info(f"Remapped TTS timestamps after silence removal ({len(silence_result.segments_map)} regions)")
                 except Exception as e:
                     logger.warning(f"Silence removal failed, using raw audio: {e}")
 
@@ -2276,7 +2282,7 @@ async def _render_final_clip_task(
                 # Check SRT cache first
                 from app.services.tts_cache import srt_cache_lookup, srt_cache_store
                 _tts_voice = content_data.get("tts_voice_id", "")
-                _srt_cache_key = {"text": content_data["tts_text"], "voice_id": _tts_voice, "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
+                _srt_cache_key = {"text": content_data["tts_text"], "voice_id": _tts_voice, "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "pause_version": "v2"}
                 cached_srt = srt_cache_lookup(_srt_cache_key)
                 if cached_srt:
                     auto_srt = cached_srt

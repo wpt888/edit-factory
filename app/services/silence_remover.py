@@ -69,12 +69,14 @@ class SilenceRemover:
         min_silence_duration: float = 0.3,  # Pauze < 300ms rămân (ritm natural)
         padding: float = 0.08,  # 80ms padding pentru tranziții line
         speech_threshold: float = 0.5,  # Threshold pentru VAD
-        min_speech_duration: float = 0.1  # Segmente mai scurte de 100ms sunt ignorate
+        min_speech_duration: float = 0.1,  # Segmente mai scurte de 100ms sunt ignorate
+        target_pause_duration: float = None  # If set, shorten long pauses to this instead of removing
     ):
         self.min_silence_duration = min_silence_duration
         self.padding = padding
         self.speech_threshold = speech_threshold
         self.min_speech_duration = min_speech_duration
+        self.target_pause_duration = target_pause_duration
 
         # Voice detector (lazy loading)
         self._detector = None
@@ -149,6 +151,48 @@ class SilenceRemover:
 
         return merged
 
+    def _build_output_regions(
+        self,
+        speech_segments: List[Tuple[float, float]],
+        total_duration: float
+    ) -> List[Tuple[float, float]]:
+        """
+        Build final extraction regions: speech + shortened pauses.
+
+        When target_pause_duration is set, long pauses are shortened to that
+        duration by taking a slice from the CENTER of each gap (avoids breathing
+        sounds at edges). When None, gaps are skipped entirely (original behavior).
+        """
+        if not speech_segments:
+            return []
+
+        if self.target_pause_duration is None:
+            return speech_segments
+
+        regions = []
+        for i, (start, end) in enumerate(speech_segments):
+            # Add speech region
+            regions.append((start, end))
+
+            # Add shortened pause from the gap AFTER this segment
+            if i < len(speech_segments) - 1:
+                gap_start = end
+                gap_end = speech_segments[i + 1][0]
+                gap_duration = gap_end - gap_start
+
+                if gap_duration > 0:
+                    # Take a slice from the center of the gap
+                    slice_duration = min(self.target_pause_duration, gap_duration)
+                    center = (gap_start + gap_end) / 2
+                    slice_start = center - slice_duration / 2
+                    slice_end = center + slice_duration / 2
+                    # Clamp to gap boundaries
+                    slice_start = max(slice_start, gap_start)
+                    slice_end = min(slice_end, gap_end)
+                    regions.append((slice_start, slice_end))
+
+        return regions
+
     def remove_silence_vad(
         self,
         audio_path: Path,
@@ -194,12 +238,18 @@ class SilenceRemover:
 
         logger.info(f"Found {len(voice_segments)} speech segments, merged to {len(merged_segments)}")
 
+        # Build output regions (speech + shortened pauses if target_pause_duration is set)
+        output_regions = self._build_output_regions(merged_segments, original_duration)
+
+        if self.target_pause_duration is not None:
+            logger.info(f"Pause shortening: {len(merged_segments)} speech regions → {len(output_regions)} output regions (target pause: {self.target_pause_duration}s)")
+
         # Extragem și concatenăm segmentele
         with tempfile.TemporaryDirectory() as temp_dir:
             tmp_path = Path(temp_dir)
             segment_files = []
 
-            for i, (start, end) in enumerate(merged_segments):
+            for i, (start, end) in enumerate(output_regions):
                 # Asigurăm că nu depășim durata originală
                 start = max(0, start)
                 end = min(end, original_duration)
@@ -276,8 +326,8 @@ class SilenceRemover:
             original_duration=original_duration,
             new_duration=new_duration,
             removed_duration=removed_duration,
-            segments_kept=len(merged_segments),
-            segments_map=merged_segments
+            segments_kept=len(output_regions),
+            segments_map=output_regions
         )
 
     def _detect_voice_in_audio(
@@ -443,7 +493,8 @@ def remove_silence_from_tts(
     audio_path: Path,
     output_path: Optional[Path] = None,
     min_silence_duration: float = 0.3,
-    padding: float = 0.08
+    padding: float = 0.08,
+    target_pause_duration: float = None
 ) -> SilenceRemovalResult:
     """
     Funcție helper: elimină silence dintr-un fișier TTS.
@@ -453,6 +504,7 @@ def remove_silence_from_tts(
         output_path: Calea pentru output (default: audio_path cu suffix _trimmed)
         min_silence_duration: Pauze mai scurte nu sunt eliminate (păstrează ritmul)
         padding: Câte secunde să păstreze în jurul cuvintelor
+        target_pause_duration: If set, shorten long pauses to this duration instead of removing
 
     Returns:
         SilenceRemovalResult
@@ -464,7 +516,8 @@ def remove_silence_from_tts(
 
     remover = SilenceRemover(
         min_silence_duration=min_silence_duration,
-        padding=padding
+        padding=padding,
+        target_pause_duration=target_pause_duration
     )
 
     return remover.remove_silence(audio_path, output_path)
