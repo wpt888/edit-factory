@@ -118,7 +118,7 @@ class ElevenLabsTTS:
         }
 
         # Prepare request
-        # Request 192kbps MP3 output (flash v2.5 costs ~$0.11 per 1k chars, half of multilingual v2)
+        # Request 192kbps MP3 output (~$0.24 per 1k chars, Scale plan pricing)
         url = f"{self.BASE_URL}/text-to-speech/{self.voice_id}?output_format=mp3_44100_128"
 
         headers = {

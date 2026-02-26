@@ -14,7 +14,7 @@ from dataclasses import dataclass, asdict
 logger = logging.getLogger(__name__)
 
 # Pricing constants (approximate)
-ELEVENLABS_COST_PER_CHAR = 0.00022  # ~$0.22 per 1000 chars (Creator plan)
+ELEVENLABS_COST_PER_CHAR = 0.00024  # ~$0.24 per 1000 chars (Scale plan pricing)
 GEMINI_COST_PER_IMAGE = 0.02  # $0.02 per image
 GEMINI_COST_PER_1K_INPUT_TOKENS = 0.000075
 GEMINI_COST_PER_1K_OUTPUT_TOKENS = 0.0003

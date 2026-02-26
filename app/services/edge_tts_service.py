@@ -101,7 +101,11 @@ class EdgeTTSService:
 
     def list_voices_sync(self, language: Optional[str] = None) -> List[Voice]:
         """Versiune sincronă pentru list_voices."""
-        return asyncio.run(self.list_voices(language))
+        try:
+            loop = asyncio.get_running_loop()
+            return loop.run_until_complete(self.list_voices(language))
+        except RuntimeError:
+            return asyncio.run(self.list_voices(language))
 
     async def generate_audio(
         self,
@@ -154,9 +158,15 @@ class EdgeTTSService:
         pitch: str = "+0Hz"
     ) -> Path:
         """Versiune sincronă pentru generate_audio."""
-        return asyncio.run(self.generate_audio(
-            text, output_path, voice, rate, volume, pitch
-        ))
+        try:
+            loop = asyncio.get_running_loop()
+            return loop.run_until_complete(self.generate_audio(
+                text, output_path, voice, rate, volume, pitch
+            ))
+        except RuntimeError:
+            return asyncio.run(self.generate_audio(
+                text, output_path, voice, rate, volume, pitch
+            ))
 
     async def generate_with_subtitles(
         self,
@@ -232,9 +242,15 @@ class EdgeTTSService:
         rate: str = "+0%"
     ) -> Dict[str, Path]:
         """Versiune sincronă pentru generate_with_subtitles."""
-        return asyncio.run(self.generate_with_subtitles(
-            text, audio_path, srt_path, voice, rate
-        ))
+        try:
+            loop = asyncio.get_running_loop()
+            return loop.run_until_complete(self.generate_with_subtitles(
+                text, audio_path, srt_path, voice, rate
+            ))
+        except RuntimeError:
+            return asyncio.run(self.generate_with_subtitles(
+                text, audio_path, srt_path, voice, rate
+            ))
 
     def _ms_to_srt_time(self, ms: float) -> str:
         """Convertește milisecunde în format SRT (HH:MM:SS,mmm)."""
@@ -302,9 +318,15 @@ class EdgeTTSService:
         base_name: str = "variant"
     ) -> List[Dict]:
         """Versiune sincronă pentru generate_variants."""
-        return asyncio.run(self.generate_variants(
-            texts, output_dir, voices, base_name
-        ))
+        try:
+            loop = asyncio.get_running_loop()
+            return loop.run_until_complete(self.generate_variants(
+                texts, output_dir, voices, base_name
+            ))
+        except RuntimeError:
+            return asyncio.run(self.generate_variants(
+                texts, output_dir, voices, base_name
+            ))
 
 
 def get_voice_for_language(language: str, gender: str = "male") -> str:

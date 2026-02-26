@@ -4,9 +4,10 @@ Handles video uploads and post scheduling via Postiz API.
 """
 import os
 import logging
+import time
 import httpx
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -290,7 +291,14 @@ class PostizPublisher:
                     error=f"Postiz API error: {response.status_code} - {response.text[:200]}"
                 )
 
-            data = response.json()
+            try:
+                data = response.json()
+            except (ValueError, Exception) as e:
+                logger.error(f"Failed to parse Postiz create_post response: {e}, raw: {response.text[:500]}")
+                return PublishResult(
+                    success=False,
+                    error=f"Postiz returned invalid JSON: {response.text[:200]}"
+                )
 
             if profile_id:
                 logger.info(f"[Profile {profile_id}] Created Postiz post: {data.get('id')}")
@@ -304,8 +312,9 @@ class PostizPublisher:
             )
 
 
-# Profile-aware factory pattern with instance caching
-_postiz_instances: Dict[str, PostizPublisher] = {}
+# Profile-aware factory pattern with instance caching + TTL
+_postiz_instances: Dict[str, Tuple[PostizPublisher, float]] = {}  # profile_id -> (instance, created_at)
+_POSTIZ_CACHE_TTL = 300  # 5 minutes
 
 
 def get_postiz_publisher(profile_id: str) -> PostizPublisher:
@@ -323,9 +332,14 @@ def get_postiz_publisher(profile_id: str) -> PostizPublisher:
     """
     global _postiz_instances
 
-    # Return cached instance if exists
+    # Return cached instance if exists and not expired
     if profile_id in _postiz_instances:
-        return _postiz_instances[profile_id]
+        instance, created_at = _postiz_instances[profile_id]
+        if (time.time() - created_at) < _POSTIZ_CACHE_TTL:
+            return instance
+        else:
+            logger.debug(f"[Profile {profile_id}] Postiz cache expired, recreating")
+            del _postiz_instances[profile_id]
 
     # Load profile's Postiz settings from database
     supabase = get_supabase()
@@ -355,9 +369,9 @@ def get_postiz_publisher(profile_id: str) -> PostizPublisher:
             "Configurează Postiz în Settings."
         )
 
-    # Create and cache instance
+    # Create and cache instance with timestamp
     publisher = PostizPublisher(api_url=api_url, api_key=api_key)
-    _postiz_instances[profile_id] = publisher
+    _postiz_instances[profile_id] = (publisher, time.time())
     logger.info(f"[Profile {profile_id}] Created Postiz publisher instance")
 
     return publisher

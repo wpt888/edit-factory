@@ -107,66 +107,6 @@ class ElevenLabsTTSService(TTSService):
 
         logger.info(f"ElevenLabsTTSService initialized with voice: {self._voice_id}, model: {self.model_id}")
 
-    async def _post_with_failover(
-        self,
-        client: httpx.AsyncClient,
-        url: str,
-        headers: dict,
-        data: dict
-    ) -> httpx.Response:
-        """
-        POST with automatic key rotation on 402 (quota exceeded).
-
-        Tries current key, then rotates through available keys via AccountManager.
-        Max retries = MAX_FAILOVER_RETRIES (default 2, so 3 total attempts).
-        """
-        current_key = headers.get("xi-api-key", self.api_key)
-        current_hint = f"...{current_key[-4:]}" if len(current_key) >= 4 else "..."
-
-        response = await client.post(url, headers=headers, json=data)
-
-        if response.status_code != 402 or not self._profile_id:
-            return response
-
-        # 402 = quota exceeded, try failover
-        logger.warning(f"ElevenLabs 402 on key {current_hint}, attempting failover...")
-
-        try:
-            from app.services.elevenlabs_account_manager import get_account_manager
-            manager = get_account_manager()
-            manager.record_error(self._profile_id, current_key, "402 Quota exceeded")
-        except Exception as e:
-            logger.warning(f"Failed to record error: {e}")
-            return response
-
-        for attempt in range(self.MAX_FAILOVER_RETRIES):
-            next_key = manager.get_next_api_key(self._profile_id, current_key)
-            if not next_key:
-                logger.error("All ElevenLabs keys exhausted")
-                return response
-
-            next_hint = f"...{next_key[-4:]}" if len(next_key) >= 4 else "..."
-            logger.info(f"Rotating ElevenLabs key: {current_hint} -> {next_hint} (attempt {attempt + 2})")
-
-            headers["xi-api-key"] = next_key
-            response = await client.post(url, headers=headers, json=data)
-
-            if response.status_code != 402:
-                # Success or different error - update our active key
-                self.api_key = next_key
-                return response
-
-            # Still 402, record and try next
-            try:
-                manager.record_error(self._profile_id, next_key, "402 Quota exceeded")
-            except Exception:
-                pass
-            current_key = next_key
-            current_hint = next_hint
-
-        logger.error("All ElevenLabs keys returned 402")
-        return response
-
     @property
     def provider_name(self) -> str:
         """Return provider identifier."""
@@ -174,8 +114,8 @@ class ElevenLabsTTSService(TTSService):
 
     @property
     def cost_per_1k_chars(self) -> float:
-        """Return cost per 1000 characters (flash v2.5 pricing)."""
-        return 0.11
+        """Return cost per 1000 characters (Scale plan pricing)."""
+        return 0.24
 
     async def list_voices(self, language: Optional[str] = None) -> List[TTSVoice]:
         """
@@ -298,6 +238,10 @@ class ElevenLabsTTSService(TTSService):
         try:
             response = await _call_elevenlabs_api_new(url, headers, data)
 
+            # Handle 402 (quota exceeded) with key failover
+            if response.status_code == 402 and self._profile_id:
+                response = await self._try_failover(response, url, headers, data)
+
             if response.status_code != 200:
                 error_detail = response.text
                 logger.error(f"ElevenLabs API error: {response.status_code} - {error_detail}")
@@ -326,6 +270,7 @@ class ElevenLabsTTSService(TTSService):
                 tracker.log_elevenlabs_tts(
                     job_id=output_path.stem,
                     characters=len(text),
+                    profile_id=self._profile_id,
                     text_preview=text[:100]
                 )
             except Exception as e:
@@ -351,6 +296,58 @@ class ElevenLabsTTSService(TTSService):
         except Exception as e:
             logger.error(f"TTS generation failed: {e}")
             raise
+
+    async def _try_failover(
+        self,
+        response: httpx.Response,
+        url: str,
+        headers: dict,
+        data: dict
+    ) -> httpx.Response:
+        """
+        Attempt key rotation on 402 (quota exceeded).
+
+        Rotates through available keys via AccountManager.
+        Returns the last response (success or final failure).
+        """
+        current_key = headers.get("xi-api-key", self.api_key)
+        current_hint = f"...{current_key[-4:]}" if len(current_key) >= 4 else "..."
+
+        logger.warning(f"ElevenLabs 402 on key {current_hint}, attempting failover...")
+
+        try:
+            from app.services.elevenlabs_account_manager import get_account_manager
+            manager = get_account_manager()
+            manager.record_error(self._profile_id, current_key, "402 Quota exceeded")
+        except Exception as e:
+            logger.warning(f"Failed to record error: {e}")
+            return response
+
+        for attempt in range(self.MAX_FAILOVER_RETRIES):
+            next_key = manager.get_next_api_key(self._profile_id, current_key)
+            if not next_key:
+                logger.error("All ElevenLabs keys exhausted")
+                return response
+
+            next_hint = f"...{next_key[-4:]}" if len(next_key) >= 4 else "..."
+            logger.info(f"Rotating ElevenLabs key: {current_hint} -> {next_hint} (attempt {attempt + 2})")
+
+            headers["xi-api-key"] = next_key
+            response = await _call_elevenlabs_api_new(url, headers, data)
+
+            if response.status_code != 402:
+                self.api_key = next_key
+                return response
+
+            try:
+                manager.record_error(self._profile_id, next_key, "402 Quota exceeded")
+            except Exception:
+                pass
+            current_key = next_key
+            current_hint = next_hint
+
+        logger.error("All ElevenLabs keys returned 402")
+        return response
 
     async def generate_audio_with_timestamps(
         self,
@@ -430,6 +427,10 @@ class ElevenLabsTTSService(TTSService):
         try:
             response = await _call_elevenlabs_api_new(url, headers, data)
 
+            # Handle 402 (quota exceeded) with key failover
+            if response.status_code == 402 and self._profile_id:
+                response = await self._try_failover(response, url, headers, data)
+
             if response.status_code != 200:
                 error_detail = response.text
                 logger.error(f"ElevenLabs API error: {response.status_code} - {error_detail}")
@@ -469,6 +470,7 @@ class ElevenLabsTTSService(TTSService):
                 tracker.log_elevenlabs_tts(
                     job_id=output_path.stem,
                     characters=len(text),
+                    profile_id=self._profile_id,
                     text_preview=text[:100]
                 )
             except Exception as e:

@@ -20,6 +20,7 @@ class JobStorage:
     def __init__(self):
         self._supabase = None
         self._memory_store: Dict[str, dict] = {}
+        self._update_lock = threading.Lock()
         self._init_supabase()
 
     def _init_supabase(self):
@@ -107,10 +108,16 @@ class JobStorage:
                 if result.data:
                     # Extract job data from JSONB column
                     return result.data.get("data", {})
+                return None
             except Exception as e:
-                logger.warning(f"JobStorage: Failed to get job from Supabase: {e}, trying memory")
+                logger.error(f"JobStorage: Supabase error fetching job {job_id}: {e}")
+                # Only fall through to memory if job might exist there (created during Supabase outage)
+                if job_id in self._memory_store:
+                    logger.warning(f"JobStorage: Found job {job_id} in memory fallback after Supabase error")
+                    return self._memory_store.get(job_id)
+                return None
 
-        # Fallback to memory
+        # In-memory only mode (no Supabase configured)
         return self._memory_store.get(job_id)
 
     def update_job(self, job_id: str, updates: dict, profile_id: Optional[str] = None) -> Optional[dict]:
@@ -125,46 +132,47 @@ class JobStorage:
         Returns:
             Updated job data or None if not found
         """
-        # Get current job
-        job = self.get_job(job_id)
-        if not job:
-            logger.warning(f"JobStorage: Job {job_id} not found for update")
-            return None
+        with self._update_lock:
+            # Get current job
+            job = self.get_job(job_id)
+            if not job:
+                logger.warning(f"JobStorage: Job {job_id} not found for update")
+                return None
 
-        # Merge updates
-        job.update(updates)
-        job["updated_at"] = datetime.now(timezone.utc).isoformat()
+            # Merge updates
+            job.update(updates)
+            job["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        if self._supabase:
-            try:
-                # Build update data
-                update_data = {
-                    "status": job.get("status"),
-                    "progress": job.get("progress"),
-                    "data": job,
-                    "updated_at": job["updated_at"]
-                }
-                # Include profile_id if provided
-                if profile_id:
-                    update_data["profile_id"] = profile_id
+            if self._supabase:
+                try:
+                    # Build update data
+                    update_data = {
+                        "status": job.get("status"),
+                        "progress": job.get("progress"),
+                        "data": job,
+                        "updated_at": job["updated_at"]
+                    }
+                    # Include profile_id if provided
+                    if profile_id:
+                        update_data["profile_id"] = profile_id
 
-                # Update in Supabase
-                self._supabase.table("jobs").update(update_data).eq("id", job_id).execute()
+                    # Update in Supabase
+                    self._supabase.table("jobs").update(update_data).eq("id", job_id).execute()
 
-                if profile_id:
-                    logger.debug(f"[Profile {profile_id}] JobStorage: Updated job {job_id} in Supabase")
-                else:
-                    logger.debug(f"JobStorage: Updated job {job_id} in Supabase")
-                return job
-            except Exception as e:
-                logger.error(f"JobStorage: Failed to update job in Supabase: {e}, using memory")
-                # Fallback to memory
+                    if profile_id:
+                        logger.debug(f"[Profile {profile_id}] JobStorage: Updated job {job_id} in Supabase")
+                    else:
+                        logger.debug(f"JobStorage: Updated job {job_id} in Supabase")
+                    return job
+                except Exception as e:
+                    logger.error(f"JobStorage: Failed to update job in Supabase: {e}, using memory")
+                    # Fallback to memory
+                    self._memory_store[job_id] = job
+                    return job
+            else:
+                # In-memory storage
                 self._memory_store[job_id] = job
                 return job
-        else:
-            # In-memory storage
-            self._memory_store[job_id] = job
-            return job
 
     def list_jobs(self, status: Optional[str] = None, profile_id: Optional[str] = None, limit: int = 100) -> list:
         """
@@ -231,7 +239,7 @@ class JobStorage:
 
     def cleanup_old_jobs(self, days: int = 7) -> int:
         """
-        Cleanup jobs older than N days.
+        Cleanup jobs older than N days from both Supabase and in-memory store.
 
         Args:
             days: Number of days to keep
@@ -239,21 +247,32 @@ class JobStorage:
         Returns:
             Number of jobs deleted
         """
-        if not self._supabase:
-            logger.warning("JobStorage: Cleanup only works with Supabase")
-            return 0
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        count = 0
 
-        try:
-            from datetime import timedelta
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        # Clean up in-memory store
+        expired_keys = [
+            job_id for job_id, job in self._memory_store.items()
+            if job.get("created_at", "") < cutoff
+        ]
+        for job_id in expired_keys:
+            del self._memory_store[job_id]
+        if expired_keys:
+            logger.info(f"JobStorage: Cleaned up {len(expired_keys)} old jobs from memory")
+        count += len(expired_keys)
 
-            result = self._supabase.table("jobs").delete().lt("created_at", cutoff).execute()
-            count = len(result.data) if result.data else 0
-            logger.info(f"JobStorage: Cleaned up {count} old jobs (older than {days} days)")
-            return count
-        except Exception as e:
-            logger.error(f"JobStorage: Failed to cleanup old jobs: {e}")
-            return 0
+        # Clean up Supabase
+        if self._supabase:
+            try:
+                result = self._supabase.table("jobs").delete().lt("created_at", cutoff).execute()
+                db_count = len(result.data) if result.data else 0
+                logger.info(f"JobStorage: Cleaned up {db_count} old jobs from Supabase (older than {days} days)")
+                count += db_count
+            except Exception as e:
+                logger.error(f"JobStorage: Failed to cleanup old jobs from Supabase: {e}")
+
+        return count
 
 
 # Singleton instance
