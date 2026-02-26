@@ -53,10 +53,13 @@ import {
   Library,
   Eye,
   AlertTriangle,
+  Share2,
 } from "lucide-react";
 import { usePolling } from "@/hooks";
 import { useProfile } from "@/contexts/profile-context";
+import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
+import { PublishDialog } from "@/components/PublishDialog";
 import { ProductPickerDialog } from "@/components/product-picker-dialog";
 import { ImagePickerDialog } from "@/components/image-picker-dialog";
 import type { AssociationResponse } from "@/components/product-picker-dialog";
@@ -109,6 +112,7 @@ interface VariantStatus {
   current_step: string;
   final_video_path?: string;
   thumbnail_path?: string;
+  clip_id?: string;
   error?: string;
   library_saved?: boolean;
   library_error?: string;
@@ -224,6 +228,7 @@ function PipelinePage() {
   const [isRendering, setIsRendering] = useState(false);
   const [variantStatuses, setVariantStatuses] = useState<VariantStatus[]>([]);
   const [presetName, setPresetName] = useState("TikTok");
+  const [publishVariant, setPublishVariant] = useState<VariantStatus | null>(null);
 
   // History sidebar
   const [historyPipelines, setHistoryPipelines] = useState<PipelineListItem[]>([]);
@@ -881,18 +886,10 @@ function PipelinePage() {
         adaptive_sizing: subtitleSettings.adaptiveSizing ?? false,
       }, { timeout: 600_000 }); // 10 min — rendering can be very slow
 
-      if (res.ok) {
-        // data.variants does not exist on PipelineRenderResponse — initialStatuses
-        // already set above serve as placeholder until polling fills in real data.
-        setStep(4);
-      } else {
-        const errorData = await res.json().catch(() => ({
-          detail: "Failed to start render",
-        }));
-        setPreviewError(errorData.detail || "Failed to start render");
-        setVariantStatuses([]);
-        setIsRendering(false);
-      }
+      // apiPost throws on non-2xx, so if we reach here it succeeded.
+      // data.variants does not exist on PipelineRenderResponse — initialStatuses
+      // already set above serve as placeholder until polling fills in real data.
+      setStep(4);
     } catch (err) {
       handleApiError(err, "Eroare la generarea variantelor");
       if (err instanceof ApiError) {
@@ -994,17 +991,13 @@ function PipelinePage() {
     e.stopPropagation();
     if (!confirm("Sigur vrei să ștergi acest set de scripturi?")) return;
     try {
-      const res = await apiDelete(`/pipeline/${id}`);
-      if (res.ok) {
-        setHistoryPipelines(prev => prev.filter(p => p.pipeline_id !== id));
-        if (selectedHistoryId === id) {
-          setSelectedHistoryId(null);
-          setHistoryScripts([]);
-          setHistorySelectedScripts(new Set());
-        }
-      } else {
-        const errorData = await res.json().catch(() => ({ detail: "Failed to delete pipeline" }));
-        setError(errorData.detail || "Failed to delete pipeline");
+      // apiDelete throws on non-2xx, so if we reach here it succeeded.
+      await apiDelete(`/pipeline/${id}`);
+      setHistoryPipelines(prev => prev.filter(p => p.pipeline_id !== id));
+      if (selectedHistoryId === id) {
+        setSelectedHistoryId(null);
+        setHistoryScripts([]);
+        setHistorySelectedScripts(new Set());
       }
     } catch (err) {
       handleApiError(err, "Failed to delete pipeline");
@@ -2838,7 +2831,10 @@ function PipelinePage() {
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-semibold">Render Progress</h2>
-              <Button variant="outline" onClick={resetPipeline}>
+              <Button variant="outline" onClick={() => {
+                if (isRendering && !confirm("Renderizarea este în progres. Ești sigur că vrei să începi un pipeline nou?")) return;
+                resetPipeline();
+              }}>
                 <Sparkles className="h-4 w-4 mr-2" />
                 Start New Pipeline
               </Button>
@@ -2921,6 +2917,15 @@ function PipelinePage() {
                             Download Video
                           </a>
                         </Button>
+                        {status.clip_id && (
+                          <Button
+                            className="w-full bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
+                            onClick={() => setPublishVariant(status)}
+                          >
+                            <Share2 className="h-4 w-4 mr-2" />
+                            Publica pe Social Media
+                          </Button>
+                        )}
                       </div>
                     )}
 
@@ -3205,6 +3210,19 @@ function PipelinePage() {
           currentSelectedUrls={imagePickerAssoc.selected_image_urls}
           productTitle={imagePickerAssoc.product_title}
           onImagesUpdated={handleImagesUpdated}
+        />
+      )}
+
+      {/* Publish Dialog */}
+      {publishVariant && publishVariant.clip_id && publishVariant.final_video_path && (
+        <PublishDialog
+          clipId={publishVariant.clip_id}
+          videoPath={publishVariant.final_video_path}
+          open={!!publishVariant}
+          onOpenChange={(open) => { if (!open) setPublishVariant(null); }}
+          onPublished={() => {
+            toast.success("Publicat cu succes din pipeline!");
+          }}
         />
       )}
     </div>

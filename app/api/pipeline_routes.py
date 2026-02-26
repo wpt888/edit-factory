@@ -313,6 +313,7 @@ class VariantStatus(BaseModel):
     current_step: str
     final_video_path: Optional[str] = None
     thumbnail_path: Optional[str] = None
+    clip_id: Optional[str] = None
     error: Optional[str] = None
     library_saved: Optional[bool] = None
     library_error: Optional[str] = None
@@ -1256,7 +1257,8 @@ async def render_variants(
         _render_locks[pipeline_id_str] = asyncio.Lock()
     render_jobs_lock = _render_locks[pipeline_id_str]
 
-    # Initialize render jobs for each variant
+    # Initialize render jobs for each variant and collect which ones to render
+    variant_indices_to_render = []
     for variant_index in request.variant_indices:
         existing_job = pipeline["render_jobs"].get(variant_index)
         if existing_job and existing_job.get("status") == "processing":
@@ -1270,261 +1272,282 @@ async def render_variants(
             "error": None,
             "started_at": datetime.now(timezone.utc).isoformat()
         }
+        variant_indices_to_render.append(variant_index)
 
-        # Create background task for this variant
-        async def do_render(vid=variant_index):
-            try:
-                logger.info(
-                    f"[Profile {profile.profile_id}] Rendering pipeline {pipeline_id} "
-                    f"variant {vid}"
-                )
+    # Define render function for a single variant
+    async def do_render(vid):
+        try:
+            logger.info(
+                f"[Profile {profile.profile_id}] Rendering pipeline {pipeline_id} "
+                f"variant {vid}"
+            )
 
-                job = pipeline["render_jobs"][vid]
-                script_text = pipeline["scripts"][vid]
+            job = pipeline["render_jobs"][vid]
+            script_text = pipeline["scripts"][vid]
 
-                # Update progress
+            # Update progress
+            async with render_jobs_lock:
                 job["current_step"] = "Generating TTS audio"
                 job["progress"] = 10
 
-                assembly_service = get_assembly_service()
+            assembly_service = get_assembly_service()
 
-                # Extract match overrides for this variant (from timeline editor)
-                variant_match_overrides = None
-                if request.match_overrides:
-                    variant_match_overrides = request.match_overrides.get(vid) or request.match_overrides.get(str(vid))
-                    if variant_match_overrides:
-                        logger.info(
-                            f"[Profile {profile.profile_id}] Using {len(variant_match_overrides)} "
-                            f"match overrides for variant {vid}"
-                        )
+            # Extract match overrides for this variant (from timeline editor)
+            variant_match_overrides = None
+            if request.match_overrides:
+                variant_match_overrides = request.match_overrides.get(vid) or request.match_overrides.get(str(vid))
+                if variant_match_overrides:
+                    logger.info(
+                        f"[Profile {profile.profile_id}] Using {len(variant_match_overrides)} "
+                        f"match overrides for variant {vid}"
+                    )
 
-                # Check for reusable TTS audio from pipeline state
-                reuse_audio_path = None
-                reuse_audio_duration = None
-                reuse_srt_content = None
+            # Check for reusable TTS audio from pipeline state
+            reuse_audio_path = None
+            reuse_audio_duration = None
+            reuse_srt_content = None
 
-                # Hash comparison uses cleaned text (tags stripped) to match stored hash
-                cleaned_render_text = strip_product_group_tags(script_text)
-                existing_tts = pipeline.get("tts_previews", {}).get(vid)
-                if existing_tts:
-                    script_match = existing_tts.get("script_hash") == _stable_hash(cleaned_render_text)
-                    if script_match:
-                        # For library audio: skip voice_settings check
-                        # For generated audio: compare voice_settings
-                        is_library = bool(existing_tts.get("library_asset_id"))
-                        settings_match = is_library or _voice_settings_match(existing_tts.get("voice_settings"), request.voice_settings)
+            # Hash comparison uses cleaned text (tags stripped) to match stored hash
+            cleaned_render_text = strip_product_group_tags(script_text)
+            existing_tts = pipeline.get("tts_previews", {}).get(vid)
+            if existing_tts:
+                script_match = existing_tts.get("script_hash") == _stable_hash(cleaned_render_text)
+                if script_match:
+                    # For library audio: skip voice_settings check
+                    # For generated audio: compare voice_settings
+                    is_library = bool(existing_tts.get("library_asset_id"))
+                    settings_match = is_library or _voice_settings_match(existing_tts.get("voice_settings"), request.voice_settings)
 
-                        if settings_match:
-                            audio_path_str = existing_tts.get("audio_path")
-                            if audio_path_str and Path(audio_path_str).exists() and Path(audio_path_str).stat().st_size > 100:
-                                reuse_audio_path = audio_path_str
-                                reuse_audio_duration = existing_tts.get("audio_duration")
-                                reuse_srt_content = existing_tts.get("srt_content")
-                                logger.info(
-                                    f"[Profile {profile.profile_id}] Reusing "
-                                    f"{'library' if is_library else 'cached'} TTS audio "
-                                    f"for variant {vid}"
-                                )
-                                # Skip TTS generation step — jump to segment matching
+                    if settings_match:
+                        audio_path_str = existing_tts.get("audio_path")
+                        if audio_path_str and Path(audio_path_str).exists() and Path(audio_path_str).stat().st_size > 100:
+                            reuse_audio_path = audio_path_str
+                            reuse_audio_duration = existing_tts.get("audio_duration")
+                            reuse_srt_content = existing_tts.get("srt_content")
+                            logger.info(
+                                f"[Profile {profile.profile_id}] Reusing "
+                                f"{'library' if is_library else 'cached'} TTS audio "
+                                f"for variant {vid}"
+                            )
+                            # Skip TTS generation step — jump to segment matching
+                            async with render_jobs_lock:
                                 job["current_step"] = "Matching segments"
                                 job["progress"] = 30
 
-                # Progress callback: assembly_service calls this at each major step
-                def on_progress(step_name: str, pct: int):
-                    job["current_step"] = step_name
-                    job["progress"] = pct
+            # Progress callback: assembly_service calls this at each major step
+            def on_progress(step_name: str, pct: int):
+                job["current_step"] = step_name
+                job["progress"] = pct
 
-                # Run full assembly (with 15-minute timeout)
-                try:
-                    final_video_path = await asyncio.wait_for(
-                        assembly_service.assemble_and_render(
-                            script_text=script_text,
-                            profile_id=profile.profile_id,
-                            preset_data=preset_data,
-                            subtitle_settings=subtitle_settings,
-                            elevenlabs_model=request.elevenlabs_model,
-                            voice_id=request.voice_id,
-                            source_video_ids=request.source_video_ids,
-                            match_overrides=variant_match_overrides,
-                            enable_denoise=request.enable_denoise,
-                            denoise_strength=request.denoise_strength,
-                            enable_sharpen=request.enable_sharpen,
-                            sharpen_amount=request.sharpen_amount,
-                            enable_color=request.enable_color,
-                            brightness=request.brightness,
-                            contrast=request.contrast,
-                            saturation=request.saturation,
-                            shadow_depth=request.shadow_depth,
-                            enable_glow=request.enable_glow,
-                            glow_blur=request.glow_blur,
-                            adaptive_sizing=request.adaptive_sizing,
-                            variant_index=vid,
-                            voice_settings=request.voice_settings,
-                            reuse_audio_path=reuse_audio_path,
-                            reuse_audio_duration=reuse_audio_duration,
-                            reuse_srt_content=reuse_srt_content,
-                            on_progress=on_progress,
-                            max_words_per_phrase=request.words_per_subtitle
-                        ),
-                        timeout=900
-                    )
-                except asyncio.TimeoutError:
-                    raise Exception("Render timed out after 15 minutes")
-
-                # Success — acquire lock before writing shared render_jobs dict
-                async with render_jobs_lock:
-                    job["status"] = "completed"
-                    job["progress"] = 100
-                    job["current_step"] = "Render complete"
-                    job["final_video_path"] = str(final_video_path)
-                    job["completed_at"] = datetime.now(timezone.utc).isoformat()
-
-                    logger.info(
-                        f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
-                        f"variant {vid} completed: {final_video_path}"
-                    )
-
-                    # Persist render result to DB
-                    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
-
-                # Save rendered clip to library
-                job["library_saved"] = False
-                try:
-                    supabase_lib = get_supabase()
-                    if supabase_lib:
-                        # Step A: Get or create a library project (locked to prevent duplicates)
-                        library_project_id = pipeline.get("library_project_id")
-
-                        if not library_project_id:
-                            with _library_project_lock:
-                                # Re-check after acquiring lock (another variant may have created it)
-                                library_project_id = pipeline.get("library_project_id")
-                                if not library_project_id:
-                                    pipeline_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
-
-                                    # Insert-or-fetch: attempt insert first, fall back to
-                                    # select if a concurrent request already created the row.
-                                    # This eliminates the TOCTOU race between SELECT and INSERT.
-                                    try:
-                                        proj_result = supabase_lib.table("editai_projects").insert({
-                                            "profile_id": profile.profile_id,
-                                            "name": pipeline_name,
-                                            "description": f"Auto-generated from pipeline {pipeline_id}",
-                                            "status": "completed",
-                                        }).execute()
-                                        if proj_result.data:
-                                            library_project_id = proj_result.data[0]["id"]
-                                    except Exception as insert_err:
-                                        # Likely a unique-constraint violation (duplicate).
-                                        # Fetch the existing project instead.
-                                        logger.debug(
-                                            f"Project insert conflict, fetching existing: {insert_err}"
-                                        )
-                                        existing = supabase_lib.table("editai_projects")\
-                                            .select("id")\
-                                            .eq("profile_id", profile.profile_id)\
-                                            .eq("name", pipeline_name)\
-                                            .limit(1)\
-                                            .execute()
-                                        if existing.data:
-                                            library_project_id = existing.data[0]["id"]
-                                        else:
-                                            raise
-
-                                    if library_project_id:
-                                        pipeline["library_project_id"] = library_project_id
-
-                        if library_project_id:
-                            # Step B: Generate thumbnail
-                            thumb_path = None
-                            try:
-                                thumb_dir = final_video_path.parent / "thumbnails"
-                                thumb_dir.mkdir(parents=True, exist_ok=True)
-                                thumb_path = thumb_dir / f"{final_video_path.stem}_thumb.jpg"
-                                subprocess.run([
-                                    "ffmpeg", "-y", "-ss", "1", "-i", str(final_video_path),
-                                    "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "3",
-                                    str(thumb_path)
-                                ], capture_output=True, timeout=30)
-                                if thumb_path.exists():
-                                    job["thumbnail_path"] = str(thumb_path)
-                                else:
-                                    thumb_path = None
-                            except Exception as thumb_err:
-                                logger.warning(f"Thumbnail generation failed: {thumb_err}")
-                                thumb_path = None
-
-                            # Step C: Get video duration
-                            duration = None
-                            try:
-                                dur_result = subprocess.run([
-                                    "ffprobe", "-v", "error", "-show_entries",
-                                    "format=duration",
-                                    "-of", "default=noprint_wrappers=1:nokey=1",
-                                    str(final_video_path)
-                                ], capture_output=True, text=True, timeout=30)
-                                if dur_result.returncode == 0:
-                                    duration = float(dur_result.stdout.strip())
-                            except Exception as dur_err:
-                                logger.warning(f"Duration probe failed: {dur_err}")
-
-                            # Step D: Insert clip row (skip if already exists for this variant)
-                            existing_clip = supabase_lib.table("editai_clips")\
-                                .select("id")\
-                                .eq("project_id", library_project_id)\
-                                .eq("variant_index", vid)\
-                                .limit(1)\
-                                .execute()
-                            if not existing_clip.data:
-                                supabase_lib.table("editai_clips").insert({
-                                    "project_id": library_project_id,
-                                    "profile_id": profile.profile_id,
-                                    "variant_index": vid,
-                                    "variant_name": f"variant_{vid + 1}",
-                                    "raw_video_path": str(final_video_path),
-                                    "final_video_path": str(final_video_path),
-                                    "thumbnail_path": str(thumb_path) if thumb_path else None,
-                                    "duration": duration,
-                                    "is_selected": False,
-                                    "is_deleted": False,
-                                    "final_status": "completed"
-                                }).execute()
-
-                            job["library_saved"] = True
-                            logger.info(
-                                f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
-                                f"variant {vid} saved to library project {library_project_id}"
-                            )
-                        else:
-                            job["library_error"] = "Failed to create or find library project"
-                    else:
-                        job["library_error"] = "Supabase unavailable"
-                except Exception as lib_err:
-                    job["library_error"] = str(lib_err)
-                    logger.error(
-                        f"[Profile {profile.profile_id}] Failed to save pipeline variant "
-                        f"{vid} to library: {lib_err}",
-                        exc_info=True
-                    )
-
-            except Exception as e:
-                logger.error(
-                    f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
-                    f"variant {vid} failed: {e}"
+            # Run full assembly (with 15-minute timeout)
+            try:
+                final_video_path = await asyncio.wait_for(
+                    assembly_service.assemble_and_render(
+                        script_text=script_text,
+                        profile_id=profile.profile_id,
+                        preset_data=preset_data,
+                        subtitle_settings=subtitle_settings,
+                        elevenlabs_model=request.elevenlabs_model,
+                        voice_id=request.voice_id,
+                        source_video_ids=request.source_video_ids,
+                        match_overrides=variant_match_overrides,
+                        enable_denoise=request.enable_denoise,
+                        denoise_strength=request.denoise_strength,
+                        enable_sharpen=request.enable_sharpen,
+                        sharpen_amount=request.sharpen_amount,
+                        enable_color=request.enable_color,
+                        brightness=request.brightness,
+                        contrast=request.contrast,
+                        saturation=request.saturation,
+                        shadow_depth=request.shadow_depth,
+                        enable_glow=request.enable_glow,
+                        glow_blur=request.glow_blur,
+                        adaptive_sizing=request.adaptive_sizing,
+                        variant_index=vid,
+                        voice_settings=request.voice_settings,
+                        reuse_audio_path=reuse_audio_path,
+                        reuse_audio_duration=reuse_audio_duration,
+                        reuse_srt_content=reuse_srt_content,
+                        on_progress=on_progress,
+                        max_words_per_phrase=request.words_per_subtitle
+                    ),
+                    timeout=900
                 )
-                # Acquire lock before writing shared render_jobs dict
+            except asyncio.TimeoutError:
+                raise Exception("Render timed out after 15 minutes")
+
+            # Success — acquire lock before writing shared render_jobs dict
+            async with render_jobs_lock:
+                job["status"] = "completed"
+                job["progress"] = 100
+                job["current_step"] = "Render complete"
+                job["final_video_path"] = str(final_video_path)
+                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+                logger.info(
+                    f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
+                    f"variant {vid} completed: {final_video_path}"
+                )
+
+                # Persist render result to DB
+                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+
+            # Save rendered clip to library
+            async with render_jobs_lock:
+                job["library_saved"] = False
+            try:
+                supabase_lib = get_supabase()
+                if supabase_lib:
+                    # Step A: Get or create a library project (locked to prevent duplicates)
+                    library_project_id = pipeline.get("library_project_id")
+
+                    if not library_project_id:
+                        with _library_project_lock:
+                            # Re-check after acquiring lock (another variant may have created it)
+                            library_project_id = pipeline.get("library_project_id")
+                            if not library_project_id:
+                                pipeline_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
+
+                                # Insert-or-fetch: attempt insert first, fall back to
+                                # select if a concurrent request already created the row.
+                                # This eliminates the TOCTOU race between SELECT and INSERT.
+                                try:
+                                    proj_result = supabase_lib.table("editai_projects").insert({
+                                        "profile_id": profile.profile_id,
+                                        "name": pipeline_name,
+                                        "description": f"Auto-generated from pipeline {pipeline_id}",
+                                        "status": "completed",
+                                    }).execute()
+                                    if proj_result.data:
+                                        library_project_id = proj_result.data[0]["id"]
+                                except Exception as insert_err:
+                                    # Likely a unique-constraint violation (duplicate).
+                                    # Fetch the existing project instead.
+                                    logger.debug(
+                                        f"Project insert conflict, fetching existing: {insert_err}"
+                                    )
+                                    existing = supabase_lib.table("editai_projects")\
+                                        .select("id")\
+                                        .eq("profile_id", profile.profile_id)\
+                                        .eq("name", pipeline_name)\
+                                        .limit(1)\
+                                        .execute()
+                                    if existing.data:
+                                        library_project_id = existing.data[0]["id"]
+                                    else:
+                                        raise
+
+                                if library_project_id:
+                                    pipeline["library_project_id"] = library_project_id
+
+                    if library_project_id:
+                        # Step B: Generate thumbnail
+                        thumb_path = None
+                        try:
+                            thumb_dir = final_video_path.parent / "thumbnails"
+                            thumb_dir.mkdir(parents=True, exist_ok=True)
+                            thumb_path = thumb_dir / f"{final_video_path.stem}_thumb.jpg"
+                            subprocess.run([
+                                "ffmpeg", "-y", "-ss", "1", "-i", str(final_video_path),
+                                "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "3",
+                                str(thumb_path)
+                            ], capture_output=True, timeout=30)
+                            if thumb_path.exists():
+                                async with render_jobs_lock:
+                                    job["thumbnail_path"] = str(thumb_path)
+                            else:
+                                thumb_path = None
+                        except Exception as thumb_err:
+                            logger.warning(f"Thumbnail generation failed: {thumb_err}")
+                            thumb_path = None
+
+                        # Step C: Get video duration
+                        duration = None
+                        try:
+                            dur_result = subprocess.run([
+                                "ffprobe", "-v", "error", "-show_entries",
+                                "format=duration",
+                                "-of", "default=noprint_wrappers=1:nokey=1",
+                                str(final_video_path)
+                            ], capture_output=True, text=True, timeout=30)
+                            if dur_result.returncode == 0:
+                                duration = float(dur_result.stdout.strip())
+                        except Exception as dur_err:
+                            logger.warning(f"Duration probe failed: {dur_err}")
+
+                        # Step D: Insert clip row (skip if already exists for this variant)
+                        existing_clip = supabase_lib.table("editai_clips")\
+                            .select("id")\
+                            .eq("project_id", library_project_id)\
+                            .eq("variant_index", vid)\
+                            .limit(1)\
+                            .execute()
+                        if not existing_clip.data:
+                            clip_result = supabase_lib.table("editai_clips").insert({
+                                "project_id": library_project_id,
+                                "profile_id": profile.profile_id,
+                                "variant_index": vid,
+                                "variant_name": f"variant_{vid + 1}",
+                                "raw_video_path": str(final_video_path),
+                                "final_video_path": str(final_video_path),
+                                "thumbnail_path": str(thumb_path) if thumb_path else None,
+                                "duration": duration,
+                                "is_selected": False,
+                                "is_deleted": False,
+                                "final_status": "completed"
+                            }).execute()
+                            if clip_result.data and len(clip_result.data) > 0:
+                                async with render_jobs_lock:
+                                    job["clip_id"] = clip_result.data[0].get("id")
+                        else:
+                            # Existing clip — store its ID
+                            async with render_jobs_lock:
+                                job["clip_id"] = existing_clip.data[0].get("id")
+
+                        async with render_jobs_lock:
+                            job["library_saved"] = True
+                        logger.info(
+                            f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
+                            f"variant {vid} saved to library project {library_project_id}"
+                        )
+                    else:
+                        async with render_jobs_lock:
+                            job["library_error"] = "Failed to create or find library project"
+                else:
+                    async with render_jobs_lock:
+                        job["library_error"] = "Supabase unavailable"
+            except Exception as lib_err:
                 async with render_jobs_lock:
-                    job["status"] = "failed"
-                    job["progress"] = 0
-                    job["current_step"] = "Render failed"
-                    job["error"] = str(e)
-                    job["failed_at"] = datetime.now(timezone.utc).isoformat()
+                    job["library_error"] = str(lib_err)
+                logger.error(
+                    f"[Profile {profile.profile_id}] Failed to save pipeline variant "
+                    f"{vid} to library: {lib_err}",
+                    exc_info=True
+                )
 
-                    # Persist failure to DB
-                    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+        except Exception as e:
+            logger.error(
+                f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
+                f"variant {vid} failed: {e}"
+            )
+            # Acquire lock before writing shared render_jobs dict
+            async with render_jobs_lock:
+                job["status"] = "failed"
+                job["progress"] = 0
+                job["current_step"] = "Render failed"
+                job["error"] = str(e)
+                job["failed_at"] = datetime.now(timezone.utc).isoformat()
 
-        # Add background task
-        background_tasks.add_task(do_render)
+                # Persist failure to DB
+                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+
+    # Run all variant renders in parallel via asyncio.gather
+    async def _render_all_variants():
+        tasks = [do_render(vid) for vid in variant_indices_to_render]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    if variant_indices_to_render:
+        background_tasks.add_task(_render_all_variants)
 
     return PipelineRenderResponse(
         pipeline_id=pipeline_id,
@@ -1576,6 +1599,7 @@ async def get_pipeline_status(pipeline_id: str):
                 current_step=job["current_step"],
                 final_video_path=job.get("final_video_path"),
                 thumbnail_path=job.get("thumbnail_path"),
+                clip_id=job.get("clip_id"),
                 error=sanitized_error,
                 library_saved=job.get("library_saved"),
                 library_error=sanitized_lib_error
@@ -1730,7 +1754,7 @@ async def sync_pipeline_to_library(
             pass
 
         # Insert clip
-        supabase.table("editai_clips").insert({
+        clip_result = supabase.table("editai_clips").insert({
             "project_id": library_project_id,
             "profile_id": profile.profile_id,
             "variant_index": vid,
@@ -1747,6 +1771,8 @@ async def sync_pipeline_to_library(
         # Mark as saved in render_jobs so status endpoint reflects it
         job["library_saved"] = True
         job.pop("library_error", None)
+        if clip_result.data and len(clip_result.data) > 0:
+            job["clip_id"] = clip_result.data[0].get("id")
 
         synced += 1
         logger.info(f"Pipeline {pipeline_id} variant {vid} synced to library project {library_project_id}")

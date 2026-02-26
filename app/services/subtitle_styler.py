@@ -265,7 +265,11 @@ def build_subtitle_filter(
     # Order matters: backslashes first, then special chars
     srt_path_escaped = str(srt_path).replace('\\', '/')
     srt_path_escaped = srt_path_escaped.replace("'", "'\\''")
-    srt_path_escaped = srt_path_escaped.replace(':', '\\:')
+    # Only escape colons that are NOT part of a Windows drive letter (e.g. C:/)
+    if len(srt_path_escaped) > 1 and srt_path_escaped[1] == ':':
+        srt_path_escaped = srt_path_escaped[0:2] + srt_path_escaped[2:].replace(':', '\\:')
+    else:
+        srt_path_escaped = srt_path_escaped.replace(':', '\\:')
     srt_path_escaped = srt_path_escaped.replace('[', '\\[')
     srt_path_escaped = srt_path_escaped.replace(']', '\\]')
     srt_path_escaped = srt_path_escaped.replace(' ', '\\ ')

@@ -2179,7 +2179,7 @@ async def _render_final_clip_task(
                     supabase.table("editai_clip_content").update({
                         "tts_timestamps": tts_timestamps,
                         "tts_model": elevenlabs_model
-                    }).eq("clip_id", clip_id).eq("profile_id", profile_id).execute()
+                    }).eq("clip_id", clip_id).execute()
                     logger.info(f"TTS timestamps persisted for clip {clip_id}")
                 except Exception as e:
                     logger.warning(f"Failed to persist TTS timestamps: {e}")
@@ -2216,7 +2216,7 @@ async def _render_final_clip_task(
                 shutil.copy2(str(audio_path), str(tts_persist_path))
                 supabase.table("editai_clip_content").update({
                     "tts_audio_path": str(tts_persist_path)
-                }).eq("clip_id", clip_id).eq("profile_id", profile_id).execute()
+                }).eq("clip_id", clip_id).execute()
                 logger.info(f"TTS audio persisted for clip {clip_id}: {tts_persist_path}")
             except Exception as e:
                 tts_persist_failed = True
@@ -2518,8 +2518,8 @@ def _generate_thumbnail(video_path: Path) -> Optional[Path]:
 
         cmd = [
             "ffmpeg", "-y",
-            "-i", str(video_path),
             "-ss", seek_time,
+            "-i", str(video_path),
             "-vframes", "1",
             "-vf", "scale=320:-1",  # Width 320px, height auto
             "-q:v", "3",
@@ -2673,7 +2673,6 @@ def _extend_video_with_segments(
     supabase,
     profile_id: Optional[str] = "default"
 ) -> bool:
-    profile_id = profile_id or "default"
     """
     Extinde video-ul cu segmente adiționale din proiect pentru a atinge durata țintă.
 
@@ -2682,6 +2681,7 @@ def _extend_video_with_segments(
     2. Calculează cât mai avem nevoie
     3. Extrage și concatenează segmente până atingem target_duration
     """
+    profile_id = profile_id or "default"
     try:
         current_duration = _get_video_duration(base_video)
         needed_duration = target_duration - current_duration
@@ -2744,7 +2744,24 @@ def _extend_video_with_segments(
 
         try:
             # Extragem segmentele adiționale
-            segment_files = [base_video]  # Start with base video
+            # Re-encode base video without audio to match extension segments (all -an)
+            base_no_audio = temp_dir / "base_no_audio.mp4"
+            base_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(base_video),
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "23",
+                "-an",
+                "-pix_fmt", "yuv420p",
+                str(base_no_audio)
+            ]
+            base_result = subprocess.run(base_cmd, capture_output=True, text=True, timeout=300)
+            if base_result.returncode != 0 or not base_no_audio.exists():
+                logger.error(f"Failed to strip audio from base video: {base_result.stderr[:200]}")
+                return False
+
+            segment_files = [base_no_audio]  # Start with audio-stripped base video
 
             for idx, seg in enumerate(selected_segments):
                 seg_output = temp_dir / f"ext_seg_{idx:03d}.mp4"
@@ -2967,6 +2984,7 @@ async def _render_with_preset(
 
     # Audio normalization (two-pass loudnorm)
     audio_filters = []
+    encoding_preset = None  # Will be set in audio normalization or encoding params block
 
     if has_audio and audio_path:  # Only normalize real audio, not silent
         # Get encoding preset to check if normalization is enabled
@@ -3008,19 +3026,17 @@ async def _render_with_preset(
     if audio_filters:
         cmd.extend(["-af", ",".join(audio_filters)])
 
-    # Get encoding preset parameters
-    # Map database preset name to platform key
-    preset_name = preset.get("name", "Generic")
-    platform_map = {
-        "TikTok": "tiktok",
-        "Instagram Reels": "reels",
-        "YouTube Shorts": "youtube_shorts",
-        "Generic": "generic"
-    }
-    platform_key = platform_map.get(preset_name, "generic")
-
-    # Get EncodingPreset object and generate FFmpeg params
-    encoding_preset = get_preset(platform_key)
+    # Reuse encoding_preset from audio normalization block (or compute if first time)
+    if not encoding_preset:
+        preset_name = preset.get("name", "Generic")
+        platform_map = {
+            "TikTok": "tiktok",
+            "Instagram Reels": "reels",
+            "YouTube Shorts": "youtube_shorts",
+            "Generic": "generic"
+        }
+        platform_key = platform_map.get(preset_name, "generic")
+        encoding_preset = get_preset(platform_key)
     logger.info(f"Using encoding preset: {encoding_preset.name} (platform: {encoding_preset.platform})")
 
     # Get encoding parameters (use_gpu=False for CPU encoding)
