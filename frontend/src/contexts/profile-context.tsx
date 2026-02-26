@@ -23,6 +23,7 @@ import {
   useEffect,
   useCallback,
   useMemo,
+  useRef,
   ReactNode,
 } from "react";
 import { apiGetWithRetry, handleApiError } from "@/lib/api";
@@ -57,6 +58,10 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const [profiles, setProfilesState] = useState<Profile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Ref to track currentProfile without causing callback recreation
+  const currentProfileRef = useRef<Profile | null>(null);
+  currentProfileRef.current = currentProfile;
+
   /**
    * Fetch profiles from API and auto-select appropriate profile
    * - Tries to restore last-used profile from localStorage
@@ -72,8 +77,8 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         setProfilesState(fetchedProfiles);
         localStorage.setItem(STORAGE_KEYS.PROFILES, JSON.stringify(fetchedProfiles));
 
-        // Auto-select profile if none currently selected
-        if (!currentProfile) {
+        // Auto-select profile if none currently selected (read from ref to avoid stale closure)
+        if (!currentProfileRef.current) {
           const storedId = localStorage.getItem(STORAGE_KEYS.PROFILE_ID);
           let profileToSelect: Profile | null = null;
 
@@ -101,7 +106,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       handleApiError(error, "Eroare la incarcarea profilului");
     }
-  }, [currentProfile]);
+  }, []);
 
   /**
    * Initialize profiles on mount

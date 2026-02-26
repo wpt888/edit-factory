@@ -14,6 +14,7 @@ function extractProgress(job: Job): number {
   const fractionMatch = raw?.match(/(\d+)\s*\/\s*(\d+)/);
   if (fractionMatch) {
     const [, done, total] = fractionMatch;
+    if (parseInt(total) === 0) return 0;
     return Math.round((parseInt(done) / parseInt(total)) * 100);
   }
 

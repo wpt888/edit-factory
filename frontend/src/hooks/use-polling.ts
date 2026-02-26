@@ -55,9 +55,17 @@ export function usePolling<T>(options: UsePollingOptions<T>): UsePollingReturn<T
   const isCancelledRef = useRef(false);
   const currentIntervalRef = useRef(interval);
 
+  // Refs for callbacks to avoid stale closures in the poll loop
+  const onDataRef = useRef(onData);
+  onDataRef.current = onData;
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+  const shouldStopRef = useRef(shouldStop);
+  shouldStopRef.current = shouldStop;
+
   const clearPolling = useCallback(() => {
     if (intervalRef.current) {
-      clearInterval(intervalRef.current);
+      clearTimeout(intervalRef.current);
       intervalRef.current = null;
     }
   }, []);
@@ -87,33 +95,29 @@ export function usePolling<T>(options: UsePollingOptions<T>): UsePollingReturn<T
         setError(null);
         // Reset interval on success
         currentIntervalRef.current = interval;
-        onData?.(result);
+        onDataRef.current?.(result);
 
-        if (shouldStop?.(result)) {
+        if (shouldStopRef.current?.(result)) {
           stopPolling();
+          return;
         }
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
         setError(error);
-        onError?.(error);
+        onErrorRef.current?.(error);
         // Double interval on error (exponential backoff, max 30s)
         currentIntervalRef.current = Math.min(currentIntervalRef.current * 2, 30000);
-        clearPolling();
-        if (!isCancelledRef.current) {
-          intervalRef.current = setInterval(poll, currentIntervalRef.current);
-        }
-        return;
       }
 
-      if (!isCancelledRef.current && intervalRef.current !== null) {
-        // Still running — interval handles the next call
+      // Schedule next poll after current one completes (avoids double-poll)
+      if (!isCancelledRef.current) {
+        intervalRef.current = setTimeout(poll, currentIntervalRef.current) as unknown as NodeJS.Timeout;
       }
     };
 
-    // Run immediately, then on interval
+    // Run immediately, then schedule next after completion
     poll();
-    intervalRef.current = setInterval(poll, currentIntervalRef.current);
-  }, [endpoint, interval, onData, onError, shouldStop, stopPolling, clearPolling]);
+  }, [endpoint, interval, stopPolling, clearPolling]);
 
   // Auto-start when enabled becomes true or endpoint changes
   useEffect(() => {
