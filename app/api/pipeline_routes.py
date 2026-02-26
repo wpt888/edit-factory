@@ -1241,6 +1241,9 @@ async def render_variants(
     if request.source_video_ids:
         pipeline["source_video_ids"] = request.source_video_ids
 
+    # Lock to guard concurrent writes to pipeline["render_jobs"]
+    render_jobs_lock = asyncio.Lock()
+
     # Initialize render jobs for each variant
     for variant_index in request.variant_indices:
         existing_job = pipeline["render_jobs"].get(variant_index)
@@ -1356,20 +1359,21 @@ async def render_variants(
                 except asyncio.TimeoutError:
                     raise Exception("Render timed out after 15 minutes")
 
-                # Success
-                job["status"] = "completed"
-                job["progress"] = 100
-                job["current_step"] = "Render complete"
-                job["final_video_path"] = str(final_video_path)
-                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                # Success — acquire lock before writing shared render_jobs dict
+                async with render_jobs_lock:
+                    job["status"] = "completed"
+                    job["progress"] = 100
+                    job["current_step"] = "Render complete"
+                    job["final_video_path"] = str(final_video_path)
+                    job["completed_at"] = datetime.now(timezone.utc).isoformat()
 
-                logger.info(
-                    f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
-                    f"variant {vid} completed: {final_video_path}"
-                )
+                    logger.info(
+                        f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
+                        f"variant {vid} completed: {final_video_path}"
+                    )
 
-                # Persist render result to DB
-                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                    # Persist render result to DB
+                    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
                 # Save rendered clip to library
                 job["library_saved"] = False
@@ -1485,14 +1489,16 @@ async def render_variants(
                     f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
                     f"variant {vid} failed: {e}"
                 )
-                job["status"] = "failed"
-                job["progress"] = 0
-                job["current_step"] = "Render failed"
-                job["error"] = str(e)
-                job["failed_at"] = datetime.now(timezone.utc).isoformat()
+                # Acquire lock before writing shared render_jobs dict
+                async with render_jobs_lock:
+                    job["status"] = "failed"
+                    job["progress"] = 0
+                    job["current_step"] = "Render failed"
+                    job["error"] = str(e)
+                    job["failed_at"] = datetime.now(timezone.utc).isoformat()
 
-                # Persist failure to DB
-                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                    # Persist failure to DB
+                    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
         # Add background task
         background_tasks.add_task(do_render)

@@ -209,10 +209,16 @@ async def get_profile_context(
             return ProfileContext(profile_id=x_profile_id, user_id=current_user.id)
 
         # Try to find a real profile in the DB to avoid FK violations
+        # NOTE: In dev mode, current_user.id is a hardcoded UUID. We filter by user_id
+        # first, falling back to any default profile if the dev user has no rows.
         supabase = _get_supabase()
         if supabase:
             try:
-                result = supabase.table("profiles").select("id").eq("is_default", True).limit(1).execute()
+                # First try scoped to the dev user_id
+                result = supabase.table("profiles").select("id").eq("user_id", current_user.id).eq("is_default", True).limit(1).execute()
+                if not result.data:
+                    # Fallback: pick any default profile (only safe because auth_disabled=True)
+                    result = supabase.table("profiles").select("id").eq("is_default", True).limit(1).execute()
                 if result.data:
                     profile_id = result.data[0]["id"]
                     logger.warning(f"⚠️ Dev mode: using DB profile {profile_id}")
@@ -231,16 +237,22 @@ async def get_profile_context(
 
     if not x_profile_id:
         # Auto-select default profile
-        result = supabase.table("profiles")\
-            .select("id")\
-            .eq("user_id", current_user.id)\
-            .eq("is_default", True)\
-            .single()\
-            .execute()
+        try:
+            result = supabase.table("profiles")\
+                .select("id")\
+                .eq("user_id", current_user.id)\
+                .eq("is_default", True)\
+                .single()\
+                .execute()
+        except Exception as e:
+            # .single() raises when 0 or 2+ rows match
+            logger.warning(f"Profile lookup failed for user {current_user.id}: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail="Account misconfigured: no default profile exists. Please contact support or re-run account setup."
+            )
 
         if not result.data:
-            # This indicates a data inconsistency - user should always have a default profile
-            # Return 503 Service Unavailable with actionable message
             raise HTTPException(
                 status_code=503,
                 detail="Account misconfigured: no default profile exists. Please contact support or re-run account setup."
@@ -252,11 +264,16 @@ async def get_profile_context(
         profile_id = x_profile_id
 
         # Validate profile exists
-        result = supabase.table("profiles")\
-            .select("id, user_id")\
-            .eq("id", profile_id)\
-            .single()\
-            .execute()
+        try:
+            result = supabase.table("profiles")\
+                .select("id, user_id")\
+                .eq("id", profile_id)\
+                .single()\
+                .execute()
+        except Exception as e:
+            # .single() raises when 0 or 2+ rows match
+            logger.warning(f"Profile validation failed for {profile_id}: {e}")
+            raise HTTPException(status_code=404, detail="Profile not found")
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Profile not found")
