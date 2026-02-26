@@ -461,6 +461,19 @@ async def update_project(
 
     allowed_fields = ["name", "description", "target_duration", "context_text"]
     filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
+
+    # Validate target_duration range
+    if "target_duration" in filtered_updates:
+        td = filtered_updates["target_duration"]
+        if td is not None:
+            try:
+                td = float(td)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail="target_duration must be a number")
+            if td <= 0 or td > 300:
+                raise HTTPException(status_code=422, detail="target_duration must be between 0 and 300 seconds (5 minutes max)")
+            filtered_updates["target_duration"] = td
+
     filtered_updates["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     try:
@@ -1464,7 +1477,7 @@ async def update_clip(
         if result.data:
             clip = result.data[0]
             if request.is_selected is not None:
-                _update_project_counts(clip["project_id"])
+                _update_project_counts(clip["project_id"], profile.profile_id)
             return {"status": "updated", "clip": clip}
         raise HTTPException(status_code=404, detail="Clip not found")
     except HTTPException:
@@ -1494,7 +1507,7 @@ async def toggle_clip_selection(
         if result.data:
             clip = result.data[0]
             # Actualizăm contorul în proiect
-            _update_project_counts(clip["project_id"])
+            _update_project_counts(clip["project_id"], profile.profile_id)
             return {"status": "updated", "clip_id": clip_id, "is_selected": selected}
         raise HTTPException(status_code=404, detail="Clip not found")
     except HTTPException:
@@ -1527,7 +1540,7 @@ async def bulk_select_clips(
 
         # Actualizăm contoarele
         for project_id in project_ids:
-            _update_project_counts(project_id)
+            _update_project_counts(project_id, profile.profile_id)
 
         return {"status": "updated", "count": len(clip_ids), "is_selected": selected}
     except Exception as e:
@@ -1592,7 +1605,7 @@ async def remove_clip_audio(
         if clip.get("final_video_path"):
             update_data["final_video_path"] = str(output_path)
 
-        supabase.table("editai_clips").update(update_data).eq("id", clip_id).execute()
+        supabase.table("editai_clips").update(update_data).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
 
         # Optionally delete old file (keeping it for now as backup)
         # if video_path != output_path and video_path.exists():
@@ -1630,9 +1643,9 @@ async def delete_clip(
             # Delete physical files
             _delete_clip_files(clip.data)
             # Delete from database
-            supabase.table("editai_clips").delete().eq("id", clip_id).execute()
+            supabase.table("editai_clips").delete().eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
             # Also delete associated clip content
-            supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
+            supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).eq("profile_id", profile.profile_id).execute()
             logger.info(f"Deleted clip {clip_id} and associated files")
 
         return {"status": "deleted", "clip_id": clip_id}
@@ -1666,9 +1679,9 @@ async def bulk_delete_clips(
                 # Delete physical files
                 _delete_clip_files(clip.data)
                 # Delete from database
-                supabase.table("editai_clips").delete().eq("id", clip_id).execute()
+                supabase.table("editai_clips").delete().eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
                 # Also delete associated clip content
-                supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
+                supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).eq("profile_id", profile.profile_id).execute()
                 deleted.append(clip_id)
                 logger.info(f"Bulk delete: deleted clip {clip_id}")
             else:
@@ -2242,7 +2255,7 @@ async def _render_final_clip_task(
         }).execute()
 
         # Actualizăm contorul din proiect
-        _update_project_counts(clip_data["project_id"])
+        _update_project_counts(clip_data["project_id"], profile_id)
 
         logger.info(f"Rendered final clip {clip_id} -> {output_path}")
 
@@ -2355,7 +2368,7 @@ def _get_video_info(video_path: Path) -> dict:
             "-of", "json",
             str(video_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode == 0:
             data = json.loads(result.stdout)
             stream = data.get("streams", [{}])[0]
@@ -2379,7 +2392,7 @@ def _get_video_duration(video_path: Path) -> float:
             "-of", "default=noprint_wrappers=1:nokey=1",
             str(video_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode == 0:
             return float(result.stdout.strip())
     except Exception:
@@ -2396,10 +2409,14 @@ def _generate_thumbnail(video_path: Path) -> Optional[Path]:
 
         thumb_path = thumb_dir / f"{video_path.stem}_thumb.jpg"
 
+        # Get video duration to pick a safe seek time (avoid -ss 1 for clips under 1s)
+        duration = _get_video_duration(video_path)
+        seek_time = str(min(1, duration / 2)) if duration > 0 else "0.1"
+
         cmd = [
             "ffmpeg", "-y",
             "-i", str(video_path),
-            "-ss", "1",  # Frame la secunda 1
+            "-ss", seek_time,
             "-vframes", "1",
             "-vf", "scale=320:-1",  # Width 320px, height auto
             "-q:v", "3",
@@ -2423,7 +2440,7 @@ def _delete_clip_files(clip: dict):
                 logger.warning(f"Failed to delete {clip[key]}: {e}")
 
 
-def _update_project_counts(project_id: str):
+def _update_project_counts(project_id: str, profile_id: Optional[str] = None):
     """Actualizează contoarele de clipuri în proiect."""
     supabase = get_supabase()
     if not supabase:
@@ -2431,18 +2448,24 @@ def _update_project_counts(project_id: str):
 
     try:
         # Count total clips (not deleted)
-        clips = supabase.table("editai_clips").select("id, is_selected, final_status").eq("project_id", project_id).eq("is_deleted", False).execute()
+        query = supabase.table("editai_clips").select("id, is_selected, final_status").eq("project_id", project_id).eq("is_deleted", False)
+        if profile_id:
+            query = query.eq("profile_id", profile_id)
+        clips = query.execute()
 
         total = len(clips.data) if clips.data else 0
         selected = len([c for c in (clips.data or []) if c.get("is_selected")])
         exported = len([c for c in (clips.data or []) if c.get("final_status") == "completed"])
 
-        supabase.table("editai_projects").update({
+        update_query = supabase.table("editai_projects").update({
             "variants_count": total,
             "selected_count": selected,
             "exported_count": exported,
             "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", project_id).execute()
+        }).eq("id", project_id)
+        if profile_id:
+            update_query = update_query.eq("profile_id", profile_id)
+        update_query.execute()
     except Exception as e:
         logger.warning(f"Failed to update project counts: {e}")
 
@@ -2895,8 +2918,13 @@ async def _render_with_preset(
     db_audio_bitrate = preset.get("audio_bitrate", "192k")
     if db_audio_bitrate and db_audio_bitrate != preset_audio_bitrate:
         # Parse bitrates for comparison (e.g., "320k" -> 320)
-        db_bitrate_val = int(db_audio_bitrate.replace("k", ""))
-        preset_bitrate_val = int(preset_audio_bitrate.replace("k", ""))
+        try:
+            db_bitrate_val = int(db_audio_bitrate.lower().replace("k", ""))
+            preset_bitrate_val = int(preset_audio_bitrate.lower().replace("k", ""))
+        except (ValueError, AttributeError):
+            logger.warning(f"Could not parse audio bitrates: db={db_audio_bitrate}, preset={preset_audio_bitrate}, using defaults")
+            db_bitrate_val = 192
+            preset_bitrate_val = 192
         if db_bitrate_val > preset_bitrate_val:
             logger.info(f"Database audio bitrate {db_audio_bitrate} higher than preset {preset_audio_bitrate}, using database value")
             # Update audio bitrate in encoding params
@@ -2939,5 +2967,8 @@ async def _render_with_preset(
     result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=1200)
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg render failed: {result.stderr}")
+
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        raise RuntimeError(f"FFmpeg render produced no output file or empty file: {output_path}")
 
     logger.info(f"Rendered: {output_path}")
