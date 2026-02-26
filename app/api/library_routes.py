@@ -491,10 +491,13 @@ async def cancel_generation(
     # Clean up any stale lock entry so get_project_lock() starts fresh on next run
     cleanup_project_lock(project_id)
 
-    supabase.table("editai_projects").update({
-        "status": "failed",
-        "updated_at": datetime.now(timezone.utc).isoformat()
-    }).eq("id", project_id).eq("profile_id", profile.profile_id).execute()
+    try:
+        supabase.table("editai_projects").update({
+            "status": "failed",
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", project_id).eq("profile_id", profile.profile_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to update project status on cancel: {e}")
 
     return {"status": "cancelled"}
 
@@ -586,16 +589,6 @@ async def generate_raw_clips(
     # Obținem info despre video
     video_info = _get_video_info(final_video_path)
 
-    # Actualizăm proiectul cu info despre video sursă
-    supabase.table("editai_projects").update({
-        "source_video_path": str(final_video_path),
-        "source_video_duration": video_info.get("duration", 0),
-        "source_video_width": video_info.get("width", 1080),
-        "source_video_height": video_info.get("height", 1920),
-        "status": "generating",
-        "updated_at": datetime.now(timezone.utc).isoformat()
-    }).eq("id", project_id).eq("profile_id", profile.profile_id).execute()
-
     # Limitări
     variant_count = max(1, min(10, variant_count))
 
@@ -605,6 +598,7 @@ async def generate_raw_clips(
         project_id=project_id,
         profile_id=profile.profile_id,
         video_path=str(final_video_path),
+        video_info=video_info,
         variant_count=variant_count,
         target_duration=project_data["target_duration"],
         context_text=project_data.get("context_text")
@@ -621,6 +615,7 @@ async def generate_raw_clips(
 async def _generate_raw_clips_task(
     project_id: str,
     video_path: str,
+    video_info: dict,
     variant_count: int,
     target_duration: int,
     context_text: Optional[str],
@@ -645,6 +640,19 @@ async def _generate_raw_clips_task(
         return
 
     try:
+        # Update project status now that we hold the lock
+        try:
+            supabase.table("editai_projects").update({
+                "source_video_path": video_path,
+                "source_video_duration": video_info.get("duration", 0),
+                "source_video_width": video_info.get("width", 1080),
+                "source_video_height": video_info.get("height", 1920),
+                "status": "generating",
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", project_id).eq("profile_id", profile_id).execute()
+        except Exception as e:
+            logger.error(f"Failed to update project status to generating: {e}")
+
         # Profile-scoped temp directory to prevent cross-profile file collisions
         temp_dir = settings.base_dir / "temp" / profile_id
         temp_dir.mkdir(parents=True, exist_ok=True)
@@ -1190,7 +1198,7 @@ async def _generate_from_segments_task(
                             str(segment_output)
                         ]
 
-                        result = subprocess.run(extract_cmd, capture_output=True, text=True, timeout=300)
+                        result = await asyncio.to_thread(subprocess.run, extract_cmd, capture_output=True, text=True, timeout=300)
                         if result.returncode != 0:
                             logger.error(f"FFmpeg extract error: {result.stderr}")
                             continue
@@ -1207,7 +1215,7 @@ async def _generate_from_segments_task(
                     str(output_path)
                 ]
 
-                result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=300)
+                result = await asyncio.to_thread(subprocess.run, concat_cmd, capture_output=True, text=True, timeout=300)
                 if result.returncode != 0:
                     logger.error(f"FFmpeg concat error: {result.stderr}")
                     continue
@@ -1516,14 +1524,16 @@ async def bulk_select_clips(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
+        # Bulk update all clips in a single query instead of N+1 individual updates
+        result = supabase.table("editai_clips").update({
+            "is_selected": selected,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).in_("id", clip_ids).eq("profile_id", profile.profile_id).execute()
+
+        # Collect unique project IDs from updated clips to refresh counts
         project_ids = set()
-        for clip_id in clip_ids:
-            result = supabase.table("editai_clips").update({
-                "is_selected": selected,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
-            if result.data:
-                project_ids.add(result.data[0]["project_id"])
+        for clip in (result.data or []):
+            project_ids.add(clip["project_id"])
 
         # Actualizăm contoarele
         for project_id in project_ids:
@@ -1556,6 +1566,12 @@ async def remove_clip_audio(
             raise HTTPException(status_code=404, detail="Clip not found")
 
         clip = clip_result.data[0]
+
+        # Check if project is currently being processed
+        clip_project_id = clip.get("project_id")
+        if clip_project_id and is_project_locked(clip_project_id):
+            raise HTTPException(status_code=409, detail="Project is currently being processed")
+
         video_path = Path(clip.get("final_video_path") or clip.get("raw_video_path"))
 
         if not video_path.exists():
@@ -1576,7 +1592,7 @@ async def remove_clip_audio(
         ]
 
         logger.info(f"Removing audio from clip {clip_id}: {video_path} -> {output_path}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=300)
 
         if result.returncode != 0:
             logger.error(f"FFmpeg error: {result.stderr}")
@@ -1875,13 +1891,7 @@ async def render_final_clip(
         if not preset.data:
             raise HTTPException(status_code=404, detail=f"Preset '{preset_name}' not found")
 
-        # Actualizăm statusul
-        supabase.table("editai_clips").update({
-            "final_status": "processing",
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", clip_id).execute()
-
-        # Lansăm renderul în background
+        # Lansăm renderul în background (status update moved inside task after lock acquired)
         background_tasks.add_task(
             _render_final_clip_task,
             clip_id=clip_id,
@@ -1975,6 +1985,12 @@ async def _render_final_clip_task(
             "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("id", clip_id).eq("profile_id", profile_id).execute()
         return
+
+    # Set clip status to processing now that we hold the lock
+    supabase.table("editai_clips").update({
+        "final_status": "processing",
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }).eq("id", clip_id).execute()
 
     # Initialize temp file paths for cleanup in finally block
     audio_path = None
