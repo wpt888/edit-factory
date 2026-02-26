@@ -269,7 +269,6 @@ function PipelinePage() {
   const [ttsResults, setTtsResults] = useState<Record<number, { audio_duration: number; generating: boolean; stale: boolean }>>({});
   const [playingTtsVariant, setPlayingTtsVariant] = useState<number | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
-  const voiceSettingsInitialized = useRef(false);
   const previewAbortRef = useRef<AbortController | null>(null);
   const pendingBlobUrl = useRef<string | null>(null);
 
@@ -1305,10 +1304,16 @@ function PipelinePage() {
     };
   }, []);
 
-  // Mark existing TTS results as stale when voice settings change (skip initial mount)
+  // Mark existing TTS results as stale when voice settings change (user-initiated only)
+  // voiceSettingsHydrated captures the settings value AFTER localStorage hydration.
+  // Any change after that point is a real user change.
+  const voiceSettingsHydrated = useRef(false);
   useEffect(() => {
-    if (!voiceSettingsInitialized.current) {
-      voiceSettingsInitialized.current = true;
+    // Wait until localStorage hydration is complete
+    if (!voiceSettingsLoaded.current) return;
+    // The first trigger after hydration is the hydrated values settling — skip it
+    if (!voiceSettingsHydrated.current) {
+      voiceSettingsHydrated.current = true;
       return;
     }
     setTtsResults(prev => {
@@ -1330,6 +1335,7 @@ function PipelinePage() {
     const speed = localStorage.getItem("ef_voice_speed");
     const boost = localStorage.getItem("ef_voice_speaker_boost");
     const wps = localStorage.getItem("ef_words_per_subtitle");
+    const hasVoiceValues = stability !== null || similarity !== null || style !== null || speed !== null || boost !== null;
     if (stability !== null) setVoiceStability(parseFloat(stability));
     if (similarity !== null) setVoiceSimilarity(parseFloat(similarity));
     if (style !== null) setVoiceStyle(parseFloat(style));
@@ -1337,6 +1343,9 @@ function PipelinePage() {
     if (boost !== null) setVoiceSpeakerBoost(boost === "true");
     if (wps !== null) setWordsPerSubtitle(parseInt(wps, 10));
     voiceSettingsLoaded.current = true;
+    // If no voice values were stored, hydration won't trigger a re-render,
+    // so pre-mark as hydrated to avoid skipping the first real user change
+    if (!hasVoiceValues) voiceSettingsHydrated.current = true;
   }, []);
 
   // Persist voice settings to localStorage (skip initial render before load)
@@ -2191,6 +2200,9 @@ function PipelinePage() {
                         <div className="flex items-center gap-2">
                           <Badge variant="outline">
                             {wordCount} words (~{formatDuration(estimatedDuration)})
+                          </Badge>
+                          <Badge variant="outline" className="text-muted-foreground">
+                            {script.replace(/\[([^\[\]]+)\]/g, "").length} chars
                           </Badge>
                           {scripts.length > 1 && (
                             <Button
