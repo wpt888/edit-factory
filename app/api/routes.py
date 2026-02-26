@@ -99,62 +99,78 @@ async def get_all_costs(
 
 
 @router.get("/usage")
-async def get_usage_stats():
+async def get_usage_stats(
+    profile: ProfileContext = Depends(get_profile_context),
+):
     """
-    Get usage statistics from ElevenLabs and Gemini APIs.
-    Returns character/token consumption and costs.
+    Get usage statistics from all ElevenLabs accounts and Gemini.
+    Uses ElevenLabsAccountManager to show all configured accounts.
     """
-    import httpx
+    from app.services.elevenlabs_account_manager import get_account_manager
 
     settings = get_settings()
+    manager = get_account_manager()
     result = {
         "elevenlabs": None,
+        "elevenlabs_accounts": [],
         "gemini": None,
-        "errors": []
+        "errors": [],
     }
 
-    # ElevenLabs Usage
-    if settings.elevenlabs_api_key:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(
-                    "https://api.elevenlabs.io/v1/user/subscription",
-                    headers={"xi-api-key": settings.elevenlabs_api_key}
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    chars_used = data.get("character_count", 0)
-                    chars_limit = data.get("character_limit", 0)
-                    chars_remaining = chars_limit - chars_used
-                    next_reset = data.get("next_character_count_reset_unix")
+    # ElevenLabs Usage — fetch from all accounts via account manager
+    try:
+        accounts = manager.list_accounts(profile.profile_id)
+        all_accounts = []
+        primary_account = None
 
-                    # Estimate cost (approximate based on Creator plan ~$0.22/1000 chars)
-                    estimated_cost = round(chars_used * 0.00022, 2)
+        for acc in accounts:
+            chars_used = acc.get("characters_used") or 0
+            chars_limit = acc.get("character_limit") or 0
+            chars_remaining = chars_limit - chars_used
+            usage_pct = round((chars_used / chars_limit * 100), 1) if chars_limit > 0 else 0
+            estimated_cost = round(chars_used * 0.00022, 2)
 
-                    result["elevenlabs"] = {
-                        "characters_used": chars_used,
-                        "characters_limit": chars_limit,
-                        "characters_remaining": chars_remaining,
-                        "usage_percent": round((chars_used / chars_limit * 100), 1) if chars_limit > 0 else 0,
-                        "next_reset_unix": next_reset,
-                        "tier": data.get("tier", "unknown"),
-                        "estimated_cost_usd": estimated_cost
-                    }
-                else:
-                    result["errors"].append(f"ElevenLabs API error: {response.status_code}")
-        except Exception as e:
-            result["errors"].append(f"ElevenLabs error: {str(e)}")
-    else:
-        result["errors"].append("ElevenLabs API key not configured")
+            entry = {
+                "id": acc.get("id"),
+                "label": acc.get("label", "Unknown"),
+                "api_key_hint": acc.get("api_key_hint", ""),
+                "is_primary": acc.get("is_primary", False),
+                "is_active": acc.get("is_active", True),
+                "is_env_default": acc.get("is_env_default", False),
+                "tier": acc.get("tier") or "unknown",
+                "characters_used": chars_used,
+                "characters_limit": chars_limit,
+                "characters_remaining": chars_remaining,
+                "usage_percent": usage_pct,
+                "estimated_cost_usd": estimated_cost,
+                "last_error": acc.get("last_error"),
+            }
+            all_accounts.append(entry)
 
-    # Gemini - nu are usage API direct, dar putem estima din logs
-    # Pentru acum, returnăm info despre configurare
+            if acc.get("is_primary"):
+                primary_account = entry
+
+        result["elevenlabs_accounts"] = all_accounts
+
+        # Keep backward-compat: elevenlabs = primary account data
+        if primary_account:
+            result["elevenlabs"] = primary_account
+        elif all_accounts:
+            result["elevenlabs"] = all_accounts[0]
+
+    except Exception as e:
+        result["errors"].append(f"ElevenLabs error: {str(e)}")
+
+    if not result["elevenlabs"] and not result["elevenlabs_accounts"]:
+        result["errors"].append("No ElevenLabs API keys configured")
+
+    # Gemini
     if settings.gemini_api_key:
         result["gemini"] = {
             "configured": True,
             "model": settings.gemini_model,
             "note": "Gemini usage tracking requires Google Cloud Console billing reports",
-            "estimated_cost_per_video": 1.20  # ~60 frames × $0.02
+            "estimated_cost_per_video": 1.20,
         }
     else:
         result["errors"].append("Gemini API key not configured")

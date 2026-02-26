@@ -59,15 +59,25 @@ interface CostEntry {
   created_at?: string;
 }
 
+interface ElevenLabsAccount {
+  id: string;
+  label: string;
+  api_key_hint: string;
+  is_primary: boolean;
+  is_active: boolean;
+  is_env_default?: boolean;
+  tier: string;
+  characters_used: number;
+  characters_limit: number;
+  characters_remaining: number;
+  usage_percent: number;
+  estimated_cost_usd: number;
+  last_error?: string | null;
+}
+
 interface UsageStats {
-  elevenlabs?: {
-    characters_used: number;
-    characters_limit: number;
-    characters_remaining: number;
-    usage_percent: number;
-    tier: string;
-    estimated_cost_usd: number;
-  };
+  elevenlabs?: ElevenLabsAccount;
+  elevenlabs_accounts?: ElevenLabsAccount[];
   gemini?: {
     configured: boolean;
     model: string;
@@ -316,7 +326,7 @@ export default function UsagePage() {
 
         {/* Service Breakdown */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-          {/* ElevenLabs */}
+          {/* ElevenLabs — all accounts */}
           <Card className="bg-card border-border">
             <CardHeader>
               <CardTitle className="text-foreground flex items-center gap-2">
@@ -324,7 +334,10 @@ export default function UsagePage() {
                 ElevenLabs TTS
               </CardTitle>
               <CardDescription className="text-muted-foreground">
-                Text-to-Speech usage
+                Text-to-Speech usage{" "}
+                {(usageStats?.elevenlabs_accounts?.length || 0) > 1
+                  ? `(${usageStats?.elevenlabs_accounts?.length} accounts)`
+                  : ""}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -335,7 +348,62 @@ export default function UsagePage() {
                     {formatCost(costSummary?.totals?.elevenlabs || 0)}
                   </span>
                 </div>
-                {usageStats?.elevenlabs && (
+
+                {(usageStats?.elevenlabs_accounts || []).map((acc) => (
+                  <div
+                    key={acc.id}
+                    className={`p-3 rounded-lg border space-y-2 ${
+                      acc.is_primary
+                        ? "border-primary/50 bg-primary/5"
+                        : "border-border bg-muted/30"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-foreground text-sm">
+                          {acc.label}
+                        </span>
+                        <span className="text-xs text-muted-foreground font-mono">
+                          {acc.api_key_hint}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {acc.is_primary && (
+                          <Badge variant="default" className="text-xs">
+                            ACTIV
+                          </Badge>
+                        )}
+                        <Badge variant="outline" className="text-xs">
+                          {acc.tier}
+                        </Badge>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Characters:</span>
+                        <span className="text-foreground">
+                          {acc.characters_used?.toLocaleString() || 0} /{" "}
+                          {acc.characters_limit?.toLocaleString() || 0}
+                        </span>
+                      </div>
+                      <Progress value={acc.usage_percent || 0} className="h-2" />
+                    </div>
+
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Remaining:</span>
+                      <span className="text-green-500 font-medium">
+                        {acc.characters_remaining?.toLocaleString() || 0} chars
+                      </span>
+                    </div>
+
+                    {acc.last_error && (
+                      <p className="text-xs text-destructive">{acc.last_error}</p>
+                    )}
+                  </div>
+                ))}
+
+                {!usageStats?.elevenlabs_accounts?.length && usageStats?.elevenlabs && (
                   <>
                     <div className="space-y-2">
                       <div className="flex justify-between text-sm">
@@ -345,16 +413,7 @@ export default function UsagePage() {
                           {usageStats.elevenlabs.characters_limit?.toLocaleString() || 0}
                         </span>
                       </div>
-                      <Progress
-                        value={usageStats.elevenlabs.usage_percent || 0}
-                        className="h-2"
-                      />
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Remaining:</span>
-                      <span className="text-green-500 font-medium">
-                        {usageStats.elevenlabs.characters_remaining?.toLocaleString() || 0} chars
-                      </span>
+                      <Progress value={usageStats.elevenlabs.usage_percent || 0} className="h-2" />
                     </div>
                     <Badge variant="outline">
                       {usageStats.elevenlabs.tier} Plan
