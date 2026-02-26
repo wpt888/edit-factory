@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -156,6 +156,9 @@ export default function SegmentsPage() {
   const [pipExpandedSegId, setPipExpandedSegId] = useState<string | null>(null);
   const [pipSaving, setPipSaving] = useState(false);
 
+  // Undo history for segment deletes
+  const undoStackRef = useRef<{ segment: Segment; videoId: string }[]>([]);
+
   // Product group state
   const [productGroups, setProductGroups] = useState<ProductGroup[]>([]);
   const [showGroupDialog, setShowGroupDialog] = useState(false);
@@ -301,7 +304,7 @@ export default function SegmentsPage() {
     fetchAllSegments();
   }, [profileId, profileLoading, fetchSourceVideos, fetchAllSegments]);
 
-  // Actually delete segment
+  // Actually delete segment (pushes to undo stack)
   const handleDeleteSegment = useCallback(async (segmentId: string) => {
     // Get the segment before deleting to know its source video
     const segmentToDelete = segments.find((s) => s.id === segmentId) ||
@@ -310,6 +313,11 @@ export default function SegmentsPage() {
     try {
       const res = await apiDelete(`/segments/${segmentId}`);
       if (res.ok) {
+        // Push to undo stack
+        if (segmentToDelete) {
+          const videoId = segmentToDelete.source_video_id || selectedVideo?.id || "";
+          undoStackRef.current.push({ segment: { ...segmentToDelete }, videoId });
+        }
         setSegments((prev) => prev.filter((s) => s.id !== segmentId));
         setAllSegments((prev) => prev.filter((s) => s.id !== segmentId));
         // Update source video segments count
@@ -329,7 +337,41 @@ export default function SegmentsPage() {
     }
   }, [segments, allSegments, selectedVideo?.id]);
 
-  // Delete key shortcut — delete selected segment instantly
+  // Undo last deleted segment (Ctrl+Z)
+  const handleUndo = useCallback(async () => {
+    const last = undoStackRef.current.pop();
+    if (!last) return;
+
+    const { segment, videoId } = last;
+    try {
+      const res = await apiPost(
+        `/segments/source-videos/${videoId}/segments`,
+        {
+          start_time: segment.start_time,
+          end_time: segment.end_time,
+          keywords: segment.keywords,
+          notes: segment.notes || "",
+        }
+      );
+      if (res.ok) {
+        const restored = await res.json();
+        restored.source_video_name = segment.source_video_name;
+        setSegments((prev) => [...prev, restored].sort((a, b) => a.start_time - b.start_time));
+        setAllSegments((prev) => [...prev, restored].sort((a, b) => a.start_time - b.start_time));
+        setSourceVideos((prev) =>
+          prev.map((v) =>
+            v.id === videoId
+              ? { ...v, segments_count: v.segments_count + 1 }
+              : v
+          )
+        );
+      }
+    } catch (error) {
+      handleApiError(error, "Eroare la restaurarea segmentului");
+    }
+  }, []);
+
+  // Keyboard shortcuts: Delete selected segment, Ctrl+Z undo, Escape deselect
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Skip when typing in form elements
@@ -343,12 +385,18 @@ export default function SegmentsPage() {
         e.preventDefault();
         handleDeleteSegment(selectedSegment.id);
         setSelectedSegment(null);
+      } else if (e.key === "z" && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        setSelectedSegment(null);
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedSegment, handleDeleteSegment]);
+  }, [selectedSegment, handleDeleteSegment, handleUndo]);
 
   // Load segments and product groups when video selected
   useEffect(() => {
@@ -841,7 +889,7 @@ export default function SegmentsPage() {
       </div>
 
       {/* Videos list */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className={selectedSegment ? "flex-none max-h-[40%]" : "flex-1"}>
         <div className="space-y-1 p-2">
           {sourceVideos.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-8">
@@ -901,6 +949,31 @@ export default function SegmentsPage() {
           )}
         </div>
       </ScrollArea>
+
+      {/* Transform panel - shown when segment is selected */}
+      {selectedSegment && (
+        <div className="border-t border-border p-3 flex-1 overflow-auto">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-muted-foreground font-mono">
+              {formatTime(selectedSegment.start_time)} - {formatTime(selectedSegment.end_time)}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setSelectedSegment(null)}
+              title="Close panel (Esc)"
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          <SegmentTransformPanel
+            transforms={activeTransforms}
+            onChange={setActiveTransforms}
+            onSave={handleSaveTransforms}
+          />
+        </div>
+      )}
     </div>
   );
 
@@ -1044,7 +1117,7 @@ export default function SegmentsPage() {
 
       {/* Segments list */}
       <ScrollArea className="flex-1 min-h-0">
-        <div className="space-y-2 p-2">
+        <div className="space-y-1 p-1.5">
           {loadingSegments && viewMode === "current" ? (
             <p className="text-sm text-muted-foreground text-center py-8">
               Loading...
@@ -1065,7 +1138,7 @@ export default function SegmentsPage() {
             filteredSegments.map((segment) => (
               <div
                 key={segment.id}
-                className={`p-2 rounded-lg border transition-colors cursor-pointer ${
+                className={`px-2 py-1.5 rounded-md border transition-colors cursor-pointer ${
                   selectedSegment?.id === segment.id
                     ? "border-primary bg-primary/5 ring-1 ring-primary/30"
                     : "border-border hover:border-primary/50"
@@ -1074,25 +1147,38 @@ export default function SegmentsPage() {
               >
                 {/* Source video name (in All Videos mode) */}
                 {viewMode === "all" && segment.source_video_name && (
-                  <p className="text-[10px] text-muted-foreground mb-1 truncate">
-                    <Video className="h-3 w-3 inline mr-1" />
+                  <p className="text-[10px] text-muted-foreground truncate mb-0.5">
+                    <Video className="h-3 w-3 inline mr-0.5" />
                     {segment.source_video_name}
                   </p>
                 )}
 
-                {/* Header */}
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-1">
-                    <Clock className="h-3 w-3 text-muted-foreground" />
-                    <span className="font-mono text-xs">
-                      {formatTime(segment.start_time)} - {formatTime(segment.end_time)}
-                    </span>
-                  </div>
+                {/* Row 1: Time range + duration + favorite */}
+                <div className="flex items-center gap-1.5">
+                  <Clock className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                  <span className="font-mono text-xs">
+                    {formatTime(segment.start_time)}-{formatTime(segment.end_time)}
+                  </span>
+                  <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
+                    {segment.duration.toFixed(1)}s
+                  </Badge>
+                  {segment.product_group && (() => {
+                    const group = productGroups.find(g => g.label === segment.product_group);
+                    return (
+                      <Badge
+                        className="text-[10px] text-white px-1 py-0 h-4"
+                        style={{ backgroundColor: group?.color || "#4ECDC4" }}
+                      >
+                        {segment.product_group}
+                      </Badge>
+                    );
+                  })()}
+                  <div className="flex-1" />
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-6 w-6"
-                    onClick={() => handleToggleFavorite(segment.id)}
+                    className="h-5 w-5 flex-shrink-0"
+                    onClick={(e) => { e.stopPropagation(); handleToggleFavorite(segment.id); }}
                   >
                     {segment.is_favorite ? (
                       <Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />
@@ -1102,44 +1188,19 @@ export default function SegmentsPage() {
                   </Button>
                 </div>
 
-                {/* Duration badge + product group */}
-                <div className="flex items-center gap-1 mb-1">
-                  <Badge variant="outline" className="text-[10px]">
-                    {segment.duration.toFixed(1)}s
-                  </Badge>
-                  {segment.product_group && (() => {
-                    const group = productGroups.find(g => g.label === segment.product_group);
-                    return (
-                      <Badge
-                        className="text-[10px] text-white"
-                        style={{ backgroundColor: group?.color || "#4ECDC4" }}
-                      >
-                        {segment.product_group}
-                      </Badge>
-                    );
-                  })()}
-                </div>
-
-                {/* Keywords */}
+                {/* Row 2: Keywords (inline) */}
                 {segment.keywords.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mb-1">
+                  <div className="flex flex-wrap gap-0.5 mt-0.5">
                     {segment.keywords.map((kw) => (
-                      <Badge key={kw} variant="secondary" className="text-[10px]">
+                      <Badge key={kw} variant="secondary" className="text-[10px] px-1 py-0 h-4">
                         {kw}
                       </Badge>
                     ))}
                   </div>
                 )}
 
-                {/* Usage info */}
-                {segment.usage_count > 0 && (
-                  <p className="text-[10px] text-muted-foreground mb-1">
-                    Used in {segment.usage_count} project(s)
-                  </p>
-                )}
-
-                {/* Product association */}
-                <div className="flex items-center gap-1.5 mb-1">
+                {/* Row 3: Product association + actions (compact single row) */}
+                <div className="flex items-center gap-1 mt-1">
                   {associations[segment.id] ? (
                     <>
                       {associations[segment.id].product_image && (
@@ -1147,55 +1208,78 @@ export default function SegmentsPage() {
                         <img
                           src={associations[segment.id].product_image!}
                           alt=""
-                          className="w-6 h-6 rounded object-cover flex-shrink-0"
+                          className="w-5 h-5 rounded object-cover flex-shrink-0"
                         />
                       )}
-                      <span className="text-[10px] truncate flex-1" title={associations[segment.id].product_title || ""}>
+                      <span className="text-[10px] truncate" title={associations[segment.id].product_title || ""}>
                         {associations[segment.id].product_title || "Product"}
                       </span>
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-5 w-5"
+                        className="h-4 w-4 flex-shrink-0"
                         title="Select images"
                         onClick={(e) => { e.stopPropagation(); setImagePickerAssoc(associations[segment.id]); }}
                       >
-                        <Images className="h-3 w-3" />
+                        <Images className="h-2.5 w-2.5" />
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-5 w-5 text-destructive"
+                        className="h-4 w-4 flex-shrink-0 text-destructive"
                         title="Remove product"
                         onClick={(e) => { e.stopPropagation(); handleRemoveAssociation(segment.id); }}
                       >
-                        <X className="h-3 w-3" />
+                        <X className="h-2.5 w-2.5" />
                       </Button>
                     </>
                   ) : (
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-6 text-[10px] px-2 text-muted-foreground"
+                      className="h-5 text-[10px] px-1.5 text-muted-foreground"
                       onClick={(e) => { e.stopPropagation(); setPickerSegmentId(segment.id); }}
                     >
-                      <Package className="h-3 w-3 mr-1" />
-                      Add Product
+                      <Package className="h-3 w-3 mr-0.5" />
+                      Product
                     </Button>
                   )}
+                  <div className="flex-1" />
+                  {/* Usage count inline */}
+                  {segment.usage_count > 0 && (
+                    <span className="text-[10px] text-muted-foreground">{segment.usage_count}x</span>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-5 w-5 flex-shrink-0"
+                    title="Edit segment"
+                    onClick={(e) => { e.stopPropagation(); setEditingSegment(segment); }}
+                  >
+                    <Edit className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-5 w-5 flex-shrink-0 text-destructive hover:text-destructive"
+                    title="Delete segment"
+                    onClick={(e) => { e.stopPropagation(); requestDeleteSegment(segment); }}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
                 </div>
 
                 {/* PiP Overlay controls — only for associated segments */}
                 {associations[segment.id] && (
-                  <div className="px-2 pb-1">
+                  <div className="mt-0.5">
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-5 text-[10px] w-full justify-start"
+                      className="h-4 text-[10px] w-full justify-start px-1"
                       onClick={(e) => { e.stopPropagation(); setPipExpandedSegId(prev => prev === segment.id ? null : segment.id); }}
                     >
-                      <Layers className="h-3 w-3 mr-1" />
-                      PiP Overlay {associations[segment.id].pip_config?.enabled ? "✓" : ""}
+                      <Layers className="h-3 w-3 mr-0.5" />
+                      PiP {associations[segment.id].pip_config?.enabled ? "✓" : ""}
                     </Button>
                     {pipExpandedSegId === segment.id && (
                       <PipOverlayPanel
@@ -1212,44 +1296,12 @@ export default function SegmentsPage() {
                     )}
                   </div>
                 )}
-
-                {/* Actions */}
-                <div className="flex items-center gap-1 pt-1 border-t border-border">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 text-[10px] px-2"
-                    onClick={() => setEditingSegment(segment)}
-                  >
-                    <Edit className="h-3 w-3 mr-1" />
-                    Edit
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 text-[10px] px-2 text-destructive hover:text-destructive"
-                    onClick={() => requestDeleteSegment(segment)}
-                  >
-                    <Trash2 className="h-3 w-3 mr-1" />
-                    Delete
-                  </Button>
-                </div>
               </div>
             ))
           )}
         </div>
       </ScrollArea>
 
-      {/* Transform panel - shown when segment is selected */}
-      {selectedSegment && (
-        <div className="border-t border-border p-3">
-          <SegmentTransformPanel
-            transforms={activeTransforms}
-            onChange={setActiveTransforms}
-            onSave={handleSaveTransforms}
-          />
-        </div>
-      )}
     </div>
   );
 

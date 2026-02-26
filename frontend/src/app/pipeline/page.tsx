@@ -312,6 +312,7 @@ function PipelinePage() {
   const [subtitleSettings, setSubtitleSettings] = useState<SubtitleSettings>({ ...DEFAULT_SUBTITLE_SETTINGS });
   const [subtitleSettingsLoaded, setSubtitleSettingsLoaded] = useState(false);
   const subtitleSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const voiceSettingsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep pipelineIdRef in sync for use in closures/timeouts
   useEffect(() => { pipelineIdRef.current = pipelineId; }, [pipelineId]);
@@ -456,18 +457,30 @@ function PipelinePage() {
 
   // Source videos: restore selection from a saved pipeline
   const restoreSourceSelection = useCallback(async (pid: string) => {
+    let restored = false;
     try {
       const res = await apiGet(`/pipeline/${pid}/source-selection`);
       if (res.ok) {
         const data = await res.json();
         if (data.source_video_ids && data.source_video_ids.length > 0) {
           setSelectedSourceIds(new Set(data.source_video_ids));
+          restored = true;
         }
       }
     } catch {
       // Ignore — fresh pipeline or column not yet migrated
     }
-  }, []);
+    // Fallback: if no saved selection, auto-select all source videos
+    if (!restored) {
+      setSelectedSourceIds(prev => {
+        if (prev.size === 0) {
+          const allIds = sourceVideos.map(v => v.id);
+          return allIds.length > 0 ? new Set(allIds) : prev;
+        }
+        return prev;
+      });
+    }
+  }, [sourceVideos]);
 
   // Source videos: toggle a single video selection
   const handleSourceToggle = (videoId: string) => {
@@ -511,6 +524,14 @@ function PipelinePage() {
       }).catch(() => {});
     }
   };
+
+  // Safety net: auto-select all source videos when on step 2 with none selected
+  useEffect(() => {
+    if (step === 2 && sourceVideos.length > 0 && selectedSourceIds.size === 0 && !sourceVideosLoading) {
+      const allIds = new Set(sourceVideos.map(v => v.id));
+      setSelectedSourceIds(allIds);
+    }
+  }, [step, sourceVideos, selectedSourceIds.size, sourceVideosLoading]);
 
   // Fetch product groups when source video selection changes
   useEffect(() => {
@@ -1046,12 +1067,20 @@ function PipelinePage() {
         const res = await apiGetWithRetry(`/profiles/${currentProfile.id}`);
         if (res.ok) {
           const data = await res.json();
-          const savedVoiceId = data.tts_settings?.voice_id;
+          const tts = data.tts_settings;
+          const savedVoiceId = tts?.voice_id;
           if (savedVoiceId) {
             setDefaultVoiceId(savedVoiceId);
             // Pre-select if user hasn't manually chosen yet
             setVoiceId((prev) => prev === "" ? savedVoiceId : prev);
           }
+          // Hydrate voice settings from profile (overrides localStorage defaults)
+          if (tts?.voice_stability !== undefined) setVoiceStability(tts.voice_stability);
+          if (tts?.voice_similarity !== undefined) setVoiceSimilarity(tts.voice_similarity);
+          if (tts?.voice_style !== undefined) setVoiceStyle(tts.voice_style);
+          if (tts?.voice_speed !== undefined) setVoiceSpeed(tts.voice_speed);
+          if (tts?.voice_speaker_boost !== undefined) setVoiceSpeakerBoost(tts.voice_speaker_boost);
+          if (tts?.words_per_subtitle !== undefined) setWordsPerSubtitle(tts.words_per_subtitle);
         }
       } catch {
         // Silently fail — voice selector still works with default
@@ -1358,6 +1387,34 @@ function PipelinePage() {
     localStorage.setItem("ef_voice_speaker_boost", String(voiceSpeakerBoost));
     localStorage.setItem("ef_words_per_subtitle", String(wordsPerSubtitle));
   }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle]);
+
+  // Debounced auto-save voice settings to profile
+  useEffect(() => {
+    if (!voiceSettingsLoaded.current || !voiceSettingsHydrated.current) return;
+    if (!currentProfile) return;
+    if (voiceSettingsSaveTimer.current) clearTimeout(voiceSettingsSaveTimer.current);
+    voiceSettingsSaveTimer.current = setTimeout(async () => {
+      try {
+        const res = await apiGetWithRetry(`/profiles/${currentProfile.id}`);
+        if (!res.ok) return;
+        const profileData = await res.json();
+        const existingTts = profileData.tts_settings || {};
+        await apiPatch(`/profiles/${currentProfile.id}`, {
+          tts_settings: {
+            ...existingTts,
+            voice_stability: voiceStability,
+            voice_similarity: voiceSimilarity,
+            voice_style: voiceStyle,
+            voice_speed: voiceSpeed,
+            voice_speaker_boost: voiceSpeakerBoost,
+            words_per_subtitle: wordsPerSubtitle,
+          },
+        });
+      } catch {
+        // Silent — settings still work locally via localStorage
+      }
+    }, 1000);
+  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, currentProfile]);
 
   // Per-script TTS: generate voice-over for a single script
   const handleGenerateTts = async (variantIndex: number) => {
