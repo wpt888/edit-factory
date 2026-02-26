@@ -54,7 +54,8 @@ class ScriptGenerator:
         variant_count: int,
         provider: str,
         product_groups: Optional[Dict[str, List[str]]] = None,
-        ai_instructions: str = ""
+        ai_instructions: str = "",
+        target_duration: Optional[float] = None
     ) -> List[str]:
         """
         Generate N script variants using specified AI provider.
@@ -93,7 +94,7 @@ class ScriptGenerator:
         )
 
         # Build prompt
-        prompt = self._build_prompt(idea, context, keywords, variant_count, product_groups, ai_instructions)
+        prompt = self._build_prompt(idea, context, keywords, variant_count, product_groups, ai_instructions, target_duration)
 
         # Generate with selected provider
         try:
@@ -128,7 +129,8 @@ class ScriptGenerator:
         keywords: List[str],
         variant_count: int,
         product_groups: Optional[Dict[str, List[str]]] = None,
-        ai_instructions: str = ""
+        ai_instructions: str = "",
+        target_duration: Optional[float] = None
     ) -> str:
         """Build AI prompt for script generation."""
         keyword_list = ", ".join(keywords) if keywords else "none available"
@@ -146,6 +148,20 @@ class ScriptGenerator:
         if ai_instructions.strip():
             ai_rules_section = f"\n**Creator's Rules & Guidelines:**\n{ai_instructions.strip()}\n"
 
+        # Compute dynamic word target based on available footage duration
+        if target_duration and target_duration > 0:
+            words_per_sec = 2.3
+            # Target 80-95% of available duration to leave breathing room
+            min_duration = target_duration * 0.80
+            max_duration = target_duration * 0.95
+            min_words = max(20, int(min_duration * words_per_sec))
+            max_words = max(min_words + 10, int(max_duration * words_per_sec))
+            duration_target = f"{min_words}-{max_words} words (~{int(min_duration)}-{int(max_duration)} seconds when spoken)"
+            duration_warning = f"\n8. IMPORTANT: The available video footage is approximately {int(target_duration)}s. The script MUST NOT exceed this duration when spoken, or segments will be looped."
+        else:
+            duration_target = "75-150 words (~30-60 seconds when spoken)"
+            duration_warning = ""
+
         prompt = f"""Generate {variant_count} script variants for a social media video (reel/TikTok/YouTube Short).
 
 **User's Idea:** {idea}
@@ -158,11 +174,11 @@ class ScriptGenerator:
 **Instructions:**
 1. Generate EXACTLY {variant_count} unique script variants
 2. Each script is a standalone voiceover narration
-3. Target length: 75-150 words (~30-60 seconds when spoken)
+3. Target length: {duration_target}
 4. Each variant should take a different angle/approach to the same idea
 5. Naturally incorporate some (not all) of the available keywords where relevant
 6. Write in the same language as the user's idea
-7. Use conversational, engaging language suitable for social media
+7. Use conversational, engaging language suitable for social media{duration_warning}
 
 **CRITICAL TTS-SAFE FORMAT RULES:**
 - Plain text only - NO emojis, NO hashtags, NO markdown
@@ -290,9 +306,15 @@ Begin generation now:"""
         # Remove markdown links [text](url)
         text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
 
-        # Remove stage directions in brackets/parentheses
+        # Remove stage directions in brackets — e.g. [pause], [dramatic]
+        # Note: do NOT remove content from brackets that look like [ProductGroup] tags
+        # since users may insert those manually. The brackets remover below only runs
+        # during script generation sanitization (before user edits), so any AI-generated
+        # bracket content that slipped through is still removed here.
         text = re.sub(r'\[([^\]]+)\]', '', text)  # [pause], [dramatic]
-        text = re.sub(r'\(([^\)]+)\)', '', text)  # (whisper), (loudly)
+        # Remove single-word stage directions in parentheses — e.g. (whisper), (loudly)
+        # but preserve multi-word parenthetical phrases that are legitimate speech.
+        text = re.sub(r'\((\w+)\)', '', text)  # (whisper), (loudly) — single-word only
 
         # Remove hashtags
         text = re.sub(r'#\w+', '', text)

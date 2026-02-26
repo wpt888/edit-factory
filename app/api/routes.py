@@ -66,6 +66,38 @@ async def get_costs(
     return tracker.get_summary(profile_id=profile.profile_id)
 
 
+@router.get("/costs/all")
+async def get_all_costs(
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Get all cost entries for the current profile.
+    Used by the usage page to display the full cost log.
+    Returns {"entries": [...]} with all cost records.
+    """
+    from app.services.cost_tracker import get_cost_tracker
+    from app.db import get_supabase
+
+    tracker = get_cost_tracker()
+    supabase = get_supabase()
+
+    if supabase:
+        try:
+            query = supabase.table("api_costs")\
+                .select("*")\
+                .eq("profile_id", profile.profile_id)\
+                .order("created_at", desc=True)\
+                .limit(500)
+            result = query.execute()
+            return {"entries": result.data or [], "source": "supabase"}
+        except Exception as e:
+            logger.warning(f"Failed to fetch all costs from Supabase: {e}")
+
+    # Fallback to local log
+    summary = tracker.get_summary(profile_id=profile.profile_id)
+    return {"entries": summary.get("last_entries", []), "source": "local"}
+
+
 @router.get("/usage")
 async def get_usage_stats():
     """

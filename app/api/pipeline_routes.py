@@ -9,6 +9,7 @@ Orchestrates end-to-end pipeline:
 
 This is the glue layer connecting script generation and assembly into a single workflow.
 """
+import asyncio
 import hashlib
 import logging
 import subprocess
@@ -23,14 +24,14 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.api.auth import ProfileContext, get_profile_context
+from app.db import get_supabase
+from app.services.script_generator import get_script_generator
+from app.services.assembly_service import get_assembly_service, strip_product_group_tags
 
 
 def _stable_hash(text: str) -> str:
     """Stable hash that persists across Python process restarts (unlike built-in hash())."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-from app.db import get_supabase
-from app.services.script_generator import get_script_generator
-from app.services.assembly_service import get_assembly_service, strip_product_group_tags
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/pipeline", tags=["Multi-Variant Pipeline"])
@@ -171,6 +172,44 @@ def _get_pipeline_or_load(pipeline_id: str) -> Optional[dict]:
     return _db_load_pipeline(pipeline_id)
 
 
+def _compute_segment_duration(profile_id: str) -> float:
+    """Compute total duration of all segments for a profile."""
+    supabase = get_supabase()
+    if not supabase:
+        return 0.0
+    try:
+        result = supabase.table("editai_segments")\
+            .select("start_time, end_time")\
+            .eq("profile_id", profile_id)\
+            .execute()
+        total = 0.0
+        for seg in result.data:
+            start = seg.get("start_time")
+            end = seg.get("end_time")
+            if start is not None and end is not None:
+                total += max(0, float(end) - float(start))
+        return round(total, 1)
+    except Exception as e:
+        logger.warning(f"Failed to compute segment duration: {e}")
+        return 0.0
+
+
+def _voice_settings_match(a: Optional[dict], b: Optional[dict]) -> bool:
+    """Compare voice settings dicts with tolerance for float precision differences."""
+    if a is None or b is None:
+        return a is b
+    if set(a.keys()) != set(b.keys()):
+        return False
+    for key in a:
+        va, vb = a[key], b[key]
+        if isinstance(va, (int, float)) and isinstance(vb, (int, float)):
+            if abs(va - vb) > 0.01:
+                return False
+        elif va != vb:
+            return False
+    return True
+
+
 # ============== PYDANTIC MODELS ==============
 
 class PipelineGenerateRequest(BaseModel):
@@ -188,6 +227,7 @@ class PipelineGenerateResponse(BaseModel):
     provider: str                       # Which AI provider was used
     keyword_count: int                  # How many keywords were available
     variant_count: int                  # Number of variants generated
+    total_segment_duration: float = 0.0 # Total duration (seconds) of available video segments
 
 
 class MatchPreview(BaseModel):
@@ -501,6 +541,8 @@ async def update_pipeline_scripts(
     """
     if not request.scripts:
         raise HTTPException(status_code=400, detail="scripts list cannot be empty")
+    if len(request.scripts) > 10:
+        raise HTTPException(status_code=400, detail="Maximum 10 scripts allowed")
 
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
@@ -522,6 +564,12 @@ async def update_pipeline_scripts(
     # Update scripts in memory
     pipeline["scripts"] = request.scripts
     pipeline["variant_count"] = len(request.scripts)
+
+    # Clean up orphan TTS entries for removed script indices
+    new_count = len(request.scripts)
+    orphan_keys = [k for k in list(tts_previews.keys()) if int(str(k)) >= new_count]
+    for k in orphan_keys:
+        tts_previews.pop(k, None)
 
     # Persist to DB — convert int keys to strings for JSONB compatibility
     try:
@@ -649,14 +697,19 @@ async def generate_pipeline(
             # Convert sets to sorted lists
             product_groups_dict = {k: sorted(v) for k, v in product_groups_dict.items()}
 
-            logger.info(
-                f"[Profile {profile.profile_id}] Fetched {len(unique_keywords)} unique keywords "
-                f"from {len(result.data)} segments, {len(product_groups_dict)} product groups"
-            )
         except Exception as e:
             logger.warning(f"Failed to fetch keywords from database: {e}")
     else:
         logger.warning("Supabase not available, continuing without keywords")
+
+    # Compute total segment duration using shared helper
+    total_segment_duration = _compute_segment_duration(profile.profile_id)
+
+    logger.info(
+        f"[Profile {profile.profile_id}] Fetched {len(unique_keywords)} unique keywords, "
+        f"{len(product_groups_dict)} product groups, "
+        f"total segment duration: {total_segment_duration:.1f}s"
+    )
 
     # Fetch AI instructions from profile
     ai_instructions = ""
@@ -687,7 +740,8 @@ async def generate_pipeline(
             variant_count=request.variant_count,
             provider=request.provider,
             product_groups=product_groups_dict if product_groups_dict else None,
-            ai_instructions=ai_instructions
+            ai_instructions=ai_instructions,
+            target_duration=total_segment_duration if total_segment_duration > 0 else None
         )
 
         # Generate pipeline ID
@@ -722,7 +776,8 @@ async def generate_pipeline(
             scripts=scripts,
             provider=request.provider,
             keyword_count=len(unique_keywords),
-            variant_count=len(scripts)
+            variant_count=len(scripts),
+            total_segment_duration=round(total_segment_duration, 1)
         )
 
     except ValueError as e:
@@ -733,6 +788,15 @@ async def generate_pipeline(
             status_code=503,
             detail=f"Pipeline generation service unavailable: {str(e)}"
         )
+
+
+@router.get("/segment-duration")
+async def get_segment_duration(
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Return total duration (seconds) of all segments for the current profile."""
+    total = _compute_segment_duration(profile.profile_id)
+    return {"total_segment_duration": total}
 
 
 class PipelineTtsRequest(BaseModel):
@@ -999,7 +1063,7 @@ async def preview_variant(
         # For library audio: skip voice_settings check (same logic as render endpoint)
         is_library = bool(existing_tts.get("library_asset_id"))
         stored_settings = existing_tts.get("voice_settings")
-        settings_match = is_library or stored_settings == voice_settings
+        settings_match = is_library or _voice_settings_match(stored_settings, voice_settings)
         if not script_match:
             logger.info(
                 f"[Profile {profile.profile_id}] TTS reuse SKIP for variant {variant_index}: "
@@ -1012,7 +1076,7 @@ async def preview_variant(
             )
         if script_match and settings_match:
             audio_path_str = existing_tts.get("audio_path")
-            if audio_path_str and Path(audio_path_str).exists():
+            if audio_path_str and Path(audio_path_str).exists() and Path(audio_path_str).stat().st_size > 100:
                 reuse_audio_path = audio_path_str
                 reuse_audio_duration = existing_tts.get("audio_duration")
                 logger.info(
@@ -1233,11 +1297,11 @@ async def render_variants(
                         # For library audio: skip voice_settings check
                         # For generated audio: compare voice_settings
                         is_library = bool(existing_tts.get("library_asset_id"))
-                        settings_match = is_library or existing_tts.get("voice_settings") == request.voice_settings
+                        settings_match = is_library or _voice_settings_match(existing_tts.get("voice_settings"), request.voice_settings)
 
                         if settings_match:
                             audio_path_str = existing_tts.get("audio_path")
-                            if audio_path_str and Path(audio_path_str).exists():
+                            if audio_path_str and Path(audio_path_str).exists() and Path(audio_path_str).stat().st_size > 100:
                                 reuse_audio_path = audio_path_str
                                 reuse_audio_duration = existing_tts.get("audio_duration")
                                 reuse_srt_content = existing_tts.get("srt_content")
@@ -1255,36 +1319,42 @@ async def render_variants(
                     job["current_step"] = step_name
                     job["progress"] = pct
 
-                # Run full assembly
-                final_video_path = await assembly_service.assemble_and_render(
-                    script_text=script_text,
-                    profile_id=profile.profile_id,
-                    preset_data=preset_data,
-                    subtitle_settings=subtitle_settings,
-                    elevenlabs_model=request.elevenlabs_model,
-                    voice_id=request.voice_id,
-                    source_video_ids=request.source_video_ids,
-                    match_overrides=variant_match_overrides,
-                    enable_denoise=request.enable_denoise,
-                    denoise_strength=request.denoise_strength,
-                    enable_sharpen=request.enable_sharpen,
-                    sharpen_amount=request.sharpen_amount,
-                    enable_color=request.enable_color,
-                    brightness=request.brightness,
-                    contrast=request.contrast,
-                    saturation=request.saturation,
-                    shadow_depth=request.shadow_depth,
-                    enable_glow=request.enable_glow,
-                    glow_blur=request.glow_blur,
-                    adaptive_sizing=request.adaptive_sizing,
-                    variant_index=vid,
-                    voice_settings=request.voice_settings,
-                    reuse_audio_path=reuse_audio_path,
-                    reuse_audio_duration=reuse_audio_duration,
-                    reuse_srt_content=reuse_srt_content,
-                    on_progress=on_progress,
-                    max_words_per_phrase=request.words_per_subtitle
-                )
+                # Run full assembly (with 15-minute timeout)
+                try:
+                    final_video_path = await asyncio.wait_for(
+                        assembly_service.assemble_and_render(
+                            script_text=script_text,
+                            profile_id=profile.profile_id,
+                            preset_data=preset_data,
+                            subtitle_settings=subtitle_settings,
+                            elevenlabs_model=request.elevenlabs_model,
+                            voice_id=request.voice_id,
+                            source_video_ids=request.source_video_ids,
+                            match_overrides=variant_match_overrides,
+                            enable_denoise=request.enable_denoise,
+                            denoise_strength=request.denoise_strength,
+                            enable_sharpen=request.enable_sharpen,
+                            sharpen_amount=request.sharpen_amount,
+                            enable_color=request.enable_color,
+                            brightness=request.brightness,
+                            contrast=request.contrast,
+                            saturation=request.saturation,
+                            shadow_depth=request.shadow_depth,
+                            enable_glow=request.enable_glow,
+                            glow_blur=request.glow_blur,
+                            adaptive_sizing=request.adaptive_sizing,
+                            variant_index=vid,
+                            voice_settings=request.voice_settings,
+                            reuse_audio_path=reuse_audio_path,
+                            reuse_audio_duration=reuse_audio_duration,
+                            reuse_srt_content=reuse_srt_content,
+                            on_progress=on_progress,
+                            max_words_per_phrase=request.words_per_subtitle
+                        ),
+                        timeout=900
+                    )
+                except asyncio.TimeoutError:
+                    raise Exception("Render timed out after 15 minutes")
 
                 # Success
                 job["status"] = "completed"
@@ -1371,20 +1441,27 @@ async def render_variants(
                             except Exception as dur_err:
                                 logger.warning(f"Duration probe failed: {dur_err}")
 
-                            # Step D: Insert clip row
-                            supabase_lib.table("editai_clips").insert({
-                                "project_id": library_project_id,
-                                "profile_id": profile.profile_id,
-                                "variant_index": vid,
-                                "variant_name": f"variant_{vid + 1}",
-                                "raw_video_path": str(final_video_path),
-                                "final_video_path": str(final_video_path),
-                                "thumbnail_path": str(thumb_path) if thumb_path else None,
-                                "duration": duration,
-                                "is_selected": False,
-                                "is_deleted": False,
-                                "final_status": "completed"
-                            }).execute()
+                            # Step D: Insert clip row (skip if already exists for this variant)
+                            existing_clip = supabase_lib.table("editai_clips")\
+                                .select("id")\
+                                .eq("project_id", library_project_id)\
+                                .eq("variant_index", vid)\
+                                .limit(1)\
+                                .execute()
+                            if not existing_clip.data:
+                                supabase_lib.table("editai_clips").insert({
+                                    "project_id": library_project_id,
+                                    "profile_id": profile.profile_id,
+                                    "variant_index": vid,
+                                    "variant_name": f"variant_{vid + 1}",
+                                    "raw_video_path": str(final_video_path),
+                                    "final_video_path": str(final_video_path),
+                                    "thumbnail_path": str(thumb_path) if thumb_path else None,
+                                    "duration": duration,
+                                    "is_selected": False,
+                                    "is_deleted": False,
+                                    "final_status": "completed"
+                                }).execute()
 
                             job["library_saved"] = True
                             logger.info(
@@ -1437,12 +1514,22 @@ async def get_pipeline_status(pipeline_id: str):
     re-authenticating on every request.  This is safe because:
     - UUIDs are 128-bit random (2^122 entropy with v4)
     - Pipeline IDs are never exposed in URLs visible to other users
-    - Pipelines auto-expire after 30 days
+    - Pipelines expire after 30 days (TTL enforced on read).
     """
     # Try in-memory first, then DB fallback
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    # Enforce 30-day TTL
+    created_at = pipeline.get("created_at", "")
+    if created_at:
+        try:
+            created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            if (datetime.now(timezone.utc) - created_dt).days > 30:
+                raise HTTPException(status_code=404, detail="Pipeline expired")
+        except (ValueError, TypeError):
+            pass  # Can't parse date, skip TTL check
 
     # Build variants status list
     variants = []

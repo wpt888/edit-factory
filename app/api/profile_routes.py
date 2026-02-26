@@ -647,7 +647,8 @@ async def get_ai_instructions(
         if not result.data:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        if result.data["user_id"] != current_user.id:
+        settings = get_settings()
+        if not settings.auth_disabled and result.data["user_id"] != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
         return {"ai_instructions": result.data.get("ai_instructions") or ""}
@@ -680,7 +681,8 @@ async def update_ai_instructions(
         if not result.data:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        if result.data["user_id"] != current_user.id:
+        settings = get_settings()
+        if not settings.auth_disabled and result.data["user_id"] != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
         supabase.table("profiles")\

@@ -190,11 +190,14 @@ function PipelinePage() {
   const [error, setError] = useState<string | null>(null);
   const [aiInstructions, setAiInstructions] = useState("");
   const [aiRulesExpanded, setAiRulesExpanded] = useState(false);
+  const [aiRulesSaved, setAiRulesSaved] = useState(false);
+  const [aiRulesDirty, setAiRulesDirty] = useState(false);
   const aiInstructionsSaveTimer = useRef<NodeJS.Timeout | null>(null);
 
   // Step 2: Scripts
   const [pipelineId, setPipelineId] = useState<string | null>(null);
   const [scripts, setScripts] = useState<string[]>([]);
+  const [totalSegmentDuration, setTotalSegmentDuration] = useState<number>(0);
 
   // Step 3: Preview
   const [previewVariant, setPreviewVariant] = useState<number | null>(null);
@@ -321,6 +324,9 @@ function PipelinePage() {
     return cleaned.trim().split(/\s+/).filter(Boolean).length;
   };
 
+  /** Average TTS speech rate in words per second (ElevenLabs default) */
+  const WORDS_PER_SECOND = 2.3;
+
   // Format script: ensure each sentence starts on a new line
   const formatScript = (text: string): string => {
     // If already has multiple lines (3+), assume it's formatted
@@ -392,6 +398,21 @@ function PipelinePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProfile?.id]);
 
+  // Fetch total segment duration on profile load
+  useEffect(() => {
+    if (!currentProfile?.id) return;
+    apiGet("/pipeline/segment-duration")
+      .then(async (res) => {
+        if (res.ok) {
+          const data = await res.json();
+          setTotalSegmentDuration(data.total_segment_duration || 0);
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to fetch segment duration:", err);
+      });
+  }, [currentProfile?.id]);
+
   // Fetch AI instructions on profile load
   useEffect(() => {
     if (!currentProfile?.id) return;
@@ -403,22 +424,29 @@ function PipelinePage() {
           if (data.ai_instructions) setAiRulesExpanded(true);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.warn("Failed to load AI instructions:", err);
+      });
   }, [currentProfile?.id]);
 
-  // Save AI instructions (debounced)
-  const saveAiInstructions = useCallback((text: string) => {
+  // Save AI instructions explicitly
+  const saveAiInstructions = useCallback(async (text: string, collapse?: boolean) => {
     if (!currentProfile?.id) return;
     if (aiInstructionsSaveTimer.current) clearTimeout(aiInstructionsSaveTimer.current);
-    aiInstructionsSaveTimer.current = setTimeout(async () => {
-      try {
-        await apiPut(`/profiles/${currentProfile.id}/ai-instructions`, {
-          ai_instructions: text,
-        });
-      } catch {
-        // Silent — non-critical save
-      }
-    }, 1000);
+    try {
+      await apiPut(`/profiles/${currentProfile.id}/ai-instructions`, {
+        ai_instructions: text,
+      });
+      setAiRulesDirty(false);
+      setAiRulesSaved(true);
+      if (collapse) setAiRulesExpanded(false);
+      setTimeout(() => setAiRulesSaved(false), 2000);
+    } catch {
+      setAiRulesSaved(false);
+      setAiRulesDirty(true);
+      // Re-expand panel so user sees the unsaved state
+      if (collapse) setAiRulesExpanded(true);
+    }
   }, [currentProfile?.id]);
 
   // Source videos: restore selection from a saved pipeline
@@ -680,6 +708,7 @@ function PipelinePage() {
         const data = await res.json();
         setPipelineId(data.pipeline_id);
         setScripts((data.scripts || []).map(formatScript));
+        setTotalSegmentDuration(data.total_segment_duration || 0);
         setStep(2);
       } else {
         const errorData = await res.json().catch(() => ({
@@ -1229,7 +1258,10 @@ function PipelinePage() {
         audio.play().catch(() => { setPlayingAudio(null); pendingBlobUrl.current = null; URL.revokeObjectURL(url); });
         audioRef.current = audio;
       })
-      .catch(() => setPlayingAudio(null));
+      .catch((err) => {
+        console.warn("Audio playback failed:", err);
+        setPlayingAudio(null);
+      });
   };
 
   // Cleanup audio, timers, and abort in-flight requests on unmount
@@ -1587,24 +1619,43 @@ function PipelinePage() {
                       <BookOpen className="h-3.5 w-3.5 mr-1" />
                       AI Rules
                     </Button>
-                    {aiInstructions.trim() && (
+                    {aiInstructions.trim() && !aiRulesExpanded && (
                       <Badge variant="secondary" className="text-xs">
                         {aiInstructions.trim().length} chars
                       </Badge>
                     )}
+                    {aiRulesSaved && (
+                      <span className="text-xs text-green-500 flex items-center gap-1">
+                        <CheckCircle className="h-3 w-3" /> Saved
+                      </span>
+                    )}
                   </div>
                   {aiRulesExpanded && (
-                    <Textarea
-                      id="ai-instructions"
-                      placeholder="Persistent rules for AI script generation (tone, style, phrases, formatting)..."
-                      rows={4}
-                      value={aiInstructions}
-                      onChange={(e) => {
-                        setAiInstructions(e.target.value);
-                        saveAiInstructions(e.target.value);
-                      }}
-                      className="resize-y text-sm"
-                    />
+                    <div className="space-y-2">
+                      <Textarea
+                        id="ai-instructions"
+                        placeholder="Persistent rules for AI script generation (tone, style, phrases, formatting)..."
+                        rows={4}
+                        value={aiInstructions}
+                        onChange={(e) => {
+                          setAiInstructions(e.target.value);
+                          setAiRulesDirty(true);
+                        }}
+                        className="resize-y text-sm"
+                      />
+                      <div className="flex justify-end">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={aiRulesDirty ? "default" : "outline"}
+                          className="h-7 text-xs"
+                          onClick={() => saveAiInstructions(aiInstructions, true)}
+                        >
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          Save & Close
+                        </Button>
+                      </div>
+                    </div>
                   )}
                 </div>
 
@@ -1882,6 +1933,14 @@ function PipelinePage() {
                   </Alert>
                 )}
 
+                {/* Segment duration info */}
+                {totalSegmentDuration > 0 && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Info className="h-4 w-4" />
+                    <span>{Math.round(totalSegmentDuration)}s material video disponibil</span>
+                  </div>
+                )}
+
                 {/* Generate button */}
                 <Button
                   onClick={handleGenerate}
@@ -2106,7 +2165,7 @@ function PipelinePage() {
             <div className="grid grid-cols-1 gap-4">
               {scripts.map((script, index) => {
                 const wordCount = countWords(script);
-                const estimatedDuration = Math.round(wordCount / 2.3);
+                const estimatedDuration = Math.round(wordCount / WORDS_PER_SECOND);
 
                 return (
                   <Card key={index}>
@@ -2148,6 +2207,16 @@ function PipelinePage() {
                                   }
                                   return next;
                                 });
+                                // Remap previews: remove deleted index, shift higher indices down
+                                setPreviews(prev => {
+                                  const next: typeof prev = {};
+                                  for (const [k, v] of Object.entries(prev)) {
+                                    const ki = Number(k);
+                                    if (ki < index) next[ki] = v;
+                                    else if (ki > index) next[ki - 1] = v;
+                                  }
+                                  return next;
+                                });
                               }}
                             >
                               <X className="h-4 w-4" />
@@ -2156,6 +2225,16 @@ function PipelinePage() {
                         </div>
                       </div>
                     </CardHeader>
+                    {totalSegmentDuration > 0 && estimatedDuration > totalSegmentDuration && (
+                      <div className="px-6 pb-2">
+                        <Alert className="border-blue-500/50 bg-blue-500/10">
+                          <Info className="h-4 w-4 text-blue-500" />
+                          <AlertDescription className="text-blue-700 dark:text-blue-400 text-sm">
+                            Scriptul depășește materialul video disponibil ({Math.round(totalSegmentDuration)}s) cu ~{estimatedDuration - Math.round(totalSegmentDuration)}s. Segmentele vor fi repetate pentru a acoperi diferența.
+                          </AlertDescription>
+                        </Alert>
+                      </div>
+                    )}
                     <CardContent className="space-y-3">
                       <Textarea
                         id={`script-textarea-${index}`}
