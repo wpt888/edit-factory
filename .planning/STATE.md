@@ -5,20 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-28)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v9 Assembly Pipeline Fix + Overlays
+**Current focus:** v9 Assembly Pipeline Fix + Overlays — Phase 43
 
 ## Current Position
 
 Milestone: v9 Assembly Pipeline Fix + Overlays
-Phase: Not started (defining requirements)
-Status: Defining requirements
-Last activity: 2026-02-28 — Milestone v9 started
+Phase: 43 of 46 (Assembly Diversity Fix)
+Plan: 0 of ? in current phase
+Status: Ready to plan
+Last activity: 2026-02-28 — Roadmap created, 4 phases defined, 13 requirements mapped
+
+Progress: [░░░░░░░░░░] 0% (v9)
 
 ## Performance Metrics
 
 **Velocity:**
 - Total plans completed: 90 (across v2-v8)
-- Total phases completed: 40 (36-37 deferred)
+- Total phases completed: 40 (36-37 deferred, absorbed into v9)
 - Total milestones shipped: 8
 
 **By Milestone:**
@@ -39,6 +42,11 @@ Last activity: 2026-02-28 — Milestone v9 started
 
 Decisions are logged in PROJECT.md Key Decisions table.
 
+Recent decisions affecting v9:
+- v9 phases 43-44 are independent backend fixes; can be planned/executed in parallel
+- v9 phases 45-46 resume deferred v7 phases 36-37 (interstitial controls + render integration)
+- Phase 45 depends on 43+44 completing first (stable assembly before adding overlay complexity)
+
 ### Pending Todos
 
 None.
@@ -46,24 +54,20 @@ None.
 ### Blockers/Concerns
 
 **Database migrations pending (carry-over):**
-- Migration 007 (v3 encoding presets) requires manual application via Supabase SQL Editor
-- Migration 009 (v4 TTS timestamps) requires manual application via Supabase SQL Editor
-- Migration 017 (editai_generation_progress) requires manual application via Supabase SQL Editor
-- Migration 021 (source_video_ids on editai_pipelines) requires manual application via Supabase SQL Editor
+- Migration 007/009/017/021 require manual application via Supabase SQL Editor
 
-**v9 audit findings (from 2026-02-28 audit):**
-- Segment merge step destroys round-robin diversity (only checks previous group)
-- Step 2 TTS does not store srt_content in tts_previews
-- Step 3 render regenerates TTS with different timing when reusing cached audio
-- Silence remover can create zero-duration SRT entries
-- Assembled video may be shorter than audio, cutting final subtitles
+**v9 audit findings (guide implementation):**
+- Merge step at assembly_service.py lines 796-852 picks ONE representative per group; fix: track all used segment IDs across merged groups
+- pipeline_routes.py lines 968-975: tts_previews cache missing srt_content field — Step 3 gets None and regenerates
+- tts_subtitle_generator.py lines 14-44: silence remover can produce zero-duration SRT entries
+- Assembled video may be shorter than audio; need padding or duration alignment before subtitle bake-in
 
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: v9 milestone initialization
+Stopped at: Roadmap created — ready to plan Phase 43
 Resume file: None
-Next action: Define requirements and create roadmap
+Next action: `/gsd:plan-phase 43`
 
 ---
-*Last updated: 2026-02-28 after v9 milestone started*
+*Last updated: 2026-02-28 after v9 roadmap creation*

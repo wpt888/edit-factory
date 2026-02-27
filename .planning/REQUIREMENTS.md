@@ -45,25 +45,25 @@ None — all scoped features included in v9.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ASMB-01 | TBD | Pending |
-| ASMB-02 | TBD | Pending |
-| ASMB-03 | TBD | Pending |
-| SUBS-01 | TBD | Pending |
-| SUBS-02 | TBD | Pending |
-| SUBS-03 | TBD | Pending |
-| SUBS-04 | TBD | Pending |
-| OVRL-01 | TBD | Pending |
-| OVRL-02 | TBD | Pending |
-| OVRL-03 | TBD | Pending |
-| OVRL-04 | TBD | Pending |
-| OVRL-05 | TBD | Pending |
-| OVRL-06 | TBD | Pending |
+| ASMB-01 | Phase 43 | Pending |
+| ASMB-02 | Phase 43 | Pending |
+| ASMB-03 | Phase 43 | Pending |
+| SUBS-01 | Phase 44 | Pending |
+| SUBS-02 | Phase 44 | Pending |
+| SUBS-03 | Phase 44 | Pending |
+| SUBS-04 | Phase 44 | Pending |
+| OVRL-01 | Phase 45 | Pending |
+| OVRL-02 | Phase 45 | Pending |
+| OVRL-03 | Phase 45 | Pending |
+| OVRL-04 | Phase 46 | Pending |
+| OVRL-05 | Phase 46 | Pending |
+| OVRL-06 | Phase 46 | Pending |
 
 **Coverage:**
 - v9 requirements: 13 total
-- Mapped to phases: 0
-- Unmapped: 13 (pending roadmap)
+- Mapped to phases: 13
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-28*
-*Last updated: 2026-02-28 after initial definition*
+*Last updated: 2026-02-28 after roadmap creation (traceability complete)*
