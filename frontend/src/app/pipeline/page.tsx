@@ -84,6 +84,8 @@ export interface MatchPreview {
   segment_start_time?: number;
   segment_end_time?: number;
   thumbnail_path?: string;
+  merge_group?: number;
+  merge_group_duration?: number;
 }
 
 interface PreviewData {
@@ -1224,7 +1226,6 @@ function PipelinePage() {
         });
       }
       setTtsResults(restoredTts);
-      setStep(2);
       setSelectedHistoryId(null);
       setHistoryScripts([]);
       setHistorySelectedScripts(new Set());
@@ -1233,6 +1234,38 @@ function PipelinePage() {
       // Restore source video selection from DB
       setSelectedSourceIds(new Set());
       restoreSourceSelection(pid);
+
+      // Restore previews in background (so step 3 is ready when user navigates there)
+      const allHavePreviews = historyScripts.every((_, idx) => {
+        const info = historyPreviewInfo[String(idx)];
+        return info && info.has_audio && info.has_srt;
+      });
+
+      if (allHavePreviews && historyScripts.length > 0) {
+        apiGet(`/pipeline/${pid}/restore-previews`)
+          .then(async (previewRes) => {
+            if (previewRes.ok) {
+              const previewData = await previewRes.json();
+              if (previewData.previews && Object.keys(previewData.previews).length > 0) {
+                const restoredPreviews: Record<number, PreviewData> = {};
+                for (const [key, val] of Object.entries(previewData.previews)) {
+                  restoredPreviews[Number(key)] = val as PreviewData;
+                }
+                setPreviews(restoredPreviews);
+                if (previewData.available_segments?.length > 0) {
+                  setAvailableSegments(previewData.available_segments);
+                }
+                setSelectedVariants(new Set(historyScripts.map((_, i) => i)));
+              }
+            }
+          })
+          .catch((err) => {
+            console.warn("Failed to restore previews:", err);
+          });
+      }
+
+      // Always land on step 2 so user can review source videos & segments
+      setStep(2);
       return;
     }
 
@@ -1649,10 +1682,14 @@ function PipelinePage() {
                         ? "bg-primary text-primary-foreground"
                         : step > s.num
                         ? "bg-green-600 text-white cursor-pointer hover:bg-green-700 transition-colors"
+                        : (s.num === 3 && step === 2 && Object.keys(previews).length > 0)
+                        ? "bg-blue-600 text-white cursor-pointer hover:bg-blue-700 transition-colors"
                         : "bg-secondary text-muted-foreground"
                     }`}
                     onClick={() => {
                       if (step > s.num) setStep(s.num);
+                      // Allow forward nav to Step 3 from Step 2 when previews exist
+                      if (s.num === 3 && step === 2 && Object.keys(previews).length > 0) setStep(3);
                     }}
                   >
                     {step > s.num ? <CheckCircle className="h-5 w-5" /> : s.num}
