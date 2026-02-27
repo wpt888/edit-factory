@@ -103,6 +103,9 @@ Automated video production from any input — an idea, a product feed, or a coll
 
 ### Active
 
+- [ ] Segment repetition fix: use ALL segments before repeating any (round-robin through merge)
+- [ ] SRT/subtitle text fix: persist SRT content at Step 2 TTS, reuse at Step 3 render
+- [ ] Video-audio duration alignment: ensure assembled video matches TTS audio duration
 - [ ] User can insert interstitial product slides between segments (deferred from v7)
 - [ ] Assembly/render pipeline applies PiP overlays and interstitial slides (deferred from v7)
 
@@ -183,13 +186,16 @@ Automated video production from any input — an idea, a product feed, or a coll
 | Optimistic UI state for Step 4 render | Pre-call card rendering eliminates empty state flash | ✓ Good |
 | match_overrides through render pipeline | Segment swaps + duration edits flow to final video | ✓ Good |
 
-## Current State
+## Current Milestone: v9 Assembly Pipeline Fix + Overlays
 
-No active milestone. v7 + v8 shipped 2026-02-24.
+**Goal:** Fix critical assembly pipeline bugs (segment repetition, missing subtitles) and complete deferred v7 overlay rendering.
 
-**Deferred work:**
-- v7 phases 36-37: Interstitial slides + FFmpeg render integration for PiP overlays
-- 4 DB migrations pending manual application (007, 009, 017, 021)
+**Target features:**
+- Fix segment repetition in merge step (exhaust all segments before reuse)
+- Fix SRT content persistence (Step 2 → Step 3 data flow)
+- Video-audio duration alignment
+- Interstitial product slides between segments
+- PiP overlay + interstitial FFmpeg render integration
 
 ---
-*Last updated: 2026-02-24 after v7 + v8 milestone completion*
+*Last updated: 2026-02-28 after v9 milestone started*

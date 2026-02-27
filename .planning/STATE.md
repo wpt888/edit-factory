@@ -2,19 +2,17 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-24)
+See: .planning/PROJECT.md (updated 2026-02-28)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v7 + v8 milestones complete — planning next milestone
+**Current focus:** v9 Assembly Pipeline Fix + Overlays
 
 ## Current Position
 
-Milestone: None active
-Phase: 42 phases total (1-35 + 38-42 complete, 36-37 deferred)
-Status: Between milestones
-Last activity: 2026-02-24 — v7 + v8 milestones archived
-
-Progress: [██████████] 100% | 8 milestones shipped (v1-v8)
+Milestone: v9 Assembly Pipeline Fix + Overlays
+Phase: Not started (defining requirements)
+Status: Defining requirements
+Last activity: 2026-02-28 — Milestone v9 started
 
 ## Performance Metrics
 
@@ -53,14 +51,19 @@ None.
 - Migration 017 (editai_generation_progress) requires manual application via Supabase SQL Editor
 - Migration 021 (source_video_ids on editai_pipelines) requires manual application via Supabase SQL Editor
 
-**v7 deferred work:** Phases 36 (Interstitial Slide Controls) and 37 (Render Integration) can be resumed in a future milestone.
+**v9 audit findings (from 2026-02-28 audit):**
+- Segment merge step destroys round-robin diversity (only checks previous group)
+- Step 2 TTS does not store srt_content in tts_previews
+- Step 3 render regenerates TTS with different timing when reusing cached audio
+- Silence remover can create zero-duration SRT entries
+- Assembled video may be shorter than audio, cutting final subtitles
 
 ## Session Continuity
 
-Last session: 2026-02-24
-Stopped at: v7 + v8 milestone completion
+Last session: 2026-02-28
+Stopped at: v9 milestone initialization
 Resume file: None
-Next action: `/gsd:new-milestone` to start next milestone
+Next action: Define requirements and create roadmap
 
 ---
-*Last updated: 2026-02-24 after v7 + v8 milestone completion*
+*Last updated: 2026-02-28 after v9 milestone started*
