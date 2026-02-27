@@ -2282,7 +2282,12 @@ async def _render_final_clip_task(
                 # Check SRT cache first
                 from app.services.tts_cache import srt_cache_lookup, srt_cache_store
                 _tts_voice = content_data.get("tts_voice_id", "")
-                _srt_cache_key = {"text": content_data["tts_text"], "voice_id": _tts_voice, "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "pause_version": "v2"}
+                # Include voice_settings in SRT cache key to prevent stale SRT when settings change
+                _voice_settings = content_data.get("voice_settings", {})
+                _vs_key = ""
+                if _voice_settings:
+                    _vs_key = f"{_voice_settings.get('stability', 0.5):.2f}_{_voice_settings.get('similarity_boost', 0.75):.2f}_{_voice_settings.get('style', 0.0):.2f}_{_voice_settings.get('speed', 1.0):.2f}"
+                _srt_cache_key = {"text": content_data["tts_text"], "voice_id": _tts_voice, "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "pause_version": "v2", "vs": _vs_key}
                 cached_srt = srt_cache_lookup(_srt_cache_key)
                 if cached_srt:
                     auto_srt = cached_srt
@@ -3076,13 +3081,26 @@ async def _render_with_preset(
     # Add encoding parameters from EncodingPreset
     cmd.extend(encoding_params)
 
-    # Audio mapping
+    # Audio mapping — use audio duration as master clock (video was pre-synced to match)
     if audio_path and audio_path.exists():
+        # Get audio duration to use as explicit output duration (avoids -shortest truncation bugs)
+        try:
+            _probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
+                capture_output=True, text=True, timeout=30
+            )
+            _audio_dur = float(_probe.stdout.strip()) if _probe.returncode == 0 else 0
+        except Exception:
+            _audio_dur = 0
+
         cmd.extend([
             "-map", "0:v:0",
             "-map", "1:a:0",
-            "-shortest"  # Trim to shorter of audio/video to prevent mismatched lengths
         ])
+        # Use explicit duration from audio to prevent premature cutoff
+        if _audio_dur > 0:
+            cmd.extend(["-t", str(_audio_dur)])
     else:
         # Silent audio - map video from 0, audio from lavfi 1
         cmd.extend([

@@ -49,6 +49,8 @@ export interface MatchPreview {
   segment_start_time?: number;
   segment_end_time?: number;
   thumbnail_path?: string;
+  merge_group?: number;
+  merge_group_duration?: number;
 }
 
 export interface SegmentOption {
@@ -191,7 +193,14 @@ export function TimelineEditor({
     if (!activeVideo) return;
 
     activeVideo.currentTime = match.segment_start_time;
-    previewSegmentEndTimeRef.current = match.segment_end_time ?? undefined;
+
+    // If this match belongs to a merge group, let the video play for the
+    // full group duration instead of pausing at the individual segment end.
+    if (match.merge_group_duration != null && match.segment_start_time != null) {
+      previewSegmentEndTimeRef.current = match.segment_start_time + match.merge_group_duration;
+    } else {
+      previewSegmentEndTimeRef.current = match.segment_end_time ?? undefined;
+    }
 
     if (isPreviewPlayingRef.current) {
       activeVideo.play().catch(() => {});
@@ -212,9 +221,17 @@ export function TimelineEditor({
 
       const newIdx = findActiveMatch(time);
       if (newIdx !== previewActiveIndexRef.current) {
+        const ms = matchesRef.current;
+        const oldGroup = ms[previewActiveIndexRef.current]?.merge_group;
+        const newGroup = ms[newIdx]?.merge_group;
+        // Only switch video when entering a DIFFERENT merge group (or no groups)
+        const groupChanged = oldGroup === undefined || newGroup === undefined || oldGroup !== newGroup;
+
         setPreviewActiveIndex(newIdx);
         previewActiveIndexRef.current = newIdx;
-        syncPreviewVideo(newIdx);
+        if (groupChanged) {
+          syncPreviewVideo(newIdx);
+        }
       }
 
       previewRafIdRef.current = requestAnimationFrame(loop);
@@ -783,94 +800,127 @@ export function TimelineEditor({
       {viewMode === "timeline" ? (
         /* ========== TIMELINE VIEW ========== */
         <div className="space-y-3">
-          {/* Horizontal scrollable strip */}
+          {/* Horizontal scrollable strip — grouped by merge_group */}
           <div className="overflow-x-auto rounded-md border bg-muted/30 p-2">
             <div className="flex gap-1" style={{ minWidth: "100%" }}>
-              {matches.map((match, idx) => {
-                const isMatched = match.segment_id !== null && match.confidence > 0;
-                const isAutoFilled = match.is_auto_filled === true && match.segment_id !== null;
-                const isDragging = dragIndex === idx;
-                const isDragOver = dragOverIndex === idx && dragIndex !== idx;
-                const naturalDuration = match.srt_end - match.srt_start;
-                const segDuration = match.duration_override ?? naturalDuration;
-                const widthPercent = totalDuration > 0 ? (segDuration / totalDuration) * 100 : 10;
-                const isSelected = selectedBlockIndex === idx;
+              {(() => {
+                // Group consecutive matches by merge_group
+                const groups: { groupId: number; groupDuration: number; matchIndices: number[] }[] = [];
+                let currentGroup: typeof groups[0] | null = null;
+                matches.forEach((match, idx) => {
+                  const mg = match.merge_group;
+                  if (mg !== undefined && currentGroup && currentGroup.groupId === mg) {
+                    currentGroup.matchIndices.push(idx);
+                  } else {
+                    currentGroup = {
+                      groupId: mg ?? idx,
+                      groupDuration: match.merge_group_duration ?? (match.srt_end - match.srt_start),
+                      matchIndices: [idx],
+                    };
+                    groups.push(currentGroup);
+                  }
+                });
 
-                const borderColor = isMatched
-                  ? "border-green-500"
-                  : isAutoFilled
-                  ? "border-blue-500"
-                  : "border-amber-500";
+                return groups.map((group) => {
+                  const firstIdx = group.matchIndices[0];
+                  const firstMatch = matches[firstIdx];
+                  const isMulti = group.matchIndices.length > 1;
+                  const groupDuration = group.groupDuration;
+                  const widthPercent = totalDuration > 0 ? (groupDuration / totalDuration) * 100 : 10;
 
-                const bgColor = isSelected
-                  ? "bg-accent"
-                  : isMatched
-                  ? "bg-green-50 dark:bg-green-950/20"
-                  : isAutoFilled
-                  ? "bg-blue-50 dark:bg-blue-950/20"
-                  : "bg-amber-50 dark:bg-amber-950/20";
+                  // Use first match for color/status
+                  const isMatched = firstMatch.segment_id !== null && firstMatch.confidence > 0;
+                  const isAutoFilled = firstMatch.is_auto_filled === true && firstMatch.segment_id !== null;
+                  const isSelected = group.matchIndices.includes(selectedBlockIndex ?? -1);
+                  const isPreviewHighlighted = isPreviewActive && group.matchIndices.includes(previewActiveIndex);
 
-                const label = isMatched
-                  ? (match.matched_keyword ?? "matched")
-                  : isAutoFilled
-                  ? (match.segment_keywords[0] ?? "auto")
-                  : "?";
+                  const borderColor = isMatched
+                    ? "border-green-500"
+                    : isAutoFilled
+                    ? "border-blue-500"
+                    : "border-amber-500";
 
-                return (
-                  <div
-                    key={idx}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, idx)}
-                    onDragOver={(e) => handleDragOver(e, idx)}
-                    onDragLeave={handleDragLeave}
-                    onDrop={(e) => handleDrop(e, idx)}
-                    onDragEnd={handleDragEnd}
-                    onClick={() => {
-                      if (isPreviewActive) {
-                        handleSeekToSegment(idx);
-                      } else {
-                        setSelectedBlockIndex(idx === selectedBlockIndex ? null : idx);
-                      }
-                    }}
-                    className={`
-                      relative flex-shrink-0 rounded-md border-2 cursor-pointer
-                      transition-all select-none overflow-hidden
-                      ${borderColor} ${bgColor}
-                      ${isDragging ? "opacity-50" : ""}
-                      ${isDragOver ? "ring-2 ring-blue-400 ring-offset-1" : ""}
-                      ${isSelected && !isPreviewActive ? "ring-2 ring-primary ring-offset-1" : ""}
-                      ${isPreviewActive && previewActiveIndex === idx ? "ring-2 ring-green-400 ring-offset-1 animate-pulse" : ""}
-                    `}
-                    style={{
-                      width: `max(60px, ${widthPercent}%)`,
-                      height: "80px",
-                    }}
-                    title={match.srt_text}
-                  >
-                    {/* Thumbnail background */}
-                    {match.thumbnail_path && (
-                      <img
-                        src={`${API_URL}/segments/files/${encodeURIComponent(match.thumbnail_path)}`}
-                        alt=""
-                        className="absolute inset-0 w-full h-full object-cover opacity-40"
-                        loading="lazy"
-                      />
-                    )}
-                    {/* Content overlay */}
-                    <div className="relative z-10 flex flex-col items-center justify-center h-full px-1 py-1 text-center">
-                      <span className="text-[10px] font-mono font-bold leading-none">
-                        #{match.srt_index + 1}
-                      </span>
-                      <span className="text-[10px] font-medium leading-tight mt-0.5 truncate max-w-full">
-                        {segDuration.toFixed(1)}s
-                      </span>
-                      <span className="text-[9px] text-muted-foreground leading-tight mt-0.5 truncate max-w-full">
-                        {label}
-                      </span>
+                  const bgColor = isSelected
+                    ? "bg-accent"
+                    : isMatched
+                    ? "bg-green-50 dark:bg-green-950/20"
+                    : isAutoFilled
+                    ? "bg-blue-50 dark:bg-blue-950/20"
+                    : "bg-amber-50 dark:bg-amber-950/20";
+
+                  // Combine texts for tooltip
+                  const groupTexts = group.matchIndices.map(i => matches[i].srt_text).join(" ");
+
+                  return (
+                    <div
+                      key={`g-${group.groupId}`}
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, firstIdx)}
+                      onDragOver={(e) => handleDragOver(e, firstIdx)}
+                      onDragLeave={handleDragLeave}
+                      onDrop={(e) => handleDrop(e, firstIdx)}
+                      onDragEnd={handleDragEnd}
+                      onClick={() => {
+                        if (isPreviewActive) {
+                          handleSeekToSegment(firstIdx);
+                        } else {
+                          setSelectedBlockIndex(firstIdx === selectedBlockIndex ? null : firstIdx);
+                        }
+                      }}
+                      className={`
+                        relative flex-shrink-0 rounded-md border-2 cursor-pointer
+                        transition-all select-none overflow-hidden
+                        ${borderColor} ${bgColor}
+                        ${isSelected && !isPreviewActive ? "ring-2 ring-primary ring-offset-1" : ""}
+                        ${isPreviewHighlighted ? "ring-2 ring-green-400 ring-offset-1 animate-pulse" : ""}
+                      `}
+                      style={{
+                        width: `max(${isMulti ? 90 : 60}px, ${widthPercent}%)`,
+                        height: "80px",
+                      }}
+                      title={groupTexts}
+                    >
+                      {/* Thumbnail background */}
+                      {firstMatch.thumbnail_path && (
+                        <img
+                          src={`${API_URL}/segments/files/${encodeURIComponent(firstMatch.thumbnail_path)}`}
+                          alt=""
+                          className="absolute inset-0 w-full h-full object-cover opacity-40"
+                          loading="lazy"
+                        />
+                      )}
+                      {/* Content overlay */}
+                      <div className="relative z-10 flex flex-col items-center justify-center h-full px-1 py-1 text-center">
+                        {isMulti ? (
+                          <>
+                            <span className="text-[10px] font-mono font-bold leading-none">
+                              #{firstMatch.srt_index + 1}-{matches[group.matchIndices[group.matchIndices.length - 1]].srt_index + 1}
+                            </span>
+                            <span className="text-[10px] font-medium leading-tight mt-0.5">
+                              {groupDuration.toFixed(1)}s
+                            </span>
+                            <span className="text-[9px] text-muted-foreground leading-tight mt-0.5 truncate max-w-full">
+                              {group.matchIndices.length} phrases
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-[10px] font-mono font-bold leading-none">
+                              #{firstMatch.srt_index + 1}
+                            </span>
+                            <span className="text-[10px] font-medium leading-tight mt-0.5 truncate max-w-full">
+                              {groupDuration.toFixed(1)}s
+                            </span>
+                            <span className="text-[9px] text-muted-foreground leading-tight mt-0.5 truncate max-w-full">
+                              {firstMatch.matched_keyword ?? (isAutoFilled ? "auto" : "?")}
+                            </span>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                });
+              })()}
             </div>
           </div>
 
@@ -973,6 +1023,14 @@ export function TimelineEditor({
                 match.duration_override !== undefined &&
                 Math.abs(match.duration_override - naturalDuration) > 0.05;
 
+              // Merge group info: check if this entry is first/last in its group
+              const mg = match.merge_group;
+              const prevMg = idx > 0 ? matches[idx - 1].merge_group : undefined;
+              const nextMg = idx < matches.length - 1 ? matches[idx + 1].merge_group : undefined;
+              const isGroupStart = mg !== undefined && mg !== prevMg;
+              const isGroupEnd = mg !== undefined && mg !== nextMg;
+              const isInGroup = mg !== undefined && (mg === prevMg || mg === nextMg);
+
               return (
                 <div
                   key={idx}
@@ -992,7 +1050,9 @@ export function TimelineEditor({
                     isDragOver
                       ? "border-t-2 border-t-blue-500"
                       : "border-t-transparent"
-                  }`}
+                  } ${isInGroup ? "border-r-2 border-r-purple-400 dark:border-r-purple-600" : ""} ${
+                    isGroupStart && isInGroup ? "rounded-tr-md" : ""
+                  } ${isGroupEnd && isInGroup ? "rounded-br-md" : ""}`}
                 >
                   {/* Drag handle */}
                   <div
@@ -1024,7 +1084,15 @@ export function TimelineEditor({
                   <div className="flex-shrink-0 flex flex-col items-end gap-1">
                     {/* Duration adjustment control */}
                     <div className="flex items-center gap-1 text-xs">
-                      <span title="Segment duration">
+                      {isGroupStart && isInGroup && match.merge_group_duration ? (
+                        <span
+                          className="text-[10px] font-mono bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 px-1 rounded mr-0.5"
+                          title={`Segment video: ${match.merge_group_duration.toFixed(1)}s (grupate)`}
+                        >
+                          {match.merge_group_duration.toFixed(1)}s
+                        </span>
+                      ) : null}
+                      <span title="Subtitle duration">
                         <Clock className="h-3 w-3 text-muted-foreground" />
                       </span>
                       <Button

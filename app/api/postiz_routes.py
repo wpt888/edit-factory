@@ -178,7 +178,13 @@ async def get_integrations(
     logger.info(f"[Profile {profile.profile_id}] Fetching Postiz integrations")
 
     try:
-        from app.services.postiz_service import get_postiz_publisher
+        from app.services.postiz_service import get_postiz_publisher, is_postiz_configured
+
+        # Return empty list if Postiz is not configured (not an error)
+        if not is_postiz_configured(profile.profile_id):
+            logger.debug(f"[Profile {profile.profile_id}] Postiz not configured, returning empty integrations")
+            return []
+
         publisher = get_postiz_publisher(profile.profile_id)
         integrations = await publisher.get_integrations(profile_id=profile.profile_id)
 
@@ -196,7 +202,7 @@ async def get_integrations(
 
     except ValueError as e:
         logger.warning(f"[Profile {profile.profile_id}] Postiz not configured: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        return []
     except Exception as e:
         logger.error(f"[Profile {profile.profile_id}] Failed to get integrations: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

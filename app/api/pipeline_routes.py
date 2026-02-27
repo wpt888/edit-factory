@@ -248,6 +248,8 @@ class MatchPreview(BaseModel):
     segment_start_time: Optional[float] = None
     segment_end_time: Optional[float] = None
     thumbnail_path: Optional[str] = None
+    merge_group: Optional[int] = None
+    merge_group_duration: Optional[float] = None
 
 
 class PipelinePreviewResponse(BaseModel):
@@ -1144,6 +1146,8 @@ async def preview_variant(
                 segment_start_time=m.get("segment_start_time"),
                 segment_end_time=m.get("segment_end_time"),
                 thumbnail_path=m.get("thumbnail_path"),
+                merge_group=m.get("merge_group"),
+                merge_group_duration=m.get("merge_group_duration"),
             )
             for m in preview_data["matches"]
         ]
@@ -1802,6 +1806,75 @@ async def sync_pipeline_to_library(
         "library_project_id": library_project_id,
         "message": f"Synced {synced} variant(s) to library"
     }
+
+
+@router.get("/{pipeline_id}/restore-previews")
+async def restore_previews(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Return stored preview match data for all variants in a pipeline.
+
+    Used by the frontend to restore full preview state when importing a
+    pipeline from history that already has previews generated. Returns
+    the same shape as PipelinePreviewResponse keyed by variant index.
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    if pipeline["profile_id"] != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    stored_previews = pipeline.get("previews", {})
+    if not stored_previews:
+        return {"previews": {}, "available_segments": []}
+
+    result_previews = {}
+    all_available_segments = []
+
+    for idx_key, preview_entry in stored_previews.items():
+        pd = preview_entry.get("preview_data", {}) if isinstance(preview_entry, dict) else {}
+        if not pd or not pd.get("matches"):
+            continue
+
+        matches = [
+            {
+                "srt_index": m.get("srt_index", 0),
+                "srt_text": m.get("srt_text", ""),
+                "srt_start": m.get("srt_start", 0),
+                "srt_end": m.get("srt_end", 0),
+                "segment_id": m.get("segment_id"),
+                "segment_keywords": m.get("segment_keywords", []),
+                "matched_keyword": m.get("matched_keyword"),
+                "confidence": m.get("confidence", 0),
+                "is_auto_filled": m.get("is_auto_filled", False),
+                "source_video_id": m.get("source_video_id"),
+                "segment_start_time": m.get("segment_start_time"),
+                "segment_end_time": m.get("segment_end_time"),
+                "thumbnail_path": m.get("thumbnail_path"),
+                "merge_group": m.get("merge_group"),
+                "merge_group_duration": m.get("merge_group_duration"),
+            }
+            for m in pd.get("matches", [])
+        ]
+
+        result_previews[str(idx_key)] = {
+            "audio_duration": pd.get("audio_duration", 0),
+            "srt_content": pd.get("srt_content", ""),
+            "matches": matches,
+            "total_phrases": pd.get("total_phrases", len(matches)),
+            "matched_count": pd.get("matched_count", 0),
+            "unmatched_count": pd.get("unmatched_count", 0),
+            "available_segments": pd.get("available_segments", []),
+        }
+
+        # Grab available_segments from the first preview that has them
+        if not all_available_segments and pd.get("available_segments"):
+            all_available_segments = pd["available_segments"]
+
+    return {"previews": result_previews, "available_segments": all_available_segments}
 
 
 @router.get("/audio/{pipeline_id}/{variant_index}")

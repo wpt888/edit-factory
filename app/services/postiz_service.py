@@ -408,7 +408,10 @@ def get_postiz_publisher(profile_id: str) -> PostizPublisher:
                 postiz_config = tts_settings.get("postiz") or {}
                 api_url = postiz_config.get("api_url")
                 api_key = postiz_config.get("api_key")
-                logger.info(f"[Profile {profile_id}] Loaded Postiz config from database")
+                if api_url and api_key:
+                    logger.info(f"[Profile {profile_id}] Loaded Postiz config from database")
+                else:
+                    logger.debug(f"[Profile {profile_id}] Profile found but Postiz credentials not set")
         except Exception as e:
             logger.warning(f"[Profile {profile_id}] Failed to load Postiz config: {e}")
 

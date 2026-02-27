@@ -226,18 +226,18 @@ class ElevenLabsTTS:
 
         if has_audio:
             # Mix original audio (low volume) with TTS audio
+            # Use duration=first to match TTS audio duration (input 1 = audio_path)
             cmd = [
                 "ffmpeg", "-y",
                 "-i", str(video_path),
                 "-i", str(audio_path),
                 "-filter_complex",
-                f"[0:a]volume={video_volume}[a0];[1:a]volume={audio_volume}[a1];[a0][a1]amix=inputs=2:duration=longest[aout]",
+                f"[1:a]volume={audio_volume}[a1];[0:a]volume={video_volume}[a0];[a1][a0]amix=inputs=2:duration=first:dropout_transition=2[aout]",
                 "-map", "0:v",
                 "-map", "[aout]",
                 "-c:v", "copy",
                 "-c:a", "aac",
                 "-b:a", "192k",
-                "-shortest",
                 str(output_path)
             ]
         else:
@@ -251,7 +251,6 @@ class ElevenLabsTTS:
                 "-c:v", "copy",
                 "-c:a", "aac",
                 "-b:a", "192k",
-                "-shortest",
                 str(output_path)
             ]
 
@@ -272,7 +271,6 @@ class ElevenLabsTTS:
                     "-c:v", "copy",
                     "-c:a", "aac",
                     "-b:a", "192k",
-                    "-shortest",
                     str(output_path)
                 ]
                 result = subprocess.run(cmd_simple, capture_output=True, text=True, timeout=300)

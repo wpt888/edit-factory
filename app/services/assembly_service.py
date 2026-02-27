@@ -295,7 +295,8 @@ class AssemblyService:
 
         silence_remover = SilenceRemover(
             min_silence_duration=0.25,
-            padding=0.06
+            padding=0.06,
+            target_pause_duration=0.1  # Shorten pauses instead of removing (consistent with library render)
         )
 
         removal_result = silence_remover.remove_silence(
@@ -392,17 +393,43 @@ class AssemblyService:
         matches: List[MatchResult] = []
         current_product_group: Optional[str] = None
         prev_segment_id: Optional[str] = None
+        prev_source_video_id: Optional[str] = None
         variant_rng = random.Random(variant_index)
 
         # --- Build ordered segment lists per product group ---
+        # Interleave segments by source_video_id so that the round-robin
+        # cycles through different source videos before repeating any.
+        # E.g. sources A(3 segs), B(2 segs) → A1,B1,A2,B2,A3 instead of A1,A2,A3,B1,B2
         group_seg_ids: Dict[Optional[str], List[str]] = {}
         segment_lookup: Dict[str, dict] = {}
         for seg in segments_data:
-            g = seg.get("product_group")
-            group_seg_ids.setdefault(g, []).append(seg["id"])
             segment_lookup[seg["id"]] = seg
+
+        for seg in segments_data:
+            g = seg.get("product_group")
+            group_seg_ids.setdefault(g, [])
+
         for g in group_seg_ids:
-            group_seg_ids[g].sort()
+            # Group segments by source_video_id within this product group
+            segs_in_group = [s for s in segments_data if s.get("product_group") == g]
+            source_buckets: Dict[Optional[str], List[str]] = {}
+            for s in segs_in_group:
+                src_id = s.get("source_video_id")
+                source_buckets.setdefault(src_id, []).append(s["id"])
+            # Sort each bucket for determinism
+            for src_id in source_buckets:
+                source_buckets[src_id].sort()
+            # Sort source keys for determinism
+            sorted_sources = sorted(source_buckets.keys(), key=lambda x: (x is None, x or ""))
+            # Interleave: take one segment from each source in round-robin
+            interleaved: List[str] = []
+            max_len = max((len(v) for v in source_buckets.values()), default=0)
+            for i in range(max_len):
+                for src_id in sorted_sources:
+                    bucket = source_buckets[src_id]
+                    if i < len(bucket):
+                        interleaved.append(bucket[i])
+            group_seg_ids[g] = interleaved
 
         def _resolve_group(group: Optional[str]) -> Optional[str]:
             """Return group key that has segments, with fallback."""
@@ -428,11 +455,13 @@ class AssemblyService:
             if ids and len(cycle_used.get(grp, set())) >= len(ids):
                 cycle_used[grp] = set()
 
-        def _rr_next(group: Optional[str], exclude_id: Optional[str] = None) -> Optional[dict]:
+        def _rr_next(group: Optional[str], exclude_id: Optional[str] = None,
+                     exclude_source_video_id: Optional[str] = None) -> Optional[dict]:
             """
             Get next segment by advancing the round-robin pointer.
             Skips segments already consumed in this cycle. Starts a new cycle
             if all segments have been used.
+            Prefers segments from a different source_video_id than exclude_source_video_id.
             """
             grp = _resolve_group(group)
             ids = group_seg_ids.get(grp)
@@ -444,20 +473,49 @@ class AssemblyService:
             used = cycle_used.get(grp, set())
 
             ptr = rr_pointer.get(grp, 0) % n
+
+            # First pass: find segment from a DIFFERENT source video
+            best_different_source = None
+            best_different_idx = None
+            # Second pass fallback: any available segment (same source ok)
+            best_any = None
+            best_any_idx = None
+
             for attempt in range(n * 2):  # *2 to handle cycle reset mid-scan
                 idx = (ptr + attempt) % n
                 sid = ids[idx]
 
-                # Skip if already used in this cycle or is consecutive duplicate
+                # Skip if already used in this cycle
                 if sid in used:
                     continue
+                # Skip consecutive identical segment
                 if sid == exclude_id and n > 1:
                     continue
 
-                # Advance pointer past this segment
-                rr_pointer[grp] = (idx + 1) % n
-                used.add(sid)
-                return segment_lookup[sid]
+                seg = segment_lookup[sid]
+                seg_source = seg.get("source_video_id")
+
+                if best_any is None:
+                    best_any = seg
+                    best_any_idx = idx
+
+                # Prefer different source video
+                if exclude_source_video_id and seg_source == exclude_source_video_id:
+                    continue  # Try to find a different source first
+
+                # Found a segment from a different source
+                best_different_source = seg
+                best_different_idx = idx
+                break
+
+            # Use different-source if found, otherwise fall back to any available
+            chosen = best_different_source or best_any
+            chosen_idx = best_different_idx if best_different_source else best_any_idx
+
+            if chosen and chosen_idx is not None:
+                rr_pointer[grp] = (chosen_idx + 1) % n
+                used.add(chosen["id"])
+                return chosen
 
             # All exhausted (shouldn't happen) — force reset and pick
             cycle_used[grp] = set()
@@ -538,9 +596,15 @@ class AssemblyService:
                 top_confidence = candidates[0][2]
                 top_candidates = [c for c in candidates if c[2] >= top_confidence - 0.1]
 
-                # Exclude consecutive duplicate
-                non_prev = [c for c in top_candidates if c[0]["id"] != prev_segment_id]
-                pool = non_prev if non_prev else top_candidates
+                # Prefer different source video, then exclude consecutive duplicate segment
+                non_prev_source = [c for c in top_candidates
+                                   if c[0].get("source_video_id") != prev_source_video_id]
+                if not non_prev_source:
+                    # All candidates are from same source — at least avoid same segment
+                    non_prev = [c for c in top_candidates if c[0]["id"] != prev_segment_id]
+                    pool = non_prev if non_prev else top_candidates
+                else:
+                    pool = non_prev_source
 
                 chosen_seg_tuple = variant_rng.choice(pool) if len(pool) > 1 else pool[0]
                 seg, kw, conf = chosen_seg_tuple
@@ -553,7 +617,8 @@ class AssemblyService:
 
             # --- No keyword match → round-robin auto-fill ---
             if not chosen_segment:
-                seg = _rr_next(target_group, exclude_id=prev_segment_id)
+                seg = _rr_next(target_group, exclude_id=prev_segment_id,
+                               exclude_source_video_id=prev_source_video_id)
                 if seg:
                     chosen_segment = seg
                     is_auto = True
@@ -588,6 +653,7 @@ class AssemblyService:
                     thumbnail_path=chosen_segment.get("thumbnail_path"),
                 )
                 prev_segment_id = chosen_segment["id"]
+                prev_source_video_id = chosen_segment.get("source_video_id")
                 if seg_group:
                     current_product_group = seg_group
             else:
@@ -702,10 +768,13 @@ class AssemblyService:
             gap = audio_duration - current_timeline_pos
             logger.info(f"Extending timeline by {gap:.2f}s to match audio duration")
 
-            # Use seeded random segment for gap fill (varies per variant)
+            # Use seeded random segment for gap fill — prefer different source from last entry
             if timeline and segments_data:
                 rng = random.Random(variant_index + 1000)
-                gap_segment = rng.choice(segments_data)
+                last_source = timeline[-1].source_video_path if timeline else None
+                diff_source = [s for s in segments_data if s.get("source_video_path") != last_source]
+                gap_pool = diff_source if diff_source else segments_data
+                gap_segment = rng.choice(gap_pool)
                 last_segment = gap_segment
                 source_video_path = last_segment.get("source_video_path")
                 segment_start = last_segment.get("start_time", 0.0)
@@ -720,7 +789,10 @@ class AssemblyService:
                 )
                 timeline.append(gap_entry)
 
-        # Post-process: merge short consecutive entries to meet min_segment_duration
+        # Post-process: merge short consecutive entries to meet min_segment_duration.
+        # Each merged group plays ONE continuous clip from the representative entry's
+        # source video. The representative is chosen to maximize source diversity:
+        # prefer a source different from the previous merged group.
         if min_segment_duration > 0 and len(timeline) > 1:
             merged = []
             i = 0
@@ -734,17 +806,44 @@ class AssemblyService:
                     last_merged_idx += 1
                     accumulated_duration += timeline[last_merged_idx].timeline_duration
 
-                # Create merged entry: keep first entry's video source, extend its duration
+                # Pick representative: prefer source different from previous merged group
+                prev_merged_source = merged[-1].source_video_path if merged else None
+                representative = current  # default to first
+                if prev_merged_source:
+                    for j in range(i, last_merged_idx + 1):
+                        if timeline[j].source_video_path != prev_merged_source:
+                            representative = timeline[j]
+                            break
+
                 merged_entry = TimelineEntry(
-                    source_video_path=current.source_video_path,
-                    start_time=current.start_time,
-                    end_time=current.start_time + accumulated_duration,
+                    source_video_path=representative.source_video_path,
+                    start_time=representative.start_time,
+                    end_time=representative.start_time + accumulated_duration,
                     timeline_start=current.timeline_start,
                     timeline_duration=accumulated_duration,
-                    transforms=current.transforms,
+                    transforms=representative.transforms,
                 )
                 merged.append(merged_entry)
                 i = last_merged_idx + 1
+
+            # If the last merged group is shorter than minimum, absorb it into
+            # the previous group so no short segment appears at the end
+            if len(merged) >= 2 and merged[-1].timeline_duration < min_segment_duration:
+                last = merged.pop()
+                prev = merged[-1]
+                combined_duration = prev.timeline_duration + last.timeline_duration
+                merged[-1] = TimelineEntry(
+                    source_video_path=prev.source_video_path,
+                    start_time=prev.start_time,
+                    end_time=prev.start_time + combined_duration,
+                    timeline_start=prev.timeline_start,
+                    timeline_duration=combined_duration,
+                    transforms=prev.transforms,
+                )
+                logger.info(
+                    f"Absorbed short last group ({last.timeline_duration:.2f}s) into previous "
+                    f"({prev.timeline_duration:.2f}s -> {combined_duration:.2f}s)"
+                )
 
             logger.info(
                 f"Merged timeline: {len(timeline)} entries -> {len(merged)} entries "
@@ -822,10 +921,11 @@ class AssemblyService:
                 ])
             else:
                 # Without loop, -ss before -i enables fast seeking
+                # Use needed_duration (not segment_duration) to match timeline exactly
                 cmd.extend([
                     "-ss", str(entry.start_time),
                     "-i", entry.source_video_path,
-                    "-t", str(segment_duration),
+                    "-t", str(needed_duration),
                     "-vf", ",".join(transform_filters),
                 ])
 
@@ -988,7 +1088,7 @@ class AssemblyService:
                 logger.info("Step 2/7: Reusing existing SRT content")
             else:
                 from app.services.tts_cache import srt_cache_lookup, srt_cache_store
-                _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
+                _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "wpf": max_words_per_phrase}
                 cached_srt = srt_cache_lookup(_srt_cache_key)
                 if cached_srt:
                     srt_content = cached_srt
@@ -1215,7 +1315,7 @@ class AssemblyService:
         # Step 2: Generate SRT (with cache — use cleaned text for cache key)
         logger.info("Preview Step 2/4: Generating SRT subtitles")
         from app.services.tts_cache import srt_cache_lookup, srt_cache_store
-        _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts"}
+        _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "wpf": max_words_per_phrase}
         cached_srt = srt_cache_lookup(_srt_cache_key)
         if cached_srt:
             srt_content = cached_srt
@@ -1300,6 +1400,22 @@ class AssemblyService:
         matched_count = sum(1 for m in match_results if m.segment_id is not None)
         unmatched_count = len(match_results) - matched_count
 
+        # Build merge group mapping (mirrors build_timeline merge logic)
+        match_group_map = {}  # match_index -> (group_idx, group_duration)
+        if min_segment_duration > 0 and len(match_results) > 1:
+            group_idx = 0
+            i = 0
+            while i < len(match_results):
+                duration = match_results[i].srt_end - match_results[i].srt_start
+                last = i
+                while duration < min_segment_duration and last + 1 < len(match_results):
+                    last += 1
+                    duration += match_results[last].srt_end - match_results[last].srt_start
+                for j in range(i, last + 1):
+                    match_group_map[j] = (group_idx, round(duration, 2))
+                group_idx += 1
+                i = last + 1
+
         # Convert to serializable format
         matches_data = [
             {
@@ -1320,6 +1436,16 @@ class AssemblyService:
             }
             for m in match_results
         ]
+
+        # Annotate matches with merge group info
+        for idx, m_data in enumerate(matches_data):
+            if idx in match_group_map:
+                g, d = match_group_map[idx]
+            else:
+                g = idx
+                d = round(m_data["srt_end"] - m_data["srt_start"], 2)
+            m_data["merge_group"] = g
+            m_data["merge_group_duration"] = d
 
         timeline_data = [
             {
