@@ -1,3 +1,16 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-02-28T00:17:58.350Z"
+progress:
+  total_phases: 17
+  completed_phases: 17
+  total_plans: 47
+  completed_plans: 47
+---
+
 # Project State
 
 ## Project Reference
@@ -5,17 +18,17 @@
 See: .planning/PROJECT.md (updated 2026-02-28)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v9 Assembly Pipeline Fix + Overlays — Phase 43
+**Current focus:** v9 Assembly Pipeline Fix + Overlays — Phase 44
 
 ## Current Position
 
 Milestone: v9 Assembly Pipeline Fix + Overlays
-Phase: 43 of 46 (Assembly Diversity Fix)
-Plan: 1 of 1 in current phase
-Status: In progress
-Last activity: 2026-02-28 — Phase 43 Plan 01 complete: assembly diversity fix + overlap prevention
+Phase: 44 of 46 (Subtitle Data Flow Fix)
+Plan: 0 of ? in current phase
+Status: Ready to plan
+Last activity: 2026-02-28 — Phase 43 complete (1/1 plans, verified 4/4 must-haves)
 
-Progress: [█░░░░░░░░░] 10% (v9)
+Progress: [██░░░░░░░░] 25% (v9)
 
 ## Performance Metrics
 
@@ -67,9 +80,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 43-01-PLAN.md (assembly diversity fix)
+Stopped at: Phase 43 complete, advancing to Phase 44
 Resume file: None
-Next action: Continue Phase 43 or execute Phase 44 (pipeline_routes TTS preview cache fix)
+Next action: `/gsd:plan-phase 44`
 
 ---
 *Last updated: 2026-02-28 after Phase 43 Plan 01 execution*
