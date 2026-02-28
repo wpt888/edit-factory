@@ -893,7 +893,10 @@ class AssemblyService:
     async def assemble_video(
         self,
         timeline: List[TimelineEntry],
-        temp_dir: Path
+        temp_dir: Path,
+        interstitial_slides: Optional[List[dict]] = None,
+        pip_overlays: Optional[Dict[str, dict]] = None,
+        match_results: Optional[List] = None,
     ) -> Path:
         """
         Assemble video from timeline using FFmpeg.
@@ -985,11 +988,75 @@ class AssemblyService:
         logger.info(f"Extracting {len(timeline)} segments in parallel (max {max_parallel} concurrent)")
         await asyncio.gather(*(extract_segment(i, entry) for i, entry in enumerate(timeline)))
 
+        # Apply PiP overlays to extracted segments (before collecting into segment_files)
+        if pip_overlays and match_results:
+            from app.services.overlay_renderer import apply_pip_overlay
+            for i, entry in enumerate(timeline):
+                if i < len(match_results):
+                    seg_id = match_results[i].segment_id
+                    if seg_id and seg_id in pip_overlays:
+                        pip = pip_overlays[seg_id]
+                        seg_file = results[i]
+                        if seg_file and seg_file.exists():
+                            pip_output = temp_dir / f"segment_{i:03d}_pip.mp4"
+                            try:
+                                result_path = await apply_pip_overlay(
+                                    video_path=seg_file,
+                                    image_url_or_path=pip["image_url"],
+                                    output_path=pip_output,
+                                    position=pip.get("position", "bottom-right"),
+                                    size=pip.get("size", "medium"),
+                                    animation=pip.get("animation", "static"),
+                                )
+                                if result_path != seg_file:
+                                    results[i] = result_path
+                                    logger.info(f"PiP overlay applied to segment {i} (segment_id={seg_id})")
+                            except Exception as e:
+                                logger.warning(f"PiP overlay failed for segment {i} (segment_id={seg_id}): {e}")
+
         # Collect successful segments in order
         segment_files = [f for f in results if f is not None]
 
         if not segment_files:
             raise RuntimeError("No segments were extracted successfully")
+
+        # Generate and insert interstitial slide clips into segment list
+        if interstitial_slides:
+            from app.services.overlay_renderer import generate_interstitial_clip
+            # Sort slides by afterMatchIndex
+            sorted_slides = sorted(interstitial_slides, key=lambda s: s.get("afterMatchIndex", -1))
+            # Build insertion map: afterMatchIndex -> list of clip paths
+            slide_clips: Dict[int, List[Path]] = {}
+            for slide in sorted_slides:
+                idx = slide.get("afterMatchIndex", -1)
+                clip_path = temp_dir / f"interstitial_{slide.get('id', 'x')}.mp4"
+                try:
+                    result = await generate_interstitial_clip(
+                        image_url_or_path=slide["imageUrl"],
+                        output_path=clip_path,
+                        duration=slide.get("duration", 2.0),
+                        animation=slide.get("animation", "static"),
+                        ken_burns_direction=slide.get("kenBurnsDirection", "zoom-in"),
+                    )
+                    if result and result.exists():
+                        slide_clips.setdefault(idx, []).append(result)
+                        logger.info(f"Interstitial slide generated at afterMatchIndex={idx}: {clip_path.name}")
+                except Exception as e:
+                    logger.warning(f"Interstitial slide generation failed (afterMatchIndex={idx}): {e}")
+
+            # Rebuild segment_files list with interstitials inserted
+            if slide_clips:
+                new_files: List[Path] = []
+                # Insert slides before first segment (afterMatchIndex == -1)
+                for clip in slide_clips.get(-1, []):
+                    new_files.append(clip)
+                for i, seg_file in enumerate(segment_files):
+                    new_files.append(seg_file)
+                    # Insert slides after segment i
+                    for clip in slide_clips.get(i, []):
+                        new_files.append(clip)
+                segment_files = new_files
+                logger.info(f"Interstitial slides inserted: {len(segment_files)} total clips in concat list")
 
         # Create concat list file
         concat_file = temp_dir / "concat_list.txt"
@@ -1053,7 +1120,9 @@ class AssemblyService:
         reuse_srt_content: Optional[str] = None,
         on_progress=None,  # Optional[Callable[[str, int], None]]
         max_words_per_phrase: int = 2,
-        min_segment_duration: float = 2.0
+        min_segment_duration: float = 2.0,
+        interstitial_slides: Optional[List[dict]] = None,
+        pip_overlays: Optional[Dict[str, dict]] = None,
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
@@ -1259,7 +1328,10 @@ class AssemblyService:
             _report("Assembling video segments", 70)
             assembled_video_path = await self.assemble_video(
                 timeline=timeline,
-                temp_dir=temp_dir
+                temp_dir=temp_dir,
+                interstitial_slides=interstitial_slides,
+                pip_overlays=pip_overlays,
+                match_results=match_results,
             )
 
             # Render with preset and subtitle settings

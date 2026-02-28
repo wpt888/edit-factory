@@ -1387,6 +1387,19 @@ async def render_variants(
                 job["current_step"] = step_name
                 job["progress"] = pct
 
+            # Extract overlay params for this variant
+            # interstitial_slides is keyed by variant index (string); pip_overlays is shared (keyed by segment_id)
+            variant_interstitial_slides = None
+            if request.interstitial_slides:
+                variant_slides = request.interstitial_slides.get(str(vid), [])
+                if variant_slides:
+                    variant_interstitial_slides = variant_slides
+                    logger.info(f"[Pipeline {pipeline_id}] Variant {vid}: {len(variant_slides)} interstitial slides")
+
+            variant_pip_overlays = request.pip_overlays if request.pip_overlays else None
+            if variant_pip_overlays:
+                logger.info(f"[Pipeline {pipeline_id}] Variant {vid}: {len(variant_pip_overlays)} PiP overlays")
+
             # Run full assembly (with 15-minute timeout)
             try:
                 final_video_path = await asyncio.wait_for(
@@ -1418,7 +1431,9 @@ async def render_variants(
                         reuse_srt_content=reuse_srt_content,
                         on_progress=on_progress,
                         max_words_per_phrase=request.words_per_subtitle,
-                        min_segment_duration=request.min_segment_duration
+                        min_segment_duration=request.min_segment_duration,
+                        interstitial_slides=variant_interstitial_slides,
+                        pip_overlays=variant_pip_overlays,
                     ),
                     timeout=900
                 )
