@@ -175,10 +175,11 @@ Plans:
   2. Rendered video contains interstitial product slides at the configured timestamps between segments
   3. Product images in both PiP overlays and interstitial slides exhibit Ken Burns zoom/pan motion in the final video
   4. Render does not fail when a segment has no product association (PiP is skipped gracefully)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 46-01: TBD
+- [ ] 46-01-PLAN.md — Create overlay_renderer service + wire frontend PiP data to backend
+- [ ] 46-02-PLAN.md — Integrate overlays into assembly pipeline + visual verification
 
 ## Progress
 
