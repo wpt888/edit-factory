@@ -9,9 +9,9 @@ Requirements for v9 Assembly Pipeline Fix + Overlays. Each maps to roadmap phase
 
 ### Assembly Fix
 
-- [ ] **ASMB-01**: Merge step uses all segments before repeating any (full round-robin through merge)
-- [ ] **ASMB-02**: Diversity window tracks all used segments in merged groups, not just the previous one
-- [ ] **ASMB-03**: Segments from same source video with overlapping time ranges are not placed near each other
+- [x] **ASMB-01**: Merge step uses all segments before repeating any (full round-robin through merge)
+- [x] **ASMB-02**: Diversity window tracks all used segments in merged groups, not just the previous one
+- [x] **ASMB-03**: Segments from same source video with overlapping time ranges are not placed near each other
 
 ### Subtitle Fix
 
@@ -45,9 +45,9 @@ None — all scoped features included in v9.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ASMB-01 | Phase 43 | Pending |
-| ASMB-02 | Phase 43 | Pending |
-| ASMB-03 | Phase 43 | Pending |
+| ASMB-01 | Phase 43 | Complete |
+| ASMB-02 | Phase 43 | Complete |
+| ASMB-03 | Phase 43 | Complete |
 | SUBS-01 | Phase 44 | Pending |
 | SUBS-02 | Phase 44 | Pending |
 | SUBS-03 | Phase 44 | Pending |

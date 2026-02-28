@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-28)
 
 Milestone: v9 Assembly Pipeline Fix + Overlays
 Phase: 43 of 46 (Assembly Diversity Fix)
-Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-02-28 — Roadmap created, 4 phases defined, 13 requirements mapped
+Plan: 1 of 1 in current phase
+Status: In progress
+Last activity: 2026-02-28 — Phase 43 Plan 01 complete: assembly diversity fix + overlap prevention
 
-Progress: [░░░░░░░░░░] 0% (v9)
+Progress: [█░░░░░░░░░] 10% (v9)
 
 ## Performance Metrics
 
@@ -46,6 +46,8 @@ Recent decisions affecting v9:
 - v9 phases 43-44 are independent backend fixes; can be planned/executed in parallel
 - v9 phases 45-46 resume deferred v7 phases 36-37 (interstitial controls + render integration)
 - Phase 45 depends on 43+44 completing first (stable assembly before adding overlay complexity)
+- [43-01] Merge step keeps ALL sub-entries as individual TimelineEntry with proportional durations — no representative collapse
+- [43-01] Adjacency uses time-range overlap check (not just source_video_id equality) — same source with non-overlapping ranges is acceptable
 
 ### Pending Todos
 
@@ -57,7 +59,7 @@ None.
 - Migration 007/009/017/021 require manual application via Supabase SQL Editor
 
 **v9 audit findings (guide implementation):**
-- Merge step at assembly_service.py lines 796-852 picks ONE representative per group; fix: track all used segment IDs across merged groups
+- ~~Merge step at assembly_service.py lines 796-852 picks ONE representative per group~~ FIXED in 43-01
 - pipeline_routes.py lines 968-975: tts_previews cache missing srt_content field — Step 3 gets None and regenerates
 - tts_subtitle_generator.py lines 14-44: silence remover can produce zero-duration SRT entries
 - Assembled video may be shorter than audio; need padding or duration alignment before subtitle bake-in
@@ -65,9 +67,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Roadmap created — ready to plan Phase 43
+Stopped at: Completed 43-01-PLAN.md (assembly diversity fix)
 Resume file: None
-Next action: `/gsd:plan-phase 43`
+Next action: Continue Phase 43 or execute Phase 44 (pipeline_routes TTS preview cache fix)
 
 ---
-*Last updated: 2026-02-28 after v9 roadmap creation*
+*Last updated: 2026-02-28 after Phase 43 Plan 01 execution*
