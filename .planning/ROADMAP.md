@@ -196,7 +196,7 @@ Plans:
 | 43. Assembly Diversity Fix | 1/1 | Complete    | 2026-02-28 | - |
 | 44. Subtitle Data Flow Fix | 2/2 | Complete    | 2026-02-28 | - |
 | 45. Interstitial Slide Controls | 1/1 | Complete    | 2026-02-28 | - |
-| 46. Overlay FFmpeg Render Integration | 2/2 | Complete   | 2026-02-28 | - |
+| 46. Overlay FFmpeg Render Integration | 2/2 | Complete    | 2026-02-28 | - |
 
 ---
 *Last updated: 2026-02-28 after v9 roadmap creation*
