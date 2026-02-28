@@ -25,9 +25,9 @@ Requirements for v9 Assembly Pipeline Fix + Overlays. Each maps to roadmap phase
 - [x] **OVRL-01**: User can insert interstitial product slides between video segments
 - [x] **OVRL-02**: Interstitial slides have configurable duration
 - [x] **OVRL-03**: Ken Burns animation applied to interstitial product images
-- [ ] **OVRL-04**: PiP overlay rendered in final video via FFmpeg
-- [ ] **OVRL-05**: Interstitial slides rendered in final video via FFmpeg
-- [ ] **OVRL-06**: Product image animation (zoom/pan) in rendered overlays
+- [x] **OVRL-04**: PiP overlay rendered in final video via FFmpeg
+- [x] **OVRL-05**: Interstitial slides rendered in final video via FFmpeg
+- [x] **OVRL-06**: Product image animation (zoom/pan) in rendered overlays
 
 ## Future Requirements
 
@@ -55,9 +55,9 @@ None — all scoped features included in v9.
 | OVRL-01 | Phase 45 | Complete |
 | OVRL-02 | Phase 45 | Complete |
 | OVRL-03 | Phase 45 | Complete |
-| OVRL-04 | Phase 46 | Pending |
-| OVRL-05 | Phase 46 | Pending |
-| OVRL-06 | Phase 46 | Pending |
+| OVRL-04 | Phase 46 | Complete |
+| OVRL-05 | Phase 46 | Complete |
+| OVRL-06 | Phase 46 | Complete |
 
 **Coverage:**
 - v9 requirements: 13 total

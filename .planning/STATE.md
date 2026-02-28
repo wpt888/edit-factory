@@ -25,9 +25,9 @@ Next action: `/gsd:plan-phase 46`
 
 Milestone: v9 Assembly Pipeline Fix + Overlays
 Phase: 46 of 46 (Overlay FFmpeg Render Integration)
-Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-02-28 — Phase 45 complete (1/1 plans, verified 4/4 must-haves)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-28 — Phase 46 Plan 01 complete (overlay_renderer service + pip_overlays data flow)
 
 Progress: [███████░░░] 75% (v9)
 
@@ -71,6 +71,9 @@ Recent decisions affecting v9:
 - [45-01]: afterMatchIndex=-1 for before-first slide position; last match index of each group for after-group insertion
 - [45-01]: Interstitial slides do not participate in drag-and-drop (fixed positions relative to matches)
 - [45-01]: Backend accepts interstitial_slides as Dict[str, List[dict]] (string-keyed); Phase 46 handles FFmpeg rendering
+- [46-01]: PiP sizes: small=150x150, medium=200x200, large=280x280; positions offset y=200 (top) / y=H-h-250 (bottom) for TikTok safe zones
+- [46-01]: Ken Burns for PiP uses 2x pre-scale; full-frame interstitials use 4x (reuses product_video_compositor pattern)
+- [46-01]: apply_pip_overlay returns original video_path on failure — never crashes render pipeline (graceful degradation)
 
 ### Pending Todos
 
@@ -90,9 +93,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 45-01-PLAN.md — InterstitialSlide UI + pipeline state wiring
+Stopped at: Completed 46-01-PLAN.md — overlay_renderer service + pip_overlays data flow
 Resume file: None
-Next action: Phase 46 (interstitial render integration)
+Next action: Phase 46 Plan 02 (assembly service integration of overlay rendering)
 
 ---
 *Last updated: 2026-02-28 after Phase 43 Plan 01 execution*
