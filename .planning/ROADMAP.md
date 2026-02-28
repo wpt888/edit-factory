@@ -146,10 +146,11 @@ Plans:
   2. Every subtitle entry is visible on screen for at least a minimum perceptible duration
   3. The final video file is at least as long as the TTS audio track so no subtitle is cut off before display
   4. Step 3 render does not call ElevenLabs a second time when TTS audio already exists in cache
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 44-01: TBD
+- [ ] 44-01-PLAN.md — Persist SRT content in tts_previews cache for render reuse
+- [ ] 44-02-PLAN.md — Enforce minimum subtitle duration and video-audio duration alignment
 
 ### Phase 45: Interstitial Slide Controls
 **Goal**: Users can insert product image slides between video segments with configurable duration and Ken Burns animation, visible in the timeline before render
