@@ -19,16 +19,17 @@ See: .planning/PROJECT.md (updated 2026-02-28)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
 **Current focus:** v9 Assembly Pipeline Fix + Overlays — Phase 45
+Next action: `/gsd:plan-phase 45`
 
 ## Current Position
 
 Milestone: v9 Assembly Pipeline Fix + Overlays
-Phase: 44 of 46 (Subtitle Data Flow Fix) — COMPLETE
-Plan: 2 of 2 in phase 44 (both plans executed)
-Status: Ready for Phase 45
-Last activity: 2026-02-28 — Phase 44 complete (2/2 plans: SRT cache fix + duration/timeline fix)
+Phase: 45 of 46 (Interstitial Slide Controls)
+Plan: 0 of ? in current phase
+Status: Ready to plan
+Last activity: 2026-02-28 — Phase 44 complete (2/2 plans, verified 6/6 must-haves)
 
-Progress: [██░░░░░░░░] 25% (v9)
+Progress: [█████░░░░░] 50% (v9)
 
 ## Performance Metrics
 
