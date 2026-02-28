@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -28,6 +28,9 @@ import {
   SkipBack,
   SkipForward,
   Square,
+  ImageIcon,
+  Trash2,
+  ChevronDown,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import type { SubtitleSettings } from "@/types/video-processing";
@@ -64,6 +67,16 @@ export interface SegmentOption {
   thumbnail_path?: string;
 }
 
+export interface InterstitialSlide {
+  id: string;                    // Unique ID
+  afterMatchIndex: number;       // Insert after this match index (-1 = before first)
+  imageUrl: string;              // Product image URL
+  duration: number;              // Seconds (default 2.0, range 0.5-5.0)
+  animation: "static" | "kenburns"; // Ken Burns or static (default "kenburns")
+  kenBurnsDirection?: "zoom-in" | "zoom-out" | "pan-left" | "pan-right"; // Default "zoom-in"
+  productTitle?: string;         // For display in timeline
+}
+
 interface TimelineEditorProps {
   matches: MatchPreview[];
   audioDuration: number;
@@ -74,6 +87,8 @@ interface TimelineEditorProps {
   pipelineId?: string;
   variantIndex?: number;
   subtitleSettings?: SubtitleSettings;
+  interstitialSlides?: InterstitialSlide[];
+  onInterstitialSlidesChange?: (slides: InterstitialSlide[]) => void;
 }
 
 function formatTime(seconds: number): string {
@@ -92,6 +107,8 @@ export function TimelineEditor({
   pipelineId,
   variantIndex,
   subtitleSettings,
+  interstitialSlides = [],
+  onInterstitialSlidesChange,
 }: TimelineEditorProps) {
   // View mode: "timeline" (horizontal) or "list" (vertical)
   const [viewMode, setViewMode] = useState<"timeline" | "list">("timeline");
@@ -102,6 +119,7 @@ export function TimelineEditor({
 
   // Timeline view state
   const [selectedBlockIndex, setSelectedBlockIndex] = useState<number | null>(null);
+  const [selectedSlideId, setSelectedSlideId] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSourceVideoId = useRef<string | null>(null);
   const lastStartTime = useRef<number | null>(null);
@@ -546,6 +564,40 @@ export function TimelineEditor({
     onMatchesChange(updated);
   };
 
+  // --- Interstitial slide handlers ---
+
+  const handleInsertSlide = (afterMatchIndex: number) => {
+    if (!onInterstitialSlidesChange) return;
+    const newSlide: InterstitialSlide = {
+      id: Math.random().toString(36).slice(2, 10),
+      afterMatchIndex,
+      imageUrl: "",
+      duration: 2.0,
+      animation: "kenburns",
+      kenBurnsDirection: "zoom-in",
+      productTitle: "",
+    };
+    const updated = [...interstitialSlides, newSlide];
+    onInterstitialSlidesChange(updated);
+    setSelectedSlideId(newSlide.id);
+    setSelectedBlockIndex(null);
+  };
+
+  const handleUpdateSlide = (slideId: string, changes: Partial<InterstitialSlide>) => {
+    if (!onInterstitialSlidesChange) return;
+    const updated = interstitialSlides.map((s) =>
+      s.id === slideId ? { ...s, ...changes } : s
+    );
+    onInterstitialSlidesChange(updated);
+  };
+
+  const handleRemoveSlide = (slideId: string) => {
+    if (!onInterstitialSlidesChange) return;
+    const updated = interstitialSlides.filter((s) => s.id !== slideId);
+    onInterstitialSlidesChange(updated);
+    if (selectedSlideId === slideId) setSelectedSlideId(null);
+  };
+
   // --- Video preview effect for timeline view ---
   useEffect(() => {
     if (viewMode !== "timeline" || selectedBlockIndex === null) return;
@@ -802,7 +854,7 @@ export function TimelineEditor({
         <div className="space-y-3">
           {/* Horizontal scrollable strip — grouped by merge_group */}
           <div className="overflow-x-auto rounded-md border bg-muted/30 p-2">
-            <div className="flex gap-1" style={{ minWidth: "100%" }}>
+            <div className="flex items-stretch gap-0.5" style={{ minWidth: "100%" }}>
               {(() => {
                 // Group consecutive matches by merge_group
                 const groups: { groupId: number; groupDuration: number; matchIndices: number[] }[] = [];
@@ -821,8 +873,80 @@ export function TimelineEditor({
                   }
                 });
 
-                return groups.map((group) => {
+                const elements: React.ReactNode[] = [];
+
+                // Helper: render a "+" insertion button
+                const renderInsertButton = (afterMatchIndex: number) => {
+                  if (!onInterstitialSlidesChange) return null;
+                  return (
+                    <button
+                      key={`insert-${afterMatchIndex}`}
+                      onClick={() => handleInsertSlide(afterMatchIndex)}
+                      className="flex-shrink-0 flex items-center justify-center w-5 h-[80px] rounded border border-dashed border-indigo-400 text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 hover:text-indigo-600 transition-colors"
+                      title={`Insert image slide ${afterMatchIndex === -1 ? "before first block" : "here"}`}
+                    >
+                      <Plus className="h-3 w-3" />
+                    </button>
+                  );
+                };
+
+                // Helper: render an interstitial slide block
+                const renderSlideBlock = (slide: InterstitialSlide) => {
+                  const slideWidthPercent = totalDuration > 0 ? (slide.duration / totalDuration) * 100 : 5;
+                  const isSlideSelected = selectedSlideId === slide.id;
+                  return (
+                    <div
+                      key={`slide-${slide.id}`}
+                      onClick={() => {
+                        setSelectedSlideId(slide.id === selectedSlideId ? null : slide.id);
+                        setSelectedBlockIndex(null);
+                      }}
+                      className={`
+                        relative flex-shrink-0 rounded-md border-2 cursor-pointer
+                        transition-all select-none overflow-hidden
+                        border-indigo-500 bg-indigo-50 dark:bg-indigo-950/20
+                        ${isSlideSelected ? "ring-2 ring-indigo-500 ring-offset-1" : ""}
+                      `}
+                      style={{
+                        width: `max(50px, ${slideWidthPercent}%)`,
+                        height: "80px",
+                      }}
+                      title={slide.productTitle || "Image slide"}
+                    >
+                      {/* Background image thumbnail */}
+                      {slide.imageUrl && (
+                        <img
+                          src={slide.imageUrl}
+                          alt=""
+                          className="absolute inset-0 w-full h-full object-cover opacity-40"
+                          loading="lazy"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                        />
+                      )}
+                      <div className="relative z-10 flex flex-col items-center justify-center h-full px-1 py-1 text-center">
+                        <ImageIcon className="h-3 w-3 text-indigo-600 dark:text-indigo-400 mb-0.5" />
+                        <span className="text-[10px] font-medium leading-tight text-indigo-700 dark:text-indigo-300">
+                          {slide.duration.toFixed(1)}s
+                        </span>
+                        {slide.animation === "kenburns" && (
+                          <span className="text-[9px] text-indigo-500 dark:text-indigo-400 leading-none mt-0.5">KB</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                };
+
+                // Insert "before first" button
+                elements.push(renderInsertButton(-1));
+
+                // Slides before the first group (afterMatchIndex === -1)
+                interstitialSlides
+                  .filter((s) => s.afterMatchIndex === -1)
+                  .forEach((s) => elements.push(renderSlideBlock(s)));
+
+                groups.forEach((group) => {
                   const firstIdx = group.matchIndices[0];
+                  const lastIdx = group.matchIndices[group.matchIndices.length - 1];
                   const firstMatch = matches[firstIdx];
                   const isMulti = group.matchIndices.length > 1;
                   const groupDuration = group.groupDuration;
@@ -851,7 +975,7 @@ export function TimelineEditor({
                   // Combine texts for tooltip
                   const groupTexts = group.matchIndices.map(i => matches[i].srt_text).join(" ");
 
-                  return (
+                  elements.push(
                     <div
                       key={`g-${group.groupId}`}
                       draggable
@@ -865,6 +989,7 @@ export function TimelineEditor({
                           handleSeekToSegment(firstIdx);
                         } else {
                           setSelectedBlockIndex(firstIdx === selectedBlockIndex ? null : firstIdx);
+                          setSelectedSlideId(null);
                         }
                       }}
                       className={`
@@ -919,12 +1044,155 @@ export function TimelineEditor({
                       </div>
                     </div>
                   );
+
+                  // "+" button after this group
+                  elements.push(renderInsertButton(lastIdx));
+
+                  // Interstitial slides after this group
+                  interstitialSlides
+                    .filter((s) => s.afterMatchIndex === lastIdx)
+                    .forEach((s) => elements.push(renderSlideBlock(s)));
                 });
+
+                return elements;
               })()}
             </div>
           </div>
 
-          {/* Inline preview panel (shown when a block is selected) */}
+          {/* Interstitial slide config panel (shown when a slide block is selected) */}
+          {selectedSlideId !== null && (() => {
+            const slide = interstitialSlides.find((s) => s.id === selectedSlideId);
+            if (!slide) return null;
+            return (
+              <div className="rounded-md border border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/10 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sm font-medium text-indigo-700 dark:text-indigo-300">
+                    <ImageIcon className="h-4 w-4" />
+                    Image Slide Config
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs gap-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                    onClick={() => handleRemoveSlide(slide.id)}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                    Remove
+                  </Button>
+                </div>
+
+                <div className="flex items-start gap-4">
+                  {/* Image preview */}
+                  <div className="flex-shrink-0 w-20 h-20 rounded border overflow-hidden bg-muted flex items-center justify-center">
+                    {slide.imageUrl ? (
+                      <img
+                        src={slide.imageUrl}
+                        alt="Product"
+                        className="w-full h-full object-cover"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                      />
+                    ) : (
+                      <ImageIcon className="h-6 w-6 text-muted-foreground" />
+                    )}
+                  </div>
+
+                  <div className="flex-1 min-w-0 space-y-2">
+                    {/* Image URL */}
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-muted-foreground">Image URL</label>
+                      <input
+                        type="text"
+                        value={slide.imageUrl}
+                        onChange={(e) => handleUpdateSlide(slide.id, { imageUrl: e.target.value })}
+                        placeholder="https://..."
+                        className="w-full h-7 text-xs px-2 rounded border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    {/* Duration */}
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-medium text-muted-foreground whitespace-nowrap">Duration</label>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5"
+                          onClick={() => handleUpdateSlide(slide.id, { duration: Math.max(0.5, slide.duration - 0.5) })}
+                        >
+                          <Minus className="h-3 w-3" />
+                        </Button>
+                        <span className="w-12 text-center text-xs font-mono tabular-nums">
+                          {slide.duration.toFixed(1)}s
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5"
+                          onClick={() => handleUpdateSlide(slide.id, { duration: Math.min(5.0, slide.duration + 0.5) })}
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                        <input
+                          type="range"
+                          min={0.5}
+                          max={5.0}
+                          step={0.5}
+                          value={slide.duration}
+                          onChange={(e) => handleUpdateSlide(slide.id, { duration: parseFloat(e.target.value) })}
+                          className="w-24 h-1.5 rounded-lg appearance-none cursor-pointer bg-secondary accent-indigo-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Animation toggle */}
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-medium text-muted-foreground whitespace-nowrap">Animation</label>
+                      <div className="flex gap-1">
+                        <Button
+                          variant={slide.animation === "static" ? "default" : "outline"}
+                          size="sm"
+                          className="h-6 text-xs px-2"
+                          onClick={() => handleUpdateSlide(slide.id, { animation: "static" })}
+                        >
+                          Static
+                        </Button>
+                        <Button
+                          variant={slide.animation === "kenburns" ? "default" : "outline"}
+                          size="sm"
+                          className="h-6 text-xs px-2"
+                          onClick={() => handleUpdateSlide(slide.id, { animation: "kenburns" })}
+                        >
+                          Ken Burns
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Ken Burns direction */}
+                    {slide.animation === "kenburns" && (
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs font-medium text-muted-foreground whitespace-nowrap">Direction</label>
+                        <div className="relative">
+                          <select
+                            value={slide.kenBurnsDirection ?? "zoom-in"}
+                            onChange={(e) => handleUpdateSlide(slide.id, { kenBurnsDirection: e.target.value as InterstitialSlide["kenBurnsDirection"] })}
+                            className="h-6 text-xs pl-2 pr-6 rounded border bg-background text-foreground appearance-none focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          >
+                            <option value="zoom-in">Zoom In</option>
+                            <option value="zoom-out">Zoom Out</option>
+                            <option value="pan-left">Pan Left</option>
+                            <option value="pan-right">Pan Right</option>
+                          </select>
+                          <ChevronDown className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Inline preview panel (shown when a segment block is selected) */}
           {selectedBlockIndex !== null && selectedMatch && (
             <div className="rounded-md border bg-card p-4 space-y-3">
               <div className="flex items-start gap-4">
@@ -1005,9 +1273,51 @@ export function TimelineEditor({
           )}
         </div>
       ) : (
-        /* ========== LIST VIEW (existing) ========== */
+        /* ========== LIST VIEW ========== */
         <div className="max-h-[500px] overflow-y-auto rounded-md border">
           <div className="divide-y">
+            {/* "+" insert before first row */}
+            {onInterstitialSlidesChange && (
+              <div className="flex items-center px-3 py-1 bg-muted/20">
+                <button
+                  onClick={() => handleInsertSlide(-1)}
+                  className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700 transition-colors"
+                >
+                  <Plus className="h-3 w-3" />
+                  <span>Insert slide before</span>
+                </button>
+              </div>
+            )}
+            {/* Interstitial slides at the top (afterMatchIndex === -1) */}
+            {interstitialSlides
+              .filter((s) => s.afterMatchIndex === -1)
+              .map((slide) => (
+                <div
+                  key={`list-slide-${slide.id}`}
+                  className="group flex items-center gap-3 px-3 py-2.5 border-l-4 border-l-indigo-500 bg-indigo-50 dark:bg-indigo-950/20"
+                >
+                  <div className="flex-shrink-0 w-10 h-10 rounded overflow-hidden border bg-muted flex items-center justify-center">
+                    {slide.imageUrl ? (
+                      <img src={slide.imageUrl} alt="" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display="none"; }} />
+                    ) : (
+                      <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0 text-sm text-indigo-700 dark:text-indigo-300">
+                    <div className="font-medium">Image Slide</div>
+                    <div className="text-xs text-muted-foreground">{slide.duration.toFixed(1)}s · {slide.animation === "kenburns" ? `Ken Burns (${slide.kenBurnsDirection ?? "zoom-in"})` : "Static"}</div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 opacity-0 group-hover:opacity-100 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-opacity"
+                    onClick={() => handleRemoveSlide(slide.id)}
+                    title="Remove slide"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              ))}
             {matches.map((match, idx) => {
               const isMatched = match.segment_id !== null && match.confidence > 0;
               const isAutoFilled = match.is_auto_filled === true && match.segment_id !== null;
@@ -1031,9 +1341,12 @@ export function TimelineEditor({
               const isGroupEnd = mg !== undefined && mg !== nextMg;
               const isInGroup = mg !== undefined && (mg === prevMg || mg === nextMg);
 
+              // Slides and insert button after this match
+              const slidesAfter = interstitialSlides.filter((s) => s.afterMatchIndex === idx);
+
               return (
+                <React.Fragment key={idx}>
                 <div
-                  key={idx}
                   draggable
                   onDragStart={(e) => handleDragStart(e, idx)}
                   onDragOver={(e) => handleDragOver(e, idx)}
@@ -1205,6 +1518,47 @@ export function TimelineEditor({
                     </div>
                   </div>
                 </div>
+                {/* Slides after this match */}
+                {slidesAfter.map((slide) => (
+                  <div
+                    key={`list-slide-${slide.id}`}
+                    className="group flex items-center gap-3 px-3 py-2.5 border-l-4 border-l-indigo-500 bg-indigo-50 dark:bg-indigo-950/20"
+                  >
+                    <div className="flex-shrink-0 w-10 h-10 rounded overflow-hidden border bg-muted flex items-center justify-center">
+                      {slide.imageUrl ? (
+                        <img src={slide.imageUrl} alt="" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display="none"; }} />
+                      ) : (
+                        <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0 text-sm text-indigo-700 dark:text-indigo-300">
+                      <div className="font-medium">Image Slide</div>
+                      <div className="text-xs text-muted-foreground">{slide.duration.toFixed(1)}s · {slide.animation === "kenburns" ? `Ken Burns (${slide.kenBurnsDirection ?? "zoom-in"})` : "Static"}</div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 opacity-0 group-hover:opacity-100 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-opacity"
+                      onClick={() => handleRemoveSlide(slide.id)}
+                      title="Remove slide"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ))}
+                {/* "+" insert after this match */}
+                {onInterstitialSlidesChange && (
+                  <div className="flex items-center px-3 py-1 bg-muted/20">
+                    <button
+                      onClick={() => handleInsertSlide(idx)}
+                      className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700 transition-colors"
+                    >
+                      <Plus className="h-3 w-3" />
+                      <span>Insert slide after</span>
+                    </button>
+                  </div>
+                )}
+                </React.Fragment>
               );
             })}
           </div>
