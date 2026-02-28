@@ -117,7 +117,7 @@ Full details: `.planning/milestones/v8-ROADMAP.md`
 **Milestone Goal:** Fix critical assembly pipeline bugs (segment repetition, missing subtitles) and complete deferred v7 overlay rendering (interstitial slides + PiP via FFmpeg).
 
 - [x] **Phase 43: Assembly Diversity Fix** - Exhaust all segments before repeating and prevent same-source time-range adjacency (completed 2026-02-28)
-- [ ] **Phase 44: Subtitle Data Flow Fix** - Persist SRT content from Step 2 through Step 3 render and eliminate zero-duration entries
+- [x] **Phase 44: Subtitle Data Flow Fix** - Persist SRT content from Step 2 through Step 3 render and eliminate zero-duration entries (completed 2026-02-28)
 - [ ] **Phase 45: Interstitial Slide Controls** - User can insert and configure interstitial product slides between segments
 - [ ] **Phase 46: Overlay FFmpeg Render Integration** - PiP overlays and interstitial slides rendered into final video via FFmpeg
 
@@ -193,7 +193,7 @@ Plans:
 | 36-37 | v7 | 0/3 | Deferred (absorbed into v9) | - |
 | 38-42 | v8 | 8/8 | Complete | 2026-02-24 |
 | 43. Assembly Diversity Fix | 1/1 | Complete    | 2026-02-28 | - |
-| 44. Subtitle Data Flow Fix | v9 | 0/? | Not started | - |
+| 44. Subtitle Data Flow Fix | 2/2 | Complete   | 2026-02-28 | - |
 | 45. Interstitial Slide Controls | v9 | 0/? | Not started | - |
 | 46. Overlay FFmpeg Render Integration | v9 | 0/? | Not started | - |
 
