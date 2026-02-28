@@ -790,9 +790,10 @@ class AssemblyService:
                 timeline.append(gap_entry)
 
         # Post-process: merge short consecutive entries to meet min_segment_duration.
-        # Each merged group plays ONE continuous clip from the representative entry's
-        # source video. The representative is chosen to maximize source diversity:
-        # prefer a source different from the previous merged group.
+        # ALL sub-entries within a merged group survive as individual TimelineEntry
+        # objects — diversity from the round-robin is fully preserved. The
+        # accumulated group duration is redistributed proportionally across the
+        # sub-entries so that each segment receives its fair share of screen time.
         if min_segment_duration > 0 and len(timeline) > 1:
             merged = []
             i = 0
@@ -806,28 +807,31 @@ class AssemblyService:
                     last_merged_idx += 1
                     accumulated_duration += timeline[last_merged_idx].timeline_duration
 
-                # Pick representative: prefer source different from previous merged group
-                prev_merged_source = merged[-1].source_video_path if merged else None
-                representative = current  # default to first
-                if prev_merged_source:
-                    for j in range(i, last_merged_idx + 1):
-                        if timeline[j].source_video_path != prev_merged_source:
-                            representative = timeline[j]
-                            break
+                # Collect all sub-entries in this merged group
+                sub_entries = timeline[i:last_merged_idx + 1]
+                original_total = sum(e.timeline_duration for e in sub_entries)
 
-                merged_entry = TimelineEntry(
-                    source_video_path=representative.source_video_path,
-                    start_time=representative.start_time,
-                    end_time=representative.start_time + accumulated_duration,
-                    timeline_start=current.timeline_start,
-                    timeline_duration=accumulated_duration,
-                    transforms=representative.transforms,
-                )
-                merged.append(merged_entry)
+                # Redistribute accumulated_duration proportionally across sub-entries.
+                # Every sub-entry keeps its own source_video_path, start_time, and
+                # transforms — no segment diversity is lost during merging.
+                group_timeline_start = current.timeline_start
+                for se in sub_entries:
+                    proportion = se.timeline_duration / original_total if original_total > 0 else 1.0 / len(sub_entries)
+                    new_duration = accumulated_duration * proportion
+                    merged.append(TimelineEntry(
+                        source_video_path=se.source_video_path,
+                        start_time=se.start_time,
+                        end_time=se.start_time + new_duration,
+                        timeline_start=group_timeline_start,
+                        timeline_duration=new_duration,
+                        transforms=se.transforms,
+                    ))
+                    group_timeline_start += new_duration
+
                 i = last_merged_idx + 1
 
-            # If the last merged group is shorter than minimum, absorb it into
-            # the previous group so no short segment appears at the end
+            # If the last entry is shorter than minimum, absorb it into
+            # the previous entry (acceptable edge case — only the very last entry)
             if len(merged) >= 2 and merged[-1].timeline_duration < min_segment_duration:
                 last = merged.pop()
                 prev = merged[-1]
@@ -841,7 +845,7 @@ class AssemblyService:
                     transforms=prev.transforms,
                 )
                 logger.info(
-                    f"Absorbed short last group ({last.timeline_duration:.2f}s) into previous "
+                    f"Absorbed short last entry ({last.timeline_duration:.2f}s) into previous "
                     f"({prev.timeline_duration:.2f}s -> {combined_duration:.2f}s)"
                 )
 
