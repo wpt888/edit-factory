@@ -25,9 +25,9 @@ Next action: `/gsd:plan-phase 45`
 
 Milestone: v9 Assembly Pipeline Fix + Overlays
 Phase: 45 of 46 (Interstitial Slide Controls)
-Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-02-28 — Phase 44 complete (2/2 plans, verified 6/6 must-haves)
+Plan: 1 of 1 in current phase
+Status: In progress
+Last activity: 2026-02-28 — Phase 45 Plan 01 complete (interstitial slide controls UI)
 
 Progress: [█████░░░░░] 50% (v9)
 
@@ -68,6 +68,9 @@ Recent decisions affecting v9:
 - [Phase 44]: Backfill audio metadata only when tts_previews entry lacks audio_path — avoids overwriting richer data
 - [Phase 44]: 100ms minimum SRT duration floor: extend entry end without overlapping next phrase, skip if still zero-duration
 - [Phase 44]: 0.5s video timeline safety margin beyond audio_duration in build_timeline to prevent subtitle cutoff from float accumulation
+- [45-01]: afterMatchIndex=-1 for before-first slide position; last match index of each group for after-group insertion
+- [45-01]: Interstitial slides do not participate in drag-and-drop (fixed positions relative to matches)
+- [45-01]: Backend accepts interstitial_slides as Dict[str, List[dict]] (string-keyed); Phase 46 handles FFmpeg rendering
 
 ### Pending Todos
 
@@ -87,9 +90,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 44-02-PLAN.md — Phase 44 fully complete
+Stopped at: Completed 45-01-PLAN.md — InterstitialSlide UI + pipeline state wiring
 Resume file: None
-Next action: `/gsd:plan-phase 45`
+Next action: Phase 46 (interstitial render integration)
 
 ---
 *Last updated: 2026-02-28 after Phase 43 Plan 01 execution*

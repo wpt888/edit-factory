@@ -15,16 +15,16 @@ Requirements for v9 Assembly Pipeline Fix + Overlays. Each maps to roadmap phase
 
 ### Subtitle Fix
 
-- [ ] **SUBS-01**: Step 2 TTS generation persists srt_content and timestamps in tts_previews cache
-- [ ] **SUBS-02**: Step 3 render reuses cached SRT content instead of regenerating TTS
-- [ ] **SUBS-03**: Assembled video duration matches TTS audio duration (no subtitle cutoff)
-- [ ] **SUBS-04**: SRT entries have minimum duration floor (no zero-duration invisible subtitles)
+- [x] **SUBS-01**: Step 2 TTS generation persists srt_content and timestamps in tts_previews cache
+- [x] **SUBS-02**: Step 3 render reuses cached SRT content instead of regenerating TTS
+- [x] **SUBS-03**: Assembled video duration matches TTS audio duration (no subtitle cutoff)
+- [x] **SUBS-04**: SRT entries have minimum duration floor (no zero-duration invisible subtitles)
 
 ### Overlay Render
 
-- [ ] **OVRL-01**: User can insert interstitial product slides between video segments
-- [ ] **OVRL-02**: Interstitial slides have configurable duration
-- [ ] **OVRL-03**: Ken Burns animation applied to interstitial product images
+- [x] **OVRL-01**: User can insert interstitial product slides between video segments
+- [x] **OVRL-02**: Interstitial slides have configurable duration
+- [x] **OVRL-03**: Ken Burns animation applied to interstitial product images
 - [ ] **OVRL-04**: PiP overlay rendered in final video via FFmpeg
 - [ ] **OVRL-05**: Interstitial slides rendered in final video via FFmpeg
 - [ ] **OVRL-06**: Product image animation (zoom/pan) in rendered overlays
@@ -48,13 +48,13 @@ None — all scoped features included in v9.
 | ASMB-01 | Phase 43 | Complete |
 | ASMB-02 | Phase 43 | Complete |
 | ASMB-03 | Phase 43 | Complete |
-| SUBS-01 | Phase 44 | Pending |
-| SUBS-02 | Phase 44 | Pending |
-| SUBS-03 | Phase 44 | Pending |
-| SUBS-04 | Phase 44 | Pending |
-| OVRL-01 | Phase 45 | Pending |
-| OVRL-02 | Phase 45 | Pending |
-| OVRL-03 | Phase 45 | Pending |
+| SUBS-01 | Phase 44 | Complete |
+| SUBS-02 | Phase 44 | Complete |
+| SUBS-03 | Phase 44 | Complete |
+| SUBS-04 | Phase 44 | Complete |
+| OVRL-01 | Phase 45 | Complete |
+| OVRL-02 | Phase 45 | Complete |
+| OVRL-03 | Phase 45 | Complete |
 | OVRL-04 | Phase 46 | Pending |
 | OVRL-05 | Phase 46 | Pending |
 | OVRL-06 | Phase 46 | Pending |
