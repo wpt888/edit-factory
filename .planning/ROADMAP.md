@@ -193,7 +193,7 @@ Plans:
 | 36-37 | v7 | 0/3 | Deferred (absorbed into v9) | - |
 | 38-42 | v8 | 8/8 | Complete | 2026-02-24 |
 | 43. Assembly Diversity Fix | 1/1 | Complete    | 2026-02-28 | - |
-| 44. Subtitle Data Flow Fix | 2/2 | Complete   | 2026-02-28 | - |
+| 44. Subtitle Data Flow Fix | 2/2 | Complete    | 2026-02-28 | - |
 | 45. Interstitial Slide Controls | v9 | 0/? | Not started | - |
 | 46. Overlay FFmpeg Render Integration | v9 | 0/? | Not started | - |
 
