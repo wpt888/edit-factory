@@ -161,10 +161,10 @@ Plans:
   2. User can set the duration of each interstitial slide independently
   3. The interstitial slide entry shows the selected product image in the timeline UI
   4. Ken Burns zoom/pan animation is configured for interstitial slides (settings persist to render)
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 45-01: TBD
+- [ ] 45-01-PLAN.md — InterstitialSlide type, timeline UI insertion/config controls, pipeline state wiring, render payload
 
 ### Phase 46: Overlay FFmpeg Render Integration
 **Goal**: Final rendered video includes PiP product image overlays on configured segments and interstitial product image slides between segments, both with Ken Burns animation applied via FFmpeg
