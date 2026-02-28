@@ -394,6 +394,8 @@ class AssemblyService:
         current_product_group: Optional[str] = None
         prev_segment_id: Optional[str] = None
         prev_source_video_id: Optional[str] = None
+        prev_segment_start: Optional[float] = None
+        prev_segment_end: Optional[float] = None
         variant_rng = random.Random(variant_index)
 
         # --- Build ordered segment lists per product group ---
@@ -456,12 +458,15 @@ class AssemblyService:
                 cycle_used[grp] = set()
 
         def _rr_next(group: Optional[str], exclude_id: Optional[str] = None,
-                     exclude_source_video_id: Optional[str] = None) -> Optional[dict]:
+                     exclude_source_video_id: Optional[str] = None,
+                     exclude_start: Optional[float] = None,
+                     exclude_end: Optional[float] = None) -> Optional[dict]:
             """
             Get next segment by advancing the round-robin pointer.
             Skips segments already consumed in this cycle. Starts a new cycle
             if all segments have been used.
-            Prefers segments from a different source_video_id than exclude_source_video_id.
+            Prefers segments that do not produce overlapping-time-range adjacency
+            with the previous segment on the same source video.
             """
             grp = _resolve_group(group)
             ids = group_seg_ids.get(grp)
@@ -474,10 +479,10 @@ class AssemblyService:
 
             ptr = rr_pointer.get(grp, 0) % n
 
-            # First pass: find segment from a DIFFERENT source video
-            best_different_source = None
-            best_different_idx = None
-            # Second pass fallback: any available segment (same source ok)
+            # First pass: find segment that does NOT cause overlapping-time adjacency
+            best_non_overlap = None
+            best_non_overlap_idx = None
+            # Second pass fallback: any available segment (overlap ok as last resort)
             best_any = None
             best_any_idx = None
 
@@ -499,18 +504,26 @@ class AssemblyService:
                     best_any = seg
                     best_any_idx = idx
 
-                # Prefer different source video
-                if exclude_source_video_id and seg_source == exclude_source_video_id:
-                    continue  # Try to find a different source first
+                # Check if this segment would cause overlapping-time adjacency
+                same_source_overlap = (
+                    exclude_source_video_id
+                    and seg_source == exclude_source_video_id
+                    and exclude_start is not None
+                    and exclude_end is not None
+                    and seg.get("start_time", 0.0) < exclude_end
+                    and exclude_start < seg.get("end_time", 0.0)
+                )
+                if same_source_overlap:
+                    continue  # Try to find a non-overlapping segment first
 
-                # Found a segment from a different source
-                best_different_source = seg
-                best_different_idx = idx
+                # Found a segment with no overlapping-time adjacency
+                best_non_overlap = seg
+                best_non_overlap_idx = idx
                 break
 
-            # Use different-source if found, otherwise fall back to any available
-            chosen = best_different_source or best_any
-            chosen_idx = best_different_idx if best_different_source else best_any_idx
+            # Use non-overlapping if found, otherwise fall back to any available
+            chosen = best_non_overlap or best_any
+            chosen_idx = best_non_overlap_idx if best_non_overlap else best_any_idx
 
             if chosen and chosen_idx is not None:
                 rr_pointer[grp] = (chosen_idx + 1) % n
@@ -596,15 +609,25 @@ class AssemblyService:
                 top_confidence = candidates[0][2]
                 top_candidates = [c for c in candidates if c[2] >= top_confidence - 0.1]
 
-                # Prefer different source video, then exclude consecutive duplicate segment
-                non_prev_source = [c for c in top_candidates
-                                   if c[0].get("source_video_id") != prev_source_video_id]
-                if not non_prev_source:
-                    # All candidates are from same source — at least avoid same segment
+                # Prefer candidates that do not produce overlapping-time adjacency.
+                # Two segments are considered "same visual content" when they share
+                # the same source_video_id AND their time ranges overlap.
+                def _overlaps_previous(seg: dict) -> bool:
+                    if not prev_source_video_id or seg.get("source_video_id") != prev_source_video_id:
+                        return False
+                    if prev_segment_start is None or prev_segment_end is None:
+                        return False
+                    seg_start = seg.get("start_time", 0.0)
+                    seg_end = seg.get("end_time", 0.0)
+                    return seg_start < prev_segment_end and prev_segment_start < seg_end
+
+                non_overlapping = [c for c in top_candidates if not _overlaps_previous(c[0])]
+                if not non_overlapping:
+                    # All candidates overlap with previous — at least avoid same segment
                     non_prev = [c for c in top_candidates if c[0]["id"] != prev_segment_id]
                     pool = non_prev if non_prev else top_candidates
                 else:
-                    pool = non_prev_source
+                    pool = non_overlapping
 
                 chosen_seg_tuple = variant_rng.choice(pool) if len(pool) > 1 else pool[0]
                 seg, kw, conf = chosen_seg_tuple
@@ -618,7 +641,9 @@ class AssemblyService:
             # --- No keyword match → round-robin auto-fill ---
             if not chosen_segment:
                 seg = _rr_next(target_group, exclude_id=prev_segment_id,
-                               exclude_source_video_id=prev_source_video_id)
+                               exclude_source_video_id=prev_source_video_id,
+                               exclude_start=prev_segment_start,
+                               exclude_end=prev_segment_end)
                 if seg:
                     chosen_segment = seg
                     is_auto = True
@@ -654,6 +679,8 @@ class AssemblyService:
                 )
                 prev_segment_id = chosen_segment["id"]
                 prev_source_video_id = chosen_segment.get("source_video_id")
+                prev_segment_start = chosen_segment.get("start_time")
+                prev_segment_end = chosen_segment.get("end_time")
                 if seg_group:
                     current_product_group = seg_group
             else:
