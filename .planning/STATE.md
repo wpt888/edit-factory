@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-02-28T01:03:26.711Z"
+last_updated: "2026-02-28T01:24:59.663Z"
 progress:
-  total_phases: 19
-  completed_phases: 19
-  total_plans: 50
-  completed_plans: 50
+  total_phases: 20
+  completed_phases: 20
+  total_plans: 52
+  completed_plans: 52
 ---
 
 # Project State
@@ -18,18 +18,18 @@ progress:
 See: .planning/PROJECT.md (updated 2026-02-28)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v9 Assembly Pipeline Fix + Overlays — Phase 46
-Next action: `/gsd:plan-phase 46`
+**Current focus:** v9 Assembly Pipeline Fix + Overlays — Phase 46 COMPLETE
+Next action: `/gsd:new-milestone`
 
 ## Current Position
 
 Milestone: v9 Assembly Pipeline Fix + Overlays
 Phase: 46 of 46 (Overlay FFmpeg Render Integration)
-Plan: 1 of 2 in current phase
-Status: In progress
-Last activity: 2026-02-28 — Phase 46 Plan 01 complete (overlay_renderer service + pip_overlays data flow)
+Plan: 2 of 2 in current phase
+Status: Complete
+Last activity: 2026-02-28 — Phase 46 Plan 02 complete (overlay pipeline integration — PiP + interstitial slides in assembly)
 
-Progress: [███████░░░] 75% (v9)
+Progress: [██████████] 100% (v9)
 
 ## Performance Metrics
 
@@ -51,6 +51,7 @@ Progress: [███████░░░] 75% (v9)
 | v8 Pipeline UX | 5 (38-42) | 8 | Shipped 2026-02-24 |
 | Phase 44 P01 | 8 | 1 tasks | 1 files |
 | Phase 44 P02 | 12 | 2 tasks | 2 files |
+| Phase 46 P02 | 5 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,7 @@ Recent decisions affecting v9:
 - [46-01]: PiP sizes: small=150x150, medium=200x200, large=280x280; positions offset y=200 (top) / y=H-h-250 (bottom) for TikTok safe zones
 - [46-01]: Ken Burns for PiP uses 2x pre-scale; full-frame interstitials use 4x (reuses product_video_compositor pattern)
 - [46-01]: apply_pip_overlay returns original video_path on failure — never crashes render pipeline (graceful degradation)
+- [Phase 46]: PiP pass runs post-gather preserving parallel extraction performance; interstitial afterMatchIndex maps -1=before-first, N=after-segment-N
 
 ### Pending Todos
 
@@ -93,9 +95,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 46-01-PLAN.md — overlay_renderer service + pip_overlays data flow
+Stopped at: Completed 46-02-PLAN.md — overlay pipeline integration (PiP + interstitial slides in assembly)
 Resume file: None
-Next action: Phase 46 Plan 02 (assembly service integration of overlay rendering)
+Next action: v9 milestone complete — run /gsd:new-milestone for next milestone
 
 ---
 *Last updated: 2026-02-28 after Phase 43 Plan 01 execution*

@@ -119,7 +119,7 @@ Full details: `.planning/milestones/v8-ROADMAP.md`
 - [x] **Phase 43: Assembly Diversity Fix** - Exhaust all segments before repeating and prevent same-source time-range adjacency (completed 2026-02-28)
 - [x] **Phase 44: Subtitle Data Flow Fix** - Persist SRT content from Step 2 through Step 3 render and eliminate zero-duration entries (completed 2026-02-28)
 - [x] **Phase 45: Interstitial Slide Controls** - User can insert and configure interstitial product slides between segments (completed 2026-02-28)
-- [ ] **Phase 46: Overlay FFmpeg Render Integration** - PiP overlays and interstitial slides rendered into final video via FFmpeg
+- [x] **Phase 46: Overlay FFmpeg Render Integration** - PiP overlays and interstitial slides rendered into final video via FFmpeg (completed 2026-02-28)
 
 ## Phase Details
 
@@ -196,7 +196,7 @@ Plans:
 | 43. Assembly Diversity Fix | 1/1 | Complete    | 2026-02-28 | - |
 | 44. Subtitle Data Flow Fix | 2/2 | Complete    | 2026-02-28 | - |
 | 45. Interstitial Slide Controls | 1/1 | Complete    | 2026-02-28 | - |
-| 46. Overlay FFmpeg Render Integration | 1/2 | In Progress|  | - |
+| 46. Overlay FFmpeg Render Integration | 2/2 | Complete   | 2026-02-28 | - |
 
 ---
 *Last updated: 2026-02-28 after v9 roadmap creation*
