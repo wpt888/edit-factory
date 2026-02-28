@@ -356,7 +356,8 @@ class AssemblyService:
         segments_data: List[dict],
         min_confidence: float = 0.3,
         variant_index: int = 0,
-        srt_product_groups: Optional[List[Optional[str]]] = None
+        srt_product_groups: Optional[List[Optional[str]]] = None,
+        avoid_segment_ids: Optional[set] = None
     ) -> List[MatchResult]:
         """
         Match SRT subtitle phrases against segment keywords using round-robin.
@@ -444,29 +445,26 @@ class AssemblyService:
         # --- Round-robin state per group ---
         # Pointer: fixed cyclical position (only advances on round-robin picks)
         rr_pointer: Dict[Optional[str], int] = {}
-        # Cycle used: segments consumed in the current cycle (by keyword OR round-robin)
-        cycle_used: Dict[Optional[str], set] = {}
+        # Cooldown: tracks which SRT index each segment was last used at
+        last_used_at: Dict[Optional[str], Dict[str, int]] = {}
+        # Avoid set for cross-variant deprioritization
+        _avoid_ids: set = avoid_segment_ids or set()
 
         for g, ids in group_seg_ids.items():
             rr_pointer[g] = variant_index % len(ids) if ids else 0
-            cycle_used[g] = set()
+            last_used_at[g] = {}
 
-        def _start_new_cycle_if_needed(grp: Optional[str]):
-            """If all segments in group have been used this cycle, reset."""
-            ids = group_seg_ids.get(grp, [])
-            if ids and len(cycle_used.get(grp, set())) >= len(ids):
-                cycle_used[grp] = set()
-
-        def _rr_next(group: Optional[str], exclude_id: Optional[str] = None,
+        def _rr_next(group: Optional[str], current_srt_idx: int,
+                     exclude_id: Optional[str] = None,
                      exclude_source_video_id: Optional[str] = None,
                      exclude_start: Optional[float] = None,
                      exclude_end: Optional[float] = None) -> Optional[dict]:
             """
             Get next segment by advancing the round-robin pointer.
-            Skips segments already consumed in this cycle. Starts a new cycle
-            if all segments have been used.
-            Prefers segments that do not produce overlapping-time-range adjacency
-            with the previous segment on the same source video.
+            Uses cooldown system: a segment is skipped if it was used fewer than
+            min_reuse_distance SRT entries ago.
+            Prefers segments not in _avoid_ids (cross-variant deprioritization).
+            Prefers segments that do not produce overlapping-time-range adjacency.
             """
             grp = _resolve_group(group)
             ids = group_seg_ids.get(grp)
@@ -474,24 +472,26 @@ class AssemblyService:
                 return segments_data[0] if segments_data else None
 
             n = len(ids)
-            _start_new_cycle_if_needed(grp)
-            used = cycle_used.get(grp, set())
+            min_reuse_distance = max(2, n - 1)
+            group_last_used = last_used_at.get(grp, {})
 
             ptr = rr_pointer.get(grp, 0) % n
 
-            # First pass: find segment that does NOT cause overlapping-time adjacency
-            best_non_overlap = None
-            best_non_overlap_idx = None
-            # Second pass fallback: any available segment (overlap ok as last resort)
+            # Collect candidates: (seg, idx, is_avoided, is_overlapping)
+            best_non_overlap_non_avoid = None
+            best_non_overlap_non_avoid_idx = None
+            best_non_overlap_avoid = None
+            best_non_overlap_avoid_idx = None
             best_any = None
             best_any_idx = None
 
-            for attempt in range(n * 2):  # *2 to handle cycle reset mid-scan
+            for attempt in range(n):
                 idx = (ptr + attempt) % n
                 sid = ids[idx]
 
-                # Skip if already used in this cycle
-                if sid in used:
+                # Cooldown check
+                last_pos = group_last_used.get(sid, -999)
+                if (current_srt_idx - last_pos) < min_reuse_distance:
                     continue
                 # Skip consecutive identical segment
                 if sid == exclude_id and n > 1:
@@ -499,12 +499,13 @@ class AssemblyService:
 
                 seg = segment_lookup[sid]
                 seg_source = seg.get("source_video_id")
+                is_avoided = sid in _avoid_ids
 
                 if best_any is None:
                     best_any = seg
                     best_any_idx = idx
 
-                # Check if this segment would cause overlapping-time adjacency
+                # Check overlapping-time adjacency
                 same_source_overlap = (
                     exclude_source_video_id
                     and seg_source == exclude_source_video_id
@@ -514,46 +515,55 @@ class AssemblyService:
                     and exclude_start < seg.get("end_time", 0.0)
                 )
                 if same_source_overlap:
-                    continue  # Try to find a non-overlapping segment first
+                    continue
 
-                # Found a segment with no overlapping-time adjacency
-                best_non_overlap = seg
-                best_non_overlap_idx = idx
-                break
+                # Non-overlapping candidate found
+                if not is_avoided:
+                    best_non_overlap_non_avoid = seg
+                    best_non_overlap_non_avoid_idx = idx
+                    break  # Best possible match
+                elif best_non_overlap_avoid is None:
+                    best_non_overlap_avoid = seg
+                    best_non_overlap_avoid_idx = idx
+                    # Keep looking for non-avoided
 
-            # Use non-overlapping if found, otherwise fall back to any available
-            chosen = best_non_overlap or best_any
-            chosen_idx = best_non_overlap_idx if best_non_overlap else best_any_idx
+            # Priority: non-overlap+non-avoid > non-overlap+avoid > any
+            chosen = best_non_overlap_non_avoid or best_non_overlap_avoid or best_any
+            chosen_idx = (
+                best_non_overlap_non_avoid_idx if best_non_overlap_non_avoid
+                else best_non_overlap_avoid_idx if best_non_overlap_avoid
+                else best_any_idx
+            )
 
             if chosen and chosen_idx is not None:
                 rr_pointer[grp] = (chosen_idx + 1) % n
-                used.add(chosen["id"])
+                group_last_used[chosen["id"]] = current_srt_idx
                 return chosen
 
-            # All exhausted (shouldn't happen) — force reset and pick
-            cycle_used[grp] = set()
-            ptr = rr_pointer.get(grp, 0) % n
-            sid = ids[ptr]
-            rr_pointer[grp] = (ptr + 1) % n
-            cycle_used[grp].add(sid)
-            return segment_lookup[sid]
+            # All on cooldown — pick the segment with oldest last_used_at
+            oldest_sid = min(ids, key=lambda s: group_last_used.get(s, -999))
+            oldest_idx = ids.index(oldest_sid)
+            rr_pointer[grp] = (oldest_idx + 1) % n
+            group_last_used[oldest_sid] = current_srt_idx
+            return segment_lookup[oldest_sid]
 
-        def _mark_keyword_consumed(seg_id: str, group: Optional[str]):
+        def _mark_keyword_consumed(seg_id: str, group: Optional[str], current_srt_idx: int):
             """
-            Mark segment as consumed in current cycle (keyword match).
-            Does NOT advance the round-robin pointer — the pointer will
-            skip this segment when it naturally reaches it.
+            Mark segment as consumed via keyword match (records cooldown timestamp).
+            Does NOT advance the round-robin pointer.
             """
             grp = _resolve_group(group)
-            _start_new_cycle_if_needed(grp)
-            used = cycle_used.get(grp, set())
-            used.add(seg_id)
+            group_last_used = last_used_at.setdefault(grp, {})
+            group_last_used[seg_id] = current_srt_idx
 
-        def _is_available_in_cycle(seg_id: str, group: Optional[str]) -> bool:
-            """Check if segment hasn't been consumed in the current cycle."""
+        def _is_available_in_cooldown(seg_id: str, group: Optional[str], current_srt_idx: int) -> bool:
+            """Check if segment has passed its cooldown period."""
             grp = _resolve_group(group)
-            _start_new_cycle_if_needed(grp)
-            return seg_id not in cycle_used.get(grp, set())
+            ids = group_seg_ids.get(grp, [])
+            min_reuse_distance = max(2, len(ids) - 1)
+            group_last_used = last_used_at.get(grp, {})
+            last_pos = group_last_used.get(seg_id, -999)
+            return (current_srt_idx - last_pos) >= min_reuse_distance
 
         # --- Single-pass: keyword match + round-robin in one loop ---
         keyword_matched = 0
@@ -580,8 +590,8 @@ class AssemblyService:
                 seg_group = segment.get("product_group")
                 check_group = forced_group or seg_group or target_group
 
-                # Only consider segments available in the current cycle
-                if not _is_available_in_cycle(segment["id"], check_group):
+                # Only consider segments that have passed cooldown
+                if not _is_available_in_cooldown(segment["id"], check_group, idx):
                     continue
 
                 keywords = segment.get("keywords") or []
@@ -629,7 +639,19 @@ class AssemblyService:
                 else:
                     pool = non_overlapping
 
-                chosen_seg_tuple = variant_rng.choice(pool) if len(pool) > 1 else pool[0]
+                # Prefer segments with oldest cooldown (most spacing) and not in avoid set
+                if len(pool) > 1:
+                    def _sort_key(c):
+                        sid = c[0]["id"]
+                        grp = c[0].get("product_group") or target_group
+                        resolved_grp = _resolve_group(grp)
+                        age = last_used_at.get(resolved_grp, {}).get(sid, -999)
+                        avoid_penalty = 1000 if sid in _avoid_ids else 0
+                        return avoid_penalty + age  # Lower = preferred
+                    pool.sort(key=_sort_key)
+                    chosen_seg_tuple = pool[0]
+                else:
+                    chosen_seg_tuple = pool[0]
                 seg, kw, conf = chosen_seg_tuple
 
                 if conf >= min_confidence:
@@ -640,7 +662,8 @@ class AssemblyService:
 
             # --- No keyword match → round-robin auto-fill ---
             if not chosen_segment:
-                seg = _rr_next(target_group, exclude_id=prev_segment_id,
+                seg = _rr_next(target_group, current_srt_idx=idx,
+                               exclude_id=prev_segment_id,
                                exclude_source_video_id=prev_source_video_id,
                                exclude_start=prev_segment_start,
                                exclude_end=prev_segment_end)
@@ -657,9 +680,9 @@ class AssemblyService:
             if chosen_segment:
                 seg_group = chosen_segment.get("product_group")
 
-                # Keyword match: consume from cycle without advancing pointer
+                # Keyword match: record cooldown without advancing pointer
                 if not is_auto:
-                    _mark_keyword_consumed(chosen_segment["id"], seg_group)
+                    _mark_keyword_consumed(chosen_segment["id"], seg_group, idx)
 
                 match = MatchResult(
                     srt_index=idx,
@@ -1123,6 +1146,7 @@ class AssemblyService:
         min_segment_duration: float = 2.0,
         interstitial_slides: Optional[List[dict]] = None,
         pip_overlays: Optional[Dict[str, dict]] = None,
+        avoid_segment_ids: Optional[set] = None,
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
@@ -1307,7 +1331,8 @@ class AssemblyService:
                     segments_data=segments_data,
                     min_confidence=0.3,
                     variant_index=variant_index,
-                    srt_product_groups=srt_product_groups
+                    srt_product_groups=srt_product_groups,
+                    avoid_segment_ids=avoid_segment_ids
                 )
                 duration_overrides = None
 
@@ -1385,7 +1410,8 @@ class AssemblyService:
         reuse_audio_duration: Optional[float] = None,
         voice_settings: Optional[dict] = None,
         max_words_per_phrase: int = 2,
-        min_segment_duration: float = 2.0
+        min_segment_duration: float = 2.0,
+        avoid_segment_ids: Optional[set] = None
     ) -> dict:
         """
         Preview-only: TTS -> SRT -> match -> timeline (no rendering).
@@ -1491,7 +1517,8 @@ class AssemblyService:
             segments_data=segments_data,
             min_confidence=0.3,
             variant_index=variant_index,
-            srt_product_groups=srt_product_groups
+            srt_product_groups=srt_product_groups,
+            avoid_segment_ids=avoid_segment_ids
         )
 
         timeline = self.build_timeline(

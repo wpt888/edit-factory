@@ -1111,6 +1111,17 @@ async def preview_variant(
     try:
         assembly_service = get_assembly_service()
 
+        # Cross-variant deprioritization: gather segments used by OTHER variants
+        avoid_ids = set()
+        for other_idx, used_set in pipeline.get("segment_usage", {}).items():
+            if str(other_idx) != str(variant_index):
+                avoid_ids.update(used_set)
+        if avoid_ids:
+            logger.info(
+                f"[Profile {profile.profile_id}] Variant {variant_index}: "
+                f"deprioritizing {len(avoid_ids)} segments used by other variants"
+            )
+
         preview_data = await assembly_service.preview_matches(
             script_text=script_text,
             profile_id=profile.profile_id,
@@ -1122,8 +1133,16 @@ async def preview_variant(
             reuse_audio_duration=reuse_audio_duration,
             voice_settings=voice_settings,
             max_words_per_phrase=words_per_subtitle,
-            min_segment_duration=min_segment_duration
+            min_segment_duration=min_segment_duration,
+            avoid_segment_ids=avoid_ids if avoid_ids else None
         )
+
+        # Track which segments this variant used (for cross-variant deprioritization)
+        used_segment_ids = list({
+            m["segment_id"] for m in preview_data.get("matches", [])
+            if m.get("segment_id")
+        })
+        pipeline.setdefault("segment_usage", {})[str(variant_index)] = used_segment_ids
 
         # Store preview result in pipeline state
         pipeline["previews"][variant_index] = {
@@ -1400,6 +1419,15 @@ async def render_variants(
             if variant_pip_overlays:
                 logger.info(f"[Pipeline {pipeline_id}] Variant {vid}: {len(variant_pip_overlays)} PiP overlays")
 
+            # Cross-variant deprioritization for render
+            render_avoid_ids = set()
+            for other_idx, used_set in pipeline.get("segment_usage", {}).items():
+                if str(other_idx) != str(vid):
+                    if isinstance(used_set, list):
+                        render_avoid_ids.update(used_set)
+                    else:
+                        render_avoid_ids.update(used_set)
+
             # Run full assembly (with 15-minute timeout)
             try:
                 final_video_path = await asyncio.wait_for(
@@ -1434,6 +1462,7 @@ async def render_variants(
                         min_segment_duration=request.min_segment_duration,
                         interstitial_slides=variant_interstitial_slides,
                         pip_overlays=variant_pip_overlays,
+                        avoid_segment_ids=render_avoid_ids if render_avoid_ids else None,
                     ),
                     timeout=900
                 )
