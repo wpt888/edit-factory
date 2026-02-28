@@ -303,6 +303,8 @@ class PipelineRenderRequest(BaseModel):
     # Interstitial product image slides: variant_index -> list of slide configs
     # Phase 46 will implement FFmpeg rendering — this phase just stores the data
     interstitial_slides: Optional[Dict[str, List[dict]]] = None
+    # PiP overlay configs: segment_id -> { image_url, position, size, animation }
+    pip_overlays: Optional[Dict[str, dict]] = None
 
 
 class PipelineRenderResponse(BaseModel):
@@ -1223,6 +1225,11 @@ async def render_variants(
         logger.info(
             "[Profile %s] Received %d variant(s) with interstitial slides",
             profile.profile_id, len(request.interstitial_slides)
+        )
+    if request.pip_overlays:
+        logger.info(
+            "[Profile %s] Received %d segment(s) with PiP overlays",
+            profile.profile_id, len(request.pip_overlays)
         )
 
     # Fetch preset data

@@ -895,6 +895,28 @@ function PipelinePage() {
         )
       : undefined;
 
+    // Build pip_overlays: segment_id -> { image_url, position, size, animation }
+    // Only includes segments from selected variants whose association has pip_config.enabled
+    const pipOverlays: Record<string, { image_url: string; position: string; size: string; animation: string }> = {};
+    for (const idx of Array.from(selectedVariants)) {
+      const preview = previews[idx];
+      if (!preview?.matches) continue;
+      for (const match of preview.matches) {
+        if (!match.segment_id) continue;
+        const assoc = associations[match.segment_id];
+        if (!assoc?.pip_config?.enabled) continue;
+        // Use first selected image URL, or product_image as fallback
+        const imageUrl = assoc.selected_image_urls?.[0] || assoc.product_image;
+        if (!imageUrl) continue;
+        pipOverlays[match.segment_id] = {
+          image_url: imageUrl,
+          position: assoc.pip_config.position,
+          size: assoc.pip_config.size,
+          animation: assoc.pip_config.animation,
+        };
+      }
+    }
+
     try {
       const res = await apiPost(`/pipeline/render/${pipelineId}`, {
         variant_indices: Array.from(selectedVariants),
@@ -904,6 +926,7 @@ function PipelinePage() {
         source_video_ids: selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined,
         match_overrides: Object.keys(matchOverrides).length > 0 ? matchOverrides : undefined,
         interstitial_slides: filteredInterstitialSlides,
+        pip_overlays: Object.keys(pipOverlays).length > 0 ? pipOverlays : undefined,
         voice_settings: {
           stability: voiceStability,
           similarity_boost: voiceSimilarity,
