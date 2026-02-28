@@ -1127,6 +1127,21 @@ async def preview_variant(
             "preview_data": preview_data
         }
 
+        # Persist SRT content into tts_previews so Step 3 render can reuse it
+        # without calling ElevenLabs a second time just to get subtitle timestamps.
+        if "tts_previews" not in pipeline:
+            pipeline["tts_previews"] = {}
+        if variant_index not in pipeline["tts_previews"]:
+            pipeline["tts_previews"][variant_index] = {}
+        pipeline["tts_previews"][variant_index]["srt_content"] = preview_data.get("srt_content", "")
+        # Also persist audio info from preview_data if tts_previews was empty
+        # (covers the case where Step 2 standalone TTS was skipped entirely)
+        if not pipeline["tts_previews"][variant_index].get("audio_path"):
+            pipeline["tts_previews"][variant_index]["audio_path"] = preview_data.get("audio_path", "")
+            pipeline["tts_previews"][variant_index]["audio_duration"] = preview_data.get("audio_duration", 0.0)
+            pipeline["tts_previews"][variant_index]["script_hash"] = _stable_hash(cleaned_text)
+            pipeline["tts_previews"][variant_index]["timestamp"] = datetime.now(timezone.utc).isoformat()
+
         # Persist to DB
         _db_save_pipeline(pipeline_id, pipeline)
 
