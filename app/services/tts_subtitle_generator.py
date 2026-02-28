@@ -263,20 +263,38 @@ def generate_srt_from_timestamps(
             "end": current_phrase_end
         })
 
-    # Step 3: Phrases to SRT
+    # Step 3: Phrases to SRT (with minimum duration enforcement)
+    MIN_DURATION = 0.1  # 100ms minimum for perceptible display
     srt_entries = []
-    for index, phrase in enumerate(phrases, start=1):
-        start_time_str = _seconds_to_srt_time(phrase["start"])
-        end_time_str = _seconds_to_srt_time(phrase["end"])
+    srt_index = 1
+    for i, phrase in enumerate(phrases):
+        start = phrase["start"]
+        end = phrase["end"]
         text = phrase["text"]
 
-        # SRT format: index, timestamp line, text, blank line
-        srt_entry = f"{index}\n{start_time_str} --> {end_time_str}\n{text}\n"
+        # Enforce minimum duration
+        if end - start < MIN_DURATION:
+            # Extend end, but don't overlap next phrase
+            if i + 1 < len(phrases):
+                end = min(start + MIN_DURATION, phrases[i + 1]["start"])
+            else:
+                end = start + MIN_DURATION
+
+        # Skip truly zero-duration entries (can happen when phrases are back-to-back)
+        if end - start < 0.001:
+            logger.warning(f"Skipping zero-duration subtitle entry: '{text}' at {start:.3f}s")
+            continue
+
+        start_time_str = _seconds_to_srt_time(start)
+        end_time_str = _seconds_to_srt_time(end)
+
+        srt_entry = f"{srt_index}\n{start_time_str} --> {end_time_str}\n{text}\n"
         srt_entries.append(srt_entry)
+        srt_index += 1
 
     # Join all entries with blank line separator
     srt_content = "\n".join(srt_entries)
 
-    logger.info(f"Generated SRT with {len(phrases)} subtitle entries from {len(words)} words ({len(characters)} characters)")
+    logger.info(f"Generated SRT with {srt_index - 1} subtitle entries from {len(words)} words ({len(characters)} characters)")
 
     return srt_content
