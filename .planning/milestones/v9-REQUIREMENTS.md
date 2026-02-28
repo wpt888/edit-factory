@@ -1,3 +1,12 @@
+# Requirements Archive: v9 Assembly Pipeline Fix + Overlays
+
+**Archived:** 2026-02-28
+**Status:** SHIPPED
+
+For current requirements, see `.planning/REQUIREMENTS.md`.
+
+---
+
 # Requirements: Edit Factory
 
 **Defined:** 2026-02-28

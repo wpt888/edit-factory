@@ -209,3 +209,37 @@
 
 ---
 
+
+## v9 Assembly Pipeline Fix + Overlays (Shipped: 2026-02-28)
+
+**Delivered:** Fixed critical assembly pipeline bugs (segment repetition, missing subtitles) and completed deferred v7 overlay rendering — interstitial product slides and PiP overlays rendered into final video via FFmpeg with Ken Burns animation.
+
+**Phases completed:** 43-46 (4 phases, 6 plans, 12 tasks)
+
+**Key accomplishments:**
+- Diversity-preserving merge in assembly pipeline — all N segments used before any repetition, with overlapping-time-range adjacency prevention
+- SRT content persistence in tts_previews cache — Step 3 render reuses Step 2 subtitles without redundant ElevenLabs API calls
+- Minimum 100ms SRT duration floor + 0.5s video timeline safety margin — no invisible subtitles or cutoff at video end
+- Interstitial slide controls — users can insert configurable product image slides between timeline segments with Ken Burns animation toggle
+- Overlay FFmpeg render service — PiP overlays and interstitial slides rendered into final video with graceful degradation on failure
+- Completes deferred v7 phases 36-37 (interstitial slides + render integration)
+
+**Stats:**
+- 25 files modified
+- +3,969 / -123 lines (Python + TypeScript)
+- 4 phases, 6 plans, 12 tasks, 25 commits
+- 1 day (2026-02-28)
+- 13/13 v9 requirements satisfied
+- 1 new backend service (overlay_renderer.py)
+
+**Git range:** `fix(43-01)` → `docs(phase-46)`
+
+**Tech debt:**
+- Dead code: pipeline_routes.py lines 1343-1351 (Phase 45 stub superseded by Phase 46)
+- Type annotation mismatches in overlay_renderer.py (runtime-safe)
+- Human visual verification deferred for PiP overlay positioning, interstitial insertion, and Ken Burns animation quality
+
+**What's next:** TBD — `/gsd:new-milestone`
+
+---
+

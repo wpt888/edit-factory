@@ -100,14 +100,15 @@ Automated video production from any input — an idea, a product feed, or a coll
 - ✓ Manual segment assignment for unmatched phrases — v8
 - ✓ Duration adjustment controls on timeline — v8
 - ✓ Match overrides wired through render pipeline — v8
+- ✓ Segment repetition fix: round-robin diversity with overlapping-time-range adjacency prevention — v9
+- ✓ SRT content persistence: Step 2 TTS cached and reused at Step 3 render — v9
+- ✓ Video-audio duration alignment: 0.5s safety margin + 100ms min SRT duration — v9
+- ✓ Interstitial product slides between segments with Ken Burns animation — v9
+- ✓ PiP overlays and interstitial slides rendered via FFmpeg with graceful degradation — v9
 
 ### Active
 
-- [ ] Segment repetition fix: use ALL segments before repeating any (round-robin through merge)
-- [ ] SRT/subtitle text fix: persist SRT content at Step 2 TTS, reuse at Step 3 render
-- [ ] Video-audio duration alignment: ensure assembled video matches TTS audio duration
-- [ ] User can insert interstitial product slides between segments (deferred from v7)
-- [ ] Assembly/render pipeline applies PiP overlays and interstitial slides (deferred from v7)
+(None — all current requirements shipped. Use `/gsd:new-milestone` to define next.)
 
 ### Out of Scope
 
@@ -130,9 +131,9 @@ Automated video production from any input — an idea, a product feed, or a coll
 - Runs on Windows/WSL development machine
 - Constant iteration — code changes frequently
 - Tech stack: FastAPI backend (Python), Next.js frontend (TypeScript), Supabase DB, FFmpeg
-- ~42K LOC across Python (~24K) + TypeScript (~18K)
-- 8 milestones shipped: v1 (MVP), v2 (Profiles), v3 (Video Quality), v4 (Script-First), v5 (Product Videos), v6 (Production Hardening), v7 (Product Image Overlays, partial), v8 (Pipeline UX Overhaul)
-- 42 phases, 90 plans executed across all milestones
+- ~46K LOC across Python (~27K) + TypeScript (~19K)
+- 9 milestones shipped: v1 (MVP), v2 (Profiles), v3 (Video Quality), v4 (Script-First), v5 (Product Videos), v6 (Production Hardening), v7 (Product Image Overlays, partial), v8 (Pipeline UX Overhaul), v9 (Assembly Pipeline Fix + Overlays)
+- 46 phases, 96 plans executed across all milestones
 - 13 backend services, 9 frontend pages, 14+ API routers
 - DB migrations: 021 total (007/009/017/021 pending manual application)
 - Nortia.ro feed: ~9,987 products, Google Shopping XML format
@@ -141,7 +142,8 @@ Automated video production from any input — an idea, a product feed, or a coll
 - Structured JSON logging across all backend services
 - v7 delivered product-segment associations + PiP overlay config UI (render integration deferred)
 - v8 delivered complete pipeline UX: source selection, timeline editor, video preview, library save
-- Tech debt: In-memory state dicts for pipeline/assembly, no job cancellation, safe_zone fields unused, v7 render integration deferred
+- v9 fixed assembly diversity + subtitle data flow, completed overlay rendering (PiP + interstitial slides via FFmpeg)
+- Tech debt: In-memory state dicts for pipeline/assembly, no job cancellation, safe_zone fields unused, dead code in pipeline_routes.py (Phase 45 stub)
 
 ## Constraints
 
@@ -185,17 +187,13 @@ Automated video production from any input — an idea, a product feed, or a coll
 | HTML5 native Drag API for timeline | Zero new npm deps, sufficient for vertical swap UX | ✓ Good |
 | Optimistic UI state for Step 4 render | Pre-call card rendering eliminates empty state flash | ✓ Good |
 | match_overrides through render pipeline | Segment swaps + duration edits flow to final video | ✓ Good |
-
-## Current Milestone: v9 Assembly Pipeline Fix + Overlays
-
-**Goal:** Fix critical assembly pipeline bugs (segment repetition, missing subtitles) and complete deferred v7 overlay rendering.
-
-**Target features:**
-- Fix segment repetition in merge step (exhaust all segments before reuse)
-- Fix SRT content persistence (Step 2 → Step 3 data flow)
-- Video-audio duration alignment
-- Interstitial product slides between segments
-- PiP overlay + interstitial FFmpeg render integration
+| Sub-entry merge preserves all segment assignments | Proportional duration redistribution instead of one representative | ✓ Good |
+| Time-range overlap check for adjacency | Same source + overlapping times = avoid; non-overlapping = acceptable | ✓ Good |
+| SRT content in tts_previews cache | Single cache entry carries audio + SRT; no redundant ElevenLabs calls | ✓ Good |
+| 100ms minimum SRT duration floor | Below human perception but above float noise; skip < 1ms entries | ✓ Good |
+| 0.5s timeline safety margin | Absorbs float accumulation; trimmed by -t flag in render | ✓ Good |
+| overlay_renderer graceful degradation | Returns original path on failure; never crashes render pipeline | ✓ Good |
+| Ken Burns 2x pre-scale for PiP, 4x for interstitials | Matches product_video_compositor pattern; smooth zoompan | ✓ Good |
 
 ---
-*Last updated: 2026-02-28 after v9 milestone started*
+*Last updated: 2026-02-28 after v9 milestone completion*

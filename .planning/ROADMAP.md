@@ -10,7 +10,7 @@
 - ✅ **v6 Production Hardening** - Phases 24-31 (shipped 2026-02-22)
 - ✅ **v7 Product Image Overlays** - Phases 32-35 (partial, shipped 2026-02-24, phases 36-37 deferred)
 - ✅ **v8 Pipeline UX Overhaul** - Phases 38-42 (shipped 2026-02-24)
-- 🚧 **v9 Assembly Pipeline Fix + Overlays** - Phases 43-46 (in progress)
+- ✅ **v9 Assembly Pipeline Fix + Overlays** - Phases 43-46 (shipped 2026-02-28)
 
 ## Phases
 
@@ -92,8 +92,8 @@ Full details: `.planning/milestones/v6-ROADMAP.md`
 - [x] Phase 33: Product and Image Picker Components (1 plan) — completed 2026-02-23
 - [x] Phase 34: Page Integration (2 plans) — completed 2026-02-23
 - [x] Phase 35: PiP Overlay Controls (2 plans) — completed 2026-02-23
-- [ ] Phase 36: Interstitial Slide Controls — deferred (covered in Phase 45)
-- [ ] Phase 37: Render Integration — deferred (covered in Phase 46)
+- [ ] Phase 36: Interstitial Slide Controls — deferred (completed as Phase 45 in v9)
+- [ ] Phase 37: Render Integration — deferred (completed as Phase 46 in v9)
 
 Full details: `.planning/milestones/v7-ROADMAP.md`
 
@@ -112,74 +112,17 @@ Full details: `.planning/milestones/v8-ROADMAP.md`
 
 </details>
 
-### 🚧 v9 Assembly Pipeline Fix + Overlays (In Progress)
+<details>
+<summary>✅ v9 Assembly Pipeline Fix + Overlays (Phases 43-46) — SHIPPED 2026-02-28</summary>
 
-**Milestone Goal:** Fix critical assembly pipeline bugs (segment repetition, missing subtitles) and complete deferred v7 overlay rendering (interstitial slides + PiP via FFmpeg).
+- [x] Phase 43: Assembly Diversity Fix (1 plan) — completed 2026-02-28
+- [x] Phase 44: Subtitle Data Flow Fix (2 plans) — completed 2026-02-28
+- [x] Phase 45: Interstitial Slide Controls (1 plan) — completed 2026-02-28
+- [x] Phase 46: Overlay FFmpeg Render Integration (2 plans) — completed 2026-02-28
 
-- [x] **Phase 43: Assembly Diversity Fix** - Exhaust all segments before repeating and prevent same-source time-range adjacency (completed 2026-02-28)
-- [x] **Phase 44: Subtitle Data Flow Fix** - Persist SRT content from Step 2 through Step 3 render and eliminate zero-duration entries (completed 2026-02-28)
-- [x] **Phase 45: Interstitial Slide Controls** - User can insert and configure interstitial product slides between segments (completed 2026-02-28)
-- [x] **Phase 46: Overlay FFmpeg Render Integration** - PiP overlays and interstitial slides rendered into final video via FFmpeg (completed 2026-02-28)
+Full details: `.planning/milestones/v9-ROADMAP.md`
 
-## Phase Details
-
-### Phase 43: Assembly Diversity Fix
-**Goal**: Video segments never repeat until all available segments have been used, and segments from the same source video do not appear consecutively when they cover overlapping time ranges
-**Depends on**: Nothing (independent backend fix)
-**Requirements**: ASMB-01, ASMB-02, ASMB-03
-**Success Criteria** (what must be TRUE):
-  1. A generated video that uses fewer segments than the available pool does not show the same clip twice
-  2. Consecutive segments from the same source video do not come from overlapping time ranges
-  3. The merge step preserves the diversity established by the round-robin cycle rather than collapsing it to one representative per group
-  4. After exhausting all unique segments, reuse begins from the segment least recently used
-**Plans**: 1 plan
-
-Plans:
-- [ ] 43-01-PLAN.md — Rewrite merge logic to preserve segment diversity + add overlapping-time-range adjacency prevention
-
-### Phase 44: Subtitle Data Flow Fix
-**Goal**: Subtitles generated at Step 2 are reused verbatim at Step 3 render with no timing drift, no invisible zero-duration entries, and no cutoff at the end of the video
-**Depends on**: Nothing (independent backend fix)
-**Requirements**: SUBS-01, SUBS-02, SUBS-03, SUBS-04
-**Success Criteria** (what must be TRUE):
-  1. Playing a rendered pipeline video shows subtitles that match the voiceover with no timing shift from Step 2 preview
-  2. Every subtitle entry is visible on screen for at least a minimum perceptible duration
-  3. The final video file is at least as long as the TTS audio track so no subtitle is cut off before display
-  4. Step 3 render does not call ElevenLabs a second time when TTS audio already exists in cache
-**Plans**: 2 plans
-
-Plans:
-- [ ] 44-01-PLAN.md — Persist SRT content in tts_previews cache for render reuse
-- [ ] 44-02-PLAN.md — Enforce minimum subtitle duration and video-audio duration alignment
-
-### Phase 45: Interstitial Slide Controls
-**Goal**: Users can insert product image slides between video segments with configurable duration and Ken Burns animation, visible in the timeline before render
-**Depends on**: Phase 43, Phase 44 (assembly fixes should be complete before new overlay controls)
-**Requirements**: OVRL-01, OVRL-02, OVRL-03
-**Success Criteria** (what must be TRUE):
-  1. User can click a control between segments on the timeline to insert a product image slide
-  2. User can set the duration of each interstitial slide independently
-  3. The interstitial slide entry shows the selected product image in the timeline UI
-  4. Ken Burns zoom/pan animation is configured for interstitial slides (settings persist to render)
-**Plans**: 1 plan
-
-Plans:
-- [ ] 45-01-PLAN.md — InterstitialSlide type, timeline UI insertion/config controls, pipeline state wiring, render payload
-
-### Phase 46: Overlay FFmpeg Render Integration
-**Goal**: Final rendered video includes PiP product image overlays on configured segments and interstitial product image slides between segments, both with Ken Burns animation applied via FFmpeg
-**Depends on**: Phase 45
-**Requirements**: OVRL-04, OVRL-05, OVRL-06
-**Success Criteria** (what must be TRUE):
-  1. Rendered video shows product image as picture-in-picture overlay on segments where PiP is enabled, at the configured position and size
-  2. Rendered video contains interstitial product slides at the configured timestamps between segments
-  3. Product images in both PiP overlays and interstitial slides exhibit Ken Burns zoom/pan motion in the final video
-  4. Render does not fail when a segment has no product association (PiP is skipped gracefully)
-**Plans**: 2 plans
-
-Plans:
-- [ ] 46-01-PLAN.md — Create overlay_renderer service + wire frontend PiP data to backend
-- [ ] 46-02-PLAN.md — Integrate overlays into assembly pipeline + visual verification
+</details>
 
 ## Progress
 
@@ -191,12 +134,9 @@ Plans:
 | 17-23 | v5 | 13/13 | Complete | 2026-02-21 |
 | 24-31 | v6 | 16/16 | Complete | 2026-02-22 |
 | 32-35 | v7 | 7/7 | Complete (4/6 phases) | 2026-02-23 |
-| 36-37 | v7 | 0/3 | Deferred (absorbed into v9) | - |
+| 36-37 | v7 | 0/3 | Deferred (completed in v9) | - |
 | 38-42 | v8 | 8/8 | Complete | 2026-02-24 |
-| 43. Assembly Diversity Fix | 1/1 | Complete    | 2026-02-28 | - |
-| 44. Subtitle Data Flow Fix | 2/2 | Complete    | 2026-02-28 | - |
-| 45. Interstitial Slide Controls | 1/1 | Complete    | 2026-02-28 | - |
-| 46. Overlay FFmpeg Render Integration | 2/2 | Complete    | 2026-02-28 | - |
+| 43-46 | v9 | 6/6 | Complete | 2026-02-28 |
 
 ---
-*Last updated: 2026-02-28 after v9 roadmap creation*
+*Last updated: 2026-02-28 after v9 milestone completion*
