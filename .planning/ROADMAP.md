@@ -132,10 +132,10 @@ Full details: `.planning/milestones/v8-ROADMAP.md`
   2. Consecutive segments from the same source video do not come from overlapping time ranges
   3. The merge step preserves the diversity established by the round-robin cycle rather than collapsing it to one representative per group
   4. After exhausting all unique segments, reuse begins from the segment least recently used
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 43-01: TBD
+- [ ] 43-01-PLAN.md — Rewrite merge logic to preserve segment diversity + add overlapping-time-range adjacency prevention
 
 ### Phase 44: Subtitle Data Flow Fix
 **Goal**: Subtitles generated at Step 2 are reused verbatim at Step 3 render with no timing drift, no invisible zero-duration entries, and no cutoff at the end of the video
