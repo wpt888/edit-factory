@@ -65,7 +65,7 @@ import { ImagePickerDialog } from "@/components/image-picker-dialog";
 import type { AssociationResponse } from "@/components/product-picker-dialog";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { SubtitleSettings, DEFAULT_SUBTITLE_SETTINGS } from "@/types/video-processing";
-import { TimelineEditor, SegmentOption } from "@/components/timeline-editor";
+import { TimelineEditor, SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
 import { VariantPreviewPlayer } from "@/components/variant-preview-player";
 
 // TypeScript interfaces
@@ -310,6 +310,9 @@ function PipelinePage() {
 
   // Available segments for timeline editor (collected from preview response)
   const [availableSegments, setAvailableSegments] = useState<SegmentOption[]>([]);
+
+  // Interstitial slides: keyed by variant index
+  const [interstitialSlides, setInterstitialSlides] = useState<Record<number, InterstitialSlide[]>>({});
 
   // Subtitle settings state
   const [subtitleSettings, setSubtitleSettings] = useState<SubtitleSettings>({ ...DEFAULT_SUBTITLE_SETTINGS });
@@ -882,6 +885,16 @@ function PipelinePage() {
       }
     }
 
+    // Collect interstitial slides for each selected variant (filter out slides with no imageUrl)
+    const filteredInterstitialSlides = Object.keys(interstitialSlides).length > 0
+      ? Object.fromEntries(
+          Object.entries(interstitialSlides)
+            .filter(([k]) => selectedVariants.has(Number(k)))
+            .map(([k, v]) => [k, v.filter((s) => s.imageUrl)])
+            .filter(([, v]) => (v as InterstitialSlide[]).length > 0)
+        )
+      : undefined;
+
     try {
       const res = await apiPost(`/pipeline/render/${pipelineId}`, {
         variant_indices: Array.from(selectedVariants),
@@ -890,6 +903,7 @@ function PipelinePage() {
         voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
         source_video_ids: selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined,
         match_overrides: Object.keys(matchOverrides).length > 0 ? matchOverrides : undefined,
+        interstitial_slides: filteredInterstitialSlides,
         voice_settings: {
           stability: voiceStability,
           similarity_boost: voiceSimilarity,
@@ -2907,6 +2921,10 @@ function PipelinePage() {
                         pipelineId={pipelineId ?? undefined}
                         variantIndex={index}
                         subtitleSettings={subtitleSettings}
+                        interstitialSlides={interstitialSlides[index] ?? []}
+                        onInterstitialSlidesChange={(slides) => {
+                          setInterstitialSlides(prev => ({ ...prev, [index]: slides }));
+                        }}
                         onMatchesChange={(updatedMatches) => {
                           setPreviews(prev => ({
                             ...prev,

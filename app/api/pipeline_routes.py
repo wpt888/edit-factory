@@ -300,6 +300,9 @@ class PipelineRenderRequest(BaseModel):
     words_per_subtitle: int = 2
     # Minimum video segment duration (seconds) — groups short SRT phrases
     min_segment_duration: float = 2.0
+    # Interstitial product image slides: variant_index -> list of slide configs
+    # Phase 46 will implement FFmpeg rendering — this phase just stores the data
+    interstitial_slides: Optional[Dict[str, List[dict]]] = None
 
 
 class PipelineRenderResponse(BaseModel):
@@ -1216,6 +1219,11 @@ async def render_variants(
         f"[Profile {profile.profile_id}] Starting render for pipeline {pipeline_id}, "
         f"variants: {request.variant_indices}"
     )
+    if request.interstitial_slides:
+        logger.info(
+            "[Profile %s] Received %d variant(s) with interstitial slides",
+            profile.profile_id, len(request.interstitial_slides)
+        )
 
     # Fetch preset data
     supabase = get_supabase()
@@ -1323,6 +1331,16 @@ async def render_variants(
                     logger.info(
                         f"[Profile {profile.profile_id}] Using {len(variant_match_overrides)} "
                         f"match overrides for variant {vid}"
+                    )
+
+            # Extract interstitial slides for this variant (stored for Phase 46 render integration)
+            variant_interstitial_slides = None
+            if request.interstitial_slides:
+                variant_interstitial_slides = request.interstitial_slides.get(str(vid)) or request.interstitial_slides.get(vid)
+                if variant_interstitial_slides:
+                    logger.info(
+                        f"[Profile {profile.profile_id}] Received {len(variant_interstitial_slides)} "
+                        f"interstitial slide(s) for variant {vid} (stored for Phase 46 render)"
                     )
 
             # Check for reusable TTS audio from pipeline state
