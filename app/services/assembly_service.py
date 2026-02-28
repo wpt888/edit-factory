@@ -791,9 +791,12 @@ class AssemblyService:
             current_timeline_pos += needed_duration
 
         # Handle gap between last SRT entry and audio end
-        if current_timeline_pos < audio_duration:
-            gap = audio_duration - current_timeline_pos
-            logger.info(f"Extending timeline by {gap:.2f}s to match audio duration")
+        # Add 0.5s safety margin so video track fully covers audio (prevents subtitle cutoff
+        # from floating-point accumulation in segment durations during concat)
+        target_video_duration = audio_duration + 0.5
+        if current_timeline_pos < target_video_duration:
+            gap = target_video_duration - current_timeline_pos
+            logger.info(f"Extending timeline by {gap:.2f}s to cover audio duration + safety margin")
 
             # Use seeded random segment for gap fill — prefer different source from last entry
             if timeline and segments_data:
