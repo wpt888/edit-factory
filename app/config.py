@@ -6,6 +6,8 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
+APP_VERSION = "0.1.0"  # Keep in sync with electron/package.json version
+
 
 def _get_app_base_dir() -> Path:
     """Returns %APPDATA%\\EditFactory in desktop mode, project root in dev."""
