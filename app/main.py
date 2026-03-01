@@ -10,7 +10,11 @@ def _setup_ffmpeg_path():
     desktop_mode = os.getenv("DESKTOP_MODE", "").lower() in ("true", "1", "yes")
     candidates = []
     if desktop_mode:
-        # Desktop mode: bundled FFmpeg in AppData (placed by installer, Phase 52)
+        # Primary: electron-builder extraResources places FFmpeg at resourcesPath/ffmpeg/bin
+        resources_path = os.getenv("RESOURCES_PATH")
+        if resources_path:
+            candidates.append(Path(resources_path) / "ffmpeg" / "bin")
+        # Fallback: legacy AppData path (kept for backwards compat)
         appdata = os.getenv("APPDATA")
         if appdata:
             candidates.append(Path(appdata) / "EditFactory" / "bundled" / "ffmpeg" / "bin")
