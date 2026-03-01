@@ -122,6 +122,11 @@ docker-compose.override.yml
 ffmpeg/
 
 # ======================
+# Electron (allow electron/build/ to be tracked)
+# ======================
+!electron/build/
+
+# ======================
 # Misc
 # ======================
 .claude/
