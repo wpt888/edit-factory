@@ -40,10 +40,10 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 
 ### Licensing
 
-- [ ] **LICS-01**: License activated via Lemon Squeezy POST /v1/licenses/activate on first run
-- [ ] **LICS-02**: License validated via POST /v1/licenses/validate on each startup
-- [ ] **LICS-03**: 7-day offline grace period with cached last-successful validation timestamp
-- [ ] **LICS-04**: Invalid/expired license blocks app access with re-activation prompt
+- [x] **LICS-01**: License activated via Lemon Squeezy POST /v1/licenses/activate on first run
+- [x] **LICS-02**: License validated via POST /v1/licenses/validate on each startup
+- [x] **LICS-03**: 7-day offline grace period with cached last-successful validation timestamp
+- [x] **LICS-04**: Invalid/expired license blocks app access with re-activation prompt
 
 ### Updates & Telemetry
 
@@ -51,7 +51,7 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 - [ ] **UPDT-02**: Update downloads in background, prompts user to restart (not mid-session)
 - [ ] **UPDT-03**: Sentry crash reporting initialized only when user has opted in
 - [ ] **UPDT-04**: before_send filter scrubs API keys from Sentry stack frame locals
-- [ ] **UPDT-05**: Backend GET /api/v1/desktop/version returns current version number
+- [x] **UPDT-05**: Backend GET /api/v1/desktop/version returns current version number
 - [ ] **UPDT-06**: Version displayed in Settings page footer
 
 ## Future Requirements
@@ -108,15 +108,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WIZD-04 | Phase 50 | Pending |
 | WIZD-05 | Phase 50 | Pending |
 | WIZD-06 | Phase 50 | Pending |
-| LICS-01 | Phase 49 | Pending |
-| LICS-02 | Phase 49 | Pending |
-| LICS-03 | Phase 49 | Pending |
-| LICS-04 | Phase 49 | Pending |
+| LICS-01 | Phase 49 | Complete |
+| LICS-02 | Phase 49 | Complete |
+| LICS-03 | Phase 49 | Complete |
+| LICS-04 | Phase 49 | Complete |
 | UPDT-01 | Phase 52 | Pending |
 | UPDT-02 | Phase 52 | Pending |
 | UPDT-03 | Phase 51 | Pending |
 | UPDT-04 | Phase 51 | Pending |
-| UPDT-05 | Phase 49 | Pending |
+| UPDT-05 | Phase 49 | Complete |
 | UPDT-06 | Phase 49 | Pending |
 
 **Coverage:**

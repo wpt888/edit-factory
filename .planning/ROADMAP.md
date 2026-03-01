@@ -223,7 +223,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 | 43-46 | v9 | 6/6 | Complete | 2026-02-28 |
 | 47. Desktop Foundation | 3/3 | Complete    | 2026-03-01 | - |
 | 48. Electron Shell | 2/2 | Complete    | 2026-03-01 | - |
-| 49. Desktop API Routes | v10 | 0/TBD | Not started | - |
+| 49. Desktop API Routes | 1/2 | In Progress|  | - |
 | 50. Setup Wizard | v10 | 0/TBD | Not started | - |
 | 51. Crash Reporting | v10 | 0/TBD | Not started | - |
 | 52. Installer and Packaging | v10 | 0/TBD | Not started | - |

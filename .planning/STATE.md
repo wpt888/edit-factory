@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v10
-milestone_name: Desktop Launcher & Distribution
-status: in_progress
-last_updated: "2026-03-01T13:30:00.000Z"
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-03-01T12:31:35.598Z"
 progress:
-  total_phases: 6
-  completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
+  total_phases: 19
+  completed_phases: 18
+  total_plans: 53
+  completed_plans: 52
 ---
 
 # Project State
@@ -23,9 +23,9 @@ See: .planning/PROJECT.md (updated 2026-03-01)
 ## Current Position
 
 Phase: 49 of 52 (Desktop API Routes)
-Plan: — (not yet planned)
-Status: Ready to plan
-Last activity: 2026-03-01 — Phase 48 complete, all 2 plans verified
+Plan: 49-01 complete (1 of 2 plans done)
+Status: In progress
+Last activity: 2026-03-01 — Plan 49-01 complete (LicenseService + Desktop API Routes)
 
 Progress: [██░░░░░░░░] 33% (2 of 6 v10 phases complete)
 
@@ -73,6 +73,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 48-electron-shell]: 127.0.0.1 for health polling, localhost for loadURL — avoids IPv6 mismatch on Windows
 - [Phase 48-electron-shell]: postbuild.js uses Node.js fs stdlib only for cross-platform standalone asset copy (Windows/WSL)
 - [Phase 48-electron-shell]: electron/build/ excluded from build/ gitignore via !electron/build/ negation to allow ICO tracking
+- [Phase 49]: 404 for not-activated (wizard redirect), 403 for invalid/expired (re-activation) — Phase 50 frontend uses this distinction
+- [Phase 49]: Conditional desktop router import inside if settings.desktop_mode block — avoids loading in web deployments
+- [Phase 49]: Grace period strictly network errors only (ConnectError/TimeoutException/NetworkError) — LS valid=false does not trigger grace period
 
 ### Pending Todos
 
@@ -91,9 +94,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Phase 48 verified and complete — all 2 plans verified (10/10 must-haves)
+Stopped at: Completed 49-01-PLAN.md — LicenseService + Desktop API Routes (4 tasks, 4 files)
 Resume file: None
-Next action: /gsd:plan-phase 49
+Next action: Execute plan 49-02 (or /gsd:plan-phase 49 if no plan yet)
 
 ---
-*Last updated: 2026-03-01 after Phase 48 completion (Electron Shell — all SHELL requirements verified)*
+*Last updated: 2026-03-01 after Plan 49-01 execution (LicenseService + Desktop API Routes — LICS-01/02/03/04 + UPDT-05 satisfied)*
