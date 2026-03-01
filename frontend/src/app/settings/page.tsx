@@ -1049,6 +1049,35 @@ export default function SettingsPage() {
       {process.env.NEXT_PUBLIC_DESKTOP_MODE === "true" && (
         <Card>
           <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5" />
+              Crash Reporting
+            </CardTitle>
+            <CardDescription>
+              Help improve Edit Factory by automatically sending crash reports
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <p className="text-sm font-medium">Send crash reports</p>
+                <p className="text-xs text-muted-foreground">
+                  Stack traces are sent to help diagnose issues. API keys and sensitive data are automatically scrubbed before sending.
+                </p>
+              </div>
+              <Switch
+                checked={crashReporting}
+                onCheckedChange={handleCrashReportingToggle}
+                disabled={crashReportingLoading}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {process.env.NEXT_PUBLIC_DESKTOP_MODE === "true" && (
+        <Card>
+          <CardHeader>
             <CardTitle>Setup Wizard</CardTitle>
             <CardDescription>
               Re-run the setup wizard to update your license, API keys, or preferences
