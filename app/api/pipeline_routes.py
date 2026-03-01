@@ -45,6 +45,20 @@ _library_project_lock = threading.Lock()
 
 # Per-pipeline render locks (prevents race conditions in concurrent variant renders)
 _render_locks: Dict[str, asyncio.Lock] = {}
+_render_locks_timestamps: Dict[str, float] = {}  # pipeline_id -> last acquired time
+_RENDER_LOCK_TTL = 3600  # 1 hour
+
+
+def _evict_stale_render_locks():
+    """Evict render locks not acquired for over 1 hour."""
+    import time
+    now = time.monotonic()
+    stale = [k for k, ts in _render_locks_timestamps.items() if now - ts > _RENDER_LOCK_TTL]
+    for k in stale:
+        _render_locks.pop(k, None)
+        _render_locks_timestamps.pop(k, None)
+    if stale:
+        logger.debug(f"Evicted {len(stale)} stale render lock(s)")
 
 
 def _evict_old_pipelines():
@@ -830,6 +844,9 @@ class PipelineTtsResponse(BaseModel):
     """Response model for per-script TTS generation."""
     status: str
     audio_duration: float
+    srt_content: Optional[str] = None
+    script_word_count: Optional[int] = None
+    srt_word_count: Optional[int] = None
 
 
 class PipelineTtsFromLibraryRequest(BaseModel):
@@ -965,6 +982,23 @@ async def generate_variant_tts(
             voice_settings=request.voice_settings
         )
 
+        # Generate SRT from timestamps for subtitle preview
+        srt_content = None
+        script_word_count = None
+        srt_word_count = None
+        if _timestamps:
+            srt_content = await assembly_service.generate_srt_from_timestamps(
+                _timestamps,
+                max_words_per_phrase=request.words_per_subtitle or 2
+            )
+            # Count words in script vs SRT for validation
+            script_word_count = len(cleaned_text.split())
+            if srt_content:
+                srt_lines = [line for block in srt_content.strip().split("\n\n") for line in block.split("\n")[2:] if line.strip()]
+                srt_word_count = sum(len(line.split()) for line in srt_lines)
+            else:
+                srt_word_count = 0
+
         # Store TTS preview result (include voice_settings for reuse invalidation)
         # Use cleaned_text hash so tag changes don't invalidate audio cache
         if "tts_previews" not in pipeline:
@@ -977,6 +1011,9 @@ async def generate_variant_tts(
             "script_hash": _stable_hash(cleaned_text),
             "voice_settings": request.voice_settings,
             "words_per_subtitle": request.words_per_subtitle,
+            "srt_content": srt_content,
+            "script_word_count": script_word_count,
+            "srt_word_count": srt_word_count,
         }
 
         # Persist to DB
@@ -984,7 +1021,10 @@ async def generate_variant_tts(
 
         return PipelineTtsResponse(
             status="ok",
-            audio_duration=audio_duration
+            audio_duration=audio_duration,
+            srt_content=srt_content,
+            script_word_count=script_word_count,
+            srt_word_count=srt_word_count
         )
 
     except Exception as e:
@@ -1310,8 +1350,11 @@ async def render_variants(
 
     # Lock to guard concurrent writes to pipeline["render_jobs"]
     pipeline_id_str = str(pipeline_id)
+    _evict_stale_render_locks()
     if pipeline_id_str not in _render_locks:
         _render_locks[pipeline_id_str] = asyncio.Lock()
+    import time as _time
+    _render_locks_timestamps[pipeline_id_str] = _time.monotonic()
     render_jobs_lock = _render_locks[pipeline_id_str]
 
     # Initialize render jobs for each variant and collect which ones to render

@@ -263,10 +263,12 @@ def generate_srt_from_timestamps(
             "end": current_phrase_end
         })
 
-    # Step 3: Phrases to SRT (with minimum duration enforcement)
+    # Step 3: Phrases to SRT (with minimum duration enforcement and merge for zero-duration)
     MIN_DURATION = 0.1  # 100ms minimum for perceptible display
     srt_entries = []
     srt_index = 1
+    pending_merge_text = ""  # Buffer for text from zero-duration phrases with no prior entry
+
     for i, phrase in enumerate(phrases):
         start = phrase["start"]
         end = phrase["end"]
@@ -280,10 +282,25 @@ def generate_srt_from_timestamps(
             else:
                 end = start + MIN_DURATION
 
-        # Skip truly zero-duration entries (can happen when phrases are back-to-back)
+        # Merge zero-duration entries instead of dropping them
         if end - start < 0.001:
-            logger.warning(f"Skipping zero-duration subtitle entry: '{text}' at {start:.3f}s")
+            if srt_entries:
+                # Append text to the last SRT entry's subtitle line
+                lines = srt_entries[-1].split("\n")
+                # SRT format: index \n timing \n text \n
+                lines[2] = lines[2] + " " + text
+                srt_entries[-1] = "\n".join(lines)
+                logger.info(f"Merged zero-duration phrase '{text}' into previous subtitle entry at {start:.3f}s")
+            else:
+                # No previous entry yet — buffer for next valid phrase
+                pending_merge_text += (" " + text) if pending_merge_text else text
+                logger.info(f"Buffered zero-duration phrase '{text}' at {start:.3f}s for next entry")
             continue
+
+        # Prepend any buffered text from earlier zero-duration phrases
+        if pending_merge_text:
+            text = pending_merge_text + " " + text
+            pending_merge_text = ""
 
         start_time_str = _seconds_to_srt_time(start)
         end_time_str = _seconds_to_srt_time(end)
@@ -292,8 +309,25 @@ def generate_srt_from_timestamps(
         srt_entries.append(srt_entry)
         srt_index += 1
 
+    # Flush any remaining buffered text into the last entry
+    if pending_merge_text and srt_entries:
+        lines = srt_entries[-1].split("\n")
+        lines[2] = lines[2] + " " + pending_merge_text
+        srt_entries[-1] = "\n".join(lines)
+        logger.info(f"Flushed remaining buffered text into last subtitle entry")
+    elif pending_merge_text:
+        logger.warning(f"Could not place buffered text (no SRT entries): '{pending_merge_text}'")
+
     # Join all entries with blank line separator
     srt_content = "\n".join(srt_entries)
+
+    # Word count validation: compare input words to SRT output words
+    input_word_count = len(words)
+    srt_word_count = sum(len(entry.split("\n")[2].split()) for entry in srt_entries if len(entry.split("\n")) > 2)
+    if input_word_count != srt_word_count:
+        logger.error(f"SRT word count mismatch: input={input_word_count} words, SRT output={srt_word_count} words (delta={input_word_count - srt_word_count})")
+    else:
+        logger.info(f"SRT word count validated: {input_word_count} words match")
 
     logger.info(f"Generated SRT with {srt_index - 1} subtitle entries from {len(words)} words ({len(characters)} characters)")
 

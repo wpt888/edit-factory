@@ -269,8 +269,9 @@ function PipelinePage() {
   const [imagePickerAssoc, setImagePickerAssoc] = useState<AssociationResponse | null>(null);
 
   // Step 2: Per-script TTS previews
-  const [ttsResults, setTtsResults] = useState<Record<number, { audio_duration: number; generating: boolean; stale: boolean }>>({});
+  const [ttsResults, setTtsResults] = useState<Record<number, { audio_duration: number; generating: boolean; stale: boolean; srt_content?: string; script_word_count?: number; srt_word_count?: number }>>({});
   const [playingTtsVariant, setPlayingTtsVariant] = useState<number | null>(null);
+  const [srtPreviewOpen, setSrtPreviewOpen] = useState<Record<number, boolean>>({});
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
   const pendingBlobUrl = useRef<string | null>(null);
@@ -1522,7 +1523,14 @@ function PipelinePage() {
         const data = await res.json();
         setTtsResults(prev => ({
           ...prev,
-          [variantIndex]: { audio_duration: data.audio_duration, generating: false, stale: false }
+          [variantIndex]: {
+            audio_duration: data.audio_duration,
+            generating: false,
+            stale: false,
+            srt_content: data.srt_content,
+            script_word_count: data.script_word_count,
+            srt_word_count: data.srt_word_count,
+          }
         }));
       } else {
         const errorData = await res.json().catch(() => ({ detail: "TTS generation failed" }));
@@ -2556,6 +2564,33 @@ function PipelinePage() {
                           </Button>
                         )}
                       </div>
+
+                      {/* SRT Subtitle Preview */}
+                      {ttsResults[index]?.srt_content && !ttsResults[index]?.generating && !ttsResults[index]?.stale && (
+                        <div className="mt-2">
+                          <button
+                            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                            onClick={() => setSrtPreviewOpen(prev => ({ ...prev, [index]: !prev[index] }))}
+                          >
+                            {srtPreviewOpen[index] ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                            Subtitle Preview
+                            <span className="text-muted-foreground">
+                              — Script: {ttsResults[index].script_word_count} words | SRT: {ttsResults[index].srt_word_count} words
+                            </span>
+                            {ttsResults[index].script_word_count != null && ttsResults[index].srt_word_count != null && ttsResults[index].script_word_count! > ttsResults[index].srt_word_count! && (
+                              <Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-4 ml-1">
+                                <AlertTriangle className="h-2.5 w-2.5 mr-0.5" />
+                                {ttsResults[index].script_word_count! - ttsResults[index].srt_word_count!} words missing
+                              </Badge>
+                            )}
+                          </button>
+                          {srtPreviewOpen[index] && (
+                            <pre className="mt-1.5 p-2 bg-muted/50 rounded text-[11px] font-mono max-h-48 overflow-y-auto whitespace-pre-wrap border">
+                              {ttsResults[index].srt_content}
+                            </pre>
+                          )}
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 );
