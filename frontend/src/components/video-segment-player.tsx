@@ -719,6 +719,7 @@ export function VideoSegmentPlayer({
   // Handle segment click
   const handleSegmentClick = (e: React.MouseEvent, segment: Segment) => {
     e.stopPropagation(); // Prevent timeline seek
+    seekTo(segment.start_time);
     onSegmentClick?.(segment);
   };
 

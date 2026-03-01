@@ -19,6 +19,7 @@ This service bridges:
 """
 import asyncio
 import logging
+import math
 import random
 import re
 import subprocess
@@ -971,11 +972,30 @@ class AssemblyService:
             cmd = ["ffmpeg", "-y"]
 
             if use_loop:
-                # When looping, -ss must come AFTER -i to work with -stream_loop
-                cmd.extend([
-                    "-stream_loop", "-1",
-                    "-i", entry.source_video_path,
+                # Extract just the segment to a temp file, then loop it
+                # This prevents bleeding past segment end_time
+                segment_raw = temp_dir / f"segment_{i:03d}_raw.mp4"
+                extract_cmd = [
+                    "ffmpeg", "-y",
                     "-ss", str(entry.start_time),
+                    "-i", entry.source_video_path,
+                    "-t", str(segment_duration),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+                    "-an", "-pix_fmt", "yuv420p",
+                    str(segment_raw)
+                ]
+                result_extract = await asyncio.to_thread(
+                    subprocess.run, extract_cmd, capture_output=True, text=True, timeout=120
+                )
+                if result_extract.returncode != 0:
+                    logger.error(f"Failed to extract raw segment {i}: {result_extract.stderr}")
+                    return
+
+                # Loop the extracted segment (contains only segment content)
+                loop_count = math.ceil(needed_duration / segment_duration)
+                cmd.extend([
+                    "-stream_loop", str(loop_count),
+                    "-i", str(segment_raw),
                     "-t", str(needed_duration),
                     "-vf", ",".join(transform_filters),
                 ])
