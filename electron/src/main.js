@@ -8,6 +8,7 @@ const { spawn, spawnSync } = require('child_process');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const { autoUpdater } = require('electron-updater');
 
 // ---------- Path resolution ----------
 const isDev = !app.isPackaged;
@@ -295,6 +296,60 @@ async function cleanup() {
   console.log('[launcher] Shutdown complete.');
 }
 
+// ---------- UPDT-01/02: Auto-update ----------
+function setupAutoUpdater() {
+  if (isDev) return;  // No update checks in dev mode (no app-update.yml exists)
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = false;  // We control install timing
+
+  autoUpdater.on('checking-for-update', () => {
+    console.log('[updater] Checking for updates...');
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    console.log('[updater] Update available:', info.version);
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    console.log('[updater] App is up to date');
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    console.log(`[updater] Downloading: ${Math.round(progress.percent)}%`);
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('[updater] Update downloaded:', info.version);
+    // UPDT-02: Prompt user — never force restart mid-session
+    if (isQuitting) return;  // Don't show dialog if app is shutting down
+    dialog.showMessageBox(mainWindow || undefined, {
+      type: 'info',
+      title: 'Update Ready',
+      message: `Edit Factory ${info.version} is ready to install.`,
+      detail: 'Restart the app now to apply the update, or continue working and restart later.',
+      buttons: ['Restart Now', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+    }).then(({ response }) => {
+      if (response === 0) {
+        isQuitting = true;
+        autoUpdater.quitAndInstall();
+      }
+      // response === 1: "Later" — update applies on next launch automatically
+    });
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.error('[updater] Auto-update error (non-fatal):', err.message);
+  });
+
+  // Start checking — download happens in background
+  autoUpdater.checkForUpdates().catch((err) => {
+    console.error('[updater] Check failed (non-fatal):', err.message);
+  });
+}
+
 // ---------- App lifecycle ----------
 
 // Prevent app from quitting when window closes — tray keeps it alive
@@ -335,6 +390,9 @@ app.whenReady().then(async () => {
     mainWindow.loadURL('http://localhost:3000');
     mainWindow.once('ready-to-show', () => mainWindow.show());
     tray.setToolTip('Edit Factory');
+
+    // UPDT-01: Check for updates after services are confirmed running
+    setupAutoUpdater();
   } catch (err) {
     console.error('[launcher] Startup failed:', err.message);
     dialog.showErrorBox('Startup Failed', err.message);
