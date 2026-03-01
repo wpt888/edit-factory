@@ -49,8 +49,8 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 
 - [ ] **UPDT-01**: electron-updater checks for new version on startup via latest.yml manifest
 - [ ] **UPDT-02**: Update downloads in background, prompts user to restart (not mid-session)
-- [ ] **UPDT-03**: Sentry crash reporting initialized only when user has opted in
-- [ ] **UPDT-04**: before_send filter scrubs API keys from Sentry stack frame locals
+- [x] **UPDT-03**: Sentry crash reporting initialized only when user has opted in
+- [x] **UPDT-04**: before_send filter scrubs API keys from Sentry stack frame locals
 - [x] **UPDT-05**: Backend GET /api/v1/desktop/version returns current version number
 - [x] **UPDT-06**: Version displayed in Settings page footer
 
@@ -114,8 +114,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LICS-04 | Phase 49 | Complete |
 | UPDT-01 | Phase 52 | Pending |
 | UPDT-02 | Phase 52 | Pending |
-| UPDT-03 | Phase 51 | Pending |
-| UPDT-04 | Phase 51 | Pending |
+| UPDT-03 | Phase 51 | Complete |
+| UPDT-04 | Phase 51 | Complete |
 | UPDT-05 | Phase 49 | Complete |
 | UPDT-06 | Phase 49 | Complete |
 

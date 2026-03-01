@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v10
-milestone_name: Desktop Launcher & Distribution
-status: in_progress
-last_updated: "2026-03-01T14:30:00.000Z"
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-03-01T13:36:33.755Z"
 progress:
-  total_phases: 6
-  completed_phases: 4
-  total_plans: 9
-  completed_plans: 9
+  total_phases: 21
+  completed_phases: 20
+  total_plans: 57
+  completed_plans: 56
 ---
 
 # Project State
@@ -23,9 +23,9 @@ See: .planning/PROJECT.md (updated 2026-03-01)
 ## Current Position
 
 Phase: 51 of 52 (Crash Reporting)
-Plan: — (not yet planned)
-Status: Ready to plan
-Last activity: 2026-03-01 — Phase 50 complete, all 2 plans verified (6/6 WIZD requirements)
+Plan: 01 complete, 02 pending
+Status: In progress
+Last activity: 2026-03-01 — Phase 51-01 complete (Sentry backend wired, PII scrubbing, runtime toggle)
 
 Progress: [██████░░░░] 67% (4 of 6 v10 phases complete)
 
@@ -83,6 +83,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 50]: Setup wizard uses useState with currentStep (1/2/3) — no stepper library needed
 - [Phase 50]: Edit mode (?mode=edit) skips first-run guard and pre-fills values from GET /settings
 - [Phase 50]: Empty API key fields excluded from settings payload to avoid overwriting existing values
+- [Phase 51]: sentry_sdk.init() called ONLY when desktop_mode=True AND crash_reporting_enabled=True — never in dev/web mode
+- [Phase 51]: SENTRY_DSN left as empty string placeholder — must be replaced when Sentry project is created
+- [Phase 51]: Runtime toggle via module-level _crash_reporting_enabled flag checked in before_send — events dropped client-side before network call
 
 ### Pending Todos
 
@@ -101,9 +104,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Phase 50 verified and complete — all 2 plans verified (6/6 WIZD requirements)
+Stopped at: Completed 51-01-PLAN.md (Sentry Crash Reporter Backend)
 Resume file: None
-Next action: /gsd:plan-phase 51
+Next action: Execute 51-02 (frontend Settings page toggle UI)
 
 ---
 *Last updated: 2026-03-01 after Phase 50 verification passed (6/6 WIZD requirements — Setup Wizard complete)*
