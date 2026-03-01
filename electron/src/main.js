@@ -454,8 +454,13 @@ app.whenReady().then(async () => {
   // SHELL-02: Wait for services, then show window
   try {
     await waitForServices();
-    console.log('[launcher] Services ready — loading UI...');
-    mainWindow.loadURL('http://localhost:3000');
+    console.log('[launcher] Services ready — checking startup state...');
+
+    // WIZD-01 / LICS-02 / LICS-04: Determine correct startup URL
+    const startupUrl = await checkStartupState();
+
+    console.log('[launcher] Loading:', startupUrl);
+    mainWindow.loadURL(startupUrl);
     mainWindow.once('ready-to-show', () => mainWindow.show());
     tray.setToolTip('Edit Factory');
 
