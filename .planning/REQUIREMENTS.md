@@ -9,9 +9,9 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 
 ### Desktop Foundation
 
-- [x] **FOUND-01**: App stores config in %APPDATA%\EditFactory\ (config.json, license.json, .env)
+- [ ] **FOUND-01**: App stores config in %APPDATA%\EditFactory\ (config.json, license.json, .env)
 - [x] **FOUND-02**: Backend detects DESKTOP_MODE=true and skips JWT auth, reads config from AppData
-- [x] **FOUND-03**: FFmpeg path resolves bundled binary in desktop mode, falls back to system PATH in dev
+- [ ] **FOUND-03**: FFmpeg path resolves bundled binary in desktop mode, falls back to system PATH in dev
 - [x] **FOUND-04**: All file paths use APP_BASE_DIR abstraction (no hardcoded relative paths)
 
 ### Electron Shell
@@ -25,18 +25,18 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 ### Installer
 
 - [x] **INST-01**: electron-builder produces NSIS .exe installer for Windows
-- [x] **INST-02**: Installer bundles Python venv, FFmpeg binary, Next.js standalone, portable Node.js 22.x
+- [ ] **INST-02**: Installer bundles Python venv, FFmpeg binary, Next.js standalone, portable Node.js 22.x
 - [x] **INST-03**: Installer creates Start Menu shortcut, desktop shortcut, and Add/Remove Programs entry
 - [x] **INST-04**: Uninstaller removes all installed files and shortcuts
 
 ### Setup Wizard
 
-- [x] **WIZD-01**: /setup page detects first run via %APPDATA% flag and redirects new users
-- [x] **WIZD-02**: Step 1: License key entry with Lemon Squeezy activation and success/error feedback
-- [x] **WIZD-03**: Step 2: API key configuration (Supabase required, Gemini/ElevenLabs optional) with test connection
-- [x] **WIZD-04**: Step 3: Crash reporting consent (opt-in, defaults OFF)
-- [x] **WIZD-05**: Wizard writes config to %APPDATA% and marks first_run_complete
-- [x] **WIZD-06**: Wizard re-accessible from Settings page at any time
+- [ ] **WIZD-01**: /setup page detects first run via %APPDATA% flag and redirects new users
+- [ ] **WIZD-02**: Step 1: License key entry with Lemon Squeezy activation and success/error feedback
+- [ ] **WIZD-03**: Step 2: API key configuration (Supabase required, Gemini/ElevenLabs optional) with test connection
+- [ ] **WIZD-04**: Step 3: Crash reporting consent (opt-in, defaults OFF)
+- [ ] **WIZD-05**: Wizard writes config to %APPDATA% and marks first_run_complete
+- [ ] **WIZD-06**: Wizard re-accessible from Settings page at any time
 
 ### Licensing
 
@@ -51,8 +51,8 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 - [x] **UPDT-02**: Update downloads in background, prompts user to restart (not mid-session)
 - [x] **UPDT-03**: Sentry crash reporting initialized only when user has opted in
 - [x] **UPDT-04**: before_send filter scrubs API keys from Sentry stack frame locals
-- [x] **UPDT-05**: Backend GET /api/v1/desktop/version returns current version number
-- [x] **UPDT-06**: Version displayed in Settings page footer
+- [ ] **UPDT-05**: Backend GET /api/v1/desktop/version returns current version number
+- [ ] **UPDT-06**: Version displayed in Settings page footer
 
 ## Future Requirements
 
@@ -89,9 +89,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | Phase 47 | Complete |
+| FOUND-01 | Phase 47 → Phase 53 | Pending |
 | FOUND-02 | Phase 47 | Complete |
-| FOUND-03 | Phase 47 | Complete |
+| FOUND-03 | Phase 47 → Phase 53 | Pending |
 | FOUND-04 | Phase 47 | Complete |
 | SHELL-01 | Phase 48 | Complete |
 | SHELL-02 | Phase 48 | Complete |
@@ -99,15 +99,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SHELL-04 | Phase 48 | Complete |
 | SHELL-05 | Phase 48 | Complete |
 | INST-01 | Phase 52 | Complete |
-| INST-02 | Phase 52 | Complete |
+| INST-02 | Phase 52 → Phase 53 | Pending |
 | INST-03 | Phase 52 | Complete |
 | INST-04 | Phase 52 | Complete |
-| WIZD-01 | Phase 50 | Complete |
-| WIZD-02 | Phase 50 | Complete |
-| WIZD-03 | Phase 50 | Complete |
-| WIZD-04 | Phase 50 | Complete |
-| WIZD-05 | Phase 50 | Complete |
-| WIZD-06 | Phase 50 | Complete |
+| WIZD-01 | Phase 50 → Phase 53 | Pending |
+| WIZD-02 | Phase 50 → Phase 53 | Pending |
+| WIZD-03 | Phase 50 → Phase 53 | Pending |
+| WIZD-04 | Phase 50 → Phase 53 | Pending |
+| WIZD-05 | Phase 50 → Phase 53 | Pending |
+| WIZD-06 | Phase 50 → Phase 53 | Pending |
 | LICS-01 | Phase 49 | Complete |
 | LICS-02 | Phase 49 | Complete |
 | LICS-03 | Phase 49 | Complete |
@@ -116,14 +116,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UPDT-02 | Phase 52 | Complete |
 | UPDT-03 | Phase 51 | Complete |
 | UPDT-04 | Phase 51 | Complete |
-| UPDT-05 | Phase 49 | Complete |
-| UPDT-06 | Phase 49 | Complete |
+| UPDT-05 | Phase 49 → Phase 53 | Pending |
+| UPDT-06 | Phase 49 → Phase 53 | Pending |
 
 **Coverage:**
 - v10 requirements: 29 total
-- Mapped to phases: 29
+- Satisfied: 19
+- Pending (gap closure Phase 53): 10 (FOUND-01, FOUND-03, INST-02, WIZD-01-06, UPDT-05, UPDT-06)
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-01*
-*Last updated: 2026-03-01 after v10 roadmap creation*
+*Last updated: 2026-03-01 after gap closure phase 53 added*

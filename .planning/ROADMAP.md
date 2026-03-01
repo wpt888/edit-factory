@@ -11,7 +11,7 @@
 - ✅ **v7 Product Image Overlays** - Phases 32-35 (partial, shipped 2026-02-24, phases 36-37 deferred)
 - ✅ **v8 Pipeline UX Overhaul** - Phases 38-42 (shipped 2026-02-24)
 - ✅ **v9 Assembly Pipeline Fix + Overlays** - Phases 43-46 (shipped 2026-02-28)
-- 🚧 **v10 Desktop Launcher & Distribution** - Phases 47-52 (in progress)
+- 🚧 **v10 Desktop Launcher & Distribution** - Phases 47-53 (in progress)
 
 ## Phases
 
@@ -208,6 +208,18 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 
 **Research flag:** Phase-level research needed for NSIS customization to bundle portable Node.js 22 alongside Python venv; SHA256 hash verification in auto-update download flow; update server hosting decision (GitHub Releases vs S3); build size measurement before scripting.
 
+### Phase 53: Cross-Phase Integration Wiring
+**Goal**: Fix 3 cross-phase integration gaps so the packaged desktop app's frontend detects desktop mode, backend reloads settings after wizard config write, and FFmpeg resolves from the installer's bundled location
+**Depends on**: Phase 48, Phase 49, Phase 50, Phase 52
+**Requirements**: WIZD-01, WIZD-02, WIZD-03, WIZD-04, WIZD-05, WIZD-06, UPDT-05, UPDT-06, FOUND-01, FOUND-03, INST-02
+**Gap Closure**: Closes all 3 integration gaps from v10 milestone audit
+**Success Criteria** (what must be TRUE):
+  1. The packaged Electron app sets NEXT_PUBLIC_DESKTOP_MODE=true in the frontend process — setup/page.tsx renders the wizard (not "only available in desktop mode")
+  2. After the setup wizard saves API keys via POST /desktop/settings, the backend serves the new values immediately without requiring a process restart
+  3. The installed app finds FFmpeg at the location where electron-builder extraResources placed it — video processing works on a fresh install
+  4. Settings page shows version footer, crash reporting toggle, and Setup Wizard link in desktop mode
+**Plans**: TBD
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -227,6 +239,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 | 50. Setup Wizard | 2/2 | Complete    | 2026-03-01 | - |
 | 51. Crash Reporting | 2/2 | Complete    | 2026-03-01 | - |
 | 52. Installer and Packaging | 2/2 | Complete    | 2026-03-01 | - |
+| 53. Integration Wiring | 0/0 | Pending     | -          | - |
 
 ---
-*Last updated: 2026-03-01 after v10 roadmap creation*
+*Last updated: 2026-03-01 after gap closure phases added*
