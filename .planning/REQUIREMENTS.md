@@ -16,11 +16,11 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 
 ### Electron Shell
 
-- [ ] **SHELL-01**: Electron main process spawns FastAPI backend + Next.js standalone as child processes
-- [ ] **SHELL-02**: BrowserWindow opens at localhost:3000 after health-check polling confirms both services ready
-- [ ] **SHELL-03**: System tray icon with right-click menu: Open Edit Factory, Quit
-- [ ] **SHELL-04**: Graceful shutdown kills child processes and cleans up ports 8000/3000 via psutil
-- [ ] **SHELL-05**: Orphaned processes from previous launches cleaned up on startup
+- [x] **SHELL-01**: Electron main process spawns FastAPI backend + Next.js standalone as child processes
+- [x] **SHELL-02**: BrowserWindow opens at localhost:3000 after health-check polling confirms both services ready
+- [x] **SHELL-03**: System tray icon with right-click menu: Open Edit Factory, Quit
+- [x] **SHELL-04**: Graceful shutdown kills child processes and cleans up ports 8000/3000 via psutil
+- [x] **SHELL-05**: Orphaned processes from previous launches cleaned up on startup
 
 ### Installer
 
@@ -93,11 +93,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FOUND-02 | Phase 47 | Complete |
 | FOUND-03 | Phase 47 | Complete |
 | FOUND-04 | Phase 47 | Complete |
-| SHELL-01 | Phase 48 | Pending |
-| SHELL-02 | Phase 48 | Pending |
-| SHELL-03 | Phase 48 | Pending |
-| SHELL-04 | Phase 48 | Pending |
-| SHELL-05 | Phase 48 | Pending |
+| SHELL-01 | Phase 48 | Complete |
+| SHELL-02 | Phase 48 | Complete |
+| SHELL-03 | Phase 48 | Complete |
+| SHELL-04 | Phase 48 | Complete |
+| SHELL-05 | Phase 48 | Complete |
 | INST-01 | Phase 52 | Pending |
 | INST-02 | Phase 52 | Pending |
 | INST-03 | Phase 52 | Pending |
