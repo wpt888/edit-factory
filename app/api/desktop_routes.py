@@ -190,3 +190,20 @@ async def save_desktop_settings(body: dict):
     existing.update({k: v for k, v in body.items() if v is not None})
     config_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
     return {"saved": True}
+
+
+@router.post("/crash-reporting")
+async def set_crash_reporting_toggle(body: dict):
+    """Toggle crash reporting at runtime. Takes immediate effect without restart."""
+    enabled = bool(body.get("enabled", False))
+    # Update in-memory flag (immediate effect via before_send)
+    from app.services.crash_reporter import set_crash_reporting
+    set_crash_reporting(enabled)
+    # Persist to config.json
+    settings = get_settings()
+    config_file = settings.base_dir / "config.json"
+    existing = _read_config(config_file)
+    existing["crash_reporting_enabled"] = enabled
+    config_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    logger.info("Crash reporting toggled: %s", "enabled" if enabled else "disabled")
+    return {"crash_reporting_enabled": enabled}
