@@ -106,6 +106,9 @@ export default function SettingsPage() {
   const [addingAccount, setAddingAccount] = useState(false)
   const [accountActionLoading, setAccountActionLoading] = useState<string | null>(null)
 
+  // Desktop version state
+  const [appVersion, setAppVersion] = useState<string | null>(null)
+
   // Load ElevenLabs accounts (subscription info auto-fetched by backend)
   const loadAccounts = useCallback(async () => {
     if (!currentProfile) return
@@ -235,6 +238,15 @@ export default function SettingsPage() {
     loadVoices()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- voiceId intentionally excluded: adding it would cause infinite refetch loop since loadVoices may call setVoiceId("")
   }, [provider, initialLoad])
+
+  // Fetch app version when running in desktop mode
+  useEffect(() => {
+    if (process.env.NEXT_PUBLIC_DESKTOP_MODE !== 'true') return
+    apiGetWithRetry('/desktop/version')
+      .then((res) => res.json())
+      .then((data: any) => setAppVersion(data.version))
+      .catch(() => {}) // Non-critical — silently ignore errors
+  }, [])
 
   const handleSave = async () => {
     if (!currentProfile) {
@@ -1006,6 +1018,12 @@ export default function SettingsPage() {
           )}
         </Button>
       </div>
+
+      {appVersion && (
+        <div className="text-center text-xs text-muted-foreground mt-8 pb-4">
+          Edit Factory v{appVersion}
+        </div>
+      )}
     </div>
   )
 }
