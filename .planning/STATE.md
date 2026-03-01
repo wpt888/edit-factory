@@ -111,9 +111,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Completed 52-02-PLAN.md — electron-updater auto-update wired into main.js (UPDT-01, UPDT-02)
+Stopped at: Completed 52-01-PLAN.md — NSIS config and build orchestration script (INST-01 through INST-04)
 Resume file: None
-Next action: v10 milestone complete — all 6 phases (47-52) shipped
+Next action: Execute 52-02-PLAN.md (electron-updater auto-update)
 
 ---
-*Last updated: 2026-03-01 after Phase 52 Plan 02 complete (UPDT-01, UPDT-02 — electron-updater auto-update)*
+*Last updated: 2026-03-01 after Phase 52 Plan 01 complete (INST-01, INST-02, INST-03, INST-04 — NSIS installer config + build script)*
