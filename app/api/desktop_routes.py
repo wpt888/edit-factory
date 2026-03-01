@@ -6,6 +6,8 @@ import json
 import logging
 from pathlib import Path
 
+import httpx
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -21,6 +23,12 @@ router = APIRouter(prefix="/desktop")
 
 class ActivateRequest(BaseModel):
     license_key: str
+
+
+class TestConnectionRequest(BaseModel):
+    service: str  # "supabase" | "gemini" | "elevenlabs"
+    url: str = ""
+    key: str = ""
 
 
 # --- Version ---
