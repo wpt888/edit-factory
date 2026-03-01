@@ -542,12 +542,18 @@ export default function SegmentsPage() {
   const handleSaveSegment = async (keywords: string[], notes: string) => {
     if (!selectedVideo || !pendingSegment) return;
 
+    // Close popup immediately to prevent double-creation
+    const segmentToSave = { ...pendingSegment };
+    const videoId = selectedVideo.id;
+    setPendingSegment(null);
+    setShowKeywordPopup(false);
+
     try {
       const res = await apiPost(
-        `/segments/source-videos/${selectedVideo.id}/segments`,
+        `/segments/source-videos/${videoId}/segments`,
         {
-          start_time: pendingSegment.start,
-          end_time: pendingSegment.end,
+          start_time: segmentToSave.start,
+          end_time: segmentToSave.end,
           keywords,
           notes,
         }
@@ -562,7 +568,7 @@ export default function SegmentsPage() {
         // Update source video segments count
         setSourceVideos((prev) =>
           prev.map((v) =>
-            v.id === selectedVideo.id
+            v.id === videoId
               ? { ...v, segments_count: v.segments_count + 1 }
               : v
           )
@@ -571,9 +577,6 @@ export default function SegmentsPage() {
     } catch (error) {
       handleApiError(error, "Eroare la crearea segmentului");
     }
-
-    setPendingSegment(null);
-    setShowKeywordPopup(false);
   };
 
   // Update segment (keywords)
