@@ -1,257 +1,212 @@
 ---
 milestone: v10
-audited: "2026-03-01T17:30:00Z"
-status: gaps_found
-prior_audit: "2026-03-01T16:00:00Z (3 gaps → Phase 53 closed all 3)"
+audited: "2026-03-01T19:00:00Z"
+status: tech_debt
+prior_audit: "2026-03-01T17:30:00Z (2 gaps → Phase 54 closed both)"
 scores:
-  requirements: 26/29
-  phases: 7/7
-  integration: 25/28
-  flows: 3/5
+  requirements: 29/29
+  phases: 8/8
+  integration: 29/29
+  flows: 5/5
 gaps:
-  requirements:
-    - id: "WIZD-01"
-      status: "unsatisfied"
-      phase: "Phase 50 → Phase 53"
-      claimed_by_plans: ["50-01-PLAN.md", "50-02-PLAN.md", "53-01-PLAN.md"]
-      completed_by_plans: ["50-01-SUMMARY.md", "50-02-SUMMARY.md", "53-01-SUMMARY.md"]
-      verification_status: "passed"
-      evidence: "Phase verifications confirm setup/page.tsx guards work when NEXT_PUBLIC_DESKTOP_MODE=true (Phase 53 fixed the env var). However, Electron main.js line 395 loads http://localhost:3000 unconditionally — no mechanism routes first-run users to /setup. Success criteria: 'A brand-new install automatically redirects to /setup on first launch' — this redirect does not exist."
-    - id: "LICS-02"
-      status: "unsatisfied"
-      phase: "Phase 49"
-      claimed_by_plans: ["49-01-PLAN.md"]
-      completed_by_plans: ["49-01-SUMMARY.md"]
-      verification_status: "passed"
-      evidence: "LicenseService.validate() fully implemented. POST /desktop/license/validate endpoint exists. However, Electron main.js does not call license validation on startup — only occurs when user navigates to /setup page. Requirement: 'License validated on each startup' — does not happen on regular launches."
-    - id: "LICS-04"
-      status: "unsatisfied"
-      phase: "Phase 49"
-      claimed_by_plans: ["49-01-PLAN.md"]
-      completed_by_plans: ["49-01-SUMMARY.md"]
-      verification_status: "passed"
-      evidence: "POST /desktop/license/validate returns 403 on invalid/expired license. But since validation never runs at startup (see LICS-02), an expired license does not block app access. User can continue using app indefinitely after initial activation."
-  integration:
-    - from: "Phase 48 (Electron main.js)"
-      to: "Phase 50 (Setup Wizard)"
-      issue: "Electron loads root URL unconditionally — no first-run detection or URL routing to /setup"
-      affected_requirements: ["WIZD-01"]
-    - from: "Phase 48 (Electron main.js)"
-      to: "Phase 49 (License Service)"
-      issue: "Electron startup does not call license validation API after services are ready"
-      affected_requirements: ["LICS-02", "LICS-04"]
-    - from: "Phase 49 (GET /desktop/settings)"
-      to: "Phase 48 (Electron startup)"
-      issue: "GET /desktop/settings returns first_run_complete but Electron doesn't consume it to decide startup URL"
-      affected_requirements: ["WIZD-01"]
-  flows:
-    - name: "Fresh Install → Setup Wizard"
-      status: "broken"
-      breaks_at: "Electron loads http://localhost:3000 instead of /setup — no redirect from root to wizard for unconfigured installs"
-      affected_requirements: ["WIZD-01"]
-    - name: "Startup License Validation"
-      status: "broken"
-      breaks_at: "Electron does not call POST /desktop/license/validate after services are ready — license check only happens on /setup page"
-      affected_requirements: ["LICS-02", "LICS-04"]
+  requirements: []
+  integration: []
+  flows: []
 tech_debt:
-  - phase: 51-crash-reporting
-    items:
-      - "SENTRY_DSN = '' — empty placeholder; crash reporting code structurally complete but inoperable until real Sentry DSN configured"
-  - phase: 52-installer-and-packaging
-    items:
-      - "PLACEHOLDER_ORG / PLACEHOLDER_REPO in electron/package.json publish config — must replace before first release"
-      - "electron/build/icon.ico is 16x16 placeholder — needs production-quality icon before release"
   - phase: 47-desktop-foundation
     items:
       - "app/cleanup.py uses hardcoded _PROJECT_ROOT — pre-existing utility, not in desktop mode runtime path"
   - phase: 48-electron-shell
     items:
       - "will-quit handler only cleans up when isQuitting=True — OS-kill leaves orphans (mitigated by next-launch cleanupOrphans)"
+      - "electron/build/icon.ico is 16x16 placeholder — needs production-quality icon before release"
+  - phase: 51-crash-reporting
+    items:
+      - "SENTRY_DSN = '' — empty placeholder; crash reporting code structurally complete but inoperable until real Sentry project created"
+  - phase: 52-installer-and-packaging
+    items:
+      - "PLACEHOLDER_ORG / PLACEHOLDER_REPO in electron/package.json publish config — must replace before first release"
+      - "build-installer.js does not verify FFmpeg source directory exists before packaging — silent omission possible (affects FOUND-03, INST-02)"
 ---
 
-# v10 Desktop Launcher & Distribution — Milestone Audit (Post-Gap-Closure)
+# v10 Desktop Launcher & Distribution — Milestone Audit (Post-Phase-54 Gap Closure)
 
-**Audited:** 2026-03-01T17:30:00Z
-**Prior audit:** 2026-03-01T16:00:00Z (found 3 gaps → Phase 53 closed all 3)
-**Status:** GAPS FOUND
-**Score:** 26/29 requirements satisfied
+**Audited:** 2026-03-01T19:00:00Z
+**Prior audits:** 2026-03-01T16:00:00Z (3 gaps → Phase 53), 2026-03-01T17:30:00Z (2 gaps → Phase 54)
+**Status:** TECH DEBT (no critical blockers)
+**Score:** 29/29 requirements satisfied
 
 ## Executive Summary
 
-Phase 53 successfully closed all 3 gaps from the first audit:
-- ~~Gap 1: NEXT_PUBLIC_DESKTOP_MODE never set~~ → Fixed by `.env.production` + Electron env injection
-- ~~Gap 2: Settings cache not cleared~~ → Fixed by `cache_clear` calls + `_write_env_keys` helper
-- ~~Gap 3: FFmpeg path mismatch~~ → Fixed by `RESOURCES_PATH` env var injection
+All 29 v10 requirements are satisfied across 8 phases. Both gaps identified in the prior audit (first-run redirect to /setup, startup license validation) are confirmed closed by Phase 54's `checkStartupState()` implementation. All 5 E2E user flows trace end-to-end without breaks. No orphaned or unsatisfied requirements remain.
 
-However, the integration checker identified **2 new cross-phase wiring gaps** in the Electron↔Backend startup sequence that prevent 3 requirements from being satisfied:
-
-1. **Electron doesn't route first-run users to /setup** (WIZD-01) — loads root URL unconditionally
-2. **Electron doesn't validate license on startup** (LICS-02, LICS-04) — license check only happens on /setup page
-
-All individual phase verifications pass. The gaps exist at the Electron↔Backend API boundary during startup URL determination.
-
-## Phase Verification Summary
-
-| Phase | Status | Score | Gaps |
-|-------|--------|-------|------|
-| 47 - Desktop Foundation | PASSED | 4/4 | None |
-| 48 - Electron Shell | PASSED | 10/10 | None |
-| 49 - Desktop API Routes | PASSED | 7/7 | None |
-| 50 - Setup Wizard | PASSED | 6/6 | None |
-| 51 - Crash Reporting | PASSED | 4/4 | None |
-| 52 - Installer & Packaging | PASSED | 6/6 | None |
-| 53 - Integration Wiring | PASSED | 8/8 | None (closed all first-audit gaps) |
+The milestone carries non-blocking tech debt: placeholder values for Sentry DSN, GitHub publish config, and app icon that must be replaced before the first public release.
 
 ## Requirements Coverage (3-Source Cross-Reference)
 
-### Desktop Foundation (4/4 satisfied)
+### Desktop Foundation (Phase 47)
 
-| REQ-ID | VERIFICATION | SUMMARY Frontmatter | REQUIREMENTS.md | Final Status |
-|--------|-------------|---------------------|-----------------|--------------|
-| FOUND-01 | passed (47, 53) | 47-01 ✓, 53-02 ✓ | [x] | **satisfied** |
-| FOUND-02 | passed (47) | 47-03 ✓ | [x] | **satisfied** |
-| FOUND-03 | passed (47, 53) | 47-03 ✓ | [x] | **satisfied** |
-| FOUND-04 | passed (47) | 47-01 ✓, 47-02 ✓ | [x] | **satisfied** |
+| Req | VERIFICATION.md | SUMMARY Frontmatter | REQUIREMENTS.md | Final Status |
+|-----|-----------------|---------------------|-----------------|--------------|
+| FOUND-01 | passed (47-VERIFICATION) | provides: APP_BASE_DIR | [x] Phase 47 → 53 | **satisfied** |
+| FOUND-02 | passed (47-VERIFICATION) | provides: desktop_mode auth bypass | [x] Phase 47 | **satisfied** |
+| FOUND-03 | passed (47-VERIFICATION) | provides: FFmpeg path resolution | [x] Phase 47 → 53 | **satisfied** |
+| FOUND-04 | passed (47-VERIFICATION) | provides: APP_BASE_DIR abstraction | [x] Phase 47 | **satisfied** |
 
-### Electron Shell (5/5 satisfied)
+### Electron Shell (Phase 48)
 
-| REQ-ID | VERIFICATION | SUMMARY Frontmatter | REQUIREMENTS.md | Final Status |
-|--------|-------------|---------------------|-----------------|--------------|
-| SHELL-01 | passed (48) | 48-01 ✓, 48-02 ✓ | [x] | **satisfied** |
-| SHELL-02 | passed (48) | 48-02 ✓ | [x] | **satisfied** |
-| SHELL-03 | passed (48) | 48-02 ✓ | [x] | **satisfied** |
-| SHELL-04 | passed (48) | 48-02 ✓ | [x] | **satisfied** |
-| SHELL-05 | passed (48) | 48-02 ✓ | [x] | **satisfied** |
+| Req | VERIFICATION.md | SUMMARY Frontmatter | REQUIREMENTS.md | Final Status |
+|-----|-----------------|---------------------|-----------------|--------------|
+| SHELL-01 | passed (48-VERIFICATION) | provides: spawn backend+frontend | [x] Phase 48 | **satisfied** |
+| SHELL-02 | passed (48-VERIFICATION) | provides: health poll + loadURL | [x] Phase 48 | **satisfied** |
+| SHELL-03 | passed (48-VERIFICATION) | provides: system tray | [x] Phase 48 | **satisfied** |
+| SHELL-04 | passed (48-VERIFICATION) | provides: graceful shutdown | [x] Phase 48 | **satisfied** |
+| SHELL-05 | passed (48-VERIFICATION) | provides: orphan cleanup | [x] Phase 48 | **satisfied** |
 
-### Installer (4/4 satisfied)
+### Installer (Phase 52)
 
-| REQ-ID | VERIFICATION | SUMMARY Frontmatter | REQUIREMENTS.md | Final Status |
-|--------|-------------|---------------------|-----------------|--------------|
-| INST-01 | passed (52) | 52-01 (no field) | [x] | **satisfied** |
-| INST-02 | passed (52, 53) | 52-01 (no field) | [x] | **satisfied** |
-| INST-03 | passed (52) | 52-01 (no field) | [x] | **satisfied** |
-| INST-04 | passed (52) | 52-01 (no field) | [x] | **satisfied** |
+| Req | VERIFICATION.md | SUMMARY Frontmatter | REQUIREMENTS.md | Final Status |
+|-----|-----------------|---------------------|-----------------|--------------|
+| INST-01 | passed (52-VERIFICATION) | provides: electron-builder NSIS | [x] Phase 52 | **satisfied** |
+| INST-02 | passed (52-VERIFICATION) | provides: extraResources bundles | [x] Phase 52 → 53 | **satisfied** |
+| INST-03 | passed (52-VERIFICATION) | provides: shortcuts + Add/Remove | [x] Phase 52 | **satisfied** |
+| INST-04 | passed (52-VERIFICATION) | provides: uninstaller | [x] Phase 52 | **satisfied** |
 
-### Setup Wizard (5/6 satisfied)
+### Setup Wizard (Phases 50, 53, 54)
 
-| REQ-ID | VERIFICATION | SUMMARY Frontmatter | REQUIREMENTS.md | Final Status |
-|--------|-------------|---------------------|-----------------|--------------|
-| WIZD-01 | passed (50, 53) | 50-01 ✓ | [x] | **UNSATISFIED** — No redirect to /setup on first launch |
-| WIZD-02 | passed (50, 53) | 50-02 (no field) | [x] | **satisfied** |
-| WIZD-03 | passed (50, 53) | 50-01 ✓ | [x] | **satisfied** |
-| WIZD-04 | passed (50, 53) | 50-02 (no field) | [x] | **satisfied** |
-| WIZD-05 | passed (50, 53) | 50-01 ✓, 53-02 ✓ | [x] | **satisfied** |
-| WIZD-06 | passed (50, 53) | 50-02 (no field) | [x] | **satisfied** |
+| Req | VERIFICATION.md | SUMMARY Frontmatter | REQUIREMENTS.md | Final Status |
+|-----|-----------------|---------------------|-----------------|--------------|
+| WIZD-01 | passed (50, 53, 54) | provides: [WIZD-01] (50-02) | [x] Phase 50 → 53 → 54 | **satisfied** |
+| WIZD-02 | passed (50-VERIFICATION) | provides: [WIZD-02] (50-02) | [x] Phase 50 | **satisfied** |
+| WIZD-03 | passed (50-VERIFICATION) | provides: [WIZD-03] (50-02) | [x] Phase 50 | **satisfied** |
+| WIZD-04 | passed (50-VERIFICATION) | provides: [WIZD-04] (50-02) | [x] Phase 50 | **satisfied** |
+| WIZD-05 | passed (50, 53) | provides: [WIZD-05] (50-02) | [x] Phase 50 → 53 | **satisfied** |
+| WIZD-06 | passed (50-VERIFICATION) | provides: [WIZD-06] (50-02) | [x] Phase 50 | **satisfied** |
 
-### Licensing (2/4 satisfied)
+### Licensing (Phases 49, 54)
 
-| REQ-ID | VERIFICATION | SUMMARY Frontmatter | REQUIREMENTS.md | Final Status |
-|--------|-------------|---------------------|-----------------|--------------|
-| LICS-01 | passed (49) | 49-01 ✓ | [x] | **satisfied** |
-| LICS-02 | passed (49) | 49-01 ✓ | [x] | **UNSATISFIED** — No startup validation |
-| LICS-03 | passed (49) | 49-01 ✓ | [x] | **satisfied** |
-| LICS-04 | passed (49) | 49-01 ✓ | [x] | **UNSATISFIED** — Expired license doesn't block at launch |
+| Req | VERIFICATION.md | SUMMARY Frontmatter | REQUIREMENTS.md | Final Status |
+|-----|-----------------|---------------------|-----------------|--------------|
+| LICS-01 | passed (49-VERIFICATION) | provides: activate endpoint | [x] Phase 49 | **satisfied** |
+| LICS-02 | passed (49, 54) | provides: validate endpoint + startup call | [x] Phase 49 → 54 | **satisfied** |
+| LICS-03 | passed (49-VERIFICATION) | provides: 7-day grace period | [x] Phase 49 | **satisfied** |
+| LICS-04 | passed (49, 54) | provides: 403 blocks access + startup routing | [x] Phase 49 → 54 | **satisfied** |
 
-### Updates & Telemetry (6/6 satisfied)
+### Updates & Telemetry (Phases 49, 51, 52)
 
-| REQ-ID | VERIFICATION | SUMMARY Frontmatter | REQUIREMENTS.md | Final Status |
-|--------|-------------|---------------------|-----------------|--------------|
-| UPDT-01 | passed (52) | 52-02 ✓ | [x] | **satisfied** |
-| UPDT-02 | passed (52) | 52-02 ✓ | [x] | **satisfied** |
-| UPDT-03 | passed (51) | 51-01 ✓, 51-02 ✓ | [x] | **satisfied** (code correct; DSN is deployment config) |
-| UPDT-04 | passed (51) | 51-01 ✓ | [x] | **satisfied** (EventScrubber correct; DSN is deployment config) |
-| UPDT-05 | passed (49, 53) | 49-01 ✓ | [x] | **satisfied** |
-| UPDT-06 | passed (49, 53) | 49-02 ✓ | [x] | **satisfied** |
+| Req | VERIFICATION.md | SUMMARY Frontmatter | REQUIREMENTS.md | Final Status |
+|-----|-----------------|---------------------|-----------------|--------------|
+| UPDT-01 | passed (52-VERIFICATION) | provides: electron-updater | [x] Phase 52 | **satisfied** |
+| UPDT-02 | passed (52-VERIFICATION) | provides: Restart Now/Later dialog | [x] Phase 52 | **satisfied** |
+| UPDT-03 | passed (51-VERIFICATION) | provides: init_sentry gated | [x] Phase 51 | **satisfied** |
+| UPDT-04 | passed (51-VERIFICATION) | provides: EventScrubber denylist | [x] Phase 51 | **satisfied** |
+| UPDT-05 | passed (49-VERIFICATION) | provides: GET /version | [x] Phase 49 | **satisfied** |
+| UPDT-06 | passed (49-VERIFICATION) | provides: version footer | [x] Phase 49 | **satisfied** |
 
-### Orphaned Requirements Check
+**Orphaned requirements:** None. All 29 requirement IDs appear in at least one phase VERIFICATION.md.
 
-No orphaned requirements. All 29 REQ-IDs appear in at least one phase VERIFICATION.md.
+## Phase Verification Summary
 
-### Missing SUMMARY Frontmatter
+| Phase | Status | Score | Gaps | Tech Debt |
+|-------|--------|-------|------|-----------|
+| 47. Desktop Foundation | passed | 4/4 | 0 | 1 (cleanup.py hardcoded path) |
+| 48. Electron Shell | passed | 10/10 | 0 | 2 (OS-kill orphans, placeholder icon) |
+| 49. Desktop API Routes | passed | 7/7 | 0 | 0 |
+| 50. Setup Wizard | passed | 6/6 | 0 | 0 |
+| 51. Crash Reporting | passed | 4/4 | 0 | 1 (empty SENTRY_DSN) |
+| 52. Installer & Packaging | passed | 6/6 | 0 | 2 (placeholder org/repo, no FFmpeg build check) |
+| 53. Integration Wiring | passed | 8/8 | 0 | 0 |
+| 54. Startup State Check | passed | 5/5 | 0 | 0 |
 
-3 summaries lack `requirements-completed` field (50-02, 52-01, 53-01). Not code gaps — all requirements confirmed by VERIFICATION.md evidence.
+**Total:** 8/8 phases passed, 50/50 observable truths verified
 
-## Critical Integration Gaps
+## Cross-Phase Integration
 
-### GAP-4: First-Run Redirect Missing (Electron → Setup Wizard)
+| Connection | From → To | Status |
+|-----------|-----------|--------|
+| DESKTOP_MODE env var | Electron → Backend config.py | WIRED |
+| NEXT_PUBLIC_DESKTOP_MODE | Electron + .env.production → Frontend pages | WIRED |
+| RESOURCES_PATH | Electron → app/main.py FFmpeg resolution | WIRED |
+| checkStartupState() | Electron → Desktop settings + license endpoints | WIRED |
+| Desktop router mount | app/main.py → desktop_routes.py (conditional) | WIRED |
+| License activation | setup/page.tsx → desktop_routes.py → LicenseService → Lemon Squeezy | WIRED |
+| License validation | main.js → desktop_routes.py → LicenseService | WIRED |
+| Settings cache invalidation | desktop_routes.py → get_settings.cache_clear() | WIRED |
+| API key persistence | desktop_routes.py _write_env_keys → AppData .env | WIRED |
+| Crash reporting toggle | settings/page.tsx → POST /crash-reporting → crash_reporter.py | WIRED |
+| Auto-update | main.js setupAutoUpdater() → electron-updater → GitHub Releases | WIRED |
+| Version display | settings/page.tsx → GET /desktop/version → APP_VERSION | WIRED |
+| Process cleanup | main.js cleanup() → app/desktop.py kill_processes_on_port() | WIRED |
+| FFmpeg path chain | RESOURCES_PATH → AppData fallback → dev fallback | WIRED |
+| Postbuild assets | frontend/scripts/postbuild.js → .next/standalone static/public | WIRED |
 
-**Root cause:** `electron/src/main.js` loads `http://localhost:3000` unconditionally after `waitForServices()` resolves (line 395). No check for `first_run_complete` state. No conditional routing to `/setup`.
-
-**Impact:** Fresh-install users land on library page with no API keys configured instead of setup wizard.
-
-**Affected requirements:** WIZD-01
-
-**Fix:** After `waitForServices()`, call `GET /api/v1/desktop/settings` to check `first_run_complete`. If `false`, load `http://localhost:3000/setup` instead of root URL.
-
-### GAP-5: Startup License Validation Missing (Electron → License Service)
-
-**Root cause:** `electron/src/main.js` does not call `POST /api/v1/desktop/license/validate` during startup. License validation only occurs when user navigates to `/setup` page (which calls it on mount at `setup/page.tsx` line 64).
-
-**Impact:** Expired or invalidated licenses do not block app access on subsequent launches. Users can use the app indefinitely after initial activation without re-validation.
-
-**Affected requirements:** LICS-02, LICS-04
-
-**Fix:** After `waitForServices()` and checking `first_run_complete === true`, call `POST /api/v1/desktop/license/validate`. If 403 (invalid/expired), load `/setup` for re-activation. If 404 (not activated), load `/setup`. If 200 (valid), load root URL.
-
-### Combined Fix (Single Change to main.js)
-
-Both gaps share one root cause: `main.js` needs a startup state check. After `waitForServices()` resolves and before `loadURL()`:
-
-```javascript
-// 1. Check first-run state
-const settings = await fetch('http://127.0.0.1:8000/api/v1/desktop/settings');
-const { first_run_complete } = await settings.json();
-
-if (!first_run_complete) {
-  mainWindow.loadURL('http://localhost:3000/setup');  // WIZD-01 fix
-} else {
-  // 2. Validate license on startup
-  const license = await fetch('http://127.0.0.1:8000/api/v1/desktop/license/validate', { method: 'POST' });
-  if (license.status === 200) {
-    mainWindow.loadURL('http://localhost:3000');       // Normal launch
-  } else {
-    mainWindow.loadURL('http://localhost:3000/setup'); // Re-activation
-  }
-}
-```
+**Score:** 29/29 integration paths verified, 0 broken
 
 ## E2E Flow Verification
 
-| Flow | Status | Details |
-|------|--------|---------|
-| Fresh Install → Setup Wizard | **BROKEN** | Electron loads root URL; no redirect to /setup |
-| Settings → Edit Setup Wizard | COMPLETE | Settings links to /setup?mode=edit; pre-fills; saves with cache_clear |
-| Startup → Services → Window | COMPLETE | Health polling, tray icon, window show all verified |
-| Startup → License Validation | **BROKEN** | Electron doesn't call validate; no license gate |
-| Startup → Auto-Update Check | COMPLETE | setupAutoUpdater() after services ready; dialog works |
-| Crash Reporting Toggle | COMPLETE | Toggle → POST → set_crash_reporting → immediate effect |
-| Settings Cache Invalidation | COMPLETE | Wizard saves → _write_env_keys → cache_clear → fresh Settings |
+### Flow 1: Fresh Install → Setup Wizard
+**Status:** COMPLETE
+Electron → cleanupOrphans → startBackend/Frontend → waitForServices → checkStartupState (first_run_complete !== true) → loadURL(/setup) → wizard Step 1
 
-## Tech Debt (Non-Blocking)
+### Flow 2: Startup License Validation (Returning User)
+**Status:** COMPLETE
+checkStartupState → settings (first_run_complete=true) → POST /license/validate → 200 loads app / 403|404 loads /setup / network error graceful fallback
 
-| Phase | Item | Priority |
-|-------|------|----------|
-| 51 | `SENTRY_DSN = ""` — needs real DSN before release | Pre-release |
-| 52 | `PLACEHOLDER_ORG/REPO` in publish config — needs real values before release | Pre-release |
-| 52 | `icon.ico` 16x16 placeholder — needs production icon | Pre-release |
-| 47 | `app/cleanup.py` hardcoded `_PROJECT_ROOT` — not in runtime path | Low |
-| 48 | OS-kill cleanup gap — mitigated by next-launch cleanupOrphans | Low |
+### Flow 3: Setup Wizard → Config Write → Cache Invalidation
+**Status:** COMPLETE
+handleFinish → POST /settings → _write_env_keys + cache_clear → POST /first-run/complete → cache_clear → redirect /librarie → next request uses fresh settings
 
-**Total: 5 tech debt items across 4 phases**
+### Flow 4: NEXT_PUBLIC_DESKTOP_MODE Propagation
+**Status:** COMPLETE
+.env.production (build-time bake) + Electron env injection (runtime SSR) → setup/page.tsx + settings/page.tsx guards all activated
 
-## Comparison with First Audit
+### Flow 5: FFmpeg Path Resolution Chain
+**Status:** COMPLETE
+RESOURCES_PATH/ffmpeg/bin (packaged) → AppData/bundled/ffmpeg/bin (legacy) → dev checkout (dev mode)
 
-| Metric | First Audit (pre-Phase 53) | This Audit (post-Phase 53) |
-|--------|---------------------------|---------------------------|
-| Requirements satisfied | 23/29 | 26/29 |
-| Integration connections | 15/18 | 25/28 |
-| E2E flows complete | 3/5 | 3/5 |
-| Gaps | 3 (env var, cache, FFmpeg) | 2 (first-run, license startup) |
-| Status | gaps_found | gaps_found |
+## Prior Gap Closure Status
 
-Phase 53 improved requirements coverage from 23→26 and fixed all 3 original gaps. The 2 remaining gaps are simpler (single-file change in main.js) and share a common root cause.
+| Gap | Identified In | Closed By | Verification |
+|-----|--------------|-----------|-------------|
+| GAP-1: NEXT_PUBLIC_DESKTOP_MODE not set | Audit 1 | Phase 53-01 | 53-VERIFICATION passed |
+| GAP-2: Settings cache not cleared after wizard | Audit 1 | Phase 53-02 | 53-VERIFICATION passed |
+| GAP-3: FFmpeg path mismatch | Audit 1 | Phase 53-01 | 53-VERIFICATION passed |
+| GAP-4: No first-run redirect to /setup | Audit 2 | Phase 54-01 | 54-VERIFICATION passed |
+| GAP-5: No startup license validation | Audit 2 | Phase 54-01 | 54-VERIFICATION passed |
+
+All 5 gaps from prior audits confirmed closed.
+
+## Tech Debt Summary
+
+### 6 items across 4 phases (non-blocking)
+
+**Phase 47: Desktop Foundation**
+- `app/cleanup.py` uses hardcoded `_PROJECT_ROOT` — pre-existing utility, not in desktop mode runtime path
+
+**Phase 48: Electron Shell**
+- `will-quit` handler only cleans up when `isQuitting=True` — OS-kill leaves orphans (mitigated by next-launch `cleanupOrphans()`)
+- `electron/build/icon.ico` is 16x16 placeholder — needs production-quality icon before release
+
+**Phase 51: Crash Reporting**
+- `SENTRY_DSN = ''` — empty placeholder; code is structurally complete but inoperable until real Sentry project is created
+
+**Phase 52: Installer & Packaging**
+- `PLACEHOLDER_ORG` / `PLACEHOLDER_REPO` in `electron/package.json` publish config — must replace before first release
+- `build-installer.js` does not verify FFmpeg source directory exists before packaging — silent bundle omission possible
+
+### Pre-Release Checklist (derived from tech debt)
+1. Replace `PLACEHOLDER_ORG`/`PLACEHOLDER_REPO` with real GitHub org/repo
+2. Replace `electron/build/icon.ico` with production icon (256x256 minimum)
+3. Create Sentry project and set `SENTRY_DSN` in `crash_reporter.py`
+4. Add FFmpeg existence check to `build-installer.js` `verifyPrerequisites()`
 
 ---
 
-*Audited: 2026-03-01T17:30:00Z*
-*Auditor: Claude (gsd audit-milestone, post-gap-closure re-audit)*
+## Verdict
+
+**TECH DEBT** — All 29 requirements satisfied. All 5 E2E flows verified. All 5 prior gaps closed. No critical blockers. 6 non-blocking tech debt items for pre-release cleanup.
+
+---
+*Audited: 2026-03-01T19:00:00Z*
+*Auditor: Claude (gsd-audit-milestone)*
+*Integration checker: Claude (gsd-integration-checker)*

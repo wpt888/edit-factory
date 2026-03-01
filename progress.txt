@@ -1,6 +1,89 @@
 # GSD-RALPH Progress Log
 # Learnings accumulate here across iterations
 
+## Iteration 35 - 2026-03-01
+- Phase: 54 (Electron Startup State Check) — GAP CLOSURE EXECUTION
+- Action: Executed plan 54-01 (1 wave, 1 plan). Verification passed 5/5 must-haves. Phase marked complete.
+- Plan 54-01: Added httpGetJson(), httpPost(), checkStartupState() to electron/src/main.js. Wired into app.whenReady() startup sequence replacing hardcoded URL.
+- Files changed: electron/src/main.js
+- Decisions made: Used http module (consistent with existing checkUrl pattern). 127.0.0.1 for backend calls (IPv6 mismatch avoidance per Phase 48 decision). Network errors fall back to root URL.
+- Learnings: Phase 54 was the last phase of v10. All 54 phases across 10 milestones now complete. is_last_phase=true returned by phase-complete. Ready for milestone audit.
+- Status: PHASE COMPLETE — v10 milestone ready for audit
+- Commits: d7ea424, f642e3f, 79785a6 (code), 5a7f7ed (docs)
+
+## Iteration 34 - 2026-03-01
+- Phase: 54 (Electron Startup State Check) — GAP CLOSURE
+- Action: Research + Planning complete (1 plan, 1 wave). Verification passed all dimensions.
+- Plan 54-01: Add checkStartupState() to electron/src/main.js — checks first_run_complete via GET /desktop/settings, validates license via POST /desktop/license/validate, routes to /setup or root URL accordingly. Graceful degradation on network error.
+- Files changed: .planning/phases/54-startup-state-check/54-RESEARCH.md, 54-01-PLAN.md, .planning/STATE.md
+- Decisions made: Single plan (single file change). Used http module (not fetch) for consistency with existing checkUrl() pattern. Used !== true (not === false) for first_run_complete to handle undefined/null/missing.
+- Learnings: Phase 54 is minimal — 2 tasks, 1 file. Checker passed first try with no issues. Research confirmed all backend endpoints and frontend pages are already in place from Phases 48-53.
+- Status: PLANNING COMPLETE — ready for /gsd:execute-phase 54
+- Commits: cff225b
+
+## Iteration 33 - 2026-03-01
+- Phase: 54 (Electron Startup State Check) — GAP CLOSURE
+- Action: Created Phase 54 from post-Phase-53 re-audit gaps via /gsd:plan-milestone-gaps
+- Re-audit found 2 gaps: (1) WIZD-01 — Electron loads root URL, no first-run redirect to /setup, (2) LICS-02+LICS-04 — Electron doesn't call license validation on startup
+- Both share single root cause: main.js needs startup state check (GET /desktop/settings + POST /desktop/license/validate) before deciding URL to load
+- Files changed: .planning/ROADMAP.md, .planning/REQUIREMENTS.md, .planning/STATE.md, .planning/phases/54-startup-state-check/ (created)
+- Decisions made: All gaps in single Phase 54 (single-file fix in main.js). Graceful degradation on network error — load root URL since backend has its own grace period.
+- Learnings: This is the second gap closure round. Pattern: phase verifiers pass individually but cross-phase startup flow has seams. After Phase 54, re-audit should pass clean.
+- Status: PHASE CREATED — needs /gsd:plan-phase 54 next
+- Commits: e96c0d9
+
+## Iteration 32 - 2026-03-01
+- Phase: v10 milestone (post-gap-closure re-audit)
+- Action: Ran /gsd:audit-milestone after Phase 53 gap closure completed
+- Phase 53 successfully closed all 3 original gaps (NEXT_PUBLIC_DESKTOP_MODE, cache_clear, FFmpeg RESOURCES_PATH)
+- Integration checker found 2 NEW gaps in Electron startup wiring:
+  1. WIZD-01: Electron loads http://localhost:3000 unconditionally — no first-run redirect to /setup
+  2. LICS-02/LICS-04: Electron does not call license validation on startup — only happens on /setup page visit
+- Score: 26/29 requirements satisfied (was 23/29 before Phase 53)
+- Both gaps share single root cause: main.js needs startup state check (GET /desktop/settings + POST /desktop/license/validate) before deciding URL to load
+- Files changed: .planning/v10-MILESTONE-AUDIT.md
+- Decisions made: Classified UPDT-03/04 (SENTRY_DSN placeholder) as tech debt not gaps — code is correct, DSN is deployment config. Classified FOUND-02/03 integration checker "partial" findings as by-design (DESKTOP_MODE injected by Electron, RESOURCES_PATH dev-mode omission intentional).
+- Learnings: Phase-level verifiers consistently miss cross-phase startup flow gaps because each phase tests its own code in isolation. The Electron→Backend startup URL decision is a seam where integration checker catches what verifiers can't.
+- Status: GAPS FOUND — needs /gsd:plan-milestone-gaps to create Phase 54
+- Commits: 17c1f27
+
+## Iteration 31 - 2026-03-01
+- Phase: 53 (Cross-Phase Integration Wiring)
+- Action: Executed all 2 plans in 1 wave (parallel), verified phase goal (8/8 must-haves)
+- Wave 1: Plan 53-01 (Electron Env Injection + FFmpeg Path Fix — 2 tasks, 3 commits) + Plan 53-02 (Settings Cache Invalidation + AppData .env Persistence — 1 task, 2 commits)
+- Files changed: electron/src/main.js, frontend/.env.production (NEW), .gitignore, frontend/.gitignore, app/main.py, app/api/desktop_routes.py
+- Decisions made: Both .gitignore files needed negation patterns for .env.production (contains only NEXT_PUBLIC_* vars, no secrets). set_crash_reporting_toggle intentionally not modified (uses runtime module flag).
+- Learnings: Both plans in wave 1 executed cleanly in parallel with no file conflicts. Phase 53 was last phase of v10 — milestone is now ready for audit.
+- Status: PHASE COMPLETE — all v10 phases (47-53) done, is_last_phase=true
+- Commits: b59117a, be80e30, e0ff055 (53-01) + b7405e1, 552941d (53-02) + 4fd15c9 (completion docs)
+
+## Iteration 30 - 2026-03-01
+- Phase: 53 (Cross-Phase Integration Wiring)
+- Action: Research + Planning complete (2 plans, 1 wave)
+- Plan 53-01: Electron Env Injection + FFmpeg Path Fix (wave 1) — inject NEXT_PUBLIC_DESKTOP_MODE into frontend subprocess, create frontend/.env.production, inject RESOURCES_PATH into backend subprocess, update _setup_ffmpeg_path() to check RESOURCES_PATH/ffmpeg/bin
+- Plan 53-02: Settings Cache Invalidation + AppData .env Persistence (wave 1) — _write_env_keys helper, cache_clear in save_desktop_settings and mark_first_run_complete
+- Files changed: .planning/phases/53-integration-wiring/53-RESEARCH.md, 53-01-PLAN.md, 53-02-PLAN.md
+- Decisions made: Both plans in wave 1 (no file overlap). Key insight: GAP-2 requires writing to AppData/.env (not just config.json) because pydantic-settings reads from .env sources. Verification passed first try — no revision loop needed.
+- Learnings: Research correctly identified that build-time .env.production is the primary fix for NEXT_PUBLIC_DESKTOP_MODE (not just runtime injection), since frontend pages are "use client" with webpack-compiled env refs.
+- Status: PLANNING COMPLETE — ready for /gsd:execute-phase 53
+- Commits: 28bad72 (research + plans)
+
+## Iteration 29 - 2026-03-01
+- Phase: 53 (Cross-Phase Integration Wiring) — GAP CLOSURE
+- Action: Created Phase 53 from milestone audit gaps via /gsd:plan-milestone-gaps
+- Audit found 3 integration gaps: (1) NEXT_PUBLIC_DESKTOP_MODE not injected into frontend process env, (2) get_settings.cache_clear() not called after wizard config write, (3) FFmpeg path mismatch between installer extraResources and backend lookup
+- Files changed: .planning/ROADMAP.md, .planning/REQUIREMENTS.md, .planning/STATE.md, .planning/phases/53-integration-wiring/ (created)
+- Decisions made: All 3 gaps grouped into single Phase 53 (all are small wiring fixes, no file conflicts). 10 requirements reset to Pending.
+- Learnings: Audit correctly identified cross-phase boundaries as gap sources. All code exists and works in isolation — gaps are pure wiring issues (env vars, cache invalidation, path alignment).
+- Status: PHASE CREATED — needs /gsd:plan-phase 53 next
+- Commits: 1e983e8
+
+## Iteration 28 - 2026-03-01
+- Phase: v10 milestone
+- Action: Milestone audit completed — found 3 critical integration gaps across 6 phases
+- See: .planning/v10-MILESTONE-AUDIT.md
+- Status: GAPS FOUND — created Phase 53 for closure
+
 ## Iteration 27 - 2026-03-01
 - Phase: 52 (Installer and Packaging)
 - Action: Research + Planning complete (2 plans, 1 wave)
@@ -781,3 +864,29 @@
 - Learnings: Phase 52 is LAST phase of v10. All 6 phases (47-52) complete. PLACEHOLDER_ORG/PLACEHOLDER_REPO in publish config needs replacement before first release. 3 human verification items flagged (installer build, live auto-update, latest.yml).
 - Status: PHASE COMPLETE — v10 milestone ready for audit
 - Commits: 6262dee, b19407c, e6f8263 (52-01), b213370, a0e2687 (52-02), 6099a1a (docs)
+
+## Iteration 28 - 2026-03-01
+- Phase: v10 Milestone Audit
+- Action: Ran /gsd:audit-milestone — read all 6 phase VERIFICATIONs, parsed REQUIREMENTS.md traceability (29 reqs), extracted SUMMARY frontmatter, spawned integration checker agent
+- Files changed: .planning/v10-MILESTONE-AUDIT.md (NEW)
+- Decisions made: Status = gaps_found (not passed) due to 3 cross-phase integration breaks
+- Key findings:
+  1. CRITICAL: NEXT_PUBLIC_DESKTOP_MODE=true never injected into frontend build — all desktop-mode UI gates are dead code in packaged app (affects WIZD-01..06, UPDT-05, UPDT-06)
+  2. HIGH: get_settings.cache_clear() not called after POST /desktop/settings — stale settings until restart (affects WIZD-05, FOUND-01)
+  3. HIGH: FFmpeg path mismatch — main.py looks at %APPDATA%\EditFactory\bundled\ffmpeg\bin but extraResources copies to process.resourcesPath/ffmpeg/bin (affects FOUND-03, INST-02)
+- Learnings: Individual phase verifications all passed — gaps are exclusively at cross-phase boundaries. SUMMARY frontmatter doesn't use requirements_completed field (process improvement for future milestones). 5 tech debt items (non-blocking).
+- Score: 23/29 requirements satisfied, 6 unsatisfied/partial
+- Status: AUDIT COMPLETE — needs /gsd:plan-milestone-gaps to create gap closure phases
+- Commit: fc492a7
+
+## Iteration 36 - 2026-03-01
+- Phase: v10 milestone (post-Phase-54 final audit)
+- Action: Ran /gsd:audit-milestone — third and final audit of v10 milestone
+- Results: 29/29 requirements satisfied. 8/8 phases passed. 5/5 E2E flows complete. 0 broken connections.
+- Both gaps from second audit (GAP-4: first-run redirect, GAP-5: startup license validation) confirmed closed by Phase 54
+- Integration checker verified all 29 cross-phase wiring paths
+- Status: TECH_DEBT — no critical blockers, 6 non-blocking tech debt items (placeholder DSN, placeholder GitHub org/repo, placeholder icon, no FFmpeg build check, hardcoded cleanup.py path, OS-kill orphan edge case)
+- Files changed: .planning/v10-MILESTONE-AUDIT.md (rewritten), .planning/REQUIREMENTS.md (coverage 26→29)
+- Decisions made: Classified all 6 tech debt items as non-blocking pre-release checklist items
+- Learnings: Three audit rounds were needed to achieve clean pass. Phase 53 closed 3 wiring gaps, Phase 54 closed 2 startup flow gaps. Integration checker is essential for catching cross-phase seams that individual verifiers miss.
+- Status: MILESTONE AUDIT PASSED — ready for /gsd:complete-milestone
