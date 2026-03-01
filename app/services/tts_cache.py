@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 MAX_CACHE_ENTRIES = 5000
 
 def _get_cache_root() -> Path:
-    return Path(__file__).parent.parent.parent / "cache" / "tts"
+    from app.config import get_settings
+    return get_settings().base_dir / "cache" / "tts"
 
 
 def _cache_key(key_data: dict) -> str:
