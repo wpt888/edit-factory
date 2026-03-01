@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { NavBar } from "@/components/navbar";
 
 // Paths where navbar should be hidden
-const hideNavbarPaths = ["/login", "/signup"];
+const hideNavbarPaths = ["/login", "/signup", "/setup"];
 
 export function NavBarWrapper() {
   const pathname = usePathname();
