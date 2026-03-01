@@ -89,41 +89,41 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | — | Pending |
-| FOUND-02 | — | Pending |
-| FOUND-03 | — | Pending |
-| FOUND-04 | — | Pending |
-| SHELL-01 | — | Pending |
-| SHELL-02 | — | Pending |
-| SHELL-03 | — | Pending |
-| SHELL-04 | — | Pending |
-| SHELL-05 | — | Pending |
-| INST-01 | — | Pending |
-| INST-02 | — | Pending |
-| INST-03 | — | Pending |
-| INST-04 | — | Pending |
-| WIZD-01 | — | Pending |
-| WIZD-02 | — | Pending |
-| WIZD-03 | — | Pending |
-| WIZD-04 | — | Pending |
-| WIZD-05 | — | Pending |
-| WIZD-06 | — | Pending |
-| LICS-01 | — | Pending |
-| LICS-02 | — | Pending |
-| LICS-03 | — | Pending |
-| LICS-04 | — | Pending |
-| UPDT-01 | — | Pending |
-| UPDT-02 | — | Pending |
-| UPDT-03 | — | Pending |
-| UPDT-04 | — | Pending |
-| UPDT-05 | — | Pending |
-| UPDT-06 | — | Pending |
+| FOUND-01 | Phase 47 | Pending |
+| FOUND-02 | Phase 47 | Pending |
+| FOUND-03 | Phase 47 | Pending |
+| FOUND-04 | Phase 47 | Pending |
+| SHELL-01 | Phase 48 | Pending |
+| SHELL-02 | Phase 48 | Pending |
+| SHELL-03 | Phase 48 | Pending |
+| SHELL-04 | Phase 48 | Pending |
+| SHELL-05 | Phase 48 | Pending |
+| INST-01 | Phase 52 | Pending |
+| INST-02 | Phase 52 | Pending |
+| INST-03 | Phase 52 | Pending |
+| INST-04 | Phase 52 | Pending |
+| WIZD-01 | Phase 50 | Pending |
+| WIZD-02 | Phase 50 | Pending |
+| WIZD-03 | Phase 50 | Pending |
+| WIZD-04 | Phase 50 | Pending |
+| WIZD-05 | Phase 50 | Pending |
+| WIZD-06 | Phase 50 | Pending |
+| LICS-01 | Phase 49 | Pending |
+| LICS-02 | Phase 49 | Pending |
+| LICS-03 | Phase 49 | Pending |
+| LICS-04 | Phase 49 | Pending |
+| UPDT-01 | Phase 52 | Pending |
+| UPDT-02 | Phase 52 | Pending |
+| UPDT-03 | Phase 51 | Pending |
+| UPDT-04 | Phase 51 | Pending |
+| UPDT-05 | Phase 49 | Pending |
+| UPDT-06 | Phase 49 | Pending |
 
 **Coverage:**
 - v10 requirements: 29 total
-- Mapped to phases: 0
-- Unmapped: 29
+- Mapped to phases: 29
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-01*
-*Last updated: 2026-03-01 after initial definition*
+*Last updated: 2026-03-01 after v10 roadmap creation*

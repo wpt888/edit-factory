@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v10
 milestone_name: Desktop Launcher & Distribution
-status: defining_requirements
-last_updated: "2026-03-01T10:00:00.000Z"
+status: ready_to_plan
+last_updated: "2026-03-01T10:30:00.000Z"
 progress:
-  total_phases: 0
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -18,14 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-01)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v10 Desktop Launcher & Distribution
+**Current focus:** v10 Desktop Launcher & Distribution — Phase 47: Desktop Foundation
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-03-01 — Milestone v10 started
+Phase: 47 of 52 (Desktop Foundation)
+Plan: — (not yet planned)
+Status: Ready to plan
+Last activity: 2026-03-01 — v10 roadmap created, 6 phases defined, 29/29 requirements mapped
+
+Progress: [░░░░░░░░░░] 0% (0 of 6 v10 phases complete)
 
 ## Performance Metrics
 
@@ -46,7 +48,7 @@ Last activity: 2026-03-01 — Milestone v10 started
 | v7 Overlays | 4/6 (32-35) | 7 | Shipped 2026-02-24 (partial) |
 | v8 Pipeline UX | 5 (38-42) | 8 | Shipped 2026-02-24 |
 | v9 Assembly Fix + Overlays | 4 (43-46) | 6 | Shipped 2026-02-28 |
-| v10 Desktop Launcher | — | — | In progress |
+| v10 Desktop Launcher | 6 (47-52) | TBD | In progress |
 
 ## Accumulated Context
 
@@ -54,25 +56,32 @@ Last activity: 2026-03-01 — Milestone v10 started
 
 Decisions are logged in PROJECT.md Key Decisions table.
 
+**v10 key decisions:**
+- Electron shell (not pystray) as launcher — electron-builder + electron-updater eliminate custom installer/update-server code
+- Python venv copy (not PyInstaller) for v1 — avoids PyTorch/Silero bundling fragility and antivirus false positives
+- Lemon Squeezy for licensing — 5% fees, EU VAT as MoR, license API with instance tracking
+- psutil for process cleanup — not currently in requirements.txt, must be added
+
 ### Pending Todos
 
 None.
 
 ### Blockers/Concerns
 
-**Database migrations pending (carry-over):**
-- Migration 007/009/017/021 require manual application via Supabase SQL Editor
+**Research flags (must resolve before execution):**
+- Phase 48: electron-builder extraResources config for Python venv + Next.js standalone hybrid — needs validation on clean Windows 11 VM
+- Phase 52: NSIS portable Node.js 22 bundling; update server hosting decision (GitHub Releases vs S3); build size measurement
 
-**Minor tech debt from v9:**
-- Dead code: pipeline_routes.py lines 1343-1351 (Phase 45 stub superseded by Phase 46)
-- Type annotation mismatches in overlay_renderer.py (runtime-safe)
+**Carry-over from v9:**
+- Database migrations 007/009/017/021 require manual application via Supabase SQL Editor
+- Dead code: pipeline_routes.py lines 1343-1351 (runtime-safe, non-blocking)
 
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Defining v10 requirements
+Stopped at: Roadmap created — all 29 v10 requirements mapped to phases 47-52
 Resume file: None
-Next action: Define requirements and create roadmap
+Next action: /gsd:plan-phase 47
 
 ---
-*Last updated: 2026-03-01 after v10 milestone start*
+*Last updated: 2026-03-01 after v10 roadmap creation*
