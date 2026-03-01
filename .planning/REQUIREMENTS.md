@@ -31,7 +31,7 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 
 ### Setup Wizard
 
-- [x] **WIZD-01**: /setup page detects first run via %APPDATA% flag and redirects new users
+- [ ] **WIZD-01**: /setup page detects first run via %APPDATA% flag and redirects new users
 - [x] **WIZD-02**: Step 1: License key entry with Lemon Squeezy activation and success/error feedback
 - [x] **WIZD-03**: Step 2: API key configuration (Supabase required, Gemini/ElevenLabs optional) with test connection
 - [x] **WIZD-04**: Step 3: Crash reporting consent (opt-in, defaults OFF)
@@ -41,9 +41,9 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 ### Licensing
 
 - [x] **LICS-01**: License activated via Lemon Squeezy POST /v1/licenses/activate on first run
-- [x] **LICS-02**: License validated via POST /v1/licenses/validate on each startup
+- [ ] **LICS-02**: License validated via POST /v1/licenses/validate on each startup
 - [x] **LICS-03**: 7-day offline grace period with cached last-successful validation timestamp
-- [x] **LICS-04**: Invalid/expired license blocks app access with re-activation prompt
+- [ ] **LICS-04**: Invalid/expired license blocks app access with re-activation prompt
 
 ### Updates & Telemetry
 
@@ -102,16 +102,16 @@ Which phases cover which requirements. Updated during roadmap creation.
 | INST-02 | Phase 52 → Phase 53 | Complete |
 | INST-03 | Phase 52 | Complete |
 | INST-04 | Phase 52 | Complete |
-| WIZD-01 | Phase 50 → Phase 53 | Complete |
+| WIZD-01 | Phase 50 → Phase 53 → Phase 54 | Pending |
 | WIZD-02 | Phase 50 → Phase 53 | Complete |
 | WIZD-03 | Phase 50 → Phase 53 | Complete |
 | WIZD-04 | Phase 50 → Phase 53 | Complete |
 | WIZD-05 | Phase 50 → Phase 53 | Complete |
 | WIZD-06 | Phase 50 → Phase 53 | Complete |
 | LICS-01 | Phase 49 | Complete |
-| LICS-02 | Phase 49 | Complete |
+| LICS-02 | Phase 49 → Phase 54 | Pending |
 | LICS-03 | Phase 49 | Complete |
-| LICS-04 | Phase 49 | Complete |
+| LICS-04 | Phase 49 → Phase 54 | Pending |
 | UPDT-01 | Phase 52 | Complete |
 | UPDT-02 | Phase 52 | Complete |
 | UPDT-03 | Phase 51 | Complete |
@@ -121,10 +121,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 **Coverage:**
 - v10 requirements: 29 total
-- Satisfied: 19
-- Pending (gap closure Phase 53): 10 (FOUND-01, FOUND-03, INST-02, WIZD-01-06, UPDT-05, UPDT-06)
+- Satisfied: 26
+- Pending (gap closure Phase 54): 3 (WIZD-01, LICS-02, LICS-04)
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-01*
-*Last updated: 2026-03-01 after gap closure phase 53 added*
+*Last updated: 2026-03-01 after gap closure Phase 54 added*

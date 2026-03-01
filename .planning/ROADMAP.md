@@ -11,7 +11,7 @@
 - ✅ **v7 Product Image Overlays** - Phases 32-35 (partial, shipped 2026-02-24, phases 36-37 deferred)
 - ✅ **v8 Pipeline UX Overhaul** - Phases 38-42 (shipped 2026-02-24)
 - ✅ **v9 Assembly Pipeline Fix + Overlays** - Phases 43-46 (shipped 2026-02-28)
-- 🚧 **v10 Desktop Launcher & Distribution** - Phases 47-53 (in progress)
+- 🚧 **v10 Desktop Launcher & Distribution** - Phases 47-54 (in progress)
 
 ## Phases
 
@@ -220,6 +220,19 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
   4. Settings page shows version footer, crash reporting toggle, and Setup Wizard link in desktop mode
 **Plans**: TBD
 
+### Phase 54: Electron Startup State Check
+**Goal**: Electron checks first-run state and validates license on startup before deciding which URL to load — so fresh installs route to /setup and expired licenses block app access
+**Depends on**: Phase 48, Phase 49, Phase 50, Phase 53
+**Requirements**: WIZD-01, LICS-02, LICS-04
+**Gap Closure**: Closes 2 remaining integration gaps from v10 post-Phase-53 re-audit (GAP-4, GAP-5)
+**Success Criteria** (what must be TRUE):
+  1. A fresh install (first_run_complete=false) loads /setup instead of root URL — user sees setup wizard on first launch
+  2. On subsequent launches, Electron calls POST /desktop/license/validate after services are ready — a valid license loads root URL
+  3. An expired or invalid license (validate returns 403) redirects to /setup for re-activation instead of loading the main app
+  4. A not-yet-activated state (validate returns 404) redirects to /setup
+  5. If the settings or license check fails due to network error, the app loads root URL (graceful degradation — backend has its own grace period)
+**Plans**: TBD
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -240,6 +253,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 | 51. Crash Reporting | 2/2 | Complete    | 2026-03-01 | - |
 | 52. Installer and Packaging | 2/2 | Complete    | 2026-03-01 | - |
 | 53. Integration Wiring | 2/2 | Complete    | 2026-03-01 | - |
+| 54. Startup State Check | 0/0 | Pending     | -          | - |
 
 ---
-*Last updated: 2026-03-01 after gap closure phases added*
+*Last updated: 2026-03-01 after gap closure Phase 54 added*
