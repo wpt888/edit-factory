@@ -28,8 +28,8 @@ from app.db import get_supabase
 from app.services.script_generator import get_script_generator
 from app.services.assembly_service import get_assembly_service, strip_product_group_tags
 
-# Limit concurrent FFmpeg renders in pipeline to prevent CPU/RAM exhaustion
-_ffmpeg_pipeline_semaphore = asyncio.Semaphore(3)
+# Global FFmpeg concurrency — shared across ALL routes (library, pipeline, product)
+from app.services.ffmpeg_semaphore import acquire_render_slot, check_disk_space
 
 
 def _stable_hash(text: str) -> str:
@@ -1458,6 +1458,10 @@ async def render_variants(
                 job["current_step"] = "Generating TTS audio"
                 job["progress"] = 10
 
+            # Pre-render disk space check
+            from app.config import get_settings as _get_settings
+            check_disk_space(_get_settings().output_dir)
+
             assembly_service = get_assembly_service()
 
             # Extract match overrides for this variant (from timeline editor)
@@ -1757,7 +1761,7 @@ async def render_variants(
     # Run all variant renders in parallel via asyncio.gather (throttled by semaphore)
     async def _render_all_variants():
         async def _throttled_render(vid):
-            async with _ffmpeg_pipeline_semaphore:
+            async with acquire_render_slot():
                 await do_render(vid)
         tasks = [_throttled_render(vid) for vid in variant_indices_to_render]
         await asyncio.gather(*tasks, return_exceptions=True)

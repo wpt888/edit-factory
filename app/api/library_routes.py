@@ -42,8 +42,12 @@ _cancelled_lock = threading.Lock()
 _MAX_CANCELLED = 200
 
 # ============== FFmpeg CONCURRENCY LIMIT ==============
-# Limit total concurrent FFmpeg render processes to prevent CPU/RAM exhaustion
-_ffmpeg_render_semaphore = asyncio.Semaphore(3)
+# Global semaphore shared across ALL routes (library, pipeline, product)
+from app.services.ffmpeg_semaphore import (
+    acquire_render_slot, acquire_prep_slot, safe_ffmpeg_run, check_disk_space,
+)
+# Keep legacy name for backwards compat with product_generate_routes import
+_ffmpeg_render_semaphore = None  # DEPRECATED — use acquire_render_slot() instead
 
 
 def _evict_old_cancelled():
@@ -1274,7 +1278,8 @@ async def _generate_from_segments_task(
                             str(segment_output)
                         ]
 
-                        result = await asyncio.to_thread(subprocess.run, extract_cmd, capture_output=True, text=True, timeout=300)
+                        async with acquire_prep_slot():
+                            result = await asyncio.to_thread(safe_ffmpeg_run, extract_cmd, 300, "segment extract")
                         if result.returncode != 0:
                             logger.error(f"FFmpeg extract error: {result.stderr}")
                             continue
@@ -1291,7 +1296,8 @@ async def _generate_from_segments_task(
                     str(output_path)
                 ]
 
-                result = await asyncio.to_thread(subprocess.run, concat_cmd, capture_output=True, text=True, timeout=300)
+                async with acquire_prep_slot():
+                    result = await asyncio.to_thread(safe_ffmpeg_run, concat_cmd, 300, "segment concat")
                 if result.returncode != 0:
                     logger.error(f"FFmpeg concat error: {result.stderr}")
                     continue
@@ -2257,7 +2263,8 @@ async def _render_final_clip_task(
                 # VIDEO MAI LUNG: Trimează video la durata audio
                 logger.info(f"Video > Audio ({video_duration:.1f}s > {audio_duration:.1f}s): trimming video")
                 adjusted_video_path = temp_dir / f"trimmed_{clip_id}.mp4"
-                await asyncio.to_thread(_trim_video_to_duration, raw_video_path, adjusted_video_path, audio_duration)
+                async with acquire_prep_slot():
+                    await asyncio.to_thread(_trim_video_to_duration, raw_video_path, adjusted_video_path, audio_duration)
                 final_video_path = adjusted_video_path
 
             else:
@@ -2267,22 +2274,24 @@ async def _render_final_clip_task(
 
                 # Încercăm să extindem cu segmente din proiect
                 adjusted_video_path = temp_dir / f"extended_{clip_id}.mp4"
-                extended = await asyncio.to_thread(
-                    _extend_video_with_segments,
-                    base_video=raw_video_path,
-                    target_duration=audio_duration,
-                    project_id=project_id,
-                    output_path=adjusted_video_path,
-                    supabase=supabase,
-                    profile_id=profile_id
-                )
+                async with acquire_prep_slot():
+                    extended = await asyncio.to_thread(
+                        _extend_video_with_segments,
+                        base_video=raw_video_path,
+                        target_duration=audio_duration,
+                        project_id=project_id,
+                        output_path=adjusted_video_path,
+                        supabase=supabase,
+                        profile_id=profile_id
+                    )
 
                 if extended and adjusted_video_path.exists():
                     final_video_path = adjusted_video_path
                 else:
                     # Fallback: loop video pentru a umple gap-ul
                     logger.warning(f"Could not extend with segments, using loop fallback")
-                    await asyncio.to_thread(_loop_video_to_duration, raw_video_path, adjusted_video_path, audio_duration)
+                    async with acquire_prep_slot():
+                        await asyncio.to_thread(_loop_video_to_duration, raw_video_path, adjusted_video_path, audio_duration)
                     if adjusted_video_path.exists():
                         final_video_path = adjusted_video_path
 
@@ -2351,7 +2360,10 @@ async def _render_final_clip_task(
         # 4. Randăm cu FFmpeg folosind preset-ul (limited by global concurrency semaphore)
         output_path = output_dir / f"final_{clip_id}_{preset_data['name']}.mp4"
 
-        async with _ffmpeg_render_semaphore:
+        # Pre-render disk space check
+        check_disk_space(output_dir)
+
+        async with acquire_render_slot():
             await _render_with_preset(
                 video_path=final_video_path,
                 audio_path=audio_path,
@@ -2488,7 +2500,7 @@ def _get_video_info(video_path: Path) -> dict:
             "-of", "json",
             str(video_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = safe_ffmpeg_run(cmd, timeout=30, operation="ffprobe video info")
         if result.returncode == 0:
             data = json.loads(result.stdout)
             stream = data.get("streams", [{}])[0]
@@ -2512,7 +2524,7 @@ def _get_video_duration(video_path: Path) -> float:
             "-of", "default=noprint_wrappers=1:nokey=1",
             str(video_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = safe_ffmpeg_run(cmd, timeout=30, operation="ffprobe duration")
         if result.returncode == 0:
             return float(result.stdout.strip())
     except Exception:
@@ -2542,7 +2554,7 @@ def _generate_thumbnail(video_path: Path) -> Optional[Path]:
             "-q:v", "3",
             str(thumb_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = safe_ffmpeg_run(cmd, timeout=30, operation="thumbnail")
         if result.returncode == 0 and thumb_path.exists():
             return thumb_path
     except Exception as e:
@@ -2612,7 +2624,7 @@ def _get_audio_duration(audio_path: Path) -> float:
             "-of", "default=noprint_wrappers=1:nokey=1",
             str(audio_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = safe_ffmpeg_run(cmd, timeout=30, operation="ffprobe audio duration")
         if result.returncode == 0:
             return float(result.stdout.strip())
     except Exception as e:
@@ -2638,7 +2650,7 @@ def _trim_video_to_duration(input_path: Path, output_path: Path, target_duration
             "-movflags", "+faststart",
             str(output_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = safe_ffmpeg_run(cmd, timeout=300, operation="trim video")
         if result.returncode == 0 and output_path.exists():
             logger.info(f"Trimmed video to {target_duration:.1f}s: {output_path.name}")
             return True
@@ -2670,7 +2682,7 @@ def _loop_video_to_duration(input_path: Path, output_path: Path, target_duration
             "-movflags", "+faststart",
             str(output_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = safe_ffmpeg_run(cmd, timeout=300, operation="loop video")
         if result.returncode == 0 and output_path.exists():
             logger.info(f"Looped video to {target_duration:.1f}s: {output_path.name}")
             return True
@@ -2773,7 +2785,7 @@ def _extend_video_with_segments(
                 "-pix_fmt", "yuv420p",
                 str(base_no_audio)
             ]
-            base_result = subprocess.run(base_cmd, capture_output=True, text=True, timeout=300)
+            base_result = safe_ffmpeg_run(base_cmd, timeout=300, operation="strip audio from base")
             if base_result.returncode != 0 or not base_no_audio.exists():
                 logger.error(f"Failed to strip audio from base video: {base_result.stderr[:200]}")
                 return False
@@ -2796,7 +2808,7 @@ def _extend_video_with_segments(
                     str(seg_output)
                 ]
 
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                result = safe_ffmpeg_run(cmd, timeout=300, operation="extend segment extract")
                 if result.returncode == 0 and seg_output.exists():
                     segment_files.append(seg_output)
 
@@ -2826,7 +2838,7 @@ def _extend_video_with_segments(
                 str(output_path)
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = safe_ffmpeg_run(cmd, timeout=300, operation="extend concat")
 
             if result.returncode == 0 and output_path.exists():
                 logger.info(f"Extended video to {target_duration:.1f}s with {len(selected_segments)} additional segments")
@@ -3091,10 +3103,10 @@ async def _render_with_preset(
     if audio_path and audio_path.exists():
         # Get audio duration to use as explicit output duration (avoids -shortest truncation bugs)
         try:
-            _probe = subprocess.run(
+            _probe = safe_ffmpeg_run(
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration",
                  "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
-                capture_output=True, text=True, timeout=30
+                timeout=30, operation="ffprobe audio duration (render)"
             )
             _audio_dur = float(_probe.stdout.strip()) if _probe.returncode == 0 else 0
         except Exception:

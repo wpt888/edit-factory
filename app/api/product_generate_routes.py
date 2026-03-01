@@ -501,7 +501,8 @@ async def _generate_product_video_task(
     settings = get_settings()
 
     # Import everything we need up front so any import error surfaces quickly
-    from app.api.library_routes import _render_with_preset, _ffmpeg_render_semaphore
+    from app.api.library_routes import _render_with_preset
+    from app.services.ffmpeg_semaphore import acquire_render_slot, check_disk_space
     from app.services.product_video_compositor import compose_product_video, CompositorConfig
     from app.services.tts_subtitle_generator import generate_srt_from_timestamps
 
@@ -744,7 +745,8 @@ async def _generate_product_video_task(
         )
 
         # compose_product_video is synchronous (FFmpeg subprocess) — throttled by global semaphore
-        async with _ffmpeg_render_semaphore:
+        check_disk_space(settings.output_dir)
+        async with acquire_render_slot():
             await asyncio.to_thread(
                 compose_product_video,
                 image_path=image_path,

@@ -83,6 +83,44 @@ async def _recover_stuck_projects():
         logger.warning(f"Failed to recover stuck projects: {e}")
 
 
+async def _recover_stuck_clips():
+    """Recover clips stuck in 'processing' final_status (e.g. from server crash)."""
+    try:
+        from app.db import get_supabase
+        supabase = get_supabase()
+        if not supabase:
+            return
+        result = supabase.table("editai_clips").select("id").eq("final_status", "processing").execute()
+        if result.data:
+            for clip in result.data:
+                supabase.table("editai_clips").update({
+                    "final_status": "failed",
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", clip["id"]).execute()
+            logger.info(f"Recovered {len(result.data)} stuck clips (processing -> failed)")
+    except Exception as e:
+        logger.warning(f"Failed to recover stuck clips: {e}")
+
+
+async def _recover_stuck_jobs():
+    """Recover jobs stuck in 'processing' status (e.g. from server crash)."""
+    try:
+        from app.db import get_supabase
+        supabase = get_supabase()
+        if not supabase:
+            return
+        result = supabase.table("jobs").select("id").eq("status", "processing").execute()
+        if result.data:
+            for job in result.data:
+                supabase.table("jobs").update({
+                    "status": "failed",
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", job["id"]).execute()
+            logger.info(f"Recovered {len(result.data)} stuck jobs (processing -> failed)")
+    except Exception as e:
+        logger.warning(f"Failed to recover stuck jobs: {e}")
+
+
 async def _cleanup_expired_pipelines():
     """Delete expired pipeline and assembly job rows from Supabase."""
     try:
@@ -122,6 +160,8 @@ async def lifespan(app: FastAPI):
     logger.info(f"  Input dir: {settings.input_dir.absolute()}")
     logger.info(f"  Output dir: {settings.output_dir.absolute()}")
     await _recover_stuck_projects()
+    await _recover_stuck_clips()
+    await _recover_stuck_jobs()
     await _cleanup_expired_pipelines()
     yield
     # Shutdown
