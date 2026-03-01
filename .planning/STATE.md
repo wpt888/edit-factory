@@ -62,6 +62,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - Lemon Squeezy for licensing — 5% fees, EU VAT as MoR, license API with instance tracking
 - psutil for process cleanup — added psutil>=5.9.0 to requirements.txt (47-02)
 - app/desktop.py uses lazy psutil import inside function body, not top-level (avoids import cost in non-desktop contexts)
+- APP_BASE_DIR via _get_app_base_dir(): DESKTOP_MODE=true uses %APPDATA%\EditFactory, dev uses project root (47-01)
+- settings_customise_sources priority: env vars > AppData .env > project .env (47-01)
+- Phase 50 cache_clear() pattern: get_settings.cache_clear() then get_settings() after Setup Wizard writes AppData .env (47-01)
 
 ### Pending Todos
 

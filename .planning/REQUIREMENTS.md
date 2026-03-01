@@ -9,7 +9,7 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 
 ### Desktop Foundation
 
-- [ ] **FOUND-01**: App stores config in %APPDATA%\EditFactory\ (config.json, license.json, .env)
+- [x] **FOUND-01**: App stores config in %APPDATA%\EditFactory\ (config.json, license.json, .env)
 - [ ] **FOUND-02**: Backend detects DESKTOP_MODE=true and skips JWT auth, reads config from AppData
 - [ ] **FOUND-03**: FFmpeg path resolves bundled binary in desktop mode, falls back to system PATH in dev
 - [x] **FOUND-04**: All file paths use APP_BASE_DIR abstraction (no hardcoded relative paths)
@@ -89,7 +89,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | Phase 47 | Pending |
+| FOUND-01 | Phase 47 | Complete |
 | FOUND-02 | Phase 47 | Pending |
 | FOUND-03 | Phase 47 | Pending |
 | FOUND-04 | Phase 47 | Complete |
