@@ -23,9 +23,9 @@ See: .planning/PROJECT.md (updated 2026-03-01)
 ## Current Position
 
 Phase: 50 of 52 (Setup Wizard)
-Plan: — (not yet planned)
-Status: Ready to plan
-Last activity: 2026-03-01 — Phase 49 complete, all 2 plans verified (7/7 must-haves)
+Plan: 50-01 complete, 50-02 next
+Status: In progress
+Last activity: 2026-03-01 — Plan 50-01 (Backend Wizard Endpoints) complete
 
 Progress: [█████░░░░░] 50% (3 of 6 v10 phases complete)
 
@@ -78,6 +78,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 49]: Grace period strictly network errors only (ConnectError/TimeoutException/NetworkError) — LS valid=false does not trigger grace period
 - [Phase 49-02]: Chain .json() parse on apiGetWithRetry response before extracting version — apiGetWithRetry returns Response not parsed data
 - [Phase 49-02]: Version display JSX gated on appVersion truthy (null when not in desktop mode or API failed) — no duplicate NEXT_PUBLIC_DESKTOP_MODE check needed in JSX
+- [Phase 50-01]: Supabase /rest/v1/ returns 400 (no table specified) when connected — POST /test-connection accepts both 200 and 400 as success
+- [Phase 50-01]: first_run_complete and crash_reporting_enabled returned as plain booleans from GET /settings — not secrets, no redaction needed
 
 ### Pending Todos
 
@@ -96,9 +98,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Phase 49 verified and complete — all 2 plans verified (7/7 must-haves)
+Stopped at: Completed 50-01-PLAN.md (Backend Wizard Endpoints)
 Resume file: None
-Next action: /gsd:plan-phase 50
+Next action: Execute 50-02 (Setup Wizard Frontend)
 
 ---
-*Last updated: 2026-03-01 after Plan 49-02 execution (Frontend Version Display — UPDT-06 satisfied)*
+*Last updated: 2026-03-01 after Plan 50-01 execution (Backend Wizard Endpoints — WIZD-01, WIZD-03, WIZD-05 satisfied)*
