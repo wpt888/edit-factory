@@ -113,6 +113,71 @@ async def mark_first_run_complete():
     return {"completed": True}
 
 
+@router.post("/test-connection")
+async def test_connection(body: TestConnectionRequest):
+    """Test API connectivity for a service. Used by Setup Wizard Step 2."""
+    if body.service == "supabase":
+        if not body.url or not body.key:
+            raise HTTPException(status_code=400, detail="Supabase URL and key are required")
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            try:
+                resp = await client.get(
+                    f"{body.url.rstrip('/')}/rest/v1/",
+                    headers={"apikey": body.key, "Authorization": f"Bearer {body.key}"},
+                )
+                if resp.status_code in (200, 400):
+                    return {"connected": True, "service": "supabase"}
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Supabase returned HTTP {resp.status_code}",
+                )
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                raise HTTPException(
+                    status_code=400, detail=f"Cannot reach Supabase: {e}"
+                )
+
+    elif body.service == "gemini":
+        if not body.key:
+            raise HTTPException(status_code=400, detail="Gemini API key is required")
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            try:
+                resp = await client.get(
+                    f"https://generativelanguage.googleapis.com/v1beta/models?key={body.key}",
+                )
+                if resp.status_code == 200:
+                    return {"connected": True, "service": "gemini"}
+                raise HTTPException(
+                    status_code=400,
+                    detail="Gemini API key invalid or quota exceeded",
+                )
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                raise HTTPException(
+                    status_code=400, detail=f"Cannot reach Gemini API: {e}"
+                )
+
+    elif body.service == "elevenlabs":
+        if not body.key:
+            raise HTTPException(status_code=400, detail="ElevenLabs API key is required")
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            try:
+                resp = await client.get(
+                    "https://api.elevenlabs.io/v1/user",
+                    headers={"xi-api-key": body.key},
+                )
+                if resp.status_code == 200:
+                    return {"connected": True, "service": "elevenlabs"}
+                raise HTTPException(
+                    status_code=400,
+                    detail="ElevenLabs API key invalid",
+                )
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                raise HTTPException(
+                    status_code=400, detail=f"Cannot reach ElevenLabs API: {e}"
+                )
+
+    raise HTTPException(status_code=400, detail=f"Unknown service: {body.service}")
+
+
 @router.post("/settings")
 async def save_desktop_settings(body: dict):
     """Write settings to config.json. Merges with existing values."""
