@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-01T13:36:33.755Z"
+last_updated: "2026-03-01T13:39:57.521Z"
 progress:
   total_phases: 21
-  completed_phases: 20
+  completed_phases: 21
   total_plans: 57
-  completed_plans: 56
+  completed_plans: 57
 ---
 
 # Project State
@@ -23,9 +23,9 @@ See: .planning/PROJECT.md (updated 2026-03-01)
 ## Current Position
 
 Phase: 51 of 52 (Crash Reporting)
-Plan: 01 complete, 02 pending
-Status: In progress
-Last activity: 2026-03-01 — Phase 51-01 complete (Sentry backend wired, PII scrubbing, runtime toggle)
+Plan: 02 complete — Phase 51 DONE (2/2 plans)
+Status: Phase 51 complete, ready for Phase 52
+Last activity: 2026-03-01 — Phase 51-02 complete (Settings page crash reporting toggle UI)
 
 Progress: [██████░░░░] 67% (4 of 6 v10 phases complete)
 
@@ -48,7 +48,7 @@ Progress: [██████░░░░] 67% (4 of 6 v10 phases complete)
 | v7 Overlays | 4/6 (32-35) | 7 | Shipped 2026-02-24 (partial) |
 | v8 Pipeline UX | 5 (38-42) | 8 | Shipped 2026-02-24 |
 | v9 Assembly Fix + Overlays | 4 (43-46) | 6 | Shipped 2026-02-28 |
-| v10 Desktop Launcher | 6 (47-52) | 9+ | In progress (4/6 phases) |
+| v10 Desktop Launcher | 6 (47-52) | 9+ | In progress (5/6 phases) |
 
 ## Accumulated Context
 
@@ -86,6 +86,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 51]: sentry_sdk.init() called ONLY when desktop_mode=True AND crash_reporting_enabled=True — never in dev/web mode
 - [Phase 51]: SENTRY_DSN left as empty string placeholder — must be replaced when Sentry project is created
 - [Phase 51]: Runtime toggle via module-level _crash_reporting_enabled flag checked in before_send — events dropped client-side before network call
+- [Phase 51]: Crash Reporting card placed BEFORE Setup Wizard card in settings page
+- [Phase 51]: Reuse existing desktop useEffect for crash_reporting_enabled fetch alongside version fetch
+- [Phase 51]: Optimistic toggle with full revert on error — no half-state persistence
 
 ### Pending Todos
 
@@ -104,9 +107,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Completed 51-01-PLAN.md (Sentry Crash Reporter Backend)
+Stopped at: Completed 51-02-PLAN.md (Settings Page Crash Reporting Toggle) — Phase 51 complete
 Resume file: None
-Next action: Execute 51-02 (frontend Settings page toggle UI)
+Next action: /gsd:plan-phase 52 (Distribution & Installer)
 
 ---
 *Last updated: 2026-03-01 after Phase 50 verification passed (6/6 WIZD requirements — Setup Wizard complete)*
