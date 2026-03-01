@@ -98,6 +98,8 @@ async def get_desktop_settings():
         "elevenlabs_api_key": _hint(config.get("elevenlabs_api_key", "")),
         "supabase_url": config.get("supabase_url", ""),
         "supabase_key": _hint(config.get("supabase_key", "")),
+        "first_run_complete": config.get("first_run_complete", False),
+        "crash_reporting_enabled": config.get("crash_reporting_enabled", False),
     }
 
 
