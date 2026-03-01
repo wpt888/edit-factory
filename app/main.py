@@ -164,6 +164,20 @@ app.add_middleware(
 
 app.add_middleware(SlowAPIMiddleware)
 
+# Sentry crash reporting (desktop-mode only, opt-in)
+if settings.desktop_mode:
+    from app.services.crash_reporter import init_sentry, SENTRY_DSN
+    import json as _json
+    _config_file = settings.base_dir / "config.json"
+    _crash_enabled = False
+    if _config_file.exists():
+        try:
+            _cfg = _json.loads(_config_file.read_text(encoding="utf-8"))
+            _crash_enabled = _cfg.get("crash_reporting_enabled", False)
+        except Exception:
+            pass
+    init_sentry(dsn=SENTRY_DSN, enabled=_crash_enabled)
+
 # Include API routes
 app.include_router(api_router, prefix="/api/v1", tags=["Video Processing"])
 app.include_router(library_router, prefix="/api/v1", tags=["Library & Workflow"])
