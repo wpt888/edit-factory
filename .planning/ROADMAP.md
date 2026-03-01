@@ -11,7 +11,8 @@
 - ✅ **v7 Product Image Overlays** - Phases 32-35 (partial, shipped 2026-02-24, phases 36-37 deferred)
 - ✅ **v8 Pipeline UX Overhaul** - Phases 38-42 (shipped 2026-02-24)
 - ✅ **v9 Assembly Pipeline Fix + Overlays** - Phases 43-46 (shipped 2026-02-28)
-- 🚧 **v10 Desktop Launcher & Distribution** - Phases 47-54 (in progress)
+- ✅ **v10 Desktop Launcher & Distribution** - Phases 47-54 (shipped 2026-03-01)
+- 🚧 **v11 Production Polish & Platform Hardening** - Phases 55-62 (in progress)
 
 ## Phases
 
@@ -125,112 +126,121 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 
 </details>
 
-### 🚧 v10 Desktop Launcher & Distribution (In Progress)
+<details>
+<summary>✅ v10 Desktop Launcher & Distribution (Phases 47-54) — SHIPPED 2026-03-01</summary>
 
-**Milestone Goal:** Transform Edit Factory into an installable Windows desktop product (hybrid: local rendering, cloud DB) that can be sold as a one-time purchase — packaged as an NSIS .exe installer with Electron shell, first-run setup wizard, license key validation, opt-in crash reporting, and auto-update.
+- [x] Phase 47: Desktop Foundation (3 plans) — completed 2026-03-01
+- [x] Phase 48: Electron Shell (2 plans) — completed 2026-03-01
+- [x] Phase 49: Desktop API Routes (2 plans) — completed 2026-03-01
+- [x] Phase 50: Setup Wizard (2 plans) — completed 2026-03-01
+- [x] Phase 51: Crash Reporting (2 plans) — completed 2026-03-01
+- [x] Phase 52: Installer and Packaging (2 plans) — completed 2026-03-01
+- [x] Phase 53: Integration Wiring (2 plans) — completed 2026-03-01
+- [x] Phase 54: Startup State Check (1 plan) — completed 2026-03-01
+
+</details>
+
+### 🚧 v11 Production Polish & Platform Hardening (In Progress)
+
+**Milestone Goal:** Comprehensive quality upgrade — fix security gaps, add real tests, improve UX with inline previews and modern dialogs, optimize performance with pagination and SSE, and harden architecture with durable job queues and persistent state.
+
+- [ ] **Phase 55: Security Hardening** - Enable RLS, per-route rate limits, MIME validation, input sanitization
+- [ ] **Phase 56: Testing Foundation** - Pytest unit/integration tests plus Playwright E2E with assertions
+- [ ] **Phase 57: DevOps & CI** - GitHub Actions pipeline, pinned dependencies, git-tag versioning
+- [ ] **Phase 58: Architecture Upgrade** - Redis job queue, persistent pipeline/assembly state, cloud storage support
+- [ ] **Phase 59: Performance Optimization** - Cursor pagination, SSE job progress, profile caching, TTS cache metrics
+- [ ] **Phase 60: Monitoring & Observability** - Sentry, extended health checks, failed render cleanup, file TTL
+- [ ] **Phase 61: UX Polish — Interactions** - Inline video player, AlertDialogs, soft-delete trash, drag-drop upload, keyboard shortcuts, hover preview
+- [ ] **Phase 62: UX Polish — Organization** - UI language consistency, dead page removal, clip tagging
 
 ## Phase Details
 
-### Phase 47: Desktop Foundation
-**Goal**: Backend resolves all paths from %APPDATA%, respects DESKTOP_MODE flag, and the app starts/stops cleanly without orphaned processes or broken WSL path assumptions
-**Depends on**: Nothing (first phase of v10)
-**Requirements**: FOUND-01, FOUND-02, FOUND-03, FOUND-04
+### Phase 55: Security Hardening
+**Goal**: User data is protected end-to-end — RLS enforces row isolation at the database layer, rate limits throttle abuse at per-route granularity, file uploads are validated by actual MIME type, and user text cannot inject commands into the FFmpeg subtitle pipeline
+**Depends on**: Nothing (first phase of v11)
+**Requirements**: SEC-01, SEC-02, SEC-03, SEC-04
 **Success Criteria** (what must be TRUE):
-  1. Starting the app from a desktop shortcut resolves FFmpeg, log files, and config correctly — no "file not found" errors from wrong CWD
-  2. %APPDATA%\EditFactory\ directory is created on first run and is writable by the backend
-  3. DESKTOP_MODE=true disables JWT auth and routes config reads to AppData instead of project .env
-  4. Shutting down the launcher fully terminates all backend processes — ports 8000 and 3000 are free immediately after quit
-  5. No WSL-specific paths (e.g., /usr/share/fonts) appear in desktop mode startup
+  1. A Supabase query run as an anon/user role for editai_* tables returns only that user's own rows — another user's data is invisible
+  2. Uploading more than 10 files/min to any upload endpoint returns HTTP 429 before any processing begins
+  3. Uploading a .exe file renamed as .mp4 is rejected with a clear error — the server detects the actual file type, not just the Content-Type header
+  4. A script or context text containing FFmpeg filter special characters (apostrophes, backslashes, colons) renders without errors and appears literally in the subtitle output
 **Plans**: TBD
 
-### Phase 48: Electron Shell
-**Goal**: Users can launch Edit Factory by double-clicking EditFactory.exe, which starts both services, waits for readiness, opens the app in a window, and shows a system tray icon
-**Depends on**: Phase 47
-**Requirements**: SHELL-01, SHELL-02, SHELL-03, SHELL-04, SHELL-05
+### Phase 56: Testing Foundation
+**Goal**: The test suite provides meaningful confidence in critical backend services and real user workflows — unit tests cover the paths most likely to regress, integration tests catch API contract breaks, and E2E tests verify the workflows users actually run
+**Depends on**: Phase 55
+**Requirements**: TEST-01, TEST-02, TEST-03
 **Success Criteria** (what must be TRUE):
-  1. Double-clicking EditFactory.exe starts the app — browser window opens at localhost:3000 showing the Edit Factory UI (not a "site can't be reached" error)
-  2. During startup, the tray icon tooltip shows a "Starting..." state and updates to ready once services are up
-  3. Right-clicking the system tray icon shows "Open Edit Factory" and "Quit" options that work correctly
-  4. Clicking Quit terminates all processes — no background uvicorn or Node.js processes remain after quit
-  5. If a previous launch left orphaned processes, the new launch cleans up the ports before starting
+  1. Running `pytest` with coverage reports >80% line coverage across video_processor, assembly_service, job_storage, and cost_tracker
+  2. Running `pytest` on API integration tests verifies response structure (status codes, required fields, error shape) for the upload, render, TTS, and jobs endpoints using mock data — no live Supabase or FFmpeg needed
+  3. Running `npx playwright test` executes at least one E2E test per major workflow (library, pipeline, product video) that asserts API responses — not just screenshots
 **Plans**: TBD
 
-**Research flag:** Phase-level research needed for exact electron-builder configuration to bundle Python venv alongside Next.js standalone (extraResources and files config for Python+Node hybrid).
-
-### Phase 49: Desktop API Routes
-**Goal**: The backend exposes desktop-specific endpoints for version info, license activation/validation, and settings management — all backed by a complete LicenseService with offline grace period
-**Depends on**: Phase 47
-**Requirements**: LICS-01, LICS-02, LICS-03, LICS-04, UPDT-05, UPDT-06
+### Phase 57: DevOps & CI
+**Goal**: Every push to the repository automatically validates the codebase — lint, type-check, and tests run without manual intervention, all dependencies are reproducible from requirements.txt, and the version displayed in the app comes from git tags not hardcoded strings
+**Depends on**: Phase 56
+**Requirements**: DEVOPS-01, DEVOPS-02, DEVOPS-03
 **Success Criteria** (what must be TRUE):
-  1. GET /api/v1/desktop/version returns the current version number as a JSON response
-  2. POST /api/v1/desktop/license/activate sends the license key to Lemon Squeezy and returns success or a descriptive error
-  3. POST /api/v1/desktop/license/validate succeeds on startup when the license is valid — and still succeeds for 7 days after the last successful validation even without internet
-  4. An invalid or expired license causes the validate endpoint to return a 403 with a re-activation prompt message
-  5. GET/POST /api/v1/desktop/settings reads and writes API keys to %APPDATA%\EditFactory\config.json
+  1. Opening a pull request triggers a GitHub Actions workflow that runs Python lint + type-check and pytest — a failing test blocks merge
+  2. Opening a pull request triggers a GitHub Actions workflow that runs Next.js lint and type-check — a type error blocks merge
+  3. Installing from requirements.txt produces the identical package versions on any machine — no floating version ranges that could break between installs
+  4. The version shown in the app footer or /health endpoint matches the current git tag — no manual version bumps needed when tagging a release
 **Plans**: TBD
 
-### Phase 50: Setup Wizard
-**Goal**: New users are guided through license activation, API key configuration, and crash reporting consent before accessing the app — and can return to the wizard from Settings at any time
-**Depends on**: Phase 49
-**Requirements**: WIZD-01, WIZD-02, WIZD-03, WIZD-04, WIZD-05, WIZD-06
+### Phase 58: Architecture Upgrade
+**Goal**: Jobs survive server restarts, pipeline and assembly progress is not lost when the process exits, the job tracking system is consistent across all job types, and file storage can be swapped to S3 or Supabase Storage without rewriting the render pipeline
+**Depends on**: Phase 55
+**Requirements**: ARCH-01, ARCH-02, ARCH-03, ARCH-04
 **Success Criteria** (what must be TRUE):
-  1. A brand-new install automatically redirects to /setup on first launch — existing installs with first_run_complete flag skip the wizard
-  2. Step 1 accepts a license key, calls the activation endpoint, and shows clear success or error feedback before allowing progression
-  3. Step 2 accepts Supabase URL and key (required) plus Gemini and ElevenLabs keys (optional) and tests each connection inline
-  4. Step 3 shows a crash reporting consent toggle that defaults to OFF and explains what data is collected
-  5. Completing the wizard writes all values to %APPDATA%\EditFactory\ and marks first_run_complete — the main app loads on finish
-  6. A "Setup" link in the Settings page opens the wizard again with current values pre-filled
+  1. Starting a render job, restarting the FastAPI server, and then polling the job status returns the job's current state — not a 404 or "unknown" status
+  2. Creating a pipeline with segments and navigating away, then returning, shows the same pipeline state — in-memory dict loss on restart no longer wipes user work
+  3. An assembly job appears in the same job status endpoint as video processing jobs — no separate polling path needed
+  4. Setting a FILE_STORAGE_BACKEND environment variable to "supabase" routes file reads and writes through Supabase Storage without changing any render pipeline code
 **Plans**: TBD
 
-### Phase 51: Crash Reporting
-**Goal**: Users who opted in during setup have crashes automatically reported to Sentry — with API keys and file paths scrubbed before any data leaves the machine
-**Depends on**: Phase 50
-**Requirements**: UPDT-03, UPDT-04
+### Phase 59: Performance Optimization
+**Goal**: The library page loads fast regardless of how many clips exist, job progress arrives instantly without polling overhead, profile data does not trigger a Supabase round-trip on every request, and the TTS cache behaves predictably under load
+**Depends on**: Phase 58
+**Requirements**: PERF-01, PERF-02, PERF-03, PERF-04
 **Success Criteria** (what must be TRUE):
-  1. With crash reporting OFF (default), no data is sent to Sentry — no network requests to sentry.io on startup or crash
-  2. With crash reporting ON, an unhandled FastAPI exception appears in the Sentry dashboard with a stack trace
-  3. The Sentry event for a crash in a route that handles API keys does NOT include the actual key values in frame locals
-  4. Toggling crash reporting in Settings immediately takes effect for the current session without requiring a restart
+  1. The library page loads the first 50 clips immediately — scrolling to the bottom loads the next 50 without a full page reload or URL change
+  2. Starting a render job and watching the progress bar updates in real time without the browser making repeated polling requests — network tab shows a single persistent SSE connection
+  3. Making 10 rapid API requests that require profile context hits Supabase at most once during the 60-second TTL window — subsequent requests use cached data
+  4. The /api/v1/tts/cache/stats endpoint returns hit count, miss count, current size, and max size — and the cache automatically evicts the least recently used entry when full
 **Plans**: TBD
 
-### Phase 52: Installer and Packaging
-**Goal**: Edit Factory ships as a self-contained NSIS .exe installer that installs cleanly on a fresh Windows machine, creates Start Menu and desktop shortcuts, and produces a latest.yml manifest for auto-update
-**Depends on**: Phase 48, Phase 50, Phase 51
-**Requirements**: INST-01, INST-02, INST-03, INST-04, UPDT-01, UPDT-02
+### Phase 60: Monitoring & Observability
+**Goal**: Production errors are captured automatically, the health endpoint reflects the real state of all dependencies, failed renders clean up after themselves, and the output directory does not accumulate unbounded intermediate files
+**Depends on**: Phase 57
+**Requirements**: MON-01, MON-02, MON-03, MON-04
 **Success Criteria** (what must be TRUE):
-  1. Running EditFactory-Setup-{version}.exe on a clean Windows machine installs the app without errors and without requiring Python or Node.js pre-installed
-  2. After installation, Start Menu and desktop shortcuts launch the app correctly
-  3. The installed app appears in Windows Add/Remove Programs with the correct name and version
-  4. Running the uninstaller removes all installed files and shortcuts cleanly
-  5. On startup, the app checks for updates in the background — if a new version is available, a notification appears prompting the user to restart (not mid-session)
-  6. After restarting to apply an update, the Settings footer shows the new version number
+  1. Triggering an unhandled exception in a FastAPI route (with SENTRY_DSN configured) creates a new issue in the Sentry dashboard within 30 seconds
+  2. Calling GET /api/v1/health returns a JSON response showing individual status for Supabase, FFmpeg, and Redis — a disconnected Supabase shows "degraded" not "ok"
+  3. A render that fails mid-way (e.g., FFmpeg exits non-zero) leaves no partial output files in the output directory — only the input source file remains
+  4. Running the cleanup CLI (or automatic scheduler) removes intermediate files older than the configured TTL — the output directory shrinks measurably after cleanup runs
 **Plans**: TBD
 
-**Research flag:** Phase-level research needed for NSIS customization to bundle portable Node.js 22 alongside Python venv; SHA256 hash verification in auto-update download flow; update server hosting decision (GitHub Releases vs S3); build size measurement before scripting.
-
-### Phase 53: Cross-Phase Integration Wiring
-**Goal**: Fix 3 cross-phase integration gaps so the packaged desktop app's frontend detects desktop mode, backend reloads settings after wizard config write, and FFmpeg resolves from the installer's bundled location
-**Depends on**: Phase 48, Phase 49, Phase 50, Phase 52
-**Requirements**: WIZD-01, WIZD-02, WIZD-03, WIZD-04, WIZD-05, WIZD-06, UPDT-05, UPDT-06, FOUND-01, FOUND-03, INST-02
-**Gap Closure**: Closes all 3 integration gaps from v10 milestone audit
+### Phase 61: UX Polish — Interactions
+**Goal**: Users interact with clips and media through modern, polished controls — watching clips without leaving the page, performing destructive actions with confirmation dialogs, recovering accidentally deleted clips, dragging files to upload, using keyboard shortcuts, and previewing clips on hover
+**Depends on**: Phase 59
+**Requirements**: UX-01, UX-02, UX-03, UX-06, UX-07, UX-08
 **Success Criteria** (what must be TRUE):
-  1. The packaged Electron app sets NEXT_PUBLIC_DESKTOP_MODE=true in the frontend process — setup/page.tsx renders the wizard (not "only available in desktop mode")
-  2. After the setup wizard saves API keys via POST /desktop/settings, the backend serves the new values immediately without requiring a process restart
-  3. The installed app finds FFmpeg at the location where electron-builder extraResources placed it — video processing works on a fresh install
-  4. Settings page shows version footer, crash reporting toggle, and Setup Wizard link in desktop mode
+  1. Clicking a clip thumbnail in the library opens an embedded HTML5 video player inline on the page — the video plays without opening a new tab or navigating away
+  2. Clicking "Delete clip" shows a Shadcn AlertDialog with Cancel and Confirm buttons — window.confirm() is not used anywhere in the app
+  3. A deleted clip moves to a Trash view and is recoverable for 30 days — after 30 days it is permanently removed
+  4. Dragging a video file from Windows Explorer onto the upload area starts the upload — no file picker dialog required
+  5. Pressing Delete on a selected clip triggers delete, Escape closes any open dialog or panel, and Space plays/pauses the currently focused video
+  6. Hovering over a clip thumbnail for more than 500ms starts a silent looping video preview directly on the card — no click needed
 **Plans**: TBD
 
-### Phase 54: Electron Startup State Check
-**Goal**: Electron checks first-run state and validates license on startup before deciding which URL to load — so fresh installs route to /setup and expired licenses block app access
-**Depends on**: Phase 48, Phase 49, Phase 50, Phase 53
-**Requirements**: WIZD-01, LICS-02, LICS-04
-**Gap Closure**: Closes 2 remaining integration gaps from v10 post-Phase-53 re-audit (GAP-4, GAP-5)
+### Phase 62: UX Polish — Organization
+**Goal**: The app's language is internally consistent, dead marketing pages are removed from the routing tree, and users can tag and categorize clips to find them quickly in a growing library
+**Depends on**: Phase 61
+**Requirements**: UX-04, UX-05, UX-09
 **Success Criteria** (what must be TRUE):
-  1. A fresh install (first_run_complete=false) loads /setup instead of root URL — user sees setup wizard on first launch
-  2. On subsequent launches, Electron calls POST /desktop/license/validate after services are ready — a valid license loads root URL
-  3. An expired or invalid license (validate returns 403) redirects to /setup for re-activation instead of loading the main app
-  4. A not-yet-activated state (validate returns 404) redirects to /setup
-  5. If the settings or license check fails due to network error, the app loads root URL (graceful degradation — backend has its own grace period)
+  1. Every label, button, tooltip, and error message in the UI uses the same language — no mixed Romanian/English strings on any single page
+  2. Navigating to /statsai, /preturi, /functionalitati, /cum-functioneaza, /contact, or /testimoniale returns a 404 — these routes no longer exist
+  3. A user can add one or more tags to a clip, filter the library by tag, and see only clips with that tag — the tag persists across page reloads
 **Plans**: TBD
 
 ## Progress
@@ -246,14 +256,15 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 | 36-37 | v7 | 0/3 | Deferred (completed in v9) | - |
 | 38-42 | v8 | 8/8 | Complete | 2026-02-24 |
 | 43-46 | v9 | 6/6 | Complete | 2026-02-28 |
-| 47. Desktop Foundation | 3/3 | Complete    | 2026-03-01 | - |
-| 48. Electron Shell | 2/2 | Complete    | 2026-03-01 | - |
-| 49. Desktop API Routes | 2/2 | Complete    | 2026-03-01 | - |
-| 50. Setup Wizard | 2/2 | Complete    | 2026-03-01 | - |
-| 51. Crash Reporting | 2/2 | Complete    | 2026-03-01 | - |
-| 52. Installer and Packaging | 2/2 | Complete    | 2026-03-01 | - |
-| 53. Integration Wiring | 2/2 | Complete    | 2026-03-01 | - |
-| 54. Startup State Check | 1/1 | Complete    | 2026-03-01 | - |
+| 47-54 | v10 | 18/18 | Complete | 2026-03-01 |
+| 55. Security Hardening | v11 | 0/TBD | Not started | - |
+| 56. Testing Foundation | v11 | 0/TBD | Not started | - |
+| 57. DevOps & CI | v11 | 0/TBD | Not started | - |
+| 58. Architecture Upgrade | v11 | 0/TBD | Not started | - |
+| 59. Performance Optimization | v11 | 0/TBD | Not started | - |
+| 60. Monitoring & Observability | v11 | 0/TBD | Not started | - |
+| 61. UX Polish — Interactions | v11 | 0/TBD | Not started | - |
+| 62. UX Polish — Organization | v11 | 0/TBD | Not started | - |
 
 ---
-*Last updated: 2026-03-01 after gap closure Phase 54 added*
+*Last updated: 2026-03-02 after v11 roadmap creation*

@@ -96,43 +96,43 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SEC-01 | — | Pending |
-| SEC-02 | — | Pending |
-| SEC-03 | — | Pending |
-| SEC-04 | — | Pending |
-| TEST-01 | — | Pending |
-| TEST-02 | — | Pending |
-| TEST-03 | — | Pending |
-| DEVOPS-01 | — | Pending |
-| DEVOPS-02 | — | Pending |
-| DEVOPS-03 | — | Pending |
-| MON-01 | — | Pending |
-| MON-02 | — | Pending |
-| MON-03 | — | Pending |
-| MON-04 | — | Pending |
-| UX-01 | — | Pending |
-| UX-02 | — | Pending |
-| UX-03 | — | Pending |
-| UX-04 | — | Pending |
-| UX-05 | — | Pending |
-| UX-06 | — | Pending |
-| UX-07 | — | Pending |
-| UX-08 | — | Pending |
-| UX-09 | — | Pending |
-| PERF-01 | — | Pending |
-| PERF-02 | — | Pending |
-| PERF-03 | — | Pending |
-| PERF-04 | — | Pending |
-| ARCH-01 | — | Pending |
-| ARCH-02 | — | Pending |
-| ARCH-03 | — | Pending |
-| ARCH-04 | — | Pending |
+| SEC-01 | Phase 55 | Pending |
+| SEC-02 | Phase 55 | Pending |
+| SEC-03 | Phase 55 | Pending |
+| SEC-04 | Phase 55 | Pending |
+| TEST-01 | Phase 56 | Pending |
+| TEST-02 | Phase 56 | Pending |
+| TEST-03 | Phase 56 | Pending |
+| DEVOPS-01 | Phase 57 | Pending |
+| DEVOPS-02 | Phase 57 | Pending |
+| DEVOPS-03 | Phase 57 | Pending |
+| MON-01 | Phase 60 | Pending |
+| MON-02 | Phase 60 | Pending |
+| MON-03 | Phase 60 | Pending |
+| MON-04 | Phase 60 | Pending |
+| UX-01 | Phase 61 | Pending |
+| UX-02 | Phase 61 | Pending |
+| UX-03 | Phase 61 | Pending |
+| UX-04 | Phase 62 | Pending |
+| UX-05 | Phase 62 | Pending |
+| UX-06 | Phase 61 | Pending |
+| UX-07 | Phase 61 | Pending |
+| UX-08 | Phase 61 | Pending |
+| UX-09 | Phase 62 | Pending |
+| PERF-01 | Phase 59 | Pending |
+| PERF-02 | Phase 59 | Pending |
+| PERF-03 | Phase 59 | Pending |
+| PERF-04 | Phase 59 | Pending |
+| ARCH-01 | Phase 58 | Pending |
+| ARCH-02 | Phase 58 | Pending |
+| ARCH-03 | Phase 58 | Pending |
+| ARCH-04 | Phase 58 | Pending |
 
 **Coverage:**
 - v11 requirements: 31 total
-- Mapped to phases: 0
-- Unmapped: 31
+- Mapped to phases: 31
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-02*
-*Last updated: 2026-03-02 after initial definition*
+*Last updated: 2026-03-02 after v11 roadmap creation — all 31 requirements mapped*

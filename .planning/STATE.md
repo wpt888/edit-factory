@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v11
 milestone_name: Production Polish & Platform Hardening
-status: defining_requirements
+status: roadmap_ready
 last_updated: "2026-03-02"
 progress:
-  total_phases: 0
+  total_phases: 8
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -18,20 +18,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v11 Production Polish & Platform Hardening — Defining requirements
+**Current focus:** Phase 55 — Security Hardening (v11, ready to plan)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-03-02 — Milestone v11 started
+Phase: 55 of 62 (Security Hardening)
+Plan: 0 of TBD in current phase
+Status: Ready to plan
+Last activity: 2026-03-02 — v11 roadmap created, 31 requirements mapped across 8 phases (55-62)
+
+Progress: [░░░░░░░░░░] 0% (v11 not yet started)
 
 ## Performance Metrics
 
 **Velocity:**
 - Total plans completed: 100 (across v2-v10)
-- Total phases completed: 48
+- Total phases completed: 54
 - Total milestones shipped: 10
 
 **By Milestone:**
@@ -46,14 +48,19 @@ Last activity: 2026-03-02 — Milestone v11 started
 | v7 Overlays | 4/6 (32-35) | 7 | Shipped 2026-02-24 (partial) |
 | v8 Pipeline UX | 5 (38-42) | 8 | Shipped 2026-02-24 |
 | v9 Assembly Fix + Overlays | 4 (43-46) | 6 | Shipped 2026-02-28 |
-| v10 Desktop Launcher | 8 (47-54) | 12 | Shipped 2026-03-01 |
-| v11 Production Polish | — | — | In Progress |
+| v10 Desktop Launcher | 8 (47-54) | 18 | Shipped 2026-03-01 |
+| v11 Production Polish | 8 (55-62) | TBD | In Progress |
 
 ## Accumulated Context
 
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
+Recent decisions affecting v11:
+
+- v9: In-memory state for pipeline/assembly marked as tech debt — ARCH-02 in Phase 58 addresses this
+- v6: get_supabase() centralized in db.py — foundation for Phase 55 RLS re-enable
+- v6: slowapi at 60 req/min global — Phase 55 upgrades to per-route limits (uploads: 10/min, renders: 5/min)
 
 ### Pending Todos
 
@@ -61,17 +68,18 @@ None.
 
 ### Blockers/Concerns
 
-**Carry-over from v10:**
-- Database migrations 007/009/017/021 require manual application via Supabase SQL Editor
-- Dead code: pipeline_routes.py lines 1343-1351 (runtime-safe, non-blocking)
-- SENTRY_DSN is empty placeholder — must be replaced when Sentry project is created (SEC/MON scope)
+- Phase 58 (ARCH-01): Redis job queue requires Redis running in WSL — verify `redis-server` available before planning
+- Phase 59 (PERF-02): SSE replaces polling contract — frontend hooks use-job-polling.ts and use-batch-polling.ts both need updating
+- Phase 62 (UX-04): Language consistency requires a decision — full English recommended; confirm before planning Phase 62
+- Carry-over: DB migrations 007/009/017/021 require manual application via Supabase SQL Editor
+- Carry-over: Dead code pipeline_routes.py lines 1343-1351 (runtime-safe, non-blocking)
 
 ## Session Continuity
 
 Last session: 2026-03-02
-Stopped at: Defining v11 requirements
+Stopped at: v11 roadmap created — 8 phases, 31 requirements, all mapped
 Resume file: None
-Next action: Create roadmap → `/gsd:plan-phase 55`
+Next action: `/gsd:plan-phase 55`
 
 ---
-*Last updated: 2026-03-02 after v11 milestone start*
+*Last updated: 2026-03-02 after v11 roadmap creation*
