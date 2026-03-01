@@ -101,6 +101,18 @@ async def get_desktop_settings():
     }
 
 
+@router.post("/first-run/complete")
+async def mark_first_run_complete():
+    """Mark setup wizard as complete. Writes first_run_complete to config.json."""
+    settings = get_settings()
+    config_file = settings.base_dir / "config.json"
+    existing = _read_config(config_file)
+    existing["first_run_complete"] = True
+    config_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    logger.info("Setup wizard completed — first_run_complete written to config.json")
+    return {"completed": True}
+
+
 @router.post("/settings")
 async def save_desktop_settings(body: dict):
     """Write settings to config.json. Merges with existing values."""
