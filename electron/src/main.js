@@ -165,6 +165,69 @@ function checkUrl(url) {
   });
 }
 
+// ---------- WIZD-01 / LICS-02 / LICS-04: Startup state helpers ----------
+function httpGetJson(url) {
+  return new Promise((resolve, reject) => {
+    http.get(url, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch {
+          reject(new Error('Invalid JSON response'));
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+function httpPost(url) {
+  return new Promise((resolve, reject) => {
+    const { hostname, port, pathname } = new URL(url);
+    const req = http.request(
+      { hostname, port: Number(port), path: pathname, method: 'POST',
+        headers: { 'Content-Length': 0 } },
+      (res) => resolve(res.statusCode)
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+// WIZD-01 / LICS-02 / LICS-04: Determine startup URL based on first-run state and license
+async function checkStartupState() {
+  const SETUP_URL = 'http://localhost:3000/setup';
+  const APP_URL   = 'http://localhost:3000';
+
+  try {
+    // Step 1: Check first-run state (WIZD-01)
+    const settingsData = await httpGetJson(
+      'http://127.0.0.1:8000/api/v1/desktop/settings'
+    );
+    if (!settingsData || settingsData.first_run_complete !== true) {
+      console.log('[launcher] First run detected — routing to setup wizard');
+      return SETUP_URL;
+    }
+
+    // Step 2: Validate license on subsequent launches (LICS-02 / LICS-04)
+    const licenseStatus = await httpPost(
+      'http://127.0.0.1:8000/api/v1/desktop/license/validate'
+    );
+    if (licenseStatus === 200) {
+      return APP_URL;
+    }
+    // 403 = expired/invalid, 404 = not activated (LICS-04)
+    console.log(`[launcher] License check returned ${licenseStatus} — routing to setup`);
+    return SETUP_URL;
+
+  } catch (err) {
+    // Network error — graceful degradation (backend has its own 7-day grace period)
+    console.warn('[launcher] Startup state check failed (non-fatal):', err.message);
+    return APP_URL;
+  }
+}
+
 function waitForServices() {
   return new Promise((resolve, reject) => {
     let elapsed = 0;
