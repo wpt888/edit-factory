@@ -11,7 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Loader2, Save, Settings as SettingsIcon, Eye, EyeOff, BarChart3, Trash2, Star, RefreshCw, Plus, Key } from "lucide-react"
+import { Loader2, Save, Settings as SettingsIcon, Eye, EyeOff, BarChart3, Trash2, Star, RefreshCw, Plus, Key, Shield } from "lucide-react"
+import { Switch } from "@/components/ui/switch"
 import { apiGetWithRetry, apiPost, apiPatch, apiDelete, handleApiError } from "@/lib/api"
 import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
@@ -109,6 +110,10 @@ export default function SettingsPage() {
 
   // Desktop version state
   const [appVersion, setAppVersion] = useState<string | null>(null)
+
+  // Crash reporting state
+  const [crashReporting, setCrashReporting] = useState(false)
+  const [crashReportingLoading, setCrashReportingLoading] = useState(false)
 
   // Load ElevenLabs accounts (subscription info auto-fetched by backend)
   const loadAccounts = useCallback(async () => {
@@ -240,14 +245,35 @@ export default function SettingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- voiceId intentionally excluded: adding it would cause infinite refetch loop since loadVoices may call setVoiceId("")
   }, [provider, initialLoad])
 
-  // Fetch app version when running in desktop mode
+  // Fetch app version and crash reporting state when running in desktop mode
   useEffect(() => {
     if (process.env.NEXT_PUBLIC_DESKTOP_MODE !== 'true') return
     apiGetWithRetry('/desktop/version')
       .then((res) => res.json())
       .then((data: any) => setAppVersion(data.version))
       .catch(() => {}) // Non-critical — silently ignore errors
+    apiGetWithRetry('/desktop/settings')
+      .then((res) => res.json())
+      .then((data: any) => setCrashReporting(data.crash_reporting_enabled ?? false))
+      .catch(() => {}) // Non-critical — silently ignore errors
   }, [])
+
+  const handleCrashReportingToggle = async (enabled: boolean) => {
+    setCrashReportingLoading(true)
+    setCrashReporting(enabled) // Optimistic update
+    try {
+      const res = await apiPost('/desktop/crash-reporting', { enabled })
+      if (!res.ok) {
+        setCrashReporting(!enabled) // Revert on error
+        toast.error('Failed to update crash reporting setting')
+      }
+    } catch {
+      setCrashReporting(!enabled) // Revert on error
+      toast.error('Failed to update crash reporting setting')
+    } finally {
+      setCrashReportingLoading(false)
+    }
+  }
 
   const handleSave = async () => {
     if (!currentProfile) {
