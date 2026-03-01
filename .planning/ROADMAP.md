@@ -239,7 +239,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 | 50. Setup Wizard | 2/2 | Complete    | 2026-03-01 | - |
 | 51. Crash Reporting | 2/2 | Complete    | 2026-03-01 | - |
 | 52. Installer and Packaging | 2/2 | Complete    | 2026-03-01 | - |
-| 53. Integration Wiring | 2/2 | Complete   | 2026-03-01 | - |
+| 53. Integration Wiring | 2/2 | Complete    | 2026-03-01 | - |
 
 ---
 *Last updated: 2026-03-01 after gap closure phases added*
