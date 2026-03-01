@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v10
-milestone_name: Desktop Launcher & Distribution
-status: in_progress
-last_updated: "2026-03-01T14:45:00.000Z"
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-03-01T14:04:03.234Z"
 progress:
-  total_phases: 6
-  completed_phases: 5
-  total_plans: 11
-  completed_plans: 11
+  total_phases: 22
+  completed_phases: 22
+  total_plans: 59
+  completed_plans: 59
 ---
 
 # Project State
@@ -23,18 +23,18 @@ See: .planning/PROJECT.md (updated 2026-03-01)
 ## Current Position
 
 Phase: 52 of 52 (Installer and Packaging)
-Plan: — (not yet planned)
-Status: Ready to plan
-Last activity: 2026-03-01 — Phase 51 complete, all 2 plans verified (4/4 crash reporting criteria)
+Plan: 02 of 02 complete
+Status: Phase 52 complete — all 2 plans executed
+Last activity: 2026-03-01 — Phase 52 complete, electron-updater auto-update wired into main.js (UPDT-01, UPDT-02)
 
-Progress: [████████░░] 83% (5 of 6 v10 phases complete)
+Progress: [██████████] 100% (6 of 6 v10 phases complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 98 (across v2-v10)
-- Total phases completed: 47
-- Total milestones shipped: 9
+- Total plans completed: 100 (across v2-v10)
+- Total phases completed: 48
+- Total milestones shipped: 10
 
 **By Milestone:**
 
@@ -48,7 +48,7 @@ Progress: [████████░░] 83% (5 of 6 v10 phases complete)
 | v7 Overlays | 4/6 (32-35) | 7 | Shipped 2026-02-24 (partial) |
 | v8 Pipeline UX | 5 (38-42) | 8 | Shipped 2026-02-24 |
 | v9 Assembly Fix + Overlays | 4 (43-46) | 6 | Shipped 2026-02-28 |
-| v10 Desktop Launcher | 6 (47-52) | 9+ | In progress (5/6 phases) |
+| v10 Desktop Launcher | 6 (47-52) | 11 | Shipped 2026-03-01 |
 
 ## Accumulated Context
 
@@ -89,6 +89,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 51]: Crash Reporting card placed BEFORE Setup Wizard card in settings page
 - [Phase 51]: Reuse existing desktop useEffect for crash_reporting_enabled fetch alongside version fetch
 - [Phase 51]: Optimistic toggle with full revert on error — no half-state persistence
+- [Phase 52]: electron-updater autoDownload=true/autoInstallOnAppQuit=false — silent download, user-controlled install via Restart Now / Later dialog
+- [Phase 52]: setupAutoUpdater() called after waitForServices()+loadURL() — update check deferred until app fully running
+- [Phase 52]: isDev guard in setupAutoUpdater() — checkForUpdates() never called in dev mode (no app-update.yml exists)
+- [Phase 52]: NSIS installer config with five extraResources bundles all runtime deps; electron-updater added as runtime (not dev) dep; FFmpeg excludes ffplay.exe (194 MB unused); portable Node 22.22.0 downloaded by build script
 
 ### Pending Todos
 
@@ -107,9 +111,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Phase 51 verified and complete — all 2 plans verified (4/4 crash reporting criteria)
+Stopped at: Completed 52-02-PLAN.md — electron-updater auto-update wired into main.js (UPDT-01, UPDT-02)
 Resume file: None
-Next action: /gsd:plan-phase 52
+Next action: v10 milestone complete — all 6 phases (47-52) shipped
 
 ---
-*Last updated: 2026-03-01 after Phase 51 verification passed (4/4 crash reporting criteria)*
+*Last updated: 2026-03-01 after Phase 52 Plan 02 complete (UPDT-01, UPDT-02 — electron-updater auto-update)*

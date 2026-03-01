@@ -24,10 +24,10 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 
 ### Installer
 
-- [ ] **INST-01**: electron-builder produces NSIS .exe installer for Windows
-- [ ] **INST-02**: Installer bundles Python venv, FFmpeg binary, Next.js standalone, portable Node.js 22.x
-- [ ] **INST-03**: Installer creates Start Menu shortcut, desktop shortcut, and Add/Remove Programs entry
-- [ ] **INST-04**: Uninstaller removes all installed files and shortcuts
+- [x] **INST-01**: electron-builder produces NSIS .exe installer for Windows
+- [x] **INST-02**: Installer bundles Python venv, FFmpeg binary, Next.js standalone, portable Node.js 22.x
+- [x] **INST-03**: Installer creates Start Menu shortcut, desktop shortcut, and Add/Remove Programs entry
+- [x] **INST-04**: Uninstaller removes all installed files and shortcuts
 
 ### Setup Wizard
 
@@ -47,8 +47,8 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 
 ### Updates & Telemetry
 
-- [ ] **UPDT-01**: electron-updater checks for new version on startup via latest.yml manifest
-- [ ] **UPDT-02**: Update downloads in background, prompts user to restart (not mid-session)
+- [x] **UPDT-01**: electron-updater checks for new version on startup via latest.yml manifest
+- [x] **UPDT-02**: Update downloads in background, prompts user to restart (not mid-session)
 - [x] **UPDT-03**: Sentry crash reporting initialized only when user has opted in
 - [x] **UPDT-04**: before_send filter scrubs API keys from Sentry stack frame locals
 - [x] **UPDT-05**: Backend GET /api/v1/desktop/version returns current version number
@@ -98,10 +98,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SHELL-03 | Phase 48 | Complete |
 | SHELL-04 | Phase 48 | Complete |
 | SHELL-05 | Phase 48 | Complete |
-| INST-01 | Phase 52 | Pending |
-| INST-02 | Phase 52 | Pending |
-| INST-03 | Phase 52 | Pending |
-| INST-04 | Phase 52 | Pending |
+| INST-01 | Phase 52 | Complete |
+| INST-02 | Phase 52 | Complete |
+| INST-03 | Phase 52 | Complete |
+| INST-04 | Phase 52 | Complete |
 | WIZD-01 | Phase 50 | Complete |
 | WIZD-02 | Phase 50 | Complete |
 | WIZD-03 | Phase 50 | Complete |
@@ -112,8 +112,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LICS-02 | Phase 49 | Complete |
 | LICS-03 | Phase 49 | Complete |
 | LICS-04 | Phase 49 | Complete |
-| UPDT-01 | Phase 52 | Pending |
-| UPDT-02 | Phase 52 | Pending |
+| UPDT-01 | Phase 52 | Complete |
+| UPDT-02 | Phase 52 | Complete |
 | UPDT-03 | Phase 51 | Complete |
 | UPDT-04 | Phase 51 | Complete |
 | UPDT-05 | Phase 49 | Complete |

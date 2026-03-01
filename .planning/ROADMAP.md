@@ -226,7 +226,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 | 49. Desktop API Routes | 2/2 | Complete    | 2026-03-01 | - |
 | 50. Setup Wizard | 2/2 | Complete    | 2026-03-01 | - |
 | 51. Crash Reporting | 2/2 | Complete    | 2026-03-01 | - |
-| 52. Installer and Packaging | v10 | 0/TBD | Not started | - |
+| 52. Installer and Packaging | 2/2 | Complete   | 2026-03-01 | - |
 
 ---
 *Last updated: 2026-03-01 after v10 roadmap creation*
