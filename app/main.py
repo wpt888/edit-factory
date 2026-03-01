@@ -112,6 +112,8 @@ async def lifespan(app: FastAPI):
     settings.ensure_dirs()
     if settings.auth_disabled and not settings.debug:
         logger.critical("⚠️ AUTH_DISABLED=true in non-debug mode! This is a security risk.")
+    if settings.desktop_mode:
+        logger.info("Desktop mode active — auth bypassed, config from %s", settings.base_dir)
     logger.info("Edit Factory started")
     logger.info(f"  Input dir: {settings.input_dir.absolute()}")
     logger.info(f"  Output dir: {settings.output_dir.absolute()}")
