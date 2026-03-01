@@ -5,10 +5,23 @@ import os
 import logging
 from pathlib import Path
 
-# Add local FFmpeg to PATH if exists
-_ffmpeg_bin = Path(__file__).parent.parent / "ffmpeg" / "ffmpeg-master-latest-win64-gpl" / "bin"
-if _ffmpeg_bin.exists():
-    os.environ['PATH'] = str(_ffmpeg_bin) + os.pathsep + os.environ.get('PATH', '')
+# Add FFmpeg to PATH: check bundled location (desktop mode) then local dev location
+def _setup_ffmpeg_path():
+    desktop_mode = os.getenv("DESKTOP_MODE", "").lower() in ("true", "1", "yes")
+    candidates = []
+    if desktop_mode:
+        # Desktop mode: bundled FFmpeg in AppData (placed by installer, Phase 52)
+        appdata = os.getenv("APPDATA")
+        if appdata:
+            candidates.append(Path(appdata) / "EditFactory" / "bundled" / "ffmpeg" / "bin")
+    # Dev fallback: local win64-gpl checkout in project root
+    candidates.append(Path(__file__).parent.parent / "ffmpeg" / "ffmpeg-master-latest-win64-gpl" / "bin")
+    for candidate in candidates:
+        if candidate.exists():
+            os.environ['PATH'] = str(candidate) + os.pathsep + os.environ.get('PATH', '')
+            break
+
+_setup_ffmpeg_path()
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -124,8 +137,11 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
     from fastapi.responses import JSONResponse
+    if isinstance(exc, (ValueError, TypeError)):
+        logger.warning(f"Bad request: {exc}")
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 # CORS - configurat din environment variables
