@@ -1,0 +1,39 @@
+{
+  "name": "edit-factory-shell",
+  "version": "0.1.0",
+  "description": "Edit Factory Desktop Shell",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^34.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.editfactory.app",
+    "productName": "Edit Factory",
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "extraResources": [
+      {
+        "from": "../venv",
+        "to": "venv",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../frontend/.next/standalone",
+        "to": "frontend/standalone",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../app",
+        "to": "app",
+        "filter": ["**/*"]
+      }
+    ]
+  }
+}
