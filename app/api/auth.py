@@ -107,11 +107,11 @@ async def get_current_user(
     settings = get_settings()
 
     # Development mode bypass - WARNING: Only use for local development!
-    if settings.auth_disabled:
-        logger.warning("⚠️ Authentication is DISABLED - development mode only!")
+    if settings.auth_disabled or settings.desktop_mode:
+        logger.warning("Auth bypassed — %s", "desktop mode" if settings.desktop_mode else "AUTH_DISABLED=true")
         return AuthUser(
             user_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-            email="dev@localhost",
+            email="desktop@local" if settings.desktop_mode else "dev@localhost",
             role="authenticated"
         )
 
@@ -203,7 +203,7 @@ async def get_profile_context(
     settings = get_settings()
 
     # Development mode bypass
-    if settings.auth_disabled:
+    if settings.auth_disabled or settings.desktop_mode:
         if x_profile_id:
             logger.warning(f"⚠️ Using explicit dev profile: {x_profile_id} (AUTH_DISABLED=true)")
             return ProfileContext(profile_id=x_profile_id, user_id=current_user.id)
