@@ -1,6 +1,78 @@
 # GSD-RALPH Progress Log
 # Learnings accumulate here across iterations
 
+## Iteration 27 - 2026-03-01
+- Phase: 52 (Installer and Packaging)
+- Action: Research + Planning complete (2 plans, 1 wave)
+- Plan 52-01: NSIS Build Configuration and Build Script (wave 1) — electron/package.json NSIS config, extraResources (venv, frontend, app, FFmpeg, Node.js 22), GitHub publish config, build-installer.js script
+- Plan 52-02: Auto-Update via electron-updater (wave 1) — setupAutoUpdater() in main.js, update-downloaded dialog with Restart Now/Later, non-fatal errors
+- Files changed: .planning/phases/52-installer-and-packaging/52-RESEARCH.md, 52-01-PLAN.md, 52-02-PLAN.md
+- Decisions made: Both plans in wave 1 (no file overlap). GitHub Releases for update hosting. ffprobe.exe included, ffplay.exe excluded (saves ~194 MB). PowerShell for Node.js download in build script. electron-updater dependency added in Plan 01's package.json task to avoid file conflict with Plan 02.
+- Learnings: Build size safe (~1 GB uncompressed, 300-400 MB LZMA). Phase 48 already wired most of the extraResources and portable Node.js path. Verification passed first try — no revision loop needed.
+- Status: PLANNING COMPLETE — ready for /gsd:execute-phase 52
+- Commits: e3935c0 (research), a17fdd2 (plans)
+
+## Iteration 26 - 2026-03-01
+- Phase: 51 (Crash Reporting)
+- Action: Executed all 2 plans in 1 wave (parallel), verified phase goal (4/4 success criteria)
+- Wave 1: Plan 51-01 (Sentry Crash Reporter Backend — 4 tasks, 5 commits) + Plan 51-02 (Settings Page Crash Reporting Toggle — 3 tasks, 4 commits)
+- Files changed: app/services/crash_reporter.py (NEW), app/main.py, app/api/desktop_routes.py, requirements.txt, frontend/src/app/settings/page.tsx
+- Decisions made: Fixed STATE.md frontmatter manually — phase-complete tool misidentifies milestone as v1.0 (same bug as iterations 22/24). SENTRY_DSN left as empty string placeholder (standard practice, needs replacing when Sentry project created).
+- Learnings: Phase-complete tool still has v10→v1.0 milestone detection bug. Both plans executed cleanly in parallel with no conflicts (backend + frontend independent).
+- Status: PHASE COMPLETE — Phase 51 verified, ready for Phase 52
+- Commits: 8f88694, 3c8d68f, beb56ce, 4c67b63, 7fd43c5 (51-01) + 0ab5982, 8f5f0e4, 44cb668, 19859ab (51-02) + 8a1db3b (completion docs)
+
+## Iteration 25 - 2026-03-01
+- Phase: 51 (Crash Reporting)
+- Action: Research + Planning complete (2 plans, 1 wave)
+- Plan 51-01: Sentry Crash Reporter Backend (wave 1) — sentry-sdk dependency, crash_reporter.py service, main.py wiring, POST /crash-reporting endpoint
+- Plan 51-02: Settings Page Crash Reporting Toggle (wave 1) — Settings page toggle card, runtime enable/disable
+- Files changed: .planning/phases/51-crash-reporting/51-RESEARCH.md, 51-01-PLAN.md, 51-02-PLAN.md
+- Decisions made: Both plans in wave 1 (backend + frontend independent). No CONTEXT.md — used research + requirements only.
+- Learnings: Sentry SDK can only init once per process — use before_send hook with mutable flag for runtime toggle.
+- Status: PLANNING COMPLETE — ready for execution
+- Commits: a5faeb7
+
+## Iteration 24 - 2026-03-01
+- Phase: 50 (Setup Wizard)
+- Action: Executed all 2 plans across 2 waves, verified phase goal (6/6 WIZD requirements)
+- Wave 1: Plan 50-01 (Backend Wizard Endpoints — 4 tasks, 5 commits: httpx import, TestConnectionRequest model, first-run/complete endpoint, test-connection endpoint, extended GET /settings)
+- Wave 2: Plan 50-02 (Setup Wizard Frontend + Settings Link — 3 tasks, 4 commits: navbar hide, /setup page, Settings re-entry link)
+- Files changed: app/api/desktop_routes.py, frontend/src/app/setup/page.tsx (NEW), frontend/src/components/navbar-wrapper.tsx, frontend/src/app/settings/page.tsx
+- Decisions made: Respected plan dependency (50-02 depends on 50-01) and executed sequentially despite plan-index grouping both in wave 1. Fixed STATE.md manually (phase-complete tool misidentifies last phase due to numbering gaps — same bug as iteration 22).
+- Learnings: phase-complete tool still reports is_last_phase=true incorrectly for non-sequential phase numbers. Manual STATE.md fix needed each time.
+- Status: PHASE COMPLETE — Phase 50 verified (6/6 must-haves), STATE updated to Phase 51
+- Commits: 266ee04, 51f8118, d8cbb20, d204b4b, e8a335b, 7bcf14a, 805cc65, d721919, 698e5cc, c95e000
+
+## Iteration 23 - 2026-03-01
+- Phase: 50 (Setup Wizard)
+- Action: Research + Planning complete (2 plans, 2 waves)
+- Plan 50-01: Backend Wizard Endpoints (wave 1) — POST /first-run/complete, POST /test-connection, extended GET /settings
+- Plan 50-02: Setup Wizard Frontend + Settings Link (wave 2) — 3-step wizard page, navbar hide, settings link
+- Files changed: .planning/phases/50-setup-wizard/50-RESEARCH.md, 50-01-PLAN.md, 50-02-PLAN.md
+- Decisions made: No CONTEXT.md — proceeded with research+requirements only; plan checker passed all 6 WIZD requirements on first try
+- Learnings: Phase 49 desktop_routes.py endpoints are the foundation; 404/403/200 license validate distinction drives first-run detection
+- Status: PHASE PLANNED — ready for /gsd:execute-phase 50
+
+## Iteration 22 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Executed all 2 plans across 2 waves, verified phase goal
+- Wave 1: Plan 49-01 (LicenseService + Desktop API Routes — Lemon Squeezy integration, 4 tasks, 4 files)
+- Wave 2: Plan 49-02 (Frontend Version Display — Settings page footer, 1 task, 1 file)
+- Files changed: app/config.py, app/services/license_service.py (NEW), app/api/desktop_routes.py (NEW), app/main.py, frontend/src/app/settings/page.tsx
+- Decisions made: Executor correctly fixed apiGetWithRetry .json() chain (returns Response not parsed data); phase-complete tool incorrectly reported is_last_phase=true, manually fixed STATE.md
+- Learnings: gsd-tools phase-complete may misidentify last phase when phase numbering has gaps (47-52 vs sequential). Manual STATE.md fixes needed.
+- Status: PHASE COMPLETE — Phase 49 verified (7/7 must-haves), STATE updated to Phase 50
+- Commits: 0ae5cd8, d87491d, 916b720, 58f30d4, c557db5, 6837989, a0efcee, afaf9b5
+
+## Iteration 21 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Verified existing plans (49-01, 49-02) — research and plans were already created from a previous session
+- Files changed: none (plans already existed)
+- Decisions made: Proceeded without CONTEXT.md since research + requirements are sufficient; plan checker passed all 6 requirements
+- Learnings: Phase 49 had plans pre-created from research session. Plan checker passed with minor warnings (task format, implementation-focused must_haves). Ready for execution.
+- Status: PHASE PLANNED — ready for /gsd:execute-phase 49
+
 ## Iteration 1 - 2026-02-12
 - Phase: 12 (ElevenLabs TTS Upgrade)
 - Action: Executed all 3 plans across 2 waves, verified phase goal
@@ -531,3 +603,181 @@
 - Learnings: Verifier passed 7/7 must-haves with 4 human_needed items (all runtime visual checks). Both plans executed cleanly. overlay_renderer reuses zoompan math from product_video_compositor (4x pre-scale pattern). End-to-end chain verified: Frontend POST → PipelineRenderRequest → render_variants → assemble_and_render → assemble_video → apply_pip_overlay/generate_interstitial_clip. All 3 OVRL requirements (04/05/06) satisfied. Phase 46 is LAST phase in v9 — MILESTONE COMPLETE.
 - Status: PHASE COMPLETE — Phase 46 verified (7/7 must-haves), v9 MILESTONE COMPLETE
 - Commits: d05e865, b531cce, ed462ba, c05a468, 5b3630c, 38105e4
+
+## Iteration 27 - 2026-03-01
+- Phase: 47 (Desktop Foundation)
+- Action: Executed all 3 plans across 2 waves, fixed gap, verified phase goal
+- Wave 1: Plans 47-01 + 47-02 in parallel (APP_BASE_DIR abstraction + process cleanup utility)
+- Wave 2: Plan 47-03 (desktop mode auth bypass + FFmpeg resolution)
+- Gap fix: tts_cache.py _get_cache_root() was hardcoded to project root, updated to use get_settings().base_dir
+- Files changed: app/config.py, app/desktop.py (new), app/api/auth.py, app/main.py, app/services/tts_cache.py, requirements.txt
+- Decisions made: Renamed PLAN-A/B/C to 47-01/02/03 format for GSD tooling; fixed tts_cache gap directly instead of full gap-closure cycle (single line fix); fixed depends_on reference from PLAN-A to 47-01
+- Learnings: Plan files with non-standard naming (PLAN-A instead of 47-01-PLAN) aren't recognized by gsd-tools. Always use NN-MM-PLAN.md format. Pre-existing uncommitted changes in working tree can get swept into executor commits. The `phase complete` tool reported is_last_phase:true because it couldn't auto-detect Phase 48 — manual STATE.md update was needed.
+- Status: PHASE COMPLETE — Phase 47 verified (4/4 requirements), STATE advanced to Phase 48
+- Commits: 78e29af, d216d90, c44f81d, d9be665, 73260e7, de9fac6, 40a80ea, 40d273c, ea34fe6, 88fa1e0, eb2fb8e
+
+## Iteration 19 - 2026-03-01
+- Phase: 48 (Electron Shell)
+- Action: Planned phase — research + 2 plans created + verification passed
+- Files changed: .planning/phases/48-electron-shell/48-RESEARCH.md, 48-01-PLAN.md, 48-02-PLAN.md
+- Decisions made: Continue without CONTEXT.md (autonomous mode); accepted checker warnings as non-blocking (will-quit guard logic, wave 1 soft artifact dependency)
+- Learnings: Phase 48 has 2 plans in 1 wave (parallel). Plan A = Next.js standalone postbuild + icon. Plan B = full Electron main process (spawn, poll, tray, shutdown). Research flagged tray GC pitfall and 127.0.0.1 vs localhost. Checker noted will-quit guard may miss non-tray quit paths — acceptable per research Pitfall 4.
+- Status: PHASE STEP DONE — planning complete, ready for execution
+
+## Iteration 25 - 2026-03-01
+- Phase: 48 (Electron Shell)
+- Action: Verified existing plans (48-01, 48-02) — research and plans already existed from prior session
+- Plans: 2 plans in 1 wave — Plan A (postbuild + icon), Plan B (Electron main process)
+- Verification: PASSED with 2 informational notes (non-blocking)
+- Decisions made: Proceeded with existing plans since research and plan artifacts were already complete
+- Learnings: Phase 48 had plans pre-created from a research session. Plan checker validated all 5 SHELL requirements covered.
+- Status: PLANNING COMPLETE — ready for execution
+
+## Iteration - 2026-03-01 (Phase 48 Execution)
+- Phase: 48 (Electron Shell)
+- Action: Executed all 2 plans in 1 wave (parallel), verified phase goal
+- Wave 1: Plans 48-01 + 48-02 in parallel
+  - 48-01: Next.js standalone postbuild script (copies .next/static + public/ into standalone), placeholder ICO icon, .gitignore fix
+  - 48-02: Electron main process (electron/src/main.js) — spawn uvicorn+node, health polling, BrowserWindow, tray icon, graceful shutdown, orphan cleanup
+- Files changed: frontend/scripts/postbuild.js, frontend/package.json, electron/package.json, electron/src/main.js, electron/.gitignore, electron/build/icon.ico, electron/build/generate-icon.js, .gitignore
+- Decisions made: `phase complete` tool returned wrong milestone metadata (v1.0 instead of v10, is_last_phase=true) — manually fixed STATE.md to correctly advance to Phase 49
+- Learnings: The gsd-tools phase complete command may misidentify milestone boundaries when phases span different numbering schemes. Manual STATE.md fixup was needed. Both parallel agents completed cleanly with no conflicts.
+- Verification: 10/10 must-haves passed, human_needed for GUI items (expected for Electron)
+- Status: PHASE COMPLETE — Phase 48 verified, STATE updated to Phase 49
+- Commits: 2387a47, d0ca68d, b8ac255, 2b8888a, e57579a, f42c692, 03611b0, 62ea0a9, 9626fea
+
+## Iteration 21 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Planned phase — research + 2 plans + verification passed
+- Files changed: .planning/phases/49-desktop-api-routes/49-RESEARCH.md, 49-01-PLAN.md, 49-02-PLAN.md
+- Decisions made: 2-plan split (Wave 1: backend LicenseService+routes, Wave 2: frontend version display). No CONTEXT.md — proceeded with research+requirements only (autonomous mode).
+- Learnings: Lemon Squeezy API uses form-encoded POST (not JSON). Grace period is app-side logic. Desktop router conditionally mounted. All 6 requirements covered across 2 plans.
+- Status: PHASE STEP DONE — plans ready for execution
+- Commit: dd9206f
+
+## Iteration 22 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Verified existing plans (49-01, 49-02) — research and plans already existed from prior session
+- Files changed: None (plans already complete)
+- Decisions made: Proceeded with existing plans rather than replanning — plan checker passed all 8 dimensions
+- Learnings: Phase 49 had plans from an incomplete prior session (STATE.md said "not yet planned" but plans existed). Verification confirmed all 6 requirements covered (LICS-01-04, UPDT-05-06). 2 plans in 2 waves.
+- Status: PHASE_STEP_DONE — plans verified, ready for execution
+
+## Iteration 19 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Validated existing plans (49-01, 49-02) with plan checker — plans were already created from prior research session
+- Files changed: none (plans pre-existed)
+- Decisions made: Verified plans cover all 6 requirement IDs (LICS-01-04, UPDT-05-06), used existing research, skipped re-planning
+- Learnings: Phase 49 directory had plans from a prior session (research phase created them). Plan checker passed on first try — no revision needed. 2 plans in 2 waves.
+- Status: PHASE PLANNED — ready for /gsd:execute-phase 49
+
+## Iteration 14 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Validated existing plans (49-01 LicenseService + Desktop API Routes, 49-02 Frontend Version Display) and ran plan checker
+- Files changed: None (plans already committed from previous session)
+- Decisions made: Plans pre-existing from research phase — verified they cover all 6 requirements (LICS-01..04, UPDT-05..06), checker passed all 8 dimensions
+- Learnings: Plans were already created and committed during the research phase. Plan checker validated cleanly — no revisions needed.
+- Status: completed — Phase 49 planned with 2 plans in 2 waves
+
+## Iteration 60 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Ran /gsd:plan-phase 49 — plans already existed (49-01, 49-02). Verified with plan checker — all 6 requirements covered, all dimensions passed.
+- Files changed: None (plans pre-existing)
+- Decisions made: Plans validated as-is; no revisions needed
+- Learnings: Plans were committed in a prior session. Checker passed cleanly. Next iteration should run /gsd:execute-phase 49.
+- Status: completed — planning verified, ready for execution
+
+## Iteration 17 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Verified existing plans (49-01, 49-02) — research and plans were already created in previous iteration
+- Files changed: none (plans already existed)
+- Decisions made: Proceeded with existing plans since they passed all verification checks (6/6 requirements covered, all 8 dimensions passed)
+- Learnings: Plans were already created from prior research iteration. Plan checker confirmed all LICS-01 through LICS-04, UPDT-05, UPDT-06 are covered. 2 plans in 2 waves.
+- Status: PHASE PLANNED — ready for execute-phase 49
+
+## Iteration 25 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Ran /gsd:plan-phase 49 — found existing plans (49-01, 49-02) and research. Ran plan checker verification — passed all dimensions.
+- Files changed: none (plans already committed)
+- Decisions made: Accepted existing plans since plan checker verified all 6 requirements covered (LICS-01-04, UPDT-05-06)
+- Learnings: Plans were already created+committed in a prior session. Plan checker confirms clean pass. Next step is execute-phase 49.
+- Status: PHASE_STEP_DONE — planning verified, ready for execution
+
+## Iteration - 2026-03-01 (Phase 49 Planning)
+- Phase: 49 (Desktop API Routes)
+- Action: Verified existing plans (49-01, 49-02) from previous session — research and plans already committed
+- Plans: 2 plans in 2 waves covering LICS-01..04, UPDT-05..06
+  - 49-01 (Wave 1): LicenseService + Desktop API Routes (4 tasks, 4 files)
+  - 49-02 (Wave 2): Frontend Version Display (1 task, 1 file)
+- Verification: PASSED — all 6 requirements covered, dependencies correct, scope acceptable
+- Decisions made: Used existing plans rather than replanning — they were complete and verified
+- Learnings: Phase 49 research+planning was done in a prior session but STATE.md wasn't updated. Plans were ready and passed verification.
+- Status: completed (planning phase done, ready for execution)
+
+## Iteration 20 - 2026-03-01 (continued)
+- Phase: 49 (Desktop API Routes)
+- Action: Ran /gsd:plan-phase 49 — found existing plans (49-01, 49-02) and research. Ran plan-checker verification.
+- Verification result: PASSED — all 6 requirements covered (LICS-01-04, UPDT-05-06), dependencies correct, must_haves trace to goal
+- Decisions made: Plans already existed from previous session; verified rather than replanned
+- Learnings: Previous iteration created plans but loop exited before execution could begin. Plans are solid and ready.
+- Status: PHASE_STEP_DONE — planning verified, ready for execution
+
+## Iteration 19 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Verified existing plans (49-01 LicenseService + Desktop Routes, 49-02 Frontend Version Display)
+- Files changed: none (plans already existed from previous research session)
+- Decisions made: Plans were already created with research — ran plan checker which passed all 6 dimensions
+- Learnings: Phase 49 had research + 2 plans already created from a prior session (dd9206f commit). Plan checker verified all 6 requirements (LICS-01..04, UPDT-05..06) covered. Ready for execution.
+- Status: PHASE STEP DONE — plans verified, ready for /gsd:execute-phase 49
+
+## Iteration 61 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Verified existing plans (49-01 and 49-02) with plan-checker — plans were already created and committed from prior research session
+- Files changed: none (plans already committed)
+- Decisions made: Plans already existed with research complete — skipped re-research and re-planning, ran verification only
+- Learnings: Phase 49 had plans created during the research phase. Plan checker passed all 7 dimensions, 6/6 requirements covered. Plans are ready for execution.
+- Status: PHASE PLANNED — ready for /gsd:execute-phase 49
+
+## Iteration 27 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Plan-phase — validated existing plans (2 plans from prior session), ran plan checker
+- Files changed: None (plans already committed)
+- Decisions made: Reused existing plans (49-01, 49-02) from prior session; plan checker verified all 6 requirements covered (LICS-01 through LICS-04, UPDT-05, UPDT-06)
+- Learnings: Plans were already created and committed in a previous session but STATE.md wasn't updated. Init correctly detected has_plans: true.
+- Status: PHASE_STEP_DONE — plans verified, ready for execute
+
+## Iteration 18 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Verified existing plans (2 plans already created from previous research session)
+- Files changed: none (plans already existed)
+- Decisions made: Plans passed all 8 verification dimensions — no revisions needed
+- Learnings: Plans were pre-created during research phase. Checker confirmed all 6 requirements (LICS-01 through LICS-04, UPDT-05, UPDT-06) covered across 2 plans in 2 waves
+- Status: PHASE PLANNED — ready for execution
+
+## Iteration 22 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Ran /gsd:plan-phase 49 — plans already existed (49-01, 49-02), ran plan checker verification
+- Files changed: none (plans already committed in dd9206f)
+- Decisions made: Autonomous — used existing plans, skipped re-planning since research + plans were complete
+- Learnings: Phase 49 was partially completed in a prior session (research + plans created/committed). Checker passed all dimensions. Ready for execution.
+- Status: PHASE PLANNED — ready for /gsd:execute-phase 49
+
+## Iteration 17 - 2026-03-01
+- Phase: 49 (Desktop API Routes)
+- Action: Plan-phase — verified existing plans (2 plans, 2 waves)
+- Plans: 49-01 (LicenseService + Desktop API Routes, Wave 1), 49-02 (Frontend Version Display, Wave 2)
+- Requirements covered: LICS-01, LICS-02, LICS-03, LICS-04, UPDT-05, UPDT-06 (all 6)
+- Verification: Plan checker PASSED — all dimensions clear
+- Decisions: Plans and research already existed from previous session (commit dd9206f), reused as-is
+- Learnings: Plans were already committed, no re-commit needed
+- Status: PHASE STEP DONE — ready for /gsd:execute-phase 49
+
+## Iteration 28 - 2026-03-01
+- Phase: 52 (Installer and Packaging)
+- Action: Executed all 2 plans in 1 wave (parallel), verified phase goal (6/6 requirements)
+- Wave 1: Plan 52-01 (NSIS Build Config — 2 tasks, 3 commits) + Plan 52-02 (Auto-Update — 1 task, 2 commits)
+- Files changed: electron/package.json, electron/src/main.js, scripts/build-installer.js, electron/.gitignore
+- Decisions made: Both plans wave 1 (parallel, no file overlap). Verification passed first try — 45 automated checks across 3 files.
+- Learnings: Phase 52 is LAST phase of v10. All 6 phases (47-52) complete. PLACEHOLDER_ORG/PLACEHOLDER_REPO in publish config needs replacement before first release. 3 human verification items flagged (installer build, live auto-update, latest.yml).
+- Status: PHASE COMPLETE — v10 milestone ready for audit
+- Commits: 6262dee, b19407c, e6f8263 (52-01), b213370, a0e2687 (52-02), 6099a1a (docs)
