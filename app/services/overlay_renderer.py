@@ -178,6 +178,7 @@ def _run_ffmpeg(cmd: list) -> subprocess.CompletedProcess:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        timeout=300,
     )
 
 

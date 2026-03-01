@@ -785,7 +785,7 @@ class AssemblyService:
                 if duration_overrides and idx < len(duration_overrides)
                 else None
             )
-            needed_duration = override if override else (match.srt_end - match.srt_start)
+            needed_duration = override if override is not None else (match.srt_end - match.srt_start)
 
             # Get segment video path from source_video_id
             source_video_path = segment.get("source_video_path")
@@ -1605,6 +1605,20 @@ class AssemblyService:
             }
             for seg in segments_data
         ]
+
+        # Schedule cleanup of temp TTS directory after 30 minutes
+        temp_dir = audio_path.parent
+        def _cleanup_temp():
+            import shutil
+            try:
+                if temp_dir.exists():
+                    shutil.rmtree(str(temp_dir), ignore_errors=True)
+                    logger.debug(f"Cleaned up preview temp dir: {temp_dir}")
+            except Exception:
+                pass
+        cleanup_timer = threading.Timer(1800, _cleanup_temp)
+        cleanup_timer.daemon = True
+        cleanup_timer.start()
 
         return {
             "audio_path": str(audio_path),

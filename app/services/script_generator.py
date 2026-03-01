@@ -205,7 +205,10 @@ Begin generation now:"""
     def _generate_with_gemini(self, prompt: str) -> str:
         """Generate content using Gemini API."""
         if self._gemini_client is None:
-            self._gemini_client = genai.Client(api_key=self.gemini_api_key)
+            self._gemini_client = genai.Client(
+                api_key=self.gemini_api_key,
+                http_options={"timeout": 120_000},
+            )
 
         logger.info(f"Calling Gemini API with model {self.gemini_model}")
 
@@ -219,7 +222,10 @@ Begin generation now:"""
     def _generate_with_claude(self, prompt: str) -> str:
         """Generate content using Anthropic Claude API."""
         if self._anthropic_client is None:
-            self._anthropic_client = anthropic.Anthropic(api_key=self.anthropic_api_key)
+            self._anthropic_client = anthropic.Anthropic(
+                api_key=self.anthropic_api_key,
+                timeout=120.0,
+            )
 
         logger.info("Calling Anthropic Claude API")
 

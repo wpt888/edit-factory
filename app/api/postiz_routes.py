@@ -232,6 +232,12 @@ async def upload_to_postiz(
             if not video_path.exists():
                 raise HTTPException(status_code=404, detail=f"Video file not found: {request.video_path}")
 
+    # Path traversal protection
+    resolved = video_path.resolve()
+    allowed_dirs = [settings.output_dir.resolve(), settings.base_dir.resolve()]
+    if not any(str(resolved).startswith(str(d)) for d in allowed_dirs):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     try:
         from app.services.postiz_service import get_postiz_publisher
         publisher = get_postiz_publisher(profile.profile_id)
@@ -514,7 +520,7 @@ async def bulk_publish_clips(
 
 
 @router.get("/publish/{job_id}/progress")
-async def get_publish_job_progress(job_id: str):
+async def get_publish_job_progress(job_id: str, profile: ProfileContext = Depends(get_profile_context)):
     """Get progress of a publish job."""
     progress = get_publish_progress(job_id)
     if not progress:

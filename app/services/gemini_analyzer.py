@@ -319,6 +319,7 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
             tracker.log_gemini_analysis(
                 job_id=video_path.stem,
                 frames_analyzed=len(frames),
+                profile_id=getattr(self, '_profile_id', None),
                 video_duration=video_duration
             )
         except Exception as e:

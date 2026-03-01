@@ -29,9 +29,9 @@ export function EmptyState({ icon, title, description, action }: EmptyStateProps
           {icon}
         </div>
       )}
-      <p className="text-lg font-medium text-gray-300">{title}</p>
+      <p className="text-lg font-medium text-muted-foreground">{title}</p>
       {description && (
-        <p className="text-sm text-gray-500 text-center max-w-xs">{description}</p>
+        <p className="text-sm text-muted-foreground text-center max-w-xs">{description}</p>
       )}
       {action && (
         <Button

@@ -111,7 +111,6 @@ export function ImagePickerDialog({
       onOpenChange(false);
     } catch (err) {
       handleApiError(err, "Failed to save image selection");
-      toast.error("Failed to save image selection");
     } finally {
       setSaving(false);
     }
@@ -142,10 +141,10 @@ export function ImagePickerDialog({
               <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center text-muted-foreground">
                 <Images className="h-6 w-6" />
               </div>
-              <p className="text-lg font-medium text-gray-300">
+              <p className="text-lg font-medium text-muted-foreground">
                 No images available
               </p>
-              <p className="text-sm text-gray-500 text-center max-w-xs">
+              <p className="text-sm text-muted-foreground text-center max-w-xs">
                 This product has no gallery images in the catalog.
               </p>
             </div>

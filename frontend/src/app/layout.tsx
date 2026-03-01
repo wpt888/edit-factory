@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Montserrat, Roboto, Open_Sans, Oswald, Bebas_Neue } from "next/font/google";
 import "./globals.css";
-import { NavBar } from "@/components/navbar";
+import { NavBarWrapper } from "@/components/navbar-wrapper";
 import { Toaster } from "sonner";
 import { ProfileProvider } from "@/contexts/profile-context";
 
@@ -57,12 +57,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="ro" className="dark" suppressHydrationWarning>
+    <html lang="ro" className="dark">
       <body
         className={`${geistSans.variable} ${geistMono.variable} ${montserrat.variable} ${roboto.variable} ${openSans.variable} ${oswald.variable} ${bebasNeue.variable} antialiased`}
       >
         <ProfileProvider>
-          <NavBar />
+          <NavBarWrapper />
           {children}
         </ProfileProvider>
         <Toaster

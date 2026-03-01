@@ -148,26 +148,26 @@ class ElevenLabsTTS:
             with open(output_path, "wb") as f:
                 f.write(response.content)
 
-                logger.info(f"Audio saved to: {output_path}")
+            logger.info(f"Audio saved to: {output_path}")
 
-                # Log cost
-                try:
-                    from app.services.cost_tracker import get_cost_tracker
-                    tracker = get_cost_tracker()
-                    tracker.log_elevenlabs_tts(
-                        job_id=output_path.stem,
-                        characters=len(text),
-                        text_preview=text
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to log cost: {e}")
+            # Log cost (after file handle is released)
+            try:
+                from app.services.cost_tracker import get_cost_tracker
+                tracker = get_cost_tracker()
+                tracker.log_elevenlabs_tts(
+                    job_id=output_path.stem,
+                    characters=len(text),
+                    text_preview=text
+                )
+            except Exception as e:
+                logger.warning(f"Failed to log cost: {e}")
 
-                # --- Cache store ---
-                cache_store(cache_key, "legacy", output_path, {
-                    "characters": len(text)
-                })
+            # --- Cache store ---
+            cache_store(cache_key, "legacy", output_path, {
+                "characters": len(text)
+            })
 
-                return output_path
+            return output_path
 
         except httpx.TimeoutException:
             raise Exception("ElevenLabs API timeout - text may be too long")

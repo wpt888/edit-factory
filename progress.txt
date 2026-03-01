@@ -461,3 +461,73 @@
 - Learnings: Verifier passed 9/9 must-haves with 4 human_needed (visual checks). All 5 TIME requirements satisfied (TIME-01 through TIME-05). All 3 waves executed cleanly — no deviations. Phase 41 is the LAST phase in v8 — milestone complete.
 - Status: PHASE COMPLETE — Phase 41 verified (9/9 must-haves), v8 MILESTONE COMPLETE
 - Commits: 8a38158, 306a04a, d7332f8, 0f7b435, 504b388, e50547c, 4c7685d, 0528773, 2590ecb
+
+## Iteration 45 - 2026-02-28
+- Phase: 43 (Assembly Diversity Fix)
+- Action: Planned phase — 1 PLAN.md file created in 1 wave, verified by plan checker
+- Plan 43-01 (Wave 1, autonomous): Rewrite merge logic to preserve per-SRT segment diversity + add overlapping-time-range adjacency prevention
+- Files changed: .planning/phases/43-assembly-diversity-fix/43-01-PLAN.md
+- Decisions made: Continued without CONTEXT.md (autonomous mode). Research skipped (disabled in config). Single plan with 2 tasks covers all 3 requirements (ASMB-01/02/03). Pure backend fix in assembly_service.py only.
+- Learnings: Plan checker passed all dimensions on first attempt. Task 1 rewrites merge step to preserve all sub-entries instead of picking one representative per group. Task 2 adds overlapping-time-range adjacency check in _rr_next and match_srt_to_segments.
+- Status: PLANNED — ready for /gsd:execute-phase 43
+
+## Iteration 46 - 2026-02-28
+- Phase: 43 (Assembly Diversity Fix)
+- Action: Executed all 1 plan in 1 wave, verified phase goal
+- Wave 1: Plan 43-01 (rewrite merge logic to preserve per-SRT segment diversity + overlapping-time-range adjacency prevention)
+- Files changed: app/services/assembly_service.py (modified — merge step rewritten lines 792-858, _rr_next extended with exclude_start/exclude_end, keyword filtering uses _overlaps_previous helper)
+- Decisions made: is_last_phase CLI bug recurred — manually fixed STATE.md to Phase 44. Verifier passed 4/4 must-haves with automated tests.
+- Learnings: Merge step now emits N TimelineEntry objects per merged group (not 1 representative). Adjacency check uses time-range overlap (cs < pe and ps < ce), not just source_video_id equality. Round-robin cycling confirmed: 3 segments over 9 entries = perfect [s0,s1,s2,s0,s1,s2,s0,s1,s2]. Same is_last_phase CLI bug as all previous iterations.
+- Status: PHASE COMPLETE — Phase 43 verified (4/4 must-haves), STATE updated to Phase 44
+- Commits: f05f3e5, e401381, 78b9c03, 238c1d3
+
+## Iteration 47 - 2026-02-28
+- Phase: 44 (Subtitle Data Flow Fix)
+- Action: Executed all 2 plans in 1 wave (parallel), verified phase goal
+- Wave 1: Plan 44-01 (persist srt_content into tts_previews cache at preview_variant — render reuses without re-calling ElevenLabs) + Plan 44-02 (100ms minimum SRT entry duration + 0.5s safety margin in build_timeline for video-audio alignment)
+- Files changed: app/api/pipeline_routes.py (modified — srt_content persistence in tts_previews), app/services/tts_subtitle_generator.py (modified — MIN_DURATION=0.1s floor, zero-duration skip), app/services/assembly_service.py (modified — target_video_duration += 0.5 safety margin)
+- Decisions made: is_last_phase CLI bug recurred — manually fixed STATE.md to Phase 45. Both plans parallel (disjoint file sets — pipeline_routes.py vs tts_subtitle_generator.py + assembly_service.py).
+- Learnings: Verifier passed 6/6 must-haves. All 4 requirement IDs (SUBS-01 through SUBS-04) satisfied. 3 human_needed items flagged (timing match, cutoff, word skip — all runtime/perceptual). Clean parallel execution. Same is_last_phase CLI bug as all previous iterations — always manually verify.
+- Status: PHASE COMPLETE — Phase 44 verified (6/6 must-haves), STATE updated to Phase 45
+- Commits: 9f7fb6e, 58b5b80, 09af561, ab704d4, 7bd51f3, 5997874, 1d28859
+
+## Iteration 48 - 2026-02-28
+- Phase: 45 (Interstitial Slide Controls)
+- Action: Planned phase — 1 PLAN.md file created in 1 wave, verified by plan checker
+- Plan 45-01 (Wave 1, has checkpoint): InterstitialSlide type + "+" insertion buttons between timeline blocks + duration slider + Ken Burns animation config + pipeline state wiring + render payload
+- Files changed: .planning/phases/45-interstitial-slide-controls/45-01-PLAN.md
+- Decisions made: Continued without CONTEXT.md (autonomous mode). Research skipped (disabled in config). Single plan covers all 3 requirements (OVRL-01/02/03). InterstitialSlide is separate type from MatchPreview. No DB schema changes — data flows through render payload. Actual FFmpeg rendering deferred to Phase 46.
+- Learnings: Plan checker passed all dimensions on first attempt. 3 files modified: timeline-editor.tsx, pipeline/page.tsx, pipeline_routes.py. Checkpoint for visual verification.
+- Status: PLANNED — ready for /gsd:execute-phase 45
+
+## Iteration 49 - 2026-02-28
+- Phase: 45 (Interstitial Slide Controls)
+- Action: Executed all 1 plan in 1 wave, verified phase goal
+- Wave 1: Plan 45-01 (InterstitialSlide type + "+" insertion buttons between timeline blocks + slide config panel with duration/animation/Ken Burns direction + pipeline state wiring + render payload)
+- Files changed: frontend/src/components/timeline-editor.tsx (modified — InterstitialSlide interface, renderInsertButton, renderSlideBlock, config panel), frontend/src/app/pipeline/page.tsx (modified — interstitialSlides state per variant, prop passing, render payload), app/api/pipeline_routes.py (modified — PipelineRenderRequest.interstitial_slides field, logging)
+- Decisions made: Auto-approved checkpoint (autonomous mode, visual verification only). is_last_phase CLI bug recurred — manually fixed STATE.md to Phase 46. No FFmpeg rendering added (deferred to Phase 46 per plan). Same is_last_phase CLI bug as all previous iterations — always manually verify.
+- Learnings: Verifier passed 4/4 must-haves with 4 human_needed items (all runtime browser checks). Clean single-wave execution. InterstitialSlide type exported from timeline-editor.tsx (17 occurrences). interstitialSlides wired in pipeline page (4 occurrences). Backend accepts but does not render — Phase 46 handles FFmpeg integration.
+- Status: PHASE COMPLETE — Phase 45 verified (4/4 must-haves), STATE updated to Phase 46
+- Commits: 909ffb5, 39d8a66, 94cce96, 132945b
+
+## Iteration 50 - 2026-02-28
+- Phase: 46 (Overlay FFmpeg Render Integration)
+- Action: Planned phase — 2 PLAN.md files created in 2 waves, verified by plan checker
+- Plan 46-01 (Wave 1, autonomous): Create overlay_renderer.py service (generate_interstitial_clip + apply_pip_overlay with Ken Burns) + wire frontend PiP data to render POST body + extend PipelineRenderRequest model
+- Plan 46-02 (Wave 2, depends on 46-01, has checkpoint): Integrate overlay renderer into assembly pipeline (PiP on segments after extraction, interstitials into concat list) + visual verification
+- Files changed: .planning/phases/46-overlay-ffmpeg-render-integration/46-01-PLAN.md, 46-02-PLAN.md
+- Decisions made: Continued without CONTEXT.md (autonomous mode). Research skipped (disabled in config). Plan checker passed all 8 dimensions on first attempt. overlay_renderer.py reuses zoompan math from product_video_compositor.py. Graceful degradation: failed overlays log warnings but never crash render.
+- Learnings: Planner agent auto-committed (b5cd4c4). All 3 requirements (OVRL-04/05/06) covered across both plans. Key architecture: overlay_renderer is called from assembly_service (not pipeline_routes). Plan 01 explicitly defers assembly wiring to Plan 02 (clear boundary).
+- Status: PLANNED — ready for /gsd:execute-phase 46
+- Commits: b5cd4c4
+
+## Iteration 51 - 2026-02-28
+- Phase: 46 (Overlay FFmpeg Render Integration)
+- Action: Executed all 2 plans across 2 waves, verified phase goal
+- Wave 1: Plan 46-01 (overlay_renderer.py service 449 lines — generate_interstitial_clip with Ken Burns 4x pre-scale zoompan, apply_pip_overlay with static/fade/kenburns modes; frontend pip_overlays in render POST body; backend PipelineRenderRequest.pip_overlays field)
+- Wave 2: Plan 46-02 (assembly pipeline integration — PiP post-extract pass on segments via apply_pip_overlay, interstitial slide insertion into concat list via generate_interstitial_clip, pipeline_routes param threading)
+- Files changed: app/services/overlay_renderer.py (new, 449 lines), app/services/assembly_service.py (modified), app/api/pipeline_routes.py (modified), frontend/src/app/pipeline/page.tsx (modified)
+- Decisions made: Auto-approved checkpoint (autonomous mode, visual verification only). is_last_phase=true is correct (Phase 46 is last v9 phase). Graceful degradation maintained — overlay failures never crash render.
+- Learnings: Verifier passed 7/7 must-haves with 4 human_needed items (all runtime visual checks). Both plans executed cleanly. overlay_renderer reuses zoompan math from product_video_compositor (4x pre-scale pattern). End-to-end chain verified: Frontend POST → PipelineRenderRequest → render_variants → assemble_and_render → assemble_video → apply_pip_overlay/generate_interstitial_clip. All 3 OVRL requirements (04/05/06) satisfied. Phase 46 is LAST phase in v9 — MILESTONE COMPLETE.
+- Status: PHASE COMPLETE — Phase 46 verified (7/7 must-haves), v9 MILESTONE COMPLETE
+- Commits: d05e865, b531cce, ed462ba, c05a468, 5b3630c, 38105e4

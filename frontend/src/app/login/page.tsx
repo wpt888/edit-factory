@@ -49,7 +49,7 @@ export default function LoginPage() {
       }
 
       // Redirect to library on success
-      router.push("/library");
+      router.push("/librarie");
       router.refresh();
     } catch {
       setError("A apărut o eroare. Te rugăm să încerci din nou.");

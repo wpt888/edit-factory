@@ -149,7 +149,7 @@ export const FONT_OPTIONS = [
   { value: "var(--font-roboto), Roboto, sans-serif", label: "Roboto" },
   { value: "var(--font-oswald), Oswald, sans-serif", label: "Oswald" },
   { value: "var(--font-poppins), Poppins, sans-serif", label: "Poppins" },
-  { value: "var(--font-bebas), 'Bebas Neue', sans-serif", label: "Bebas Neue" },
+  { value: "var(--font-bebas-neue), 'Bebas Neue', sans-serif", label: "Bebas Neue" },
   { value: "var(--font-anton), Anton, sans-serif", label: "Anton" },
   { value: "var(--font-rubik), Rubik, sans-serif", label: "Rubik" },
   { value: "var(--font-nunito), Nunito, sans-serif", label: "Nunito" },

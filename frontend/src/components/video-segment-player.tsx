@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback } from "react";
-import { handleApiError, API_URL } from "@/lib/api";
+import { handleApiError, apiGet } from "@/lib/api";
+import { formatTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
@@ -70,6 +71,7 @@ interface VideoSegmentPlayerProps {
   profileId?: string;
   productGroups?: ProductGroup[];
   showGroupBands?: boolean;
+  fps?: number;
 }
 
 export function VideoSegmentPlayer({
@@ -85,6 +87,7 @@ export function VideoSegmentPlayer({
   profileId,
   productGroups = [],
   showGroupBands = true,
+  fps = 30,
 }: VideoSegmentPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -118,6 +121,9 @@ export function VideoSegmentPlayer({
   const [isScrubbing, setIsScrubbing] = useState(false);
   const wasPlayingBeforeScrub = useRef(false);
 
+  // Track which video IDs we've already fetched voice data for
+  const voiceFetchedRef = useRef<Set<string>>(new Set());
+
   // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -133,15 +139,7 @@ export function VideoSegmentPlayer({
   const visibleStart = scrollOffset * safeDuration;
   const visibleEnd = visibleStart + visibleDuration;
 
-  // Format time as mm:ss.ms
-  const formatTime = (time: number): string => {
-    const minutes = Math.floor(time / 60);
-    const seconds = Math.floor(time % 60);
-    const ms = Math.floor((time % 1) * 100);
-    return `${minutes.toString().padStart(2, "0")}:${seconds
-      .toString()
-      .padStart(2, "0")}.${ms.toString().padStart(2, "0")}`;
-  };
+  // Format time - imported from utils
 
   // Play/Pause toggle
   const togglePlay = useCallback(() => {
@@ -165,10 +163,9 @@ export function VideoSegmentPlayer({
   // Frame navigation
   const frameStep = useCallback((direction: number) => {
     if (!videoRef.current) return;
-    const fps = 30; // Assume 30fps
     const step = direction / fps;
     seekTo(currentTime + step);
-  }, [currentTime, seekTo]);
+  }, [currentTime, seekTo, fps]);
 
   // Fullscreen toggle
   const toggleFullscreen = useCallback(() => {
@@ -588,7 +585,7 @@ export function VideoSegmentPlayer({
     if (!sourceVideoId) return;
     let cancelled = false;
     setWaveformLoading(true);
-    fetch(`${API_URL}/segments/source-videos/${sourceVideoId}/waveform?samples=1200${profileId ? `&profile_id=${profileId}` : ''}`)
+    apiGet(`/segments/source-videos/${sourceVideoId}/waveform?samples=1200${profileId ? `&profile_id=${profileId}` : ''}`)
       .then(res => res.ok ? res.json() : null)
       .then(data => { if (!cancelled && data?.waveform) setWaveformData(data.waveform); })
       .catch(() => {})
@@ -598,6 +595,7 @@ export function VideoSegmentPlayer({
       setWaveformData([]);
       setVoiceRegions([]);
       setShowVoiceOverlay(false);
+      voiceFetchedRef.current.delete(sourceVideoId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceVideoId]);
@@ -608,21 +606,14 @@ export function VideoSegmentPlayer({
       return;
     }
 
-    // Don't refetch if we already have data for this video
-    if (voiceRegions.length > 0) return;
+    // Don't refetch if we already fetched for this video
+    if (voiceFetchedRef.current.has(sourceVideoId)) return;
 
     let cancelled = false;
     setVoiceLoading(true);
+    voiceFetchedRef.current.add(sourceVideoId);
 
-    const vpId = typeof window !== "undefined"
-      ? localStorage.getItem("editai_current_profile_id")
-      : null;
-
-    fetch(`${API_URL}/segments/source-videos/${sourceVideoId}/voice-detection`, {
-      headers: {
-        ...(vpId && { "X-Profile-Id": vpId }),
-      },
-    })
+    apiGet(`/segments/source-videos/${sourceVideoId}/voice-detection`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (!cancelled && data?.voice_segments) {
@@ -844,12 +835,12 @@ export function VideoSegmentPlayer({
         </div>
 
         {/* Segment markers - clickable with higher z-index, transparent during scrubbing */}
-        {segments.map((segment, idx) => {
+        {segments.map((segment) => {
           const style = getSegmentStyle(segment);
           if (style.display === 'none') return null;
           return (
             <div
-              key={segment.id || idx}
+              key={segment.id || `seg-${segment.start_time}-${segment.end_time}`}
               className={`absolute top-4 bottom-0 transition-all z-20 border-l-2 border-r-2 cursor-pointer ${
                 currentSegment?.id === segment.id
                   ? "bg-blue-500/70 border-blue-400 ring-1 ring-blue-400/50"

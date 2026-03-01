@@ -490,7 +490,7 @@ export default function SettingsPage() {
                   ${dashboard.costs.monthly.toFixed(2)} / ${dashboard.costs.monthly_quota.toFixed(2)}
                 </span>
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
+              <div className="w-full bg-muted rounded-full h-2.5">
                 <div
                   className={`h-2.5 rounded-full ${
                     (dashboard.costs.monthly / dashboard.costs.monthly_quota) > 0.9
@@ -587,7 +587,7 @@ export default function SettingsPage() {
                         </span>
                       )}
                       {!account.is_active && (
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground">
                           Disabled
                         </span>
                       )}
@@ -603,7 +603,7 @@ export default function SettingsPage() {
                       </span>
                       {account.character_limit && account.characters_used !== null && (
                         <div className="flex items-center gap-1.5 flex-1 max-w-[200px]">
-                          <div className="flex-1 bg-gray-200 rounded-full h-1.5 dark:bg-gray-700">
+                          <div className="flex-1 bg-muted rounded-full h-1.5">
                             <div
                               className={`h-1.5 rounded-full ${
                                 (account.characters_used! / account.character_limit) > 0.9

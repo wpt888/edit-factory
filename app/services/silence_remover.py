@@ -70,7 +70,7 @@ class SilenceRemover:
         padding: float = 0.08,  # 80ms padding pentru tranziții line
         speech_threshold: float = 0.5,  # Threshold pentru VAD
         min_speech_duration: float = 0.1,  # Segmente mai scurte de 100ms sunt ignorate
-        target_pause_duration: float = None  # If set, shorten long pauses to this instead of removing
+        target_pause_duration: Optional[float] = None  # If set, shorten long pauses to this instead of removing
     ):
         self.min_silence_duration = min_silence_duration
         self.padding = padding
@@ -494,7 +494,7 @@ def remove_silence_from_tts(
     output_path: Optional[Path] = None,
     min_silence_duration: float = 0.3,
     padding: float = 0.08,
-    target_pause_duration: float = None
+    target_pause_duration: Optional[float] = None
 ) -> SilenceRemovalResult:
     """
     Funcție helper: elimină silence dintr-un fișier TTS.

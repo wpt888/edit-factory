@@ -14,12 +14,12 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
 
   return (
     <html lang="ro" className="dark">
-      <body className="bg-gray-900 text-white min-h-screen flex items-center justify-center p-4">
+      <body className="bg-background text-foreground min-h-screen flex items-center justify-center p-4">
         <div className="max-w-lg w-full text-center space-y-6">
           <div className="flex justify-center">
-            <div className="w-16 h-16 rounded-full bg-red-900/30 flex items-center justify-center border border-red-800">
+            <div className="w-16 h-16 rounded-full bg-destructive/10 flex items-center justify-center border border-destructive/30">
               <svg
-                className="w-8 h-8 text-red-400"
+                className="w-8 h-8 text-destructive"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -36,32 +36,32 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
           </div>
 
           <div className="space-y-2">
-            <h1 className="text-2xl font-bold text-white">
+            <h1 className="text-2xl font-bold">
               Ceva nu a mers bine
             </h1>
-            <p className="text-gray-400 text-sm">
+            <p className="text-muted-foreground text-sm">
               A aparut o eroare neasteptata. Poti incerca sa reiei actiunea sau sa te intorci acasa.
             </p>
           </div>
 
           {error.message && (
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 text-left">
-              <p className="text-xs text-gray-500 mb-1 uppercase tracking-wide">Detalii eroare</p>
-              <code className="text-red-400 text-sm break-all">{error.message}</code>
+            <div className="bg-muted border border-border rounded-lg p-4 text-left">
+              <p className="text-xs text-muted-foreground mb-1 uppercase tracking-wide">Detalii eroare</p>
+              <code className="text-destructive text-sm break-all">{error.message}</code>
             </div>
           )}
 
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <button
               onClick={reset}
-              className="px-6 py-2.5 bg-white text-gray-900 font-medium rounded-lg hover:bg-gray-100 transition-colors"
+              className="px-6 py-2.5 bg-primary text-primary-foreground font-medium rounded-lg hover:bg-primary/90 transition-colors"
             >
               Incearca din nou
             </button>
             {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
             <a
               href="/"
-              className="px-6 py-2.5 border border-gray-600 text-gray-300 font-medium rounded-lg hover:bg-gray-800 hover:text-white transition-colors inline-block"
+              className="px-6 py-2.5 border border-border text-muted-foreground font-medium rounded-lg hover:bg-muted hover:text-foreground transition-colors inline-block"
             >
               Inapoi acasa
             </a>

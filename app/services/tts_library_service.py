@@ -6,6 +6,7 @@ Provides generation, regeneration, deletion, and pipeline auto-save functionalit
 """
 import logging
 import shutil
+import threading
 import uuid
 from pathlib import Path
 from typing import Optional, Tuple
@@ -16,13 +17,16 @@ logger = logging.getLogger(__name__)
 
 # Singleton instance
 _instance = None
+_instance_lock = threading.Lock()
 
 
 def get_tts_library_service():
     """Get singleton TTS library service instance."""
     global _instance
     if _instance is None:
-        _instance = TTSLibraryService()
+        with _instance_lock:
+            if _instance is None:
+                _instance = TTSLibraryService()
     return _instance
 
 

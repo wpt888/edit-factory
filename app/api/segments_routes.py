@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
+from app.utils import sanitize_filename as _sanitize_filename
 
 import logging
 
@@ -208,18 +209,6 @@ def _extract_segment_video(
     except Exception as e:
         logger.error(f"Failed to extract segment: {e}")
         return False
-
-def _sanitize_filename(filename: str) -> str:
-    """Sanitize filename for safe storage."""
-    import re
-    if not filename:
-        return "unnamed"
-    safe_name = Path(filename).name
-    safe_name = re.sub(r'[^\w\-_\.]', '_', safe_name)
-    if len(safe_name) > 100:
-        safe_name = safe_name[:100]
-    return safe_name or "unnamed"
-
 
 # Product group color palette
 _PRODUCT_GROUP_COLORS = [
@@ -535,15 +524,10 @@ async def delete_source_video(
 @router.get("/source-videos/{video_id}/stream")
 async def stream_source_video(
     video_id: str,
-    profile_id: Optional[str] = Query(None),
     profile: ProfileContext = Depends(get_profile_context),
 ):
-    """Stream source video for playback.
-
-    Accepts profile_id as query param (for <video> tags that can't send headers)
-    or X-Profile-Id header.
-    """
-    effective_profile_id = profile_id or profile.profile_id
+    """Stream source video for playback."""
+    effective_profile_id = profile.profile_id
 
     supabase = get_supabase()
     if not supabase:
@@ -651,11 +635,10 @@ def _extract_waveform(video_path: str, num_samples: int = 800, duration: float =
 async def get_source_video_waveform(
     video_id: str,
     samples: int = Query(default=800, ge=100, le=4000),
-    profile_id: Optional[str] = Query(None),
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Get audio waveform data for visualization."""
-    effective_profile_id = profile_id or profile.profile_id
+    effective_profile_id = profile.profile_id
 
     supabase = get_supabase()
     if not supabase:

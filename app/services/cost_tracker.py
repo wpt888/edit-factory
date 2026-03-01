@@ -41,6 +41,7 @@ class CostTracker:
         self.log_file = self.log_dir / "cost_log.json"
         self._ensure_log_file()
         self._supabase = None
+        self._log_lock = threading.Lock()
         self._init_supabase()
 
     def _init_supabase(self):
@@ -95,13 +96,15 @@ class CostTracker:
 
         try:
             data = {
-                "job_id": entry.job_id,
                 "service": entry.service,
                 "operation": entry.operation,
-                "units": entry.input_units,
-                "estimated_cost": entry.cost_usd,
-                "profile_id": profile_id,  # Add profile_id column
-                "details": entry.details
+                "cost": entry.cost_usd,
+                "profile_id": profile_id,
+                "metadata": {
+                    "job_id": entry.job_id,
+                    "units": entry.input_units,
+                    "details": entry.details,
+                },
             }
 
             result = self._supabase.table("api_costs").insert(data).execute()
@@ -185,13 +188,14 @@ class CostTracker:
             logger.info(f"Cost logged: Gemini Analysis - {frames_analyzed} frames = ${total_cost:.4f}")
         return entry
 
-    _log_lock = threading.Lock()
-
     def _add_entry(self, entry: CostEntry):
-        """Add entry to local log and update totals."""
+        """Add entry to local log and update totals. Rotates to keep last 10000 entries."""
         with self._log_lock:
             data = self._load_log()
             data["entries"].append(asdict(entry))
+            # Log rotation: keep only last 10000 entries
+            if len(data["entries"]) > 10000:
+                data["entries"] = data["entries"][-10000:]
             data["totals"][entry.service] = round(
                 data["totals"].get(entry.service, 0) + entry.cost_usd, 6
             )
@@ -213,7 +217,7 @@ class CostTracker:
         today = datetime.now(timezone.utc).date().isoformat()
 
         # Get totals - filter by profile if provided
-        query = self._supabase.table("api_costs").select("service, estimated_cost")
+        query = self._supabase.table("api_costs").select("service, cost")
         if profile_id:
             query = query.eq("profile_id", profile_id)
         all_costs = query.execute()
@@ -222,11 +226,11 @@ class CostTracker:
         for row in all_costs.data:
             service = row["service"]
             if service in totals:
-                totals[service] += float(row["estimated_cost"] or 0)
+                totals[service] += float(row["cost"] or 0)
 
         # Get today's costs
         today_query = self._supabase.table("api_costs")\
-            .select("service, estimated_cost")\
+            .select("service, cost")\
             .gte("created_at", f"{today}T00:00:00")
         if profile_id:
             today_query = today_query.eq("profile_id", profile_id)
@@ -236,7 +240,7 @@ class CostTracker:
         for row in today_costs.data:
             service = row["service"]
             if service in today_totals:
-                today_totals[service] += float(row["estimated_cost"] or 0)
+                today_totals[service] += float(row["cost"] or 0)
 
         # Get last 10 entries
         last_query = self._supabase.table("api_costs")\
@@ -331,12 +335,12 @@ class CostTracker:
         if self._supabase:
             try:
                 result = self._supabase.table("api_costs")\
-                    .select("estimated_cost")\
+                    .select("cost")\
                     .eq("profile_id", profile_id)\
                     .gte("created_at", month_start.isoformat())\
                     .execute()
 
-                total = sum(float(row.get("estimated_cost", 0) or 0) for row in result.data)
+                total = sum(float(row.get("cost", 0) or 0) for row in result.data)
                 return round(total, 4)
             except Exception as e:
                 logger.warning(f"Failed to get monthly costs from Supabase: {e}")

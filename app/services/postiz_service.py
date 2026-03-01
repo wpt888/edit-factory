@@ -4,6 +4,7 @@ Handles video uploads and post scheduling via Postiz API.
 """
 import os
 import logging
+import threading
 import time
 import httpx
 from pathlib import Path
@@ -362,6 +363,7 @@ class PostizPublisher:
 
 # Profile-aware factory pattern with instance caching + TTL
 _postiz_instances: Dict[str, Tuple[PostizPublisher, float]] = {}  # profile_id -> (instance, created_at)
+_postiz_lock = threading.Lock()
 _POSTIZ_CACHE_TTL = 300  # 5 minutes
 _MAX_POSTIZ_INSTANCES = 100
 
@@ -382,15 +384,16 @@ def get_postiz_publisher(profile_id: str) -> PostizPublisher:
     global _postiz_instances
 
     # Return cached instance if exists and not expired
-    if profile_id in _postiz_instances:
-        instance, created_at = _postiz_instances[profile_id]
-        if (time.time() - created_at) < _POSTIZ_CACHE_TTL:
-            return instance
-        else:
-            logger.debug(f"[Profile {profile_id}] Postiz cache expired, recreating")
-            del _postiz_instances[profile_id]
+    with _postiz_lock:
+        if profile_id in _postiz_instances:
+            instance, created_at = _postiz_instances[profile_id]
+            if (time.time() - created_at) < _POSTIZ_CACHE_TTL:
+                return instance
+            else:
+                logger.debug(f"[Profile {profile_id}] Postiz cache expired, recreating")
+                del _postiz_instances[profile_id]
 
-    # Load profile's Postiz settings from database
+    # Load profile's Postiz settings from database (outside lock — DB call is slow)
     supabase = get_supabase()
     api_url = None
     api_key = None
@@ -421,14 +424,16 @@ def get_postiz_publisher(profile_id: str) -> PostizPublisher:
             "Configurează Postiz în Settings."
         )
 
-    # Evict oldest entry if cache is full
-    if len(_postiz_instances) >= _MAX_POSTIZ_INSTANCES:
-        oldest_key = next(iter(_postiz_instances))
-        _postiz_instances.pop(oldest_key, None)
-
     # Create and cache instance with timestamp
     publisher = PostizPublisher(api_url=api_url, api_key=api_key)
-    _postiz_instances[profile_id] = (publisher, time.time())
+    with _postiz_lock:
+        # Evict oldest entry if cache is full
+        if len(_postiz_instances) >= _MAX_POSTIZ_INSTANCES:
+            oldest_key = next(iter(_postiz_instances))
+            _postiz_instances.pop(oldest_key, None)
+
+        _postiz_instances[profile_id] = (publisher, time.time())
+
     logger.info(f"[Profile {profile_id}] Created Postiz publisher instance")
 
     return publisher
@@ -443,13 +448,14 @@ def reset_postiz_publisher(profile_id: Optional[str] = None):
         profile_id: Reset specific profile's instance, or None to reset all
     """
     global _postiz_instances
-    if profile_id:
-        if profile_id in _postiz_instances:
-            del _postiz_instances[profile_id]
-            logger.info(f"[Profile {profile_id}] Reset Postiz publisher cache")
-    else:
-        _postiz_instances = {}
-        logger.info("Reset all Postiz publisher caches")
+    with _postiz_lock:
+        if profile_id:
+            if profile_id in _postiz_instances:
+                del _postiz_instances[profile_id]
+                logger.info(f"[Profile {profile_id}] Reset Postiz publisher cache")
+        else:
+            _postiz_instances = {}
+            logger.info("Reset all Postiz publisher caches")
 
 
 def is_postiz_configured(profile_id: Optional[str] = None) -> bool:

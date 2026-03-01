@@ -221,7 +221,6 @@ export function ProductPickerDialog({
       onOpenChange(false);
     } catch (err) {
       handleApiError(err, "Failed to associate product");
-      toast.error("Failed to associate product");
     } finally {
       setSelectingId(null);
     }

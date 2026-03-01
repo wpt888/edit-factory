@@ -37,6 +37,7 @@ export function EditorLayout({
       ) {
         return;
       }
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
 
       if (e.key === "[" && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();

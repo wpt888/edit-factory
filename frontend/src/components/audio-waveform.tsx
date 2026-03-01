@@ -11,8 +11,18 @@ interface AudioWaveformProps {
   height?: number;
 }
 
-// Cache decoded waveform data by URL
+// Cache decoded waveform data by URL (LRU, max 100 entries)
+const WAVEFORM_CACHE_MAX = 100;
 const waveformCache = new Map<string, Float32Array>();
+
+function waveformCacheSet(key: string, value: Float32Array) {
+  if (waveformCache.size >= WAVEFORM_CACHE_MAX) {
+    // Delete oldest entry (first key in insertion order)
+    const oldest = waveformCache.keys().next().value;
+    if (oldest !== undefined) waveformCache.delete(oldest);
+  }
+  waveformCache.set(key, value);
+}
 
 export function AudioWaveform({
   audioUrl,
@@ -62,21 +72,22 @@ export function AudioWaveform({
     setLoading(true);
 
     (async () => {
+      let audioContext: AudioContext | null = null;
       try {
         const response = await fetch(audioUrl);
         const arrayBuffer = await response.arrayBuffer();
-        const audioContext = new AudioContext();
+        audioContext = new AudioContext();
         const decoded = await audioContext.decodeAudioData(arrayBuffer);
-        audioContext.close();
 
         if (cancelled) return;
 
         const bars = downsample(decoded, 150);
-        waveformCache.set(audioUrl, bars);
+        waveformCacheSet(audioUrl, bars);
         setWaveformData(bars);
       } catch {
         // silent — waveform just won't show
       } finally {
+        audioContext?.close().catch(() => {});
         if (!cancelled) setLoading(false);
       }
     })();
@@ -88,7 +99,6 @@ export function AudioWaveform({
   useEffect(() => {
     if (!isPlaying || !audioElement) {
       cancelAnimationFrame(animFrameRef.current);
-      if (!isPlaying) setProgress(0);
       return;
     }
 

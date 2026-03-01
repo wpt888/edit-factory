@@ -847,3 +847,12 @@ async def _generate_product_video_task(
             )
         except Exception as update_exc:
             logger.error("[%s] Failed to update job to failed state: %s", job_id, update_exc)
+    finally:
+        # Clean up temp files on failure or success
+        try:
+            temp_dir = settings.base_dir / "temp" / profile_id / "product_gen"
+            for pattern in [f"tts_{job_id}.*", f"composed_{job_id}.*", f"subtitles_{job_id}.*"]:
+                for f in temp_dir.glob(pattern):
+                    f.unlink(missing_ok=True)
+        except Exception:
+            pass

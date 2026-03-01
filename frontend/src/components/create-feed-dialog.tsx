@@ -74,20 +74,14 @@ export function CreateFeedDialog({
         feed_url: trimmedFeedUrl,
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        toast.success("Feed created successfully");
-        onCreated(data);
-        onOpenChange(false);
-        setName("");
-        setFeedUrl("");
-      } else {
-        const error = await response.json().catch(() => ({ detail: "Failed to create feed" }));
-        toast.error(error.detail || "Failed to create feed");
-      }
+      const data = await response.json();
+      toast.success("Feed created successfully");
+      onCreated(data);
+      onOpenChange(false);
+      setName("");
+      setFeedUrl("");
     } catch (error) {
       handleApiError(error, "Eroare la crearea feed-ului");
-      toast.error("An error occurred while creating the feed");
     } finally {
       setLoading(false);
     }

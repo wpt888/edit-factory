@@ -33,6 +33,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
+import { formatTimeShort as formatTime } from "@/lib/utils";
 import type { SubtitleSettings } from "@/types/video-processing";
 
 // MatchPreview interface (mirrors pipeline/page.tsx)
@@ -91,11 +92,6 @@ interface TimelineEditorProps {
   onInterstitialSlidesChange?: (slides: InterstitialSlide[]) => void;
 }
 
-function formatTime(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
-}
 
 export function TimelineEditor({
   matches,

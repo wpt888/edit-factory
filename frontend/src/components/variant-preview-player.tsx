@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import { API_URL } from "@/lib/api";
+import { formatTimeShort as formatTime } from "@/lib/utils";
 import type { MatchPreview } from "@/components/timeline-editor";
 import type { SubtitleSettings } from "@/types/video-processing";
 
@@ -24,12 +25,6 @@ interface VariantPreviewPlayerProps {
   subtitleSettings?: SubtitleSettings;
 }
 
-function formatTime(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
-}
-
 export function VariantPreviewPlayer({
   open,
   onOpenChange,
@@ -41,6 +36,7 @@ export function VariantPreviewPlayer({
 }: VariantPreviewPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const prevMatchesRef = useRef(matches);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -62,6 +58,21 @@ export function VariantPreviewPlayer({
   }, [activeMatchIndex]);
   useEffect(() => {
     matchesRef.current = matches;
+  }, [matches]);
+
+  // Clean stale video refs when matches prop changes
+  useEffect(() => {
+    if (prevMatchesRef.current !== matches) {
+      const currentIds = new Set(
+        matches.filter((m) => m.source_video_id).map((m) => m.source_video_id!)
+      );
+      for (const id of Object.keys(videoRefs.current)) {
+        if (!currentIds.has(id)) {
+          delete videoRefs.current[id];
+        }
+      }
+      prevMatchesRef.current = matches;
+    }
   }, [matches]);
 
   // Filter matches that have video data for sync

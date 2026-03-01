@@ -94,6 +94,7 @@ class ElevenLabsAccountManager:
         self.settings = get_settings()
         # In-memory cache: profile_id -> (list of account dicts, timestamp)
         self._cache: Dict[str, tuple] = {}  # profile_id -> (accounts, created_at)
+        self._cache_lock = threading.Lock()
         # Cache for .env key subscription info
         self._env_sub_cache: Optional[dict] = None
         self._env_sub_cache_at: float = 0
@@ -105,24 +106,27 @@ class ElevenLabsAccountManager:
 
     def _invalidate_cache(self, profile_id: str):
         """Invalidate cache for a profile."""
-        self._cache.pop(profile_id, None)
+        with self._cache_lock:
+            self._cache.pop(profile_id, None)
 
     def _get_cached_accounts(self, profile_id: str) -> Optional[List[dict]]:
         """Get cached accounts for a profile (returns None if expired)."""
         import time
-        entry = self._cache.get(profile_id)
-        if entry is None:
-            return None
-        accounts, created_at = entry
-        if (time.time() - created_at) >= self._CACHE_TTL:
-            del self._cache[profile_id]
-            return None
-        return accounts
+        with self._cache_lock:
+            entry = self._cache.get(profile_id)
+            if entry is None:
+                return None
+            accounts, created_at = entry
+            if (time.time() - created_at) >= self._CACHE_TTL:
+                del self._cache[profile_id]
+                return None
+            return accounts
 
     def _set_cached_accounts(self, profile_id: str, accounts: List[dict]):
         """Set cached accounts for a profile with timestamp."""
         import time
-        self._cache[profile_id] = (accounts, time.time())
+        with self._cache_lock:
+            self._cache[profile_id] = (accounts, time.time())
 
     # ==================== Key Selection ====================
 
@@ -533,6 +537,12 @@ class ElevenLabsAccountManager:
         masked = {**result.data[0]}
         del masked["api_key_encrypted"]
         return masked
+
+    @staticmethod
+    async def check_subscription_async(api_key: str) -> dict:
+        """Async wrapper for check_subscription using asyncio.to_thread."""
+        import asyncio
+        return await asyncio.to_thread(ElevenLabsAccountManager.check_subscription, api_key)
 
     @staticmethod
     def check_subscription(api_key: str) -> dict:

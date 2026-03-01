@@ -5,6 +5,7 @@ Calitate excelentă, multe voci, fără costuri.
 import asyncio
 import concurrent.futures
 import logging
+import threading
 from pathlib import Path
 from typing import List, Dict, Optional
 from dataclasses import dataclass
@@ -65,6 +66,7 @@ class EdgeTTSService:
 
     # Class-level cache shared across all instances
     _voices_cache: Optional[List[Voice]] = None
+    _voices_cache_lock = threading.Lock()
 
     def __init__(self, output_dir: Optional[Path] = None):
         """
@@ -85,17 +87,19 @@ class EdgeTTSService:
             Lista de voci disponibile
         """
         if EdgeTTSService._voices_cache is None:
-            voices_list = await edge_tts.list_voices()
-            EdgeTTSService._voices_cache = [
-                Voice(
-                    name=v["FriendlyName"],
-                    short_name=v["ShortName"],
-                    gender=v["Gender"],
-                    language=v["Locale"].split("-")[0],
-                    locale=v["Locale"]
-                )
-                for v in voices_list
-            ]
+            with EdgeTTSService._voices_cache_lock:
+                if EdgeTTSService._voices_cache is None:
+                    voices_list = await edge_tts.list_voices()
+                    EdgeTTSService._voices_cache = [
+                        Voice(
+                            name=v["FriendlyName"],
+                            short_name=v["ShortName"],
+                            gender=v["Gender"],
+                            language=v["Locale"].split("-")[0],
+                            locale=v["Locale"]
+                        )
+                        for v in voices_list
+                    ]
 
         if language:
             return [v for v in EdgeTTSService._voices_cache if v.language.lower() == language.lower()]

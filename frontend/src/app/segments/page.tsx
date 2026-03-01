@@ -1311,7 +1311,7 @@ export default function SegmentsPage() {
       {/* Video header */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-3">
-          <Link href="/library">
+          <Link href="/librarie">
             <Button variant="ghost" size="icon" className="h-8 w-8">
               <ChevronLeft className="h-4 w-4" />
             </Button>

@@ -54,6 +54,7 @@ import {
   Eye,
   AlertTriangle,
   Share2,
+  RefreshCw,
 } from "lucide-react";
 import { usePolling } from "@/hooks";
 import { useProfile } from "@/contexts/profile-context";
@@ -270,6 +271,8 @@ function PipelinePage() {
 
   // Step 2: Per-script TTS previews
   const [ttsResults, setTtsResults] = useState<Record<number, { audio_duration: number; generating: boolean; stale: boolean; srt_content?: string; script_word_count?: number; srt_word_count?: number }>>({});
+  const [regeneratingAll, setRegeneratingAll] = useState(false);
+  const [regeneratingAllIndex, setRegeneratingAllIndex] = useState<number | null>(null);
   const [playingTtsVariant, setPlayingTtsVariant] = useState<number | null>(null);
   const [srtPreviewOpen, setSrtPreviewOpen] = useState<Record<number, boolean>>({});
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -1556,6 +1559,63 @@ function PipelinePage() {
     }
   };
 
+  const handleRegenerateAllTts = async () => {
+    if (!pipelineId || scripts.length === 0) return;
+    setRegeneratingAll(true);
+    setRegeneratingAllIndex(0);
+
+    for (let i = 0; i < scripts.length; i++) {
+      setRegeneratingAllIndex(i);
+      setTtsResults(prev => ({
+        ...prev,
+        [i]: { audio_duration: 0, generating: true, stale: false }
+      }));
+
+      try {
+        const res = await apiPost(`/pipeline/tts/${pipelineId}/${i}`, {
+          elevenlabs_model: elevenlabsModel,
+          voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
+          voice_settings: {
+            stability: voiceStability,
+            similarity_boost: voiceSimilarity,
+            style: voiceStyle,
+            speed: voiceSpeed,
+            use_speaker_boost: voiceSpeakerBoost,
+          },
+          words_per_subtitle: wordsPerSubtitle,
+          min_segment_duration: minSegmentDuration,
+        }, { timeout: 300_000 });
+
+        if (res.ok) {
+          const data = await res.json();
+          setTtsResults(prev => ({
+            ...prev,
+            [i]: {
+              audio_duration: data.audio_duration,
+              generating: false,
+              stale: false,
+              srt_content: data.srt_content,
+              script_word_count: data.script_word_count,
+              srt_word_count: data.srt_word_count,
+            }
+          }));
+        } else {
+          const errorData = await res.json().catch(() => ({ detail: `TTS failed for script ${i + 1}` }));
+          setPreviewError(errorData.detail || `TTS failed for script ${i + 1}`);
+          setTtsResults(prev => { const next = { ...prev }; delete next[i]; return next; });
+          break;
+        }
+      } catch (err) {
+        handleApiError(err, "TTS regeneration error");
+        setTtsResults(prev => { const next = { ...prev }; delete next[i]; return next; });
+        break;
+      }
+    }
+
+    setRegeneratingAll(false);
+    setRegeneratingAllIndex(null);
+  };
+
   // Per-script TTS: adopt library audio instead of generating
   const handleUseLibraryTts = async (variantIndex: number) => {
     if (!pipelineId) return;
@@ -2144,10 +2204,25 @@ function PipelinePage() {
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-semibold">Review Scripts ({scripts.length})</h2>
-              <Button variant="outline" onClick={() => setStep(1)}>
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Back to Input
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRegenerateAllTts}
+                  disabled={regeneratingAll || scripts.length === 0 || Object.values(ttsResults).some(r => r.generating)}
+                >
+                  {regeneratingAll ? (
+                    <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                      Regenerating {(regeneratingAllIndex ?? 0) + 1}/{scripts.length}...</>
+                  ) : (
+                    <><RefreshCw className="h-3.5 w-3.5 mr-1.5" />Regenerate All Voice-overs</>
+                  )}
+                </Button>
+                <Button variant="outline" onClick={() => setStep(1)}>
+                  <ArrowLeft className="h-4 w-4 mr-2" />
+                  Back to Input
+                </Button>
+              </div>
             </div>
 
             {/* ElevenLabs model selector */}

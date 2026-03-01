@@ -23,7 +23,6 @@ interface SegmentTransformPanelProps {
   onChange: (transforms: SegmentTransform) => void;
   onSave: (transforms: SegmentTransform) => void;
   isOverride?: boolean;
-  defaultTransforms?: SegmentTransform;
 }
 
 export function SegmentTransformPanel({
@@ -31,8 +30,6 @@ export function SegmentTransformPanel({
   onChange,
   onSave,
   isOverride = false,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  defaultTransforms,
 }: SegmentTransformPanelProps) {
   const update = (partial: Partial<SegmentTransform>) => {
     onChange({ ...transforms, ...partial });

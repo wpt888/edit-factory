@@ -62,23 +62,17 @@ export function CreateProfileDialog({
         description: description.trim() || undefined,
       });
 
-      if (response.ok) {
-        toast.success("Profile created successfully");
+      toast.success("Profile created successfully");
 
-        // Refresh the profile list in context
-        await refreshProfiles();
+      // Refresh the profile list in context
+      await refreshProfiles();
 
-        // Close dialog and reset form
-        onOpenChange(false);
-        setName("");
-        setDescription("");
-      } else {
-        const error = await response.json();
-        toast.error(error.detail || "Failed to create profile");
-      }
+      // Close dialog and reset form
+      onOpenChange(false);
+      setName("");
+      setDescription("");
     } catch (error) {
       handleApiError(error, "Eroare la crearea profilului");
-      toast.error("An error occurred while creating the profile");
     } finally {
       setLoading(false);
     }

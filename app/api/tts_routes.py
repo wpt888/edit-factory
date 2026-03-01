@@ -20,23 +20,37 @@ from app.services.job_storage import get_job_storage
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tts", tags=["tts"])
 
+# Cache for kokoro availability check (5-minute TTL)
+_kokoro_cache: dict = {"available": None, "checked_at": 0.0}
+_KOKORO_CACHE_TTL = 300  # 5 minutes
+
 
 def _check_kokoro_available() -> bool:
     """
     Check if Kokoro TTS dependencies (espeak-ng) are available.
+    Results are cached for 5 minutes to avoid repeated subprocess calls.
 
     Returns:
         True if espeak-ng is installed, False otherwise
     """
+    import time
+    now = time.monotonic()
+    if _kokoro_cache["available"] is not None and (now - _kokoro_cache["checked_at"]) < _KOKORO_CACHE_TTL:
+        return _kokoro_cache["available"]
+
     try:
         result = subprocess.run(
             ["espeak-ng", "--version"],
             capture_output=True,
             timeout=5
         )
-        return result.returncode == 0
+        available = result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError):
-        return False
+        available = False
+
+    _kokoro_cache["available"] = available
+    _kokoro_cache["checked_at"] = now
+    return available
 
 
 def _get_providers():
@@ -373,6 +387,10 @@ async def clone_voice_endpoint(
             status_code=400,
             detail=f"Invalid audio format: {audio_file.content_type}. Allowed: WAV, MP3, OGG, M4A"
         )
+
+    # Early Content-Length check before reading into memory
+    if audio_file.size and audio_file.size > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Audio file too large (max 10MB)")
 
     # Validate file size (max 10MB)
     settings = get_settings()

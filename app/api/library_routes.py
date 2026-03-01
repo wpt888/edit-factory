@@ -27,6 +27,7 @@ from app.services.video_filters import VideoFilters, DenoiseConfig, SharpenConfi
 from app.services.subtitle_styler import build_subtitle_filter
 from app.services.tts_subtitle_generator import generate_srt_from_timestamps
 from app.services.srt_validator import sanitize_srt_text
+from app.utils import sanitize_filename as _sanitize_filename
 
 import logging
 
@@ -37,11 +38,12 @@ router = APIRouter(prefix="/library", tags=["library"])
 _project_locks: Dict[str, threading.Lock] = {}
 _locks_lock = threading.Lock()  # Meta-lock for managing project locks
 _cancelled_projects: Dict[str, float] = {}  # project_id -> timestamp of cancellation
+_cancelled_lock = threading.Lock()
 _MAX_CANCELLED = 200
 
 
 def _evict_old_cancelled():
-    """Evict oldest entries when _cancelled_projects exceeds limit."""
+    """Evict oldest entries when _cancelled_projects exceeds limit. Caller must hold _cancelled_lock."""
     if len(_cancelled_projects) <= _MAX_CANCELLED:
         return
     sorted_ids = sorted(_cancelled_projects, key=_cancelled_projects.get)
@@ -52,18 +54,21 @@ def _evict_old_cancelled():
 
 def is_project_cancelled(project_id: str) -> bool:
     """Check if a project has been flagged for cancellation."""
-    return project_id in _cancelled_projects
+    with _cancelled_lock:
+        return project_id in _cancelled_projects
 
 
 def mark_project_cancelled(project_id: str):
     """Flag a project for cancellation."""
-    _cancelled_projects[project_id] = _time_mod.monotonic()
-    _evict_old_cancelled()
+    with _cancelled_lock:
+        _cancelled_projects[project_id] = _time_mod.monotonic()
+        _evict_old_cancelled()
 
 
 def clear_project_cancelled(project_id: str):
     """Clear the cancellation flag for a project."""
-    _cancelled_projects.pop(project_id, None)
+    with _cancelled_lock:
+        _cancelled_projects.pop(project_id, None)
 
 
 def _cleanup_stale_locks():
@@ -120,17 +125,17 @@ def cleanup_project_lock(project_id: str):
 
 # ============== PROGRESS TRACKING ==============
 _generation_progress: Dict[str, dict] = {}
+_progress_lock = threading.Lock()
 _MAX_PROGRESS_ENTRIES = 500
 
 from app.db import get_supabase
 
 
 def _evict_old_progress():
-    """Evict oldest entries when _generation_progress exceeds limit."""
+    """Evict oldest entries when _generation_progress exceeds limit. Caller must hold _progress_lock."""
     if len(_generation_progress) <= _MAX_PROGRESS_ENTRIES:
         return
-    # Sort by insertion order approximation: keys added first are oldest
-    sorted_keys = sorted(_generation_progress.keys())
+    sorted_keys = sorted(_generation_progress, key=lambda k: _generation_progress[k].get("updated_at", ""))
     to_remove = sorted_keys[:len(_generation_progress) - _MAX_PROGRESS_ENTRIES]
     for key in to_remove:
         _generation_progress.pop(key, None)
@@ -138,23 +143,26 @@ def _evict_old_progress():
 
 def update_generation_progress(project_id: str, percentage: int, current_step: str, estimated_remaining: Optional[int] = None):
     """Update generation progress for a project (in-memory only)."""
-    _generation_progress[project_id] = {
-        "percentage": percentage,
-        "current_step": current_step,
-        "estimated_remaining": estimated_remaining
-    }
-    _evict_old_progress()
+    with _progress_lock:
+        _generation_progress[project_id] = {
+            "percentage": percentage,
+            "current_step": current_step,
+            "estimated_remaining": estimated_remaining,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        _evict_old_progress()
 
 
 def get_generation_progress(project_id: str) -> Optional[dict]:
     """Get generation progress for a project from in-memory dict."""
-    return _generation_progress.get(project_id)
+    with _progress_lock:
+        return _generation_progress.get(project_id)
 
 
 def clear_generation_progress(project_id: str):
     """Clear generation progress for a project."""
-    if project_id in _generation_progress:
-        del _generation_progress[project_id]
+    with _progress_lock:
+        _generation_progress.pop(project_id, None)
 
 
 # ============== PYDANTIC MODELS ==============
@@ -742,10 +750,10 @@ async def _generate_raw_clips_task(
 
             for variant in variants:
                 video_file = Path(variant["final_video"])
-                duration = _get_video_duration(video_file)
+                duration = await asyncio.to_thread(_get_video_duration, video_file)
 
                 # Generăm thumbnail
-                thumbnail_path = _generate_thumbnail(video_file)
+                thumbnail_path = await asyncio.to_thread(_generate_thumbnail, video_file)
 
                 # Inserăm în DB
                 try:
@@ -1290,10 +1298,10 @@ async def _generate_from_segments_task(
                     continue
 
                 # Obținem durata efectivă
-                actual_duration = _get_video_duration(output_path)
+                actual_duration = await asyncio.to_thread(_get_video_duration, output_path)
 
                 # Generăm thumbnail
-                thumbnail_path = _generate_thumbnail(output_path)
+                thumbnail_path = await asyncio.to_thread(_generate_thumbnail, output_path)
 
                 # Salvăm în DB
                 supabase.table("editai_clips").insert({
@@ -1722,16 +1730,20 @@ async def delete_clip(
     try:
         # Get clip data first
         clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
-        if clip.data:
-            # Delete physical files
-            _delete_clip_files(clip.data)
-            # Delete from database
-            supabase.table("editai_clips").delete().eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
-            # Also delete associated clip content
-            supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
-            logger.info(f"Deleted clip {clip_id} and associated files")
+        if not clip.data:
+            raise HTTPException(status_code=404, detail="Clip not found")
+
+        # Delete physical files
+        _delete_clip_files(clip.data)
+        # Delete from database
+        supabase.table("editai_clips").delete().eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
+        # Also delete associated clip content
+        supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
+        logger.info(f"Deleted clip {clip_id} and associated files")
 
         return {"status": "deleted", "clip_id": clip_id}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error deleting clip: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -2111,7 +2123,7 @@ async def _render_final_clip_task(
         output_dir = settings.output_dir / "finals"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        video_duration = _get_video_duration(raw_video_path)
+        video_duration = await asyncio.to_thread(_get_video_duration, raw_video_path)
         audio_duration = None
         final_video_path = raw_video_path  # Default: use raw video
 
@@ -2177,7 +2189,7 @@ async def _render_final_clip_task(
                     padding=0.06
                 )
 
-            audio_duration = _get_audio_duration(audio_path)
+            audio_duration = await asyncio.to_thread(_get_audio_duration, audio_path)
 
             # Persist timestamps and model to Supabase for Phase 13 subtitle generation
             if tts_timestamps:
@@ -2241,7 +2253,7 @@ async def _render_final_clip_task(
                 # VIDEO MAI LUNG: Trimează video la durata audio
                 logger.info(f"Video > Audio ({video_duration:.1f}s > {audio_duration:.1f}s): trimming video")
                 adjusted_video_path = temp_dir / f"trimmed_{clip_id}.mp4"
-                _trim_video_to_duration(raw_video_path, adjusted_video_path, audio_duration)
+                await asyncio.to_thread(_trim_video_to_duration, raw_video_path, adjusted_video_path, audio_duration)
                 final_video_path = adjusted_video_path
 
             else:
@@ -2251,7 +2263,8 @@ async def _render_final_clip_task(
 
                 # Încercăm să extindem cu segmente din proiect
                 adjusted_video_path = temp_dir / f"extended_{clip_id}.mp4"
-                extended = _extend_video_with_segments(
+                extended = await asyncio.to_thread(
+                    _extend_video_with_segments,
                     base_video=raw_video_path,
                     target_duration=audio_duration,
                     project_id=project_id,
@@ -2265,7 +2278,7 @@ async def _render_final_clip_task(
                 else:
                     # Fallback: loop video pentru a umple gap-ul
                     logger.warning(f"Could not extend with segments, using loop fallback")
-                    _loop_video_to_duration(raw_video_path, adjusted_video_path, audio_duration)
+                    await asyncio.to_thread(_loop_video_to_duration, raw_video_path, adjusted_video_path, audio_duration)
                     if adjusted_video_path.exists():
                         final_video_path = adjusted_video_path
 
@@ -2459,18 +2472,6 @@ async def _start_render_for_clip(clip_id: str, preset_name: str, profile_id: str
 
 # ============== HELPER FUNCTIONS ==============
 
-def _sanitize_filename(filename: str) -> str:
-    """Sanitizează numele fișierului."""
-    import re
-    if not filename:
-        return "unnamed"
-    safe_name = Path(filename).name
-    safe_name = re.sub(r'[^\w\-_\.]', '_', safe_name)
-    if len(safe_name) > 100:
-        safe_name = safe_name[:100]
-    return safe_name or "unnamed"
-
-
 def _get_video_info(video_path: Path) -> dict:
     """Obține informații despre video."""
     try:
@@ -2536,7 +2537,7 @@ def _generate_thumbnail(video_path: Path) -> Optional[Path]:
             "-q:v", "3",
             str(thumb_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode == 0 and thumb_path.exists():
             return thumb_path
     except Exception as e:
@@ -2606,7 +2607,7 @@ def _get_audio_duration(audio_path: Path) -> float:
             "-of", "default=noprint_wrappers=1:nokey=1",
             str(audio_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode == 0:
             return float(result.stdout.strip())
     except Exception as e:

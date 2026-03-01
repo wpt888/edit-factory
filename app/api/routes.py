@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import validate_upload_size, validate_tts_text_length
+from app.utils import sanitize_filename as _sanitize_filename
 from app.models import (
     JobStatus, JobResponse, HealthResponse, VideoInfo, VideoSegment
 )
@@ -250,8 +251,11 @@ async def health_check():
         import redis
         settings = get_settings()
         r = redis.from_url(settings.redis_url)
-        r.ping()
-        redis_ok = True
+        try:
+            r.ping()
+            redis_ok = True
+        finally:
+            r.close()
     except Exception:
         pass
 
@@ -263,22 +267,6 @@ async def health_check():
     )
 
 
-def _sanitize_filename(filename: str) -> str:
-    """Sanitizează numele fișierului pentru a preveni path traversal."""
-    if not filename:
-        return "unnamed"
-    # Eliminăm orice path components și caractere periculoase
-    import re
-    # Luăm doar numele fișierului (fără cale)
-    safe_name = Path(filename).name
-    # Eliminăm caractere speciale, păstrăm doar alfanumerice, puncte, liniuțe
-    safe_name = re.sub(r'[^\w\-_\.]', '_', safe_name)
-    # Limităm lungimea
-    if len(safe_name) > 100:
-        safe_name = safe_name[:100]
-    return safe_name or "unnamed"
-
-
 @router.post("/video-info")
 async def get_video_info(video: UploadFile = File(...)):
     """
@@ -286,7 +274,6 @@ async def get_video_info(video: UploadFile = File(...)):
     Folosit pentru preview-ul subtitrarii.
     """
     settings = get_settings()
-    settings.ensure_dirs()
 
     temp_video = settings.input_dir / f"info_{uuid.uuid4().hex[:8]}_{_sanitize_filename(video.filename)}"
 
@@ -444,6 +431,7 @@ async def create_job(
     # Cream job-ul
     job = {
         "job_id": job_id,
+        "profile_id": profile.profile_id,
         "status": JobStatus.PENDING,
         "created_at": datetime.now(timezone.utc),
         "updated_at": None,
@@ -550,6 +538,9 @@ async def get_job(job_id: str, profile: ProfileContext = Depends(get_profile_con
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    if job.get("profile_id") and job["profile_id"] != profile.profile_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
     response = JobResponse(
         job_id=job["job_id"],
         status=job["status"],
@@ -591,6 +582,9 @@ async def download_result(job_id: str, profile: ProfileContext = Depends(get_pro
     """Descarca rezultatul unui job finalizat."""
     job = get_job_storage().get_job(job_id)
     if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.get("profile_id") and job["profile_id"] != profile.profile_id:
         raise HTTPException(status_code=404, detail="Job not found")
 
     if job["status"] != JobStatus.COMPLETED:
@@ -645,6 +639,7 @@ async def generate_tts(
     job = {
         "job_id": job_id,
         "job_type": "tts_generate",
+        "profile_id": profile.profile_id,
         "status": JobStatus.PENDING,
         "created_at": datetime.now(timezone.utc),
         "updated_at": None,
@@ -742,10 +737,14 @@ async def process_tts_generate_job(job_id: str):
 
 
 @router.get("/tts/{job_id}/download")
-async def download_tts_audio(job_id: str):
+async def download_tts_audio(job_id: str, profile: ProfileContext = Depends(get_profile_context)):
     """Download generated TTS audio file."""
     job = get_job_storage().get_job(job_id)
     if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Ownership check
+    if job.get("profile_id") and job["profile_id"] != profile.profile_id:
         raise HTTPException(status_code=404, detail="Job not found")
 
     if job.get("job_type") != "tts_generate":
@@ -811,6 +810,7 @@ async def add_tts_to_videos(
     job = {
         "job_id": job_id,
         "job_type": "tts",
+        "profile_id": profile.profile_id,
         "status": JobStatus.PENDING,
         "created_at": datetime.now(timezone.utc),
         "updated_at": None,
@@ -964,7 +964,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
 
 
 @router.get("/files/{file_path:path}")
-async def serve_file(file_path: str, download: bool = False):
+async def serve_file(file_path: str, download: bool = False, profile: ProfileContext = Depends(get_profile_context)):
     """Serve a file from the output directory."""
     settings = get_settings()
 

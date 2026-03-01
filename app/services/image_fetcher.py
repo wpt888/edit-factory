@@ -15,6 +15,7 @@ import asyncio
 import logging
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 import httpx
 
@@ -99,8 +100,8 @@ async def _download_one(
             content_type = response.headers.get("content-type", "").lower()
 
             if not content_type.startswith("image/"):
-                logger.warning("Non-image content-type %s for product %s, skipping", content_type, external_id)
-                return (external_id, None)
+                logger.warning("Non-image content-type %s for product %s, using placeholder", content_type, external_id)
+                return (external_id, _make_placeholder(dest))
 
             if "image/webp" in content_type:
                 # Save webp first, then convert to jpg via FFmpeg
@@ -137,7 +138,7 @@ def _convert_webp_to_jpg(webp_path: Path, jpg_path: Path) -> None:
         "-i", str(webp_path),
         str(jpg_path),
     ]
-    result = subprocess.run(cmd, capture_output=True)
+    result = subprocess.run(cmd, capture_output=True, timeout=60)
     if result.returncode != 0:
         logger.warning(
             "FFmpeg webp->jpg conversion failed for %s: %s",
@@ -146,7 +147,7 @@ def _convert_webp_to_jpg(webp_path: Path, jpg_path: Path) -> None:
         )
 
 
-def _make_placeholder(dest: Path) -> str:
+def _make_placeholder(dest: Path) -> Optional[str]:
     """Generate a 400x400 gray placeholder JPEG via FFmpeg lavfi.
 
     Args:
@@ -163,7 +164,7 @@ def _make_placeholder(dest: Path) -> str:
         "-vframes", "1",
         str(dest),
     ]
-    result = subprocess.run(cmd, capture_output=True)
+    result = subprocess.run(cmd, capture_output=True, timeout=60)
     if result.returncode != 0:
         logger.error(
             "FFmpeg placeholder generation failed for %s: %s",
@@ -192,6 +193,9 @@ def update_local_image_paths(
         feed_id: Feed identifier used to scope the WHERE clause.
     """
     for external_id, local_path in image_map.items():
+        if local_path is None:
+            logger.debug("Skipping DB update for product %s — no local image path", external_id)
+            continue
         try:
             (
                 supabase.table("products")
