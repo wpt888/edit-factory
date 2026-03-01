@@ -9,7 +9,7 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 
 ### Desktop Foundation
 
-- [ ] **FOUND-01**: App stores config in %APPDATA%\EditFactory\ (config.json, license.json, .env)
+- [x] **FOUND-01**: App stores config in %APPDATA%\EditFactory\ (config.json, license.json, .env)
 - [x] **FOUND-02**: Backend detects DESKTOP_MODE=true and skips JWT auth, reads config from AppData
 - [ ] **FOUND-03**: FFmpeg path resolves bundled binary in desktop mode, falls back to system PATH in dev
 - [x] **FOUND-04**: All file paths use APP_BASE_DIR abstraction (no hardcoded relative paths)
@@ -35,7 +35,7 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 - [ ] **WIZD-02**: Step 1: License key entry with Lemon Squeezy activation and success/error feedback
 - [ ] **WIZD-03**: Step 2: API key configuration (Supabase required, Gemini/ElevenLabs optional) with test connection
 - [ ] **WIZD-04**: Step 3: Crash reporting consent (opt-in, defaults OFF)
-- [ ] **WIZD-05**: Wizard writes config to %APPDATA% and marks first_run_complete
+- [x] **WIZD-05**: Wizard writes config to %APPDATA% and marks first_run_complete
 - [ ] **WIZD-06**: Wizard re-accessible from Settings page at any time
 
 ### Licensing
@@ -89,7 +89,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | Phase 47 → Phase 53 | Pending |
+| FOUND-01 | Phase 47 → Phase 53 | Complete |
 | FOUND-02 | Phase 47 | Complete |
 | FOUND-03 | Phase 47 → Phase 53 | Pending |
 | FOUND-04 | Phase 47 | Complete |
@@ -106,7 +106,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WIZD-02 | Phase 50 → Phase 53 | Pending |
 | WIZD-03 | Phase 50 → Phase 53 | Pending |
 | WIZD-04 | Phase 50 → Phase 53 | Pending |
-| WIZD-05 | Phase 50 → Phase 53 | Pending |
+| WIZD-05 | Phase 50 → Phase 53 | Complete |
 | WIZD-06 | Phase 50 → Phase 53 | Pending |
 | LICS-01 | Phase 49 | Complete |
 | LICS-02 | Phase 49 | Complete |
