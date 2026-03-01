@@ -333,6 +333,12 @@ async def _batch_generate_task(
     job_storage = get_job_storage()
 
     for product_job in product_jobs:
+        # Check if batch was cancelled
+        if job_storage.is_job_cancelled(batch_id):
+            logger.info("[batch %s] Batch cancelled by user, stopping", batch_id)
+            job_storage.clear_job_cancelled(batch_id)
+            break
+
         pid = product_job["product_id"]
         child_job_id = product_job["job_id"]
 
@@ -495,7 +501,7 @@ async def _generate_product_video_task(
     settings = get_settings()
 
     # Import everything we need up front so any import error surfaces quickly
-    from app.api.library_routes import _render_with_preset
+    from app.api.library_routes import _render_with_preset, _ffmpeg_render_semaphore
     from app.services.product_video_compositor import compose_product_video, CompositorConfig
     from app.services.tts_subtitle_generator import generate_srt_from_timestamps
 
@@ -570,6 +576,12 @@ async def _generate_product_video_task(
         temp_dir.mkdir(parents=True, exist_ok=True)
 
         job_storage.update_job(job_id, {"progress": "10"}, profile_id=profile_id)
+
+        # Cancel checkpoint
+        if job_storage.is_job_cancelled(job_id):
+            logger.info("[%s] Product video cancelled at stage 1", job_id)
+            job_storage.clear_job_cancelled(job_id)
+            return
 
         # ---------------------------------------------------------------
         # Stage 2: TTS Voiceover (10 -> 40%)
@@ -677,6 +689,12 @@ async def _generate_product_video_task(
 
         job_storage.update_job(job_id, {"progress": "40"}, profile_id=profile_id)
 
+        # Cancel checkpoint
+        if job_storage.is_job_cancelled(job_id):
+            logger.info("[%s] Product video cancelled at stage 2", job_id)
+            job_storage.clear_job_cancelled(job_id)
+            return
+
         # ---------------------------------------------------------------
         # Stage 3: Subtitle generation (40 -> 50%)
         # ---------------------------------------------------------------
@@ -694,6 +712,12 @@ async def _generate_product_video_task(
         # Edge TTS: no timestamps, no subtitles (srt_path stays None)
 
         job_storage.update_job(job_id, {"progress": "50"}, profile_id=profile_id)
+
+        # Cancel checkpoint
+        if job_storage.is_job_cancelled(job_id):
+            logger.info("[%s] Product video cancelled at stage 3", job_id)
+            job_storage.clear_job_cancelled(job_id)
+            return
 
         # ---------------------------------------------------------------
         # Stage 4: Silent video composition (50 -> 70%)
@@ -719,17 +743,24 @@ async def _generate_product_video_task(
             font_family=tmpl_cfg.get("font_family", ""),
         )
 
-        # compose_product_video is synchronous (FFmpeg subprocess)
-        await asyncio.to_thread(
-            compose_product_video,
-            image_path=image_path,
-            output_path=composed_path,
-            product=product,
-            config=compositor_config,
-        )
+        # compose_product_video is synchronous (FFmpeg subprocess) — throttled by global semaphore
+        async with _ffmpeg_render_semaphore:
+            await asyncio.to_thread(
+                compose_product_video,
+                image_path=image_path,
+                output_path=composed_path,
+                product=product,
+                config=compositor_config,
+            )
 
         logger.info("[%s] Composition complete: %s", job_id, composed_path)
         job_storage.update_job(job_id, {"progress": "70"}, profile_id=profile_id)
+
+        # Cancel checkpoint
+        if job_storage.is_job_cancelled(job_id):
+            logger.info("[%s] Product video cancelled at stage 4", job_id)
+            job_storage.clear_job_cancelled(job_id)
+            return
 
         # ---------------------------------------------------------------
         # Stage 5: Final render with preset (70 -> 90%)

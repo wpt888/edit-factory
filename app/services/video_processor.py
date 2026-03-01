@@ -146,7 +146,7 @@ class VideoAnalyzer:
                 "-of", "json",
                 str(self.video_path)
             ]
-            result = subprocess.run(probe_cmd, capture_output=True, text=True)
+            result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
             if result.returncode != 0:
                 return 0
 
@@ -598,7 +598,7 @@ class VideoEditor:
     def _check_nvenc_available(self) -> bool:
         """Verifica disponibilitatea NVENC."""
         try:
-            result = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True)
+            result = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True, timeout=5)
             return "h264_nvenc" in result.stdout
         except Exception:
             return False
@@ -617,9 +617,25 @@ class VideoEditor:
         Raises:
             RuntimeError: Daca FFmpeg esueaza
         """
+        # Inject thread limit to prevent CPU saturation
+        if "-threads" not in cmd:
+            cmd.insert(1, "4")
+            cmd.insert(1, "-threads")
+
         logger.debug(f"FFmpeg command ({operation}): {' '.join(cmd)}")
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            stdout, stderr = proc.communicate(timeout=600)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()  # Reap zombie process
+            raise RuntimeError(f"FFmpeg {operation} timed out after 10 minutes")
+
+        # Build a CompletedProcess-compatible object for downstream code
+        result = subprocess.CompletedProcess(
+            args=cmd, returncode=proc.returncode, stdout=stdout, stderr=stderr
+        )
 
         if result.returncode != 0:
             # Parse FFmpeg stderr for useful info
@@ -2082,7 +2098,7 @@ class VideoProcessorService:
 
             if self.editor.use_gpu:
                 cmd = [
-                    "ffmpeg", "-y",
+                    "ffmpeg", "-y", "-threads", "4",
                     "-hwaccel", "cuda",
                     "-hwaccel_output_format", "cuda",
                     "-i", str(video_path),
@@ -2103,7 +2119,7 @@ class VideoProcessorService:
                 ]
             else:
                 cmd = [
-                    "ffmpeg", "-y",
+                    "ffmpeg", "-y", "-threads", "4",
                     "-i", str(video_path),
                     "-ss", str(seg.start_time),
                     "-t", str(item['duration']),
@@ -2126,7 +2142,7 @@ class VideoProcessorService:
                     str(temp_file)
                 ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode == 0:
                 segment_files.append(temp_file)
                 self.editor._track_intermediate(temp_file)

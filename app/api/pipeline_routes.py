@@ -28,6 +28,9 @@ from app.db import get_supabase
 from app.services.script_generator import get_script_generator
 from app.services.assembly_service import get_assembly_service, strip_product_group_tags
 
+# Limit concurrent FFmpeg renders in pipeline to prevent CPU/RAM exhaustion
+_ffmpeg_pipeline_semaphore = asyncio.Semaphore(3)
+
 
 def _stable_hash(text: str) -> str:
     """Stable hash that persists across Python process restarts (unlike built-in hash())."""
@@ -47,6 +50,35 @@ _library_project_lock = threading.Lock()
 _render_locks: Dict[str, asyncio.Lock] = {}
 _render_locks_timestamps: Dict[str, float] = {}  # pipeline_id -> last acquired time
 _RENDER_LOCK_TTL = 3600  # 1 hour
+
+# Cancel infrastructure for pipeline renders
+import time as _time_mod
+
+_cancelled_pipelines: Dict[str, float] = {}  # pipeline_id -> monotonic timestamp
+_cancelled_pipelines_lock = threading.Lock()
+_MAX_CANCELLED_PIPELINES = 200
+
+
+def is_pipeline_cancelled(pipeline_id: str) -> bool:
+    """Check if a pipeline has been flagged for cancellation."""
+    with _cancelled_pipelines_lock:
+        return pipeline_id in _cancelled_pipelines
+
+
+def mark_pipeline_cancelled(pipeline_id: str):
+    """Flag a pipeline for cancellation."""
+    with _cancelled_pipelines_lock:
+        _cancelled_pipelines[pipeline_id] = _time_mod.monotonic()
+        if len(_cancelled_pipelines) > _MAX_CANCELLED_PIPELINES:
+            sorted_ids = sorted(_cancelled_pipelines, key=_cancelled_pipelines.get)
+            for pid in sorted_ids[:len(_cancelled_pipelines) - _MAX_CANCELLED_PIPELINES]:
+                _cancelled_pipelines.pop(pid, None)
+
+
+def clear_pipeline_cancelled(pipeline_id: str):
+    """Clear the cancellation flag for a pipeline."""
+    with _cancelled_pipelines_lock:
+        _cancelled_pipelines.pop(pipeline_id, None)
 
 
 def _evict_stale_render_locks():
@@ -492,6 +524,33 @@ async def delete_pipeline(
     _pipelines.pop(pipeline_id, None)
 
     return {"status": "deleted", "pipeline_id": pipeline_id}
+
+
+@router.post("/{pipeline_id}/cancel")
+async def cancel_pipeline_render(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Cancel an in-progress pipeline render."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    mark_pipeline_cancelled(pipeline_id)
+
+    # Mark all processing render jobs as cancelled
+    for idx, job in pipeline.get("render_jobs", {}).items():
+        if job.get("status") == "processing":
+            job["status"] = "cancelled"
+            job["current_step"] = "Cancelled by user"
+            job["progress"] = 0
+
+    _db_update_render_jobs(pipeline_id, pipeline.get("render_jobs", {}))
+
+    return {"status": "cancelled", "pipeline_id": pipeline_id}
 
 
 @router.get("/{pipeline_id}/source-selection")
@@ -1385,6 +1444,15 @@ async def render_variants(
             job = pipeline["render_jobs"][vid]
             script_text = pipeline["scripts"][vid]
 
+            # Check for cancellation before starting
+            if is_pipeline_cancelled(pipeline_id):
+                async with render_jobs_lock:
+                    job["status"] = "cancelled"
+                    job["current_step"] = "Cancelled by user"
+                    job["progress"] = 0
+                logger.info(f"Pipeline {pipeline_id} variant {vid} cancelled before start")
+                return
+
             # Update progress
             async with render_jobs_lock:
                 job["current_step"] = "Generating TTS audio"
@@ -1470,6 +1538,15 @@ async def render_variants(
                         render_avoid_ids.update(used_set)
                     else:
                         render_avoid_ids.update(used_set)
+
+            # Check for cancellation before heavy render
+            if is_pipeline_cancelled(pipeline_id):
+                async with render_jobs_lock:
+                    job["status"] = "cancelled"
+                    job["current_step"] = "Cancelled by user"
+                    job["progress"] = 0
+                logger.info(f"Pipeline {pipeline_id} variant {vid} cancelled before render")
+                return
 
             # Run full assembly (with 15-minute timeout)
             try:
@@ -1677,10 +1754,15 @@ async def render_variants(
                 # Persist failure to DB
                 _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
-    # Run all variant renders in parallel via asyncio.gather
+    # Run all variant renders in parallel via asyncio.gather (throttled by semaphore)
     async def _render_all_variants():
-        tasks = [do_render(vid) for vid in variant_indices_to_render]
+        async def _throttled_render(vid):
+            async with _ffmpeg_pipeline_semaphore:
+                await do_render(vid)
+        tasks = [_throttled_render(vid) for vid in variant_indices_to_render]
         await asyncio.gather(*tasks, return_exceptions=True)
+        # Clear cancellation flag after all renders complete
+        clear_pipeline_cancelled(pipeline_id)
 
     if variant_indices_to_render:
         background_tasks.add_task(_render_all_variants)

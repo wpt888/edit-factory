@@ -228,7 +228,7 @@ class ElevenLabsTTS:
             # Mix original audio (low volume) with TTS audio
             # Use duration=first to match TTS audio duration (input 1 = audio_path)
             cmd = [
-                "ffmpeg", "-y",
+                "ffmpeg", "-y", "-threads", "4",
                 "-i", str(video_path),
                 "-i", str(audio_path),
                 "-filter_complex",
@@ -243,7 +243,7 @@ class ElevenLabsTTS:
         else:
             # Video has no audio - just add TTS audio directly
             cmd = [
-                "ffmpeg", "-y",
+                "ffmpeg", "-y", "-threads", "4",
                 "-i", str(video_path),
                 "-i", str(audio_path),
                 "-map", "0:v",
@@ -263,7 +263,7 @@ class ElevenLabsTTS:
                 # Fallback: try simple replacement without mixing
                 logger.warning(f"Audio command failed, trying simple replacement. Error: {result.stderr[:200]}")
                 cmd_simple = [
-                    "ffmpeg", "-y",
+                    "ffmpeg", "-y", "-threads", "4",
                     "-i", str(video_path),
                     "-i", str(audio_path),
                     "-map", "0:v",

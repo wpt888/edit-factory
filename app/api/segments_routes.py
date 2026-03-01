@@ -192,7 +192,7 @@ def _extract_segment_video(
     try:
         duration = end_time - start_time
         cmd = [
-            "ffmpeg", "-y",
+            "ffmpeg", "-y", "-threads", "4",
             "-ss", str(start_time),
             "-i", str(source_path),
             "-t", str(duration),
@@ -329,7 +329,7 @@ async def upload_source_video(
         logger.info(f"Transcoding {video_path.suffix} to .mp4: {video_path.name}")
         try:
             cmd = [
-                "ffmpeg", "-y", "-i", str(video_path),
+                "ffmpeg", "-y", "-threads", "4", "-i", str(video_path),
                 "-c:v", "libx264", "-c:a", "aac", "-preset", "fast",
                 str(mp4_path)
             ]

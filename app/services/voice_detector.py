@@ -87,7 +87,7 @@ class VoiceDetector:
         Extrage audio din video în format WAV 16kHz mono.
         """
         cmd = [
-            "ffmpeg", "-y",
+            "ffmpeg", "-y", "-threads", "4",
             "-i", str(video_path),
             "-vn",  # No video
             "-acodec", "pcm_s16le",  # WAV format
@@ -105,7 +105,7 @@ class VoiceDetector:
     def _convert_to_wav(self, audio_path: Path, output_path: Path) -> bool:
         """Convertește orice format audio la WAV 16kHz mono."""
         cmd = [
-            "ffmpeg", "-y",
+            "ffmpeg", "-y", "-threads", "4",
             "-i", str(audio_path),
             "-vn",  # No video
             "-acodec", "pcm_s16le",  # WAV format
@@ -318,7 +318,7 @@ def mute_voice_segments(
     audio_filter = f"volume={vol}:enable='{combined_condition}'"
 
     cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg", "-y", "-threads", "4",
         "-i", str(video_path),
         "-af", audio_filter,
         "-c:v", "copy",  # Nu re-encodăm video

@@ -940,10 +940,10 @@ class AssemblyService:
         # Target output dimensions (portrait)
         target_w, target_h = 1080, 1920
 
-        # Extract each segment clip in parallel (up to 6 concurrent FFmpeg processes)
+        # Extract each segment clip in parallel (up to 3 concurrent FFmpeg processes)
         from app.services.segment_transforms import SegmentTransform
 
-        max_parallel = min(6, len(timeline))
+        max_parallel = min(3, len(timeline))
         semaphore = asyncio.Semaphore(max_parallel)
         # Pre-allocate ordered results list (None = failed)
         results: List[Optional[Path]] = [None] * len(timeline)
@@ -976,7 +976,7 @@ class AssemblyService:
                 # This prevents bleeding past segment end_time
                 segment_raw = temp_dir / f"segment_{i:03d}_raw.mp4"
                 extract_cmd = [
-                    "ffmpeg", "-y",
+                    "ffmpeg", "-y", "-threads", "4",
                     "-ss", str(entry.start_time),
                     "-i", entry.source_video_path,
                     "-t", str(segment_duration),
@@ -1013,6 +1013,7 @@ class AssemblyService:
                 "-c:v", "libx264",
                 "-preset", "fast",
                 "-crf", "23",
+                "-threads", "4",
                 "-an",
                 "-pix_fmt", "yuv420p",
                 str(segment_file)
@@ -1113,7 +1114,7 @@ class AssemblyService:
         assembled_path = temp_dir / "assembled_video.mp4"
 
         cmd = [
-            "ffmpeg", "-y",
+            "ffmpeg", "-y", "-threads", "4",
             "-f", "concat",
             "-safe", "0",
             "-i", str(concat_file),

@@ -72,6 +72,7 @@ async def measure_loudness(
         "ffmpeg",
         "-hide_banner",
         "-nostats",
+        "-threads", "4",
         "-i", str(audio_path),
         "-af", f"loudnorm=I={target_lufs}:TP={target_tp}:LRA={target_lra}:print_format=json",
         "-f", "null",

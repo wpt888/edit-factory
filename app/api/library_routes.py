@@ -41,6 +41,10 @@ _cancelled_projects: Dict[str, float] = {}  # project_id -> timestamp of cancell
 _cancelled_lock = threading.Lock()
 _MAX_CANCELLED = 200
 
+# ============== FFmpeg CONCURRENCY LIMIT ==============
+# Limit total concurrent FFmpeg render processes to prevent CPU/RAM exhaustion
+_ffmpeg_render_semaphore = asyncio.Semaphore(3)
+
 
 def _evict_old_cancelled():
     """Evict oldest entries when _cancelled_projects exceeds limit. Caller must hold _cancelled_lock."""
@@ -1259,7 +1263,7 @@ async def _generate_from_segments_task(
                             audio_filter_args = ["-af", noise_filter]
 
                         extract_cmd = [
-                            "ffmpeg", "-y",
+                            "ffmpeg", "-y", "-threads", "4",
                             "-ss", str(seg["start_time"]),
                             "-i", seg["file_path"],
                             "-t", str(seg["duration"]),
@@ -1279,7 +1283,7 @@ async def _generate_from_segments_task(
 
                 # Concatenăm segmentele
                 concat_cmd = [
-                    "ffmpeg", "-y",
+                    "ffmpeg", "-y", "-threads", "4",
                     "-f", "concat", "-safe", "0",
                     "-i", str(concat_list_path),
                     "-c:v", "libx264", "-preset", "fast",
@@ -2344,26 +2348,27 @@ async def _render_final_clip_task(
             }
             logger.info(f"Applied default subtitle styling for auto-generated SRT")
 
-        # 4. Randăm cu FFmpeg folosind preset-ul
+        # 4. Randăm cu FFmpeg folosind preset-ul (limited by global concurrency semaphore)
         output_path = output_dir / f"final_{clip_id}_{preset_data['name']}.mp4"
 
-        await _render_with_preset(
-            video_path=final_video_path,
-            audio_path=audio_path,
-            srt_path=srt_path,
-            subtitle_settings=content_data.get("subtitle_settings") if content_data else None,
-            preset=preset_data,
-            output_path=output_path,
-            # Video enhancement filters (Phase 9)
-            enable_denoise=enable_denoise,
-            denoise_strength=denoise_strength,
-            enable_sharpen=enable_sharpen,
-            sharpen_amount=sharpen_amount,
-            enable_color=enable_color,
-            brightness=brightness,
-            contrast=contrast,
-            saturation=saturation
-        )
+        async with _ffmpeg_render_semaphore:
+            await _render_with_preset(
+                video_path=final_video_path,
+                audio_path=audio_path,
+                srt_path=srt_path,
+                subtitle_settings=content_data.get("subtitle_settings") if content_data else None,
+                preset=preset_data,
+                output_path=output_path,
+                # Video enhancement filters (Phase 9)
+                enable_denoise=enable_denoise,
+                denoise_strength=denoise_strength,
+                enable_sharpen=enable_sharpen,
+                sharpen_amount=sharpen_amount,
+                enable_color=enable_color,
+                brightness=brightness,
+                contrast=contrast,
+                saturation=saturation
+            )
 
         # Actualizăm clipul
         supabase.table("editai_clips").update({
@@ -2622,7 +2627,7 @@ def _trim_video_to_duration(input_path: Path, output_path: Path, target_duration
     """
     try:
         cmd = [
-            "ffmpeg", "-y",
+            "ffmpeg", "-y", "-threads", "4",
             "-i", str(input_path),
             "-t", str(target_duration),
             "-c:v", "libx264",
@@ -2653,7 +2658,7 @@ def _loop_video_to_duration(input_path: Path, output_path: Path, target_duration
     try:
         # Folosim stream_loop pentru looping și -t pentru a tăia la durată
         cmd = [
-            "ffmpeg", "-y",
+            "ffmpeg", "-y", "-threads", "4",
             "-stream_loop", "-1",  # Loop infinit
             "-i", str(input_path),
             "-t", str(target_duration),
@@ -2759,7 +2764,7 @@ def _extend_video_with_segments(
             # Re-encode base video without audio to match extension segments (all -an)
             base_no_audio = temp_dir / "base_no_audio.mp4"
             base_cmd = [
-                "ffmpeg", "-y",
+                "ffmpeg", "-y", "-threads", "4",
                 "-i", str(base_video),
                 "-c:v", "libx264",
                 "-preset", "fast",
@@ -2779,7 +2784,7 @@ def _extend_video_with_segments(
                 seg_output = temp_dir / f"ext_seg_{idx:03d}.mp4"
 
                 cmd = [
-                    "ffmpeg", "-y",
+                    "ffmpeg", "-y", "-threads", "4",
                     "-ss", str(seg["start_time"]),
                     "-i", seg["source_path"],
                     "-t", str(seg["duration"]),
@@ -2808,7 +2813,7 @@ def _extend_video_with_segments(
 
             # Concatenăm și trimăm la durata exactă
             cmd = [
-                "ffmpeg", "-y",
+                "ffmpeg", "-y", "-threads", "4",
                 "-f", "concat",
                 "-safe", "0",
                 "-i", str(concat_list),
@@ -3120,7 +3125,17 @@ async def _render_with_preset(
 
     logger.info(f"Rendering with command: {' '.join(cmd)}")
 
-    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=1200)
+    def _run_render():
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            stdout, stderr = proc.communicate(timeout=1200)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()  # Reap zombie process
+            raise RuntimeError("FFmpeg render timed out after 20 minutes")
+        return subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout, stderr=stderr)
+
+    result = await asyncio.to_thread(_run_render)
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg render failed: {result.stderr}")
 

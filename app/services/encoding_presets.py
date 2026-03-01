@@ -91,6 +91,17 @@ class EncodingPreset(BaseModel):
             "-pix_fmt", "yuv420p",  # Most compatible format
         ])
 
+        # Thread limit to prevent CPU saturation (especially on high-core-count systems)
+        params.extend(["-threads", "4"])
+
+        # Bitrate ceiling to prevent runaway file sizes (CPU only; GPU uses its own rate control)
+        if not use_gpu:
+            max_bitrate = int(self.target_bitrate_mbps * 1.5)
+            params.extend([
+                "-maxrate", f"{max_bitrate}M",
+                "-bufsize", f"{max_bitrate * 2}M",
+            ])
+
         logger.debug(f"Generated FFmpeg params for {self.name} (GPU: {use_gpu})")
         return params
 

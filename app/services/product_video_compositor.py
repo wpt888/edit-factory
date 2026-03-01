@@ -588,7 +588,7 @@ def compose_product_video(
             )
 
             cmd = [
-                "ffmpeg", "-y",
+                "ffmpeg", "-y", "-threads", "4",
                 "-loop", "1",
                 "-framerate", str(config.fps),
                 "-i", str(image_path),
@@ -616,7 +616,7 @@ def compose_product_video(
         else:
             # ---- -vf path: single input, no badge ----
             cmd = [
-                "ffmpeg", "-y",
+                "ffmpeg", "-y", "-threads", "4",
                 "-loop", "1",
                 "-framerate", str(config.fps),
                 "-i", str(image_path),
@@ -689,7 +689,7 @@ def benchmark_zoompan(image_path: Path, duration_s: int = 30) -> dict:
         logger.info("Benchmark: running simple-scale encode (%ds)...", duration_s)
         start = time.perf_counter()
         simple_cmd = [
-            "ffmpeg", "-y",
+            "ffmpeg", "-y", "-threads", "4",
             "-loop", "1", "-framerate", str(fps), "-i", str(image_path),
             "-vf", (
                 f"scale={W_OUT}:{H_OUT}:force_original_aspect_ratio=decrease,"
@@ -708,7 +708,7 @@ def benchmark_zoompan(image_path: Path, duration_s: int = 30) -> dict:
         logger.info("Benchmark: running zoompan encode (%ds)...", duration_s)
         start = time.perf_counter()
         zoompan_cmd = [
-            "ffmpeg", "-y",
+            "ffmpeg", "-y", "-threads", "4",
             "-loop", "1", "-framerate", str(fps), "-i", str(image_path),
             "-vf", (
                 f"scale={W_LARGE}:-1:force_original_aspect_ratio=decrease,"

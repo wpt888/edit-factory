@@ -260,7 +260,7 @@ class SilenceRemover:
                 segment_file = tmp_path / f"segment_{i:03d}.wav"
 
                 cmd = [
-                    "ffmpeg", "-y",
+                    "ffmpeg", "-y", "-threads", "4",
                     "-i", str(audio_path),
                     "-ss", str(start),
                     "-t", str(end - start),
@@ -305,7 +305,7 @@ class SilenceRemover:
                 audio_codec = ["-c:a", "copy"]
 
             cmd = [
-                "ffmpeg", "-y",
+                "ffmpeg", "-y", "-threads", "4",
                 "-f", "concat", "-safe", "0",
                 "-i", str(concat_file),
                 *audio_codec,
@@ -417,7 +417,7 @@ class SilenceRemover:
         )
 
         cmd = [
-            "ffmpeg", "-y",
+            "ffmpeg", "-y", "-threads", "4",
             "-i", str(audio_path),
             "-af", filter_complex,
             "-c:a", "libmp3lame",
