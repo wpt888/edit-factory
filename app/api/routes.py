@@ -1036,6 +1036,10 @@ async def delete_job(job_id: str, profile: ProfileContext = Depends(get_profile_
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    # Ownership check
+    if job.get("profile_id") and job["profile_id"] != profile.profile_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
     # Stergem fisierele
     for key in ["video_path", "audio_path", "srt_path"]:
         if job.get(key):

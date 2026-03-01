@@ -398,11 +398,12 @@ async def render_assembly(
 
 
 @router.get("/status/{job_id}", response_model=AssemblyStatusResponse)
-async def get_assembly_status(job_id: str):
+async def get_assembly_status(
+    job_id: str,
+    profile: ProfileContext = Depends(get_profile_context),
+):
     """
     Get assembly job status.
-
-    Public endpoint (no auth) - job_id is the secret.
     """
     # Try in-memory first, then DB fallback
     if job_id not in _assembly_jobs:

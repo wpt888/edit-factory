@@ -135,13 +135,13 @@ class JobStorage:
         Returns:
             Updated job data or None if not found
         """
-        # Get current job outside lock (read operation — no mutation)
-        job = self.get_job(job_id)
-        if not job:
-            logger.warning(f"JobStorage: Job {job_id} not found for update")
-            return None
-
         with self._update_lock:
+            # Get current job inside lock to prevent TOCTOU race
+            job = self.get_job(job_id)
+            if not job:
+                logger.warning(f"JobStorage: Job {job_id} not found for update")
+                return None
+
             # Merge updates
             job.update(updates)
             job["updated_at"] = datetime.now(timezone.utc).isoformat()

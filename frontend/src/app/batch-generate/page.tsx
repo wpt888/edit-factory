@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useBatchPolling, type BatchStatus, type ProductJobStatus } from "@/hooks/use-batch-polling";
-import { apiPost, apiGet, API_URL } from "@/lib/api";
+import { apiPost, apiGet } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Clock,
@@ -109,7 +109,6 @@ function BatchGenerateContent() {
 
   const { startPolling, stopPolling, isPolling, batchStatus, productJobs, completedCount, failedCount, totalCount } =
     useBatchPolling({
-      apiBaseUrl: API_URL,
       interval: 2000,
       onBatchComplete: (status: BatchStatus) => {
         if (status.failed === 0) {

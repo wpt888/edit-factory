@@ -177,7 +177,8 @@ async def test_connection(body: TestConnectionRequest):
         async with httpx.AsyncClient(timeout=8.0) as client:
             try:
                 resp = await client.get(
-                    f"https://generativelanguage.googleapis.com/v1beta/models?key={body.key}",
+                    "https://generativelanguage.googleapis.com/v1beta/models",
+                    headers={"x-goog-api-key": body.key},
                 )
                 if resp.status_code == 200:
                     return {"connected": True, "service": "gemini"}
@@ -213,18 +214,27 @@ async def test_connection(body: TestConnectionRequest):
     raise HTTPException(status_code=400, detail=f"Unknown service: {body.service}")
 
 
+class DesktopSettingsUpdate(BaseModel):
+    gemini_api_key: str | None = None
+    elevenlabs_api_key: str | None = None
+    supabase_url: str | None = None
+    supabase_key: str | None = None
+    first_run_complete: bool | None = None
+    crash_reporting_enabled: bool | None = None
+
+
 @router.post("/settings")
-async def save_desktop_settings(body: dict):
+async def save_desktop_settings(body: DesktopSettingsUpdate):
     """Write settings to config.json and AppData .env. Merges with existing values."""
     settings = get_settings()
     config_file = settings.base_dir / "config.json"
     existing = _read_config(config_file)
     # Only update non-None values from the request
-    existing.update({k: v for k, v in body.items() if v is not None})
+    existing.update({k: v for k, v in body.model_dump(exclude_none=True).items()})
     config_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 
     # Write API keys to AppData .env so pydantic-settings picks them up
-    _write_env_keys(settings.base_dir, body)
+    _write_env_keys(settings.base_dir, body.model_dump(exclude_none=True))
 
     # Clear settings cache so next request sees fresh values
     get_settings.cache_clear()

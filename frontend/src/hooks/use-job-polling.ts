@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Job } from "@/types/video-processing";
-import { handleApiError } from "@/lib/api";
+import { apiFetch, handleApiError } from "@/lib/api";
 
 function extractProgress(job: Job): number {
   const raw = job.progress;
@@ -29,8 +29,6 @@ function extractProgress(job: Job): number {
 }
 
 interface UseJobPollingOptions {
-  /** Base API URL (e.g., "http://localhost:8000/api/v1") */
-  apiBaseUrl: string;
   /** Polling interval in milliseconds (default: 2000) */
   interval?: number;
   /** Called on each progress update */
@@ -65,7 +63,6 @@ interface UseJobPollingReturn {
  */
 export function useJobPolling(options: UseJobPollingOptions): UseJobPollingReturn {
   const {
-    apiBaseUrl,
     interval = 2000,
     onProgress,
     onComplete,
@@ -83,6 +80,14 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
   const startTimeRef = useRef<number | null>(null);
   const elapsedIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isCancelledRef = useRef(false);
+
+  // Use refs for callbacks to avoid stale closures
+  const onProgressRef = useRef(onProgress);
+  const onCompleteRef = useRef(onComplete);
+  const onErrorRef = useRef(onError);
+  useEffect(() => { onProgressRef.current = onProgress; }, [onProgress]);
+  useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
+  useEffect(() => { onErrorRef.current = onError; }, [onError]);
 
   // Calculate ETA based on progress and elapsed time
   const calculateETA = useCallback((currentProgress: number, elapsed: number) => {
@@ -123,7 +128,7 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
     if (isCancelledRef.current) return;
 
     try {
-      const response = await fetch(`${apiBaseUrl}/jobs/${jobId}`);
+      const response = await apiFetch(`/jobs/${jobId}`);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
@@ -143,15 +148,15 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
       setEstimatedRemaining(calculateETA(progressNum, elapsed));
 
       // Notify progress callback
-      onProgress?.(progressNum, job.status, job);
+      onProgressRef.current?.(progressNum, job.status, job);
 
       if (job.status === "completed") {
         stopPolling();
         setProgress(100);
-        onComplete?.(job.result);
+        onCompleteRef.current?.(job.result);
       } else if (job.status === "failed") {
         stopPolling();
-        onError?.(job.error || "Job failed");
+        onErrorRef.current?.(job.error || "Job failed");
       } else if (job.status === "processing" || job.status === "pending") {
         // Continue polling
         pollingRef.current = setTimeout(() => poll(jobId), interval);
@@ -163,7 +168,7 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
         pollingRef.current = setTimeout(() => poll(jobId), interval * 2);
       }
     }
-  }, [apiBaseUrl, interval, calculateETA, onProgress, onComplete, onError, stopPolling]);
+  }, [interval, calculateETA, stopPolling]);
 
   // Start polling for a job
   const startPolling = useCallback((jobId: string) => {

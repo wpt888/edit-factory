@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { handleApiError } from "@/lib/api";
+import { apiFetch, handleApiError } from "@/lib/api";
 
 export interface ProductJobStatus {
   product_id: string;
@@ -23,8 +23,6 @@ export interface BatchStatus {
 }
 
 interface UseBatchPollingOptions {
-  /** Base API URL (e.g., "http://localhost:8000/api/v1") */
-  apiBaseUrl: string;
   /** Polling interval in milliseconds (default: 2000) */
   interval?: number;
   /** Called when the entire batch finishes */
@@ -54,7 +52,7 @@ interface UseBatchPollingReturn {
  * Hook for polling batch generation status with per-product state
  */
 export function useBatchPolling(options: UseBatchPollingOptions): UseBatchPollingReturn {
-  const { apiBaseUrl, interval = 2000, onBatchComplete } = options;
+  const { interval = 2000, onBatchComplete } = options;
 
   const [isPolling, setIsPolling] = useState(false);
   const [batchStatus, setBatchStatus] = useState<BatchStatus | null>(null);
@@ -62,6 +60,10 @@ export function useBatchPolling(options: UseBatchPollingOptions): UseBatchPollin
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
   const isCancelledRef = useRef(false);
   const currentBatchIdRef = useRef<string | null>(null);
+
+  // Use ref for callback to avoid stale closures
+  const onBatchCompleteRef = useRef(onBatchComplete);
+  useEffect(() => { onBatchCompleteRef.current = onBatchComplete; }, [onBatchComplete]);
 
   // Stop polling and cleanup
   const stopPolling = useCallback(() => {
@@ -80,8 +82,8 @@ export function useBatchPolling(options: UseBatchPollingOptions): UseBatchPollin
       if (isCancelledRef.current) return;
 
       try {
-        const response = await fetch(
-          `${apiBaseUrl}/products/batch/${batchId}/status`
+        const response = await apiFetch(
+          `/products/batch/${batchId}/status`
         );
 
         if (!response.ok) {
@@ -94,7 +96,7 @@ export function useBatchPolling(options: UseBatchPollingOptions): UseBatchPollin
         if (status.status === "completed") {
           // All products finished (completed or failed)
           stopPolling();
-          onBatchComplete?.(status);
+          onBatchCompleteRef.current?.(status);
         } else {
           // Still processing — schedule next poll
           pollingRef.current = setTimeout(() => poll(batchId), interval);
@@ -107,7 +109,7 @@ export function useBatchPolling(options: UseBatchPollingOptions): UseBatchPollin
         }
       }
     },
-    [apiBaseUrl, interval, onBatchComplete, stopPolling]
+    [interval, stopPolling]
   );
 
   // Start polling for a batch

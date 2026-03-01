@@ -252,7 +252,11 @@ def verify_project_ownership(supabase, project_id: str, profile_id: str) -> dict
 # ============== FILE SERVING ==============
 
 @router.get("/files/{file_path:path}")
-async def serve_file(file_path: str, download: bool = Query(default=False)):
+async def serve_file(
+    file_path: str,
+    download: bool = Query(default=False),
+    profile: ProfileContext = Depends(get_profile_context),
+):
     """
     Servește fișiere (thumbnails, videos) din directoarele output.
     Security: Permite doar fișiere din directoarele permise.

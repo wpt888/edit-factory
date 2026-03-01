@@ -24,13 +24,29 @@ logger = logging.getLogger(__name__)
 # Max concurrent FINAL FFmpeg render processes (the heavy encode step).
 # Library, Pipeline, and Product routes all share this single gate.
 MAX_CONCURRENT_RENDERS = 3
-_ffmpeg_render_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RENDERS)
+_ffmpeg_render_semaphore: asyncio.Semaphore | None = None
 
 # Max concurrent PREPARATORY FFmpeg processes (trim, extend, silence removal,
 # segment extraction, loudness measurement). These are lighter but still
 # spawn real FFmpeg/ffprobe subprocesses.
 MAX_CONCURRENT_PREP = 4
-_ffmpeg_prep_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PREP)
+_ffmpeg_prep_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_render_semaphore() -> asyncio.Semaphore:
+    """Lazily create render semaphore in the running event loop."""
+    global _ffmpeg_render_semaphore
+    if _ffmpeg_render_semaphore is None:
+        _ffmpeg_render_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RENDERS)
+    return _ffmpeg_render_semaphore
+
+
+def _get_prep_semaphore() -> asyncio.Semaphore:
+    """Lazily create prep semaphore in the running event loop."""
+    global _ffmpeg_prep_semaphore
+    if _ffmpeg_prep_semaphore is None:
+        _ffmpeg_prep_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PREP)
+    return _ffmpeg_prep_semaphore
 
 # Timeout (seconds) waiting to acquire a semaphore slot before giving up.
 SEMAPHORE_ACQUIRE_TIMEOUT = 600  # 10 minutes
@@ -74,7 +90,7 @@ def acquire_render_slot(timeout: float = SEMAPHORE_ACQUIRE_TIMEOUT):
         async with acquire_render_slot():
             await _render_with_preset(...)
     """
-    return _SemaphoreWithTimeout(_ffmpeg_render_semaphore, timeout, "render")
+    return _SemaphoreWithTimeout(_get_render_semaphore(), timeout, "render")
 
 
 def acquire_prep_slot(timeout: float = SEMAPHORE_ACQUIRE_TIMEOUT):
@@ -85,7 +101,7 @@ def acquire_prep_slot(timeout: float = SEMAPHORE_ACQUIRE_TIMEOUT):
         async with acquire_prep_slot():
             await asyncio.to_thread(subprocess.run, cmd, ...)
     """
-    return _SemaphoreWithTimeout(_ffmpeg_prep_semaphore, timeout, "prep")
+    return _SemaphoreWithTimeout(_get_prep_semaphore(), timeout, "prep")
 
 
 # =============================================================================

@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Progress } from "@/components/ui/progress";
-import { apiPost, apiGetWithRetry, API_URL } from "@/lib/api";
+import { apiPost, apiGetWithRetry } from "@/lib/api";
 import { useProfile } from "@/contexts/profile-context";
 import { useJobPolling, formatElapsedTime } from "@/hooks/use-job-polling";
 import { toast } from "sonner";
@@ -97,7 +97,6 @@ function ProductVideoContent() {
   // Job polling
   const { startPolling, stopPolling, isPolling, progress, statusText, elapsedTime, estimatedRemaining } =
     useJobPolling({
-      apiBaseUrl: API_URL,
       interval: 2000,
       onProgress: (p, status) => {
         // progress updates handled by hook state
