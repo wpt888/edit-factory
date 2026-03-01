@@ -1,5 +1,31 @@
 # Project Milestones: Edit Factory
 
+## v10 Desktop Launcher & Distribution (Shipped: 2026-03-01)
+
+**Delivered:** Desktop product with Electron shell launcher, NSIS Windows installer bundling Python venv + FFmpeg + Node.js, first-run setup wizard, auto-update via electron-updater, Sentry crash reporting (opt-in), Lemon Squeezy license validation, and desktop mode config (%APPDATA%).
+
+**Phases completed:** 47-54 (8 phases, 12 plans)
+
+**Key accomplishments:**
+- Electron shell launcher with system tray, backend health polling, graceful shutdown
+- NSIS installer with 5 extraResources bundles (Python venv, FFmpeg, Node, Next.js standalone, frontend)
+- Setup wizard with 3-step flow (Supabase, API keys, completion) and edit mode
+- electron-updater with autoDownload + user-controlled install (Restart Now / Later)
+- Sentry crash reporting with privacy-safe opt-in toggle and runtime enable/disable
+- Lemon Squeezy license validation with 72-hour grace period for network errors
+- Desktop mode foundation: APP_BASE_DIR, settings priority chain, desktop API routes
+
+**Stats:**
+- 8 phases, 12 plans
+- 1 day (2026-03-01)
+- 29/29 v10 requirements satisfied
+
+**Git range:** `feat(47-01)` → `docs(phase-54)`
+
+**What's next:** v11 Production Polish & Platform Hardening
+
+---
+
 ## v3 Video Quality Enhancement (Shipped: 2026-02-06)
 
 **Delivered:** Professional-grade video output with platform-optimized encoding, audio normalization, video filters, improved segment scoring, and enhanced subtitle rendering.
