@@ -85,7 +85,11 @@ function startBackend() {
     ['app.main:app', '--host', '127.0.0.1', '--port', String(BACKEND_PORT)],
     {
       cwd: BACKEND_CWD,
-      env: { ...process.env, DESKTOP_MODE: 'true' },
+      env: {
+        ...process.env,
+        DESKTOP_MODE: 'true',
+        ...(isDev ? {} : { RESOURCES_PATH: process.resourcesPath }),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     }
@@ -131,6 +135,7 @@ function startFrontend() {
         PORT: String(FRONTEND_PORT),
         HOSTNAME: '127.0.0.1',
         NODE_ENV: 'production',
+        NEXT_PUBLIC_DESKTOP_MODE: 'true',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,

@@ -87,6 +87,37 @@ def _hint(key: str) -> str:
     return "set" if key else ""
 
 
+def _write_env_keys(base_dir: Path, payload: dict) -> None:
+    """Write API key values from settings payload to AppData .env for pydantic-settings reload."""
+    env_key_map = {
+        "gemini_api_key": "GEMINI_API_KEY",
+        "elevenlabs_api_key": "ELEVENLABS_API_KEY",
+        "supabase_url": "SUPABASE_URL",
+        "supabase_key": "SUPABASE_KEY",
+    }
+    env_file = base_dir / ".env"
+    # Read existing lines (preserve non-API-key entries like DESKTOP_MODE)
+    existing_env = {}
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if "=" in line and not line.startswith("#"):
+                k, _, v = line.partition("=")
+                existing_env[k.strip()] = v.strip()
+
+    # Update with new values from payload (skip empty strings to avoid overwriting)
+    changed = False
+    for payload_key, env_var in env_key_map.items():
+        value = payload.get(payload_key)
+        if value:  # Skip None and empty strings
+            existing_env[env_var] = value
+            changed = True
+
+    if changed:
+        new_lines = [f"{k}={v}" for k, v in existing_env.items()]
+        env_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+        logger.info("API keys written to AppData .env")
+
+
 @router.get("/settings")
 async def get_desktop_settings():
     """Read config.json and return redacted view (API keys show last-4-char hints only)."""
@@ -111,6 +142,8 @@ async def mark_first_run_complete():
     existing = _read_config(config_file)
     existing["first_run_complete"] = True
     config_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    get_settings.cache_clear()
+    get_settings()
     logger.info("Setup wizard completed — first_run_complete written to config.json")
     return {"completed": True}
 
@@ -182,13 +215,21 @@ async def test_connection(body: TestConnectionRequest):
 
 @router.post("/settings")
 async def save_desktop_settings(body: dict):
-    """Write settings to config.json. Merges with existing values."""
+    """Write settings to config.json and AppData .env. Merges with existing values."""
     settings = get_settings()
     config_file = settings.base_dir / "config.json"
     existing = _read_config(config_file)
     # Only update non-None values from the request
     existing.update({k: v for k, v in body.items() if v is not None})
     config_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+
+    # Write API keys to AppData .env so pydantic-settings picks them up
+    _write_env_keys(settings.base_dir, body)
+
+    # Clear settings cache so next request sees fresh values
+    get_settings.cache_clear()
+    get_settings()
+
     return {"saved": True}
 
 
