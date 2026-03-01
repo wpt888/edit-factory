@@ -108,7 +108,18 @@ Automated video production from any input — an idea, a product feed, or a coll
 
 ### Active
 
-(None — all current requirements shipped. Use `/gsd:new-milestone` to define next.)
+## Current Milestone: v10 Desktop Launcher & Distribution
+
+**Goal:** Transform Edit Factory into an installable desktop product (hybrid: local rendering, cloud DB) that can be sold as a one-time purchase.
+
+**Target features:**
+- Desktop launcher (.exe) — starts backend + opens browser with system tray
+- Windows installer (NSIS) — bundles Python, deps, FFmpeg, frontend
+- First-run setup wizard — API keys config UI page
+- Auto-update system — version check + download on startup
+- Crash reporting (Sentry) — opt-in error telemetry
+- License key validation — Gumroad/Lemon Squeezy integration
+- Desktop mode flags (AUTH_DISABLED, DESKTOP_MODE) and %APPDATA% config
 
 ### Out of Scope
 
@@ -133,6 +144,7 @@ Automated video production from any input — an idea, a product feed, or a coll
 - Tech stack: FastAPI backend (Python), Next.js frontend (TypeScript), Supabase DB, FFmpeg
 - ~46K LOC across Python (~27K) + TypeScript (~19K)
 - 9 milestones shipped: v1 (MVP), v2 (Profiles), v3 (Video Quality), v4 (Script-First), v5 (Product Videos), v6 (Production Hardening), v7 (Product Image Overlays, partial), v8 (Pipeline UX Overhaul), v9 (Assembly Pipeline Fix + Overlays)
+- v10 milestone active: Desktop Launcher & Distribution
 - 46 phases, 96 plans executed across all milestones
 - 13 backend services, 9 frontend pages, 14+ API routers
 - DB migrations: 021 total (007/009/017/021 pending manual application)
@@ -196,4 +208,4 @@ Automated video production from any input — an idea, a product feed, or a coll
 | Ken Burns 2x pre-scale for PiP, 4x for interstitials | Matches product_video_compositor pattern; smooth zoompan | ✓ Good |
 
 ---
-*Last updated: 2026-02-28 after v9 milestone completion*
+*Last updated: 2026-03-01 after v10 milestone start*
