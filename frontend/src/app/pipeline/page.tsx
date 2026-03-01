@@ -110,7 +110,7 @@ interface PipelineListItem {
 
 interface VariantStatus {
   variant_index: number;
-  status: "not_started" | "processing" | "completed" | "failed";
+  status: "not_started" | "processing" | "completed" | "failed" | "cancelled";
   progress: number;
   current_step: string;
   final_video_path?: string;
@@ -277,6 +277,7 @@ function PipelinePage() {
   const [srtPreviewOpen, setSrtPreviewOpen] = useState<Record<number, boolean>>({});
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
+  const scriptAbortRef = useRef<AbortController | null>(null);
   const pendingBlobUrl = useRef<string | null>(null);
 
   // TTS Library duplicate detection
@@ -688,7 +689,7 @@ function PipelinePage() {
       const allComplete =
         renderedVariants.length > 0 &&
         renderedVariants.every(
-          (v) => v.status === "completed" || v.status === "failed"
+          (v) => v.status === "completed" || v.status === "failed" || v.status === "cancelled"
         );
       if (allComplete) {
         stopRenderPolling();
@@ -725,7 +726,7 @@ function PipelinePage() {
           const allDone =
             rendered.length > 0 &&
             rendered.every(
-              (v: { status: string }) => v.status === "completed" || v.status === "failed"
+              (v: { status: string }) => v.status === "completed" || v.status === "failed" || v.status === "cancelled"
             );
           if (allDone) {
             setIsRendering(false);
@@ -739,6 +740,10 @@ function PipelinePage() {
   // Step 1: Generate scripts
   const handleGenerate = async () => {
     if (!idea.trim()) return;
+
+    scriptAbortRef.current?.abort();
+    const abortController = new AbortController();
+    scriptAbortRef.current = abortController;
 
     setError(null);
     setIsGenerating(true);
@@ -755,7 +760,9 @@ function PipelinePage() {
         context: fullContext || undefined,
         variant_count: variantCount,
         provider,
-      }, { timeout: 300_000 }); // 5 min — AI script generation is slow
+      }, { timeout: 300_000, signal: abortController.signal }); // 5 min — AI script generation is slow
+
+      if (abortController.signal.aborted) return;
 
       if (res.ok) {
         const data = await res.json();
@@ -770,6 +777,7 @@ function PipelinePage() {
         setError(errorData.detail || "Failed to generate scripts");
       }
     } catch (err) {
+      if (abortController.signal.aborted) return;
       handleApiError(err, "Eroare la generarea scripturilor");
       if (err instanceof ApiError) {
         if (err.isTimeout) {
@@ -781,8 +789,16 @@ function PipelinePage() {
         setError("Network error. Please check if the backend is running.");
       }
     } finally {
-      setIsGenerating(false);
+      if (!abortController.signal.aborted) {
+        setIsGenerating(false);
+      }
     }
+  };
+
+  const handleCancelGenerate = () => {
+    scriptAbortRef.current?.abort();
+    scriptAbortRef.current = null;
+    setIsGenerating(false);
   };
 
   // Step 2: Preview all matches
@@ -969,6 +985,26 @@ function PipelinePage() {
       }
       setVariantStatuses([]);
       setIsRendering(false);
+    }
+  };
+
+  // Cancel render
+  const handleCancelRender = async () => {
+    if (!pipelineId) return;
+    try {
+      await apiPost(`/pipeline/${pipelineId}/cancel`, {});
+      stopRenderPolling();
+      setIsRendering(false);
+      setVariantStatuses(prev =>
+        prev.map(v =>
+          v.status === "processing"
+            ? { ...v, status: "cancelled" as const, current_step: "Cancelled by user", progress: 0 }
+            : v
+        )
+      );
+      toast.success("Render cancelled");
+    } catch (err) {
+      handleApiError(err, "Failed to cancel render");
     }
   };
 
@@ -1408,6 +1444,8 @@ function PipelinePage() {
       if (sourceSelectionTimer.current) clearTimeout(sourceSelectionTimer.current);
       if (ttsLibraryCheckTimer.current) clearTimeout(ttsLibraryCheckTimer.current);
       previewAbortRef.current?.abort();
+      scriptAbortRef.current?.abort();
+      regenerateAbortRef.current?.abort();
     };
   }, []);
 
@@ -1559,12 +1597,21 @@ function PipelinePage() {
     }
   };
 
+  const regenerateAbortRef = useRef<AbortController | null>(null);
+
   const handleRegenerateAllTts = async () => {
     if (!pipelineId || scripts.length === 0) return;
+
+    regenerateAbortRef.current?.abort();
+    const abortController = new AbortController();
+    regenerateAbortRef.current = abortController;
+
     setRegeneratingAll(true);
     setRegeneratingAllIndex(0);
 
     for (let i = 0; i < scripts.length; i++) {
+      if (abortController.signal.aborted) break;
+
       setRegeneratingAllIndex(i);
       setTtsResults(prev => ({
         ...prev,
@@ -1584,7 +1631,9 @@ function PipelinePage() {
           },
           words_per_subtitle: wordsPerSubtitle,
           min_segment_duration: minSegmentDuration,
-        }, { timeout: 300_000 });
+        }, { timeout: 300_000, signal: abortController.signal });
+
+        if (abortController.signal.aborted) break;
 
         if (res.ok) {
           const data = await res.json();
@@ -1606,6 +1655,7 @@ function PipelinePage() {
           break;
         }
       } catch (err) {
+        if (abortController.signal.aborted) break;
         handleApiError(err, "TTS regeneration error");
         setTtsResults(prev => { const next = { ...prev }; delete next[i]; return next; });
         break;
@@ -1614,6 +1664,23 @@ function PipelinePage() {
 
     setRegeneratingAll(false);
     setRegeneratingAllIndex(null);
+  };
+
+  const handleCancelRegenerateAll = () => {
+    regenerateAbortRef.current?.abort();
+    regenerateAbortRef.current = null;
+    setRegeneratingAll(false);
+    setRegeneratingAllIndex(null);
+    // Mark any currently-generating entries as not generating
+    setTtsResults(prev => {
+      const next = { ...prev };
+      for (const key of Object.keys(next)) {
+        if (next[Number(key)]?.generating) {
+          delete next[Number(key)];
+        }
+      }
+      return next;
+    });
   };
 
   // Per-script TTS: adopt library audio instead of generating
@@ -2176,24 +2243,36 @@ function PipelinePage() {
                 )}
 
                 {/* Generate button */}
-                <Button
-                  onClick={handleGenerate}
-                  disabled={!idea.trim() || isGenerating}
-                  className="w-full"
-                  size="lg"
-                >
-                  {isGenerating ? (
-                    <>
+                {isGenerating ? (
+                  <div className="flex gap-2 w-full">
+                    <Button
+                      disabled
+                      className="flex-1"
+                      size="lg"
+                    >
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                       Generating...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="h-4 w-4 mr-2" />
-                      Generate Scripts
-                    </>
-                  )}
-                </Button>
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="lg"
+                      onClick={handleCancelGenerate}
+                    >
+                      <X className="h-4 w-4 mr-1" />
+                      Stop
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    onClick={handleGenerate}
+                    disabled={!idea.trim()}
+                    className="w-full"
+                    size="lg"
+                  >
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    Generate Scripts
+                  </Button>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -2205,19 +2284,25 @@ function PipelinePage() {
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-semibold">Review Scripts ({scripts.length})</h2>
               <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleRegenerateAllTts}
-                  disabled={regeneratingAll || scripts.length === 0 || Object.values(ttsResults).some(r => r.generating)}
-                >
-                  {regeneratingAll ? (
-                    <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                      Regenerating {(regeneratingAllIndex ?? 0) + 1}/{scripts.length}...</>
-                  ) : (
-                    <><RefreshCw className="h-3.5 w-3.5 mr-1.5" />Regenerate All Voice-overs</>
-                  )}
-                </Button>
+                {regeneratingAll ? (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleCancelRegenerateAll}
+                  >
+                    <X className="h-3.5 w-3.5 mr-1.5" />
+                    Stop ({(regeneratingAllIndex ?? 0) + 1}/{scripts.length})
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleRegenerateAllTts}
+                    disabled={scripts.length === 0 || Object.values(ttsResults).some(r => r.generating)}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 mr-1.5" />Regenerate All Voice-overs
+                  </Button>
+                )}
                 <Button variant="outline" onClick={() => setStep(1)}>
                   <ArrowLeft className="h-4 w-4 mr-2" />
                   Back to Input
@@ -3115,13 +3200,21 @@ function PipelinePage() {
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-semibold">Render Progress</h2>
-              <Button variant="outline" onClick={() => {
-                if (isRendering && !confirm("Renderizarea este în progres. Ești sigur că vrei să începi un pipeline nou?")) return;
-                resetPipeline();
-              }}>
-                <Sparkles className="h-4 w-4 mr-2" />
-                Start New Pipeline
-              </Button>
+              <div className="flex gap-2">
+                {isRendering && (
+                  <Button variant="destructive" onClick={handleCancelRender}>
+                    <X className="h-4 w-4 mr-2" />
+                    Stop Render
+                  </Button>
+                )}
+                <Button variant="outline" onClick={() => {
+                  if (isRendering && !confirm("Renderizarea este în progres. Ești sigur că vrei să începi un pipeline nou?")) return;
+                  resetPipeline();
+                }}>
+                  <Sparkles className="h-4 w-4 mr-2" />
+                  Start New Pipeline
+                </Button>
+              </div>
             </div>
 
             {/* Variant status grid */}
@@ -3144,7 +3237,7 @@ function PipelinePage() {
                         variant={
                           status.status === "completed"
                             ? "default"
-                            : status.status === "failed"
+                            : status.status === "failed" || status.status === "cancelled"
                             ? "destructive"
                             : "secondary"
                         }

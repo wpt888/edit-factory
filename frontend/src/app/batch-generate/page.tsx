@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useBatchPolling, type BatchStatus, type ProductJobStatus } from "@/hooks/use-batch-polling";
-import { apiPost, API_URL } from "@/lib/api";
+import { apiPost, apiGet, API_URL } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Clock,
@@ -19,6 +19,7 @@ import {
   Film,
   RefreshCw,
   Layers,
+  X,
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 
@@ -106,7 +107,7 @@ function BatchGenerateContent() {
 
   const retryLoadingRef = useRef(false);
 
-  const { startPolling, isPolling, batchStatus, productJobs, completedCount, failedCount, totalCount } =
+  const { startPolling, stopPolling, isPolling, batchStatus, productJobs, completedCount, failedCount, totalCount } =
     useBatchPolling({
       apiBaseUrl: API_URL,
       interval: 2000,
@@ -181,6 +182,15 @@ function BatchGenerateContent() {
       ? Math.round(((completedCount + failedCount) / totalCount) * 100)
       : 0;
 
+  const handleCancelBatch = async () => {
+    if (batchId) {
+      try {
+        await apiPost(`/jobs/${batchId}/cancel`, {});
+      } catch { /* best effort */ }
+    }
+    stopPolling();
+  };
+
   const isDone = batchStatus?.status === "completed";
   const allSucceeded = isDone && failedCount === 0;
   const someFailedAndDone = isDone && failedCount > 0;
@@ -229,6 +239,16 @@ function BatchGenerateContent() {
               <div className="text-2xl font-bold text-primary">{overallProgress}%</div>
             </div>
             <Progress value={overallProgress} className="h-2" />
+
+            {/* Cancel button while processing */}
+            {isPolling && !isDone && (
+              <div className="pt-2">
+                <Button variant="destructive" size="sm" onClick={handleCancelBatch}>
+                  <X className="h-4 w-4 mr-2" />
+                  Stop Batch
+                </Button>
+              </div>
+            )}
 
             {/* Completion actions */}
             {allSucceeded && (

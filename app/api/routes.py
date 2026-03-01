@@ -1012,6 +1012,23 @@ async def serve_file(file_path: str, download: bool = False, profile: ProfileCon
         )
 
 
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str, profile: ProfileContext = Depends(get_profile_context)):
+    """Cancel a running job."""
+    job = get_job_storage().get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.get("profile_id") and job["profile_id"] != profile.profile_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.get("status") in ("completed", "failed", "cancelled"):
+        return {"status": "already_finished", "job_id": job_id}
+
+    get_job_storage().cancel_job(job_id)
+    return {"status": "cancelled", "job_id": job_id}
+
+
 @router.delete("/jobs/{job_id}")
 async def delete_job(job_id: str, profile: ProfileContext = Depends(get_profile_context)):
     """Sterge un job si fisierele asociate."""

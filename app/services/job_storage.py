@@ -21,6 +21,9 @@ class JobStorage:
         self._supabase = None
         self._memory_store: Dict[str, dict] = {}
         self._update_lock = threading.Lock()
+        self._cancelled_jobs: Dict[str, float] = {}  # job_id -> monotonic timestamp
+        self._cancelled_lock = threading.Lock()
+        self._MAX_CANCELLED = 500
         self._init_supabase()
 
     def _init_supabase(self):
@@ -236,6 +239,44 @@ class JobStorage:
             return True
 
         return False
+
+    def cancel_job(self, job_id: str) -> bool:
+        """
+        Mark a job as cancelled. Sets in-memory flag for fast checking
+        and updates persistent status.
+
+        Returns:
+            True if job was found and cancelled, False otherwise.
+        """
+        with self._cancelled_lock:
+            self._cancelled_jobs[job_id] = __import__('time').monotonic()
+            # Evict oldest if over limit
+            if len(self._cancelled_jobs) > self._MAX_CANCELLED:
+                sorted_ids = sorted(self._cancelled_jobs, key=self._cancelled_jobs.get)
+                for pid in sorted_ids[:len(self._cancelled_jobs) - self._MAX_CANCELLED]:
+                    self._cancelled_jobs.pop(pid, None)
+
+        # Update persistent storage
+        result = self.update_job(job_id, {"status": "cancelled", "progress": "Cancelled"})
+        if result:
+            logger.info(f"JobStorage: Cancelled job {job_id}")
+            return True
+
+        logger.warning(f"JobStorage: Job {job_id} not found for cancellation")
+        return False
+
+    def is_job_cancelled(self, job_id: str) -> bool:
+        """
+        Fast check if a job has been flagged for cancellation.
+        Uses in-memory dict for speed (no DB roundtrip).
+        """
+        with self._cancelled_lock:
+            return job_id in self._cancelled_jobs
+
+    def clear_job_cancelled(self, job_id: str):
+        """Clear the cancellation flag for a job."""
+        with self._cancelled_lock:
+            self._cancelled_jobs.pop(job_id, None)
 
     def cleanup_old_jobs(self, days: int = 7) -> int:
         """

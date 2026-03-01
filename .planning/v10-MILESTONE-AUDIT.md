@@ -1,13 +1,17 @@
 ---
 milestone: v10
-audited: "2026-03-01T19:00:00Z"
+audited: "2026-03-01T20:00:00Z"
 status: tech_debt
-prior_audit: "2026-03-01T17:30:00Z (2 gaps → Phase 54 closed both)"
+prior_audits:
+  - "2026-03-01T16:00:00Z (3 gaps → Phase 53 closed all)"
+  - "2026-03-01T17:30:00Z (2 gaps → Phase 54 closed both)"
+  - "2026-03-01T19:00:00Z (all gaps closed, tech debt only)"
+  - "2026-03-01T20:00:00Z (final audit with integration checker + 3-source cross-ref)"
 scores:
   requirements: 29/29
   phases: 8/8
-  integration: 29/29
-  flows: 5/5
+  integration: 28/29
+  flows: 6/6
 gaps:
   requirements: []
   integration: []
@@ -27,20 +31,26 @@ tech_debt:
     items:
       - "PLACEHOLDER_ORG / PLACEHOLDER_REPO in electron/package.json publish config — must replace before first release"
       - "build-installer.js does not verify FFmpeg source directory exists before packaging — silent omission possible (affects FOUND-03, INST-02)"
+      - "INST-04: nsis config missing deleteAppDataOnUninstall — %APPDATA%\\EditFactory persists after uninstall"
+  - phase: cross-phase
+    items:
+      - "APP_VERSION in config.py must stay in sync with electron/package.json version"
+      - "SUMMARY.md requirements_completed frontmatter not populated in v10 plans"
+      - "Double license validation on fresh install (harmless redundancy)"
 ---
 
 # v10 Desktop Launcher & Distribution — Milestone Audit (Post-Phase-54 Gap Closure)
 
-**Audited:** 2026-03-01T19:00:00Z
-**Prior audits:** 2026-03-01T16:00:00Z (3 gaps → Phase 53), 2026-03-01T17:30:00Z (2 gaps → Phase 54)
+**Audited:** 2026-03-01T20:00:00Z (final — with integration checker + 3-source cross-reference)
+**Prior audits:** 3 prior passes identified 5 gaps; all closed by Phases 53+54
 **Status:** TECH DEBT (no critical blockers)
 **Score:** 29/29 requirements satisfied
 
 ## Executive Summary
 
-All 29 v10 requirements are satisfied across 8 phases. Both gaps identified in the prior audit (first-run redirect to /setup, startup license validation) are confirmed closed by Phase 54's `checkStartupState()` implementation. All 5 E2E user flows trace end-to-end without breaks. No orphaned or unsatisfied requirements remain.
+All 29 v10 requirements are satisfied across 8 phases (50/50 observable truths verified). All 5 gaps from prior audits confirmed closed. Cross-phase integration checker verified 28/29 connections WIRED (1 PARTIAL: Sentry DSN placeholder). All 6 E2E user flows complete end-to-end. No orphaned or unsatisfied requirements.
 
-The milestone carries non-blocking tech debt: placeholder values for Sentry DSN, GitHub publish config, and app icon that must be replaced before the first public release.
+The milestone carries non-blocking tech debt: placeholder values for Sentry DSN, GitHub publish config, and app icon that must be replaced before production release. INST-04 (uninstaller) has a design decision pending: whether to clean AppData on uninstall.
 
 ## Requirements Coverage (3-Source Cross-Reference)
 
@@ -193,20 +203,28 @@ All 5 gaps from prior audits confirmed closed.
 **Phase 52: Installer & Packaging**
 - `PLACEHOLDER_ORG` / `PLACEHOLDER_REPO` in `electron/package.json` publish config — must replace before first release
 - `build-installer.js` does not verify FFmpeg source directory exists before packaging — silent bundle omission possible
+- INST-04: `nsis` config does not set `deleteAppDataOnUninstall` — `%APPDATA%\EditFactory` persists after uninstall (may be intentional for license/config preservation across reinstall)
+
+**Cross-Phase**
+- `APP_VERSION = "0.1.0"` in `app/config.py` must stay in sync with `electron/package.json` version (currently synchronized)
+- SUMMARY.md `requirements_completed` frontmatter not populated in any v10 plan — documentation convention gap, not implementation gap
+- Double license validation on fresh install (Electron validates, then setup page validates again) — harmless redundancy
 
 ### Pre-Release Checklist (derived from tech debt)
 1. Replace `PLACEHOLDER_ORG`/`PLACEHOLDER_REPO` with real GitHub org/repo
 2. Replace `electron/build/icon.ico` with production icon (256x256 minimum)
 3. Create Sentry project and set `SENTRY_DSN` in `crash_reporter.py`
 4. Add FFmpeg existence check to `build-installer.js` `verifyPrerequisites()`
+5. Decide: should uninstaller clean `%APPDATA%\EditFactory`? If yes, add `deleteAppDataOnUninstall: true` to nsis config
+6. Verify `ffmpeg.exe` and `ffprobe.exe` filenames match extraResources filter at build time
 
 ---
 
 ## Verdict
 
-**TECH DEBT** — All 29 requirements satisfied. All 5 E2E flows verified. All 5 prior gaps closed. No critical blockers. 6 non-blocking tech debt items for pre-release cleanup.
+**TECH DEBT** — All 29 requirements satisfied. All 6 E2E flows verified. All 5 prior gaps closed. No critical blockers. 9 non-blocking tech debt items (6 pre-release, 3 informational).
 
 ---
-*Audited: 2026-03-01T19:00:00Z*
+*Audited: 2026-03-01T20:00:00Z (final)*
 *Auditor: Claude (gsd-audit-milestone)*
-*Integration checker: Claude (gsd-integration-checker)*
+*Integration checker: Claude (gsd-integration-checker, model: sonnet)*

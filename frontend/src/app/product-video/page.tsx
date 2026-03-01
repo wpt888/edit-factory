@@ -30,6 +30,7 @@ import {
   ExternalLink,
   ChevronDown,
   ChevronUp,
+  X,
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 
@@ -64,6 +65,7 @@ function ProductVideoContent() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
   const [hasError, setHasError] = useState(false);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
 
   // No redirect — show empty state inline when no product ID
 
@@ -93,7 +95,7 @@ function ProductVideoContent() {
   const defaultVoice = ttsProvider === "edge" ? "ro-RO-EmilNeural" : "";
 
   // Job polling
-  const { startPolling, isPolling, progress, statusText, elapsedTime, estimatedRemaining } =
+  const { startPolling, stopPolling, isPolling, progress, statusText, elapsedTime, estimatedRemaining } =
     useJobPolling({
       apiBaseUrl: API_URL,
       interval: 2000,
@@ -146,6 +148,7 @@ function ProductVideoContent() {
         throw new Error("No job ID returned from server");
       }
 
+      setCurrentJobId(data.job_id);
       startPolling(data.job_id);
     } catch (err) {
       setIsGenerating(false);
@@ -153,6 +156,17 @@ function ProductVideoContent() {
       const message = err instanceof Error ? err.message : "Unknown error";
       toast.error(`Failed to start generation: ${message}`);
     }
+  };
+
+  const handleCancelGeneration = async () => {
+    if (currentJobId) {
+      try {
+        await apiPost(`/jobs/${currentJobId}/cancel`, {});
+      } catch { /* best effort */ }
+    }
+    stopPolling();
+    setIsGenerating(false);
+    setCurrentJobId(null);
   };
 
   const isFormDisabled = isPolling || isGenerating;
@@ -438,7 +452,7 @@ function ProductVideoContent() {
         </Card>
 
         {/* Generate button */}
-        <div className="mb-6">
+        <div className="mb-6 flex gap-2">
           <Button
             size="lg"
             onClick={handleGenerate}
@@ -457,6 +471,16 @@ function ProductVideoContent() {
               </>
             )}
           </Button>
+          {(isPolling || isGenerating) && (
+            <Button
+              size="lg"
+              variant="destructive"
+              onClick={handleCancelGeneration}
+            >
+              <X className="h-4 w-4 mr-1" />
+              Stop
+            </Button>
+          )}
         </div>
 
         {/* Progress section */}
