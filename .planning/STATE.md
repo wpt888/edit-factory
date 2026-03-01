@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v10
 milestone_name: Desktop Launcher & Distribution
-status: ready_to_plan
-last_updated: "2026-03-01T10:30:00.000Z"
+status: in_progress
+last_updated: "2026-03-01T10:45:03Z"
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 3
+  completed_plans: 2
 ---
 
 # Project State
@@ -23,11 +23,11 @@ See: .planning/PROJECT.md (updated 2026-03-01)
 ## Current Position
 
 Phase: 47 of 52 (Desktop Foundation)
-Plan: — (not yet planned)
-Status: Ready to plan
-Last activity: 2026-03-01 — v10 roadmap created, 6 phases defined, 29/29 requirements mapped
+Plan: 02 of 03 complete (47-02: Process Cleanup Utility)
+Status: In progress — Phase 47 execution underway
+Last activity: 2026-03-01 — 47-02 complete: app/desktop.py + psutil cleanup CLI
 
-Progress: [░░░░░░░░░░] 0% (0 of 6 v10 phases complete)
+Progress: [░░░░░░░░░░] 0% (0 of 6 v10 phases complete; 2/3 plans in Phase 47 done)
 
 ## Performance Metrics
 
@@ -60,7 +60,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - Electron shell (not pystray) as launcher — electron-builder + electron-updater eliminate custom installer/update-server code
 - Python venv copy (not PyInstaller) for v1 — avoids PyTorch/Silero bundling fragility and antivirus false positives
 - Lemon Squeezy for licensing — 5% fees, EU VAT as MoR, license API with instance tracking
-- psutil for process cleanup — not currently in requirements.txt, must be added
+- psutil for process cleanup — added psutil>=5.9.0 to requirements.txt (47-02)
+- app/desktop.py uses lazy psutil import inside function body, not top-level (avoids import cost in non-desktop contexts)
 
 ### Pending Todos
 
@@ -79,9 +80,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Roadmap created — all 29 v10 requirements mapped to phases 47-52
+Stopped at: Completed 47-02-PLAN.md (Process Cleanup Utility — app/desktop.py + psutil)
 Resume file: None
-Next action: /gsd:plan-phase 47
+Next action: Execute 47-03 (or continue with next phase 47 plan)
 
 ---
-*Last updated: 2026-03-01 after v10 roadmap creation*
+*Last updated: 2026-03-01 after 47-02 execution (Process Cleanup Utility)*
