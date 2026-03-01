@@ -34,7 +34,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.config import get_settings
+from app.config import get_settings, APP_VERSION
 from app.api.routes import router as api_router
 from app.api.library_routes import router as library_router
 from app.api.segments_routes import router as segments_router
@@ -129,7 +129,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Edit Factory",
     description="Video processing API pentru reels si short-form content",
-    version="1.0.0",
+    version=APP_VERSION,
     lifespan=lifespan
 )
 
@@ -180,6 +180,11 @@ app.include_router(catalog_router, prefix="/api/v1", tags=["Catalog"])
 app.include_router(association_router, prefix="/api/v1", tags=["Associations"])
 app.include_router(tts_library_router, prefix="/api/v1", tags=["TTS Library"])
 
+# Desktop-only routes (license, version, settings) — gated behind DESKTOP_MODE
+if settings.desktop_mode:
+    from app.api.desktop_routes import router as desktop_router
+    app.include_router(desktop_router, prefix="/api/v1", tags=["Desktop"])
+
 # Static files pentru frontend
 static_path = Path(__file__).parent.parent / "static"
 if static_path.exists():
@@ -191,7 +196,7 @@ async def root():
     """Root endpoint - redirect to docs."""
     return {
         "name": "Edit Factory",
-        "version": "1.0.0",
+        "version": APP_VERSION,
         "docs": "/docs",
         "api": "/api/v1"
     }
