@@ -1,87 +1,94 @@
 # Requirements: Edit Factory
 
-**Defined:** 2026-03-01
-**Core Value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
+**Defined:** 2026-03-02
+**Core Value:** Automated video production from any input — get social-media-ready videos with AI voiceover, synced subtitles, and matched visuals, ready to publish at scale.
 
-## v10 Requirements
+## v11 Requirements
 
-Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phases.
+Requirements for Production Polish & Platform Hardening. Each maps to roadmap phases.
 
-### Desktop Foundation
+### Security
 
-- [x] **FOUND-01**: App stores config in %APPDATA%\EditFactory\ (config.json, license.json, .env)
-- [x] **FOUND-02**: Backend detects DESKTOP_MODE=true and skips JWT auth, reads config from AppData
-- [x] **FOUND-03**: FFmpeg path resolves bundled binary in desktop mode, falls back to system PATH in dev
-- [x] **FOUND-04**: All file paths use APP_BASE_DIR abstraction (no hardcoded relative paths)
+- [ ] **SEC-01**: User data is isolated via Supabase RLS on all editai_* tables (re-enable RLS, backend uses service_role key)
+- [ ] **SEC-02**: Heavy API endpoints have per-route rate limits (uploads: 10/min, renders: 5/min, TTS: 20/min)
+- [ ] **SEC-03**: File uploads are validated by MIME type server-side (python-magic, not just Content-Type header)
+- [ ] **SEC-04**: Script and context text is sanitized before reaching FFmpeg subtitle rendering
 
-### Electron Shell
+### Testing
 
-- [x] **SHELL-01**: Electron main process spawns FastAPI backend + Next.js standalone as child processes
-- [x] **SHELL-02**: BrowserWindow opens at localhost:3000 after health-check polling confirms both services ready
-- [x] **SHELL-03**: System tray icon with right-click menu: Open Edit Factory, Quit
-- [x] **SHELL-04**: Graceful shutdown kills child processes and cleans up ports 8000/3000 via psutil
-- [x] **SHELL-05**: Orphaned processes from previous launches cleaned up on startup
+- [ ] **TEST-01**: Backend services have pytest unit tests with >80% coverage on critical paths (video_processor, assembly_service, job_storage, cost_tracker)
+- [ ] **TEST-02**: API endpoints have integration tests with mock data and response structure assertions
+- [ ] **TEST-03**: Playwright E2E tests verify actual user workflows with API assertions (not just screenshots)
 
-### Installer
+### DevOps
 
-- [x] **INST-01**: electron-builder produces NSIS .exe installer for Windows
-- [x] **INST-02**: Installer bundles Python venv, FFmpeg binary, Next.js standalone, portable Node.js 22.x
-- [x] **INST-03**: Installer creates Start Menu shortcut, desktop shortcut, and Add/Remove Programs entry
-- [x] **INST-04**: Uninstaller removes all installed files and shortcuts
+- [ ] **DEVOPS-01**: GitHub Actions CI pipeline runs lint, type-check, and tests on every push and PR
+- [ ] **DEVOPS-02**: All Python dependencies are pinned to exact versions in requirements.txt
+- [ ] **DEVOPS-03**: Application version is auto-derived from git tags (not hardcoded "1.0.0" in main.py)
 
-### Setup Wizard
+### Monitoring
 
-- [x] **WIZD-01**: /setup page detects first run via %APPDATA% flag and redirects new users
-- [x] **WIZD-02**: Step 1: License key entry with Lemon Squeezy activation and success/error feedback
-- [x] **WIZD-03**: Step 2: API key configuration (Supabase required, Gemini/ElevenLabs optional) with test connection
-- [x] **WIZD-04**: Step 3: Crash reporting consent (opt-in, defaults OFF)
-- [x] **WIZD-05**: Wizard writes config to %APPDATA% and marks first_run_complete
-- [x] **WIZD-06**: Wizard re-accessible from Settings page at any time
+- [ ] **MON-01**: Sentry DSN is configured and crash reporting sends real error events in production
+- [ ] **MON-02**: /health endpoint checks Supabase database connectivity alongside FFmpeg and Redis
+- [ ] **MON-03**: Failed renders automatically clean up partial output files
+- [ ] **MON-04**: Output directory has automatic TTL-based cleanup for orphaned intermediate files
 
-### Licensing
+### UX
 
-- [x] **LICS-01**: License activated via Lemon Squeezy POST /v1/licenses/activate on first run
-- [x] **LICS-02**: License validated via POST /v1/licenses/validate on each startup
-- [x] **LICS-03**: 7-day offline grace period with cached last-successful validation timestamp
-- [x] **LICS-04**: Invalid/expired license blocks app access with re-activation prompt
+- [ ] **UX-01**: User can preview clips inline via embedded HTML5 video player in library page (no new tab)
+- [ ] **UX-02**: Destructive actions (delete, remove-audio, bulk-delete) use Shadcn/UI AlertDialog instead of window.confirm()
+- [ ] **UX-03**: User can recover deleted clips via soft-delete with 30-day trash retention
+- [ ] **UX-04**: UI text language is consistent — all Romanian or all English with i18n framework
+- [ ] **UX-05**: Vestigial marketing pages (statsai, preturi, functionalitati, cum-functioneaza, contact, testimoniale) are removed from routing
+- [ ] **UX-06**: User can upload video files via drag-and-drop onto the upload area
+- [ ] **UX-07**: User can use keyboard shortcuts for common operations (Delete to remove, Escape to close, Space to play/pause)
+- [ ] **UX-08**: User can hover over clip thumbnails to see animated video preview (autoplay on hover)
+- [ ] **UX-09**: User can tag clips and organize them into custom categories/folders
 
-### Updates & Telemetry
+### Performance
 
-- [x] **UPDT-01**: electron-updater checks for new version on startup via latest.yml manifest
-- [x] **UPDT-02**: Update downloads in background, prompts user to restart (not mid-session)
-- [x] **UPDT-03**: Sentry crash reporting initialized only when user has opted in
-- [x] **UPDT-04**: before_send filter scrubs API keys from Sentry stack frame locals
-- [x] **UPDT-05**: Backend GET /api/v1/desktop/version returns current version number
-- [x] **UPDT-06**: Version displayed in Settings page footer
+- [ ] **PERF-01**: Library clips endpoint supports cursor-based pagination (50 clips per page with infinite scroll)
+- [ ] **PERF-02**: Job progress updates use Server-Sent Events (SSE) instead of HTTP polling
+- [ ] **PERF-03**: Profile context is cached with 60-second TTL to reduce per-request Supabase queries
+- [ ] **PERF-04**: TTS cache exposes hit/miss metrics and has configurable maximum size with LRU eviction
+
+### Architecture
+
+- [ ] **ARCH-01**: Background jobs use Redis-backed durable queue with retry logic (replaces BackgroundTasks)
+- [ ] **ARCH-02**: Pipeline and assembly state persists to Supabase database (not in-memory dicts)
+- [ ] **ARCH-03**: Assembly jobs use the same JobStorage pattern as video processing jobs
+- [ ] **ARCH-04**: File storage supports cloud backend (S3 or Supabase Storage) alongside local filesystem
 
 ## Future Requirements
 
-Deferred to future milestones. Tracked but not in current roadmap.
+Deferred beyond v11. Tracked but not in current roadmap.
 
-### Distribution
+### Collaboration
+- **COLLAB-01**: Multiple users can share access to the same project
+- **COLLAB-02**: Team workspace with role-based permissions
 
-- **DIST-01**: macOS DMG/Homebrew installer
-- **DIST-02**: Code signing certificate for Windows SmartScreen reputation
-- **DIST-03**: Portable mode (USB-runnable, no installation)
-- **DIST-04**: Delta/patch updates (tufup-based)
+### Content Analytics
+- **ANAL-01**: Post-publish analytics showing view counts and engagement from Postiz
+- **ANAL-02**: A/B testing dashboard comparing clip performance
 
-### Tier Enforcement
+### Templates
+- **TMPL-01**: UI for creating and editing product video templates
+- **TMPL-02**: Template marketplace or sharing
 
-- **TIER-01**: Starter vs Pro feature gating based on license tier
-- **TIER-02**: Start on login option via winreg Run key
+### Export
+- **EXPORT-01**: Additional export formats (WebM, ProRes)
+- **EXPORT-02**: Quality tier selection from library page
 
 ## Out of Scope
 
-Explicitly excluded. Documented to prevent scope creep.
-
 | Feature | Reason |
 |---------|--------|
-| PyInstaller single .exe bundle | Antivirus false positives, PyTorch bundling fragility |
-| Electron as UI renderer (WebView) | App already runs in browser; Electron is process orchestrator only |
-| In-app payment/subscription | Sell via Lemon Squeezy website; app receives license key |
-| Auto-start on Windows boot (default ON) | Heavy video tool should not auto-start; defer opt-in to future |
-| Offline-only license validation | App requires Supabase (internet); grace period is sufficient |
-| macOS build (v10) | Separate build pipeline; Windows-first |
+| Frontend component tests (Jest/Vitest) | Playwright E2E covers UI; unit tests focus on backend logic |
+| Docker secrets management | Single-user app, .env is sufficient |
+| nginx/TLS reverse proxy | Desktop app serves locally; cloud deploy TBD |
+| Database migration runner | Supabase manages migrations via dashboard; manual is acceptable |
+| Clip version history | Low usage frequency; soft-delete provides recovery |
+| Real-time collaboration | Single user, two profiles |
 
 ## Traceability
 
@@ -89,42 +96,43 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | Phase 47 → Phase 53 | Complete |
-| FOUND-02 | Phase 47 | Complete |
-| FOUND-03 | Phase 47 → Phase 53 | Complete |
-| FOUND-04 | Phase 47 | Complete |
-| SHELL-01 | Phase 48 | Complete |
-| SHELL-02 | Phase 48 | Complete |
-| SHELL-03 | Phase 48 | Complete |
-| SHELL-04 | Phase 48 | Complete |
-| SHELL-05 | Phase 48 | Complete |
-| INST-01 | Phase 52 | Complete |
-| INST-02 | Phase 52 → Phase 53 | Complete |
-| INST-03 | Phase 52 | Complete |
-| INST-04 | Phase 52 | Complete |
-| WIZD-01 | Phase 50 → Phase 53 → Phase 54 | Complete |
-| WIZD-02 | Phase 50 → Phase 53 | Complete |
-| WIZD-03 | Phase 50 → Phase 53 | Complete |
-| WIZD-04 | Phase 50 → Phase 53 | Complete |
-| WIZD-05 | Phase 50 → Phase 53 | Complete |
-| WIZD-06 | Phase 50 → Phase 53 | Complete |
-| LICS-01 | Phase 49 | Complete |
-| LICS-02 | Phase 49 → Phase 54 | Complete |
-| LICS-03 | Phase 49 | Complete |
-| LICS-04 | Phase 49 → Phase 54 | Complete |
-| UPDT-01 | Phase 52 | Complete |
-| UPDT-02 | Phase 52 | Complete |
-| UPDT-03 | Phase 51 | Complete |
-| UPDT-04 | Phase 51 | Complete |
-| UPDT-05 | Phase 49 → Phase 53 | Complete |
-| UPDT-06 | Phase 49 → Phase 53 | Complete |
+| SEC-01 | — | Pending |
+| SEC-02 | — | Pending |
+| SEC-03 | — | Pending |
+| SEC-04 | — | Pending |
+| TEST-01 | — | Pending |
+| TEST-02 | — | Pending |
+| TEST-03 | — | Pending |
+| DEVOPS-01 | — | Pending |
+| DEVOPS-02 | — | Pending |
+| DEVOPS-03 | — | Pending |
+| MON-01 | — | Pending |
+| MON-02 | — | Pending |
+| MON-03 | — | Pending |
+| MON-04 | — | Pending |
+| UX-01 | — | Pending |
+| UX-02 | — | Pending |
+| UX-03 | — | Pending |
+| UX-04 | — | Pending |
+| UX-05 | — | Pending |
+| UX-06 | — | Pending |
+| UX-07 | — | Pending |
+| UX-08 | — | Pending |
+| UX-09 | — | Pending |
+| PERF-01 | — | Pending |
+| PERF-02 | — | Pending |
+| PERF-03 | — | Pending |
+| PERF-04 | — | Pending |
+| ARCH-01 | — | Pending |
+| ARCH-02 | — | Pending |
+| ARCH-03 | — | Pending |
+| ARCH-04 | — | Pending |
 
 **Coverage:**
-- v10 requirements: 29 total
-- Satisfied: 29
-- Pending: 0
-- Unmapped: 0
+- v11 requirements: 31 total
+- Mapped to phases: 0
+- Unmapped: 31
 
 ---
-*Requirements defined: 2026-03-01*
-*Last updated: 2026-03-01 after post-Phase-54 audit passed clean (29/29)*
+*Requirements defined: 2026-03-02*
+*Last updated: 2026-03-02 after initial definition*

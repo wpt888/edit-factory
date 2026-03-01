@@ -1,33 +1,31 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: unknown
-last_updated: "2026-03-01T15:17:55.404Z"
+milestone: v11
+milestone_name: Production Polish & Platform Hardening
+status: defining_requirements
+last_updated: "2026-03-02"
 progress:
-  total_phases: 24
-  completed_phases: 24
-  total_plans: 62
-  completed_plans: 62
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-01)
+See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v10 Desktop Launcher & Distribution — Phase 54 COMPLETE — All gaps closed
+**Current focus:** v11 Production Polish & Platform Hardening — Defining requirements
 
 ## Current Position
 
-Phase: 54 of 54 (Electron Startup State Check) — COMPLETE
-Plan: 1 of 1 (executed 2026-03-01)
-Status: Complete — v10 milestone all phases done
-Last activity: 2026-03-01 — Phase 54 executed (54-01: startup state check in main.js)
-
-Progress: [██████████] 100% (v10 complete — all gaps closed)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-03-02 — Milestone v11 started
 
 ## Performance Metrics
 
@@ -49,6 +47,7 @@ Progress: [██████████] 100% (v10 complete — all gaps close
 | v8 Pipeline UX | 5 (38-42) | 8 | Shipped 2026-02-24 |
 | v9 Assembly Fix + Overlays | 4 (43-46) | 6 | Shipped 2026-02-28 |
 | v10 Desktop Launcher | 8 (47-54) | 12 | Shipped 2026-03-01 |
+| v11 Production Polish | — | — | In Progress |
 
 ## Accumulated Context
 
@@ -56,67 +55,23 @@ Progress: [██████████] 100% (v10 complete — all gaps close
 
 Decisions are logged in PROJECT.md Key Decisions table.
 
-**v10 key decisions:**
-- Electron shell (not pystray) as launcher — electron-builder + electron-updater eliminate custom installer/update-server code
-- Python venv copy (not PyInstaller) for v1 — avoids PyTorch/Silero bundling fragility and antivirus false positives
-- Lemon Squeezy for licensing — 5% fees, EU VAT as MoR, license API with instance tracking
-- psutil for process cleanup — added psutil>=5.9.0 to requirements.txt (47-02)
-- app/desktop.py uses lazy psutil import inside function body, not top-level (avoids import cost in non-desktop contexts)
-- APP_BASE_DIR via _get_app_base_dir(): DESKTOP_MODE=true uses %APPDATA%\EditFactory, dev uses project root (47-01)
-- settings_customise_sources priority: env vars > AppData .env > project .env (47-01)
-- Phase 50 cache_clear() pattern: get_settings.cache_clear() then get_settings() after Setup Wizard writes AppData .env (47-01)
-- [Phase 47-desktop-foundation]: FFmpeg setup reads DESKTOP_MODE via os.getenv() directly (not Settings) so PATH is set before any service import
-- [Phase 47-desktop-foundation]: Bundled FFmpeg at APPDATA/EditFactory/bundled/ffmpeg/bin — Phase 52 installer places binary there
-- [Phase 47-desktop-foundation]: Desktop mode returns desktop@local email vs dev@localhost (AUTH_DISABLED) to distinguish bypass modes in logs
-- [Phase 48-electron-shell]: Use !app.isPackaged instead of electron-is-dev — eliminates dependency, works Electron 14+
-- [Phase 48-electron-shell]: System node from PATH in dev mode, Phase 52 bundles portable Node at resourcesPath/node/node.exe
-- [Phase 48-electron-shell]: 127.0.0.1 for health polling, localhost for loadURL — avoids IPv6 mismatch on Windows
-- [Phase 48-electron-shell]: postbuild.js uses Node.js fs stdlib only for cross-platform standalone asset copy (Windows/WSL)
-- [Phase 48-electron-shell]: electron/build/ excluded from build/ gitignore via !electron/build/ negation to allow ICO tracking
-- [Phase 49]: 404 for not-activated (wizard redirect), 403 for invalid/expired (re-activation) — Phase 50 frontend uses this distinction
-- [Phase 49]: Conditional desktop router import inside if settings.desktop_mode block — avoids loading in web deployments
-- [Phase 49]: Grace period strictly network errors only (ConnectError/TimeoutException/NetworkError) — LS valid=false does not trigger grace period
-- [Phase 49-02]: Chain .json() parse on apiGetWithRetry response before extracting version — apiGetWithRetry returns Response not parsed data
-- [Phase 49-02]: Version display JSX gated on appVersion truthy (null when not in desktop mode or API failed) — no duplicate NEXT_PUBLIC_DESKTOP_MODE check needed in JSX
-- [Phase 50-01]: Supabase /rest/v1/ returns 400 (no table specified) when connected — POST /test-connection accepts both 200 and 400 as success
-- [Phase 50-01]: first_run_complete and crash_reporting_enabled returned as plain booleans from GET /settings — not secrets, no redaction needed
-- [Phase 50]: Setup wizard uses useState with currentStep (1/2/3) — no stepper library needed
-- [Phase 50]: Edit mode (?mode=edit) skips first-run guard and pre-fills values from GET /settings
-- [Phase 50]: Empty API key fields excluded from settings payload to avoid overwriting existing values
-- [Phase 51]: sentry_sdk.init() called ONLY when desktop_mode=True AND crash_reporting_enabled=True — never in dev/web mode
-- [Phase 51]: SENTRY_DSN left as empty string placeholder — must be replaced when Sentry project is created
-- [Phase 51]: Runtime toggle via module-level _crash_reporting_enabled flag checked in before_send — events dropped client-side before network call
-- [Phase 51]: Crash Reporting card placed BEFORE Setup Wizard card in settings page
-- [Phase 51]: Reuse existing desktop useEffect for crash_reporting_enabled fetch alongside version fetch
-- [Phase 51]: Optimistic toggle with full revert on error — no half-state persistence
-- [Phase 52]: electron-updater autoDownload=true/autoInstallOnAppQuit=false — silent download, user-controlled install via Restart Now / Later dialog
-- [Phase 52]: setupAutoUpdater() called after waitForServices()+loadURL() — update check deferred until app fully running
-- [Phase 52]: isDev guard in setupAutoUpdater() — checkForUpdates() never called in dev mode (no app-update.yml exists)
-- [Phase 52]: NSIS installer config with five extraResources bundles all runtime deps; electron-updater added as runtime (not dev) dep; FFmpeg excludes ffplay.exe (194 MB unused); portable Node 22.22.0 downloaded by build script
-- [Phase 53-02]: _write_env_keys skips None/empty strings to avoid overwriting existing .env values; set_crash_reporting_toggle NOT given cache_clear (crash reporter uses its own runtime flag); get_settings() called immediately after cache_clear() to warm new singleton
-- [Phase 53-01]: RESOURCES_PATH injected only in packaged mode (isDev guard) — dev mode resourcesPath is wrong path; frontend/.env.production negation added to gitignore (NEXT_PUBLIC_* are not secrets); AppData FFmpeg fallback retained for backwards compat
-- [Phase 54-01]: checkStartupState() uses !== true (not === false) for first_run_complete to handle undefined/null/missing key; license validate only called when first_run_complete=true (fresh installs have no license.json); network errors in checkStartupState return APP_URL for graceful degradation
-
 ### Pending Todos
 
 None.
 
 ### Blockers/Concerns
 
-**Research flags (must resolve before execution):**
-- Phase 48: electron-builder extraResources config for Python venv + Next.js standalone hybrid — needs validation on clean Windows 11 VM
-- Phase 52: NSIS portable Node.js 22 bundling; update server hosting decision (GitHub Releases vs S3); build size measurement
-
-**Carry-over from v9:**
+**Carry-over from v10:**
 - Database migrations 007/009/017/021 require manual application via Supabase SQL Editor
 - Dead code: pipeline_routes.py lines 1343-1351 (runtime-safe, non-blocking)
+- SENTRY_DSN is empty placeholder — must be replaced when Sentry project is created (SEC/MON scope)
 
 ## Session Continuity
 
-Last session: 2026-03-01
-Stopped at: Completed 54-01-PLAN.md — Phase 54 startup state check executed
+Last session: 2026-03-02
+Stopped at: Defining v11 requirements
 Resume file: None
-Next action: v10 milestone complete — ship / distribute
+Next action: Create roadmap → `/gsd:plan-phase 55`
 
 ---
-*Last updated: 2026-03-01 after Phase 54 gap closure created*
+*Last updated: 2026-03-02 after v11 milestone start*

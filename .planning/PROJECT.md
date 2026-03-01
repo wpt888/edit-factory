@@ -108,21 +108,29 @@ Automated video production from any input — an idea, a product feed, or a coll
 
 ### Active
 
-## Current Milestone: v10 Desktop Launcher & Distribution
+## Current Milestone: v11 Production Polish & Platform Hardening
 
-**Goal:** Transform Edit Factory into an installable desktop product (hybrid: local rendering, cloud DB) that can be sold as a one-time purchase.
+**Goal:** Comprehensive quality upgrade — fix security gaps, add real tests, improve UX with inline previews and modern dialogs, optimize performance with pagination and SSE, and harden architecture with durable job queues and persistent state.
 
 **Target features:**
-- Desktop launcher (.exe) — starts backend + opens browser with system tray
-- Windows installer (NSIS) — bundles Python, deps, FFmpeg, frontend
-- First-run setup wizard — API keys config UI page
-- Auto-update system — version check + download on startup
-- Crash reporting (Sentry) — opt-in error telemetry
-- License key validation — Gumroad/Lemon Squeezy integration
-- Desktop mode flags (AUTH_DISABLED, DESKTOP_MODE) and %APPDATA% config
+- Re-enable Supabase RLS on all tables, per-route rate limiting, MIME validation
+- Pytest unit/integration tests + Playwright E2E tests with assertions
+- GitHub Actions CI pipeline (lint, type-check, test)
+- Inline video player, Shadcn confirmation dialogs, soft-delete trash, drag-drop upload
+- Cursor-based pagination, SSE job progress, profile caching
+- Redis-backed durable job queue, persistent pipeline/assembly state
+- Sentry integration, auto file cleanup, health checks
+- Consistent UI language, keyboard shortcuts, clip organization
 
 ### Out of Scope
 
+- ✓ Desktop launcher (.exe) with system tray — v10
+- ✓ Windows installer (NSIS) with bundled Python, FFmpeg, Node — v10
+- ✓ First-run setup wizard for API keys — v10
+- ✓ Auto-update system with electron-updater — v10
+- ✓ Crash reporting framework (Sentry, opt-in) — v10
+- ✓ Lemon Squeezy license key validation — v10
+- ✓ Desktop mode flags and %APPDATA% config — v10
 - Desktop app (Electron/Tauri) — unnecessary overhead for single-user workflow
 - Mobile app — web-first, personal use
 - Multi-user collaboration — single user, two store profiles
@@ -144,7 +152,8 @@ Automated video production from any input — an idea, a product feed, or a coll
 - Tech stack: FastAPI backend (Python), Next.js frontend (TypeScript), Supabase DB, FFmpeg
 - ~46K LOC across Python (~27K) + TypeScript (~19K)
 - 9 milestones shipped: v1 (MVP), v2 (Profiles), v3 (Video Quality), v4 (Script-First), v5 (Product Videos), v6 (Production Hardening), v7 (Product Image Overlays, partial), v8 (Pipeline UX Overhaul), v9 (Assembly Pipeline Fix + Overlays)
-- v10 milestone active: Desktop Launcher & Distribution
+- v10 shipped: Desktop Launcher & Distribution (2026-03-01)
+- v11 milestone active: Production Polish & Platform Hardening
 - 46 phases, 96 plans executed across all milestones
 - 13 backend services, 9 frontend pages, 14+ API routers
 - DB migrations: 021 total (007/009/017/021 pending manual application)
@@ -208,4 +217,4 @@ Automated video production from any input — an idea, a product feed, or a coll
 | Ken Burns 2x pre-scale for PiP, 4x for interstitials | Matches product_video_compositor pattern; smooth zoompan | ✓ Good |
 
 ---
-*Last updated: 2026-03-01 after v10 milestone start*
+*Last updated: 2026-03-02 after v11 milestone start*
