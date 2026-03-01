@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v10
-milestone_name: Desktop Launcher & Distribution
-status: in_progress
-last_updated: "2026-03-01T14:00:00.000Z"
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-03-01T13:15:36.837Z"
 progress:
-  total_phases: 6
-  completed_phases: 3
-  total_plans: 7
-  completed_plans: 7
+  total_phases: 20
+  completed_phases: 20
+  total_plans: 55
+  completed_plans: 55
 ---
 
 # Project State
@@ -23,9 +23,9 @@ See: .planning/PROJECT.md (updated 2026-03-01)
 ## Current Position
 
 Phase: 50 of 52 (Setup Wizard)
-Plan: 50-01 complete, 50-02 next
+Plan: 50-02 complete, Phase 50 complete
 Status: In progress
-Last activity: 2026-03-01 — Plan 50-01 (Backend Wizard Endpoints) complete
+Last activity: 2026-03-01 — Plan 50-02 (Setup Wizard Frontend + Settings Link) complete
 
 Progress: [█████░░░░░] 50% (3 of 6 v10 phases complete)
 
@@ -48,7 +48,7 @@ Progress: [█████░░░░░] 50% (3 of 6 v10 phases complete)
 | v7 Overlays | 4/6 (32-35) | 7 | Shipped 2026-02-24 (partial) |
 | v8 Pipeline UX | 5 (38-42) | 8 | Shipped 2026-02-24 |
 | v9 Assembly Fix + Overlays | 4 (43-46) | 6 | Shipped 2026-02-28 |
-| v10 Desktop Launcher | 6 (47-52) | 7+ | In progress (3/6 phases) |
+| v10 Desktop Launcher | 6 (47-52) | 7+ | In progress (4/6 phases) |
 
 ## Accumulated Context
 
@@ -80,6 +80,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 49-02]: Version display JSX gated on appVersion truthy (null when not in desktop mode or API failed) — no duplicate NEXT_PUBLIC_DESKTOP_MODE check needed in JSX
 - [Phase 50-01]: Supabase /rest/v1/ returns 400 (no table specified) when connected — POST /test-connection accepts both 200 and 400 as success
 - [Phase 50-01]: first_run_complete and crash_reporting_enabled returned as plain booleans from GET /settings — not secrets, no redaction needed
+- [Phase 50]: Setup wizard uses useState with currentStep (1/2/3) — no stepper library needed
+- [Phase 50]: Edit mode (?mode=edit) skips first-run guard and pre-fills values from GET /settings
+- [Phase 50]: Empty API key fields excluded from settings payload to avoid overwriting existing values
 
 ### Pending Todos
 
@@ -98,9 +101,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Completed 50-01-PLAN.md (Backend Wizard Endpoints)
+Stopped at: Completed 50-02-PLAN.md (Setup Wizard Frontend + Settings Link)
 Resume file: None
-Next action: Execute 50-02 (Setup Wizard Frontend)
+Next action: Execute Phase 51 (plans TBD)
 
 ---
-*Last updated: 2026-03-01 after Plan 50-01 execution (Backend Wizard Endpoints — WIZD-01, WIZD-03, WIZD-05 satisfied)*
+*Last updated: 2026-03-01 after Plan 50-02 execution (Setup Wizard Frontend — WIZD-02, WIZD-04, WIZD-06 satisfied)*

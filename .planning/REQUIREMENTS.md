@@ -32,11 +32,11 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 ### Setup Wizard
 
 - [x] **WIZD-01**: /setup page detects first run via %APPDATA% flag and redirects new users
-- [ ] **WIZD-02**: Step 1: License key entry with Lemon Squeezy activation and success/error feedback
+- [x] **WIZD-02**: Step 1: License key entry with Lemon Squeezy activation and success/error feedback
 - [x] **WIZD-03**: Step 2: API key configuration (Supabase required, Gemini/ElevenLabs optional) with test connection
-- [ ] **WIZD-04**: Step 3: Crash reporting consent (opt-in, defaults OFF)
+- [x] **WIZD-04**: Step 3: Crash reporting consent (opt-in, defaults OFF)
 - [x] **WIZD-05**: Wizard writes config to %APPDATA% and marks first_run_complete
-- [ ] **WIZD-06**: Wizard re-accessible from Settings page at any time
+- [x] **WIZD-06**: Wizard re-accessible from Settings page at any time
 
 ### Licensing
 
@@ -103,11 +103,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | INST-03 | Phase 52 | Pending |
 | INST-04 | Phase 52 | Pending |
 | WIZD-01 | Phase 50 | Complete |
-| WIZD-02 | Phase 50 | Pending |
+| WIZD-02 | Phase 50 | Complete |
 | WIZD-03 | Phase 50 | Complete |
-| WIZD-04 | Phase 50 | Pending |
+| WIZD-04 | Phase 50 | Complete |
 | WIZD-05 | Phase 50 | Complete |
-| WIZD-06 | Phase 50 | Pending |
+| WIZD-06 | Phase 50 | Complete |
 | LICS-01 | Phase 49 | Complete |
 | LICS-02 | Phase 49 | Complete |
 | LICS-03 | Phase 49 | Complete |
