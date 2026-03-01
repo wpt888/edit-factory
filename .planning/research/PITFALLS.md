@@ -1,648 +1,463 @@
 # Pitfalls Research
 
-**Domain:** Adding product feed-based video generation to existing FFmpeg video platform
-**Researched:** 2026-02-20
-**Confidence:** HIGH (FFmpeg/XML pitfalls) / MEDIUM (web scraping, AI image generation)
+**Domain:** Adding desktop distribution (launcher, installer, auto-update, licensing, crash reporting) to an existing Python+Node.js web app
+**Researched:** 2026-03-01
+**Confidence:** HIGH (Windows process management, antivirus behavior) / MEDIUM (licensing, auto-update patterns)
 
 ---
 
 ## Critical Pitfalls
 
-Mistakes that cause rewrites, major data loss, or system failures.
+Mistakes that cause rewrites, broken installs, or silent failures at launch time.
 
-### Pitfall 1: Romanian Diacritics Corrupted in FFmpeg drawtext
+---
+
+### Pitfall 1: Hardcoded Relative Paths Break After Installation
 
 **What goes wrong:**
-Product names and descriptions containing Romanian diacritics (ă, â, î, ș, ț, Ș, Ț) are silently corrupted or cause FFmpeg to error out when passed directly as `text=` in a drawtext filter. The text either renders as boxes/question marks or the entire filter fails, producing a video with no overlay text.
+The existing codebase uses relative paths like `./ffmpeg/...`, `../logs/`, `os.path.dirname(__file__)`, and similar patterns that resolve correctly when run from the project root during development. After installation via NSIS, the working directory is no longer the project root — it is typically `C:\Windows\System32` or wherever the launcher was invoked from. All relative paths silently resolve to the wrong location, causing missing files, failed FFmpeg calls, and config not being read.
 
 **Why it happens:**
-The FFmpeg drawtext filter has up to four levels of escaping:
-1. The text value itself (backslash escaping)
-2. The filter option string (colon-delimited)
-3. The filtergraph description (comma-delimited)
-4. The shell command line
-
-UTF-8 diacritics survive level 1 but break at levels 2-4 when Python constructs the command as a list or string. Additionally, the font file must support the Unicode code points for these characters — Windows-bundled fonts often don't render Romanian ș/ț correctly (confusing them with ş/ţ, which use cedilla instead of comma-below).
+Development always runs from the project root (`python run.py`, `npm run dev`). Every relative path works. The team never notices because the CWD is always correct in dev. Installation changes the CWD assumption entirely.
 
 **How to avoid:**
-Write product text to a UTF-8 temp file and use `textfile=` instead of `text=`:
+Establish a single `APP_BASE_DIR` constant resolved at startup using the executable's location, not CWD. In the launcher (Python):
 ```python
-import tempfile
+import sys
 import os
 
-def write_text_file(text: str) -> str:
-    """Write UTF-8 text to temp file for FFmpeg drawtext."""
-    f = tempfile.NamedTemporaryFile(
-        mode='w',
-        encoding='utf-8',
-        suffix='.txt',
-        delete=False
-    )
-    f.write(text)
-    f.flush()
-    f.close()
-    return f.name
-
-# In FFmpeg filter string:
-# BAD:  "drawtext=text='Produs ș special':fontsize=40"
-# GOOD: "drawtext=textfile='/tmp/abc.txt':fontsize=40"
+if getattr(sys, 'frozen', False):
+    # Running as packaged .exe — use the extracted temp dir
+    APP_BASE_DIR = sys._MEIPASS
+    # For user data that must survive updates, use APPDATA:
+    APP_DATA_DIR = Path(os.environ['APPDATA']) / 'EditFactory'
+else:
+    # Development — use project root
+    APP_BASE_DIR = Path(__file__).parent.parent
+    APP_DATA_DIR = APP_BASE_DIR / 'data'
 ```
-
-For the font, use a font that includes correct Romanian glyphs. Noto Sans, DejaVu Sans, and Liberation Sans support Romanian. Bundle a font with the application instead of relying on system fonts. On WSL, prefer Linux-side font paths over Windows `C:\Windows\Fonts\` paths — Windows path colons require escape hell even with forward slashes (`C\:/Windows/Fonts/Arial.ttf`).
+Do a codebase sweep for every `os.path.join`, `Path(...)`, and `open(...)` call and replace relative paths with `APP_BASE_DIR`-relative or `APP_DATA_DIR`-relative paths before packaging.
 
 **Warning signs:**
-- Boxes or `?` characters in rendered text where diacritics should be
-- FFmpeg error: `Option text not found` (colon in text broke option parsing)
-- Text renders but ș renders as ş (wrong Unicode code point — font substitution)
-- FFmpeg exits with code 1 on any product with diacritics but succeeds on ASCII-only names
+- App launches then immediately crashes with `FileNotFoundError` on logs, config, or temp dir
+- FFmpeg path resolution fails on first launch despite FFmpeg being bundled
+- `app.log` file appears in `C:\Windows\System32\` instead of `%APPDATA%\EditFactory\`
+- Works perfectly when launched from project root folder via terminal, fails from desktop shortcut
 
-**Phase to address:** Phase 1 (video composition foundation) — establish the textfile pattern before any text overlay is built.
+**Phase to address:** Phase 1 (Desktop launcher foundation) — establish path resolution before any packaging work begins.
 
 ---
 
-### Pitfall 2: XML Feed Loaded Entirely Into Memory
+### Pitfall 2: Antivirus and SmartScreen Block the Installer on First Download
 
 **What goes wrong:**
-The Nortia.ro feed has ~9,987 products. Using `xml.etree.ElementTree.parse()` or `lxml.etree.parse()` loads the entire XML document tree into memory at once. A 10k-product Google Shopping feed with descriptions and image URLs is typically 20-80 MB of XML, which after Python object overhead becomes 200-500 MB in memory. On a WSL development machine with limited RAM, this competes directly with FFmpeg processes for memory.
+PyInstaller-generated executables and unsigned NSIS installers are systematically flagged by Windows Defender, SmartScreen, and third-party AV tools. The reason is structural: PyInstaller embeds a bootloader that is common to all PyInstaller-built executables, including malware. AV tools match on the bootloader pattern. Windows 11 Smart App Control (SAC) blocks execution of any unsigned executable by default — no bypass option for users. Windows Defender may quarantine the installer before the user can even run it.
 
 **Why it happens:**
-The natural first instinct is to parse the entire file once and query it. Developers treat a 10k feed like a small config file. The problem isn't the parse itself — it's keeping the full element tree resident while also holding parsed product objects.
+Unsigned executables have no reputation score with Microsoft SmartScreen. Every new executable starts with zero reputation and gets blocked until enough users run it safely. PyInstaller makes this worse because its bootloader pattern is shared with known-malicious software.
 
 **How to avoid:**
-Use `iterparse()` with explicit element clearing:
-```python
-from lxml import etree
-
-def parse_feed_streaming(xml_path: str):
-    """Stream-parse Google Shopping XML without loading full tree."""
-    context = etree.iterparse(xml_path, events=('end',), tag='item')
-
-    for event, elem in context:
-        product = extract_product(elem)
-        yield product
-
-        # CRITICAL: clear element to free memory
-        elem.clear()
-        # Also eliminate the now-empty reference in the parent
-        while elem.getprevious() is not None:
-            del elem.getparent()[0]
-
-    del context
-```
-
-For the product browser UI, parse into a lightweight index (id, title, price, image_url only) on first load, cache it. Do NOT keep parsed element trees in memory.
+- **Sign the installer.** A code signing certificate ($70-350/year from DigiCert, Sectigo, or similar) is the only reliable fix. Windows Defender and SmartScreen both reduce severity for signed executables. Smart App Control (Windows 11) requires a valid EV or OV certificate to bypass.
+- Use `--onedir` mode in PyInstaller (folder, not single-file exe) — this reduces bootloader exposure compared to `--onefile`.
+- Submit the unsigned installer to Microsoft for manual whitelisting as a stopgap: https://www.microsoft.com/en-us/wdsi/filesubmission
+- Consider Nuitka as an alternative to PyInstaller — it compiles Python to C, which has a lower false-positive rate than PyInstaller's bootloader approach.
+- If code signing is deferred: document the workaround clearly in install instructions (Settings > Windows Security > Virus & threat protection > Protection history > Allow).
 
 **Warning signs:**
-- WSL memory usage spikes to >80% during feed parsing
-- FFmpeg jobs fail with OOM errors after feed is loaded
-- Python process using 300+ MB just for feed data
-- Slow initial page load (>5s) for the product browser
+- Test user reports installer was quarantined before running
+- VirusTotal scan of the installer shows 5+ detections
+- SmartScreen shows "Unknown publisher" warning that cannot be dismissed by ordinary users
+- Windows 11 machines silently refuse to run the installer with no UI dialog
 
-**Phase to address:** Phase 1 (feed parsing) — the streaming pattern must be established from the start. Retrofitting this after building the product browser is painful.
+**Phase to address:** Phase 2 (Windows installer / NSIS) — decide on code signing strategy before building the installer. Unsigned installers should not be given to real users.
 
 ---
 
-### Pitfall 3: Image Download Blocks the Render Pipeline
+### Pitfall 3: Backend Not Ready When Frontend Browser Opens
 
 **What goes wrong:**
-Product videos need multiple images (feed image + scraped extras). Downloading them synchronously, one at a time, inside the video generation background task means a batch of 20 products waits for hundreds of HTTP requests sequentially. A single timeout (30s default) stalls the entire batch.
+The launcher starts the FastAPI backend (uvicorn process) and then immediately opens the browser to `http://localhost:3000`. The backend and frontend both take 2-8 seconds to initialize (Python import time, Next.js hydration). If the browser opens before either service is ready, the user sees a connection error page. On slower machines or first run (pip dependencies not pre-compiled), this can take 15-30 seconds. The user assumes the app is broken and closes it.
 
 **Why it happens:**
-The existing Edit Factory pattern runs everything inside a `BackgroundTasks` function sequentially. Adapting this pattern to image downloading without adding concurrency means 20 products × 3 images × (0.5-5s per image) = 30-300s just on downloads before FFmpeg starts.
+The current `start-dev.bat` uses a fixed sleep delay. Packaging as a product requires health-check polling instead of guessing startup time. Developers test on their own fast machine and never notice the issue.
 
 **How to avoid:**
-Pre-download all images for a batch before any FFmpeg rendering begins. Use `httpx` with async or `concurrent.futures.ThreadPoolExecutor` for parallel downloads with connection pooling:
+In the launcher, poll both services before opening the browser:
 ```python
-import httpx
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+import urllib.request
 
-def download_images_batch(urls: list[str], output_dir: Path,
-                           max_workers: int = 5) -> dict[str, Path]:
-    """Download images with timeout and retry. Returns url->path map."""
-    results = {}
-
-    def download_one(url: str) -> tuple[str, Path | None]:
+def wait_for_service(url: str, timeout: int = 60) -> bool:
+    """Poll URL until it responds 200 or timeout."""
+    start = time.time()
+    while time.time() - start < timeout:
         try:
-            resp = httpx.get(url, timeout=10.0, follow_redirects=True)
-            resp.raise_for_status()
+            urllib.request.urlopen(url, timeout=2)
+            return True
+        except Exception:
+            time.sleep(0.5)
+    return False
 
-            # Validate it's actually an image
-            content_type = resp.headers.get('content-type', '')
-            if 'image' not in content_type:
-                return url, None
+# Start backend and frontend processes
+backend_proc = subprocess.Popen([...])
+frontend_proc = subprocess.Popen([...])
 
-            ext = '.jpg'  # default
-            if 'png' in content_type:
-                ext = '.png'
-            elif 'webp' in content_type:
-                ext = '.webp'
+# Wait for both health endpoints
+backend_ready = wait_for_service("http://localhost:8000/api/v1/health")
+frontend_ready = wait_for_service("http://localhost:3000")
 
-            filename = hashlib.md5(url.encode()).hexdigest() + ext
-            path = output_dir / filename
-            path.write_bytes(resp.content)
-            return url, path
-        except Exception as e:
-            logger.warning(f"Failed to download {url}: {e}")
-            return url, None
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(download_one, url): url for url in urls}
-        for future in as_completed(futures):
-            url, path = future.result()
-            results[url] = path
-
-    return results
+if backend_ready and frontend_ready:
+    webbrowser.open("http://localhost:3000")
+else:
+    show_error_dialog("Startup failed. Check logs.")
 ```
-
-Cap `max_workers` at 5 to avoid triggering rate limits on CDNs. Use `httpx` instead of `requests` for connection pooling (avoid opening a new TCP connection per image).
+Show a system tray "Starting..." status during the wait so the user knows something is happening.
 
 **Warning signs:**
-- Batch job "progress" stuck at 0% for 2+ minutes
-- Logs show sequential download timestamps (each 1-3s apart)
-- Single failed URL stops entire batch
-- Memory grows unbounded (stream large images in chunks)
+- Users report "the app shows a blank page"
+- `http://localhost:3000` shows "This site can't be reached" on first launch
+- On first run, loading takes longer than test machine
+- No visible feedback between clicking the icon and the browser appearing
 
-**Phase to address:** Phase 1 (product image pipeline) and Phase 3 (batch processing).
+**Phase to address:** Phase 1 (Desktop launcher foundation) — implement health-check polling in the launcher before any user-facing testing.
 
 ---
 
-### Pitfall 4: FFmpeg zoompan Filter Makes Ken Burns Extremely Slow
+### Pitfall 4: Orphaned Backend Processes After Launcher Closes
 
 **What goes wrong:**
-The `zoompan` filter is the standard FFmpeg tool for Ken Burns effects. However, it is a frame-by-frame filter that processes every output frame individually, making it 10-100x slower than regular encoding. For a 9-second image clip at 30fps = 270 frames, zoompan can take 30-60 seconds on CPU.
+When the system tray icon is right-clicked and "Quit" is selected, the launcher process exits. However, the uvicorn (FastAPI) child process and the Next.js (`node`) child process continue running as orphans. On the next launch, the new processes try to bind to port 8000 and port 3000 and fail with `address already in use`. The user sees no obvious error and the app silently fails to start. The only fix is Task Manager.
 
 **Why it happens:**
-Developers assume Ken Burns is just "a few filter params" and test with one clip. It works but takes a minute. At batch scale (20+ products), this becomes 20-40 minutes of total Ken Burns processing before the actual video encode even runs.
+`subprocess.Popen()` creates child processes that are not automatically killed when the parent exits on Windows. Unlike Unix, Windows does not have process groups that propagate signals. Additionally, uvicorn spawns its own worker subprocesses, so killing the main uvicorn process may leave workers running.
 
 **How to avoid:**
-Two strategies:
-
-**Option A: Pre-render Ken Burns to a short video, then reuse.** Render the Ken Burns clip once per image to a temp `.mp4`, then concatenate. This separates the slow step from the product video assembly.
-
-**Option B: Use `scale2ref` + `zoompan` with reduced output frames.** If Ken Burns is not strictly required, use a simpler zoom with the `scale` filter and `-vf scale=iw*1.1:ih*1.1,crop=iw/1.1:ih/1.1` approach which is significantly faster.
-
-The key pattern: if you must use `zoompan`, set the output duration explicitly with `-t` and use a reasonable zoom speed:
+Use Windows Job Objects via the `psutil` library to create a kill-on-parent-exit relationship, OR implement explicit port-based cleanup on every startup and shutdown:
 ```python
-# SLOW: zoompan on high-res image at 30fps for 9s
-# Benchmark: ~45s encode time for 9s clip
+import psutil
 
-# FASTER: Pre-scale the image to exact output resolution first
-# then apply zoompan on the scaled image
-filters = (
-    f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
-    f"crop={target_w}:{target_h},"
-    f"zoompan=z='min(zoom+0.0005,1.3)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-    f":d={int(duration * fps)}:s={target_w}x{target_h}"
-)
-```
-
-Set `-threads 0` to let FFmpeg use all CPU cores for zoompan — it does parallelize frame processing.
-
-**Warning signs:**
-- Single Ken Burns clip takes >30s to render
-- Batch job progress is linear but total time is unacceptable
-- `top` shows one FFmpeg process at 100% CPU single-threaded
-- FFmpeg stderr shows thousands of "frame=X" lines slowly incrementing
-
-**Phase to address:** Phase 2 (image-to-video composition) — benchmark before committing to zoompan defaults.
-
----
-
-### Pitfall 5: Aspect Ratio Mismatch Stretches Product Images
-
-**What goes wrong:**
-Product feed images come in wildly varying aspect ratios: square (1:1 is most common for e-commerce), landscape (4:3, 16:9 for banner shots), and occasionally portrait (3:4). Target output is 9:16 portrait (1080×1920 for Reels/TikTok). Blindly scaling images to fill 1080×1920 distorts them. A square product image becomes 30% wider than it should be.
-
-**Why it happens:**
-`ffmpeg -i product.jpg -vf scale=1080:1920 output.mp4` scales without preserving aspect ratio. Developers test with images that happen to be near 9:16 and miss the general case.
-
-**How to avoid:**
-Use `scale` with `force_original_aspect_ratio=decrease` then `pad` to fill the remaining space:
-```python
-def build_image_scale_filter(target_w: int, target_h: int,
-                              pad_color: str = "black") -> str:
-    """
-    Scale image to target dimensions preserving aspect ratio.
-    Pads remaining space with pad_color.
-    """
-    return (
-        f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
-        f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:{pad_color}"
-    )
-
-# For product videos, consider blurred background instead of black bars:
-def build_image_blur_background_filter(target_w: int, target_h: int) -> str:
-    """
-    Scale with blurred version of image as background (Instagram style).
-    Requires split filter.
-    """
-    return (
-        f"[0:v]split=2[bg][fg];"
-        f"[bg]scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
-        f"crop={target_w}:{target_h},boxblur=20:5[bgblur];"
-        f"[fg]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease[fgscaled];"
-        f"[bgblur][fgscaled]overlay=(W-w)/2:(H-h)/2"
-    )
-```
-
-The blurred background approach is aesthetically better for product videos — popular on Instagram/TikTok. However, it adds FFmpeg filter complexity and processing time.
-
-**Warning signs:**
-- Product images appear stretched horizontally or vertically
-- Circular logos become ellipses
-- Text overlaid on images appears at wrong position (assumes different dimensions)
-- Images with white backgrounds show black bars instead of brand-appropriate padding
-
-**Phase to address:** Phase 2 (image-to-video composition) — must test with real Nortia.ro feed images, which are typically square e-commerce photos.
-
----
-
-### Pitfall 6: Web Scraping for Extra Images Is Fragile and May Be Blocked
-
-**What goes wrong:**
-The v5 plan includes scraping product pages for additional images beyond the feed image. Romanian e-commerce sites (including WooCommerce-based stores) increasingly use Cloudflare. Python `requests` with default headers gets 403s. Even sites without Cloudflare may have JavaScript-rendered galleries that `requests` or `lxml` can't parse.
-
-**Why it happens:**
-Developers test scraping in a browser (where it works trivially) then use `requests.get()` expecting the same. The site serves a Cloudflare challenge page instead of the HTML.
-
-**How to avoid:**
-Design web scraping as **optional enrichment**, not a required step. The pipeline must work without it:
-
-```python
-async def get_extra_images(product_url: str,
-                            fallback_images: list[str]) -> list[str]:
-    """
-    Attempt to scrape extra images from product page.
-    Returns fallback_images if scraping fails for any reason.
-    """
-    try:
-        # Attempt with reasonable timeout and real browser headers
-        result = await scrape_product_images(product_url, timeout=8.0)
-        if result:
-            return result
-    except Exception as e:
-        logger.info(f"Scraping skipped for {product_url}: {e}")
-
-    return fallback_images
-```
-
-For Nortia.ro specifically (which is the primary target), test the actual site structure once and build a site-specific parser rather than a generic scraper. WooCommerce product pages have consistent gallery HTML:
-```python
-# WooCommerce gallery image pattern
-soup.select('.woocommerce-product-gallery__image img')
-# or data attribute:
-soup.select('[data-large_image]')
-```
-
-Use `httpx` with real browser `User-Agent` and `Accept` headers. If Cloudflare is present, `playwright` (headless Chromium) is the only reliable option — but adds a 2-5 second per-product overhead.
-
-**Warning signs:**
-- 403 responses from all product URLs
-- Scraper returns no images for any product
-- HTML response contains "Checking your browser" (Cloudflare challenge)
-- Gallery div is present in HTML but images are `data-src` attributes (lazy-loaded, requires JS)
-
-**Phase to address:** Phase 2 (visual sources) — implement scraping as a plugin with graceful fallback, not as a core requirement.
-
----
-
-### Pitfall 7: Product Description HTML Not Stripped Before TTS
-
-**What goes wrong:**
-Google Shopping feed descriptions frequently contain raw HTML tags: `<br/>`, `<p>`, `<strong>`, `&nbsp;`, `&amp;`, `&lt;`, HTML entities. If passed directly to ElevenLabs or Edge TTS, the TTS engine either reads the tags aloud ("less than br slash greater than") or refuses to process the input.
-
-**Why it happens:**
-The feed description field is populated from the product's HTML description, and many store owners/systems include markup. Google Merchant Center technically requires plain text but doesn't strictly enforce it.
-
-**How to avoid:**
-Always sanitize descriptions before any text use (TTS, overlays, AI script generation):
-```python
-import html
-import re
-from bs4 import BeautifulSoup
-
-def clean_product_text(raw: str) -> str:
-    """
-    Normalize product text from feed: strip HTML, decode entities,
-    normalize whitespace.
-    """
-    if not raw:
-        return ""
-
-    # Decode HTML entities: &amp; -> &, &nbsp; -> space, etc.
-    decoded = html.unescape(raw)
-
-    # Strip HTML tags (use BeautifulSoup for robustness over regex)
-    soup = BeautifulSoup(decoded, 'html.parser')
-    text = soup.get_text(separator=' ')
-
-    # Normalize whitespace
-    text = re.sub(r'\s+', ' ', text).strip()
-
-    # Truncate for TTS (ElevenLabs flash_v2_5: 40k char limit)
-    # For product videos, descriptions > 500 chars are too long anyway
-    if len(text) > 500:
-        # Cut at last sentence boundary before 500 chars
-        truncated = text[:500]
-        last_period = truncated.rfind('.')
-        if last_period > 200:
-            text = truncated[:last_period + 1]
-        else:
-            text = truncated.rstrip() + '...'
-
-    return text
-```
-
-**Warning signs:**
-- TTS audio contains "p", "br", "strong" spoken aloud
-- ElevenLabs returns 422 (unprocessable content)
-- Script generation AI outputs HTML tags in the generated script
-- Text overlays show `&amp;` or `<br>` as literal characters
-
-**Phase to address:** Phase 1 (feed parsing) — add `clean_product_text()` as a mandatory normalization step on all product text fields at parse time, not at use time.
-
----
-
-### Pitfall 8: Batch Processing Uses BackgroundTasks Without Job-Level Error Isolation
-
-**What goes wrong:**
-The existing Edit Factory `BackgroundTasks` pattern runs one job per upload. For batch product video generation (20+ products), an unhandled exception in product #5 kills the entire batch function, leaving products 6-20 never started. There is no per-product failure tracking.
-
-**Why it happens:**
-The existing `_generation_progress` dict (in-memory, lost on restart) tracks a single job, not N sub-jobs. Adapting it naively for batch means one dict entry for the whole batch — no visibility into which individual products failed.
-
-**How to avoid:**
-Build batch jobs with per-product state tracking from the start:
-```python
-@dataclass
-class ProductJobState:
-    product_id: str
-    status: str  # 'pending' | 'downloading' | 'rendering' | 'done' | 'failed'
-    error: Optional[str] = None
-    output_path: Optional[str] = None
-
-class BatchJob:
-    def __init__(self, job_id: str, product_ids: list[str]):
-        self.job_id = job_id
-        self.products: dict[str, ProductJobState] = {
-            pid: ProductJobState(pid, 'pending')
-            for pid in product_ids
-        }
-
-    @property
-    def progress_pct(self) -> int:
-        done = sum(1 for p in self.products.values()
-                   if p.status in ('done', 'failed'))
-        return int(done / len(self.products) * 100)
-
-async def run_batch(job: BatchJob):
-    for product_id, state in job.products.items():
+def kill_port(port: int):
+    """Kill any process listening on the given port."""
+    for proc in psutil.process_iter(['pid', 'connections']):
         try:
-            state.status = 'rendering'
-            path = await render_product_video(product_id)
-            state.status = 'done'
-            state.output_path = str(path)
-        except Exception as e:
-            # ISOLATE: this product failed, continue with next
-            state.status = 'failed'
-            state.error = str(e)
-            logger.error(f"Product {product_id} failed: {e}", exc_info=True)
-            # Do NOT re-raise — let batch continue
+            for conn in proc.connections():
+                if conn.laddr.port == port and conn.status == 'LISTEN':
+                    proc.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+def shutdown():
+    """Called on tray icon Quit or system shutdown."""
+    kill_port(8000)  # FastAPI
+    kill_port(3000)  # Next.js
+    # Also terminate tracked subprocess handles
+    for proc in [backend_proc, frontend_proc]:
+        if proc and proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=5)
 ```
+Call `kill_port()` at startup (before launching new processes) as a cleanup of any previous orphans.
 
 **Warning signs:**
-- Batch job shows "complete" but only 3 of 20 videos were generated
-- No way to tell which products failed from the UI
-- Re-running batch re-processes already-successful products
-- Server restart loses all batch progress
+- "Address already in use" errors on second launch
+- Task Manager shows multiple `python.exe` and `node.exe` processes after "quitting"
+- App works on first launch but fails on every subsequent launch until reboot
+- Port 8000 or 3000 occupied after the app was quit
 
-**Phase to address:** Phase 3 (batch processing) — design the batch state model before implementing any batch rendering logic.
+**Phase to address:** Phase 1 (Desktop launcher foundation) — process lifecycle management must be airtight before the system tray icon is implemented.
+
+---
+
+### Pitfall 5: Auto-Update Cannot Replace a Running Executable
+
+**What goes wrong:**
+On Windows, a running `.exe` file is locked by the OS and cannot be overwritten. Auto-update systems that download a new version and try to replace the current executable in-place get `PermissionError: [WinError 5]` or `[WinError 32] The process cannot access the file because it is being used by another process`. The update download succeeds, but application of the update silently fails (or crashes the updater). The user sees "update complete" but is still running the old version.
+
+**Why it happens:**
+This is a Windows-specific constraint. Developers testing on macOS or Linux don't encounter it. The pattern works fine in dev (the .py source file is not locked when running), but breaks with compiled .exe deployments.
+
+**How to avoid:**
+Use the two-process update pattern:
+1. Download the new installer/exe to `%TEMP%\EditFactory\update\`
+2. Write a small batch script (or a separate `updater.exe`) to:
+   - Wait for the main app to exit
+   - Replace the old exe with the new one
+   - Restart the app
+3. The main app launches the updater script, then exits immediately
+
+```python
+def apply_update(new_exe_path: Path, current_exe_path: Path):
+    """Write and launch an updater batch script, then exit."""
+    update_bat = Path(os.environ['TEMP']) / 'ef_update.bat'
+    update_bat.write_text(
+        f'@echo off\n'
+        f'timeout /t 2 /nobreak > NUL\n'  # Wait for main process to exit
+        f'copy /Y "{new_exe_path}" "{current_exe_path}"\n'
+        f'start "" "{current_exe_path}"\n'
+        f'del "%~f0"\n'  # Self-delete the batch script
+    )
+    subprocess.Popen(['cmd.exe', '/c', str(update_bat)],
+                     creationflags=subprocess.CREATE_NO_WINDOW)
+    sys.exit(0)  # Exit immediately so the batch can overwrite
+```
+For NSIS-based updates (full reinstall approach), the new installer can run silently in the background without this complexity.
+
+**Warning signs:**
+- Update "succeeds" but version number does not change after restart
+- Error log shows `PermissionError` or `WinError 32` during file copy
+- Update works when the app is not running (manual update) but fails when triggered from inside the app
+
+**Phase to address:** Phase 3 (Auto-update system) — this constraint must drive the update architecture design, not be retrofitted later.
+
+---
+
+### Pitfall 6: License Key Checked Only at Startup, Not Periodically
+
+**What goes wrong:**
+License validation fires once at app startup. If the user's license is revoked (chargeback, refund, Gumroad dispute), the app continues running indefinitely because there is no re-validation after the initial check. Additionally, a user can activate on one machine, image their drive, and use on multiple machines because the activation count is only checked once.
+
+**Why it happens:**
+"Check the license key and open the app" is the natural mental model. Developers implement it as a startup gate and consider it done. The temporal dimension (ongoing validity) is an afterthought.
+
+**How to avoid:**
+Implement periodic re-validation: check the license key against the Lemon Squeezy or Gumroad API every N hours (24h is reasonable for a personal-use tool). Cache the result locally (signed JSON with a timestamp) so the app works offline within the grace period:
+```python
+VALIDATION_CACHE_TTL_HOURS = 48  # Allow 48h offline grace period
+
+def is_license_valid() -> bool:
+    """Check license: use cache if fresh, re-validate if stale."""
+    cache = load_license_cache()
+
+    if cache and cache_is_fresh(cache, VALIDATION_CACHE_TTL_HOURS):
+        return cache['valid']
+
+    # Re-validate against API
+    result = validate_with_api(get_stored_license_key())
+    save_license_cache(result)
+    return result['valid']
+```
+Also verify the `product_id` in the API response matches your product — Lemon Squeezy requires this to prevent license keys from other products being used for yours.
+
+**Warning signs:**
+- License revoked in Gumroad but user continues using the app
+- No mechanism to inform user that their license became invalid post-activation
+- User activates on 5 machines without triggering activation limit
+
+**Phase to address:** Phase 4 (License key validation) — design periodic validation and offline grace period before implementing the activation UI.
+
+---
+
+### Pitfall 7: Sensitive API Keys Stored in Plaintext or Bundled in Executable
+
+**What goes wrong:**
+Two separate failures:
+1. User API keys (Gemini, ElevenLabs, Supabase) entered in the first-run wizard get written to a plaintext `.env` file in the install directory (`C:\Program Files\EditFactory\.env`). Any process on the machine can read this.
+2. The developer's own API keys (Supabase project URL, anon key, etc.) get bundled into the executable by PyInstaller because they are imported via `config.py` which reads `os.environ`. If `.env` is accidentally included in the bundle, those keys ship to every user.
+
+**Why it happens:**
+The existing dev setup uses `.env` files. It's natural to keep that pattern. Developers forget that install directories are readable by other processes, and forget to audit what files PyInstaller includes.
+
+**How to avoid:**
+- Store user API keys in Windows Credential Manager via `keyring` library, not in a flat file:
+```python
+import keyring
+
+SERVICE_NAME = "EditFactory"
+
+def save_api_key(key_name: str, value: str):
+    keyring.set_password(SERVICE_NAME, key_name, value)
+
+def get_api_key(key_name: str) -> str | None:
+    return keyring.get_password(SERVICE_NAME, key_name)
+```
+- If using a config file, store it in `%APPDATA%\EditFactory\config.json` (not the install directory), and never include the actual key values — store a reference that retrieves from keyring.
+- Explicitly exclude `.env` files from the PyInstaller spec file. Audit with `--log-level DEBUG` to see everything being bundled.
+- For app-level credentials (Supabase), use environment variables injected at build time for cloud calls, or architect so the desktop app connects to Supabase directly using the user's own project.
+
+**Warning signs:**
+- `.env` file visible in `C:\Program Files\EditFactory\` after installation
+- PyInstaller build includes a `.env` file in the bundle (check build log)
+- Other local processes can read the ElevenLabs API key
+
+**Phase to address:** Phase 1 (Desktop launcher foundation, config system) and Phase 4 (License key validation, first-run wizard) — establish secure storage before any API key flows are implemented.
+
+---
+
+### Pitfall 8: First-Run Wizard Skipped With No Recovery Path
+
+**What goes wrong:**
+The first-run wizard collects critical API keys (Gemini, ElevenLabs, Supabase). If the user skips it, closes it mid-way, or completes it with invalid keys, the app opens to a broken state: every backend call fails with `KeyError` or `None` key errors, and there is no clear message explaining why or how to fix it. The user cannot find where to re-enter their keys.
+
+**Why it happens:**
+Developers test the happy path (wizard completed successfully) and never test the abandoned wizard scenario. Backend routes that call `config.GEMINI_API_KEY` assume the key exists because development always has `.env` populated.
+
+**How to avoid:**
+- Add explicit key validation after the wizard: ping each API with the provided key before saving it and before letting the user proceed.
+- Add a Settings page (reachable from tray icon menu) that re-opens the wizard for any key.
+- At backend startup, log a clear warning if any required key is missing: "GEMINI_API_KEY not configured — AI features will be unavailable."
+- Design all API-dependent features to show a "Key not configured — click here to set up" message rather than a generic error.
+- Guard the wizard with a completion flag stored in `%APPDATA%\EditFactory\config.json`. If incomplete, re-show the wizard on next launch instead of forcing users to find settings.
+
+**Warning signs:**
+- User reports "nothing works" after installation but gives no specific error
+- Backend shows `KeyError: 'GEMINI_API_KEY'` in logs
+- No way to re-open the wizard after it was dismissed
+- Wizard validates no keys — user enters garbage and the app proceeds
+
+**Phase to address:** Phase 5 (First-run setup wizard) — implement API key validation and recovery before the wizard is shown to any user.
 
 ---
 
 ## Moderate Pitfalls
 
-### Pitfall 9: Missing Images Silently Produce Black Frames
+---
+
+### Pitfall 9: PyInstaller Bundles the Wrong Python Environment
 
 **What goes wrong:**
-When a product image URL is broken (404, CDN gone, server timeout), the image download fails. If the pipeline proceeds with a `None` image path, FFmpeg either errors out (crashing the job) or produces a video with black frames in place of the product image, which looks completely broken.
-
-**Why it happens:**
-Error handling for downloads returns `None` on failure. The subsequent image-to-video composition doesn't check for `None` before calling FFmpeg, passing a non-existent file path.
+PyInstaller bundles the Python environment active at build time. If the build runs in the system Python or a shared virtualenv that has extra unrelated packages, the resulting bundle is oversized (500 MB+ instead of 150 MB). More critically, if the build runs against Python 3.12 but the app code has a dependency that only works on Python 3.10, the bundle ships with silent runtime failures.
 
 **How to avoid:**
-Implement a fallback image strategy — generate a solid color placeholder with the product name as text, or use the store's logo:
-```python
-def get_product_image_or_fallback(image_url: str,
-                                   product_title: str,
-                                   output_dir: Path) -> Path:
-    """Returns downloaded image path, or generated placeholder."""
-    downloaded = download_image_safe(image_url, output_dir)
-    if downloaded and downloaded.exists():
-        return downloaded
-
-    # Generate placeholder with FFmpeg
-    placeholder_path = output_dir / f"placeholder_{hash(product_title)}.jpg"
-    if not placeholder_path.exists():
-        subprocess.run([
-            "ffmpeg", "-y",
-            "-f", "lavfi", "-i", "color=c=gray:s=1080x1080",
-            "-frames:v", "1",
-            str(placeholder_path)
-        ], capture_output=True)
-
-    return placeholder_path
-```
+Always build from a clean, dedicated virtualenv with only production dependencies installed. Document the exact build command in a `build.bat` script. Pin Python version in the spec file. Run the final bundle on a clean Windows machine (not the dev machine) before distribution.
 
 **Warning signs:**
-- Generated videos have 2-3 second black segments
-- FFmpeg error: `No such file or directory` for image input
-- Feed has products with `image_link` pointing to discontinued CDN URLs
-- Batch partially fails with no clear indication of which products had broken images
+- `EditFactory.exe` is over 400 MB when the dependency tree doesn't warrant it
+- Bundle works on dev machine but fails on test machine with import errors
+- `pip list` inside the build env includes unrelated packages from other projects
 
-**Phase to address:** Phase 1 (product image pipeline) — implement fallback before any composition work begins.
+**Phase to address:** Phase 2 (Windows installer / NSIS) — establish clean build environment before packaging.
 
 ---
 
-### Pitfall 10: Price Display — Currency Symbol and Formatting Breaks drawtext
+### Pitfall 10: NSIS 2GB Installer Size Limit
 
 **What goes wrong:**
-Romanian product prices use the `lei` suffix or `RON` currency code, sometimes with the `%` character for discount display ("30% reducere"). The `%` character is special in FFmpeg drawtext — it initiates expression expansion. A product promotion text of "Reducere 30%" becomes either a rendered error or the `%` silently disappears.
-
-**Why it happens:**
-FFmpeg drawtext uses `%{...}` for dynamic text expansion (timecode, frame number, etc.). Any literal `%` must be escaped as `\%` (or `%%` depending on context). When this text comes from product data, developers forget to escape it.
+NSIS has a hard 2 GB compressed installer size limit. Python runtime + venv + FFmpeg + bundled Next.js assets can easily exceed 1 GB compressed. If the bundle grows past 2 GB (unlikely but possible if bundling large models like Whisper or Demucs locally), the installer is silently malformed — it appears to build successfully but extracts incorrectly or produces a corrupt output exe.
 
 **How to avoid:**
-Escape all text content before writing to the drawtext textfile. The `%` sign is the primary concern; also escape backslashes:
-```python
-def escape_for_drawtext_file(text: str) -> str:
-    """
-    Escape text for FFmpeg drawtext textfile option.
-    % is an expression prefix; \\ starts escape sequences.
-    """
-    # Escape backslashes first (must be first!)
-    text = text.replace('\\', '\\\\')
-    # Escape percent signs
-    text = text.replace('%', '\\%')
-    # Newlines in textfile are literal newlines — keep them if multiline
-    return text
-```
+Audit bundle size at every phase. Current expected size breakdown:
+- Python 3.11 runtime: ~60 MB
+- Production pip deps (FastAPI, uvicorn, ffmpeg-python, Whisper, etc.): ~300-500 MB
+- FFmpeg binary: ~80 MB
+- Next.js production build: ~50 MB
+Total target: ~500-700 MB (well within limit).
 
-Note: when using `textfile=`, the escaping rules differ from inline `text=`. With a text file, only `\` and `%` need escaping within the file contents.
+Keep Whisper model weights out of the bundle — download on first use to `%APPDATA%\EditFactory\models\`. Do not bundle Demucs inside the installer.
 
 **Warning signs:**
-- Discount percentages missing from rendered videos
-- FFmpeg warning: "bad/incomplete expression"
-- Product names with `&` (ampersand, common in store names) cause drawtext errors
-- Prices with `.` (decimal point) work but prices with `,` (Romanian decimal format: `19,99 lei`) may need locale-aware formatting
+- Installer `.exe` is exactly ~300 MB despite containing more content (classic malformed NSIS)
+- Extracted files are missing or truncated after install
+- Build completes without error but installed app crashes on launch with missing module
 
-**Phase to address:** Phase 2 (text overlay composition) — add escaping to the text-writing utility.
+**Phase to address:** Phase 2 (Windows installer / NSIS) — check bundle size before scripting the installer.
 
 ---
 
-### Pitfall 11: AI Image Generation Cost Runs Away in Batch Mode
+### Pitfall 11: Crash Reporting Captures User's API Keys in Stack Frames
 
 **What goes wrong:**
-The v5 plan includes AI-generated extra visuals. At FLUX pricing (~$0.04-0.08 per image) and with batch generation of 20 products × 2 AI images each = 40 images = $1.60-3.20 per batch run. If a developer accidentally triggers a batch twice, or if the system retries on failure, costs multiply quickly. For 9,987 products if someone accidentally hits "generate all", that's ~$800-1,600 in one run.
+Sentry captures local variable values in stack frames by default. If a crash occurs inside a function that has `api_key`, `SUPABASE_KEY`, or `ELEVENLABS_API_KEY` in scope (which is common in config and service init code), those values are sent to Sentry's servers in plain text. The user's keys are now in a third-party error tracking service.
 
 **Why it happens:**
-AI image generation is treated like any other pipeline step with retry logic. There's no cost gate or idempotency check.
+Sentry's Python SDK is powerful but sends aggressive amounts of context by default. Developers enable it, set a DSN, and move on without reviewing what data is being sent.
 
 **How to avoid:**
-- Make AI image generation **explicitly opt-in per product**, not on by default for batch
-- Implement idempotency: check if an AI image already exists for this product before generating
-- Add a cost estimate preview before any AI generation batch starts
-- Cap maximum AI images per batch run (e.g., 50 images max)
-- Use the existing `cost_tracker` service to log and monitor AI image costs
-
+Configure Sentry with an explicit `before_send` filter and set `send_default_pii=False` (which is the default but should be explicit):
 ```python
-async def generate_ai_product_image(product_id: str,
-                                     prompt: str,
-                                     output_dir: Path) -> Optional[Path]:
-    """Generate AI image with idempotency check."""
-    # Check if already generated
-    existing = output_dir / f"ai_{product_id}.jpg"
-    if existing.exists():
-        logger.info(f"AI image already exists for {product_id}, reusing")
-        return existing
+import sentry_sdk
 
-    # Log estimated cost before generation
-    estimated_cost = 0.06  # USD, FLUX average
-    cost_tracker.log_estimate("ai_image", estimated_cost,
-                               {"product_id": product_id})
-
-    # Generate
-    image_bytes = await call_ai_image_api(prompt)
-    existing.write_bytes(image_bytes)
-    return existing
-```
-
-**Warning signs:**
-- Cost log shows repeated AI generation for the same product IDs
-- Batch job retries regenerating AI images that already succeeded
-- No cost preview before batch generation starts
-- AI generation happens even when feed image download succeeded
-
-**Phase to address:** Phase 2 (visual sources) — implement idempotency and cost gating before any AI image API integration.
-
----
-
-### Pitfall 12: FFmpeg Font Path on WSL Breaks with Windows Paths
-
-**What goes wrong:**
-The Edit Factory codebase runs on WSL. If a font file is specified using a Windows path (`C:\Windows\Fonts\Arial.ttf`), FFmpeg's drawtext filter will fail even after forward-slash conversion (`C:/Windows/Fonts/Arial.ttf`) because the colon still requires escaping in the filter string. The correct WSL approach is different from either Windows or pure Linux.
-
-**Why it happens:**
-WSL mounts the Windows filesystem at `/mnt/c/`. Developers see "it's Windows" and use Windows paths, but FFmpeg runs as a Linux process and expects Linux paths.
-
-**How to avoid:**
-Use Linux font paths in WSL, not Windows paths:
-```python
-import subprocess
-from pathlib import Path
-
-def get_font_path(font_name: str = "DejaVuSans") -> str:
-    """
-    Get Linux font path for use in FFmpeg drawtext.
-    WSL: use /mnt/c/Windows/Fonts/ or install fonts in WSL.
-    Returns path with no escaping needed in textfile mode.
-    """
-    # Prefer WSL-native fonts (install: apt install fonts-dejavu)
-    wsl_font = Path(f"/usr/share/fonts/truetype/dejavu/{font_name}.ttf")
-    if wsl_font.exists():
-        return str(wsl_font)
-
-    # Fall back to Windows fonts via WSL mount
-    windows_font = Path(f"/mnt/c/Windows/Fonts/arial.ttf")
-    if windows_font.exists():
-        # Escape the colon for FFmpeg filter string usage
-        # /mnt/c/... path has no colon — safe to use directly
-        return str(windows_font)
-
-    raise RuntimeError(f"Font not found: {font_name}")
-```
-
-Install `fonts-noto` or `fonts-dejavu` in WSL for clean Romanian support: `sudo apt install fonts-noto`. These include full Unicode coverage including Romanian comma-below variants (ș, ț).
-
-**Warning signs:**
-- FFmpeg drawtext works with hardcoded English text but fails with any product name
-- Error: `Option fontfile not found` (colon in `C:` path parsed as option separator)
-- Font renders but diacritics show as fallback glyphs (wrong font charset)
-- Tests pass on dev machine but fail after WSL reinstall (font path changed)
-
-**Phase to address:** Phase 1 (video composition foundation) — establish font resolution before any text overlay work.
-
----
-
-### Pitfall 13: Feed Parsing Silently Ignores Namespace-Prefixed Tags
-
-**What goes wrong:**
-Google Shopping XML feeds use XML namespaces: `<g:price>`, `<g:brand>`, `<g:condition>`. When parsed with `ElementTree` without namespace awareness, these tags are returned as `{http://base.google.com/ns/1.0}price` — the namespace URI is prepended. Naive selectors like `elem.find('g:price')` return `None`, silently.
-
-**Why it happens:**
-Developers look at the raw XML, see `<g:price>`, and try to find elements by `g:price`. Python's ElementTree uses Clark notation for namespaces, not prefix notation.
-
-**How to avoid:**
-Define namespace map and use it consistently:
-```python
-GOOGLE_SHOPPING_NS = {
-    'g': 'http://base.google.com/ns/1.0'
+SENSITIVE_KEYS = {
+    'api_key', 'apikey', 'api_secret', 'password', 'token',
+    'elevenlabs_api_key', 'gemini_api_key', 'supabase_key',
+    'supabase_url', 'license_key'
 }
 
-def extract_product(item_elem) -> dict:
-    """Extract product fields handling Google Shopping namespaces."""
-    def find_text(tag: str, ns_prefix: str = 'g') -> str:
-        """Find text with namespace awareness."""
-        # Try namespaced first
-        ns_uri = GOOGLE_SHOPPING_NS.get(ns_prefix, '')
-        elem = item_elem.find(f'{{{ns_uri}}}{tag}')
-        if elem is None:
-            # Try without namespace (some feeds omit it)
-            elem = item_elem.find(tag)
-        return (elem.text or '').strip() if elem is not None else ''
+def scrub_sensitive(event, hint):
+    """Remove sensitive keys from all stack frames before sending."""
+    if 'exception' in event:
+        for exc in event['exception'].get('values', []):
+            for frame in exc.get('stacktrace', {}).get('frames', []):
+                for scope in ['vars', 'pre_context', 'post_context']:
+                    if scope in frame:
+                        if isinstance(frame[scope], dict):
+                            for k in list(frame[scope].keys()):
+                                if k.lower() in SENSITIVE_KEYS:
+                                    frame[scope][k] = '[Filtered]'
+    return event
 
-    return {
-        'id': find_text('id'),
-        'title': item_elem.findtext('title', '').strip(),  # No namespace
-        'description': item_elem.findtext('description', '').strip(),
-        'price': find_text('price'),
-        'sale_price': find_text('sale_price'),
-        'image_link': find_text('image_link'),
-        'brand': find_text('brand'),
-        'product_type': find_text('product_type'),
-        'availability': find_text('availability'),
-    }
+sentry_sdk.init(
+    dsn="...",
+    send_default_pii=False,
+    before_send=scrub_sensitive,
+)
 ```
-
-Also test against the actual Nortia.ro feed before coding assumptions about field names — Romanian stores sometimes use custom Google Shopping extensions.
+Make crash reporting **opt-in** with a clear consent dialog on first launch. Do not enable it silently.
 
 **Warning signs:**
-- All product prices/brands return as empty strings
-- Only `title`, `description`, `link` (non-namespaced fields) parse correctly
-- Product count is correct but most fields are blank
-- `elem.find('g:price')` returns `None` consistently
+- Sentry event inspector shows `api_key` or `token` values in frame locals
+- No `before_send` filter configured in Sentry initialization
+- Crash reporting enabled without user consent dialog
 
-**Phase to address:** Phase 1 (feed parsing) — test against real feed file during implementation.
+**Phase to address:** Phase 6 (Crash reporting / Sentry) — configure scrubbing before enabling reporting.
+
+---
+
+### Pitfall 12: Auto-Update Downloads Over Unverified HTTPS
+
+**What goes wrong:**
+The auto-update system fetches a version manifest and downloads the new installer from a URL. If certificate verification is disabled (common Python workaround for SSL errors), a man-in-the-middle attacker can serve a malicious executable. Even with correct SSL, if the downloaded file is not hash-verified against a manifest signed with the developer's private key, a compromised CDN can serve malicious updates.
+
+**How to avoid:**
+- Always verify SSL certificates (do not use `verify=False`).
+- Publish a SHA256 hash of every release artifact in the version manifest. Verify the hash after download before executing:
+```python
+import hashlib
+
+def verify_download(file_path: Path, expected_sha256: str) -> bool:
+    sha256 = hashlib.sha256()
+    with open(file_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            sha256.update(chunk)
+    return sha256.hexdigest() == expected_sha256
+```
+- Host the version manifest on HTTPS with a valid cert.
+- Consider signing the manifest itself with a private key (public key embedded in the app). This is the TUF (The Update Framework) approach — overkill for a personal tool, but hash verification is mandatory.
+
+**Warning signs:**
+- Update code uses `verify=False` or catches SSL errors and ignores them
+- No hash verification after download
+- Version manifest served over HTTP
+
+**Phase to address:** Phase 3 (Auto-update system) — security requirements must be specified before implementation.
+
+---
+
+### Pitfall 13: WSL-Specific Paths Shipped in the Desktop Build
+
+**What goes wrong:**
+The existing codebase has WSL-specific path handling: `/mnt/c/` path prefixes, Linux-side font paths, `wsl.exe` references. The desktop installer targets native Windows Python (not WSL). If any WSL path assumption leaks into the packaged build, it fails silently: files are not found, FFmpeg uses wrong font paths, the app runs but produces broken output.
+
+**How to avoid:**
+Add an explicit `DESKTOP_MODE=true` environment variable set by the launcher before starting the backend. Audit all path-handling code for WSL assumptions:
+```python
+IS_WSL = 'microsoft' in platform.uname().release.lower()
+IS_DESKTOP = os.getenv('DESKTOP_MODE', 'false').lower() == 'true'
+
+def get_font_path() -> str:
+    if IS_WSL and not IS_DESKTOP:
+        return '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+    else:
+        # Native Windows: use bundled font
+        return str(APP_BASE_DIR / 'assets' / 'fonts' / 'DejaVuSans.ttf')
+```
+Bundle a copy of the required fonts (DejaVu Sans) in the installer to avoid relying on system font availability.
+
+**Warning signs:**
+- FFmpeg drawtext fails on native Windows build but works in WSL dev
+- Log shows path patterns like `/mnt/c/` in a native Windows run
+- Font rendering produces fallback glyphs on clean Windows machines without DejaVu installed
+
+**Phase to address:** Phase 1 (Desktop launcher foundation) — add `DESKTOP_MODE` flag and audit path assumptions during the first phase, before packaging.
 
 ---
 
@@ -652,72 +467,73 @@ Shortcuts that seem reasonable but create long-term problems.
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Store all downloaded images in a flat directory | Simplest code | 9,987+ images in one directory causes filesystem slowdown on some systems | Use per-product subdirectories from the start |
-| Use `text=` inline in drawtext for simple ASCII-only products | Fewer temp files | Romanian products break; inconsistent behavior based on product name | Never — always use `textfile=` |
-| Single in-memory dict for batch job state | Matches existing patterns | Lost on server restart, no recovery possible | Only for single-product generation; batch needs persistence |
-| Download images at render time (not pre-downloaded) | Simpler pipeline | Render job times are unpredictable; timeout failures hard to diagnose | Never for batch mode |
-| `xml.etree.ElementTree.parse()` for feed | stdlib, no dependencies | 200-500 MB memory spike, blocks async event loop | Only for testing with <100 products |
-| AI images generated for every product in batch | Complete visuals | Cost unbounded, no idempotency | Never without explicit per-product opt-in + cost estimate |
-| Hardcode `max_workers=10` for image downloads | Faster downloads | CDN rate limits trigger 429s, all downloads fail together | Set to 3-5; use exponential backoff |
+| Fixed `time.sleep(5)` for startup wait | Simple to implement | Slow on fast machines; too short on slow machines; users see broken page | Never — use health-check polling |
+| Store API keys in plaintext `.env` in install dir | Zero additional code | Keys readable by other processes; ships to user machines accidentally in bundle | Never for production distribution |
+| Skip code signing "for now" | Saves $70-350/year | Users blocked by SmartScreen/Defender; no viable workaround for Windows 11 SAC | Acceptable for internal/personal use only; required before any commercial distribution |
+| License check only at startup | Simple gate | Revoked licenses keep working indefinitely | Only if distribution is free/no-license-control |
+| Bundle Whisper model weights in installer | No download on first run | Installer grows by 150-300 MB per model; NSIS size limit risk | Only if model is small (<50 MB) |
+| In-place update (overwrite running exe) | Simplest update logic | Windows file lock causes silent update failure | Never on Windows |
+| `subprocess.Popen()` without explicit cleanup | Matches existing patterns | Orphaned processes accumulate; port conflicts on relaunch | Never for a packaged product |
+| Crash reporting without user consent | All errors captured | Privacy violation; could capture API keys; regulatory risk | Never — always opt-in |
 
 ---
 
 ## Integration Gotchas
 
-Common mistakes when connecting to the existing Edit Factory pipeline.
+Common mistakes when connecting the desktop wrapper to the existing FastAPI+Next.js app.
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| Existing TTS pipeline | Pass raw feed description to `generate_tts_audio()` | Strip HTML, decode entities, truncate to 500 chars via `clean_product_text()` before TTS |
-| Existing `assembly_service.py` | Try to reuse assembly service for product videos | Build a separate `product_video_service.py` — assembly service is built around script-segment matching, incompatible with image-based composition |
-| Existing `library_routes.py` render endpoint | Add product video generation to existing render flow | Add a new `product_routes.py` router; product videos have fundamentally different inputs (images, not video segments) |
-| Existing `job_storage.py` | Track batch of 20 product jobs as single job | Add batch job concept to job storage or create `product_batch_storage.py` with per-product sub-states |
-| Existing subtitle system (`force_style` / ASS) | Apply subtitle system to text overlays in product videos | Text overlays in product videos use `drawtext` (static overlays), not `subtitles` (timed captions) — different tools, different escaping |
-| Existing `cost_tracker.py` | Forget to log AI image generation costs | Hook `cost_tracker.log_cost()` for every AI image API call, same as existing ElevenLabs logging |
-| Existing ElevenLabs credits (100k/month) | Generate full voiceover for all 9,987 products | Product videos use short template text (20-80 chars typical) = ~40-160 credits per product. 100k credits / 40 chars = 2,500 products max per month. Use Edge TTS as default for batch. |
+| FastAPI backend startup | Spawn uvicorn with `--reload` flag in the packaged build | Never use `--reload` in production; it watches for file changes and adds unnecessary overhead |
+| Next.js frontend | Bundle Next.js dev server (`npm run dev`) | Bundle the production build (`npm run build` + `npm start` or serve static files with a minimal HTTP server) |
+| Existing `.env` config | Read `.env` from project root in the launcher | Read from `%APPDATA%\EditFactory\config.json` populated by first-run wizard; never rely on project-root `.env` in packaged build |
+| FFmpeg path | `ffmpeg/ffmpeg-master.../bin/` relative path in `run.py` | Use `APP_BASE_DIR / 'ffmpeg' / 'bin'` absolute path; inject into `PATH` before starting backend |
+| Supabase JWT auth | Leave `AUTH_DISABLED=false` in packaged build | Set `AUTH_DISABLED=true` and `DESKTOP_MODE=true` in the launcher for single-user desktop deployment |
+| Job status polling | Frontend polls `/api/v1/jobs/{id}` via network | This works unchanged — localhost network calls are fine; no change needed |
+| `psutil` dependency | Assume it is already installed | Add `psutil` to requirements explicitly; it is not a dev dependency today |
 
 ---
 
 ## Performance Traps
 
-Patterns that work at small scale but fail as usage grows.
+Patterns that work fine during development but degrade the desktop experience.
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Synchronous image downloads inside render job | Single product: fine. Batch of 20: 2-5 minute delay before rendering starts | Pre-download phase before render phase | >5 products |
-| Loading full 10k feed into memory for browser UI | First page load takes 5-10 seconds; WSL memory pressure during rendering | Parse to lightweight index (id/title/price/image only), cache as JSON | Feed > 1,000 products |
-| One FFmpeg process per product image (Ken Burns) | Single product: 10-30s. Batch of 20: 3-10 minutes | Benchmark Ken Burns vs simpler scale filter; offer both options | >5 products in batch |
-| No image cache — re-download same images each batch run | Same product video regenerated twice = 2x download time | Content-addressed cache keyed by MD5 of URL | After 2nd run of same products |
-| Unlimited `asyncio.gather()` for product rendering | Fine for 3 products; crashes with OOM for 20 | Use semaphore to limit concurrent FFmpeg processes to 2-3 | >5 concurrent renders |
-| Full product descriptions in AI script prompt | Works with 200-char descriptions; fails with 2000-char descriptions (token limits, slow) | Truncate descriptions to 300 chars before AI prompt | Products with very long descriptions |
+| Next.js dev server in packaged build | ~8-15 second cold start; high CPU on idle; hot-reload file watching active | Use `next build` + `next start` (production mode) | Every launch |
+| Launcher opens browser too fast | Browser shows "site can't be reached" on slow machines | Poll health endpoints before opening browser | First launch on any machine slower than dev machine |
+| No startup progress indicator | User sees nothing for 10-30 seconds, assumes crash | System tray icon with "Starting..." tooltip or splash screen | Every launch where backend is slow |
+| Whisper model download at first TTS use | First TTS job stalls for 3-5 minutes with no progress | Pre-download in first-run wizard with a progress bar | First use after install |
+| Background update download on metered connection | User on mobile hotspot gets unexpected data usage | Respect Windows metered connection API before downloading updates | Mobile/metered connections |
 
 ---
 
 ## Security Mistakes
 
-Domain-specific security issues for product feed processing.
+Desktop distribution introduces security concerns absent from the localhost dev workflow.
 
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| Pass raw product URL to web scraper without validation | SSRF — attacker modifies feed to point to internal URLs (localhost:8000, AWS metadata endpoint) | Validate URLs are http/https and hostname is external before scraping |
-| Store downloaded product images in web-accessible directory without path sanitization | Path traversal if product ID or filename contains `../` | Use `uuid` or content hash as filename, never use product data in file paths |
-| Pass raw product title to shell command without escaping | Command injection if title contains backticks or `$()` | Always use `subprocess` with list args (not shell=True); use textfile for FFmpeg text |
-| Log full API responses containing product descriptions | Sensitive pricing data in logs | Log summary only (product count, status) not full product data |
+| Bundle developer's Supabase service-role key in the exe | All users share one database with admin access; key extractable via binary inspection | Each user connects with their own Supabase project (configured in first-run wizard) OR use a proxy API that validates per-user license before DB access |
+| License key stored in Windows Registry without ACL | Any process can read `HKCU\Software\EditFactory\LicenseKey` | Use Windows Credential Manager via `keyring` library — provides OS-level access control |
+| Auto-update downloads to temp dir with predictable name | DLL planting / update hijacking attack via symlink | Use a random UUID in the temp path; verify SHA256 before executing |
+| Crash reports include user's full video file paths | Paths reveal `C:\Users\<username>\...` structure and personal folder names | Scrub file paths in Sentry `before_send` — anonymize to `...\<filename>` |
+| No license key transmission encryption | License key in plaintext HTTP to validation endpoint | Always use HTTPS for license validation; Lemon Squeezy and Gumroad APIs require HTTPS by default |
 
 ---
 
 ## UX Pitfalls
 
-Common user experience mistakes for the product browser and video generation UI.
+Desktop product UX fails that do not exist in the localhost dev workflow.
 
 | Pitfall | User Impact | Better Approach |
 |---------|-------------|-----------------|
-| Show all 9,987 products in a single scrollable list | Browser freezes; unusable for product selection | Paginate (50 per page) with search/filter; virtual scrolling if needed |
-| Start batch render without showing estimated time and cost | User doesn't know if it will take 5 minutes or 2 hours | Show "~X minutes, ~Y ElevenLabs credits" estimate before confirming batch |
-| No way to see which products in a batch failed | User re-runs entire batch to fix one failure | Per-product status in batch progress UI (table with status icons) |
-| Trigger AI image generation for every product in batch by default | Surprise API cost; slow batch | Make AI images explicitly opt-in; show cost estimate per product |
-| Show raw feed description text in product browser | HTML tags visible; messy UI | Always display cleaned text (strip HTML) in product browser |
-| No preview before batch commit | Wasted rendering for wrong template settings | Single-product preview mode before launching batch |
+| No visual indicator that app is loading | User double-clicks icon, sees nothing for 15 seconds, clicks again, starts two instances | Show a system tray icon immediately, animate it while starting; prevent double-launch with a lock file |
+| No way to see logs after a crash | User cannot provide useful bug reports | Expose a "View logs" option in the tray icon menu; open `%APPDATA%\EditFactory\logs\` folder |
+| Update notification appears mid-work | User is mid-render; update requires restart; work context is lost | Notify about update, offer "Update on next restart" as the default option |
+| License validation blocks offline use | User on airplane cannot use app despite having a valid license | Implement 48h offline grace period using a locally-cached, timestamped validation result |
+| First-run wizard has no "Skip for now" | User wants to explore the UI before entering API keys | Allow deferring non-critical keys (e.g., Sentry opt-in, ElevenLabs) while requiring Supabase for DB access |
+| Uninstaller leaves `%APPDATA%\EditFactory\` behind | User re-installs, gets wrong config from previous install | NSIS uninstaller should offer to remove user data, or document the location clearly |
 
 ---
 
@@ -725,15 +541,16 @@ Common user experience mistakes for the product browser and video generation UI.
 
 Things that appear complete but are missing critical pieces.
 
-- [ ] **Feed parser:** Test against the actual Nortia.ro XML file (not a mock) — namespace handling, encoding, field availability may differ from spec
-- [ ] **Romanian text rendering:** Test with products containing all diacritics: ă â î ș ț (comma-below variants, not cedilla variants) — verify at font level
-- [ ] **Image downloads:** Test with broken URLs, redirects (CDN URL shorteners), HTTPS-only servers, and very large images (some feeds include unoptimized 5MB+ images)
-- [ ] **Aspect ratio handling:** Test with portrait, landscape, and square product images — verify all three look correct in the 9:16 output
-- [ ] **Ken Burns performance:** Benchmark with 5 and 20 products — total render time must be acceptable before committing to zoompan
-- [ ] **Batch failure isolation:** Deliberately break one product (point to non-existent image) in a 5-product batch — verify other 4 complete successfully
-- [ ] **ElevenLabs credit consumption:** Calculate credits for one full batch run against real product descriptions — verify it stays within 100k/month budget
-- [ ] **Price formatting:** Test products with sale prices (both price fields present) and without — verify display logic handles both cases
-- [ ] **XML namespace parsing:** Test `g:price`, `g:brand`, etc. parse correctly — log a warning if namespaced fields return empty for >10% of products
+- [ ] **Launcher process cleanup:** Test that quitting the tray icon kills backend AND frontend — verify ports 8000 and 3000 are free after quit
+- [ ] **Path resolution on clean machine:** Install on a machine that has never had the dev environment — verify no paths reference `C:\Users\dev-username\...`
+- [ ] **Antivirus test:** Run the installer through VirusTotal before distribution — verify detection count is 0 or document the false-positive status
+- [ ] **Offline license grace period:** Disconnect from internet after activation — verify the app launches and functions for 48 hours without network
+- [ ] **License revocation:** Revoke a test license key in Gumroad/Lemon Squeezy — verify the app refuses to open within 48 hours of revocation
+- [ ] **Auto-update file lock test:** Trigger an update while the app is actively rendering a video — verify update is deferred and does not corrupt the running render
+- [ ] **API key scrubbing in Sentry:** Trigger a crash inside a function that has `api_key` in scope — verify Sentry event shows `[Filtered]` not the actual key value
+- [ ] **DESKTOP_MODE flag:** Verify that `DESKTOP_MODE=true` is set in the backend's environment when launched via the desktop launcher — check in backend startup logs
+- [ ] **First-run wizard recovery:** Close the wizard mid-way — verify re-opening the app re-shows the wizard rather than opening a broken app
+- [ ] **Double-launch prevention:** Double-click the desktop icon rapidly — verify only one instance starts, not two
 
 ---
 
@@ -743,59 +560,58 @@ When pitfalls occur despite prevention, how to recover.
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| diacritics corrupted in rendered videos | HIGH — re-render all affected videos | Switch to `textfile=` pattern; regenerate using cached downloaded images (no re-download needed) |
-| Batch job crashed mid-run with no per-product state | MEDIUM — re-run batch | Add per-product state tracking; implement "resume batch" feature that skips already-completed products |
-| AI image costs unexpectedly high | LOW — no data loss | Add `--dry-run` flag to estimate cost before generation; implement idempotency cache |
-| Feed XML namespace mismatch = empty product data | MEDIUM | Add validation step after parsing: log warning if >10% of products have empty price/brand; halt if >50% empty |
-| Ken Burns too slow for batch | MEDIUM | Add configurable option: `ken_burns: bool = False` for batch mode, simple scale/crop for speed |
-| Aspect ratio mismatch = stretched images in production | HIGH — re-render | Detect during image download (PIL `Image.size` check) and store aspect ratio; fix scale filter |
+| Relative paths break after install | HIGH — must rebuild | Grep entire codebase for `./`, `../`, `os.getcwd()`, add `APP_BASE_DIR` abstraction, rebuild installer |
+| Antivirus quarantines installer | MEDIUM | Submit to Defender for manual review (1-3 days), update install instructions with SmartScreen bypass, expedite code signing purchase |
+| Orphaned processes blocking port | LOW — self-service | Add startup port cleanup to next launcher release; document manual fix: `netstat -ano \| findstr :8000` then `taskkill /PID <pid> /F` |
+| API keys captured in Sentry event | HIGH — security incident | Rotate affected API keys immediately, add `before_send` scrubbing, purge affected Sentry events from dashboard |
+| Auto-update applies corrupt file | MEDIUM | Distribute a manual patch; implement rollback in next release (backup old exe before applying update) |
+| License validation broken by API change | MEDIUM | Push an emergency update that extends offline grace period to 30 days; fix validation logic |
 
 ---
 
 ## Pitfall-to-Phase Mapping
 
-How roadmap phases should address these pitfalls.
-
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Romanian diacritics in drawtext (#1) | Phase 1: Feed parsing + image pipeline | Render a test clip with "Produs ș.r.l. Ță special" as title overlay |
-| XML loaded into memory (#2) | Phase 1: Feed parsing | Measure Python process memory while parsing full Nortia.ro feed |
-| Image download blocks rendering (#3) | Phase 1: Image pipeline + Phase 3: Batch | Time a 10-product batch from request to first rendered video |
-| Ken Burns too slow (#4) | Phase 2: Image-to-video composition | Benchmark Ken Burns vs simple scale on 5 images; document time per image |
-| Aspect ratio mismatch (#5) | Phase 2: Image-to-video composition | Test with portrait, landscape, square images from real feed |
-| Web scraping fragile (#6) | Phase 2: Visual sources | Test against Nortia.ro product pages; verify fallback works when scraping fails |
-| HTML in product descriptions (#7) | Phase 1: Feed parsing | Parse 10 real products and verify `clean_product_text()` output has no HTML |
-| Batch error isolation (#8) | Phase 3: Batch processing | Inject one failing product into a 5-product batch; verify others complete |
-| Missing image fallback (#9) | Phase 1: Image pipeline | Test with broken image URL; verify placeholder renders without FFmpeg error |
-| Price % escaping (#10) | Phase 2: Text overlay composition | Test with `"Reducere 30%"` in overlay text; verify `%` displays correctly |
-| AI image cost control (#11) | Phase 2: Visual sources | Verify cost estimate shown before batch; verify idempotency for re-runs |
-| WSL font path (#12) | Phase 1: Video composition foundation | Test drawtext with WSL Linux font path vs Windows path |
-| XML namespace parsing (#13) | Phase 1: Feed parsing | Verify `g:price`, `g:brand` parse correctly from real Nortia.ro feed |
+| Hardcoded relative paths (#1) | Phase 1: Desktop launcher foundation | Install on a clean machine at a non-standard path; verify no FileNotFoundError on launch |
+| Antivirus blocks installer (#2) | Phase 2: Windows installer | VirusTotal scan of installer before distribution; test on fresh Windows 11 VM |
+| Backend not ready on browser open (#3) | Phase 1: Desktop launcher foundation | Time backend startup on a slow machine (HDD, 4-core); verify no "can't be reached" page |
+| Orphaned processes (#4) | Phase 1: Desktop launcher foundation | Quit and relaunch 3 times; verify no "address in use" error |
+| Auto-update can't replace running exe (#5) | Phase 3: Auto-update system | Trigger update while app is running; verify version increments correctly after restart |
+| License checked only at startup (#6) | Phase 4: License key validation | Revoke license, restart app 24h later; verify rejection |
+| API keys in plaintext / bundled (#7) | Phase 1 (config) + Phase 4 (wizard) | Inspect `%APPDATA%\EditFactory\` for plaintext key files; inspect PyInstaller bundle manifest |
+| First-run wizard not recoverable (#8) | Phase 5: First-run setup wizard | Close wizard mid-way; verify relaunch re-shows wizard |
+| PyInstaller bundles wrong env (#9) | Phase 2: Windows installer | Build in a fresh venv; verify bundle size is under 600 MB |
+| NSIS 2 GB size limit (#10) | Phase 2: Windows installer | Measure bundle components before scripting NSIS |
+| Sentry captures API keys (#11) | Phase 6: Crash reporting | Trigger a controlled crash with key in scope; inspect Sentry event |
+| Update without hash verification (#12) | Phase 3: Auto-update system | Verify SHA256 check is in code before auto-update is enabled |
+| WSL paths in desktop build (#13) | Phase 1: Desktop launcher foundation | Run packaged build on native Windows (not WSL); verify no `/mnt/c/` paths in logs |
 
 ---
 
 ## Sources
 
-**HIGH Confidence (official documentation + direct FFmpeg behavior):**
-- [FFmpeg drawtext filter documentation](https://ffmpeg.org/ffmpeg-filters.html) — textfile option, escaping rules
-- [FFmpeg drawtext escaping levels](https://hhsprings.bitbucket.io/docs/programming/examples/ffmpeg/drawing_texts/drawtext.html) — four-level escaping documented
-- [lxml iterparse performance](https://lxml.de/performance.html) — iterparse vs DOM trade-offs
-- [Parsing large XML efficiently in Python](https://pranavk.me/python/parsing-xml-efficiently-with-python/) — iterparse patterns
+**HIGH Confidence (official documentation, reproducible Windows behavior):**
+- [PyInstaller: When Things Go Wrong](https://pyinstaller.org/en/stable/when-things-go-wrong.html) — `sys._MEIPASS`, path resolution, onefile behavior
+- [NSIS False Positives documentation](https://nsis.sourceforge.io/NSIS_False_Positives) — AV false positive causes and workarounds
+- [Sentry Python: Scrubbing Sensitive Data](https://docs.sentry.io/platforms/python/data-management/sensitive-data/) — `before_send`, `send_default_pii`, frame variable scrubbing
+- [Lemon Squeezy: Validating License Keys](https://docs.lemonsqueezy.com/guides/tutorials/license-keys) — product_id verification requirement, activation limits
+- [PyInstaller antivirus false positives — GitHub Issue #6754](https://github.com/pyinstaller/pyinstaller/issues/6754) — bootloader pattern cause
 
-**MEDIUM Confidence (multiple community sources, verified patterns):**
-- [Ken Burns effect with FFmpeg](https://mko.re/blog/ken-burns-ffmpeg/) — zoompan filter performance characteristics
-- [FFmpeg image aspect ratio handling](https://creatomate.com/blog/how-to-create-a-slideshow-from-images-using-ffmpeg) — scale + pad approach
-- [Python requests retry strategies](https://oxylabs.io/blog/python-requests-retry) — batch download error handling
-- [Cloudflare anti-bot bypass options](https://scrapfly.io/blog/posts/how-to-bypass-cloudflare-anti-scraping) — web scraping reliability
-- [Google Shopping feed data quality issues](https://feedarmy.com/kb/common-google-shopping-errors-problems-mistakes/) — common feed problems
-- [FFmpeg drawtext font path Windows](https://forum.videohelp.com/threads/382414-ffmpeg-drawtext-not-working) — Windows path escaping issues
+**MEDIUM Confidence (community sources, multiple reports):**
+- [NSIS installer flagged as trojan — electron-builder #6347](https://github.com/electron-userland/electron-builder/issues/6347) — real-world AV detection reports
+- [FastAPI server stuck on Windows — rolisz.ro](https://rolisz.ro/2024/fastapi-server-stuck-on-windows/) — Windows-specific process issues
+- [Child Processes Not Terminating with Uvicorn — GitHub Discussion #2281](https://github.com/Kludex/uvicorn/discussions/2281) — orphaned child process behavior
+- [Offline license key validation — Beyond Code](https://beyondco.de/course/desktop-apps-with-electron/licensing-your-apps/offline-license-key-validation) — grace period pattern
+- [How a program can update itself — codestudy.net](https://www.codestudy.net/blog/i-don-t-get-how-a-program-can-update-itself-how-can-i-make-my-software-update/) — two-process update pattern
+- [PyInstaller EXE detected as virus — CodersLegacy](https://coderslegacy.com/pyinstaller-exe-detected-as-virus-solutions/) — solutions and SmartScreen relationship
 
 **Edit Factory Codebase (direct inspection):**
-- `app/services/assembly_service.py` — existing pipeline patterns to preserve or avoid
-- `app/services/subtitle_styler.py` — ASS subtitle approach (different from drawtext)
-- `app/api/library_routes.py` — existing BackgroundTasks pattern and job storage
-- `PROJECT.md` — confirmed: Nortia.ro feed = ~9,987 products, ElevenLabs 100k credits/month
+- `app/main.py` — existing PATH injection for FFmpeg (WSL pattern to audit)
+- `run.py` — existing startup sequence (relative paths to replace)
+- `start-dev.bat` / `start-dev.sh` — sleep-based startup (to replace with health polling)
+- `.planning/PROJECT.md` — confirmed: Windows/WSL environment, AUTH_DISABLED pattern, DESKTOP_MODE flags planned
 
 ---
-*Pitfalls research for: Product feed video generation (v5) added to Edit Factory*
-*Researched: 2026-02-20*
+*Pitfalls research for: Desktop distribution (launcher, installer, auto-update, licensing, crash reporting) added to Edit Factory v10*
+*Researched: 2026-03-01*

@@ -1,239 +1,275 @@
 # Project Research Summary
 
-**Project:** v5 Product Video Generator — Edit Factory
-**Domain:** E-commerce product feed to social media video generation
-**Researched:** 2026-02-20
+**Project:** Edit Factory — v10 Desktop Launcher & Distribution
+**Domain:** Windows desktop distribution of a hybrid FastAPI + Next.js web app
+**Researched:** 2026-03-01
 **Confidence:** HIGH
 
 ## Executive Summary
 
-The v5 milestone adds a product-feed-driven video generation workflow to an existing, mature platform. The architectural approach is conservative and correct: the new feature integrates at three well-defined seams rather than building a parallel stack. Most of the render infrastructure — ElevenLabs/Edge TTS, subtitle generation, audio normalization, encoding presets, job tracking — is reused without modification. New code is concentrated in three focused areas: parsing Google Shopping XML feeds (lxml), image preparation and download (Pillow, httpx), and a new FFmpeg image-to-video compositor using zoompan Ken Burns effects, drawtext overlays, and xfade transitions. The data path is: feed URL → XML parse → products DB table → user selection → template choice → TTS voiceover → image composition → FFmpeg render → clip in existing library.
+Edit Factory v10 transforms an existing FastAPI + Next.js localhost tool into a distributable Windows desktop product using a thin Electron shell. The core insight from research is that no business logic changes are required: the existing two-process architecture (FastAPI on :8000, Next.js on :3000) already supports `AUTH_DISABLED=true`, `NEXT_PUBLIC_API_URL` externalization, and `output: "standalone"` in `next.config.ts` — making this primarily a packaging and lifecycle-management problem rather than an application rewrite. The Electron shell acts as a process orchestrator that spawns both services, manages the system tray, handles auto-update, validates the license, and cleans up on quit.
 
-The recommended MVP is deliberately narrow: feed parsing, a product browser UI, single-product video generation with Ken Burns + text overlays, and a sale banner template preset. This core workflow must be stable before batch processing is added. Batch generation is a thin layer on top of a working single-product flow — if single-product is reliable, batch is a queue wrapper; if single-product has bugs, batch multiplies those bugs by N. Competitors charge $39–$299/month for equivalent functionality; this system's only variable cost is ElevenLabs TTS for elaborate-mode voiceovers (~300 credits per 100-word script).
+The recommended approach is Electron with `electron-builder` for the NSIS installer and `electron-updater` for auto-update, backed by Lemon Squeezy for license key management and Sentry for opt-in crash reporting. New Python runtime dependencies are minimal: `platformdirs` (AppData path resolution), `sentry-sdk[fastapi]` (crash reporting), and `psutil` (process cleanup on shutdown — not currently in requirements.txt). All license and update API calls reuse the existing `httpx` dependency. The architecture adds approximately 7 new files and modifies 4 existing files; every one of the 14 existing API routers and 13+ services remains unchanged.
 
-The two categories of risk that can derail v5 are encoding correctness issues (Romanian diacritics in FFmpeg drawtext will corrupt product names silently, font path resolution on WSL is error-prone, and aspect ratio handling for mixed-orientation product images requires explicit planning) and performance traps at batch scale (zoompan Ken Burns is 10-100x slower than regular encoding, synchronous image downloads block the render pipeline, and a 9,987-product feed loaded naively into memory creates OOM pressure). Both categories are avoidable with well-documented patterns that must be established in Phase 1.
+The top risks are process lifecycle correctness (orphaned backend processes block port reuse on relaunch), Windows SmartScreen blocking unsigned installers (critical for commercial distribution), and PyInstaller fragility when bundling PyTorch-heavy dependencies. All three have well-documented mitigations: health-check polling before opening the browser, port cleanup on startup/shutdown via `psutil`, deferring code signing until after first sales validation, and shipping a venv copy rather than a PyInstaller bundle for v1. The %APPDATA% config path is the keystone: every desktop-specific feature (license, API keys, crash consent, first-run flag) flows through `%APPDATA%\EditFactory\` and must be established in Phase 1 before any other desktop work.
+
+---
 
 ## Key Findings
 
 ### Recommended Stack
 
-The stack adds four new Python libraries to the existing platform, all with HIGH confidence. `lxml` (6.0.2) for streaming XML feed parsing with namespace support — the Nortia.ro feed has ~9,987 products and must be parsed with iterparse + element clearing to avoid 200-500 MB memory spikes. `Pillow` (12.1.1) for static image preparation — resizing, format conversion (WebP to JPEG), and letterboxing before FFmpeg handles animation. `beautifulsoup4` (4.14.3) paired with the already-installed `httpx` for optional product image scraping from product page URLs. `fal-client` (0.13.1) for optional AI image generation via FLUX.1, using the `FAL_API_KEY` already in `.env.example`. All FFmpeg composition (Ken Burns, text overlays, crossfade transitions) is implemented via subprocess calls to the existing FFmpeg binary — no new video library is needed.
+The existing production stack (FastAPI, Next.js, Supabase, FFmpeg, ElevenLabs, Edge TTS, Gemini) requires zero changes for desktop mode. New capabilities are exclusively in the distribution and lifecycle layer. The architecture research confirmed that `next.config.ts` already sets `output: "standalone"` — the Next.js frontend can be run with bare Node.js via `node .next/standalone/server.js`. The existing `AUTH_DISABLED=true` flag already bypasses all JWT logic, making desktop mode's single-user requirement trivial to satisfy.
 
-**Core technologies:**
-- `lxml` 6.0.2: Google Shopping XML feed parsing with namespace support — 2-10x faster than stdlib, full iterparse streaming
-- `Pillow` 12.1.1: Image resize, format conversion, letterboxing before FFmpeg input — WebP/AVIF support critical for e-commerce feeds
-- `beautifulsoup4` 4.14.3: Optional HTML scraping for extra product images — paired with existing `httpx`, no new HTTP library
-- `fal-client` 0.13.1: Optional FLUX.1 AI image generation — FAL_API_KEY already in env; feature-flagged, explicit opt-in only
-- FFmpeg `zoompan` filter: Ken Burns animation on product images — CPU-intensive, requires benchmarking and pre-scaling
-- FFmpeg `drawtext` + `textfile=`: Product name, price, CTA text overlays — textfile mode required for Romanian diacritics
-- Pexels API via `httpx`: Free stock video backgrounds — no new dependency, 200 req/hour free tier
-- Python dataclasses: Video template system — matches existing `encoding_presets.py` pattern, not Jinja2
+**Core new technologies:**
+- **Electron 33+**: Process orchestrator shell — spawns FastAPI + Next.js, creates BrowserWindow, system tray, IPC; chosen because `electron-updater` + `electron-builder` together provide a complete NSIS installer and auto-update pipeline with minimal custom code
+- **electron-builder**: Produces NSIS installer that bundles FFmpeg, Python venv/dist, Next.js standalone, and configures Start Menu shortcuts and uninstaller; auto-generates `latest.yml` for update channel
+- **electron-updater**: Handles delta auto-updates against a static file server (S3 or GitHub Releases); downloads in background, prompts on restart (not mid-session)
+- **platformdirs 4.9.2**: Resolves `%APPDATA%\EditFactory\` on Windows; actively maintained fork of abandoned `appdirs`
+- **sentry-sdk[fastapi] 2.53.0 + @sentry/nextjs 10.x**: Opt-in crash reporting; FastAPI integration auto-activates; free tier (5,000 errors/month) is sufficient for indie distribution
+- **Lemon Squeezy License API (httpx, no new lib)**: Activate/validate/deactivate lifecycle with machine instance tracking; 5% fees vs Gumroad's 10%; handles EU VAT as Merchant of Record
+- **psutil**: Process cleanup on launcher shutdown — prevents orphaned backend/frontend processes from blocking ports on next launch (not currently in requirements.txt; must be added explicitly)
 
-**New database tables:** `product_feeds`, `products`, `product_templates` (optional in v5) — 3 new migration files extending existing Supabase schema.
+**Note on pystray:** `pystray 0.19.5` is the correct choice if a pure-Python launcher is preferred as a v1 alternative to Electron. Electron is recommended for v10 because `electron-updater` + `electron-builder` eliminate custom installer and update-server code.
+
+**Critical version requirements:**
+- PyInstaller 6.19.0 (build tool only, not in requirements.txt) — use `--onedir` not `--onefile` to reduce antivirus false-positive rate; only needed if venv-copy approach is insufficient
+- Node.js LTS 22.x portable runtime — bundled in installer to run Next.js standalone without a user Node install
+- `workers=1` in bundled uvicorn call — multiple workers cause `WinError 10022` asyncio failures in frozen builds
 
 ### Expected Features
 
-**Must have (table stakes — v5 core):**
-- Google Shopping XML feed ingestion from URL — entry point for all automation
-- Product browser UI with search, on-sale filter, category filter — 9,987 products require pagination + filter
-- Ken Burns zoom/pan on product images — minimum visual motion standard for social video
-- Text overlays: product name, price, sale price (conditional), CTA — non-negotiable for product ads
-- Sale banner template preset — highest commercial value; validates the entire concept
-- Quick-mode TTS voiceover from template string (title + price + CTA) — wires to existing ElevenLabs/Edge TTS
-- Single product → single video → library output — core atomic workflow
+The feature research identifies a two-tier MVP: features required to ship at all (P1), and features that ship in the first update after installer validation on clean machines (P2).
 
-**Should have (add after v5 core validated):**
-- Batch generation (select N products → N videos) — queue wrapper over single-product flow; most impactful for campaign scale
-- AI-generated voiceover scripts (elaborate mode) — existing `script_generator` (Gemini/Claude) needs only a product-aware prompt
-- Template presets (Product Spotlight, Sale Banner, Collection) — 3 named Python dataclass configs
-- Per-profile template customization (colors, fonts, CTA text) — integrates with existing profile system
-- Auto-filter shortcuts for on-sale / category selection
+**Must have (table stakes — P1, launch blockers):**
+- %APPDATA% config storage — foundation for all desktop-specific behavior; every other desktop feature depends on it
+- DESKTOP_MODE + AUTH_DISABLED env flags — separates desktop behavior from dev with zero code duplication
+- Launcher .exe with system tray — starts backend, opens browser, shows tray icon with Open/Quit menu, handles graceful shutdown
+- NSIS installer via electron-builder — bundles Python, deps, FFmpeg, Next.js standalone, Node.js portable; produces Start Menu shortcut and uninstaller; registers in Add/Remove Programs
+- First-run setup wizard (/setup page) — detects first run via %APPDATA% flag; collects license key (step 1), API keys (step 2, optional except Supabase), crash reporting consent (step 3); writes config.json; marks complete
+- License key activation (Lemon Squeezy) — activate on first run, validate on each startup with 7-day offline grace period; stores instance_id in license.json
+- Version display — backend `/api/v1/version` endpoint; shown in Settings UI footer
 
-**Defer (v6+):**
-- Multi-product collection video — different narrative architecture, higher complexity
-- Web scraping for extra product images — fragile, adds 2-10s per product; validate single-image quality first
-- Stock video backgrounds — different FFmpeg filter graph architecture, separate milestone
-- AI image generation in batch mode — cost risk ($0.04-0.08/image), strict per-product opt-in required
+**Should have (differentiators — P2, ship in first update):**
+- Auto-update on startup — GitHub Releases or S3 manifest check; notify and download in background; prompt on restart, not mid-session
+- Opt-in Sentry crash reporting — consent captured in wizard; DSN injected from config; scrub API keys in `before_send` filter
+- Start on login option — opt-in `winreg` Run key in Settings; OFF by default
 
-**Anti-features to avoid:**
-- Real-time video preview before render (FFmpeg render IS the preview at this scale)
-- Automatic social publishing after batch (bypasses human review; Postiz already handles manual publishing)
-- Background music (music rights, complicates audio normalization)
-- Per-video customization UI inside batch (defeats batch purpose; defeats scale)
+**Defer (v11+):**
+- Portable mode (USB-runnable) — complex relative path edge cases; low demand for heavy video tool
+- Code signing certificate — €70-350/year; pursue after 50+ sales if SmartScreen support requests increase
+- macOS support — requires entirely separate build pipeline (DMG/Homebrew); out of scope for Windows-first tool
+- Delta/patch updates — tufup handles this; full installer download (~100MB) is acceptable for an indie tool
+
+**Anti-features to explicitly avoid:**
+- Electron as a framework rewrite (ruled out in PROJECT.md): Next.js standalone + system browser is the established pattern; Electron is only used as the process orchestrator, not to render app UI in a WebView
+- PyInstaller single `.exe` bundle: antivirus false-positive rate is too high; use NSIS with electron-builder instead
+- Auto-start on Windows boot: OFF by default; opt-in only via Settings
+- In-app payment/subscription: sell via Lemon Squeezy website; app receives license key by email
 
 ### Architecture Approach
 
-The new system integrates as a single new router (`product_routes.py`) alongside existing routers, three new services (`feed_parser`, `image_fetcher`, `product_video_compositor`), two new frontend pages (`/products`, `/product-video`), and three new database migrations. The `product_video_compositor` is the architectural core — it builds FFmpeg filterchains for image-based video (scale+pad → zoompan → xfade → drawtext → ass subtitles) while calling the same `encoding_presets`, `audio_normalizer`, `subtitle_styler`, and `tts_subtitle_generator` services used by the existing script-first pipeline. Rendered videos are stored as rows in the existing `editai_clips` table and appear automatically in the `/library` page with no changes to library_routes.
+The architecture is a thin wrapper pattern: Electron sits above the unchanged two-process app, injecting environment variables that activate desktop-mode behavior. All differences between desktop and web modes are controlled exclusively by environment variables (`DESKTOP_MODE`, `AUTH_DISABLED`, `APP_DATA_DIR`, `FFMPEG_BINARY`, `NEXT_PUBLIC_DESKTOP_MODE`). The main process orchestrates lifecycle; all business logic stays in FastAPI/Next.js unchanged.
 
 **Major components:**
-1. `feed_parser.py` — Google Shopping XML iterparse, namespace handling, product normalization, Supabase upsert
-2. `image_fetcher.py` — Parallel image downloads (ThreadPoolExecutor, max 5 workers), disk cache, optional page scraping, fallback placeholder generation
-3. `product_video_compositor.py` — FFmpeg filterchain builder: scale+pad (aspect ratio), zoompan (Ken Burns), xfade (transitions), drawtext via textfile (overlays), audio + subtitle integration, encoding preset application
-4. `product_routes.py` — Thin router: feed CRUD, product listing with pagination/filters, job dispatch, polling endpoint
-5. `/products` page — Feed config panel, filter bar, paginated product grid, batch selection with sticky action bar
-6. `/product-video` page — Template selector (3 preset cards), settings panel, generation trigger, progress polling via existing `useJobPolling` hook
+
+1. **`electron/main.js`** (NEW) — process orchestrator: spawns FastAPI backend via `child_process.spawn`, spawns Next.js standalone via `node server.js`, health-check polls both before opening BrowserWindow, creates system tray with Open/Quit menu, handles IPC, triggers auto-update check, kills children on quit
+2. **`electron/preload.js`** (NEW) — context bridge: exposes only version query, license activation, and external URL open to renderer; `contextIsolation: true` required — no direct Node access from renderer
+3. **`electron-builder.yml`** (NEW) — installer config: bundles FFmpeg, Python venv/dist, Next.js standalone, portable Node.js 22.x; NSIS target with Start Menu + desktop shortcuts; publishes `latest.yml` + `.blockmap` for electron-updater
+4. **`app/api/desktop_routes.py`** (NEW) — desktop-only FastAPI router: version info, license activate/validate, settings read/write (writes API keys to AppData .env); conditionally registered only when `DESKTOP_MODE=true`
+5. **`app/services/license_service.py`** (NEW) — Lemon Squeezy License API wrapper: activate on first run, validate on startup (cached 7 days), offline grace period, `product_id` verification in response
+6. **`frontend/src/app/setup/page.tsx`** (NEW) — first-run wizard: 3-step (license key, API keys, crash consent); writes config via desktop_routes; reachable at any time from Settings
+7. **`app/config.py`** (MODIFIED, ~10 lines) — add `APP_DATA_DIR`, `FFMPEG_BINARY`, `DESKTOP_MODE` settings; merge AppData .env with project .env via pydantic_settings `env_file` list
+8. **`frontend/src/components/auth-provider.tsx` + `middleware.ts`** (MODIFIED, 3-5 lines each) — add `NEXT_PUBLIC_DESKTOP_MODE` bypass to skip Supabase SSR cookie handling in desktop mode
+
+**Build pipeline:** Next.js `npm run build` → Python venv copy (v1) or PyInstaller `--onedir` (v1.1) → FFmpeg binary copy → `electron-builder --win nsis` → produces `EditFactory-Setup-{version}.exe` + `latest.yml` for auto-update.
+
+**Unchanged (verified by direct codebase inspection):** All 14 existing API routers, all 13+ services, `frontend/src/lib/api.ts` (already uses `NEXT_PUBLIC_API_URL`), `frontend/next.config.ts` (already has `output: "standalone"`), all video processing pipeline.
 
 ### Critical Pitfalls
 
-1. **Romanian diacritics silently corrupted in FFmpeg drawtext** — Use `textfile=` (not inline `text=`) for all text overlays; bundle a Noto Sans or DejaVu Sans font with Romanian comma-below support; install `fonts-noto` in WSL. Establish this pattern in Phase 1 before any text overlay is built.
+1. **Hardcoded relative paths break after installation** — CWD is not the project root when launched from a desktop shortcut; FFmpeg path, log dir, and config all silently resolve to `C:\Windows\System32\` or equivalent. Prevention: establish `APP_BASE_DIR` from `sys._MEIPASS` (frozen) or `Path(__file__).parent.parent` (dev) in Phase 1; audit all `os.path.join`, `Path(...)`, and `open(...)` calls before packaging. Address in Phase 1.
 
-2. **XML feed loaded entirely into memory** — Use `lxml.etree.iterparse()` with explicit `elem.clear()` + parent removal after each item. A 10k-product feed becomes 200-500 MB as a Python object tree, creating OOM pressure during concurrent FFmpeg renders. Establish streaming pattern in Phase 1.
+2. **Orphaned backend/frontend processes block port reuse on relaunch** — Windows does not propagate process termination to children; uvicorn workers survive launcher exit; ports 8000 and 3000 remain occupied. Prevention: use `psutil` to `kill_port(8000)` and `kill_port(3000)` at startup (cleanup of previous orphans) and on tray Quit. Add `psutil` to requirements.txt. Address in Phase 1.
 
-3. **Ken Burns (zoompan) is 10-100x slower than regular encoding** — Benchmark zoompan against a simple `scale+crop` alternative before committing as default. Pre-scale images to exact output resolution before zoompan. Set `-threads 0`. Offer a "simple" mode for batch speed. Address in Phase 2 before batch is built.
+3. **Backend not ready when browser opens** — uvicorn and Next.js take 5-15 seconds to initialize; opening the browser immediately shows "site can't be reached"; on first run (deps not compiled) this can be 15-30 seconds. Prevention: poll `GET /api/v1/health` and `GET http://localhost:3000/` with 60-second timeout before calling `win.loadURL()`; show "Starting..." tray tooltip during wait. Address in Phase 1.
 
-4. **Product images have unpredictable aspect ratios** — Feed images are mostly 1:1 square but include landscape and portrait variants. Use `scale=W:H:force_original_aspect_ratio=decrease` + `pad=W:H:(ow-iw)/2:(oh-ih)/2` to preserve ratio with letterbox. Test with real Nortia.ro feed images in Phase 2.
+4. **Antivirus and SmartScreen block unsigned installer** — PyInstaller bootloader pattern matches known malware signatures; Windows 11 Smart App Control can silently block unsigned executables with no user bypass. Prevention: use `electron-builder` NSIS output (lower false-positive rate); plan for code signing before commercial distribution; include SmartScreen bypass instructions in install docs. Address in Phase 2.
 
-5. **Batch job errors kill the entire batch** — Design per-product state tracking (`ProductJobState` dataclass with `pending/downloading/rendering/done/failed` statuses) from the start of Phase 3. Wrap each product render in try/except and continue on failure — never re-raise inside the batch loop.
+5. **Sentry captures user API keys in stack frame locals** — Sentry Python SDK sends local variable values by default; any crash in config or service init code exposes `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`, etc. Prevention: implement `before_send` scrubber that filters known sensitive key names from frame locals; set `send_default_pii=False` explicitly. Address in Phase 5.
 
-6. **HTML tags in feed descriptions break TTS** — Product descriptions frequently contain `<br/>`, `<p>`, `&amp;`, `&nbsp;`. Always run `clean_product_text()` (html.unescape + BeautifulSoup get_text + whitespace normalization + 500-char truncation) on all text fields at parse time, not at use time.
+6. **WSL-specific paths shipped in the desktop build** — dev environment is WSL; FFmpeg font paths use `/usr/share/fonts/...`; `app/main.py` has WSL-specific PATH injection. Prevention: audit all path-handling code for WSL assumptions in Phase 1; use `DESKTOP_MODE` flag to route to native Windows paths; bundle DejaVu Sans font in installer. Address in Phase 1.
 
-7. **WSL font path resolution breaks drawtext** — Use Linux font paths (`/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf`) not Windows paths (`C:\Windows\Fonts\`). Windows paths in drawtext require colon escaping that conflicts with FFmpeg filter option syntax. Install `fonts-noto` in WSL explicitly.
+7. **Auto-update cannot replace a running executable on Windows** — Windows file locking prevents overwriting a running .exe in-place; update appears to succeed but version does not change. Prevention: use electron-updater's built-in NSIS update mechanism (it handles this correctly) or the two-process batch-script pattern for custom updaters. Address in Phase 2 (architecture decision before implementation).
+
+---
 
 ## Implications for Roadmap
 
-Based on research, the build order is strictly dependency-driven. The feed parser is a hard prerequisite for everything. The single-product video flow must be validated before batch is built. Text overlay correctness (diacritics, escaping) must be established before any template work. Architecture research provides an explicit 6-phase build sequence.
+Based on combined research, the build order is fully determined by dependencies. Config and path hardening must precede everything because the Electron shell cannot be tested until the backend resolves paths correctly from AppData. The desktop API routes must exist before the setup wizard can be built. Crash reporting and auto-update are independent of each other and can be parallelized after the core shell works. The installer is last because it can only be validated end-to-end after all features are integrated.
 
-### Phase 1: Foundation — Feed Parser and Data Pipeline
+### Phase 1: Desktop Foundation — Config, Paths, and Process Lifecycle
 
-**Rationale:** Feed parsing gates the entire feature. Database tables must exist before routes, routes before frontend. Text normalization and encoding correctness must be established first — retrofitting these after the compositor is built is painful. Per research, this phase must address Pitfalls 1 (diacritics/textfile), 2 (streaming XML), 6 (HTML in descriptions), 7 (product text sanitization), 9 (missing image fallback), 12 (WSL font path), and 13 (XML namespace parsing).
+**Rationale:** Every downstream phase depends on correct path resolution and process lifecycle management. Building anything else before this requires reworking it later. This is also where the highest-severity pitfalls live: relative paths (#1), orphaned processes (#2), backend-not-ready (#3), and WSL paths (#6). The %APPDATA% config directory is the keystone — every desktop feature writes to or reads from it.
 
-**Delivers:** Working Google Shopping XML parser with streaming iterparse; `product_feeds` + `products` Supabase tables (migrations 013, 014); `clean_product_text()` normalization utility; parallel image downloader with fallback placeholder; font resolution utility for WSL; confirmed `textfile=` pattern for drawtext.
+**Delivers:** Backend starts correctly from AppData paths; launcher correctly starts, waits for health, opens browser, and fully cleans up on quit; `%APPDATA%\EditFactory\` created and writable; `DESKTOP_MODE` flag respected; WSL path assumptions removed from `app/main.py` and `run.py`.
 
-**Addresses:** XML feed ingestion (table stakes P1); image download infrastructure; product data normalization.
+**Addresses:** DESKTOP_MODE + AUTH_DISABLED env flags, %APPDATA% config storage, graceful shutdown (all P1 table stakes)
 
-**Avoids:** Memory spikes from full XML load; corrupted Romanian text in rendered videos; silent empty field parsing from namespace mishandling.
+**Avoids:** Pitfalls 1 (hardcoded paths), 2 (orphaned processes), 3 (backend not ready), 6 (WSL paths)
 
-**Research flag:** Standard patterns — skip research-phase. lxml iterparse, parallel httpx downloads, and Pillow image prep are all well-documented with HIGH-confidence sources.
+**Modifies:** `app/config.py` — adds `APP_DATA_DIR`, `FFMPEG_BINARY`, `DESKTOP_MODE` settings with settings-driven FFmpeg PATH injection; `app/main.py` — settings-driven FFmpeg PATH; `run.py` — health endpoint
 
-### Phase 2: Image-to-Video Compositor
+**New files:** `app/services/license_service.py` (stubbed), AppData directory creation utility
 
-**Rationale:** The core new technical work. Must be validated as a standalone component before it is called from routes or a batch. Ken Burns performance must be benchmarked here before batch multiplies the cost. Aspect ratio handling must be tested with real Nortia.ro feed images. Text overlay escaping for Romanian characters and % signs must be verified. Addresses Pitfalls 3 (image download timing), 4 (zoompan performance), 5 (aspect ratio), 10 (price % escaping).
+**Research flag:** Standard patterns — pydantic_settings multi-file `env_file` is in official docs. Direct file modifications to known files.
 
-**Delivers:** `product_video_compositor.py` service with Ken Burns filterchain, drawtext via textfile, xfade transitions, audio + subtitle integration, encoding preset application; `image_fetcher.py` with pre-download phase separated from render phase; Ken Burns vs simple-scale performance benchmark result; confirmed aspect ratio handling with real Nortia.ro feed images.
+### Phase 2: Electron Shell — Launcher, Tray, and BrowserWindow
 
-**Uses:** lxml (feed data), Pillow (image prep), FFmpeg zoompan/drawtext/xfade, existing `encoding_presets`, `audio_normalizer`, `subtitle_styler`, `tts_subtitle_generator`, ElevenLabs/Edge TTS.
+**Rationale:** The Electron shell is the core user-facing artifact of v10. It depends on Phase 1 (correct backend paths and health endpoint) and unblocks the setup wizard (which needs Electron IPC running).
 
-**Implements:** `product_video_compositor.py` — the new architectural core.
+**Delivers:** `EditFactory.exe` that spawns backend + frontend, health-checks both with 60-second timeout, opens BrowserWindow at localhost:3000, shows system tray with Open/Quit menu, handles graceful shutdown with port cleanup.
 
-**Avoids:** zoompan performance trap at batch scale; aspect ratio distortion on square e-commerce images; % character corruption in overlay text.
+**Addresses:** Launcher .exe with system tray (P1 table stake)
 
-**Research flag:** Needs careful testing during execution — FFmpeg zoompan parameter tuning requires iteration against real images. Benchmark results will determine if simple-scale must be offered as batch fallback.
+**Avoids:** Pitfall 2 (orphaned processes — psutil port cleanup at startup and quit), Pitfall 7 (update exe lock — use electron-updater NSIS mechanism)
 
-### Phase 3: Product API Routes and Product Browser UI
+**Uses:** Electron 33+, electron-updater (stub only — no update server yet), electron-builder config scaffolding
 
-**Rationale:** With the compositor working, routes are straightforward thin wrappers following established patterns (BackgroundTask + immediate job_id return, lazy Supabase singleton, profile-scoped queries). The product browser UI is a net-new page but follows the same apiGet/apiPost pattern as existing pages. Feed sync must run as a BackgroundTask — a 10k-product feed can take 5-30 seconds.
+**New files:** `electron/main.js`, `electron/preload.js`, `frontend/src/lib/desktop.ts`, `electron/package.json`
 
-**Delivers:** `product_routes.py` with /feeds/sync (BackgroundTask), /products (paginated + filtered), /generate, /generate/{job_id}; `/products` frontend page with feed config panel, filter bar (search, on-sale toggle, category dropdown), paginated product grid (50/page), batch selection sticky action bar.
+**Research flag:** Needs phase-level research for exact `electron-builder` configuration for bundling Python venv alongside Next.js standalone output. The `extraResources` and `files` config for a Python+Node hybrid needs verification on a clean Windows VM before the installer phase.
 
-**Addresses:** Product browser UI with search and filter (table stakes P1); job tracking (existing infrastructure reused); feed CRUD.
+### Phase 3: Desktop API Routes — Version, License, and Settings Endpoints
 
-**Avoids:** Blocking feed sync in request handler; showing all 9,987 products in a single scrollable list.
+**Rationale:** The setup wizard (Phase 4) calls these endpoints. Building the frontend wizard without the backend API would require mocking — better to build the real API first so the wizard develops against actual behavior.
 
-**Research flag:** Standard patterns — existing router pattern (assembly_routes.py, pipeline_routes.py) is the direct template. No research-phase needed.
+**Delivers:** `app/api/desktop_routes.py` with: `GET /api/v1/desktop/version`, `POST /api/v1/desktop/license/activate`, `POST /api/v1/desktop/license/validate`, `GET /api/v1/desktop/settings`, `POST /api/v1/desktop/settings`, `GET /api/v1/desktop/health`. Full `LicenseService` implementation against Lemon Squeezy API with 7-day validation cache and offline grace period.
 
-### Phase 4: Single Product Video Generator UI and End-to-End Flow
+**Addresses:** License key activation (P1), version display (P1)
 
-**Rationale:** Connect the compositor (Phase 2) to the routes (Phase 3) through a generation UI. This is the first end-to-end test: feed → browse → select → configure → generate → library. The `/product-video` page reuses the existing `useJobPolling` hook from the Pipeline page. This phase validates the full workflow before batch is introduced and constitutes the MVP milestone.
+**Avoids:** Pitfall — license checked only at startup (implements periodic 7-day re-validation with offline grace period); verifies `product_id` in Lemon Squeezy response to prevent key sharing from other products
 
-**Delivers:** `/product-video` frontend page with template selector (3 preset cards), settings panel (duration 15-60s, voiceover mode quick/ai, TTS provider), generation trigger, progress polling; quick-mode TTS voiceover wired to existing ElevenLabs/Edge TTS factory; single product → library clip confirmed working end-to-end.
+**Uses:** Lemon Squeezy License API via httpx, platformdirs for AppData path, pydantic_settings multi-file env_file merge
 
-**Addresses:** Ken Burns on product image (P1); text overlays (P1); sale banner template preset (P1); quick-mode voiceover (P1); single product → library output (P1). This delivers the MVP.
+**New files:** `app/api/desktop_routes.py`, completes `app/services/license_service.py`
 
-**Avoids:** Batch before single works; auto-publishing after generation; per-video customization UI in generation flow.
+**Research flag:** Standard patterns — new FastAPI router following established pattern (assembly_routes.py, pipeline_routes.py). Lemon Squeezy API endpoints and response schema verified from official docs.
 
-**Research flag:** Standard patterns — useJobPolling hook and template selector are directly modeled on existing Pipeline page. No research-phase needed.
+### Phase 4: First-Run Setup Wizard — Frontend /setup Page
 
-### Phase 5: Batch Generation
+**Rationale:** Depends on Phase 3 (API endpoints for license activation and settings write). This is the onboarding UX that gates the entire product — must be built and validated before packaging.
 
-**Rationale:** Batch is only safe to build after Phase 4 validates the single-product flow end-to-end. Batch is architecturally a sequential loop over single-product generation with per-product state tracking. The per-product state model (ProductJobState dataclass) must be designed before any batch rendering code is written. Addresses Pitfall 8 (batch error isolation).
+**Delivers:** `frontend/src/app/setup/page.tsx` with 3-step wizard: (1) License key entry with Lemon Squeezy activation, (2) API key configuration (Supabase required, others optional) with inline validation, (3) Crash reporting consent (opt-in, defaults OFF). Auth bypass modifications to `auth-provider.tsx` and `middleware.ts`. First-run detection via %APPDATA% flag. Wizard is reachable from Settings at any time.
 
-**Delivers:** Batch job dispatch with per-product state tracking; progress grid UI (each product card shows queued/processing/done/failed); "Retry failed" button for partial batch recovery; estimated time + ElevenLabs credit preview before batch confirm; background processing with navigation freedom.
+**Addresses:** First-run setup wizard (P1 table stake)
 
-**Addresses:** Batch generation (P2 — add after single-product validated); most impactful for campaign scale.
+**Avoids:** Pitfall — wizard skipped with no recovery path (implements completion flag; re-shows wizard if incomplete on next relaunch; Settings page links back to wizard)
 
-**Avoids:** Batch error isolation failure (per-product try/except, never re-raise); all-or-nothing progress display; AI image generation default-on in batch (explicit opt-in only, Pitfall 11).
+**Modifies:** `frontend/src/components/auth-provider.tsx` (skip Supabase auth when DESKTOP_MODE=true), `frontend/src/lib/supabase/middleware.ts` (skip SSR cookie handling when DESKTOP_MODE=true)
 
-**Research flag:** The per-product state model is new territory — the existing single-job pattern does not directly apply. Plan the BatchJob/ProductJobState data structures before writing any render loop code.
+**New files:** `frontend/src/app/setup/page.tsx`
 
-### Phase 6: Template System and Profile Customization
+**Research flag:** Standard Next.js multi-step form. Auth bypass changes are 3-5 lines in known files. No phase research needed.
 
-**Rationale:** Template presets and per-profile customization build on a working generation pipeline. Templates are Python dataclasses following the `encoding_presets` pattern — no new infrastructure. Profile customization extends the existing profile system. These are polish features that improve consistency across campaigns.
+### Phase 5: Crash Reporting — Sentry Integration (Opt-In)
 
-**Delivers:** 3 named template presets as Python dataclasses (Product Spotlight, Sale Banner, Collection); per-profile settings (primary/accent color, font family, CTA text); optional `product_templates` Supabase table (migration 015); AI-generated voiceover scripts via existing `script_generator` in elaborate mode with a product-aware prompt.
+**Rationale:** Independent of the installer; can be tested before packaging. Can run parallel with Phase 4 after Phase 2 (Electron running). Consent must be captured in the wizard (Phase 4) before Sentry is initialized — this dependency makes Phase 4 logically first.
 
-**Addresses:** Template presets (P2); per-profile customization (P2); AI voiceover scripts (P2).
+**Delivers:** Opt-in Sentry in both Electron main process (`@sentry/electron/main`) and FastAPI (`sentry-sdk[fastapi]`); consent captured in setup wizard step 3 and Settings toggle; `before_send` scrubber for API keys and file paths; DSN stored in AppData config.
 
-**Avoids:** Too many templates (Creatify's 370+ causes choice paralysis — 3 presets is the correct number per UX research).
+**Addresses:** Opt-in crash reporting (P2 differentiator)
 
-**Research flag:** Standard patterns — mirrors encoding_presets.py dataclass approach exactly. No research-phase needed.
+**Avoids:** Pitfall 5 — Sentry captures API keys (implements `before_send` filter with `SENSITIVE_KEYS` set that scrubs frame locals before sending)
+
+**New:** Sentry config additions to `electron/main.js`, `app/main.py`, optional `frontend/sentry.client.config.ts`
+
+**Research flag:** Both `sentry-sdk[fastapi]` and `@sentry/electron` have official first-class integration guides with copy-paste setup. No phase research needed.
+
+### Phase 6: Installer and Packaging — NSIS Installer via electron-builder
+
+**Rationale:** Must come last — can only be validated end-to-end after all features are integrated. This is also the riskiest phase (PyInstaller fragility with PyTorch, NSIS size limits, antivirus detection). The v1 strategy is venv copy (requires Python on user machine, documented as prerequisite) rather than PyInstaller to avoid ML library bundling failures.
+
+**Delivers:** `EditFactory-Setup-{version}.exe` NSIS installer with: Python venv copy (v1) or PyInstaller `--onedir` dist (v1.1), bundled FFmpeg binary, Next.js standalone output, portable Node.js 22.x LTS, Start Menu shortcut, desktop shortcut, Add/Remove Programs entry, uninstaller. `latest.yml` + `.blockmap` for electron-updater auto-update channel. `build.bat` for reproducible builds.
+
+**Addresses:** NSIS installer (P1 table stake), auto-update foundation (P2 differentiator)
+
+**Avoids:** Pitfall 4 (antivirus blocks installer — electron-builder NSIS output has lower false-positive rate; SmartScreen bypass documented in install notes), NSIS 2GB size limit (keep Whisper model weights out of bundle; target bundle <700MB; measure components before scripting), PyInstaller wrong environment (build from clean venv, verify bundle <600MB)
+
+**New files:** `electron-builder.yml`, `build.bat`
+
+**Research flag:** Needs phase-level research for: exact NSIS customization to bundle portable Node.js 22 alongside electron-builder output; SHA256 hash verification in auto-update download flow; update server setup (GitHub Releases vs S3 — decision needed before this phase). Build size validation requires measurement on the actual codebase before scripting.
 
 ### Phase Ordering Rationale
 
-- Feed parser is a hard prerequisite for every subsequent phase — it cannot be skipped or deferred.
-- Text encoding correctness (diacritics, textfile=, font path) must be established in Phase 1 because the compositor in Phase 2 inherits those foundations. Fixing encoding after the compositor is built means re-testing every code path.
-- The compositor (Phase 2) is isolated from the API layer (Phase 3) deliberately — this allows benchmarking and testing the FFmpeg filterchain without needing a working frontend.
-- Single-product end-to-end (Phase 4) before batch (Phase 5) is a hard rule from feature research: "Batch is single-product × N with a queue wrapper. Ship and validate single first."
-- Template system (Phase 6) is deliberately last — it enhances a working pipeline rather than enabling it.
+- **Foundation first (Phase 1):** Pitfalls 1, 2, 3, and 6 are all addressed in Phase 1 because any work built on top of broken path resolution and process lifecycle must be redone. Research explicitly flags this.
+- **Shell before wizard (Phase 2 before Phase 4):** The Electron IPC bridge must be running before the setup wizard can test license activation via IPC. Building the wizard against a stub delays discovery of integration issues.
+- **API before UI (Phase 3 before Phase 4):** Standard backend-first discipline. The wizard calls real endpoints and validates real Lemon Squeezy responses — no mocking needed or desired.
+- **Sentry after wizard (Phase 5 after Phase 4):** Crash reporting consent must be captured in the wizard before Sentry can be initialized. Initializing Sentry without consent is a privacy violation.
+- **Installer last (Phase 6):** The installer bundles everything else. Building it before features are stable wastes packaging cycles and produces misleading test results on clean VMs.
 
 ### Research Flags
 
-Phases needing careful testing or iteration during execution:
-- **Phase 2 (compositor):** FFmpeg zoompan parameter tuning requires real Nortia.ro feed images. Benchmark Ken Burns vs simple-scale before finalizing — if zoompan takes >30s per clip, offer simple-scale as batch default.
-- **Phase 5 (batch):** Per-product state model has no direct precedent in existing codebase. Design the BatchJob/ProductJobState data structures before writing any render loop code.
+**Needs phase-level research:**
+- **Phase 2 (Electron Shell):** Exact `electron-builder` configuration for bundling a Python venv (not PyInstaller) alongside Next.js standalone. The `extraResources` and `files` config for a Python+Node hybrid needs verification on a clean Windows 11 VM before the installer phase begins.
+- **Phase 6 (Installer):** NSIS script customization to include portable Node.js 22 alongside the Python bundle; SHA256 hash verification for the downloaded installer auto-update; update server setup (GitHub Releases vs S3); build size measurement before scripting. pynsist generates a base NSIS script but Node.js bundling requires manual NSIS script extensions.
 
-Phases with standard, well-established patterns (no research-phase needed):
-- **Phase 1:** lxml iterparse, parallel httpx downloads, Pillow image prep — all HIGH-confidence, well-documented.
-- **Phase 3:** Follows existing router pattern (assembly_routes.py, pipeline_routes.py) directly.
-- **Phase 4:** Follows existing Pipeline page + useJobPolling pattern directly.
-- **Phase 6:** Follows existing encoding_presets.py dataclass pattern directly.
+**Standard patterns (skip research-phase):**
+- **Phase 1 (Config/paths):** Directly modifies known files (`app/config.py`, `app/main.py`) with minimal, well-documented changes. pydantic_settings multi-file `env_file` is in official docs.
+- **Phase 3 (Desktop API routes):** New FastAPI router with CRUD endpoints and httpx calls to Lemon Squeezy API. All patterns follow established router pattern. Endpoint URLs and response schemas verified from official Lemon Squeezy docs.
+- **Phase 4 (Setup wizard):** Standard Next.js multi-step form. Auth bypass changes are 3-5 lines in known files.
+- **Phase 5 (Sentry):** Both `sentry-sdk[fastapi]` and `@sentry/electron` have first-class official integration guides with copy-paste setup steps.
+
+---
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All 4 new library versions verified on PyPI 2026-02-20; FFmpeg techniques confirmed with official docs and multiple community sources |
-| Features | HIGH (core), MEDIUM (visual sources), LOW (AI image gen) | Core feature set confirmed by competitor analysis and feature dependency mapping; web scraping reliability is site-specific; AI image generation cost and quality under load not tested |
-| Architecture | HIGH | Integration points verified by direct codebase inspection; existing migration patterns confirmed; FFmpeg filterchain patterns are MEDIUM (require parameter tuning with real images) |
-| Pitfalls | HIGH (FFmpeg/XML), MEDIUM (web scraping, AI costs) | FFmpeg escaping pitfalls confirmed from official docs; Romanian-specific issues confirmed from multiple sources; web scraping site behavior is speculative until tested against Nortia.ro |
+| Stack | HIGH | All versions verified on PyPI/npm (2026-02-14 to 2026-03-01); official docs reviewed for Lemon Squeezy License API endpoints, electron-updater, Sentry FastAPI/Electron integrations; pystray/platformdirs/sentry-sdk all on PyPI with recent releases |
+| Features | HIGH | Feature set is well-understood for Windows indie desktop app distribution; Lemon Squeezy vs Gumroad comparison from multiple sources; PyInstaller antivirus issue confirmed by official PyInstaller GitHub and NSIS false-positive documentation |
+| Architecture | HIGH | Existing codebase read directly during research; all integration points verified against live files (`auth-provider.tsx`, `next.config.ts`, `middleware.ts`, `app/config.py`, `app/main.py`); Electron + FastAPI hybrid pattern confirmed from production templates |
+| Pitfalls | HIGH (process/antivirus/Sentry) / MEDIUM (licensing grace period) | Windows process lifecycle pitfalls documented with reproducible evidence; Sentry key-scrubbing in official docs; licensing offline grace period pattern from community sources with multiple confirming examples |
 
-**Overall confidence:** HIGH for core MVP scope (Phases 1-4); MEDIUM for batch and template phases (Phases 5-6); LOW for optional features (web scraping, AI image generation).
+**Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **Nortia.ro feed structure:** Architecture research recommends testing against the actual feed file before finalizing the parser. Field availability, custom Google Shopping extensions, and character encoding in Romanian feed data may differ from the spec. Obtain the actual feed URL and validate during Phase 1 implementation.
-- **Ken Burns performance on target hardware:** Exact render times for zoompan at 1080x1920 on the development machine are unknown. PITFALLS.md notes 30-90s per clip is typical on a dev machine. Benchmark in Phase 2 and set user expectations accordingly — or provide simple-scale as batch default.
-- **Nortia.ro scraping viability:** PITFALLS.md flags Cloudflare protection as a risk for Romanian e-commerce sites. Web scraping is a v6+ feature but its viability should be confirmed early so it is not over-planned.
-- **ElevenLabs credit budget at batch scale:** With 100k credits/month and 40-160 credits per product video (quick mode template text), batch processing at scale approaches the budget ceiling. Quick-mode voiceovers should default to Edge TTS (free) for batch; ElevenLabs reserved for elaborate mode with explicit opt-in.
+- **Python bundle strategy (v1 vs v1.1):** Research recommends venv copy for v1 (simpler, reliable — but requires Python 3.x on user machine as a documented prerequisite) vs PyInstaller `--onedir` for v1.1 (no user Python required but PyTorch/Silero fragility is LOW confidence). This decision must be made in Phase 6 planning with explicit testing on a clean Windows 11 VM. If Python is required as a prerequisite, the installer must check for it and prompt the user to install it first.
+
+- **Update server hosting:** Research documents GitHub Releases as the simplest option for `electron-updater` (free, zero infrastructure). If the product moves to a private repository, an S3 bucket or dedicated update server is needed. This decision can be deferred to Phase 6 but must be made before that phase begins.
+
+- **Code signing on Windows 11 Smart App Control:** Research recommends deferring code signing (€70-350/year) until 50+ sales trigger SmartScreen support requests. However, Windows 11 Smart App Control (SAC) can silently block unsigned executables on some configurations with no user bypass. Validate the actual block behavior on a fresh Windows 11 VM during Phase 6 to determine if this is a launch blocker or a documentation-only issue.
+
+- **Whisper model first-run download UX:** The existing app downloads Whisper model weights on first TTS use, stalling 3-5 minutes with no progress indicator. Research flags this as a UX pitfall. Whether to pre-download in the first-run wizard (Phase 4) with a progress bar or accept the current behavior needs a decision during roadmap creation — if deferred, a support ticket about "app is frozen" is likely from early users.
+
+---
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- Existing codebase (`app/main.py`, all router files, all service files) — read directly 2026-02-20
-- Existing DB migrations (001 through 012) — schema patterns verified directly
-- [lxml performance benchmarks](https://lxml.de/performance.html) — iterparse vs ElementTree
-- [lxml PyPI](https://pypi.org/project/lxml/) — version 6.0.2 verified
-- [Pillow PyPI](https://pypi.org/project/pillow/) — version 12.1.1 verified
-- [beautifulsoup4 PyPI](https://pypi.org/project/beautifulsoup4/) — version 4.14.3 verified
-- [fal-client PyPI](https://pypi.org/project/fal-client/) — version 0.13.1 verified 2026-02-20
-- [FFmpeg drawtext filter docs](https://ffmpeg.org/ffmpeg-filters.html) — textfile option, escaping rules
-- [Google Shopping XML feed specification](https://support.google.com/merchants/answer/7052112) — field names and namespaces
-- [Pexels API documentation](https://www.pexels.com/api/documentation/) — free tier confirmed
+- `.planning/research/STACK.md` — PyInstaller 6.19.0, pystray 0.19.5, platformdirs 4.9.2, sentry-sdk 2.53.0, Lemon Squeezy API, Next.js standalone mode, pynsist 2.8, NSIS 3.x — all PyPI/npm/official docs verified 2026-02-14 to 2026-03-01
+- `.planning/research/ARCHITECTURE.md` — existing codebase read directly 2026-03-01; Electron + FastAPI pattern with electron-builder NSIS; Lemon Squeezy License API; Sentry Electron + FastAPI integrations — official docs verified
+- `.planning/research/FEATURES.md` — feature dependency graph; Lemon Squeezy vs Gumroad comparison; first-run wizard UX pattern; anti-feature rationale
+- `.planning/research/PITFALLS.md` — Windows process lifecycle, PyInstaller antivirus, Sentry key scrubbing, orphaned processes, WSL paths, NSIS size limits
+- [Lemon Squeezy License API — validate](https://docs.lemonsqueezy.com/api/license-api/validate-license-key) — endpoint URL, response schema, `product_id` verification requirement
+- [Sentry FastAPI integration](https://docs.sentry.io/platforms/python/integrations/fastapi/) — `FastApiIntegration`, `StarletteIntegration`, `before_send` scrubbing
+- [electron-builder NSIS](https://www.electron.build/nsis.html) — installer config, auto-update channel, `latest.yml` format
+- [Next.js standalone output](https://nextjs.org/docs/app/api-reference/config/next-config-js/output) — `output: "standalone"`, `server.js` execution pattern
+- [platformdirs PyPI](https://pypi.org/project/platformdirs/) — version 4.9.2, official appdirs successor
 
 ### Secondary (MEDIUM confidence)
-- [Bannerbear Ken Burns FFmpeg guide](https://www.bannerbear.com/blog/how-to-do-a-ken-burns-style-effect-with-ffmpeg/) — zoompan technique and parameters
-- [OTTVerse drawtext guide](https://ottverse.com/ffmpeg-drawtext-filter-dynamic-overlays-timecode-scrolling-text-credits/) — multi-layer text overlays
-- [Mux FFmpeg concat guide](https://www.mux.com/articles/create-a-video-slideshow-with-images-using-ffmpeg) — slideshow concat patterns
-- [Creatomate slideshow guide](https://creatomate.com/blog/how-to-create-a-slideshow-from-images-using-ffmpeg) — aspect ratio handling
-- [FFmpeg drawtext escaping levels](https://hhsprings.bitbucket.io/docs/programming/examples/ffmpeg/drawing_texts/drawtext.html) — four-level escaping documentation
-- [NemoVideo batch UX patterns](https://www.nemovideo.com/blog/batch-video-generator-scale-output) — batch video workflow UX
-- [Eleken bulk action UX guidelines](https://www.eleken.co/blog-posts/bulk-actions-ux) — bulk selection and wizard UX
-- [Tolstoy ecommerce video at scale](https://www.gotolstoy.com/blog/product-videos-for-ecommerce) — batch-at-scale patterns
+- [pyinstaller-fastapi reference](https://github.com/iancleary/pyinstaller-fastapi) — uvicorn + PyInstaller bundle pattern
+- [Lemon Squeezy vs Gumroad 2025](https://ruul.io/blog/lemonsqueezy-vs-gumroad) — fee comparison, license API feature comparison
+- [PyInstaller antivirus false positives — GitHub Issue #8164](https://github.com/pyinstaller/pyinstaller/issues/8164) — bootloader pattern as AV trigger
+- [Child Processes Not Terminating with Uvicorn — GitHub Discussion #2281](https://github.com/Kludex/uvicorn/discussions/2281) — orphaned child process behavior on Windows
+- [Electron + FastAPI desktop pattern](https://medium.com/@shakeef.rakin321/electron-react-fastapi-template-for-cross-platform-desktop-apps-cf31d56c470c) — hybrid Python+Node desktop app template
+- [tufup — Python auto-updater](https://github.com/dennisvang/tufup) — considered and rejected as overkill for indie tool
 
 ### Tertiary (LOW confidence — needs validation)
-- [fal.ai FLUX.2 announcement](https://blog.fal.ai/flux-2-is-now-available-on-fal/) — FLUX model availability; pricing under load untested
-- [Cloudflare bypass options](https://scrapfly.io/blog/posts/how-to-bypass-cloudflare-anti-scraping) — Nortia.ro scraping viability not confirmed
-- [Google Shopping feed data quality issues](https://feedarmy.com/kb/common-google-shopping-errors-problems-mistakes/) — description HTML contamination patterns
+- PyInstaller + PyTorch bundling for complex ML deps — multiple community reports of fragility; testing on clean Windows 11 VM is required before committing to this approach for v1.1
+- Windows 11 Smart App Control behavior on fresh installs without code signing — block severity varies by machine configuration; must be empirically verified during Phase 6
 
 ---
-*Research completed: 2026-02-20*
+*Research completed: 2026-03-01*
 *Ready for roadmap: yes*

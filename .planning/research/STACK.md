@@ -1,12 +1,14 @@
-# Stack Research — v5 Product Video Generator
+# Stack Research — v10 Desktop Launcher & Distribution
 
-**Domain:** Product feed video generation (Google Shopping XML → social video)
-**Researched:** 2026-02-20
-**Confidence:** HIGH (PyPI verified versions, FFmpeg official docs, multiple sources)
+**Domain:** Desktop distribution of existing FastAPI + Next.js web app (Windows)
+**Researched:** 2026-03-01
+**Confidence:** HIGH for core choices (PyPI + official docs verified), MEDIUM for auto-update pattern
 
-> **Scope:** NEW additions only. The existing stack (FastAPI, Next.js, Supabase, FFmpeg,
-> OpenCV, httpx, ElevenLabs, Edge TTS, Gemini, Claude, Whisper) is already validated.
-> Do not re-install or re-research existing capabilities.
+> **Scope:** NEW capabilities only. The existing stack (FastAPI, Next.js, Supabase, FFmpeg,
+> ElevenLabs, Edge TTS, Gemini, Claude, lxml, Pillow, httpx, etc.) is already validated.
+> This file covers ONLY what's needed to distribute Edit Factory as an installable Windows
+> desktop product: launcher EXE, NSIS installer, system tray, auto-update, Sentry crash
+> reporting, and license key validation.
 
 ---
 
@@ -14,433 +16,450 @@
 
 | Capability | Library | Notes |
 |------------|---------|-------|
-| HTTP requests (sync + async) | `httpx>=0.25.0` | In requirements.txt — use for image downloads |
-| AI text generation | `anthropic`, `google-genai` | Already integrated in script_generator |
-| TTS audio | ElevenLabs, Edge TTS | Already integrated |
-| FFmpeg subprocess | Used throughout assembly_service | Call via subprocess.run |
-| Image quality | `opencv-python-headless` | Already installed |
-| Async file I/O | `aiofiles` | Already installed |
-| Config/env | `python-dotenv`, `pydantic-settings` | Already in use |
+| HTTP requests | `httpx` / `requests` | Use for GitHub releases API calls and license validation |
+| Config/env | `python-dotenv`, `pydantic-settings` | Extend for APPDATA config file location |
+| Background tasks | FastAPI `BackgroundTasks` | No change needed |
+| Process management | stdlib `subprocess` | Used in `run.py` — extend for tray launcher |
+| Error logging | `python-json-logger` | Extend with Sentry as transport |
 
 ---
 
 ## New Dependencies Required
 
-### 1. XML Parsing — `lxml` 6.0.2
+### 1. Launcher EXE — `PyInstaller` 6.19.0
 
-**Install:** `pip install "lxml>=6.0.0"`
+**Install:** `pip install "pyinstaller>=6.19.0"` (dev only, not in requirements.txt)
 
-Google Shopping feeds are large XML files (~10k products, multi-MB). `lxml` is the right
-choice over stdlib `xml.etree.ElementTree` for three reasons:
+PyInstaller bundles the Python launcher script (the process that starts uvicorn + opens
+the browser) into a standalone `.exe`. This is NOT bundling the full FastAPI app — it's
+bundling a thin launcher that starts the app, manages the system tray, and handles
+auto-update checks.
 
-- **Speed:** 2-10x faster on large files. lxml parsed a 95MB XML in 0.35s vs 2+ seconds
-  for ElementTree (measured benchmark from lxml.de/performance.html).
-- **Memory-efficient streaming:** `lxml.etree.iterparse()` processes feeds element-by-element
-  without loading the full document into memory. Critical for 9,987-product feeds.
-- **XPath support:** Google Shopping uses XML namespaces (`g:` prefix for Shopping
-  attributes). lxml's full XPath 1.0 support handles namespace-qualified queries cleanly.
-  ElementTree's namespace handling is verbose and error-prone.
+**Why PyInstaller, not Nuitka?**
+- Nuitka compiles Python to C, requiring MSVC toolchain. On WSL this adds significant
+  complexity with no benefit for a launcher whose startup time is irrelevant.
+- PyInstaller v6.x produces working uvicorn/FastAPI bundles with known hidden imports.
+  The launcher itself is a small script — antivirus false positive risk is minimal for
+  personal-use/sold-direct software.
+- PyInstaller 6.19.0 released 2026-02-14 — actively maintained.
+- Build command for launcher only (not the full app):
 
-Do NOT use `feedparser` — it targets Atom/RSS feeds, not Google Shopping XML format.
-Do NOT use stdlib `xml.etree.ElementTree` — no streaming iterparse with namespace support.
-
-```python
-# Usage pattern for Google Shopping feed
-from lxml import etree
-
-NS = {
-    'g': 'http://base.google.com/ns/1.0',
-    'c': 'http://base.google.com/cns/1.0'
-}
-
-def stream_products(feed_path: str):
-    for event, elem in etree.iterparse(feed_path, events=('end',), tag='item'):
-        yield {
-            'id': elem.findtext('g:id', namespaces=NS),
-            'title': elem.findtext('title'),
-            'description': elem.findtext('description'),
-            'image_link': elem.findtext('g:image_link', namespaces=NS),
-            'price': elem.findtext('g:price', namespaces=NS),
-            'sale_price': elem.findtext('g:sale_price', namespaces=NS),
-            'brand': elem.findtext('g:brand', namespaces=NS),
-            'product_type': elem.findtext('g:product_type', namespaces=NS),
-            'link': elem.findtext('link'),
-        }
-        elem.clear()  # Free memory after processing each item
+```bash
+pyinstaller --onefile --windowed --name "EditFactory" \
+  --icon assets/icon.ico \
+  --hidden-import pystray._win32 \
+  --hidden-import PIL.Image \
+  launcher.py
 ```
 
-**Confidence:** HIGH — lxml.de performance benchmarks + PyPI version 6.0.2 verified.
+**Critical known issues with FastAPI + uvicorn bundles:**
+- Use `--windowed` only on the launcher (which has a tray icon); backend process needs
+  to capture stdout/stderr so do NOT pass `--windowed` to uvicorn directly.
+- Set `multiprocessing.freeze_support()` at the top of `launcher.py` — required for
+  Windows frozen executables that spawn subprocesses.
+- Use `num_workers=1` in uvicorn for the bundled server — multiple workers trigger
+  `WinError 10022` in asyncio on Windows frozen builds.
+
+**Confidence:** HIGH — PyPI version 6.19.0 verified (2026-02-14), GitHub reference
+implementation at iancleary/pyinstaller-fastapi confirms the uvicorn bundle pattern.
 
 ---
 
-### 2. Image Processing — `Pillow` 12.1.1
+### 2. System Tray — `pystray` 0.19.5 + `Pillow` (already installed)
 
-**Install:** `pip install "Pillow>=12.0.0"`
+**Install:** `pip install "pystray>=0.19.5"` (Pillow is already in requirements.txt)
 
-Pillow handles all static image operations before handing off to FFmpeg:
+pystray provides a Windows system tray icon with a right-click context menu. It uses
+Windows' native Win32 API backend by default on Windows — no additional system
+dependencies needed.
 
-- Resize/pad product images to target resolution (1080x1920 or square crop)
-- Convert formats (WebP → JPEG for FFmpeg compatibility on Windows/WSL)
-- Composite multiple product images into a collage frame
-- Generate solid-color background frames for text overlays
-- Normalize image dimensions before FFmpeg input (prevents zoompan coordinate errors)
-
-**Why not OpenCV for this?** OpenCV is already installed and handles frame analysis, but
-Pillow's file format support (WebP, AVIF, animated GIF extraction) and Pillow's `ImageDraw`
-for compositing are cleaner for static image prep. Ken Burns animation itself is done
-entirely in FFmpeg — Pillow only prepares the source images.
+**Why pystray, not infi.systray or tkinter tray?**
+- pystray is the de-facto standard (documentation, active maintenance, cross-platform
+  if ever needed). infi.systray is Windows-only and less documented.
+- pystray is safe to run from a background thread on Windows — the tray's `run()` call
+  can happen after uvicorn starts in a thread without blocking the main process.
+- Requires `Pillow` for the icon image — already installed in requirements.txt.
 
 ```python
-# Resize + letterbox to 1:1 square for product spotlight
+import pystray
 from PIL import Image
+import threading
 
-def prepare_product_image(src_path: str, out_path: str, size=(1080, 1080)):
-    img = Image.open(src_path).convert('RGB')
-    img.thumbnail(size, Image.LANCZOS)
-    background = Image.new('RGB', size, (255, 255, 255))
-    offset = ((size[0] - img.width) // 2, (size[1] - img.height) // 2)
-    background.paste(img, offset)
-    background.save(out_path, 'JPEG', quality=95)
+def create_tray_icon(stop_event: threading.Event) -> pystray.Icon:
+    image = Image.open("assets/icon.png")  # 64x64 PNG
+
+    def on_open(icon, item):
+        import webbrowser
+        webbrowser.open("http://localhost:8000")
+
+    def on_quit(icon, item):
+        stop_event.set()
+        icon.stop()
+
+    menu = pystray.Menu(
+        pystray.MenuItem("Open Edit Factory", on_open, default=True),
+        pystray.MenuItem("Quit", on_quit),
+    )
+    return pystray.Icon("EditFactory", image, "Edit Factory", menu)
 ```
 
-**Confidence:** HIGH — PyPI version 12.1.1 confirmed, stable API.
+**Confidence:** HIGH — pystray 0.19.5 verified on PyPI (Sep 2023, no bugs since),
+Windows backend confirmed as default, pystray.readthedocs.io usage verified.
 
 ---
 
-### 3. Web Scraping — `beautifulsoup4` 4.14.3 (no new HTTP library needed)
+### 3. Config Directory — `platformdirs` 4.9.2
 
-**Install:** `pip install "beautifulsoup4>=4.14.0"`
+**Install:** `pip install "platformdirs>=4.9.2"`
 
-`httpx` is already in requirements. Use `httpx` for fetching + `BeautifulSoup` for
-parsing HTML to extract additional product images from product page URLs.
+platformdirs resolves the correct `%APPDATA%\EditFactory\` path on Windows for storing:
+- `config.json` — API keys, user preferences (migrated from `.env` for desktop mode)
+- `license.json` — cached license key + validation state
+- Log files
 
-**Why BeautifulSoup, not Playwright?** Nortia.ro product pages are standard e-commerce
-HTML — product images are in `<img>` tags, not dynamically loaded via JS. Playwright
-adds a full browser runtime (100MB+ install, Chromium binary) for zero benefit on
-static product pages. If a product page turns out to need JS rendering, fall back to
-skipping that product's scrape rather than adding Playwright.
+**Why platformdirs, not `appdirs` or `os.environ['APPDATA']`?**
+- `appdirs` last released May 2020 — dead project. `platformdirs` is its actively
+  maintained fork with 47M weekly downloads.
+- Raw `os.environ['APPDATA']` works but is Windows-only; `platformdirs` adds one
+  line of cross-OS correctness in case WSL or Mac dev use needs it.
+- Resolves `C:\Users\{user}\AppData\Roaming\EditFactory\` on Windows with
+  `user_data_dir("EditFactory", "EditFactory")`.
 
-**Why not Scrapy?** Overkill — this is single-URL image extraction, not a crawling
-pipeline. The existing `httpx` async client handles concurrency fine.
+```python
+from platformdirs import user_data_dir
+import os
+
+APP_DATA_DIR = user_data_dir("EditFactory", "EditFactory")
+CONFIG_FILE = os.path.join(APP_DATA_DIR, "config.json")
+LICENSE_FILE = os.path.join(APP_DATA_DIR, "license.json")
+LOG_DIR = os.path.join(APP_DATA_DIR, "logs")
+
+# Create directories on first run
+os.makedirs(APP_DATA_DIR, exist_ok=True)
+os.makedirs(LOG_DIR, exist_ok=True)
+```
+
+**Confidence:** HIGH — PyPI version 4.9.2 verified (2026-02-16), official successor
+to appdirs confirmed via tox-dev/platformdirs GitHub.
+
+---
+
+### 4. Windows Installer — NSIS 3.x + `pynsist` 2.8
+
+**Install NSIS (system tool, not pip):** https://nsis.sourceforge.io/Download
+**Install pynsist:** `pip install "pynsist>=2.8"` (build tool only)
+
+Two-step installer approach:
+
+**Step 1: pynsist** — wraps the Python environment (launcher only) into an NSIS installer.
+Pynsist bundles a Python interpreter copy, pip packages, and generates the NSIS script.
+Best for the Python-side launcher.
+
+**Step 2: NSIS script extension** — the generated NSIS script is customized to also:
+- Bundle the pre-built Next.js standalone folder (`.next/standalone/`)
+- Bundle FFmpeg binary (existing `ffmpeg/` directory)
+- Bundle Node.js portable runtime (needed to run `server.js`)
+- Create Start Menu / Desktop shortcuts
+- Write `HKCU\Software\EditFactory` registry key for first-run detection
+- Register uninstaller
+
+**Why not Inno Setup?** NSIS is open source with better community Python tooling (pynsist).
+Inno Setup is excellent but the pynsist → NSIS path is documented and tested.
+
+**Why not Tauri?** Tauri is for building the app itself in Rust/WebView — massive
+architectural change. We need only an installer, not a new framework.
+
+**Why not a plain zip + bat file?** A proper NSIS installer handles:
+- Uninstall support
+- Start menu registration
+- File association (future)
+- Per-user or machine-wide install choice
+- Upgrade detection (overwrite existing install)
+
+**Install size estimate:** ~200-400MB bundled (Python deps + FFmpeg + Node.js standalone)
+
+**Confidence:** MEDIUM — pynsist 2.8 is verified at PyPI, NSIS 3.x is the current
+stable version. The two-step customization (pynsist + manual NSIS extensions for
+Node.js/FFmpeg bundling) is a pattern from community sources, not an official guide.
+Phase-level research needed for exact NSIS script.
+
+---
+
+### 5. Auto-Update — Custom GitHub Releases check (no new library)
+
+**No new library needed — use `httpx` (already installed)**
+
+The recommended pattern for this project: check GitHub Releases API on startup, compare
+version, prompt user to download if newer. Do NOT auto-install silently — users of
+sold software expect to control updates.
+
+**Why not PyUpdater or tufup?**
+- PyUpdater: tightly coupled to PyInstaller's one-file mode, adds S3/Cloudflare
+  dependency for update hosting. Overkill for a direct-sale desktop app.
+- tufup: implements The Update Framework (TUF) with cryptographic signing — excellent
+  security but significant infrastructure (key management, update server). Premature
+  for personal-scale distribution.
+- Simple GitHub releases API check: zero infrastructure, free hosting, 60 req/hour
+  unauthenticated rate limit (startup checks are infrequent), three-line implementation.
+
+**Implementation pattern:**
+
+```python
+# In launcher.py — check on startup, non-blocking
+import httpx
+import json
+
+CURRENT_VERSION = "1.0.0"   # Set at build time
+GITHUB_RELEASES_URL = "https://api.github.com/repos/{owner}/edit-factory/releases/latest"
+
+def check_for_update() -> dict | None:
+    """Returns release dict if newer version available, else None."""
+    try:
+        resp = httpx.get(GITHUB_RELEASES_URL, timeout=5.0, headers={
+            "Accept": "application/vnd.github+json"
+        })
+        release = resp.json()
+        latest = release.get("tag_name", "").lstrip("v")
+        if latest and latest > CURRENT_VERSION:   # Simple string compare works for semver
+            return {
+                "version": latest,
+                "url": release.get("html_url"),
+                "notes": release.get("body", "")[:500],
+            }
+    except Exception:
+        pass   # Silent fail — update check is non-critical
+    return None
+```
+
+**Update delivery:** When a newer version is found, show a Windows toast notification
+(or tray menu item) linking to the GitHub releases page. User downloads and runs new
+installer manually. This is acceptable for personal-use software with infrequent releases.
+
+**Version baking:** Write current version to `version.txt` at build time. Launcher reads
+it at startup to pass to the update check.
+
+**Confidence:** MEDIUM — GitHub Releases API is documented and stable. The "prompt and
+open browser" update approach is used by many small desktop apps. Version string
+comparison is simplistic (lexicographic) — fine for semver if versions are formatted
+consistently (1.0.0, 1.1.0, etc.).
+
+---
+
+### 6. Crash Reporting — `sentry-sdk` 2.53.0
+
+**Backend:** `pip install "sentry-sdk[fastapi]>=2.53.0"`
+**Frontend:** `npm install @sentry/nextjs@^9.0.0` (latest is 10.x — see note)
+
+**Why Sentry?**
+- Industry standard for error telemetry in both Python and Next.js with first-class
+  integrations for both FastAPI and Next.js App Router.
+- FastAPI integration auto-activates when `fastapi` package is present — zero manual
+  middleware wiring needed.
+- Free tier: 5,000 errors/month, 1 project — sufficient for personal-use desktop software.
+- Opt-in by design: DSN stored in config, if not set Sentry is a no-op.
+
+**Backend setup (add to `app/main.py`):**
+
+```python
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.starlette import StarletteIntegration
+
+def init_sentry(dsn: str | None):
+    if not dsn:
+        return  # Opt-in: no DSN = no reporting
+    sentry_sdk.init(
+        dsn=dsn,
+        integrations=[
+            StarletteIntegration(transaction_style="endpoint"),
+            FastApiIntegration(transaction_style="endpoint"),
+        ],
+        traces_sample_rate=0.1,      # 10% of requests for performance monitoring
+        send_default_pii=False,      # No user PII — privacy-first
+        environment="desktop",
+    )
+```
+
+**Frontend setup (`sentry.client.config.ts`, `sentry.server.config.ts`):**
+
+```typescript
+import * as Sentry from "@sentry/nextjs";
+
+Sentry.init({
+  dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,   // empty = disabled
+  tracesSampleRate: 0.1,
+  environment: "desktop",
+  enabled: !!process.env.NEXT_PUBLIC_SENTRY_DSN,
+});
+```
+
+**Desktop-specific concerns:**
+- DSN stored in `%APPDATA%\EditFactory\config.json`, not hardcoded in build.
+- First-run setup wizard offers opt-in checkbox — only write DSN to config if user accepts.
+- Sentry is async/non-blocking — zero impact on video rendering performance.
+
+**Note on @sentry/nextjs version:** npm latest is 10.40.0 (March 2026). Use `^9.0.0`
+minimum to get Next.js App Router support. Wizard (`npx @sentry/wizard -i nextjs`)
+handles configuration automatically.
+
+**Confidence:** HIGH — sentry-sdk 2.53.0 verified on PyPI (2026-02-16), FastAPI
+integration confirmed at docs.sentry.io, @sentry/nextjs 10.40.0 verified on npm.
+
+---
+
+### 7. License Key Validation — Lemon Squeezy API (no new library)
+
+**No new library — use `httpx` (already installed)**
+
+**Why Lemon Squeezy over Gumroad?**
+- Lemon Squeezy has a purpose-built license key API with activate/validate/deactivate
+  lifecycle. Gumroad's license API is basic (single verify endpoint, no instance tracking).
+- Lemon Squeezy charges 5% vs Gumroad's 10% per transaction.
+- Lemon Squeezy acts as Merchant of Record — handles EU VAT automatically.
+- Lemon Squeezy's API returns `activation_limit`, `activation_usage`, and instance IDs —
+  enables enforcing "activate on N machines" policies.
+
+**API endpoints used:**
+- `POST https://api.lemonsqueezy.com/v1/licenses/activate` — on first run, register machine
+- `POST https://api.lemonsqueezy.com/v1/licenses/validate` — on each startup, verify key
+
+**Implementation pattern:**
 
 ```python
 import httpx
-from bs4 import BeautifulSoup
+import json
+import platform
+import uuid
 
-async def scrape_product_images(product_url: str, client: httpx.AsyncClient) -> list[str]:
-    """Extract image URLs from a product page. Returns empty list on failure."""
+LEMON_SQUEEZY_LICENSE_URL = "https://api.lemonsqueezy.com/v1/licenses"
+
+def activate_license(license_key: str, instance_name: str = None) -> dict:
+    """Activate license on this machine. Call once on first-run."""
+    if instance_name is None:
+        instance_name = platform.node()  # Machine hostname
+    resp = httpx.post(
+        f"{LEMON_SQUEEZY_LICENSE_URL}/activate",
+        data={"license_key": license_key, "instance_name": instance_name},
+        timeout=10.0,
+    )
+    return resp.json()   # Contains instance_id — store in license.json
+
+def validate_license(license_key: str, instance_id: str) -> bool:
+    """Validate on each startup. Returns True if license is active."""
     try:
-        resp = await client.get(product_url, timeout=10.0, follow_redirects=True)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        # Product images typically in gallery containers or og:image meta
-        og_image = soup.find('meta', property='og:image')
-        if og_image:
-            return [og_image['content']]
-        imgs = soup.select('.product-gallery img, .product-images img, [data-zoom-image]')
-        return [img.get('src') or img.get('data-src') for img in imgs if img.get('src') or img.get('data-src')]
+        resp = httpx.post(
+            f"{LEMON_SQUEEZY_LICENSE_URL}/validate",
+            data={"license_key": license_key, "instance_id": instance_id},
+            timeout=5.0,
+        )
+        return resp.json().get("valid", False)
     except Exception:
-        return []
+        return True   # Offline grace: if can't reach server, allow run
 ```
 
-**Parser note:** Pass `'html.parser'` (stdlib) to BeautifulSoup — avoids needing `lxml`
-as an HTML parser (lxml is used for XML parsing only, different code path).
+**Offline grace period:** If the validation call fails (no internet), return `True` and
+allow the app to run. Do NOT hard-block on network failure — this is a personal-use
+desktop tool. Log the failure to `%APPDATA%\EditFactory\logs\`.
 
-**Confidence:** HIGH — PyPI version 4.14.3 verified, httpx already installed.
+**Cache:** Store `instance_id` in `%APPDATA%\EditFactory\license.json`. Never re-activate
+if `instance_id` already present and valid.
+
+**Confidence:** HIGH — Lemon Squeezy License API docs at docs.lemonsqueezy.com verified,
+endpoint URLs and response schema confirmed from official documentation.
 
 ---
 
-### 4. AI Image Generation — `fal-client` 0.13.1
+### 8. Next.js Production Build — Standalone Output Mode
 
-**Install:** `pip install "fal-client>=0.13.0"`
+**No new library — configure `next.config.js`**
 
-`FAL_API_KEY` is already in `.env.example` (listed as optional). fal-client is the
-official Python SDK for fal.ai. Use FLUX.1 [dev] for product visuals from text
-descriptions — it produces photorealistic product-style imagery and handles text in
-images better than SD 1.5/2.x.
+For the installer to bundle the frontend without a full `node_modules`, use Next.js
+standalone output mode. This produces a self-contained `server.js` that runs with Node.js:
 
-**Why fal-client over Replicate SDK?** fal.ai wins on latency (fastest inference for
-FLUX models), and `FAL_API_KEY` is already in the existing config — zero new credential
-setup. Replicate would require a new API key.
-
-**Why not Stability AI SDK directly?** fal.ai hosts the same models (FLUX, SDXL) with
-faster cold starts and simpler Python SDK.
-
-**This is optional/feature-flagged.** AI image generation is listed as a feature but
-requires API credits. Add a `USE_AI_IMAGE_GENERATION` flag in settings.
-
-```python
-import fal_client
-
-async def generate_product_visual(prompt: str) -> str:
-    """Returns local path to downloaded generated image. Returns None if unavailable."""
-    result = await fal_client.run_async(
-        "fal-ai/flux/dev",
-        arguments={
-            "prompt": prompt,
-            "image_size": "square_hd",   # 1024x1024
-            "num_inference_steps": 28,
-            "guidance_scale": 3.5,
-        }
-    )
-    image_url = result["images"][0]["url"]
-    # Download and cache locally via httpx (already available)
-    return image_url
+```javascript
+// next.config.js
+module.exports = {
+  output: "standalone",   // Add this line
+  // ... existing config
+};
 ```
 
-**Confidence:** MEDIUM — PyPI version 0.13.1 verified (released 2026-02-20), FLUX
-model availability confirmed on fal.ai, but pricing/quota behavior under load not tested.
+Build produces `.next/standalone/` containing:
+- `server.js` — starts Next.js server on port 3000
+- Minimal `node_modules/` (Next.js server deps only, ~50MB vs full 300MB)
+- `.next/` static assets
+
+Run in installer: `node .next/standalone/server.js`
+
+**Node.js bundling in installer:** Bundle Node.js portable runtime (node.exe) in the
+installer alongside the standalone output. Use Node.js LTS portable zip (currently 22.x).
+The launcher EXE sets `PATH` to include the bundled node before starting the frontend.
+
+**Why standalone over Electron?** Electron would add ~100MB Chromium binary and require
+rewriting the frontend as an Electron app. Standalone mode + system browser is the
+minimal path — consistent with the existing "start script + browser" decision in PROJECT.md.
+
+**Confidence:** HIGH — Next.js standalone output is documented at nextjs.org, confirmed
+working on Windows with `node .next/standalone/server.js` pattern.
 
 ---
 
-## FFmpeg Techniques for Product Video Composition
+## Desktop Mode Architecture
 
-These require NO new Python libraries — all implemented via subprocess calls to the
-existing FFmpeg binary.
+The launcher `launcher.py` orchestrates everything:
 
-### Technique 1: Ken Burns Effect (zoompan filter)
-
-Animate a static product image as if a camera is slowly zooming in.
-
-```bash
-# Zoom in from 100% to 120% over 5 seconds at 30fps (150 frames)
-ffmpeg -loop 1 -i product.jpg -vf \
-  "scale=8000:-1,zoompan=z='zoom+0.0007':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=150:s=1080x1920" \
-  -t 5 -c:v libx264 -pix_fmt yuv420p output_kenburns.mp4
+```
+launcher.exe (PyInstaller bundle)
+  ├── multiprocessing.freeze_support()
+  ├── check_for_update()  → show tray notification if update available
+  ├── validate_license()  → exit with dialog if invalid
+  ├── Start uvicorn (FastAPI backend) → subprocess in background thread
+  ├── Start node server.js (Next.js) → subprocess in background thread
+  ├── Wait for backend ready (poll /api/v1/health, max 30s)
+  ├── webbrowser.open("http://localhost:3000")
+  └── pystray.Icon.run()  → blocks main thread, handles quit
+       └── On quit: terminate both subprocesses, exit
 ```
 
-**Key parameters:**
-- `scale=8000:-1` — upscale first so zoompan has pixels to work with (prevents blur)
-- `z='zoom+0.0007'` — zoom expression per frame; 0.0007 × 150 frames = ~10% zoom
-- `d=150` — duration in frames (fps × seconds)
-- `s=1080x1920` — output size (portrait for Reels/TikTok)
+**Config resolution order (desktop mode):**
+1. `%APPDATA%\EditFactory\config.json` (primary for desktop)
+2. `.env` file in app directory (fallback, dev compatibility)
+3. Environment variables (always override)
 
-**Zoom out variant (more dramatic for sale items):**
-```bash
-z='if(eq(on,1),1.5,max(1.001,pzoom-0.004))'  # Start at 150%, zoom out to 100%
-```
-
-**Pan + zoom (product detail reveal):**
-```bash
-z='zoom+0.0007':x='iw/2-(iw/zoom/2)+20*on/d':y='ih/2-(ih/zoom/2)'
-```
-
-### Technique 2: Text Overlay with drawtext
-
-Product title, price, and brand over video. Requires FFmpeg built with `--enable-libfreetype`.
-
-```bash
-ffmpeg -i kenburns.mp4 -vf \
-  "drawtext=text='${TITLE}':fontfile='/path/to/font.ttf':fontsize=60:fontcolor=white:\
-   x=(w-text_w)/2:y=h*0.75:box=1:boxcolor=black@0.5:boxborderw=15" \
-  -c:v libx264 -pix_fmt yuv420p output_text.mp4
-```
-
-**Multi-layer text (title + price stacked):**
-```bash
--vf "drawtext=text='${TITLE}':fontsize=52:fontcolor=white:x=(w-text_w)/2:y=h*0.72:\
-     box=1:boxcolor=black@0.6:boxborderw=12,\
-     drawtext=text='${PRICE}':fontsize=64:fontcolor=yellow:x=(w-text_w)/2:y=h*0.82:\
-     box=1:boxcolor=black@0.6:boxborderw=12"
-```
-
-**Note on text escaping:** Product titles contain special characters. Escape colons,
-apostrophes, and backslashes in Python before passing to FFmpeg:
-```python
-def escape_drawtext(text: str) -> str:
-    return text.replace('\\', '\\\\').replace("'", "\\'").replace(':', '\\:')
-```
-
-### Technique 3: Multi-Image Concat (slideshow)
-
-For collection videos (multiple products), concat individual clips:
-
-```bash
-# Create file list
-echo "file 'clip1.mp4'" > concat_list.txt
-echo "file 'clip2.mp4'" >> concat_list.txt
-echo "file 'clip3.mp4'" >> concat_list.txt
-
-# Concatenate
-ffmpeg -f concat -safe 0 -i concat_list.txt -c copy output_collection.mp4
-```
-
-**With crossfade transition (filter_complex approach):**
-```bash
-ffmpeg -i clip1.mp4 -i clip2.mp4 -filter_complex \
-  "[0][1]xfade=transition=fade:duration=0.5:offset=4.5[out]" \
-  -map "[out]" -c:v libx264 output_fade.mp4
-```
-
-### Technique 4: Product Image + Stock Video Background Overlay
-
-Place product image (with alpha/transparent background) over a looping stock video:
-
-```bash
-ffmpeg -i stock_background.mp4 -i product_transparent.png \
-  -filter_complex \
-  "[1]scale=600:-1[product];\
-   [0][product]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2" \
-  -c:v libx264 -pix_fmt yuv420p output_overlay.mp4
-```
-
-**Scale product to percentage of frame:**
-```bash
-[1]scale=iw*0.6:-1[product]   # Product image = 60% of frame width
-```
-
-### Technique 5: Image-to-Video (still with audio)
-
-For simple templates: pad image to target duration, add TTS audio:
-
-```bash
-ffmpeg -loop 1 -i product.jpg -i voiceover.mp3 \
-  -c:v libx264 -tune stillimage -c:a aac -b:a 192k \
-  -pix_fmt yuv420p -shortest output.mp4
-```
-
-`-tune stillimage` optimizes H.264 encoding for static content (faster, smaller file).
+**New environment flags:**
+- `DESKTOP_MODE=true` — signals app is running as installed desktop product
+- `AUTH_DISABLED=true` — set automatically in desktop mode (single-user, no need for JWT)
+- `CONFIG_DIR=%APPDATA%\EditFactory` — tells backend where to find config file
 
 ---
 
-## Template System Pattern
+## Installation Summary
 
-Use Python dataclasses (not Jinja2) for video composition templates. The existing
-codebase uses stdlib dataclasses for filter configs — keep that pattern consistent.
-
-```python
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional
-
-class TemplateType(str, Enum):
-    PRODUCT_SPOTLIGHT = "product_spotlight"  # Single product, Ken Burns + text
-    SALE_BANNER = "sale_banner"              # Sale price prominent, zoom-out effect
-    COLLECTION = "collection"               # Multi-product concat
-
-@dataclass
-class VideoTemplate:
-    type: TemplateType
-    duration_seconds: int = 15             # 15-60s
-    fps: int = 30
-    width: int = 1080
-    height: int = 1920
-    background_color: str = "#000000"
-    font_path: Optional[str] = None        # Falls back to system default
-    title_font_size: int = 52
-    price_font_size: int = 64
-    show_brand: bool = True
-    show_original_price: bool = True       # Strike-through for sale items
-    ken_burns_zoom_start: float = 1.0      # 1.0 = no zoom
-    ken_burns_zoom_end: float = 1.15       # 1.15 = 15% zoom in
-    transition_type: str = "fade"          # fade, slide, none
-    transition_duration: float = 0.5
-```
-
-**Why not Jinja2?** Jinja2 is a string template engine for text/HTML output — not suited
-for FFmpeg filter graph construction. Python dataclasses + string formatting produce
-the FFmpeg filter strings directly without an intermediate template language.
-
----
-
-## Stock Video Source: Pexels API
-
-Use the Pexels API for free stock video backgrounds (no new Python library needed —
-use `httpx` which is already installed).
-
-**API key:** Free, register at pexels.com/api. Store as `PEXELS_API_KEY` in `.env`.
-
-**Rate limits:** 200 requests/hour, 20,000/month — sufficient for a personal-use tool.
-
-**Search and download pattern:**
-```python
-async def search_stock_video(query: str, client: httpx.AsyncClient, api_key: str) -> str:
-    """Returns URL of first matching video (portrait orientation preferred)."""
-    resp = await client.get(
-        "https://api.pexels.com/videos/search",
-        params={"query": query, "orientation": "portrait", "per_page": 5},
-        headers={"Authorization": api_key}
-    )
-    videos = resp.json().get("videos", [])
-    if not videos:
-        return None
-    # Prefer HD portrait video files
-    for video_file in videos[0]["video_files"]:
-        if video_file["height"] >= 1920 and video_file["width"] == 1080:
-            return video_file["link"]
-    return videos[0]["video_files"][0]["link"]
-```
-
-**Confidence:** MEDIUM — Pexels API is free and documented, but portrait video
-availability varies by search query. Cache downloaded backgrounds locally (by query hash)
-to avoid repeated downloads.
-
----
-
-## Recommended Database Additions (Supabase)
-
-New tables needed — no new Python library, extends existing `supabase>=2.0.0` client:
-
-```sql
--- Product feed cache
-CREATE TABLE product_feeds (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    profile_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    url TEXT,                          -- Remote feed URL (for refresh)
-    file_path TEXT,                    -- Local cached copy
-    product_count INTEGER,
-    last_synced_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Video templates
-CREATE TABLE video_templates (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    profile_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    type TEXT NOT NULL,                -- product_spotlight, sale_banner, collection
-    config JSONB NOT NULL,             -- Serialized VideoTemplate dataclass
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Product video jobs
-CREATE TABLE product_videos (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    profile_id TEXT NOT NULL,
-    feed_id UUID REFERENCES product_feeds(id),
-    product_ids TEXT[] NOT NULL,       -- Array of product IDs from feed
-    template_id UUID REFERENCES video_templates(id),
-    job_id TEXT,                       -- Link to existing jobs table
-    output_path TEXT,
-    status TEXT DEFAULT 'pending',
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
----
-
-## Installation
+**Python dependencies (add to requirements.txt or separate build-tools file):**
 
 ```bash
-# Add to requirements.txt
+# Runtime — add to requirements.txt
+pystray>=0.19.5
+platformdirs>=4.9.2
+sentry-sdk[fastapi]>=2.53.0
 
-# XML parsing (Google Shopping feeds)
-lxml>=6.0.0
-
-# Image preparation (resize, format conversion, compositing)
-Pillow>=12.0.0
-
-# HTML parsing for product image scraping
-beautifulsoup4>=4.14.0
-
-# AI image generation (optional, requires FAL_API_KEY)
-fal-client>=0.13.0
+# Build tools only — do NOT add to requirements.txt
+# Install in dev environment separately:
+pip install "pyinstaller>=6.19.0"
+pip install "pynsist>=2.8"
 ```
 
-Full command:
+**Frontend:**
+
 ```bash
-pip install "lxml>=6.0.0" "Pillow>=12.0.0" "beautifulsoup4>=4.14.0" "fal-client>=0.13.0"
+cd frontend
+npm install @sentry/nextjs@^10.0.0
+npx @sentry/wizard@latest -i nextjs  # Auto-configures sentry.*.config.ts files
 ```
+
+**System tools (one-time install on build machine):**
+- NSIS 3.x — https://nsis.sourceforge.io/Download
+- Node.js LTS 22.x portable — bundled into installer, not installed on build machine
 
 ---
 
@@ -448,15 +467,17 @@ pip install "lxml>=6.0.0" "Pillow>=12.0.0" "beautifulsoup4>=4.14.0" "fal-client>
 
 | Category | Recommended | Alternative | Why Not |
 |----------|-------------|-------------|---------|
-| XML parsing | `lxml` | stdlib `xml.etree` | No streaming iterparse with namespace support; 2-10x slower on large files |
-| XML parsing | `lxml` | `feedparser` | feedparser targets Atom/RSS; no Google Shopping namespace support |
-| Scraping | `httpx` + `beautifulsoup4` | `playwright` | Playwright needs full browser runtime for static HTML pages — overkill |
-| Scraping | `httpx` + `beautifulsoup4` | `scrapy` | Scrapy is a crawling framework — wrong abstraction for single-URL image extraction |
-| Image prep | `Pillow` | `opencv-python-headless` | OpenCV already present but Pillow's format support (WebP, AVIF) and ImageDraw are better for static prep |
-| AI images | `fal-client` | `replicate` | `FAL_API_KEY` already in .env.example; fal wins on FLUX latency |
-| Templates | Python dataclasses | Jinja2 | Jinja2 is a text/HTML template engine; dataclasses integrate with existing pattern in codebase |
-| Video comp | FFmpeg subprocess | `moviepy` | moviepy is a Python wrapper over FFmpeg with API overhead; existing codebase calls FFmpeg directly |
-| Stock video | Pexels API (httpx) | `pexels-api-py` wrapper | Adds a dependency for a 3-endpoint API; `httpx` handles it with 10 lines |
+| Launcher bundler | PyInstaller 6.x | Nuitka | Nuitka needs MSVC/GCC toolchain on WSL; C compilation adds 10-30min builds with no benefit for a thin launcher |
+| Installer format | NSIS + pynsist | Inno Setup | Inno Setup is good but pynsist → NSIS path has Python ecosystem tooling; Inno would need fully manual script |
+| Installer format | NSIS + pynsist | WiX Toolset (MSI) | MSI requires XML authoring and Windows SDK; overkill for personal-scale distribution |
+| Tray icon | pystray | wxPython SystemTray | wxPython adds 30MB GUI framework for a tray icon; pystray is purpose-built at <1MB |
+| Auto-update | GitHub Releases + httpx | PyUpdater | PyUpdater needs S3 or similar update server; GitHub releases is free |
+| Auto-update | GitHub Releases + httpx | tufup (TUF) | TUF requires cryptographic key management infrastructure — premature for v10 |
+| License validation | Lemon Squeezy | Gumroad | Gumroad charges 10% vs 5%; Gumroad license API lacks instance tracking |
+| License validation | Lemon Squeezy | Keygen.sh | Keygen is better for SaaS/high volume; adds subscription cost; Lemon Squeezy includes licensing |
+| Config directory | platformdirs | appdirs | appdirs abandoned (2020); platformdirs is the maintained fork |
+| Config directory | platformdirs | raw `os.environ['APPDATA']` | Windows-only; platformdirs adds one line for correctness |
+| Frontend bundling | Next.js standalone output | Electron | Electron adds 100MB Chromium, requires rewrite to Electron APIs; conflicts with PROJECT.md decision |
 
 ---
 
@@ -464,57 +485,48 @@ pip install "lxml>=6.0.0" "Pillow>=12.0.0" "beautifulsoup4>=4.14.0" "fal-client>
 
 | Avoid | Why | Use Instead |
 |-------|-----|-------------|
-| `moviepy` | Wraps FFmpeg with Python overhead, slower than direct subprocess, complex filter graphs become opaque | FFmpeg subprocess (existing pattern) |
-| `feedparser` | Designed for RSS/Atom — lacks Google Shopping `g:` namespace support | `lxml.etree.iterparse` |
-| `playwright` (Python) | 150MB+ install, browser binary, complex async lifecycle — unnecessary for static HTML scraping | `httpx` + `beautifulsoup4` |
-| `Pillow` for Ken Burns | Pillow cannot produce video — it creates static images only | FFmpeg `zoompan` filter |
-| `pexels-api-py` | Stale PyPI package (last update 2022), adds a dependency for trivial REST calls | `httpx` with direct API calls |
-| `xml.etree.ElementTree` | No full namespace XPath; memory-loads full document; 2-10x slower | `lxml` |
-
----
-
-## Integration Points with Existing Pipeline
-
-| New Feature | Hooks Into | Notes |
-|-------------|-----------|-------|
-| Feed parsing | New `product_feed_service.py` | Stand-alone, no existing service dependency |
-| Image download | `httpx` (existing) | Use existing `AsyncClient` from `assembly_service` pattern |
-| Ken Burns render | `assembly_service.py` — new `render_product_video()` method | Reuse FFmpeg subprocess pattern from `_render_with_preset()` |
-| Text overlay | Extend FFmpeg filter chain in `assembly_service.py` | Add `build_drawtext_filter()` next to `build_filter_chain()` |
-| TTS voiceover | `tts/factory.py` (existing) | No change — same factory returns ElevenLabs/Edge TTS |
-| Subtitles | `tts_subtitle_generator.py` (existing) | No change — same timestamp-to-SRT logic |
-| Job tracking | `job_storage.py` (existing) | Use same `create_job()` / `update_job()` pattern |
-| Template config | New `product_templates.py` dataclass module | Separate from existing `encoding_presets.py` |
-| Product video DB | Supabase (existing client) | 3 new migration files (feeds, templates, product_videos) |
+| `electron` / `tauri` | Architectural change — PROJECT.md explicitly excludes desktop app frameworks | Next.js standalone + system browser |
+| PyUpdater | Requires S3 or update server infrastructure; tightly coupled to PyInstaller one-file mode | Custom GitHub Releases API check with httpx |
+| `appdirs` | Abandoned in 2020, last release 1.4.4 | `platformdirs` 4.9.2 |
+| Gumroad for license keys | 10% fees, basic license API with no instance tracking, no EU VAT MoR until 2025 | Lemon Squeezy |
+| `infi.systray` | Windows-only, poorly maintained, no context menu animations | `pystray` |
+| Multiple uvicorn workers in bundled EXE | WinError 10022 asyncio failures in frozen builds | `workers=1` in bundled uvicorn call |
+| `--windowed` on uvicorn subprocess | Suppresses stderr, making crash debugging impossible | `--windowed` only on launcher; uvicorn runs as visible subprocess |
 
 ---
 
 ## Version Compatibility
 
-| Package | Version | Python Compat | Notes |
-|---------|---------|---------------|-------|
-| `lxml` | 6.0.2 | Python 3.8+ | WSL Linux wheels available on PyPI |
-| `Pillow` | 12.1.1 | Python 3.9+ | WebP support built-in since Pillow 9.x |
-| `beautifulsoup4` | 4.14.3 | Python 3.7+ | Requires `lxml` or `html.parser` for parsing |
-| `fal-client` | 0.13.1 | Python 3.8+ | Async API; use `asyncio.run()` or FastAPI async routes |
+| Package | Version | Requires | Notes |
+|---------|---------|----------|-------|
+| `pystray` | 0.19.5 | `Pillow` any | Pillow already in requirements.txt |
+| `platformdirs` | 4.9.2 | Python 3.8+ | Drop-in replacement for appdirs |
+| `sentry-sdk` | 2.53.0 | FastAPI 0.79+ | FastAPI integration auto-activates |
+| `@sentry/nextjs` | 10.40.0 | Next.js 14+ | App Router fully supported |
+| `pyinstaller` | 6.19.0 | Python 3.8+ | Build tool only |
+| `pynsist` | 2.8 | NSIS 3.x installed | Build tool only |
+| `platformdirs` | 4.9.2 | — | Replaces appdirs entirely |
 
 ---
 
 ## Sources
 
-- [lxml performance benchmarks](https://lxml.de/performance.html) — iterparse vs ElementTree, HIGH confidence
-- [lxml PyPI — version 6.0.2](https://pypi.org/project/lxml/) — version verified
-- [Pillow PyPI — version 12.1.1](https://pypi.org/project/pillow/) — version verified
-- [beautifulsoup4 PyPI — version 4.14.3](https://pypi.org/project/beautifulsoup4/) — version verified
-- [fal-client PyPI — version 0.13.1](https://pypi.org/project/fal-client/) — version verified 2026-02-20
-- [FFmpeg Ken Burns zoompan — Bannerbear](https://www.bannerbear.com/blog/how-to-do-a-ken-burns-style-effect-with-ffmpeg/) — MEDIUM confidence (technique verified, expression syntax confirmed)
-- [FFmpeg drawtext filter — OTTVerse](https://ottverse.com/ffmpeg-drawtext-filter-dynamic-overlays-timecode-scrolling-text-credits/) — HIGH confidence
-- [FFmpeg concat filter — Mux](https://www.mux.com/articles/create-a-video-slideshow-with-images-using-ffmpeg) — HIGH confidence
-- [Pexels API documentation](https://www.pexels.com/api/documentation/) — HIGH confidence, free tier confirmed
-- [Scraping comparison 2025 — ScrapingBee](https://www.scrapingbee.com/blog/best-python-web-scraping-libraries/) — MEDIUM confidence
-- [fal.ai FLUX.2 announcement](https://blog.fal.ai/flux-2-is-now-available-on-fal/) — MEDIUM confidence
+- [PyInstaller PyPI — version 6.19.0](https://pypi.org/project/pyinstaller/) — verified 2026-02-14
+- [pyinstaller-fastapi reference](https://github.com/iancleary/pyinstaller-fastapi) — PyInstaller + uvicorn bundle pattern, MEDIUM confidence
+- [PyInstaller uvicorn known issues](https://github.com/Kludex/uvicorn/discussions/1820) — worker multiprocessing issues on Windows, HIGH confidence
+- [pystray PyPI — version 0.19.5](https://pypi.org/project/pystray/) — verified
+- [pystray documentation](https://pystray.readthedocs.io/en/latest/usage.html) — Windows backend, thread-safe usage, HIGH confidence
+- [platformdirs PyPI — version 4.9.2](https://pypi.org/project/platformdirs/) — verified 2026-02-16
+- [sentry-sdk PyPI — version 2.53.0](https://pypi.org/project/sentry-sdk/) — verified 2026-02-16
+- [Sentry FastAPI integration docs](https://docs.sentry.io/platforms/python/integrations/fastapi/) — setup steps verified, HIGH confidence
+- [@sentry/nextjs npm — version 10.40.0](https://www.npmjs.com/package/@sentry/nextjs) — verified 2026-03
+- [Lemon Squeezy License API — validate endpoint](https://docs.lemonsqueezy.com/api/license-api/validate-license-key) — endpoint and schema verified, HIGH confidence
+- [Lemon Squeezy vs Gumroad 2025](https://ruul.io/blog/lemonsqueezy-vs-gumroad) — fee comparison, MEDIUM confidence
+- [Next.js standalone output docs](https://nextjs.org/docs/app/api-reference/config/next-config-js/output) — HIGH confidence
+- [pynsist PyPI — version 2.8](https://pypi.org/project/pynsist/) — verified
+- [NSIS official](https://nsis.sourceforge.io/Main_Page) — open source, actively maintained, HIGH confidence
 
 ---
 
-*Stack research for: v5 Product Video Generator — new dependencies only*
-*Researched: 2026-02-20*
+*Stack research for: v10 Desktop Launcher & Distribution — new capabilities only*
+*Researched: 2026-03-01*

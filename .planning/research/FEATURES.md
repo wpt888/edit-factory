@@ -1,259 +1,279 @@
 # Feature Research
 
-**Domain:** Product video generation from e-commerce product feeds
-**Researched:** 2026-02-20
-**Confidence:** HIGH (core features and UX patterns), MEDIUM (visual source features), LOW (AI visual generation)
+**Domain:** Desktop app distribution — launcher, installer, auto-update, licensing, crash reporting
+**Researched:** 2026-03-01
+**Confidence:** HIGH (installer/launcher/tray patterns), HIGH (Lemon Squeezy license API), MEDIUM (auto-update implementation), MEDIUM (Sentry integration), LOW (code signing ROI)
+
+---
+
+## Context: What Already Exists
+
+Edit Factory is a FastAPI (port 8000) + Next.js (port 3000) hybrid that currently starts via `start-dev.bat` or `start-dev.sh`. The v10 milestone goal is to transform this into a distributable Windows product with: a `.exe` launcher, an NSIS installer, first-run setup wizard, auto-update, license key validation (Lemon Squeezy), and opt-in crash reporting (Sentry). Supabase remains cloud DB — this is a hybrid (local rendering, cloud data), not a fully offline app.
+
+---
 
 ## Feature Landscape
 
 ### Table Stakes (Users Expect These)
 
-Features users assume exist. Missing these = product feels incomplete.
+Features that any paid Windows desktop app must have. Missing these = product feels unfinished or untrustworthy.
 
 | Feature | Why Expected | Complexity | Notes |
 |---------|--------------|------------|-------|
-| Product feed ingestion (XML/URL) | Without feed import, nothing is automated — it is the entry point | MEDIUM | Google Shopping XML (`xml.etree.ElementTree` or `lxml`); standard fields: id, title, description, image_link, link, price, sale_price, brand, product_type; Nortia.ro feed has ~9,987 products |
-| Product browser with search and filter | ~10k products are unusable without browsing; this is the product selection UX | MEDIUM | Filter by: on-sale (sale_price exists), category/product_type, brand; full-text search on title; visual card grid not data table; virtual scroll or pagination required |
-| Ken Burns zoom/pan on product image | Static image videos look cheap and unfinished; motion is minimum viable engagement | MEDIUM | FFmpeg `zoompan` filter handles this natively (confirmed feasible); parameterize zoom direction and speed; ~4-6s per image at 30fps; slow zoom in or out |
-| Text overlays: product name, price, CTA | Price and product name are non-negotiable for product ads; without them it is not a product video | MEDIUM | FFmpeg `drawtext` filter; multiple layers with position, font, color, size; safe zone margins for TikTok/Reels (150px each side); CTA text configurable per template |
-| Sale badge / sale price overlay | Conditional overlay when sale_price < price; highest-converting element in e-commerce ads | LOW | Conditional on feed data; show original price with strikethrough + sale price highlighted; "SALE" badge with background box; drawtext with box=1 parameter |
-| TTS voiceover from product data (quick mode) | Video without audio converts poorly on social; every product video tool includes voiceover | LOW | Feed fields (title + price + sale_price + brand) → template string → existing TTS pipeline; wire product data to existing ElevenLabs/Edge service; no new TTS work needed |
-| Auto-generated subtitles | Platform requirement; 85% of social video watched with sound off | LOW | Already built in v4 — TTS timestamp → SRT pipeline; no new work needed; just wire product TTS output to existing subtitle generator |
-| Video duration control (15–60s) | Platform-specific requirements; TikTok ad specs vs Reels differ | LOW | Target duration drives TTS script length (word count); configurable 15/30/45/60s presets; existing target_duration field in library projects |
-| Platform export presets (9:16 vertical) | TikTok/Reels/Shorts are primary targets; wrong aspect ratio = automatic rejection | LOW | Already built in v3 — encoding_presets service handles aspect ratio and encoding; just pass through to existing preset system |
-| Job tracking with progress feedback | Batch jobs feel broken without feedback; single long job needs progress too | LOW | Already built — existing JobStorage + polling system; just needs product-specific job types |
-| Output clips to existing library | Videos must be discoverable and manageable alongside other content | LOW | Already built — clips + projects schema in Supabase; product videos are just another clip type |
+| Double-click launcher (.exe) | Users expect to launch an app by clicking it, not running scripts in a terminal | MEDIUM | `pystray` + Python launcher process; starts FastAPI backend subprocess + opens browser; must suppress console window (`CREATE_NO_WINDOW` flag on subprocess); single executable entry point |
+| System tray icon with right-click menu | Windows convention for background service apps; "running" indicator; quit mechanism | MEDIUM | `pystray` library (Win32 backend default on Windows); menu items: "Open Edit Factory", "Quit"; no systray = users don't know if app is running or how to stop it |
+| Windows installer (.exe) | Paid software ships with an installer; unzip-and-run feels unprofessional and untrusted | HIGH | NSIS + `pynsist` (builds NSIS installers for Python apps, bundles Python itself); alternatives: PyInstaller (antivirus false positive risk), conda-pack (heavier); installer bundles Python runtime, dependencies, FFmpeg binary, frontend build |
+| Install to `Program Files` with Start Menu shortcut | Windows user expectation — app appears in Start Menu and Add/Remove Programs | LOW | NSIS handles this natively; include uninstaller registration; standard NSIS install script |
+| First-run setup wizard | New users don't have API keys configured; wizard guides to a working state before reaching main app | MEDIUM | Web page served by Next.js (`/setup` route); detect on first launch (flag in `%APPDATA%`); 3–4 steps: Welcome → API Keys → Test Connection → Done; cannot skip required keys (Supabase URL/key required; others optional) |
+| Version number displayed | Users need to know what version they have for support and update conversations | LOW | Show in UI footer or settings page; backend `GET /api/v1/version` endpoint returns `{"version": "1.0.0"}`; read from single source of truth (e.g., `version.txt` or `pyproject.toml`) |
+| Graceful shutdown | Closing launcher should stop backend process cleanly; orphan processes are a UX defect | LOW | Track subprocess PID in launcher; on tray "Quit" → send SIGTERM to backend → wait for exit → exit launcher; also handle on window close |
+| Uninstaller | Paid app that can't be uninstalled cleanly feels hostile; Add/Remove Programs entry required | LOW | NSIS generates uninstaller automatically; remove installed files, Start Menu shortcuts, optionally `%APPDATA%` config (ask user) |
 
 ### Differentiators (Competitive Advantage)
 
-Features that set the product apart. Not required, but valued.
+Features that raise perceived quality and reduce support burden. Not expected, but clearly signal a polished product.
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| Batch generation (select N products → generate N videos) | 50 videos for 50 products in one action; competitors (Creatify, Predis) charge $39–$299/mo; zero marginal cost here | HIGH | Queue-based; per-product job tracking; UI shows batch progress grid (not single progress bar); most impactful feature for campaign scale; build on existing JobStorage |
-| AI-generated voiceover scripts (elaborate mode) | Generic price+name templates produce boring copy; AI generates varied, engaging scripts from description | MEDIUM | Existing script_generator (Gemini + Claude Max) already accepts text input; needs product-aware prompt; toggle between quick mode and elaborate mode; ElevenLabs flash v2.5 at 0.5 credits/char — ~100 word script = ~600 chars = 300 credits |
-| Auto-filter: on-sale products | Campaign trigger — sale products most likely to need video; one-click selection of all on-sale items | LOW | Filter condition: `sale_price` field present AND `sale_price` < `price`; "Select all on sale" shortcut in product browser |
-| Auto-filter: product categories | Run batch for a single category (shoes, bags, accessories) without manual selection | LOW | `product_type` field in Google Shopping XML; extract unique categories from feed → populate filter dropdown; preserves multi-category feeds |
-| Template presets (Product Spotlight, Sale Banner, Collection) | Named presets reduce configuration decisions; visual consistency across campaign | MEDIUM | Store template config as Python dataclass or JSON: overlay positions, colors, font, animation direction, CTA text; 3 starter presets; consistent with existing encoding_presets pattern |
-| Per-profile template customization (colors, fonts, CTA text) | Two stores (Nortia.ro + second brand) have different brand identities | MEDIUM | Profile-scoped template settings; primary/accent color, font family, CTA text, logo image path; integrate into existing profile system (profile already stores TTS voice, Postiz config) |
-| Multi-product collection video | Showcase 3–5 products in one video for gift guides, category highlights | HIGH | Sequence multiple product segments with per-product intro card; total runtime = sum of segments; different narrative logic — intro script covers all products; requires product ordering UI |
-| Web scraping extra product images | Single feed image not enough for engaging video; scrape 2–3 more images from product page URL | HIGH | `requests` + `BeautifulSoup` targeting `og:image`, gallery images; async pre-fetch and cache per product; fragile against site layout changes; adds 2–10s per product |
-| Stock video backgrounds | Product-only videos can feel flat; background motion adds energy and professionalism | HIGH | Free stock APIs: Pexels (free tier, 200 req/hour), Pixabay (free, 100 req/min); category keyword → search query; download + cache; composite product image overlay on top; different FFmpeg filter graph than Ken Burns approach |
-| Duplicate image detection before video | Feed may contain repeated images causing duplicate frames | LOW | Existing pHash perceptual hashing already in codebase (used for segment dedup); apply to product image set before compositing |
+| Auto-update on startup | Users stay on latest version without manual reinstall; critical for fixing bugs post-sale | MEDIUM | Check GitHub Releases API (or private endpoint) on launch; compare `current_version` vs `latest_version`; if behind, show notification with "Download update" button; download new installer, prompt user to run it; simple `requests`-based implementation — no framework needed for a one-time-purchase indie app; tufup/PyUpdater are overkill here |
+| License key activation screen | Gate access to app behind purchase; simple XXXX-XXXX-XXXX-XXXX entry screen | MEDIUM | Lemon Squeezy License API: `POST /v1/licenses/activate` with `license_key` + `instance_name` (machine hostname); store `instance_id` locally in `%APPDATA%/edit_factory/license.json`; validate on each launch with `POST /v1/licenses/validate`; Lemon Squeezy supports activation limits and tracks machine count |
+| Opt-in crash reporting (Sentry) | Reduces support blind spots; developer knows what breaks in production | LOW | `sentry-sdk` with `sentry_sdk.init(dsn=..., traces_sample_rate=0.1)`; show consent dialog on first run: "Help improve Edit Factory by sending anonymous crash reports"; store consent in `%APPDATA%` config; if declined, never initialize Sentry; FastAPI Sentry integration is built-in (`SentryAsgiMiddleware`) |
+| `%APPDATA%` config storage | Installed apps must not write config to `Program Files` (permissions issue); `%APPDATA%` is the Windows standard | LOW | `%APPDATA%/EditFactory/config.json` stores: license key, instance_id, API keys, crash consent, first-run complete flag; all services read from this path instead of `.env`; DESKTOP_MODE flag activates this path |
+| Desktop mode env flags | Separate desktop behavior from dev behavior without code duplication | LOW | `DESKTOP_MODE=true` in launcher-injected env; `AUTH_DISABLED=true` (single-user app, no multi-user auth needed); backend detects these flags at startup to skip JWT validation and read from `%APPDATA%` config |
+| Startup notification toast | Windows toast notification on launch: "Edit Factory is ready — click to open" | LOW | `win10toast` or `plyer` library; optional nicety; avoids user confusion when browser doesn't open automatically |
+| Portable mode (no installer) | Advanced users want to run from a folder on USB or network drive | LOW | Support `--portable` flag on launcher; reads config from `./config.json` relative to exe instead of `%APPDATA%`; do not require this for v10 launch — defer |
 
 ### Anti-Features (Commonly Requested, Often Problematic)
 
-Features that seem good but create problems.
-
 | Feature | Why Requested | Why Problematic | Alternative |
 |---------|---------------|-----------------|-------------|
-| Real-time video preview before render | "See what it will look like" | FFmpeg render IS the render; lightweight previews never match final; complex infrastructure (Remotion/Canvas); already documented in PROJECT.md out-of-scope | Show static layout mockup with overlay positions labeled; first render is inexpensive enough to be the preview |
-| AI-generated product images (DALL-E / Stable Diffusion / Luma AI) | "Generate lifestyle shots from product description" | $0.04–0.08 per image, high volume cost; product details often inaccurate in AI generations; adds 10–30s per video; quality inconsistent | Use existing product images with Ken Burns; scrape extra images from product URL; stock video backgrounds as visual complement |
-| Shoppable video (tap-to-buy overlay) | Seen in Creatify, Google Demand Gen Ads | Platform-specific SDK required per network (TikTok, Instagram, YouTube); this is a publishing-layer feature, not a composition feature; out of scope for FFmpeg rendering | Add product URL to social media post text in Postiz publishing step |
-| Background music auto-selection | "AI matches music to product mood" | Music rights issues with licensed tracks; royalty-free APIs require integration and attribution; most social video is watched muted anyway; complicates audio normalization | Keep audio-only-if-voiceover approach; product voiceover is the audio track |
-| 360-degree product spin video | "Generate product rotation from single image" | Requires AI image-to-3D pipeline or multi-angle photos (not in feeds); technically complex, high failure rate from single image; no tool does this reliably yet | Ken Burns zoom gives perceived motion and dynamism without needing multi-angle input |
-| Per-video customization UI in batch | "Let me tweak each video before generating" | Defeats the purpose of batch processing; creates serial bottleneck; transforms 10-minute batch into 2-hour manual process | Configure template at batch-start; allow post-generation editing of individual clips in existing library |
-| Manual product entry (CSV or form) | "I want to add products not in the feed" | Duplicates feed parser work; creates data sync issues between manual entries and feed data; two sources of truth | Use feed as single source of truth; if needed, provide template XML for one-off imports |
-| Automatic social media posting after batch | "Generate and publish in one step" | Bypasses human review of generated content; bad videos get published automatically; existing Postiz integration already handles publishing with manual approval | Keep generation and publishing as separate steps; library is the review layer |
+| PyInstaller single `.exe` bundle | "One file is clean and simple" | PyInstaller-generated exes trigger antivirus false positives on many Windows machines (well-documented, affects many versions including post-v5.13.2); complex deps (numpy, whisper, torch) frequently fail to bundle correctly; produces 150–400MB bloated executable | Use NSIS installer with `pynsist` that installs Python runtime + packages as separate files; no packing/extraction = no antivirus trigger; installed files are human-readable, trustworthy |
+| Electron wrapper | "Makes it feel like a real desktop app" | PROJECT.md explicitly ruled this out — "unnecessary overhead for single-user workflow"; adds 150MB Chromium runtime; requires Node.js build pipeline; no benefit when app already runs in browser; constant Electron security updates become maintenance burden | Keep browser-in-tray pattern: pystray + subprocess FastAPI + `webbrowser.open()`; users already have a browser; this is the established pattern for local web tools (Calibre-Web, many others) |
+| Offline-only license validation | "What if users have no internet?" | Offline license validation requires cryptographic signing infrastructure (public/private key embed), replay attack prevention, and hardware fingerprinting; significantly more complex than online validation; for a web-dependent app (Supabase requires internet), purely offline use is not the target case | Grace period: cache last successful validation result with timestamp; allow 72-hour offline use before re-prompting; Lemon Squeezy's API is reliable enough for startup validation |
+| Mandatory code signing | "Windows will block unsigned executables" | Code signing certificates cost €60–€300/year and take days to provision; they reduce (but do not eliminate) antivirus warnings; Windows SmartScreen warnings appear for new/low-reputation signers regardless; for a personal-use indie tool, the cost/benefit is poor at launch | Start unsigned; add notice in install docs about SmartScreen warning; tell users to click "Run anyway"; pursue signing after first 50+ sales if support requests about this increase |
+| Auto-start on Windows boot | "Should be always running" | Heavy video processing tools running at boot annoy users and consume resources; boot startup is acceptable for messaging apps, not rendering pipelines | Add opt-in "Start on login" checkbox in Settings page (uses `winreg` to add Run key); OFF by default |
+| In-app payment / subscription | "Sell upgrades inside the app" | Requires payment SDK integration, PCI compliance considerations, in-app purchase flow — enormous scope; Lemon Squeezy handles the purchase externally | Sell on Lemon Squeezy website; app receives license key post-purchase via email; simple and standard for indie tools |
+
+---
 
 ## Feature Dependencies
 
 ```
-[Google Shopping XML Feed Parsing]
-    └──required by──> [Product Browser UI]
-    └──required by──> [Single Product Video Generation]
-    └──required by──> [Batch Generation]
-    └──required by──> [Auto-filter: On Sale / Category]
-    └──required by──> [Sale Badge Overlay] (conditional on sale_price field)
-    └──required by──> [Web Scraping Extra Images] (uses feed link field)
+[Windows NSIS Installer]
+    └──bundles──> [Python Runtime + Dependencies]
+    └──bundles──> [FFmpeg Binary]
+    └──bundles──> [Next.js Built Frontend (static export or dev server)]
+    └──creates──> [Start Menu Shortcut → Launcher .exe]
+    └──installs──> [Uninstaller]
 
-[Single Product Video Generation]
-    ├──requires──> [Feed Parsing] (product data source)
-    ├──requires──> [Ken Burns on product image] (visual source)
-    ├──requires──> [Text Overlays] (name, price, CTA)
-    ├──requires──> [TTS Pipeline] (already built — voiceover)
-    ├──requires──> [Subtitle Pipeline] (already built — TTS timestamps)
-    └──produces──> [Clip in Library] (existing library management)
+[Launcher .exe (pystray + subprocess)]
+    ├──requires──> [NSIS Installer] (produces the exe)
+    ├──starts──> [FastAPI Backend (subprocess)]
+    ├──opens──> [Browser at localhost:3000]
+    ├──creates──> [System Tray Icon]
+    └──injects──> [DESKTOP_MODE=true, AUTH_DISABLED=true env flags]
 
-[Batch Generation]
-    └──requires──> [Single Product Video Generation] (must be stable and tested first)
-    └──requires──> [Product Browser UI] (multi-select)
-    └──requires──> [Job Queue] (existing JobStorage)
+[First-Run Setup Wizard]
+    ├──requires──> [Launcher] (detects first-run flag)
+    ├──requires──> [%APPDATA% config path] (writes config.json)
+    ├──blocks──> [Main App] (redirect to /setup until complete)
+    └──gates──> [License Key Activation] (step 1 or pre-wizard)
 
-[Sale Badge Overlay]
-    └──requires──> [Feed Parsing] (sale_price field)
-    └──requires──> [Text Overlays] (drawtext with box)
-    └──enhances──> [Single Product Video Generation]
+[License Key Activation]
+    ├──requires──> [Lemon Squeezy account + product configured]
+    ├──requires──> [%APPDATA% config path] (stores instance_id)
+    ├──calls──> [Lemon Squeezy License API: /v1/licenses/activate]
+    └──validates on──> [Each launcher startup via /v1/licenses/validate]
 
-[AI Voiceover Scripts (elaborate mode)]
-    └──requires──> [Feed Parsing] (description + title)
-    └──requires──> [Script Generator] (already built — Gemini/Claude)
-    └──enhances──> [Single Product Video Generation] (replaces quick mode template)
+[Auto-Update]
+    ├──requires──> [Version endpoint in backend]
+    ├──requires──> [GitHub Releases or update manifest URL]
+    ├──runs at──> [Launcher startup, before opening browser]
+    └──downloads──> [New NSIS installer, prompts user to run]
 
-[Template Presets]
-    └──requires──> [Text Overlays] (overlay config parameterized)
-    └──requires──> [Ken Burns] (animation config parameterized)
-    └──integrates with──> [Profile System] (already built — per-profile settings)
-    └──enhances──> [All video generation features]
+[Crash Reporting (Sentry)]
+    ├──requires──> [Consent captured in First-Run Wizard]
+    ├──requires──> [Sentry project DSN configured in build]
+    ├──integrates with──> [FastAPI via SentryAsgiMiddleware]
+    └──integrates with──> [Frontend via @sentry/nextjs]
 
-[Multi-Product Collection Video]
-    └──requires──> [Single Product Video Generation] (working reliably)
-    └──requires──> [Product Browser UI] (multi-select with ordering)
-    └──different architecture from──> [Single product] (sequence logic, intro script)
+[%APPDATA% Config Path]
+    ├──required by──> [License Key Activation]
+    ├──required by──> [First-Run Wizard]
+    ├──required by──> [Crash Reporting consent]
+    └──required by──> [DESKTOP_MODE env flag logic]
 
-[Web Scraping Extra Images]
-    └──requires──> [Feed Parsing] (link field for product URL)
-    └──enhances──> [Ken Burns on product image] (more source frames)
-    └──conflicts with──> [Fast Batch Generation] (adds 2-10s per product)
-
-[Stock Video Backgrounds]
-    └──requires──> [Text Overlays] (product image composited over background)
-    └──conflicts with──> [Ken Burns-only workflow] (different FFmpeg filter graph)
-    └──requires separate template type from──> [Product Spotlight preset]
-
-[Per-Profile Template Customization]
-    └──integrates with──> [Profile System] (already built)
-    └──requires──> [Template Presets] (customizes existing presets)
+[DESKTOP_MODE env flag]
+    ├──activates──> [%APPDATA% config read instead of .env]
+    ├──activates──> [AUTH_DISABLED=true behavior]
+    └──required by──> [All desktop-specific code paths]
 ```
 
 ### Dependency Notes
 
-- **Feed parsing gates everything:** No product data = no product video. Must be Phase 1, Day 1.
-- **Single product before batch:** Batch is single-product × N with a queue wrapper. Ship and validate single first; batch is a thin layer on top.
-- **Web scraping conflicts with batch speed:** Scraping adds 2–10s per product page. For a 50-product batch, that is 100–500 seconds of scraping alone. Implement as optional async pre-fetch job that runs before batch, not inline.
-- **Stock backgrounds vs Ken Burns:** These are different FFmpeg filter graph architectures. Ken Burns: `scale → zoompan → fade → drawtext`. Stock background: `[bg_video][product_img]overlay → drawtext`. Implement as separate template type, not an option in the same template.
-- **Template presets follow existing pattern:** encoding_presets in v3 used Python dataclasses. Template presets should follow the same pattern — not a database table, a service module with named configs.
+- **Installer must be stable before auto-update:** Auto-update downloads and runs a new installer. If the installer is broken, auto-update creates a support nightmare. Ship installer, validate it across clean Windows machines, then add auto-update in a subsequent phase.
+- **%APPDATA% config is the keystone:** Everything desktop-specific (license, API keys, crash consent, first-run flag) flows through this path. Implement this before wizard, licensing, or Sentry.
+- **License gate before wizard:** Show the license activation screen before the setup wizard. A user without a valid license should not reach API key configuration.
+- **Sentry consent must precede Sentry init:** `sentry_sdk.init()` must only be called after consent is confirmed. Cannot initialize at module load time in desktop mode.
+- **Auto-update runs before browser opens:** User should be notified of update availability before starting a work session, not interrupted mid-session.
+
+---
 
 ## MVP Definition
 
-### Launch With (v5 core)
+### Launch With (v10 core)
 
-Minimum to generate the first useful product video from the Nortia.ro feed.
+The minimum required to ship a paid, installable version of Edit Factory.
 
-- [ ] Google Shopping XML feed parsing — without this, nothing works
-- [ ] Product browser UI with search, on-sale filter, category filter — 9,987 products require it
-- [ ] Ken Burns zoom/pan on feed image — minimum visual motion
-- [ ] Text overlays: product name, price, sale price (conditional), CTA — table stakes for product video
-- [ ] Sale banner template preset — highest commercial value; validates the whole concept
-- [ ] Quick-mode voiceover from template (title + price + CTA) — fastest path to audio
-- [ ] Single product → single video → library output — core atomic workflow
+- [ ] **%APPDATA% config storage** — foundation for everything else; no desktop features work without it
+- [ ] **DESKTOP_MODE + AUTH_DISABLED env flags** — separates desktop behavior from dev; unlocks desktop code paths
+- [ ] **Launcher .exe (pystray)** — starts backend, opens browser, shows system tray icon, handles shutdown
+- [ ] **NSIS installer (pynsist)** — bundles Python, deps, FFmpeg, frontend; installs to Program Files; Start Menu shortcut; uninstaller
+- [ ] **First-run setup wizard** — /setup page; detects first-run; collects API keys; writes to %APPDATA% config; marks complete
+- [ ] **License key activation** — Lemon Squeezy activate + validate on startup; blocks app if invalid; stores instance_id locally
+- [ ] **Version display** — show version number in Settings; backend /version endpoint
 
-### Add After Validation (v5.x)
+### Add After Validation (v10.x)
 
-Add after single-product flow is tested and producing real videos for Nortia.ro.
+Add once the core installer + launcher is working on clean Windows machines.
 
-- [ ] Batch generation — trigger: single product works reliably; adds scale
-- [ ] AI-generated voiceover scripts (elaborate mode) — trigger: quick mode templates feel too generic in practice
-- [ ] Template presets (3 named: Spotlight, Sale Banner, Collection) — trigger: brand consistency needed across campaigns
-- [ ] Per-profile template customization (colors, fonts, CTA text) — trigger: second store brand differs from Nortia.ro
+- [ ] **Auto-update** — trigger: installer validated on clean machines; check GitHub Releases on startup; notify + download
+- [ ] **Opt-in crash reporting (Sentry)** — trigger: first production users encountered; consent dialog in wizard; FastAPI + Next.js Sentry integration
+- [ ] **"Start on login" option** — trigger: user request; opt-in winreg entry in Settings page
 
-### Future Consideration (v6+)
+### Future Consideration (v11+)
 
-Defer until v5 core is producing regular videos.
+Defer until v10 is stable and selling.
 
-- [ ] Multi-product collection video — requires reliable single product; different narrative logic; higher complexity
-- [ ] Web scraping extra product images — fragile, adds latency, complex error handling; validate single-image quality first
-- [ ] Stock video backgrounds — different composition architecture; separate milestone
-- [ ] Auto-filter: new in stock / recently added — requires feed version comparison / timestamp tracking
+- [ ] **Portable mode** — low demand for a resource-heavy video tool; complex edge cases with relative paths
+- [ ] **Code signing** — expensive; pursue after 50+ sales if antivirus support requests become common
+- [ ] **macOS support** — NSIS is Windows-only; would require separate build pipeline (Homebrew or DMG); out of scope for personal-use Windows tool
+- [ ] **Delta/patch updates** — tufup handles this; significant complexity for marginal bandwidth saving; full installer download is simpler
+
+---
 
 ## Feature Prioritization Matrix
 
 | Feature | User Value | Implementation Cost | Priority |
 |---------|------------|---------------------|----------|
-| XML feed parsing | HIGH | MEDIUM | P1 |
-| Product browser UI (search + filter) | HIGH | MEDIUM | P1 |
-| Ken Burns on product image | HIGH | LOW | P1 |
-| Text overlays (name, price, CTA) | HIGH | MEDIUM | P1 |
-| Sale banner (conditional overlay) | HIGH | LOW | P1 |
-| Quick-mode TTS voiceover | HIGH | LOW | P1 |
-| Single product → library output | HIGH | LOW | P1 |
-| Batch generation | HIGH | HIGH | P2 |
-| AI voiceover scripts (elaborate mode) | MEDIUM | LOW | P2 |
-| Template presets (3 named configs) | MEDIUM | MEDIUM | P2 |
-| Per-profile template customization | MEDIUM | MEDIUM | P2 |
-| Auto-filter: on sale / category | MEDIUM | LOW | P2 |
-| Multi-product collection video | MEDIUM | HIGH | P3 |
-| Web scraping extra images | MEDIUM | HIGH | P3 |
-| Stock video backgrounds | LOW | HIGH | P3 |
+| %APPDATA% config storage | HIGH (foundation) | LOW | P1 |
+| DESKTOP_MODE / AUTH_DISABLED flags | HIGH (foundation) | LOW | P1 |
+| Launcher .exe with system tray | HIGH | MEDIUM | P1 |
+| NSIS installer | HIGH | HIGH | P1 |
+| First-run setup wizard | HIGH | MEDIUM | P1 |
+| License key validation (Lemon Squeezy) | HIGH | MEDIUM | P1 |
+| Version display | MEDIUM | LOW | P1 |
+| Auto-update on startup | HIGH | MEDIUM | P2 |
+| Opt-in Sentry crash reporting | MEDIUM | LOW | P2 |
+| Start on login option | LOW | LOW | P2 |
+| Portable mode | LOW | MEDIUM | P3 |
+| Code signing | MEDIUM | HIGH | P3 |
 
 **Priority key:**
-- P1: Must have for v5 launch — core milestone
-- P2: Should have — add after single-product flow validated
-- P3: Nice to have — future milestone
+- P1: Required for v10 launch — product is not shippable without this
+- P2: Ship in first update after launch validation
+- P3: Future consideration
 
-## Competitor Feature Analysis
+---
 
-| Feature | Creatify | Predis.ai | Creatomate | Our Approach |
-|---------|----------|-----------|------------|--------------|
-| Feed ingestion | URL scraping (no XML) | Catalog import (CSV/API) | JSON/CSV via REST API | Google Shopping XML directly; standard format already used for Merchant Center |
-| Template system | 370+ templates (too many; choice paralysis) | Auto-generated per format | JSON-defined via API | 3 named presets as Python dataclasses; profile-scoped customization |
-| Batch generation | Yes, on paid tiers ($79–$299/mo) | Yes, multi-format | Yes, via API automation | Queue-based using existing JobStorage; zero incremental cost |
-| Voiceover | AI avatars + TTS | Text-to-speech | Not built-in | Existing ElevenLabs/Edge TTS — already integrated |
-| Subtitles | Auto-generated | Auto-generated | Optional add-on | Existing TTS-timestamp → SRT pipeline — already built in v4 |
-| Ken Burns / motion | Basic pan/zoom | Not prominent | Not built-in | FFmpeg zoompan filter — native, no new dependency |
-| Price / sale overlays | Sale badge variants | Auto-detected from feed | Custom via JSON template | Conditional drawtext: sale_price present → sale badge; programmatic |
-| Social publishing | Not built-in (export only) | Built-in scheduler | Not built-in | Existing Postiz integration — already wired |
-| Cost | $39–$299/month | $27–$249/month | $49+/month + per-render fees | Zero marginal cost per video (uses existing APIs); only ElevenLabs chars for elaborate mode |
+## Implementation Detail: Key Patterns
 
-**Key competitive insight:** Competitors charge high monthly fees or per-render API costs. This system uses existing FFmpeg infrastructure at zero marginal cost. The only variable cost is ElevenLabs TTS for elaborate-mode scripts — at flash v2.5 rate of 0.5 credits/char, a 100-word script (~600 chars) costs 300 credits. With 100k credits/month on the Starter plan, that is ~333 elaborate-mode videos per month before hitting the limit. Quick-mode template voiceover is still free via Edge TTS.
+### Launcher Architecture (pystray pattern)
 
-## UX Patterns for Product Video Generation
+The launcher is a small Python script compiled to `.exe` via pynsist. It:
+1. Starts FastAPI backend as a hidden subprocess (`subprocess.Popen` with `CREATE_NO_WINDOW`)
+2. Waits for backend health check (`GET /api/v1/health`) to return 200
+3. Opens browser at `http://localhost:3000` via `webbrowser.open()`
+4. Creates pystray system tray icon with menu: "Open Edit Factory" / "Quit"
+5. On "Quit": sends SIGTERM to backend subprocess, waits for exit, exits launcher
 
-### Feed Browsing (Product Browser Page)
+### License Validation Flow (Lemon Squeezy)
 
-**Visual grid, not data table.** Product cards with thumbnail, title, truncated price, sale badge. Users need to visually scan products, not parse rows of data.
+On first run:
+- Show license key input screen (fullscreen, blocks main app)
+- Call `POST https://api.lemonsqueezy.com/v1/licenses/activate` with `license_key` + `instance_name=socket.gethostname()`
+- On success: store `instance_id` + `license_key` in `%APPDATA%/EditFactory/license.json`
 
-**Sticky filter bar** at top of page: search input (debounced, searches title), on-sale toggle (most common campaign use case), category dropdown (product_type values from feed), brand dropdown.
+On every subsequent launch:
+- Read `license.json`; call `POST /v1/licenses/validate` with `license_key` + `instance_id`
+- If `valid: true` → proceed; if `valid: false` or network error → show re-activation screen (with 72h offline grace period)
+- Hard-code `product_id` and `store_id` in the client and verify response fields match (prevents key-sharing with other LS products)
 
-**Batch selection UX pattern:** Checkbox on each card; sticky action bar at bottom appears when items are selected showing count ("14 products selected") and primary CTA ("Generate Videos"). "Select all on sale" shortcut. "Clear selection" button.
+### First-Run Wizard Steps
 
-**Quick preview on hover:** Full title, price both original and sale, description snippet in a tooltip or expanded card.
+Step 1 — Welcome: product name, version, brief description, "Get Started" button
+Step 2 — License Key: input field, activate button, success/error feedback (shown only if not already activated)
+Step 3 — API Keys: Supabase URL (required), Supabase Key (required), Gemini API Key (optional), ElevenLabs API Key (optional); each field shows inline validation; "Test Connection" button hits `/api/v1/setup/test-connection`
+Step 4 — Crash Reporting: opt-in checkbox with plain-language explanation: "Send anonymous error reports to help fix bugs. No personal data or video content is included."; defaults to OFF
+Step 5 — Done: "Open Edit Factory" CTA; writes `first_run_complete: true` to config.json
 
-**Pagination** over infinite scroll for batch workflows — users need to know where they are in a 9,987-item list; page numbers help with "I reviewed page 1-3" mental model.
+### Auto-Update Implementation
 
-### Template Selection
+Simple approach (no framework):
+- `GET https://api.github.com/repos/[owner]/edit-factory/releases/latest` → parse `tag_name` as latest version
+- Compare to `current_version` from local `version.txt`
+- If newer: show non-blocking notification in the launcher tray menu: "Update available: v1.2.0 — Download"
+- Download new NSIS installer to `%TEMP%`; prompt user to run it (it handles the update)
+- User runs installer → old version replaced → launcher restarts
 
-**Preset cards with visual thumbnail previews**, not a dropdown. Users need to see what they are selecting before committing to a batch. Three preset cards is the right number — more causes choice paralysis (confirmed by Creatify's 370+ template UX as anti-pattern).
+This is lower complexity than tufup (patch-based TUF framework) and appropriate for an indie tool where full installer download (~50–100MB) is acceptable.
 
-**Last-used template is default** — users run campaigns and typically use the same template for a full campaign run.
+### Sentry Integration
 
-**Template config summary** below the selected preset: "Sale price badge: ON | Font: [profile font] | Duration: 30s | CTA: [profile CTA text]" — shows what will be used without opening an editor.
+Backend (`app/main.py`):
+```python
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
 
-### Batch Processing Workflow (Wizard Pattern)
+if desktop_config.crash_reporting_enabled:  # read from %APPDATA% config
+    sentry_sdk.init(
+        dsn="https://[key]@sentry.io/[project]",
+        integrations=[FastApiIntegration()],
+        traces_sample_rate=0.1,
+    )
+```
 
-Industry standard wizard confirmed by research: Select products → Choose template → Configure options → Review → Generate.
+Frontend (`frontend/sentry.client.config.ts`):
+```typescript
+import * as Sentry from "@sentry/nextjs";
+// Only init if backend reports consent enabled
+if (window.__SENTRY_ENABLED__) {  // injected by backend on /api/v1/config
+    Sentry.init({ dsn: "...", tracesSampleRate: 0.1 });
+}
+```
 
-**Review step before generation** is critical: show "12 products × 30s each × estimated ElevenLabs cost: 3,600 credits" summary. User confirms before compute starts.
+---
 
-**Progress grid during generation:** Each product card shows status (queued / processing / done / error). Not a single progress bar — users want to know which specific products are done and which failed.
+## Platform Comparison: Lemon Squeezy vs Gumroad
 
-**Partial batch failures are expected:** Bad image URL, TTS character limit exceeded, feed data missing required field. Show error inline per product card. Provide "Retry failed" button for the batch.
+| Criterion | Lemon Squeezy | Gumroad |
+|-----------|--------------|---------|
+| Transaction fee | 5% + $0.50 | 10% + $0.50 |
+| License key API | Full REST API (activate/validate/deactivate), instance limits, machine count | Basic validate-only API, limited instance tracking |
+| Python library | Unofficial (`lemonsqueezy-py-api`) or direct HTTP | Direct HTTP only |
+| Tax handling | MoR — handles VAT/GST in 100+ countries automatically | MoR since Jan 2025 — handles global taxes |
+| Software focus | Built for SaaS/software sellers — license management is first-class | General digital products — licenses are secondary |
+| Recommendation | **Use Lemon Squeezy** for software with license key management | Use Gumroad for simpler digital downloads without activation |
 
-**Background processing with navigation freedom:** User can navigate away; jobs persist in JobStorage. Batch progress visible from anywhere via existing polling mechanism.
+**Verdict:** Lemon Squeezy. Lower fees, purpose-built license API with machine activation limits, better for software distribution.
 
-### Single Product Video Editing
-
-**Inline voiceover text editing** before rendering — quick-mode template text is editable in place. User can see the exact script before committing TTS credits.
-
-**Duration selector** as discrete steps (15s / 30s / 45s / 60s), not a continuous slider. Maps to TTS script word count targets; discrete steps simplify rendering logic.
-
-**Template override per video:** Change template for this one video without changing the profile default. Needed for one-off custom videos alongside batch campaigns.
+---
 
 ## Sources
 
-- [Creatify product video generator features](https://creatify.ai/features/product-video) — feature set and template volume
-- [Predis.ai multi-format generator](https://predis.ai/resources/best-ai-ad-generators/) — competitive feature set
-- [Creatomate video API review](https://www.plainlyvideos.com/blog/creatomate-review) — template/batch architecture patterns
-- [NemoVideo batch video generator](https://www.nemovideo.com/blog/batch-video-generator-scale-output) — batch UX and workflow patterns
-- [Eleken bulk action UX guidelines](https://www.eleken.co/blog-posts/bulk-actions-ux) — bulk selection and wizard UX
-- [Bannerbear Ken Burns FFmpeg guide](https://www.bannerbear.com/blog/how-to-do-a-ken-burns-style-effect-with-ffmpeg/) — FFmpeg zoompan feasibility confirmed
-- [Creatomate FFmpeg slideshow guide](https://creatomate.com/blog/how-to-create-a-slideshow-from-images-using-ffmpeg) — multi-image composition patterns
-- [Google Demand Gen product feeds 2025](https://blog.google/products/ads-commerce/new-demand-gen-features-2025/) — industry direction; Asset Studio auto-generates videos from product feeds
-- [Mintly best AI generators for ecommerce 2025](https://usemintly.com/blog/best-ai-video-generators-for-ecommerce-in-2025-ranked) — market landscape
-- [Text overlay CTR impact study](https://overlaytext.com/blog/text-overlay-marketing-business-graphics) — validates text overlays as table stakes
-- [Ecommerce product video at scale (Tolstoy)](https://www.gotolstoy.com/blog/product-videos-for-ecommerce) — batch-at-scale patterns and shoppable video anti-feature
-- [Top ecommerce video mistakes (Pippit)](https://www.pippit.ai/resource/the-top-5-mistakes-to-avoid-during-ecommerce-video-editing) — pitfall research
+- [NSIS Best Practices](https://nsis.sourceforge.io/Best_practices) — installer conventions
+- [pynsist — Build Windows installers for Python](https://github.com/takluyver/pynsist) — NSIS + Python bundling
+- [pystray documentation](https://pystray.readthedocs.io/en/latest/usage.html) — system tray implementation
+- [PyInstaller antivirus false positives (GitHub issue #8164)](https://github.com/pyinstaller/pyinstaller/issues/8164) — why not PyInstaller
+- [Lemon Squeezy License API — Validate](https://docs.lemonsqueezy.com/api/license-api/validate-license-key) — response fields, activation_limit, instance tracking
+- [Lemon Squeezy License API — Activate](https://docs.lemonsqueezy.com/api/license-api/activate-license-key) — activation flow
+- [Lemon Squeezy vs Gumroad 2025 comparison](https://ruul.io/blog/lemonsqueezy-vs-gumroad) — fee and feature comparison
+- [sentry-python official SDK](https://github.com/getsentry/sentry-python) — FastAPI integration
+- [tufup — Python auto-updater](https://github.com/dennisvang/tufup) — considered, rejected as overkill for indie tool
+- [Wizard design pattern — UX Planet](https://uxplanet.org/wizard-design-pattern-8c86e14f2a38) — first-run wizard UX principles
+- [Setup wizard design analysis — Krystal Higgins](https://www.kryshiggins.com/the-design-of-setup-wizards/) — multi-step setup patterns
+- [Building Production-Ready Desktop LLM Apps: Tauri, FastAPI, and PyInstaller](https://aiechoes.substack.com/p/building-production-ready-desktop) — hybrid Python+frontend desktop patterns
 
 ---
-*Feature research for: Product video generation from e-commerce product feeds (v5 milestone)*
-*Researched: 2026-02-20*
+*Feature research for: Desktop app distribution — launcher, installer, auto-update, licensing, crash reporting (v10 milestone)*
+*Researched: 2026-03-01*
