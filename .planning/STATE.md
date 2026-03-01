@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v10
-milestone_name: Desktop Launcher & Distribution
-status: in_progress
-last_updated: "2026-03-01T10:45:03Z"
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-03-01T10:51:44.967Z"
 progress:
-  total_phases: 6
-  completed_phases: 0
-  total_plans: 3
-  completed_plans: 2
+  total_phases: 17
+  completed_phases: 17
+  total_plans: 49
+  completed_plans: 49
 ---
 
 # Project State
@@ -23,11 +23,11 @@ See: .planning/PROJECT.md (updated 2026-03-01)
 ## Current Position
 
 Phase: 47 of 52 (Desktop Foundation)
-Plan: 02 of 03 complete (47-02: Process Cleanup Utility)
-Status: In progress — Phase 47 execution underway
-Last activity: 2026-03-01 — 47-02 complete: app/desktop.py + psutil cleanup CLI
+Plan: 03 of 03 complete (47-03: Desktop Mode Flag Wiring)
+Status: Phase 47 complete — all 3 plans done; ready for Phase 48
+Last activity: 2026-03-01 — 47-03 complete: auth bypass + FFmpeg bundled path resolution
 
-Progress: [░░░░░░░░░░] 0% (0 of 6 v10 phases complete; 2/3 plans in Phase 47 done)
+Progress: [█░░░░░░░░░] 17% (1 of 6 v10 phases complete; 3/3 plans in Phase 47 done)
 
 ## Performance Metrics
 
@@ -49,6 +49,7 @@ Progress: [░░░░░░░░░░] 0% (0 of 6 v10 phases complete; 2/3 p
 | v8 Pipeline UX | 5 (38-42) | 8 | Shipped 2026-02-24 |
 | v9 Assembly Fix + Overlays | 4 (43-46) | 6 | Shipped 2026-02-28 |
 | v10 Desktop Launcher | 6 (47-52) | TBD | In progress |
+| v10 Desktop Launcher Phase 47 | 1 (47) | 3 | Shipped 2026-03-01 |
 
 ## Accumulated Context
 
@@ -65,6 +66,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - APP_BASE_DIR via _get_app_base_dir(): DESKTOP_MODE=true uses %APPDATA%\EditFactory, dev uses project root (47-01)
 - settings_customise_sources priority: env vars > AppData .env > project .env (47-01)
 - Phase 50 cache_clear() pattern: get_settings.cache_clear() then get_settings() after Setup Wizard writes AppData .env (47-01)
+- [Phase 47-desktop-foundation]: FFmpeg setup reads DESKTOP_MODE via os.getenv() directly (not Settings) so PATH is set before any service import
+- [Phase 47-desktop-foundation]: Bundled FFmpeg at APPDATA/EditFactory/bundled/ffmpeg/bin — Phase 52 installer places binary there
+- [Phase 47-desktop-foundation]: Desktop mode returns desktop@local email vs dev@localhost (AUTH_DISABLED) to distinguish bypass modes in logs
 
 ### Pending Todos
 
@@ -83,9 +87,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Completed 47-02-PLAN.md (Process Cleanup Utility — app/desktop.py + psutil)
+Stopped at: Completed 47-03-PLAN.md (Desktop Mode Flag Wiring — auth bypass + FFmpeg resolution)
 Resume file: None
-Next action: Execute 47-03 (or continue with next phase 47 plan)
+Next action: Execute Phase 48 (Electron Shell)
 
 ---
-*Last updated: 2026-03-01 after 47-02 execution (Process Cleanup Utility)*
+*Last updated: 2026-03-01 after 47-03 execution (Desktop Mode Flag Wiring — Phase 47 complete)*
