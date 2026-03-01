@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -1018,6 +1019,22 @@ export default function SettingsPage() {
           )}
         </Button>
       </div>
+
+      {process.env.NEXT_PUBLIC_DESKTOP_MODE === "true" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Setup Wizard</CardTitle>
+            <CardDescription>
+              Re-run the setup wizard to update your license, API keys, or preferences
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button variant="outline" asChild>
+              <Link href="/setup?mode=edit">Open Setup Wizard</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {appVersion && (
         <div className="text-center text-xs text-muted-foreground mt-8 pb-4">
