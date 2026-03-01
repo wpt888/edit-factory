@@ -5,7 +5,12 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron ."
+    "dev": "electron .",
+    "dist": "electron-builder --win",
+    "dist:publish": "electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.1.0"
   },
   "devDependencies": {
     "electron": "^34.0.0",
@@ -18,11 +23,29 @@
       "target": "nsis",
       "icon": "build/icon.ico"
     },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Edit Factory",
+      "uninstallDisplayName": "Edit Factory ${version}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "PLACEHOLDER_ORG",
+      "repo": "PLACEHOLDER_REPO",
+      "releaseType": "draft"
+    },
+    "directories": {
+      "output": "dist"
+    },
     "extraResources": [
       {
         "from": "../venv",
         "to": "venv",
-        "filter": ["**/*"]
+        "filter": ["**/*", "!**/__pycache__/**", "!**/*.pyc"]
       },
       {
         "from": "../frontend/.next/standalone",
@@ -32,6 +55,16 @@
       {
         "from": "../app",
         "to": "app",
+        "filter": ["**/*", "!**/__pycache__/**", "!**/*.pyc"]
+      },
+      {
+        "from": "../ffmpeg/ffmpeg-master-latest-win64-gpl/bin",
+        "to": "ffmpeg/bin",
+        "filter": ["ffmpeg.exe", "ffprobe.exe"]
+      },
+      {
+        "from": "resources/node",
+        "to": "node",
         "filter": ["**/*"]
       }
     ]
