@@ -415,32 +415,52 @@ class VideoAnalyzer:
         skipped_duplicates = 0
         skipped_overlap = 0
 
-        for segment in all_segments:
-            if total_duration >= target_duration:
-                break
+        # Distribuție temporală uniformă - zone buckets + round-robin
+        video_duration = max(seg.end_time for seg in all_segments) if all_segments else 0
+        num_zones = 5
+        zone_buckets = [[] for _ in range(num_zones)]
 
-            # Verificam overlap temporal
-            has_overlap = False
-            for sel in selected:
-                if not (segment.end_time <= sel.start_time or segment.start_time >= sel.end_time):
-                    has_overlap = True
+        for seg in all_segments:
+            bucket_idx = min(int((seg.start_time / video_duration) * num_zones), num_zones - 1) if video_duration > 0 else 0
+            zone_buckets[bucket_idx].append(seg)
+
+        # all_segments vine deja sortat pe scor, deci bucket-urile pastreaza ordinea
+        bucket_indices = [0] * num_zones
+        segments_added = True
+
+        while total_duration < target_duration and segments_added:
+            segments_added = False
+            for zone_idx in range(num_zones):
+                if total_duration >= target_duration:
                     break
+                bucket = zone_buckets[zone_idx]
+                while bucket_indices[zone_idx] < len(bucket):
+                    segment = bucket[bucket_indices[zone_idx]]
+                    bucket_indices[zone_idx] += 1
 
-            if has_overlap:
-                skipped_overlap += 1
-                continue
+                    # Verificam overlap temporal
+                    has_overlap = any(
+                        not (segment.end_time <= sel.start_time or segment.start_time >= sel.end_time)
+                        for sel in selected
+                    )
+                    if has_overlap:
+                        skipped_overlap += 1
+                        continue
 
-            # Verificam similaritate vizuala
-            is_duplicate = False
-            for sel in selected:
-                if segment.is_visually_similar(sel, threshold=similarity_threshold):
-                    is_duplicate = True
-                    skipped_duplicates += 1
-                    break
+                    # Verificam similaritate vizuala
+                    is_duplicate = False
+                    for sel in selected:
+                        if segment.is_visually_similar(sel, threshold=similarity_threshold):
+                            is_duplicate = True
+                            skipped_duplicates += 1
+                            break
+                    if is_duplicate:
+                        continue
 
-            if not is_duplicate:
-                selected.append(segment)
-                total_duration += segment.duration
+                    selected.append(segment)
+                    total_duration += segment.duration
+                    segments_added = True
+                    break  # Trecem la următorul bucket
 
         # Sortam cronologic
         selected.sort(key=lambda s: s.start_time)
