@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-01T12:31:35.598Z"
+last_updated: "2026-03-01T12:35:01.695Z"
 progress:
   total_phases: 19
-  completed_phases: 18
+  completed_phases: 19
   total_plans: 53
-  completed_plans: 52
+  completed_plans: 53
 ---
 
 # Project State
@@ -18,14 +18,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-01)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** v10 Desktop Launcher & Distribution — Phase 49: Desktop API Routes
+**Current focus:** v10 Desktop Launcher & Distribution — Phase 49: Desktop API Routes (complete)
 
 ## Current Position
 
-Phase: 49 of 52 (Desktop API Routes)
-Plan: 49-01 complete (1 of 2 plans done)
-Status: In progress
-Last activity: 2026-03-01 — Plan 49-01 complete (LicenseService + Desktop API Routes)
+Phase: 49 of 52 (Desktop API Routes) — COMPLETE
+Plan: 49-02 complete (2 of 2 plans done)
+Status: Phase 49 complete, ready for Phase 50
+Last activity: 2026-03-01 — Plan 49-02 complete (Frontend Version Display)
 
 Progress: [██░░░░░░░░] 33% (2 of 6 v10 phases complete)
 
@@ -49,6 +49,7 @@ Progress: [██░░░░░░░░] 33% (2 of 6 v10 phases complete)
 | v8 Pipeline UX | 5 (38-42) | 8 | Shipped 2026-02-24 |
 | v9 Assembly Fix + Overlays | 4 (43-46) | 6 | Shipped 2026-02-28 |
 | v10 Desktop Launcher | 6 (47-52) | 5+ | In progress (2/6 phases) |
+| Phase 49 P49-02 | 2 | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 49]: 404 for not-activated (wizard redirect), 403 for invalid/expired (re-activation) — Phase 50 frontend uses this distinction
 - [Phase 49]: Conditional desktop router import inside if settings.desktop_mode block — avoids loading in web deployments
 - [Phase 49]: Grace period strictly network errors only (ConnectError/TimeoutException/NetworkError) — LS valid=false does not trigger grace period
+- [Phase 49-02]: Chain .json() parse on apiGetWithRetry response before extracting version — apiGetWithRetry returns Response not parsed data
+- [Phase 49-02]: Version display JSX gated on appVersion truthy (null when not in desktop mode or API failed) — no duplicate NEXT_PUBLIC_DESKTOP_MODE check needed in JSX
 
 ### Pending Todos
 
@@ -94,9 +97,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Completed 49-01-PLAN.md — LicenseService + Desktop API Routes (4 tasks, 4 files)
+Stopped at: Completed 49-02-PLAN.md — Frontend Version Display (1 task, 1 file)
 Resume file: None
-Next action: Execute plan 49-02 (or /gsd:plan-phase 49 if no plan yet)
+Next action: Execute Phase 50 (Setup Wizard)
 
 ---
-*Last updated: 2026-03-01 after Plan 49-01 execution (LicenseService + Desktop API Routes — LICS-01/02/03/04 + UPDT-05 satisfied)*
+*Last updated: 2026-03-01 after Plan 49-02 execution (Frontend Version Display — UPDT-06 satisfied)*

@@ -52,7 +52,7 @@ Requirements for v10 Desktop Launcher & Distribution. Each maps to roadmap phase
 - [ ] **UPDT-03**: Sentry crash reporting initialized only when user has opted in
 - [ ] **UPDT-04**: before_send filter scrubs API keys from Sentry stack frame locals
 - [x] **UPDT-05**: Backend GET /api/v1/desktop/version returns current version number
-- [ ] **UPDT-06**: Version displayed in Settings page footer
+- [x] **UPDT-06**: Version displayed in Settings page footer
 
 ## Future Requirements
 
@@ -117,7 +117,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UPDT-03 | Phase 51 | Pending |
 | UPDT-04 | Phase 51 | Pending |
 | UPDT-05 | Phase 49 | Complete |
-| UPDT-06 | Phase 49 | Pending |
+| UPDT-06 | Phase 49 | Complete |
 
 **Coverage:**
 - v10 requirements: 29 total
