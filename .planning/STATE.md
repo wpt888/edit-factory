@@ -23,11 +23,11 @@ See: .planning/PROJECT.md (updated 2026-03-01)
 ## Current Position
 
 Phase: 53 of 53 (Cross-Phase Integration Wiring)
-Plan: 2 of 2 executed (53-02 complete)
-Status: In Progress — gap closure plans executing
-Last activity: 2026-03-01 — 53-02 complete: settings cache invalidation + AppData .env persistence added to desktop_routes.py
+Plan: 3 of 3 executed (53-01, 53-02 complete — all gap closure plans done)
+Status: In Progress — all 3 gap closure plans executed, awaiting milestone ship confirmation
+Last activity: 2026-03-01 — 53-01 complete: Electron env wiring (NEXT_PUBLIC_DESKTOP_MODE + RESOURCES_PATH + FFmpeg path from RESOURCES_PATH)
 
-Progress: [█████████░] 92% (6 of 7 v10 phases complete, 1 gap closure phase pending)
+Progress: [█████████░] 97% (all 3 phase 53 gap closure plans complete)
 
 ## Performance Metrics
 
@@ -94,6 +94,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 52]: isDev guard in setupAutoUpdater() — checkForUpdates() never called in dev mode (no app-update.yml exists)
 - [Phase 52]: NSIS installer config with five extraResources bundles all runtime deps; electron-updater added as runtime (not dev) dep; FFmpeg excludes ffplay.exe (194 MB unused); portable Node 22.22.0 downloaded by build script
 - [Phase 53-02]: _write_env_keys skips None/empty strings to avoid overwriting existing .env values; set_crash_reporting_toggle NOT given cache_clear (crash reporter uses its own runtime flag); get_settings() called immediately after cache_clear() to warm new singleton
+- [Phase 53-01]: RESOURCES_PATH injected only in packaged mode (isDev guard) — dev mode resourcesPath is wrong path; frontend/.env.production negation added to gitignore (NEXT_PUBLIC_* are not secrets); AppData FFmpeg fallback retained for backwards compat
 
 ### Pending Todos
 
@@ -112,9 +113,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Completed 53-02-PLAN.md — Settings cache invalidation and AppData .env persistence
+Stopped at: Completed 53-01-PLAN.md — Electron env wiring (NEXT_PUBLIC_DESKTOP_MODE + RESOURCES_PATH + FFmpeg path)
 Resume file: None
-Next action: Execute remaining 53 gap closure plans (53-03 if exists) or ship v10 milestone
+Next action: All phase 53 gap closure plans complete — ship v10 milestone
 
 ---
-*Last updated: 2026-03-01 after 53-02 execution complete*
+*Last updated: 2026-03-01 after 53-01 execution complete (all Phase 53 plans done)*
