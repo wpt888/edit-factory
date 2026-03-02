@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v11
-milestone_name: Production Polish & Platform Hardening
-status: in_progress
-last_updated: "2026-03-02"
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-03-02T23:35:45.009Z"
 progress:
-  total_phases: 8
-  completed_phases: 5
-  total_plans: 14
-  completed_plans: 14
+  total_phases: 30
+  completed_phases: 29
+  total_plans: 78
+  completed_plans: 77
 ---
 
 # Project State
@@ -22,10 +22,10 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 
 ## Current Position
 
-Phase: 60 of 62 (not started)
-Plan: 0 of TBD in phase 60
-Status: Phase 59 complete — starting Phase 60
-Last activity: 2026-03-02 — Phase 59 Performance Optimization executed and verified (3/3 plans, 12/12 must-haves)
+Phase: 60 of 62 (in progress)
+Plan: 2 of TBD in phase 60
+Status: Phase 60 plans 60-01 and 60-02 complete
+Last activity: 2026-03-03 — Phase 60-02 Failed Render Cleanup & Output TTL executed (2/2 tasks, MON-03 and MON-04 complete)
 
 Progress: [██████░░░░] 63% (v11: 5/8 phases complete)
 
@@ -55,6 +55,7 @@ Progress: [██████░░░░] 63% (v11: 5/8 phases complete)
 | Phase 59 P59-02 | 15 | 2 tasks | 3 files |
 | Phase 59 P03 | 15 | 3 tasks | 4 files |
 | Phase 59 P59-01 | 20 | 2 tasks | 2 files |
+| Phase 60 P60-02 | 12 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -98,6 +99,8 @@ Recent decisions affecting v11:
 - [Phase 59]: useJobPolling hook preserves identical external interface — all consumers work without code changes
 - [Phase 59]: Cursor pagination uses created_at ISO timestamp as cursor key; .lt() filter on data query only, total count query is cursor-free
 - [Phase 59-01]: IntersectionObserver sentinel pattern for infinite scroll; hasMore resets on fresh load to prevent stale state
+- [Phase 60]: render_succeeded flag (not status check) determines whether to clean partial output in finally block
+- [Phase 60]: Output TTL cleanup targets output/finals/ and output/tts/ only — raw clips never touched; OUTPUT_TTL_HOURS=0 disables startup cleanup
 
 ### Pending Todos
 
@@ -114,10 +117,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-02
-Stopped at: Phase 59 complete — Cursor pagination, profile/TTS caching, SSE job progress
+Last session: 2026-03-03
+Stopped at: Completed 60-02-PLAN.md — Failed Render Cleanup & Output TTL
 Resume file: None
-Next action: Plan Phase 60 (Monitoring & Observability — Sentry, health checks, failed render cleanup, file TTL)
+Next action: Continue Phase 60 plans (60-03 and beyond)
 
 ---
-*Last updated: 2026-03-02 after Phase 59-01 completion*
+*Last updated: 2026-03-03 after Phase 60-02 completion*

@@ -30,8 +30,8 @@ Requirements for Production Polish & Platform Hardening. Each maps to roadmap ph
 
 - [ ] **MON-01**: Sentry DSN is configured and crash reporting sends real error events in production
 - [ ] **MON-02**: /health endpoint checks Supabase database connectivity alongside FFmpeg and Redis
-- [ ] **MON-03**: Failed renders automatically clean up partial output files
-- [ ] **MON-04**: Output directory has automatic TTL-based cleanup for orphaned intermediate files
+- [x] **MON-03**: Failed renders automatically clean up partial output files
+- [x] **MON-04**: Output directory has automatic TTL-based cleanup for orphaned intermediate files
 
 ### UX
 
@@ -108,8 +108,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DEVOPS-03 | Phase 57 | Complete |
 | MON-01 | Phase 60 | Pending |
 | MON-02 | Phase 60 | Pending |
-| MON-03 | Phase 60 | Pending |
-| MON-04 | Phase 60 | Pending |
+| MON-03 | Phase 60 | Complete |
+| MON-04 | Phase 60 | Complete |
 | UX-01 | Phase 61 | Pending |
 | UX-02 | Phase 61 | Pending |
 | UX-03 | Phase 61 | Pending |
