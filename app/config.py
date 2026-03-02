@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     # Desktop mode
     desktop_mode: bool = False  # Set to True when running as Electron desktop app
 
+    # File storage backend: "local" (default) or "supabase"
+    file_storage_backend: str = "local"
+
     model_config = SettingsConfigDict(
         env_file=None,  # Disable default; controlled in settings_customise_sources
         env_file_encoding="utf-8",
