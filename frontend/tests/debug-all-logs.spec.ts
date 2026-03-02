@@ -35,8 +35,8 @@ test('Debug ALL console logs', async ({ page }) => {
 
   // Also check if projectSegments length by evaluating in page context
   const segmentCount = await page.evaluate(() => {
-    // @ts-expect-error -- accessing Next.js internal data for debug
-    return window.__NEXT_DATA__?.props?.pageProps?.projectSegments?.length || 'N/A';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (window as any).__NEXT_DATA__?.props?.pageProps?.projectSegments?.length || 'N/A';
   });
   console.log(`Segment count from page: ${segmentCount}`);
 
