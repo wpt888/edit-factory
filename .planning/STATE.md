@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v11
-milestone_name: Production Polish & Platform Hardening
-status: in_progress
-last_updated: "2026-03-02"
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-03-02T10:57:45.566Z"
 progress:
-  total_phases: 8
-  completed_phases: 2
-  total_plans: 6
-  completed_plans: 6
+  total_phases: 27
+  completed_phases: 26
+  total_plans: 70
+  completed_plans: 69
 ---
 
 # Project State
@@ -22,12 +22,12 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 
 ## Current Position
 
-Phase: 57 of 62 (next phase)
-Plan: 0 of ? in next phase
-Status: Phase 56 complete
-Last activity: 2026-03-02 — Phase 56-03 complete (15 Playwright E2E tests: library, pipeline, product-video workflows with API response assertions)
+Phase: 57 of 62 (in progress)
+Plan: 1 of 2 complete in phase 57
+Status: Phase 57 plan 01 complete
+Last activity: 2026-03-02 — Phase 57-01 complete (dependency pinning 41== pins + git-tag versioning via app/version.py)
 
-Progress: [███░░░░░░░] 25% (v11: 2/8 phases complete, phase 56 complete 3/3 plans)
+Progress: [███░░░░░░░] 25% (v11: 2/8 phases complete, phase 57 in progress 1/2 plans)
 
 ## Performance Metrics
 
@@ -51,6 +51,7 @@ Progress: [███░░░░░░░] 25% (v11: 2/8 phases complete, phase 
 | v10 Desktop Launcher | 8 (47-54) | 18 | Shipped 2026-03-01 |
 | v11 Production Polish | 8 (55-62) | 5+ | In Progress |
 | Phase 56 P01 | 45 | 3 tasks | 6 files |
+| Phase 57-devops-ci P01 | 15 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,9 @@ Recent decisions affecting v11:
 - [Phase 56-03]: Library page is at /librarie (Romanian spelling) not /library — E2E tests navigate to correct route
 - [Phase 56-03]: product-video page uses query params only, no on-mount API calls — /products page used for API assertion tests in product video workflow
 - [Phase 56-03]: Graceful degradation assertions use expect([200, 503]).toContain() for Supabase-dependent endpoints
+- [Phase 57-devops-ci]: get_version() uses lru_cache so git is called only once per process — no repeated subprocess calls
+- [Phase 57-devops-ci]: APP_VERSION stays module-level in config.py (not inside Settings) — backward-compatible for all importers
+- [Phase 57-devops-ci]: Uninstalled optional packages pinned to minimum declared range version
 
 ### Pending Todos
 
@@ -91,9 +95,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-02
-Stopped at: Phase 56 complete — all 3 plans executed, verification passed (2 architectural limitations noted)
+Stopped at: Phase 57-01 complete — dependency pinning and git-tag versioning done
 Resume file: None
-Next action: `/gsd:plan-phase 57`
+Next action: Execute 57-02 (CI pipeline)
 
 ---
 *Last updated: 2026-03-02 after Phase 56 completion*
