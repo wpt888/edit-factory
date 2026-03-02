@@ -144,7 +144,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 
 **Milestone Goal:** Comprehensive quality upgrade — fix security gaps, add real tests, improve UX with inline previews and modern dialogs, optimize performance with pagination and SSE, and harden architecture with durable job queues and persistent state.
 
-- [ ] **Phase 55: Security Hardening** - Enable RLS, per-route rate limits, MIME validation, input sanitization
+- [x] **Phase 55: Security Hardening** - Enable RLS, per-route rate limits, MIME validation, input sanitization (completed 2026-03-02)
 - [ ] **Phase 56: Testing Foundation** - Pytest unit/integration tests plus Playwright E2E with assertions
 - [ ] **Phase 57: DevOps & CI** - GitHub Actions pipeline, pinned dependencies, git-tag versioning
 - [ ] **Phase 58: Architecture Upgrade** - Redis job queue, persistent pipeline/assembly state, cloud storage support
@@ -257,7 +257,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 | 38-42 | v8 | 8/8 | Complete | 2026-02-24 |
 | 43-46 | v9 | 6/6 | Complete | 2026-02-28 |
 | 47-54 | v10 | 18/18 | Complete | 2026-03-01 |
-| 55. Security Hardening | 2/3 | In Progress|  | - |
+| 55. Security Hardening | 3/3 | Complete   | 2026-03-02 | - |
 | 56. Testing Foundation | v11 | 0/TBD | Not started | - |
 | 57. DevOps & CI | v11 | 0/TBD | Not started | - |
 | 58. Architecture Upgrade | v11 | 0/TBD | Not started | - |

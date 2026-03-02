@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-02T09:33:41.528Z"
+last_updated: "2026-03-02T09:37:18.818Z"
 progress:
   total_phases: 25
-  completed_phases: 24
+  completed_phases: 25
   total_plans: 65
-  completed_plans: 64
+  completed_plans: 65
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** Phase 55 — Security Hardening (v11, plan 1 of 3 complete)
+**Current focus:** Phase 55 — Security Hardening (v11, plans 1-2 of 3 complete)
 
 ## Current Position
 
 Phase: 55 of 62 (Security Hardening)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: In Progress
-Last activity: 2026-03-02 — 55-01 complete: RLS re-enabled on 13 editai_* tables with service_role bypass
+Last activity: 2026-03-02 — 55-02 complete: per-route rate limits + python-magic MIME validation on all upload endpoints
 
-Progress: [█░░░░░░░░░] ~4% (v11: 1/3 plans in phase 55)
+Progress: [██░░░░░░░░] ~8% (v11: 2/3 plans in phase 55)
 
 ## Performance Metrics
 
@@ -50,7 +50,6 @@ Progress: [█░░░░░░░░░] ~4% (v11: 1/3 plans in phase 55)
 | v9 Assembly Fix + Overlays | 4 (43-46) | 6 | Shipped 2026-02-28 |
 | v10 Desktop Launcher | 8 (47-54) | 18 | Shipped 2026-03-01 |
 | v11 Production Polish | 8 (55-62) | TBD | In Progress |
-| Phase 55 P03 | 223 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -65,6 +64,8 @@ Recent decisions affecting v11:
 - 55-01: editai_export_presets is global (no profile_id) — authenticated users get SELECT-only, backend manages via service_role
 - 55-01: RLS bypass uses TO service_role role (not auth.jwt() check) — semantically correct Supabase pattern
 - [Phase 55]: SRT sanitization at write-layer: escape only backslashes and curly braces in SRT file content (apostrophes/colons/brackets safe inside SRT files)
+- [Phase 55]: Shared rate limiter in app/rate_limit.py avoids circular imports from main.py
+- [Phase 55]: validate_file_mime_type uses python-magic with graceful degradation on ImportError
 
 ### Pending Todos
 
@@ -82,9 +83,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-02
-Stopped at: 55-01 complete — RLS migration, db.py warning, .env.example updated
+Stopped at: 55-02 complete — per-route rate limits + python-magic MIME validation
 Resume file: None
-Next action: Execute 55-02 (rate limiting) and 55-03 (input validation) — wave 1 parallel
+Next action: Execute 55-03 (input validation hardening) to complete phase 55
 
 ---
-*Last updated: 2026-03-02 after 55-01 completion*
+*Last updated: 2026-03-02 after 55-02 completion*
