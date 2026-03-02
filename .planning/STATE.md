@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-02T11:29:45.306Z"
+last_updated: "2026-03-02T11:30:27.455Z"
 progress:
   total_phases: 28
-  completed_phases: 27
+  completed_phases: 28
   total_plans: 73
-  completed_plans: 72
+  completed_plans: 73
 ---
 
 # Project State
@@ -22,10 +22,10 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 
 ## Current Position
 
-Phase: 58 of 62 (planning)
-Plan: 0 of TBD in phase 58
-Status: Planning Phase 58 — Architecture Upgrade
-Last activity: 2026-03-02 — Starting Phase 58 planning (Redis not installed in WSL — plan must use graceful degradation)
+Phase: 58 of 62 (in progress)
+Plan: 1 of 3 in phase 58 — 58-01 complete
+Status: Executing Phase 58 — Architecture Upgrade
+Last activity: 2026-03-02 — Completed 58-01: Durable Job Progress & Pipeline State Persistence (Supabase-backed progress tracking + crash recovery)
 
 Progress: [████░░░░░░] 37% (v11: 3/8 phases complete)
 
@@ -51,6 +51,7 @@ Progress: [████░░░░░░] 37% (v11: 3/8 phases complete)
 | v10 Desktop Launcher | 8 (47-54) | 18 | Shipped 2026-03-01 |
 | v11 Production Polish | 8 (55-62) | 8+ | In Progress |
 | Phase 58 P58-03 | 2 | 2 tasks | 2 files |
+| Phase 58 P02 | 3 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,9 @@ Recent decisions affecting v11:
 - [Phase 57-02]: Playwright E2E tests excluded from CI — require running dev server and Supabase
 - [Phase 58]: Assembly jobs dual-write to both JobStorage and legacy editai_assembly_jobs table — no data loss during transition
 - [Phase 58]: JobStorage-first read in get_assembly_status checks job_type='assembly' before using the hit — prevents false positives
+- [58-01]: get_jobs_by_project uses Supabase JSONB field query (data->>project_id) — no O(N) scan
+- [58-01]: cleanup_stale_jobs adds time-based filter (>10 min) complementing existing _recover_stuck_jobs (all processing jobs)
+- [58-01]: No Redis — Supabase + in-memory fallback provides equivalent durability per user decision
 
 ### Pending Todos
 
@@ -99,9 +103,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-02
-Stopped at: Phase 57 complete — CI pipeline workflow and typecheck script done
+Stopped at: Phase 58 Plan 01 complete — Durable job progress and crash recovery done
 Resume file: None
-Next action: Plan Phase 58 (Architecture — Redis job queue, verify redis-server available in WSL first)
+Next action: Execute remaining Phase 58 plans (58-02, 58-03 if any)
 
 ---
 *Last updated: 2026-03-02 after Phase 57 completion*

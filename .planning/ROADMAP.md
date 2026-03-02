@@ -147,7 +147,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 - [x] **Phase 55: Security Hardening** - Enable RLS, per-route rate limits, MIME validation, input sanitization (completed 2026-03-02)
 - [x] **Phase 56: Testing Foundation** - Pytest unit/integration tests plus Playwright E2E with assertions (completed 2026-03-02)
 - [x] **Phase 57: DevOps & CI** - GitHub Actions pipeline, pinned dependencies, git-tag versioning (completed 2026-03-02)
-- [ ] **Phase 58: Architecture Upgrade** - Redis job queue, persistent pipeline/assembly state, cloud storage support
+- [x] **Phase 58: Architecture Upgrade** - Redis job queue, persistent pipeline/assembly state, cloud storage support (completed 2026-03-02)
 - [ ] **Phase 59: Performance Optimization** - Cursor pagination, SSE job progress, profile caching, TTS cache metrics
 - [ ] **Phase 60: Monitoring & Observability** - Sentry, extended health checks, failed render cleanup, file TTL
 - [ ] **Phase 61: UX Polish — Interactions** - Inline video player, AlertDialogs, soft-delete trash, drag-drop upload, keyboard shortcuts, hover preview
@@ -284,7 +284,7 @@ Plans:
 | 55. Security Hardening | 3/3 | Complete    | 2026-03-02 | - |
 | 56. Testing Foundation | 3/3 | Complete    | 2026-03-02 | - |
 | 57. DevOps & CI | 2/2 | Complete    | 2026-03-02 | - |
-| 58. Architecture Upgrade | 2/3 | In Progress|  | - |
+| 58. Architecture Upgrade | 3/3 | Complete   | 2026-03-02 | - |
 | 59. Performance Optimization | v11 | 0/TBD | Not started | - |
 | 60. Monitoring & Observability | v11 | 0/TBD | Not started | - |
 | 61. UX Polish — Interactions | v11 | 0/TBD | Not started | - |
