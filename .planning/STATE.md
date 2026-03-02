@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-02T11:57:05.522Z"
+last_updated: "2026-03-02T11:59:24.019Z"
 progress:
   total_phases: 29
-  completed_phases: 28
+  completed_phases: 29
   total_plans: 76
-  completed_plans: 75
+  completed_plans: 76
 ---
 
 # Project State
@@ -54,6 +54,7 @@ Progress: [█████░░░░░] 50% (v11: 4/8 phases complete)
 | Phase 58 P02 | 3 | 2 tasks | 4 files |
 | Phase 59 P59-02 | 15 | 2 tasks | 3 files |
 | Phase 59 P03 | 15 | 3 tasks | 4 files |
+| Phase 59 P59-01 | 20 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -95,6 +96,8 @@ Recent decisions affecting v11:
 - [Phase 59]: TTS LRU eviction uses st_atime; GET /tts/cache/stats placed before /tts/{job_id} to prevent route conflict
 - [Phase 59]: SSE endpoint has no auth — EventSource cannot send custom headers; job IDs are unguessable UUIDs
 - [Phase 59]: useJobPolling hook preserves identical external interface — all consumers work without code changes
+- [Phase 59]: Cursor pagination uses created_at ISO timestamp as cursor key; .lt() filter on data query only, total count query is cursor-free
+- [Phase 59-01]: IntersectionObserver sentinel pattern for infinite scroll; hasMore resets on fresh load to prevent stale state
 
 ### Pending Todos
 
@@ -112,9 +115,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-02
-Stopped at: Phase 58 complete — Durable jobs, file storage abstraction, unified assembly jobs
+Stopped at: Completed 59-01: Cursor Pagination & Infinite Scroll
 Resume file: None
-Next action: Plan Phase 59 (Performance Optimization — cursor pagination, SSE, profile caching, TTS cache)
+Next action: Execute 59-02 (Profile Context Caching) or 59-03 (SSE Job Progress)
 
 ---
-*Last updated: 2026-03-02 after Phase 57 completion*
+*Last updated: 2026-03-02 after Phase 59-01 completion*
