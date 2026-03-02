@@ -1048,3 +1048,31 @@
 - Learnings: All 3 parallel executors completed successfully. gsd-tools phase-complete still corrupts STATE.md frontmatter — manually fixed (29/29 phases → 5/8 correct). Verifier flagged human_needed but set status: passed (12/12 automated checks pass).
 - Status: PHASE COMPLETE — Phase 59 done, next is Phase 60 (Monitoring & Observability)
 - Commits: 0049ea9, 626349e, 94e6546 (59-01), 896c6a9, 6277b4f, 946939b (59-02), c0a468b, b3f53ca, 9b5ed10, f8e2f32 (59-03), 10aa7a2 (docs)
+
+## Iteration - 2026-03-02 (Phase 60 Planning)
+- Phase: 60 (Monitoring & Observability)
+- Action: Planned Phase 60 — 2 plans in 1 wave (parallel), verification passed first try
+- Plans:
+  - 60-01 (Wave 1): Sentry Integration & Extended Health Check (MON-01, MON-02) — 2 tasks, 5 files
+  - 60-02 (Wave 1): Failed Render Cleanup & Output TTL (MON-03, MON-04) — 2 tasks, 4 files
+- Files changed: .planning/phases/60-monitoring-observability/60-01-PLAN.md, 60-02-PLAN.md
+- Decisions made:
+  - SENTRY_DSN env var enables Sentry for all modes (not just desktop)
+  - Health status "ok" requires Supabase + FFmpeg up; Redis optional
+  - Supabase health ping uses zero-data-transfer count query
+  - render_succeeded flag pattern for partial output cleanup
+  - OUTPUT_TTL_HOURS env var (default 72h), targets output/finals/ and output/tts/ only
+- Learnings: Research was disabled per config, planner produced solid plans without it. All 4 requirements covered. Verification passed first iteration.
+- Status: PHASE_STEP_DONE — plans ready, next step is /gsd:execute-phase 60
+
+## Iteration - 2026-03-03 (Phase 60 Execution)
+- Phase: 60 (Monitoring & Observability)
+- Action: Executed all 2 plans in 1 wave (parallel), verified phase goal (9/9 must-haves)
+- Wave 1: Plans 60-01 + 60-02 in parallel
+  - 60-01: Sentry SDK integration with SENTRY_DSN env var for all modes + extended /health endpoint with per-dependency status (Supabase, FFmpeg, Redis). 3 commits.
+  - 60-02: Failed render cleanup via render_succeeded flag pattern + TTL-based output cleanup (default 72h) with POST /maintenance/cleanup-output endpoint and startup auto-run. 3 commits.
+- Files changed: app/config.py, app/main.py, app/models.py, app/api/routes.py, app/api/library_routes.py, requirements.txt
+- Decisions made: SENTRY_DSN enables Sentry for all modes (not desktop-only). Health status: ok=Supabase+FFmpeg up, Redis optional. render_succeeded flag (not status check) for cleanup. OUTPUT_TTL_HOURS=0 disables startup cleanup.
+- Learnings: Both parallel executors completed cleanly. gsd-tools phase-complete still reports is_last_phase:true incorrectly — manual STATE.md fixup needed (v11 milestone 6/8 phases). Verification passed 9/9 automated checks with human_needed for live integration testing.
+- Status: PHASE COMPLETE — Phase 60 done, next is Phase 61 (UX Polish — Interactions)
+- Commits: 80d04bc, 972b15f, 79e8970 (60-01), 0a19381, d847217, a9e855e (60-02), 891c9b1 (docs)
