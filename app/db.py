@@ -25,7 +25,14 @@ def get_supabase():
                             httpx_client=_httpx_client,
                         )
                         _supabase_client = create_client(settings.supabase_url, key, options)
-                        logger.info("Shared Supabase client initialized")
+                        if settings.supabase_service_role_key:
+                            logger.info("Shared Supabase client initialized (service_role key)")
+                        else:
+                            logger.warning(
+                                "SUPABASE_SERVICE_ROLE_KEY not set — RLS may block backend operations. "
+                                "Set it in .env for production."
+                            )
+                            logger.info("Shared Supabase client initialized (anon key — RLS bypass inactive)")
                     else:
                         logger.warning("Supabase credentials not configured")
                 except Exception as e:
