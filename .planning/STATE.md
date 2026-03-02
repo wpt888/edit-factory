@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v11
-milestone_name: Production Polish & Platform Hardening
-status: in_progress
-last_updated: "2026-03-02"
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-03-02T11:55:23.605Z"
 progress:
-  total_phases: 8
-  completed_phases: 4
-  total_plans: 11
-  completed_plans: 11
+  total_phases: 29
+  completed_phases: 28
+  total_plans: 76
+  completed_plans: 74
 ---
 
 # Project State
@@ -22,10 +22,10 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 
 ## Current Position
 
-Phase: 59 of 62 (not started)
-Plan: 0 of TBD in phase 59
-Status: Phase 58 complete — starting Phase 59
-Last activity: 2026-03-02 — Phase 58 Architecture Upgrade executed and verified (3/3 plans, 9/9 must-haves)
+Phase: 59 of 62 (in progress)
+Plan: 2 of 3 in phase 59
+Status: Phase 59 plan 59-02 complete — profile cache TTL and TTS cache metrics done
+Last activity: 2026-03-02 — 59-02 Profile Cache TTL & TTS Cache Metrics (2 tasks, 3 files)
 
 Progress: [█████░░░░░] 50% (v11: 4/8 phases complete)
 
@@ -52,6 +52,7 @@ Progress: [█████░░░░░] 50% (v11: 4/8 phases complete)
 | v11 Production Polish | 8 (55-62) | 8+ | In Progress |
 | Phase 58 P58-03 | 2 | 2 tasks | 2 files |
 | Phase 58 P02 | 3 | 2 tasks | 4 files |
+| Phase 59 P59-02 | 15 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -89,6 +90,8 @@ Recent decisions affecting v11:
 - [Phase 58]: FileStorage abstraction covers output files only — FFmpeg input/temp files stay local always
 - [Phase 58]: SupabaseFileStorage uses 500MB OOM guard and falls back to LocalFileStorage on init or upload failure
 - [Phase 58]: get_file_storage() uses lru_cache singleton — backend determined by FILE_STORAGE_BACKEND env var (default: local)
+- [Phase 59]: Profile cache uses (user_id, profile_id_or_'default') key with 60s TTL; error states and fallback placeholder never cached
+- [Phase 59]: TTS LRU eviction uses st_atime; GET /tts/cache/stats placed before /tts/{job_id} to prevent route conflict
 
 ### Pending Todos
 

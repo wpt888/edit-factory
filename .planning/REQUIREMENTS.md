@@ -49,8 +49,8 @@ Requirements for Production Polish & Platform Hardening. Each maps to roadmap ph
 
 - [ ] **PERF-01**: Library clips endpoint supports cursor-based pagination (50 clips per page with infinite scroll)
 - [ ] **PERF-02**: Job progress updates use Server-Sent Events (SSE) instead of HTTP polling
-- [ ] **PERF-03**: Profile context is cached with 60-second TTL to reduce per-request Supabase queries
-- [ ] **PERF-04**: TTS cache exposes hit/miss metrics and has configurable maximum size with LRU eviction
+- [x] **PERF-03**: Profile context is cached with 60-second TTL to reduce per-request Supabase queries
+- [x] **PERF-04**: TTS cache exposes hit/miss metrics and has configurable maximum size with LRU eviction
 
 ### Architecture
 
@@ -121,8 +121,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UX-09 | Phase 62 | Pending |
 | PERF-01 | Phase 59 | Pending |
 | PERF-02 | Phase 59 | Pending |
-| PERF-03 | Phase 59 | Pending |
-| PERF-04 | Phase 59 | Pending |
+| PERF-03 | Phase 59 | Complete |
+| PERF-04 | Phase 59 | Complete |
 | ARCH-01 | Phase 58 | Complete |
 | ARCH-02 | Phase 58 | Complete |
 | ARCH-03 | Phase 58 | Complete |
