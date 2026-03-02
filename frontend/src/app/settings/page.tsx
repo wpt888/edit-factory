@@ -250,11 +250,11 @@ export default function SettingsPage() {
     if (process.env.NEXT_PUBLIC_DESKTOP_MODE !== 'true') return
     apiGetWithRetry('/desktop/version')
       .then((res) => res.json())
-      .then((data: any) => setAppVersion(data.version))
+      .then((data: { version: string }) => setAppVersion(data.version))
       .catch(() => {}) // Non-critical — silently ignore errors
     apiGetWithRetry('/desktop/settings')
       .then((res) => res.json())
-      .then((data: any) => setCrashReporting(data.crash_reporting_enabled ?? false))
+      .then((data: { crash_reporting_enabled?: boolean }) => setCrashReporting(data.crash_reporting_enabled ?? false))
       .catch(() => {}) // Non-critical — silently ignore errors
   }, [])
 

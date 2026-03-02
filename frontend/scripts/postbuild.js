@@ -1,8 +1,8 @@
 // frontend/scripts/postbuild.js
 // Copies static assets into Next.js standalone output.
 // Required for standalone server.js to serve CSS, JS, and public files.
-const fs = require('fs');
-const path = require('path');
+const fs = require('fs'); // eslint-disable-line @typescript-eslint/no-require-imports
+const path = require('path'); // eslint-disable-line @typescript-eslint/no-require-imports
 
 function copyDir(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
