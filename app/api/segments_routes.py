@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
+from app.api.validators import validate_file_mime_type, ALLOWED_VIDEO_MIMES
 from app.utils import sanitize_filename as _sanitize_filename
 from app.rate_limit import limiter
 
@@ -319,6 +320,8 @@ async def upload_source_video(
     # Reject oversized uploads before saving (STAB-05)
     from app.api.validators import validate_upload_size
     await validate_upload_size(video)
+    # Validate actual MIME type via magic-number inspection (blocks disguised malicious files)
+    await validate_file_mime_type(video, ALLOWED_VIDEO_MIMES, "video")
 
     # Save uploaded file via streaming (avoid loading entire file into memory)
     import shutil as _shutil

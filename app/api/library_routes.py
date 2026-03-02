@@ -20,7 +20,10 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
-from app.api.validators import validate_upload_size, validate_tts_text_length
+from app.api.validators import (
+    validate_upload_size, validate_tts_text_length,
+    validate_file_mime_type, ALLOWED_VIDEO_MIMES,
+)
 from app.rate_limit import limiter
 from app.services.encoding_presets import get_preset, EncodingPreset
 from app.services.audio_normalizer import measure_loudness, build_loudnorm_filter
@@ -644,6 +647,8 @@ async def generate_raw_clips(
     if video and video.filename:
         # Reject oversized uploads before reading the file into memory (STAB-05)
         await validate_upload_size(video)
+        # Validate actual MIME type via magic-number inspection (blocks disguised malicious files)
+        await validate_file_mime_type(video, ALLOWED_VIDEO_MIMES, "video")
 
         # User uploaded a file
         job_id = uuid.uuid4().hex[:12]

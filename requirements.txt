@@ -78,6 +78,9 @@ pydantic-settings>=2.1.0
 tenacity>=8.2.0
 psutil>=5.9.0
 sentry-sdk>=2.0.0
+# MIME type validation via magic-number inspection (not Content-Type header)
+# Requires libmagic system library: apt-get install libmagic1 (Linux) | brew install libmagic (macOS)
+python-magic>=0.4.27
 
 # Subtitle Processing
 srt>=3.5.0

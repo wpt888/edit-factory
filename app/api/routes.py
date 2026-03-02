@@ -15,7 +15,10 @@ from fastapi.responses import FileResponse
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
-from app.api.validators import validate_upload_size, validate_tts_text_length
+from app.api.validators import (
+    validate_upload_size, validate_tts_text_length,
+    validate_file_mime_type, ALLOWED_VIDEO_MIMES, ALLOWED_AUDIO_MIMES, ALLOWED_SUBTITLE_MIMES,
+)
 from app.rate_limit import limiter
 from app.utils import sanitize_filename as _sanitize_filename
 from app.models import (
@@ -275,6 +278,9 @@ async def get_video_info(request: Request, video: UploadFile = File(...)):
     Obtine informatii despre video (rezolutie, durata, fps).
     Folosit pentru preview-ul subtitrarii.
     """
+    # Validate MIME type before processing (blocks disguised malicious files)
+    await validate_file_mime_type(video, ALLOWED_VIDEO_MIMES, "video")
+
     settings = get_settings()
 
     temp_video = settings.input_dir / f"info_{uuid.uuid4().hex[:8]}_{_sanitize_filename(video.filename)}"
@@ -393,6 +399,8 @@ async def create_job(
 
     # Reject oversized uploads before reading into memory (STAB-05)
     await validate_upload_size(video)
+    # Validate actual MIME type via magic-number inspection (blocks disguised malicious files)
+    await validate_file_mime_type(video, ALLOWED_VIDEO_MIMES, "video")
 
     # Salvam fisierele
     video_path = settings.input_dir / f"{job_id}_{_sanitize_filename(video.filename)}"
@@ -402,12 +410,14 @@ async def create_job(
     audio_path = None
     if audio:
         await validate_upload_size(audio)
+        await validate_file_mime_type(audio, ALLOWED_AUDIO_MIMES, "audio")
         audio_path = settings.input_dir / f"{job_id}_{_sanitize_filename(audio.filename)}"
         with open(audio_path, "wb") as f:
             shutil.copyfileobj(audio.file, f)
 
     srt_path = None
     if srt:
+        await validate_file_mime_type(srt, ALLOWED_SUBTITLE_MIMES, "subtitle")
         srt_path = settings.input_dir / f"{job_id}_{_sanitize_filename(srt.filename)}"
         with open(srt_path, "wb") as f:
             shutil.copyfileobj(srt.file, f)

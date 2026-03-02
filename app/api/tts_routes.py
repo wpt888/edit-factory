@@ -11,7 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends, Request
 
 from app.api.auth import ProfileContext, get_profile_context
-from app.api.validators import validate_tts_text_length
+from app.api.validators import validate_tts_text_length, validate_file_mime_type, ALLOWED_AUDIO_MIMES
 from app.rate_limit import limiter
 from app.config import get_settings
 from app.db import get_supabase
@@ -378,20 +378,9 @@ async def clone_voice_endpoint(
     """
     logger.info(f"[Profile {profile.profile_id}] Voice cloning request: {voice_name}")
 
-    # Validate MIME type
-    allowed_types = [
-        "audio/mpeg",  # MP3
-        "audio/wav",
-        "audio/x-wav",
-        "audio/ogg",
-        "audio/mp4"  # M4A
-    ]
-
-    if audio_file.content_type not in allowed_types:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid audio format: {audio_file.content_type}. Allowed: WAV, MP3, OGG, M4A"
-        )
+    # Validate MIME type via magic-number inspection (replaces Content-Type header check
+    # which can be spoofed by clients)
+    await validate_file_mime_type(audio_file, ALLOWED_AUDIO_MIMES, "audio")
 
     # Early Content-Length check before reading into memory
     if audio_file.size and audio_file.size > 10 * 1024 * 1024:
