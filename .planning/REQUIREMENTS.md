@@ -18,7 +18,7 @@ Requirements for Production Polish & Platform Hardening. Each maps to roadmap ph
 
 - [x] **TEST-01**: Backend services have pytest unit tests with >80% coverage on critical paths (video_processor, assembly_service, job_storage, cost_tracker)
 - [x] **TEST-02**: API endpoints have integration tests with mock data and response structure assertions
-- [ ] **TEST-03**: Playwright E2E tests verify actual user workflows with API assertions (not just screenshots)
+- [x] **TEST-03**: Playwright E2E tests verify actual user workflows with API assertions (not just screenshots)
 
 ### DevOps
 
@@ -102,7 +102,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SEC-04 | Phase 55 | Complete |
 | TEST-01 | Phase 56 | Complete |
 | TEST-02 | Phase 56 | Complete |
-| TEST-03 | Phase 56 | Pending |
+| TEST-03 | Phase 56 | Complete |
 | DEVOPS-01 | Phase 57 | Pending |
 | DEVOPS-02 | Phase 57 | Pending |
 | DEVOPS-03 | Phase 57 | Pending |
