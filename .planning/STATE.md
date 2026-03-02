@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v11
 milestone_name: Production Polish & Platform Hardening
-status: roadmap_ready
+status: in_progress
 last_updated: "2026-03-02"
 progress:
   total_phases: 8
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 3
+  completed_plans: 1
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** Phase 55 — Security Hardening (v11, ready to plan)
+**Current focus:** Phase 55 — Security Hardening (v11, plan 1 of 3 complete)
 
 ## Current Position
 
 Phase: 55 of 62 (Security Hardening)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-03-02 — v11 roadmap created, 31 requirements mapped across 8 phases (55-62)
+Plan: 1 of 3 in current phase
+Status: In Progress
+Last activity: 2026-03-02 — 55-01 complete: RLS re-enabled on 13 editai_* tables with service_role bypass
 
-Progress: [░░░░░░░░░░] 0% (v11 not yet started)
+Progress: [█░░░░░░░░░] ~4% (v11: 1/3 plans in phase 55)
 
 ## Performance Metrics
 
@@ -61,6 +61,8 @@ Recent decisions affecting v11:
 - v9: In-memory state for pipeline/assembly marked as tech debt — ARCH-02 in Phase 58 addresses this
 - v6: get_supabase() centralized in db.py — foundation for Phase 55 RLS re-enable
 - v6: slowapi at 60 req/min global — Phase 55 upgrades to per-route limits (uploads: 10/min, renders: 5/min)
+- 55-01: editai_export_presets is global (no profile_id) — authenticated users get SELECT-only, backend manages via service_role
+- 55-01: RLS bypass uses TO service_role role (not auth.jwt() check) — semantically correct Supabase pattern
 
 ### Pending Todos
 
@@ -71,15 +73,16 @@ None.
 - Phase 58 (ARCH-01): Redis job queue requires Redis running in WSL — verify `redis-server` available before planning
 - Phase 59 (PERF-02): SSE replaces polling contract — frontend hooks use-job-polling.ts and use-batch-polling.ts both need updating
 - Phase 62 (UX-04): Language consistency requires a decision — full English recommended; confirm before planning Phase 62
+- Migration 023 requires manual application via Supabase SQL Editor (like 007/009/017/021)
 - Carry-over: DB migrations 007/009/017/021 require manual application via Supabase SQL Editor
 - Carry-over: Dead code pipeline_routes.py lines 1343-1351 (runtime-safe, non-blocking)
 
 ## Session Continuity
 
 Last session: 2026-03-02
-Stopped at: v11 roadmap created — 8 phases, 31 requirements, all mapped
+Stopped at: 55-01 complete — RLS migration, db.py warning, .env.example updated
 Resume file: None
-Next action: `/gsd:plan-phase 55`
+Next action: Execute 55-02 (rate limiting) and 55-03 (input validation) — wave 1 parallel
 
 ---
-*Last updated: 2026-03-02 after v11 roadmap creation*
+*Last updated: 2026-03-02 after 55-01 completion*

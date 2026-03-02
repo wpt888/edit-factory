@@ -257,7 +257,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 | 38-42 | v8 | 8/8 | Complete | 2026-02-24 |
 | 43-46 | v9 | 6/6 | Complete | 2026-02-28 |
 | 47-54 | v10 | 18/18 | Complete | 2026-03-01 |
-| 55. Security Hardening | v11 | 0/TBD | Not started | - |
+| 55. Security Hardening | 1/3 | In Progress|  | - |
 | 56. Testing Foundation | v11 | 0/TBD | Not started | - |
 | 57. DevOps & CI | v11 | 0/TBD | Not started | - |
 | 58. Architecture Upgrade | v11 | 0/TBD | Not started | - |

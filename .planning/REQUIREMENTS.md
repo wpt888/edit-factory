@@ -9,7 +9,7 @@ Requirements for Production Polish & Platform Hardening. Each maps to roadmap ph
 
 ### Security
 
-- [ ] **SEC-01**: User data is isolated via Supabase RLS on all editai_* tables (re-enable RLS, backend uses service_role key)
+- [x] **SEC-01**: User data is isolated via Supabase RLS on all editai_* tables (re-enable RLS, backend uses service_role key)
 - [ ] **SEC-02**: Heavy API endpoints have per-route rate limits (uploads: 10/min, renders: 5/min, TTS: 20/min)
 - [ ] **SEC-03**: File uploads are validated by MIME type server-side (python-magic, not just Content-Type header)
 - [ ] **SEC-04**: Script and context text is sanitized before reaching FFmpeg subtitle rendering
@@ -96,7 +96,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SEC-01 | Phase 55 | Pending |
+| SEC-01 | Phase 55 | Complete |
 | SEC-02 | Phase 55 | Pending |
 | SEC-03 | Phase 55 | Pending |
 | SEC-04 | Phase 55 | Pending |
