@@ -164,7 +164,10 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
   2. Uploading more than 10 files/min to any upload endpoint returns HTTP 429 before any processing begins
   3. Uploading a .exe file renamed as .mp4 is rejected with a clear error — the server detects the actual file type, not just the Content-Type header
   4. A script or context text containing FFmpeg filter special characters (apostrophes, backslashes, colons) renders without errors and appears literally in the subtitle output
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
+- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
 
 ### Phase 56: Testing Foundation
 **Goal**: The test suite provides meaningful confidence in critical backend services and real user workflows — unit tests cover the paths most likely to regress, integration tests catch API contract breaks, and E2E tests verify the workflows users actually run
@@ -174,7 +177,10 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
   1. Running `pytest` with coverage reports >80% line coverage across video_processor, assembly_service, job_storage, and cost_tracker
   2. Running `pytest` on API integration tests verifies response structure (status codes, required fields, error shape) for the upload, render, TTS, and jobs endpoints using mock data — no live Supabase or FFmpeg needed
   3. Running `npx playwright test` executes at least one E2E test per major workflow (library, pipeline, product video) that asserts API responses — not just screenshots
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
+- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
 
 ### Phase 57: DevOps & CI
 **Goal**: Every push to the repository automatically validates the codebase — lint, type-check, and tests run without manual intervention, all dependencies are reproducible from requirements.txt, and the version displayed in the app comes from git tags not hardcoded strings
@@ -185,7 +191,10 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
   2. Opening a pull request triggers a GitHub Actions workflow that runs Next.js lint and type-check — a type error blocks merge
   3. Installing from requirements.txt produces the identical package versions on any machine — no floating version ranges that could break between installs
   4. The version shown in the app footer or /health endpoint matches the current git tag — no manual version bumps needed when tagging a release
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
+- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
 
 ### Phase 58: Architecture Upgrade
 **Goal**: Jobs survive server restarts, pipeline and assembly progress is not lost when the process exits, the job tracking system is consistent across all job types, and file storage can be swapped to S3 or Supabase Storage without rewriting the render pipeline
@@ -196,7 +205,10 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
   2. Creating a pipeline with segments and navigating away, then returning, shows the same pipeline state — in-memory dict loss on restart no longer wipes user work
   3. An assembly job appears in the same job status endpoint as video processing jobs — no separate polling path needed
   4. Setting a FILE_STORAGE_BACKEND environment variable to "supabase" routes file reads and writes through Supabase Storage without changing any render pipeline code
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
+- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
 
 ### Phase 59: Performance Optimization
 **Goal**: The library page loads fast regardless of how many clips exist, job progress arrives instantly without polling overhead, profile data does not trigger a Supabase round-trip on every request, and the TTS cache behaves predictably under load
@@ -207,7 +219,10 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
   2. Starting a render job and watching the progress bar updates in real time without the browser making repeated polling requests — network tab shows a single persistent SSE connection
   3. Making 10 rapid API requests that require profile context hits Supabase at most once during the 60-second TTL window — subsequent requests use cached data
   4. The /api/v1/tts/cache/stats endpoint returns hit count, miss count, current size, and max size — and the cache automatically evicts the least recently used entry when full
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
+- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
 
 ### Phase 60: Monitoring & Observability
 **Goal**: Production errors are captured automatically, the health endpoint reflects the real state of all dependencies, failed renders clean up after themselves, and the output directory does not accumulate unbounded intermediate files
@@ -218,7 +233,10 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
   2. Calling GET /api/v1/health returns a JSON response showing individual status for Supabase, FFmpeg, and Redis — a disconnected Supabase shows "degraded" not "ok"
   3. A render that fails mid-way (e.g., FFmpeg exits non-zero) leaves no partial output files in the output directory — only the input source file remains
   4. Running the cleanup CLI (or automatic scheduler) removes intermediate files older than the configured TTL — the output directory shrinks measurably after cleanup runs
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
+- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
 
 ### Phase 61: UX Polish — Interactions
 **Goal**: Users interact with clips and media through modern, polished controls — watching clips without leaving the page, performing destructive actions with confirmation dialogs, recovering accidentally deleted clips, dragging files to upload, using keyboard shortcuts, and previewing clips on hover
@@ -231,7 +249,10 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
   4. Dragging a video file from Windows Explorer onto the upload area starts the upload — no file picker dialog required
   5. Pressing Delete on a selected clip triggers delete, Escape closes any open dialog or panel, and Space plays/pauses the currently focused video
   6. Hovering over a clip thumbnail for more than 500ms starts a silent looping video preview directly on the card — no click needed
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
+- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
 
 ### Phase 62: UX Polish — Organization
 **Goal**: The app's language is internally consistent, dead marketing pages are removed from the routing tree, and users can tag and categorize clips to find them quickly in a growing library
@@ -241,7 +262,10 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
   1. Every label, button, tooltip, and error message in the UI uses the same language — no mixed Romanian/English strings on any single page
   2. Navigating to /statsai, /preturi, /functionalitati, /cum-functioneaza, /contact, or /testimoniale returns a 404 — these routes no longer exist
   3. A user can add one or more tags to a clip, filter the library by tag, and see only clips with that tag — the tag persists across page reloads
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
+- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
 
 ## Progress
 
