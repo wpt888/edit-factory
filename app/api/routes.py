@@ -564,7 +564,12 @@ async def get_job(job_id: str, profile: ProfileContext = Depends(get_profile_con
         error=job.get("error")
     )
 
-    if job.get("result"):
+    # Assembly-specific fields
+    if job.get("job_type") == "assembly":
+        response.progress = job.get("current_step", job.get("progress", ""))
+        if job.get("final_video_path"):
+            response.result = {"final_video_path": job["final_video_path"]}
+    elif job.get("result"):
         response.result = job["result"]
         if "video_info" in job["result"]:
             response.video_info = VideoInfo(**job["result"]["video_info"])
