@@ -23,6 +23,84 @@ def sanitize_srt_text(srt_content: str) -> str:
     cleaned = re.sub(r'<(?!/?(?:i|b|u|font)\b)[^>]+>', '', cleaned)
     return cleaned
 
+
+def sanitize_srt_for_ffmpeg(srt_content: str) -> str:
+    """Escape special characters in SRT text content for safe FFmpeg/libass rendering.
+
+    Prevents ASS override tag injection and control sequence interpretation
+    in subtitle text. Only processes text lines — SRT structure (timestamps,
+    sequence numbers, blank lines) is preserved.
+
+    Characters escaped:
+    - Backslashes: \\ -> \\\\ (prevents \\N, \\n, \\h interpretation as ASS control sequences)
+    - Curly braces: { -> \\{, } -> \\} (prevents ASS override tags like {\\b1})
+
+    Apostrophes, colons, and square brackets are safe inside SRT file content
+    and do NOT need escaping (the path escaping in video_processor.py handles
+    the FFmpeg filter string, not the SRT file content).
+
+    Args:
+        srt_content: Raw SRT file content
+
+    Returns:
+        SRT content with text lines escaped for FFmpeg/libass
+    """
+    if not srt_content:
+        return srt_content
+
+    lines = srt_content.split('\n')
+    result = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Sequence number (digit-only line)
+        if stripped.isdigit():
+            result.append(line)
+            i += 1
+            continue
+
+        # Timestamp line (contains " --> ")
+        if ' --> ' in stripped:
+            result.append(line)
+            i += 1
+            continue
+
+        # Empty line (SRT entry separator)
+        if not stripped:
+            result.append(line)
+            i += 1
+            continue
+
+        # Text line — sanitize it
+        # Order matters: escape backslashes FIRST, then braces
+        sanitized = line.replace('\\', '\\\\')
+        sanitized = sanitized.replace('{', '\\{')
+        sanitized = sanitized.replace('}', '\\}')
+        result.append(sanitized)
+        i += 1
+
+    return '\n'.join(result)
+
+
+def sanitize_srt_full(srt_content: str) -> str:
+    """Apply all SRT sanitizations: HTML stripping + FFmpeg/libass escaping.
+
+    Convenience function that chains sanitize_srt_text (XSS prevention)
+    and sanitize_srt_for_ffmpeg (ASS control sequence escaping).
+
+    Args:
+        srt_content: Raw SRT file content
+
+    Returns:
+        Fully sanitized SRT content safe for FFmpeg subtitle rendering
+    """
+    content = sanitize_srt_text(srt_content)   # Strip HTML/XSS
+    content = sanitize_srt_for_ffmpeg(content)  # Escape for FFmpeg/libass
+    return content
+
+
 logger = logging.getLogger(__name__)
 
 
