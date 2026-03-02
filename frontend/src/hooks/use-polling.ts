@@ -1,5 +1,9 @@
 "use client";
 
+// NOTE: For job-specific polling, prefer useJobPolling which uses SSE.
+// This hook is for generic endpoints (e.g., assembly status, product status)
+// that do not yet have SSE streaming counterparts.
+
 import { useState, useRef, useCallback, useEffect } from "react";
 import { apiFetch } from "@/lib/api";
 

@@ -1,5 +1,10 @@
 "use client";
 
+// TODO: Add /products/batch/{batchId}/stream SSE endpoint and switch to EventSource
+// Batch polling is lower priority — single-job SSE (useJobPolling) covers the primary use case.
+// When the batch SSE endpoint is added, replace the poll() function with an EventSource
+// similar to the pattern used in use-job-polling.ts.
+
 import { useState, useCallback, useRef, useEffect } from "react";
 import { apiFetch, handleApiError } from "@/lib/api";
 
