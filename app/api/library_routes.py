@@ -1516,26 +1516,43 @@ async def list_project_clips(
 async def list_all_clips(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    cursor: Optional[str] = Query(default=None, description="ISO 8601 timestamp — return clips older than this value (cursor-based pagination)"),
     profile: ProfileContext = Depends(get_profile_context),
 ):
-    """Listează toate clipurile pentru librărie."""
+    """Listează toate clipurile pentru librărie cu suport cursor-based pagination."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        # Get all clips with project info
-        clips_result = supabase.table("editai_clips")\
-            .select("*, editai_projects!inner(name)", count="exact")\
+        # Total count query — always counts ALL clips for this profile (no cursor filter)
+        count_result = supabase.table("editai_clips")\
+            .select("id", count="exact")\
             .eq("is_deleted", False)\
             .eq("profile_id", profile.profile_id)\
+            .execute()
+        total = count_result.count if count_result.count is not None else 0
+
+        # Data query — apply cursor filter when provided, otherwise use offset
+        query = supabase.table("editai_clips")\
+            .select("*, editai_projects!inner(name)")\
+            .eq("is_deleted", False)\
+            .eq("profile_id", profile.profile_id)
+
+        if cursor:
+            # Cursor-based: return clips created before the cursor timestamp
+            query = query.lt("created_at", cursor)
+        else:
+            # Offset-based fallback for backward compatibility
+            query = query.offset(offset)
+
+        clips_result = query\
             .order("created_at", desc=True)\
             .limit(limit)\
-            .offset(offset)\
             .execute()
 
         if not clips_result.data:
-            return {"clips": []}
+            return {"clips": [], "total": total, "limit": limit, "offset": offset, "next_cursor": None, "has_more": False}
 
         # Get content info for all clips to check subtitles/voiceover
         clip_ids = [c["id"] for c in clips_result.data]
@@ -1579,8 +1596,18 @@ async def list_all_clips(
                 "has_audio": has_audio,
             })
 
-        total = clips_result.count if clips_result.count is not None else len(clips_with_info)
-        return {"clips": clips_with_info, "total": total, "limit": limit, "offset": offset}
+        # Compute next_cursor: the created_at of the last clip if a full page was returned
+        has_more = len(clips_with_info) == limit
+        next_cursor = clips_with_info[-1]["created_at"] if has_more else None
+
+        return {
+            "clips": clips_with_info,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+        }
     except Exception as e:
         logger.error(f"Error listing all clips: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
