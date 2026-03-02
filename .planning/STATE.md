@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v11
-milestone_name: Production Polish & Platform Hardening
-status: in_progress
-last_updated: "2026-03-02"
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-03-02T09:33:41.528Z"
 progress:
-  total_phases: 8
-  completed_phases: 0
-  total_plans: 3
-  completed_plans: 1
+  total_phases: 25
+  completed_phases: 24
+  total_plans: 65
+  completed_plans: 64
 ---
 
 # Project State
@@ -50,6 +50,7 @@ Progress: [█░░░░░░░░░] ~4% (v11: 1/3 plans in phase 55)
 | v9 Assembly Fix + Overlays | 4 (43-46) | 6 | Shipped 2026-02-28 |
 | v10 Desktop Launcher | 8 (47-54) | 18 | Shipped 2026-03-01 |
 | v11 Production Polish | 8 (55-62) | TBD | In Progress |
+| Phase 55 P03 | 223 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -63,6 +64,7 @@ Recent decisions affecting v11:
 - v6: slowapi at 60 req/min global — Phase 55 upgrades to per-route limits (uploads: 10/min, renders: 5/min)
 - 55-01: editai_export_presets is global (no profile_id) — authenticated users get SELECT-only, backend manages via service_role
 - 55-01: RLS bypass uses TO service_role role (not auth.jwt() check) — semantically correct Supabase pattern
+- [Phase 55]: SRT sanitization at write-layer: escape only backslashes and curly braces in SRT file content (apostrophes/colons/brackets safe inside SRT files)
 
 ### Pending Todos
 
