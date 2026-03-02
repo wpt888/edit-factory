@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-02T11:30:27.455Z"
+last_updated: "2026-03-02T11:30:34.426Z"
 progress:
   total_phases: 28
   completed_phases: 28
@@ -23,9 +23,9 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 58 of 62 (in progress)
-Plan: 1 of 3 in phase 58 — 58-01 complete
+Plan: 2 of 3 in phase 58 — 58-01 and 58-02 complete
 Status: Executing Phase 58 — Architecture Upgrade
-Last activity: 2026-03-02 — Completed 58-01: Durable Job Progress & Pipeline State Persistence (Supabase-backed progress tracking + crash recovery)
+Last activity: 2026-03-02 — Completed 58-02: File Storage Abstraction Layer (FileStorage ABC with local default and Supabase backend, OOM guard, graceful fallback)
 
 Progress: [████░░░░░░] 37% (v11: 3/8 phases complete)
 
@@ -86,6 +86,9 @@ Recent decisions affecting v11:
 - [58-01]: get_jobs_by_project uses Supabase JSONB field query (data->>project_id) — no O(N) scan
 - [58-01]: cleanup_stale_jobs adds time-based filter (>10 min) complementing existing _recover_stuck_jobs (all processing jobs)
 - [58-01]: No Redis — Supabase + in-memory fallback provides equivalent durability per user decision
+- [Phase 58]: FileStorage abstraction covers output files only — FFmpeg input/temp files stay local always
+- [Phase 58]: SupabaseFileStorage uses 500MB OOM guard and falls back to LocalFileStorage on init or upload failure
+- [Phase 58]: get_file_storage() uses lru_cache singleton — backend determined by FILE_STORAGE_BACKEND env var (default: local)
 
 ### Pending Todos
 
@@ -103,9 +106,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-02
-Stopped at: Phase 58 Plan 01 complete — Durable job progress and crash recovery done
+Stopped at: Completed 58-02-PLAN.md — File Storage Abstraction Layer
 Resume file: None
-Next action: Execute remaining Phase 58 plans (58-02, 58-03 if any)
+Next action: Execute remaining Phase 58 plans (58-03 if any)
 
 ---
 *Last updated: 2026-03-02 after Phase 57 completion*
