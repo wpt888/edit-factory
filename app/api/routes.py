@@ -241,8 +241,8 @@ async def get_gemini_status():
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Verifica starea serviciului."""
-    # Check ffmpeg
+    """Check health of all dependencies."""
+    # Check FFmpeg
     ffmpeg_ok = False
     try:
         result = await asyncio.to_thread(subprocess.run, ["ffmpeg", "-version"], capture_output=True, timeout=5)
@@ -250,7 +250,21 @@ async def health_check():
     except Exception:
         pass
 
-    # Check redis (optional)
+    # Check Supabase connectivity
+    supabase_ok = False
+    try:
+        from app.db import get_supabase
+        supabase = get_supabase()
+        if supabase:
+            # Lightweight query: count with limit 0 — no data transfer
+            await asyncio.to_thread(
+                lambda: supabase.table("editai_projects").select("id", count="exact").limit(0).execute()
+            )
+            supabase_ok = True  # If we got here without exception, DB is reachable
+    except Exception:
+        pass
+
+    # Check Redis (optional — Redis being down does NOT degrade overall status)
     redis_ok = False
     try:
         import redis
@@ -264,11 +278,25 @@ async def health_check():
     except Exception:
         pass
 
+    # Determine overall status
+    # "ok"       = Supabase AND FFmpeg are up (Redis is optional)
+    # "degraded" = one of Supabase/FFmpeg is down
+    # "unhealthy" = both Supabase AND FFmpeg are down
+    if supabase_ok and ffmpeg_ok:
+        overall = "ok"
+    elif not supabase_ok and not ffmpeg_ok:
+        overall = "unhealthy"
+    else:
+        overall = "degraded"
+
     return HealthResponse(
-        status="healthy" if ffmpeg_ok else "degraded",
+        status=overall,
         version=APP_VERSION,
         ffmpeg_available=ffmpeg_ok,
-        redis_available=redis_ok
+        redis_available=redis_ok,
+        supabase_status="ok" if supabase_ok else "unavailable",
+        ffmpeg_status="ok" if ffmpeg_ok else "unavailable",
+        redis_status="ok" if redis_ok else "unavailable",
     )
 
 

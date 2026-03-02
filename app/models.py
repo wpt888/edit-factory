@@ -68,8 +68,12 @@ class AnalyzeResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    """Raspuns health check."""
-    status: str
+    """Health check response with individual dependency status."""
+    status: str  # "ok", "degraded", or "unhealthy"
     version: str
-    ffmpeg_available: bool
-    redis_available: bool
+    ffmpeg_available: bool  # kept for backward compat
+    redis_available: bool   # kept for backward compat
+    # Granular dependency status (MON-02)
+    supabase_status: str = "unknown"   # "ok" | "unavailable" | "unknown"
+    ffmpeg_status: str = "unknown"     # "ok" | "unavailable"
+    redis_status: str = "unknown"      # "ok" | "unavailable"
