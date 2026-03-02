@@ -11,13 +11,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Depends
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Depends, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
 from app.utils import sanitize_filename as _sanitize_filename
+from app.rate_limit import limiter
 
 import logging
 
@@ -287,7 +288,9 @@ async def _reassign_all_segments(supabase, video_id: str, profile_id: str):
 # ============== SOURCE VIDEOS ENDPOINTS ==============
 
 @router.post("/source-videos", response_model=SourceVideoResponse)
+@limiter.limit("10/minute")
 async def upload_source_video(
+    request: Request,
     video: UploadFile = File(...),
     name: str = Form(...),
     description: Optional[str] = Form(default=None),

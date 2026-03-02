@@ -19,12 +19,13 @@ from datetime import datetime, timezone
 from typing import Any, List, Optional, Dict
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body, Query
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.api.auth import ProfileContext, get_profile_context
 from app.db import get_supabase
+from app.rate_limit import limiter
 from app.services.script_generator import get_script_generator
 from app.services.assembly_service import get_assembly_service, strip_product_group_tags
 
@@ -1306,7 +1307,9 @@ async def preview_variant(
 
 
 @router.post("/render/{pipeline_id}", response_model=PipelineRenderResponse)
+@limiter.limit("5/minute")
 async def render_variants(
+    http_request: Request,
     pipeline_id: str,
     request: PipelineRenderRequest,
     background_tasks: BackgroundTasks,

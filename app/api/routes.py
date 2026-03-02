@@ -10,12 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.responses import FileResponse
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import validate_upload_size, validate_tts_text_length
+from app.rate_limit import limiter
 from app.utils import sanitize_filename as _sanitize_filename
 from app.models import (
     JobStatus, JobResponse, HealthResponse, VideoInfo, VideoSegment
@@ -268,7 +269,8 @@ async def health_check():
 
 
 @router.post("/video-info")
-async def get_video_info(video: UploadFile = File(...)):
+@limiter.limit("10/minute")
+async def get_video_info(request: Request, video: UploadFile = File(...)):
     """
     Obtine informatii despre video (rezolutie, durata, fps).
     Folosit pentru preview-ul subtitrarii.
@@ -356,7 +358,9 @@ async def get_video_info(video: UploadFile = File(...)):
 
 
 @router.post("/jobs", response_model=JobResponse)
+@limiter.limit("10/minute")
 async def create_job(
+    request: Request,
     background_tasks: BackgroundTasks,
     video: UploadFile = File(...),
     audio: Optional[UploadFile] = File(default=None),
@@ -604,7 +608,9 @@ async def download_result(job_id: str, profile: ProfileContext = Depends(get_pro
 
 
 @router.post("/tts/generate")
+@limiter.limit("20/minute")
 async def generate_tts(
+    request: Request,
     background_tasks: BackgroundTasks,
     text: str = Form(...),
     remove_silence: str = Form(default="true"),

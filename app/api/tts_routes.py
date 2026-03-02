@@ -8,10 +8,11 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends, Request
 
 from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import validate_tts_text_length
+from app.rate_limit import limiter
 from app.config import get_settings
 from app.db import get_supabase
 from app.services.tts import get_tts_service
@@ -251,7 +252,9 @@ async def _generate_tts_background(
 
 
 @router.post("/generate")
+@limiter.limit("20/minute")
 async def generate_tts(
+    request: Request,
     background_tasks: BackgroundTasks,
     text: str = Form(...),
     provider: str = Form(...),
@@ -353,7 +356,9 @@ async def generate_tts(
 
 
 @router.post("/clone-voice")
+@limiter.limit("10/minute")
 async def clone_voice_endpoint(
+    request: Request,
     voice_name: str = Form(...),
     audio_file: UploadFile = File(...),
     profile: ProfileContext = Depends(get_profile_context)

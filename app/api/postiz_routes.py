@@ -8,12 +8,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request
 from pydantic import BaseModel
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
 from app.db import get_supabase
+from app.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/postiz", tags=["postiz"])
@@ -209,7 +210,9 @@ async def get_integrations(
 
 
 @router.post("/upload")
+@limiter.limit("10/minute")
 async def upload_to_postiz(
+    http_request: Request,
     request: UploadRequest,
     profile: ProfileContext = Depends(get_profile_context)
 ):
@@ -274,7 +277,9 @@ async def upload_to_postiz(
 
 
 @router.post("/bulk-upload")
+@limiter.limit("10/minute")
 async def bulk_upload_to_postiz(
+    http_request: Request,
     request: BulkUploadRequest,
     profile: ProfileContext = Depends(get_profile_context)
 ):

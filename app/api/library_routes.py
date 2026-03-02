@@ -14,19 +14,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Depends, Response
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Depends, Response, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import validate_upload_size, validate_tts_text_length
+from app.rate_limit import limiter
 from app.services.encoding_presets import get_preset, EncodingPreset
 from app.services.audio_normalizer import measure_loudness, build_loudnorm_filter
 from app.services.video_filters import VideoFilters, DenoiseConfig, SharpenConfig, ColorConfig
 from app.services.subtitle_styler import build_subtitle_filter
 from app.services.tts_subtitle_generator import generate_srt_from_timestamps
-from app.services.srt_validator import sanitize_srt_text
+from app.services.srt_validator import sanitize_srt_text, sanitize_srt_full
 from app.utils import sanitize_filename as _sanitize_filename
 
 import logging
@@ -45,6 +46,7 @@ _MAX_CANCELLED = 200
 # Global semaphore shared across ALL routes (library, pipeline, product)
 from app.services.ffmpeg_semaphore import (
     acquire_render_slot, acquire_prep_slot, safe_ffmpeg_run, check_disk_space,
+    is_nvenc_available,
 )
 # Keep legacy name for backwards compat with product_generate_routes import
 _ffmpeg_render_semaphore = None  # DEPRECATED — use acquire_render_slot() instead
@@ -603,7 +605,9 @@ async def delete_project(
 # ============== GENERATE RAW CLIPS ==============
 
 @router.post("/projects/{project_id}/generate")
+@limiter.limit("10/minute")
 async def generate_raw_clips(
+    request: Request,
     background_tasks: BackgroundTasks,
     project_id: str,
     video: UploadFile = File(default=None),
@@ -1959,7 +1963,9 @@ async def cleanup_temp_files(
 # ============== FINAL RENDER ==============
 
 @router.post("/clips/{clip_id}/render")
+@limiter.limit("5/minute")
 async def render_final_clip(
+    request: Request,
     background_tasks: BackgroundTasks,
     clip_id: str,
     preset_name: str = Form(default="instagram_reels"),
@@ -2442,7 +2448,9 @@ class BulkRenderRequest(BaseModel):
 
 
 @router.post("/clips/bulk-render")
+@limiter.limit("5/minute")
 async def bulk_render_clips(
+    http_request: Request,
     background_tasks: BackgroundTasks,
     request: BulkRenderRequest,
     profile: ProfileContext = Depends(get_profile_context)
@@ -3072,8 +3080,10 @@ async def _render_with_preset(
         encoding_preset = get_preset(platform_key)
     logger.info(f"Using encoding preset: {encoding_preset.name} (platform: {encoding_preset.platform})")
 
-    # Get encoding parameters (use_gpu=False for CPU encoding)
-    encoding_params = encoding_preset.to_ffmpeg_params(use_gpu=False)
+    # Use GPU encoding when NVENC is available (much faster + frees CPU)
+    _use_gpu = is_nvenc_available()
+    encoding_params = encoding_preset.to_ffmpeg_params(use_gpu=_use_gpu)
+    logger.info(f"Encoding with {'GPU (NVENC)' if _use_gpu else 'CPU (libx264)'}")
 
     # Extract audio bitrate from encoding params for comparison
     preset_audio_bitrate = encoding_preset.audio_bitrate
