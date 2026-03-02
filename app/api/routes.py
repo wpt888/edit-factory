@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.config import get_settings, APP_VERSION
 from app.services.file_storage import get_file_storage
@@ -544,6 +544,92 @@ def _cleanup_input_files(job: dict):
                 logger.info(f"Deleted input file: {job[key]}")
             except Exception as e:
                 logger.warning(f"Failed to delete {job[key]}: {e}")
+
+
+@router.get("/jobs/{job_id}/stream")
+async def stream_job_progress(job_id: str, request: Request):
+    """Stream job progress via Server-Sent Events.
+
+    No auth required — job IDs are UUIDs (unguessable) and the endpoint is read-only.
+    EventSource browsers cannot send custom headers, so auth is done via the regular
+    GET /jobs/{job_id} endpoint for programmatic access.
+    """
+    job = get_job_storage().get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    async def event_generator():
+        last_progress = None
+        last_status = None
+        heartbeat_counter = 0
+
+        while True:
+            # Check if client disconnected
+            if await request.is_disconnected():
+                break
+
+            current_job = get_job_storage().get_job(job_id)
+            if not current_job:
+                yield f"event: failed\ndata: {json.dumps({'job_id': job_id, 'error': 'Job not found'})}\n\n"
+                break
+
+            current_progress = current_job.get("progress")
+            current_status = current_job.get("status")
+
+            # Only send event when something changed
+            if current_progress != last_progress or current_status != last_status:
+                last_progress = current_progress
+                last_status = current_status
+
+                if current_status == "completed":
+                    # Build result payload
+                    result_data = current_job.get("result")
+                    # For assembly jobs, include final_video_path
+                    if current_job.get("job_type") == "assembly" and current_job.get("final_video_path"):
+                        result_data = {"final_video_path": current_job["final_video_path"]}
+                    payload = {
+                        "job_id": job_id,
+                        "status": "completed",
+                        "progress": "100",
+                        "result": result_data,
+                    }
+                    yield f"event: completed\ndata: {json.dumps(payload)}\n\n"
+                    break
+
+                elif current_status == "failed":
+                    payload = {
+                        "job_id": job_id,
+                        "status": "failed",
+                        "error": current_job.get("error", "Unknown error"),
+                    }
+                    yield f"event: failed\ndata: {json.dumps(payload)}\n\n"
+                    break
+
+                else:
+                    payload = {
+                        "job_id": job_id,
+                        "status": current_status,
+                        "progress": current_progress or "",
+                    }
+                    yield f"event: progress\ndata: {json.dumps(payload)}\n\n"
+
+            # Heartbeat every 15 seconds to keep connection alive
+            heartbeat_counter += 1
+            if heartbeat_counter >= 15:
+                heartbeat_counter = 0
+                yield f"event: heartbeat\ndata: {json.dumps({'ts': int(asyncio.get_event_loop().time())})}\n\n"
+
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering if behind proxy
+        },
+    )
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
