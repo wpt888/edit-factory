@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-02T10:57:45.566Z"
+last_updated: "2026-03-02T11:01:00Z"
 progress:
   total_phases: 27
   completed_phases: 26
-  total_plans: 70
-  completed_plans: 69
+  total_plans: 71
+  completed_plans: 70
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** Phase 57 — DevOps & CI (v11, ready to plan)
+**Current focus:** Phase 58 — Architecture (Redis job queue)
 
 ## Current Position
 
-Phase: 57 of 62 (in progress)
-Plan: 1 of 2 complete in phase 57
-Status: Phase 57 plan 01 complete
-Last activity: 2026-03-02 — Phase 57-01 complete (dependency pinning 41== pins + git-tag versioning via app/version.py)
+Phase: 57 of 62 (complete)
+Plan: 2 of 2 complete in phase 57
+Status: Phase 57 complete — all plans done
+Last activity: 2026-03-02 — Phase 57-02 complete (GitHub Actions CI workflow with Python lint/typecheck/test + Next.js lint/typecheck)
 
-Progress: [███░░░░░░░] 25% (v11: 2/8 phases complete, phase 57 in progress 1/2 plans)
+Progress: [████░░░░░░] 37% (v11: 3/8 phases complete)
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress: [███░░░░░░░] 25% (v11: 2/8 phases complete, phase 
 | v11 Production Polish | 8 (55-62) | 5+ | In Progress |
 | Phase 56 P01 | 45 | 3 tasks | 6 files |
 | Phase 57-devops-ci P01 | 15 | 2 tasks | 4 files |
+| Phase 57-devops-ci P02 | 2 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,9 @@ Recent decisions affecting v11:
 - [Phase 57-devops-ci]: get_version() uses lru_cache so git is called only once per process — no repeated subprocess calls
 - [Phase 57-devops-ci]: APP_VERSION stays module-level in config.py (not inside Settings) — backward-compatible for all importers
 - [Phase 57-devops-ci]: Uninstalled optional packages pinned to minimum declared range version
+- [Phase 57-02]: mypy uses permissive flags (--ignore-missing-imports --no-strict-optional --allow-untyped-defs) — codebase not fully typed
+- [Phase 57-02]: ruff with lenient ignore list (E501,E402,W291,W292,W293) — codebase has long lines and import ordering
+- [Phase 57-02]: Playwright E2E tests excluded from CI — require running dev server and Supabase
 
 ### Pending Todos
 
@@ -95,9 +99,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-02
-Stopped at: Phase 57-01 complete — dependency pinning and git-tag versioning done
+Stopped at: Phase 57 complete — CI pipeline workflow and typecheck script done
 Resume file: None
-Next action: Execute 57-02 (CI pipeline)
+Next action: Plan Phase 58 (Architecture — Redis job queue, verify redis-server available in WSL first)
 
 ---
-*Last updated: 2026-03-02 after Phase 56 completion*
+*Last updated: 2026-03-02 after Phase 57 completion*

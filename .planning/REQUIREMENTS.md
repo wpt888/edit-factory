@@ -22,7 +22,7 @@ Requirements for Production Polish & Platform Hardening. Each maps to roadmap ph
 
 ### DevOps
 
-- [ ] **DEVOPS-01**: GitHub Actions CI pipeline runs lint, type-check, and tests on every push and PR
+- [x] **DEVOPS-01**: GitHub Actions CI pipeline runs lint, type-check, and tests on every push and PR
 - [x] **DEVOPS-02**: All Python dependencies are pinned to exact versions in requirements.txt
 - [x] **DEVOPS-03**: Application version is auto-derived from git tags (not hardcoded "1.0.0" in main.py)
 
@@ -103,7 +103,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEST-01 | Phase 56 | Complete |
 | TEST-02 | Phase 56 | Complete |
 | TEST-03 | Phase 56 | Complete |
-| DEVOPS-01 | Phase 57 | Pending |
+| DEVOPS-01 | Phase 57 | Complete |
 | DEVOPS-02 | Phase 57 | Complete |
 | DEVOPS-03 | Phase 57 | Complete |
 | MON-01 | Phase 60 | Pending |
