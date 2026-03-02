@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-02T11:55:23.605Z"
+last_updated: "2026-03-02T11:57:05.522Z"
 progress:
   total_phases: 29
   completed_phases: 28
   total_plans: 76
-  completed_plans: 74
+  completed_plans: 75
 ---
 
 # Project State
@@ -22,10 +22,10 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 
 ## Current Position
 
-Phase: 59 of 62 (in progress)
-Plan: 2 of 3 in phase 59
-Status: Phase 59 plan 59-02 complete — profile cache TTL and TTS cache metrics done
-Last activity: 2026-03-02 — 59-02 Profile Cache TTL & TTS Cache Metrics (2 tasks, 3 files)
+Phase: 59 of 62 (complete)
+Plan: 3 of 3 in phase 59
+Status: Phase 59 complete — cursor pagination, profile/TTS cache, SSE job streaming done
+Last activity: 2026-03-02 — 59-03 SSE Job Progress (3 tasks, 4 files)
 
 Progress: [█████░░░░░] 50% (v11: 4/8 phases complete)
 
@@ -53,6 +53,7 @@ Progress: [█████░░░░░] 50% (v11: 4/8 phases complete)
 | Phase 58 P58-03 | 2 | 2 tasks | 2 files |
 | Phase 58 P02 | 3 | 2 tasks | 4 files |
 | Phase 59 P59-02 | 15 | 2 tasks | 3 files |
+| Phase 59 P03 | 15 | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,8 @@ Recent decisions affecting v11:
 - [Phase 58]: get_file_storage() uses lru_cache singleton — backend determined by FILE_STORAGE_BACKEND env var (default: local)
 - [Phase 59]: Profile cache uses (user_id, profile_id_or_'default') key with 60s TTL; error states and fallback placeholder never cached
 - [Phase 59]: TTS LRU eviction uses st_atime; GET /tts/cache/stats placed before /tts/{job_id} to prevent route conflict
+- [Phase 59]: SSE endpoint has no auth — EventSource cannot send custom headers; job IDs are unguessable UUIDs
+- [Phase 59]: useJobPolling hook preserves identical external interface — all consumers work without code changes
 
 ### Pending Todos
 
