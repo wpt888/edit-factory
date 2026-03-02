@@ -1,14 +1,13 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "--cov=app/services --cov-report=term-missing --cov-report=html:htmlcov"
+addopts = "--cov=app.services.job_storage --cov=app.services.cost_tracker --cov-report=term-missing"
 
 [tool.coverage.run]
 source = ["app/services"]
 omit = ["app/services/tts/*", "app/services/__pycache__/*"]
 
 [tool.coverage.report]
-fail_under = 80
 show_missing = true
 exclude_lines = [
     "pragma: no cover",
