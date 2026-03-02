@@ -1,10 +1,16 @@
 """
-Unit tests for SRTValidator and sanitize_srt_text.
+Unit tests for SRTValidator, sanitize_srt_text, sanitize_srt_for_ffmpeg, and sanitize_srt_full.
 
 No external dependencies — SRTValidator is pure Python string processing.
 """
 import pytest
-from app.services.srt_validator import SRTValidator, SRTEntry, sanitize_srt_text
+from app.services.srt_validator import (
+    SRTValidator,
+    SRTEntry,
+    sanitize_srt_text,
+    sanitize_srt_for_ffmpeg,
+    sanitize_srt_full,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -198,3 +204,126 @@ def test_timestamp_to_seconds_invalid(validator):
     """timestamp_to_seconds raises ValueError for invalid timestamps."""
     with pytest.raises(ValueError):
         validator.timestamp_to_seconds("not-a-timestamp")
+
+
+# ---------------------------------------------------------------------------
+# sanitize_srt_for_ffmpeg tests
+# ---------------------------------------------------------------------------
+
+SRT_TEMPLATE = """\
+1
+00:00:01,000 --> 00:00:03,500
+{text}
+
+2
+00:00:04,000 --> 00:00:06,000
+Another line
+"""
+
+
+def test_ffmpeg_sanitize_plain_text_unchanged():
+    """Normal text without special chars passes through unchanged."""
+    result = sanitize_srt_for_ffmpeg("Hello world")
+    assert result == "Hello world"
+
+
+def test_ffmpeg_sanitize_apostrophe_preserved():
+    """Apostrophes in SRT content are safe inside the SRT file — no escaping needed."""
+    result = sanitize_srt_for_ffmpeg("It's a test")
+    assert "It's a test" in result
+
+
+def test_ffmpeg_sanitize_backslash_escaped():
+    """Backslashes are escaped to prevent ASS control sequence interpretation."""
+    result = sanitize_srt_for_ffmpeg("C:\\path\\to\\file")
+    assert "\\\\" in result  # Each \ becomes \\
+
+
+def test_ffmpeg_sanitize_colon_preserved():
+    """Colons in SRT text content are safe inside the file — no escaping needed."""
+    result = sanitize_srt_for_ffmpeg("time: 12:30")
+    assert "time: 12:30" in result
+
+
+def test_ffmpeg_sanitize_curly_braces_escaped():
+    """Curly braces are escaped to prevent ASS override tag interpretation."""
+    result = sanitize_srt_for_ffmpeg("use {braces}")
+    assert "\\{braces\\}" in result
+
+
+def test_ffmpeg_sanitize_square_brackets_preserved():
+    """Square brackets in SRT text content are safe — no escaping needed."""
+    result = sanitize_srt_for_ffmpeg("[brackets]")
+    assert "[brackets]" in result
+
+
+def test_ffmpeg_sanitize_mixed_special_chars():
+    """Mixed special chars are fully sanitized (backslash and braces escaped)."""
+    text = "It's {here}: test\\n[ok]"
+    result = sanitize_srt_for_ffmpeg(text)
+    # Backslash should be escaped
+    assert "\\\\" in result
+    # Curly braces should be escaped
+    assert "\\{" in result
+    assert "\\}" in result
+    # Apostrophe and brackets preserved as-is
+    assert "It's" in result
+    assert "[ok]" in result
+
+
+def test_ffmpeg_sanitize_srt_structure_preserved():
+    """Timestamps, sequence numbers, and blank lines are NOT modified."""
+    srt = SRT_TEMPLATE.format(text="Hello world")
+    result = sanitize_srt_for_ffmpeg(srt)
+    assert "00:00:01,000 --> 00:00:03,500" in result
+    assert "00:00:04,000 --> 00:00:06,000" in result
+    assert "1\n" in result
+    assert "2\n" in result
+
+
+def test_ffmpeg_sanitize_only_text_lines_modified():
+    """Only text lines get modified; timestamps and indices are untouched."""
+    srt = "1\n00:00:01,000 --> 00:00:03,500\nText with {braces} and \\backslash\n\n"
+    result = sanitize_srt_for_ffmpeg(srt)
+    assert "00:00:01,000 --> 00:00:03,500" in result
+    assert "\\{braces\\}" in result
+    assert "\\\\" in result
+
+
+def test_ffmpeg_sanitize_empty_input_unchanged():
+    """Empty string input returns empty string."""
+    assert sanitize_srt_for_ffmpeg("") == ""
+
+
+def test_ffmpeg_sanitize_none_input_unchanged():
+    """None input returns None (falsy passthrough)."""
+    assert sanitize_srt_for_ffmpeg(None) is None
+
+
+# ---------------------------------------------------------------------------
+# sanitize_srt_full tests (combined HTML + FFmpeg sanitization)
+# ---------------------------------------------------------------------------
+
+def test_srt_full_strips_html_and_escapes_braces():
+    """sanitize_srt_full applies both HTML stripping and FFmpeg escaping."""
+    content = "Hello <script>alert(1)</script> world {bold}"
+    result = sanitize_srt_full(content)
+    assert "<script>" not in result
+    assert "alert" not in result
+    assert "\\{bold\\}" in result
+    assert "Hello" in result
+    assert "world" in result
+
+
+def test_srt_full_plain_text_unchanged():
+    """Plain text without HTML or special chars passes through sanitize_srt_full unchanged."""
+    plain = "Normal subtitle text here"
+    result = sanitize_srt_full(plain)
+    assert result == plain
+
+
+def test_srt_full_backslash_in_html_context():
+    """sanitize_srt_full handles backslashes that appear after HTML stripping."""
+    content = "Path is C:\\users\\test"
+    result = sanitize_srt_full(content)
+    assert "\\\\" in result
