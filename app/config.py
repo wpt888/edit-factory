@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     # File storage backend: "local" (default) or "supabase"
     file_storage_backend: str = "local"
 
+    # Sentry error reporting (all modes — set SENTRY_DSN env var to enable)
+    sentry_dsn: str = ""  # Sentry DSN for error reporting
+
+    # Output file TTL: hours before output/finals/ and output/tts/ files are eligible for cleanup (0 = disabled)
+    output_ttl_hours: int = 72
+
     model_config = SettingsConfigDict(
         env_file=None,  # Disable default; controlled in settings_customise_sources
         env_file_encoding="utf-8",

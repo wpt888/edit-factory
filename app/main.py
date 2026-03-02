@@ -214,8 +214,13 @@ app.add_middleware(
 
 app.add_middleware(SlowAPIMiddleware)
 
-# Sentry crash reporting (desktop-mode only, opt-in)
-if settings.desktop_mode:
+# Sentry crash reporting
+# Path 1: SENTRY_DSN env var — works in all modes (production server, dev, desktop)
+if settings.sentry_dsn:
+    from app.services.crash_reporter import init_sentry
+    init_sentry(dsn=settings.sentry_dsn, enabled=True)
+# Path 2: Desktop-mode config.json opt-in (legacy, requires hardcoded DSN in crash_reporter.py)
+elif settings.desktop_mode:
     from app.services.crash_reporter import init_sentry, SENTRY_DSN
     import json as _json
     _config_file = settings.base_dir / "config.json"
@@ -226,7 +231,8 @@ if settings.desktop_mode:
             _crash_enabled = _cfg.get("crash_reporting_enabled", False)
         except Exception:
             pass
-    init_sentry(dsn=SENTRY_DSN, enabled=_crash_enabled)
+    if SENTRY_DSN:
+        init_sentry(dsn=SENTRY_DSN, enabled=_crash_enabled)
 
 # Include API routes
 app.include_router(api_router, prefix="/api/v1", tags=["Video Processing"])

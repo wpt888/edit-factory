@@ -1,7 +1,9 @@
 """
 Crash reporting service using Sentry SDK.
 
-- Initialized ONCE at startup (desktop-mode only) via init_sentry()
+- Initialized ONCE at startup via init_sentry()
+- All modes: set SENTRY_DSN env var to enable (not just desktop mode)
+- Desktop legacy: config.json crash_reporting_enabled opt-in still works
 - Runtime toggle via set_crash_reporting() — no restart required
 - PII scrubbing via EventScrubber + send_default_pii=False
 - API keys and file paths scrubbed before any data leaves the machine
@@ -11,7 +13,8 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# Replace with actual Sentry DSN when Sentry project is created
+# Legacy desktop-mode DSN constant — kept for backward compat with desktop config.json path.
+# Production/server: use SENTRY_DSN env var via Settings.sentry_dsn instead.
 SENTRY_DSN = ""
 
 # Module-level runtime toggle flag — checked in before_send to drop/allow events
