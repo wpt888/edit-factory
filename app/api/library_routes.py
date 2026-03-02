@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.config import get_settings
+from app.services.file_storage import get_file_storage
 from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import (
     validate_upload_size, validate_tts_text_length,
@@ -1135,6 +1136,22 @@ async def _generate_from_segments_task(
 
     settings = get_settings()
 
+    # Create a durable job record in JobStorage for crash recovery
+    from app.services.job_storage import get_job_storage
+    _gen_job_id = str(uuid.uuid4())
+    try:
+        get_job_storage().create_job({
+            "job_id": _gen_job_id,
+            "job_type": "clip_generation",
+            "status": "processing",
+            "progress": "Starting...",
+            "project_id": project_id,
+            "profile_id": profile_id,
+        }, profile_id=profile_id)
+    except Exception as _e:
+        logger.warning(f"Failed to create job record for segment generation: {_e}")
+        _gen_job_id = None
+
     # Acquire project lock
     lock = get_project_lock(project_id)
     if not lock.acquire(blocking=False):
@@ -1150,7 +1167,7 @@ async def _generate_from_segments_task(
         }).eq("id", project_id).eq("profile_id", profile_id).execute()
 
         # Initial progress
-        update_generation_progress(project_id, 5, "Se pregătesc segmentele...")
+        update_generation_progress(project_id, 5, "Se pregătesc segmentele...", job_id=_gen_job_id)
 
         # Pregătim lista de segmente cu fișierele lor
         available_segments = []
@@ -1177,7 +1194,7 @@ async def _generate_from_segments_task(
         # ============== VOICE DETECTION (dacă mute_source_voice este activat) ==============
         voice_segments_by_file = {}
         if mute_source_voice:
-            update_generation_progress(project_id, 8, "Se detectează vocile din video-uri sursă...")
+            update_generation_progress(project_id, 8, "Se detectează vocile din video-uri sursă...", job_id=_gen_job_id)
             try:
                 from app.services.voice_detector import VoiceDetector
                 detector = VoiceDetector(threshold=0.5, min_speech_duration=0.25)  # Balanced threshold
@@ -1221,7 +1238,8 @@ async def _generate_from_segments_task(
                 update_generation_progress(
                     project_id,
                     base_pct,
-                    f"Se generează varianta {variant_idx} ({relative_idx} din {variant_count} noi)..."
+                    f"Se generează varianta {variant_idx} ({relative_idx} din {variant_count} noi)...",
+                    job_id=_gen_job_id
                 )
 
                 # Selectăm segmente pentru această variantă
@@ -1385,7 +1403,8 @@ async def _generate_from_segments_task(
                 update_generation_progress(
                     project_id,
                     done_pct,
-                    f"Varianta {variant_idx} completă ({actual_duration:.1f}s)"
+                    f"Varianta {variant_idx} completă ({actual_duration:.1f}s)",
+                    job_id=_gen_job_id
                 )
 
             except Exception as e:
@@ -1403,7 +1422,7 @@ async def _generate_from_segments_task(
                     pass
 
         # Final progress update
-        update_generation_progress(project_id, 95, "Se finalizează...")
+        update_generation_progress(project_id, 95, "Se finalizează...", job_id=_gen_job_id)
 
         # Actualizăm proiectul
         if variants_created:
@@ -2429,9 +2448,15 @@ async def _render_final_clip_task(
                 saturation=saturation
             )
 
+        # Store final video via FileStorage abstraction (local by default, Supabase when configured)
+        file_storage = get_file_storage()
+        storage_key = f"output/{profile_id}/{project_id}/{clip_id}_final.mp4"
+        stored_path = file_storage.store(output_path, storage_key)
+        logger.debug(f"FileStorage.store for clip {clip_id}: {output_path} -> {stored_path}")
+
         # Actualizăm clipul
         supabase.table("editai_clips").update({
-            "final_video_path": str(output_path),
+            "final_video_path": stored_path,
             "final_status": "completed",
             "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("id", clip_id).eq("profile_id", profile_id).execute()
@@ -2440,7 +2465,7 @@ async def _render_final_clip_task(
         supabase.table("editai_exports").insert({
             "clip_id": clip_id,
             "preset_name": preset_data["name"],
-            "output_path": str(output_path),
+            "output_path": stored_path,
             "file_size": output_path.stat().st_size,
             "status": "completed"
         }).execute()
