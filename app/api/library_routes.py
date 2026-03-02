@@ -2232,6 +2232,8 @@ async def _render_final_clip_task(
     srt_path = None
     adjusted_video_path = None
     tts_timestamps = None
+    output_path = None  # Track partial output for cleanup on failure
+    render_succeeded = False
 
     # Profile-scoped temp directory to prevent cross-profile file collisions
     temp_dir = settings.base_dir / "temp" / profile_id
@@ -2521,6 +2523,7 @@ async def _render_final_clip_task(
         _update_project_counts(clip_data["project_id"], profile_id)
 
         logger.info(f"Rendered final clip {clip_id} -> {output_path}")
+        render_succeeded = True
 
     except Exception as e:
         logger.error(f"Error rendering clip {clip_id}: {e}")
@@ -2542,6 +2545,13 @@ async def _render_final_clip_task(
                 logger.debug(f"Cleaned up adjusted video: {adjusted_video_path}")
         except Exception as cleanup_err:
             logger.warning(f"Failed to cleanup temp files: {cleanup_err}")
+        # Clean up partial output file on failure (FFmpeg -y creates file before completion)
+        if not render_succeeded and output_path and Path(output_path).exists():
+            try:
+                Path(output_path).unlink()
+                logger.info(f"Cleaned up partial output file: {output_path}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup partial output: {e}")
 
         # Always release and cleanup the lock
         if lock:
