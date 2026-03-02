@@ -39,6 +39,7 @@ import {
   Menu,
   ChevronDown,
   Music,
+  ImageIcon,
 } from "lucide-react";
 
 const navGroups = [
@@ -47,6 +48,7 @@ const navGroups = [
     items: [
       { label: "Pipeline", href: "/pipeline", icon: Clapperboard, desc: "Video processing pipeline" },
       { label: "Segments", href: "/segments", icon: Scissors, desc: "Manual segment selection" },
+      { label: "AI Image", href: "/create-image", icon: ImageIcon, desc: "Generate AI product images" },
     ],
   },
   {
