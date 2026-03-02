@@ -7,13 +7,20 @@ and SRT content keyed by (text, voice_id, model_id, provider) hash.
 import hashlib
 import json
 import logging
+import os
 import shutil
+import threading as _threading
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 MAX_CACHE_ENTRIES = 5000
+
+# In-memory hit/miss counters (reset on server restart)
+_stats_lock = _threading.Lock()
+_hit_count = 0
+_miss_count = 0
 
 def _get_cache_root() -> Path:
     from app.config import get_settings
@@ -43,7 +50,11 @@ def cache_lookup(key_data: dict, provider_dir: str, output_path: Path) -> Option
     mp3_path = cache_dir / f"{h}.mp3"
     meta_path = cache_dir / f"{h}.meta.json"
 
+    global _hit_count, _miss_count
+
     if not mp3_path.exists() or not meta_path.exists():
+        with _stats_lock:
+            _miss_count += 1
         return None
 
     try:
@@ -54,6 +65,12 @@ def cache_lookup(key_data: dict, provider_dir: str, output_path: Path) -> Option
         output_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(mp3_path, output_path)
 
+        # Update access time for LRU eviction tracking
+        os.utime(mp3_path, None)
+
+        with _stats_lock:
+            _hit_count += 1
+
         logger.info(f"TTS cache HIT [{provider_dir}]: {h[:12]}... → {output_path.name}")
         return metadata
     except Exception as e:
@@ -62,9 +79,9 @@ def cache_lookup(key_data: dict, provider_dir: str, output_path: Path) -> Option
 
 
 def _evict_if_needed(cache_dir: Path) -> None:
-    """Remove oldest cache entries if cache exceeds max size."""
+    """Remove least-recently-accessed cache entries if cache exceeds max size."""
     try:
-        cache_files = sorted(cache_dir.glob("*.mp3"), key=lambda f: f.stat().st_mtime)
+        cache_files = sorted(cache_dir.glob("*.mp3"), key=lambda f: f.stat().st_atime)
         if len(cache_files) > MAX_CACHE_ENTRIES:
             for f in cache_files[:len(cache_files) - MAX_CACHE_ENTRIES]:
                 f.unlink(missing_ok=True)
@@ -122,6 +139,26 @@ def srt_cache_lookup(key_data: dict, provider_dir: str = "elevenlabs") -> Option
     except Exception as e:
         logger.warning(f"SRT cache read error: {e}")
         return None
+
+
+def cache_stats() -> dict:
+    """Return TTS cache statistics including hit/miss counters and current size."""
+    root = _get_cache_root()
+    current_size = 0
+    try:
+        for provider_dir in root.iterdir():
+            if provider_dir.is_dir():
+                current_size += len(list(provider_dir.glob("*.mp3")))
+    except Exception:
+        pass
+
+    with _stats_lock:
+        return {
+            "hit_count": _hit_count,
+            "miss_count": _miss_count,
+            "current_size": current_size,
+            "max_size": MAX_CACHE_ENTRIES,
+        }
 
 
 def srt_cache_store(key_data: dict, srt_content: str, provider_dir: str = "elevenlabs") -> None:

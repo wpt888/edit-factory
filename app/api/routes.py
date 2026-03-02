@@ -725,6 +725,13 @@ async def download_result(job_id: str, profile: ProfileContext = Depends(get_pro
     )
 
 
+@router.get("/tts/cache/stats")
+async def get_tts_cache_stats(profile: ProfileContext = Depends(get_profile_context)):
+    """Return TTS cache hit/miss metrics and current size."""
+    from app.services.tts_cache import cache_stats
+    return cache_stats()
+
+
 @router.post("/tts/generate")
 @limiter.limit("20/minute")
 async def generate_tts(
