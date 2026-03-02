@@ -2063,6 +2063,20 @@ async def cleanup_temp_files(
     return {"status": "completed", "deleted_files": deleted}
 
 
+@router.post("/maintenance/cleanup-output")
+async def cleanup_output_endpoint(
+    max_age_hours: int = 72,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Cleanup output files older than specified hours.
+    Targets output/finals/ and output/tts/ directories.
+    Raw video files in output/ root are never touched.
+    """
+    result = cleanup_output_files(max_age_hours)
+    return {"status": "completed", **result}
+
+
 # ============== FINAL RENDER ==============
 
 @router.post("/clips/{clip_id}/render")
@@ -3042,6 +3056,60 @@ def cleanup_orphaned_temp_files(max_age_hours: int = 24, profile_id: Optional[st
     except Exception as e:
         logger.error(f"Error cleaning up temp files: {e}")
         return 0
+
+
+def cleanup_output_files(max_age_hours: int = 72):
+    """
+    Remove output files older than max_age_hours from output/finals/ and output/tts/.
+
+    Does NOT touch:
+    - Raw video clips in output/ root (source files)
+    - Files in output/raw/ if it exists
+    - Any file newer than max_age_hours
+
+    Args:
+        max_age_hours: Maximum age in hours. Files older than this are deleted.
+
+    Returns:
+        dict with deleted_count and freed_bytes
+    """
+    import time
+    settings = get_settings()
+
+    cutoff_time = time.time() - (max_age_hours * 3600)
+    deleted_count = 0
+    freed_bytes = 0
+
+    # Target subdirectories only — NOT the output root
+    target_dirs = [
+        settings.output_dir / "finals",
+        settings.output_dir / "tts",
+    ]
+
+    for target_dir in target_dirs:
+        if not target_dir.exists():
+            continue
+
+        # Walk deepest-first so empty parent dirs can be removed
+        for item in sorted(target_dir.rglob("*"), key=lambda p: len(str(p)), reverse=True):
+            try:
+                if item.is_file() and item.stat().st_mtime < cutoff_time:
+                    size = item.stat().st_size
+                    item.unlink()
+                    deleted_count += 1
+                    freed_bytes += size
+                    logger.debug(f"Output cleanup: deleted {item.name} ({size} bytes)")
+                elif item.is_dir() and not any(item.iterdir()):
+                    item.rmdir()
+                    logger.debug(f"Output cleanup: removed empty dir {item.name}")
+            except Exception as e:
+                logger.warning(f"Output cleanup failed for {item}: {e}")
+
+    if deleted_count > 0:
+        mb_freed = freed_bytes / (1024 * 1024)
+        logger.info(f"Output cleanup: deleted {deleted_count} files, freed {mb_freed:.1f} MB")
+
+    return {"deleted_count": deleted_count, "freed_bytes": freed_bytes}
 
 
 def _hex_to_ass_color(hex_color: str) -> str:

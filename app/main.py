@@ -169,6 +169,16 @@ async def lifespan(app: FastAPI):
             logger.info(f"Startup: marked {cleaned} stale jobs as failed via JobStorage")
     except Exception as e:
         logger.warning(f"Startup job cleanup (JobStorage) failed: {e}")
+    # Cleanup stale output files on startup
+    try:
+        from app.api.library_routes import cleanup_output_files
+        settings_local = get_settings()
+        if settings_local.output_ttl_hours > 0:
+            result = cleanup_output_files(settings_local.output_ttl_hours)
+            if result["deleted_count"]:
+                logger.info(f"Startup output cleanup: {result['deleted_count']} files, {result['freed_bytes'] / (1024 * 1024):.1f} MB freed")
+    except Exception as e:
+        logger.warning(f"Startup output cleanup failed: {e}")
     yield
     # Shutdown
     from app.db import close_supabase
