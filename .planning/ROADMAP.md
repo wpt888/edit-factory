@@ -284,7 +284,7 @@ Plans:
 | 55. Security Hardening | 3/3 | Complete    | 2026-03-02 | - |
 | 56. Testing Foundation | 3/3 | Complete    | 2026-03-02 | - |
 | 57. DevOps & CI | 2/2 | Complete    | 2026-03-02 | - |
-| 58. Architecture Upgrade | v11 | 0/TBD | Not started | - |
+| 58. Architecture Upgrade | 2/3 | In Progress|  | - |
 | 59. Performance Optimization | v11 | 0/TBD | Not started | - |
 | 60. Monitoring & Observability | v11 | 0/TBD | Not started | - |
 | 61. UX Polish — Interactions | v11 | 0/TBD | Not started | - |

@@ -56,7 +56,7 @@ Requirements for Production Polish & Platform Hardening. Each maps to roadmap ph
 
 - [ ] **ARCH-01**: Background jobs use Redis-backed durable queue with retry logic (replaces BackgroundTasks)
 - [ ] **ARCH-02**: Pipeline and assembly state persists to Supabase database (not in-memory dicts)
-- [ ] **ARCH-03**: Assembly jobs use the same JobStorage pattern as video processing jobs
+- [x] **ARCH-03**: Assembly jobs use the same JobStorage pattern as video processing jobs
 - [ ] **ARCH-04**: File storage supports cloud backend (S3 or Supabase Storage) alongside local filesystem
 
 ## Future Requirements
@@ -125,7 +125,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PERF-04 | Phase 59 | Pending |
 | ARCH-01 | Phase 58 | Pending |
 | ARCH-02 | Phase 58 | Pending |
-| ARCH-03 | Phase 58 | Pending |
+| ARCH-03 | Phase 58 | Complete |
 | ARCH-04 | Phase 58 | Pending |
 
 **Coverage:**

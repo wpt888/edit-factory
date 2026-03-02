@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v11
-milestone_name: Production Polish & Platform Hardening
-status: in_progress
-last_updated: "2026-03-02"
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-03-02T11:29:45.306Z"
 progress:
-  total_phases: 8
-  completed_phases: 3
-  total_plans: 8
-  completed_plans: 8
+  total_phases: 28
+  completed_phases: 27
+  total_plans: 73
+  completed_plans: 72
 ---
 
 # Project State
@@ -50,6 +50,7 @@ Progress: [████░░░░░░] 37% (v11: 3/8 phases complete)
 | v9 Assembly Fix + Overlays | 4 (43-46) | 6 | Shipped 2026-02-28 |
 | v10 Desktop Launcher | 8 (47-54) | 18 | Shipped 2026-03-01 |
 | v11 Production Polish | 8 (55-62) | 8+ | In Progress |
+| Phase 58 P58-03 | 2 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -79,6 +80,8 @@ Recent decisions affecting v11:
 - [Phase 57-02]: mypy uses permissive flags (--ignore-missing-imports --no-strict-optional --allow-untyped-defs) — codebase not fully typed
 - [Phase 57-02]: ruff with lenient ignore list (E501,E402,W291,W292,W293) — codebase has long lines and import ordering
 - [Phase 57-02]: Playwright E2E tests excluded from CI — require running dev server and Supabase
+- [Phase 58]: Assembly jobs dual-write to both JobStorage and legacy editai_assembly_jobs table — no data loss during transition
+- [Phase 58]: JobStorage-first read in get_assembly_status checks job_type='assembly' before using the hit — prevents false positives
 
 ### Pending Todos
 
