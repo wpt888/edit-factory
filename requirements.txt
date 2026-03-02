@@ -90,3 +90,4 @@ lxml>=5.0.0
 
 # Testing
 pytest
+pytest-cov>=4.0
