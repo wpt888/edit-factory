@@ -154,8 +154,10 @@ def _evict_old_progress():
         _generation_progress.pop(key, None)
 
 
-def update_generation_progress(project_id: str, percentage: int, current_step: str, estimated_remaining: Optional[int] = None):
-    """Update generation progress for a project (in-memory only)."""
+def update_generation_progress(project_id: str, percentage: int, current_step: str,
+                                estimated_remaining: Optional[int] = None,
+                                job_id: Optional[str] = None):
+    """Update generation progress for a project (in-memory + optional JobStorage persistence)."""
     with _progress_lock:
         _generation_progress[project_id] = {
             "percentage": percentage,
@@ -164,12 +166,42 @@ def update_generation_progress(project_id: str, percentage: int, current_step: s
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
         _evict_old_progress()
+    if job_id:
+        try:
+            from app.services.job_storage import get_job_storage
+            get_job_storage().update_job(job_id, {
+                "progress": current_step,
+                "progress_percentage": percentage,
+                "estimated_remaining": estimated_remaining,
+            })
+        except Exception as e:
+            logger.warning(f"Failed to persist progress for job {job_id}: {e}")
 
 
 def get_generation_progress(project_id: str) -> Optional[dict]:
-    """Get generation progress for a project from in-memory dict."""
+    """Get generation progress for a project. Memory-first, falls back to JobStorage."""
     with _progress_lock:
-        return _generation_progress.get(project_id)
+        mem = _generation_progress.get(project_id)
+        if mem:
+            return mem
+    # Fallback: query JobStorage by project_id directly (no O(N) scan)
+    try:
+        from app.services.job_storage import get_job_storage
+        active_jobs = get_job_storage().get_jobs_by_project(project_id, status="processing")
+        if not active_jobs:
+            active_jobs = get_job_storage().get_jobs_by_project(project_id, status="pending")
+        if active_jobs:
+            job = active_jobs[0]  # Most recent
+            data = job.get("data", job)  # Handle both raw and nested formats
+            return {
+                "percentage": data.get("progress_percentage", 0),
+                "current_step": data.get("progress", "Processing..."),
+                "estimated_remaining": data.get("estimated_remaining"),
+                "updated_at": job.get("updated_at"),
+            }
+    except Exception as e:
+        logger.warning(f"Failed to load progress from JobStorage: {e}")
+    return None
 
 
 def clear_generation_progress(project_id: str):

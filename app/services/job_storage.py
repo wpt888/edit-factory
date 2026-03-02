@@ -278,6 +278,67 @@ class JobStorage:
         with self._cancelled_lock:
             self._cancelled_jobs.pop(job_id, None)
 
+    def get_jobs_by_project(self, project_id: str, status: Optional[str] = None) -> list:
+        """Get jobs for a specific project_id stored in job data.
+        Avoids O(N) scan of list_jobs by querying directly by project_id.
+        """
+        results = []
+        # Try Supabase first
+        if self._supabase:
+            try:
+                query = self._supabase.table("jobs").select("*").eq("data->>project_id", project_id)
+                if status:
+                    query = query.eq("status", status)
+                result = query.order("created_at", desc=True).limit(10).execute()
+                if result.data:
+                    return result.data
+            except Exception as e:
+                logger.warning(f"Supabase query by project_id failed: {e}")
+        # Fallback: scan in-memory jobs
+        for job_id, job in self._memory_store.items():
+            data = job if isinstance(job, dict) else {}
+            if data.get("project_id") == project_id:
+                if status is None or data.get("status") == status:
+                    results.append(data)
+        return results
+
+    def cleanup_stale_jobs(self, max_age_minutes: int = 10) -> int:
+        """Mark jobs stuck in 'processing' for too long as 'failed'.
+        Called on server startup to recover from crashes.
+        Returns count of jobs marked failed.
+        """
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+        cutoff_iso = cutoff.isoformat()
+        cleaned = 0
+
+        # Try Supabase first
+        if self._supabase:
+            try:
+                result = self._supabase.table("jobs").select("id,status,updated_at").eq("status", "processing").lt("updated_at", cutoff_iso).execute()
+                if result.data:
+                    for job in result.data:
+                        self.update_job(job["id"], {
+                            "status": "failed",
+                            "progress": "Server restarted — job did not complete",
+                            "error": "Job was still processing when server restarted"
+                        })
+                        cleaned += 1
+                    logger.info(f"Cleaned up {cleaned} stale processing jobs")
+            except Exception as e:
+                logger.warning(f"Supabase stale job cleanup failed: {e}")
+
+        # Also clean in-memory jobs
+        for job_id, job in list(self._memory_store.items()):
+            if isinstance(job, dict) and job.get("status") == "processing":
+                updated = job.get("updated_at", "")
+                if updated and updated < cutoff_iso:
+                    job["status"] = "failed"
+                    job["error"] = "Job was still processing when server restarted"
+                    cleaned += 1
+
+        return cleaned
+
     def cleanup_old_jobs(self, days: int = 7) -> int:
         """
         Cleanup jobs older than N days from both Supabase and in-memory store.
