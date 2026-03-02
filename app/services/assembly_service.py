@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Dict
 
 from app.config import get_settings
+from app.services.srt_validator import sanitize_srt_full
 
 logger = logging.getLogger(__name__)
 
@@ -1258,7 +1259,7 @@ class AssemblyService:
 
             srt_path = temp_dir / "subtitles.srt"
             with open(srt_path, 'w', encoding='utf-8') as f:
-                f.write(srt_content)
+                f.write(sanitize_srt_full(srt_content))
 
             # Auto-save to TTS Library (non-blocking, skip if reusing library audio)
             if not skip_library_save:

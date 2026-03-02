@@ -30,6 +30,8 @@ except ImportError:
     GeminiVideoAnalyzer = None
     AnalyzedSegment = None
 
+from app.services.srt_validator import sanitize_srt_full as _sanitize_srt_full
+
 logger = logging.getLogger(__name__)
 
 
@@ -1924,7 +1926,7 @@ class VideoProcessorService:
                 # Adăugăm subtitrări
                 srt_path = self.temp_dir / f"{variant_name}_subs.srt"
                 with open(srt_path, 'w', encoding='utf-8') as f:
-                    f.write(srt_content)
+                    f.write(_sanitize_srt_full(srt_content))
 
                 report_progress(f"Adding subtitles to variant {variant_idx + 1}")
                 current_video = self.editor.add_subtitles(

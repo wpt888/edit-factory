@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 import edge_tts
+from app.services.srt_validator import sanitize_srt_full
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +244,7 @@ class EdgeTTSService:
 
         # Salvăm SRT
         with open(srt_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(srt_content))
+            f.write(sanitize_srt_full("\n".join(srt_content)))
 
         logger.info(f"Generated audio + SRT: {audio_path}, {srt_path}")
         return {"audio": audio_path, "srt": srt_path}

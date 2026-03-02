@@ -2309,7 +2309,7 @@ async def _render_final_clip_task(
         if content_data and content_data.get("srt_content"):
             srt_path = temp_dir / f"srt_{clip_id}.srt"
             with open(srt_path, "w", encoding="utf-8") as f:
-                srt_text = sanitize_srt_text(content_data["srt_content"])
+                srt_text = sanitize_srt_full(content_data["srt_content"])
                 f.write(srt_text)
             logger.info(f"Using user-provided SRT for clip {clip_id}")
         elif tts_timestamps:
@@ -2335,7 +2335,7 @@ async def _render_final_clip_task(
                 if auto_srt:
                     srt_path = temp_dir / f"srt_{clip_id}.srt"
                     with open(srt_path, "w", encoding="utf-8") as f:
-                        f.write(auto_srt)
+                        f.write(sanitize_srt_full(auto_srt))
                     logger.info(f"Auto-generated SRT from TTS timestamps for clip {clip_id}")
                 else:
                     logger.warning(f"TTS timestamps produced empty SRT for clip {clip_id}")

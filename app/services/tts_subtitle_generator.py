@@ -7,6 +7,7 @@ and providing perfect sync with voiceover audio.
 """
 import logging
 from typing import List, Optional, Tuple
+from app.services.srt_validator import sanitize_srt_for_ffmpeg
 
 logger = logging.getLogger(__name__)
 
@@ -331,4 +332,5 @@ def generate_srt_from_timestamps(
 
     logger.info(f"Generated SRT with {srt_index - 1} subtitle entries from {len(words)} words ({len(characters)} characters)")
 
+    srt_content = sanitize_srt_for_ffmpeg(srt_content)
     return srt_content

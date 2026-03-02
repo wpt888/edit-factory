@@ -29,6 +29,7 @@ from app.api.auth import ProfileContext, get_profile_context
 from app.config import get_settings
 from app.db import get_supabase
 from app.services.job_storage import get_job_storage
+from app.services.srt_validator import sanitize_srt_full
 
 logger = logging.getLogger(__name__)
 
@@ -705,7 +706,7 @@ async def _generate_product_video_task(
             srt_content = generate_srt_from_timestamps(tts_timestamps)
             if srt_content:
                 srt_path = temp_dir / f"subtitles_{job_id}.srt"
-                srt_path.write_text(srt_content, encoding="utf-8")
+                srt_path.write_text(sanitize_srt_full(srt_content), encoding="utf-8")
                 logger.info("[%s] SRT subtitles written: %s", job_id, srt_path)
             else:
                 logger.warning("[%s] Empty SRT content — skipping subtitles", job_id)
