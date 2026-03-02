@@ -14,6 +14,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Background
 from fastapi.responses import FileResponse
 
 from app.config import get_settings, APP_VERSION
+from app.services.file_storage import get_file_storage
 from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import (
     validate_upload_size, validate_tts_text_length,
@@ -612,11 +613,27 @@ async def download_result(job_id: str, profile: ProfileContext = Depends(get_pro
     result = job.get("result", {})
     final_video = result.get("final_video")
 
-    if not final_video or not Path(final_video).exists():
+    if not final_video:
+        raise HTTPException(status_code=404, detail="Output file not found")
+
+    local_path = Path(final_video)
+    if not local_path.exists():
+        # May be a remote storage key — attempt retrieval
+        file_storage = get_file_storage()
+        settings = get_settings()
+        cache_path = settings.output_dir / ".storage_cache" / Path(final_video).name
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path = file_storage.retrieve(final_video, cache_path)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"FileStorage.retrieve failed for {final_video}: {e}")
+
+    if not local_path.exists():
         raise HTTPException(status_code=404, detail="Output file not found")
 
     return FileResponse(
-        path=final_video,
+        path=str(local_path),
         media_type="video/mp4",
         filename=f"{job['output_name']}_final.mp4"
     )

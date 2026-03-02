@@ -298,6 +298,9 @@ async def serve_file(
     """
     Servește fișiere (thumbnails, videos) din directoarele output.
     Security: Permite doar fișiere din directoarele permise.
+
+    Supports both local file paths and remote storage keys (when FILE_STORAGE_BACKEND=supabase).
+    Remote keys are retrieved locally before serving.
     """
     settings = get_settings()
     full_path = Path(file_path)
@@ -327,6 +330,23 @@ async def serve_file(
 
     if not is_allowed:
         raise HTTPException(status_code=403, detail="Access denied")
+
+    # If the file doesn't exist locally, try retrieving it from the storage backend
+    if not resolved_path.exists():
+        file_storage = get_file_storage()
+        # For non-local backends, remote_key is the relative key (not an absolute path)
+        if not full_path.is_absolute() or not Path(file_path).is_absolute():
+            remote_key = file_path  # Use the original key passed in
+        else:
+            remote_key = file_path
+        try:
+            cache_path = settings.output_dir / ".storage_cache" / Path(file_path).name
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            resolved_path = file_storage.retrieve(remote_key, cache_path)
+        except Exception as e:
+            logger.warning(f"FileStorage.retrieve failed for {file_path}: {e}")
+            raise HTTPException(status_code=404, detail="File not found")
+
     if not resolved_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
     if not resolved_path.is_file():
