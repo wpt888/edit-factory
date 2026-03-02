@@ -149,7 +149,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 - [x] **Phase 57: DevOps & CI** - GitHub Actions pipeline, pinned dependencies, git-tag versioning (completed 2026-03-02)
 - [x] **Phase 58: Architecture Upgrade** - Redis job queue, persistent pipeline/assembly state, cloud storage support (completed 2026-03-02)
 - [x] **Phase 59: Performance Optimization** - Cursor pagination, SSE job progress, profile caching, TTS cache metrics (completed 2026-03-02)
-- [ ] **Phase 60: Monitoring & Observability** - Sentry, extended health checks, failed render cleanup, file TTL
+- [x] **Phase 60: Monitoring & Observability** - Sentry, extended health checks, failed render cleanup, file TTL (completed 2026-03-02)
 - [ ] **Phase 61: UX Polish — Interactions** - Inline video player, AlertDialogs, soft-delete trash, drag-drop upload, keyboard shortcuts, hover preview
 - [ ] **Phase 62: UX Polish — Organization** - UI language consistency, dead page removal, clip tagging
 
@@ -286,7 +286,7 @@ Plans:
 | 57. DevOps & CI | 2/2 | Complete    | 2026-03-02 | - |
 | 58. Architecture Upgrade | 3/3 | Complete    | 2026-03-02 | - |
 | 59. Performance Optimization | 3/3 | Complete    | 2026-03-02 | - |
-| 60. Monitoring & Observability | 1/2 | In Progress|  | - |
+| 60. Monitoring & Observability | 2/2 | Complete   | 2026-03-02 | - |
 | 61. UX Polish — Interactions | v11 | 0/TBD | Not started | - |
 | 62. UX Polish — Organization | v11 | 0/TBD | Not started | - |
 

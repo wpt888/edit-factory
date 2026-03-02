@@ -55,6 +55,7 @@ Progress: [██████░░░░] 63% (v11: 5/8 phases complete)
 | Phase 59 P59-02 | 15 | 2 tasks | 3 files |
 | Phase 59 P03 | 15 | 3 tasks | 4 files |
 | Phase 59 P59-01 | 20 | 2 tasks | 2 files |
+| Phase 60 P60-01 | 17 | 2 tasks | 6 files |
 | Phase 60 P60-02 | 12 | 2 tasks | 3 files |
 
 ## Accumulated Context
@@ -99,6 +100,9 @@ Recent decisions affecting v11:
 - [Phase 59]: useJobPolling hook preserves identical external interface — all consumers work without code changes
 - [Phase 59]: Cursor pagination uses created_at ISO timestamp as cursor key; .lt() filter on data query only, total count query is cursor-free
 - [Phase 59-01]: IntersectionObserver sentinel pattern for infinite scroll; hasMore resets on fresh load to prevent stale state
+- [Phase 60-01]: SENTRY_DSN env var enables Sentry in all modes (not just desktop); desktop config.json path preserved as legacy fallback
+- [Phase 60-01]: Health status: ok = Supabase+FFmpeg up; degraded = one down; unhealthy = both down; Redis does NOT degrade status
+- [Phase 60-01]: Supabase ping uses editai_projects.select(id, count=exact).limit(0) — zero data transfer lightweight check
 - [Phase 60]: render_succeeded flag (not status check) determines whether to clean partial output in finally block
 - [Phase 60]: Output TTL cleanup targets output/finals/ and output/tts/ only — raw clips never touched; OUTPUT_TTL_HOURS=0 disables startup cleanup
 
