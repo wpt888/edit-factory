@@ -2,9 +2,8 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Job } from "@/types/video-processing";
-import { apiFetch, handleApiError } from "@/lib/api";
 
-function extractProgress(job: Job): number {
+export function extractProgress(job: Job): number {
   const raw = job.progress;
   // Try numeric string first
   const num = parseInt(raw);
@@ -29,7 +28,7 @@ function extractProgress(job: Job): number {
 }
 
 interface UseJobPollingOptions {
-  /** Polling interval in milliseconds (default: 2000) */
+  /** Polling interval in milliseconds (default: 2000) — used only for SSE fallback polling */
   interval?: number;
   /** Called on each progress update */
   onProgress?: (progress: number, status: string, job: Job) => void;
@@ -40,11 +39,11 @@ interface UseJobPollingOptions {
 }
 
 interface UseJobPollingReturn {
-  /** Start polling for a specific job */
+  /** Start SSE streaming (or polling fallback) for a specific job */
   startPolling: (jobId: string) => void;
-  /** Stop polling */
+  /** Stop SSE streaming (or polling) */
   stopPolling: () => void;
-  /** Current polling state */
+  /** Current streaming/polling state */
   isPolling: boolean;
   /** Current job data */
   currentJob: Job | null;
@@ -59,14 +58,20 @@ interface UseJobPollingReturn {
 }
 
 /**
- * Hook for polling job status with ETA calculation
+ * Hook for real-time job progress via Server-Sent Events (SSE).
+ *
+ * Uses EventSource to open a single persistent connection to /jobs/{jobId}/stream.
+ * Falls back to setTimeout-based polling if EventSource is not available (SSR, old browsers).
+ *
+ * Interface is backward-compatible with the previous polling implementation —
+ * all consumers (library page, product-video page, progress-tracker) work unchanged.
  */
 export function useJobPolling(options: UseJobPollingOptions): UseJobPollingReturn {
   const {
     interval = 2000,
     onProgress,
     onComplete,
-    onError
+    onError,
   } = options;
 
   const [isPolling, setIsPolling] = useState(false);
@@ -76,6 +81,7 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
   const [elapsedTime, setElapsedTime] = useState(0);
   const [estimatedRemaining, setEstimatedRemaining] = useState("");
 
+  const eventSourceRef = useRef<EventSource | null>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
   const startTimeRef = useRef<number | null>(null);
   const elapsedIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -108,11 +114,15 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
     return `~${minutes}m ${seconds}s`;
   }, []);
 
-  // Stop polling and cleanup
-  const stopPolling = useCallback(() => {
+  // Cleanup SSE connection and timers
+  const cleanup = useCallback(() => {
     isCancelledRef.current = true;
     setIsPolling(false);
 
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
     if (pollingRef.current) {
       clearTimeout(pollingRef.current);
       pollingRef.current = null;
@@ -123,82 +133,161 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
     }
   }, []);
 
-  // Main polling function
-  const poll = useCallback(async (jobId: string) => {
-    if (isCancelledRef.current) return;
+  // Exported stopPolling calls cleanup internally
+  const stopPolling = useCallback(() => {
+    cleanup();
+  }, [cleanup]);
 
-    try {
-      const response = await apiFetch(`/jobs/${jobId}`);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+  // ─── SSE implementation ───────────────────────────────────────────────────
 
-      const job: Job = await response.json();
+  const startSSE = useCallback((jobId: string) => {
+    const apiBase =
+      process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+    const url = `${apiBase}/jobs/${jobId}/stream`;
+    const eventSource = new EventSource(url);
+    eventSourceRef.current = eventSource;
+
+    eventSource.addEventListener("progress", (e: MessageEvent) => {
+      if (isCancelledRef.current) return;
+      const data = JSON.parse(e.data);
+      const job: Job = {
+        job_id: data.job_id,
+        status: data.status,
+        progress: data.progress,
+      };
       setCurrentJob(job);
-
-      // Parse progress
       const progressNum = extractProgress(job);
       setProgress(progressNum);
-      setStatusText(job.status);
-
-      // Calculate ETA
+      setStatusText(data.status);
       const elapsed = startTimeRef.current
         ? Math.floor((Date.now() - startTimeRef.current) / 1000)
         : 0;
       setEstimatedRemaining(calculateETA(progressNum, elapsed));
+      onProgressRef.current?.(progressNum, data.status, job);
+    });
 
-      // Notify progress callback
-      onProgressRef.current?.(progressNum, job.status, job);
+    eventSource.addEventListener("completed", (e: MessageEvent) => {
+      if (isCancelledRef.current) return;
+      const data = JSON.parse(e.data);
+      setProgress(100);
+      setStatusText("completed");
+      onCompleteRef.current?.(data.result);
+      cleanup();
+    });
 
-      if (job.status === "completed") {
-        stopPolling();
-        setProgress(100);
-        onCompleteRef.current?.(job.result);
-      } else if (job.status === "failed") {
-        stopPolling();
-        onErrorRef.current?.(job.error || "Job failed");
-      } else if (job.status === "processing" || job.status === "pending") {
-        // Continue polling
-        pollingRef.current = setTimeout(() => poll(jobId), interval);
-      }
-    } catch (error) {
-      handleApiError(error, "Eroare la actualizarea statusului");
-      // Retry on network errors
+    eventSource.addEventListener("failed", (e: MessageEvent) => {
+      if (isCancelledRef.current) return;
+      const data = JSON.parse(e.data);
+      onErrorRef.current?.(data.error || "Job failed");
+      cleanup();
+    });
+
+    // heartbeat events are intentionally ignored — they just keep the connection alive
+
+    eventSource.onerror = () => {
+      // EventSource auto-reconnects by default on transient errors.
+      // Only log if we haven't cancelled intentionally.
       if (!isCancelledRef.current) {
-        pollingRef.current = setTimeout(() => poll(jobId), interval * 2);
+        console.warn("[useJobPolling] SSE connection error, auto-reconnecting...");
       }
-    }
-  }, [interval, calculateETA, stopPolling]);
+    };
+  }, [calculateETA, cleanup]);
 
-  // Start polling for a job
-  const startPolling = useCallback((jobId: string) => {
-    // Reset state from any previous polling session
-    isCancelledRef.current = false;
-    setCurrentJob(null);
-    setIsPolling(true);
-    setProgress(10);
-    setStatusText("pending");
-    setElapsedTime(0);
-    setEstimatedRemaining("Calculez...");
-    startTimeRef.current = Date.now();
+  // ─── Polling fallback (for SSR / browsers without EventSource) ───────────
 
-    // Start elapsed time counter
-    elapsedIntervalRef.current = setInterval(() => {
-      if (startTimeRef.current) {
-        setElapsedTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
+  const pollFallback = useCallback(
+    async (jobId: string) => {
+      if (isCancelledRef.current) return;
+
+      try {
+        // Dynamic import to avoid issues during SSR
+        const { apiFetch } = await import("@/lib/api");
+        const response = await apiFetch(`/jobs/${jobId}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const job: Job = await response.json();
+        setCurrentJob(job);
+
+        const progressNum = extractProgress(job);
+        setProgress(progressNum);
+        setStatusText(job.status);
+
+        const elapsed = startTimeRef.current
+          ? Math.floor((Date.now() - startTimeRef.current) / 1000)
+          : 0;
+        setEstimatedRemaining(calculateETA(progressNum, elapsed));
+        onProgressRef.current?.(progressNum, job.status, job);
+
+        if (job.status === "completed") {
+          setProgress(100);
+          onCompleteRef.current?.(job.result);
+          cleanup();
+        } else if (job.status === "failed") {
+          onErrorRef.current?.(job.error || "Job failed");
+          cleanup();
+        } else if (
+          job.status === "processing" ||
+          job.status === "pending"
+        ) {
+          pollingRef.current = setTimeout(() => pollFallback(jobId), interval);
+        }
+      } catch (error) {
+        const apiModule = await import("@/lib/api");
+        apiModule.handleApiError(error, "Eroare la actualizarea statusului");
+        if (!isCancelledRef.current) {
+          pollingRef.current = setTimeout(
+            () => pollFallback(jobId),
+            interval * 2
+          );
+        }
       }
-    }, 1000);
+    },
+    [interval, calculateETA, cleanup]
+  );
 
-    // Start polling
-    poll(jobId);
-  }, [poll]);
+  // ─── Start (SSE preferred, polling fallback) ─────────────────────────────
+
+  const startPolling = useCallback(
+    (jobId: string) => {
+      // Reset state from any previous session
+      isCancelledRef.current = false;
+      setCurrentJob(null);
+      setIsPolling(true);
+      setProgress(10);
+      setStatusText("pending");
+      setElapsedTime(0);
+      setEstimatedRemaining("Calculez...");
+      startTimeRef.current = Date.now();
+
+      // Elapsed time counter (kept running throughout job)
+      elapsedIntervalRef.current = setInterval(() => {
+        if (startTimeRef.current) {
+          setElapsedTime(
+            Math.floor((Date.now() - startTimeRef.current) / 1000)
+          );
+        }
+      }, 1000);
+
+      if (typeof EventSource !== "undefined") {
+        // SSE path — primary implementation
+        startSSE(jobId);
+      } else {
+        // Fallback path for SSR or very old browsers
+        console.warn(
+          "[useJobPolling] EventSource not available, falling back to polling"
+        );
+        pollFallback(jobId);
+      }
+    },
+    [startSSE, pollFallback]
+  );
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      stopPolling();
+      cleanup();
     };
-  }, [stopPolling]);
+  }, [cleanup]);
 
   return {
     startPolling,
