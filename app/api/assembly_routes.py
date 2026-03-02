@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from app.api.auth import ProfileContext, get_profile_context
 from app.db import get_supabase
 from app.services.assembly_service import get_assembly_service
+from app.services.job_storage import get_job_storage
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/assembly", tags=["assembly"])
@@ -331,6 +332,19 @@ async def render_assembly(
     # Persist to DB
     _db_create_assembly_job(job_id, profile.profile_id, _assembly_jobs[job_id])
 
+    # Also create job in unified JobStorage (dual-write for backward compatibility)
+    job_storage = get_job_storage()
+    job_storage.create_job({
+        "job_id": job_id,
+        "job_type": "assembly",
+        "status": "processing",
+        "progress": "Initializing assembly",
+        "progress_percentage": 0,
+        "current_step": "Initializing assembly",
+        "profile_id": profile.profile_id,
+        "started_at": _assembly_jobs[job_id]["started_at"],
+    }, profile_id=profile.profile_id)
+
     # Background task function
     async def do_assembly():
         try:
@@ -339,6 +353,12 @@ async def render_assembly(
             # Update progress
             _assembly_jobs[job_id]["current_step"] = "Generating TTS audio"
             _assembly_jobs[job_id]["progress"] = 10
+            get_job_storage().update_job(job_id, {
+                "status": "processing",
+                "progress": "Generating TTS audio",
+                "progress_percentage": 10,
+                "current_step": "Generating TTS audio",
+            })
 
             assembly_service = get_assembly_service()
 
@@ -371,6 +391,13 @@ async def render_assembly(
             _assembly_jobs[job_id]["current_step"] = "Assembly complete"
             _assembly_jobs[job_id]["final_video_path"] = str(final_video_path)
             _assembly_jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            get_job_storage().update_job(job_id, {
+                "status": "completed",
+                "progress": "Assembly complete",
+                "progress_percentage": 100,
+                "current_step": "Complete",
+                "final_video_path": str(final_video_path),
+            })
 
             logger.info(f"[Profile {profile.profile_id}] Assembly job {job_id} completed: {final_video_path}")
 
@@ -384,6 +411,11 @@ async def render_assembly(
             _assembly_jobs[job_id]["current_step"] = "Assembly failed"
             _assembly_jobs[job_id]["error"] = str(e)
             _assembly_jobs[job_id]["failed_at"] = datetime.now(timezone.utc).isoformat()
+            get_job_storage().update_job(job_id, {
+                "status": "failed",
+                "progress": "Assembly failed",
+                "error": str(e),
+            })
 
             # Persist to DB
             _db_update_assembly_job(job_id, _assembly_jobs[job_id])
@@ -405,7 +437,23 @@ async def get_assembly_status(
     """
     Get assembly job status.
     """
-    # Try in-memory first, then DB fallback
+    # Try JobStorage first (unified)
+    job_storage = get_job_storage()
+    job_data = job_storage.get_job(job_id)
+
+    if job_data and job_data.get("job_type") == "assembly":
+        error_msg = None
+        if job_data.get("error"):
+            error_msg = "Processing failed. Check server logs for details."
+        return AssemblyStatusResponse(
+            status=job_data.get("status", "processing"),
+            progress=job_data.get("progress_percentage", 0),
+            current_step=job_data.get("current_step", ""),
+            final_video_path=job_data.get("final_video_path"),
+            error=error_msg,
+        )
+
+    # Fallback to legacy _assembly_jobs dict and DB
     if job_id not in _assembly_jobs:
         loaded = _db_load_assembly_job(job_id)
         if not loaded:
