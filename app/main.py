@@ -160,6 +160,14 @@ async def lifespan(app: FastAPI):
     await _recover_stuck_clips()
     await _recover_stuck_jobs()
     await _cleanup_expired_pipelines()
+    # Mark stale JobStorage jobs (processing >10 min) as failed for crash recovery
+    try:
+        from app.services.job_storage import get_job_storage
+        cleaned = get_job_storage().cleanup_stale_jobs(max_age_minutes=10)
+        if cleaned:
+            logger.info(f"Startup: marked {cleaned} stale jobs as failed via JobStorage")
+    except Exception as e:
+        logger.warning(f"Startup job cleanup (JobStorage) failed: {e}")
     yield
     # Shutdown
     from app.db import close_supabase
