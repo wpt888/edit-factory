@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -88,6 +88,12 @@ function LibrarieContent() {
     searchParams.get("postiz") || "all"
   );
 
+  // Pagination state
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
   // Rename state
   const [renameClipId, setRenameClipId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -132,13 +138,29 @@ function LibrarieContent() {
     [router, searchParams]
   );
 
-  // Fetch all clips
-  const fetchAllClips = async () => {
+  // Fetch all clips — supports cursor-based pagination
+  const fetchAllClips = async (cursor?: string | null) => {
     try {
-      setLoading(true);
-      const res = await apiGetWithRetry("/library/all-clips");
+      if (cursor) {
+        setLoadingMore(true);
+      } else {
+        setLoading(true);
+      }
+      const url = cursor
+        ? `/library/all-clips?cursor=${encodeURIComponent(cursor)}`
+        : "/library/all-clips";
+      const res = await apiGetWithRetry(url);
       const data = await res.json();
-      setClips(data.clips || []);
+      if (cursor) {
+        // Append to existing clips (subsequent pages)
+        setClips((prev) => [...prev, ...(data.clips || [])]);
+      } else {
+        // Replace clips (first page load or refresh) — reset pagination
+        setClips(data.clips || []);
+        setHasMore(true);
+      }
+      setNextCursor(data.next_cursor ?? null);
+      setHasMore(data.has_more ?? false);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         window.location.href = "/login";
@@ -147,8 +169,31 @@ function LibrarieContent() {
       handleApiError(error, "Eroare la incarcarea clipurilor");
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   };
+
+  // Load next page via cursor
+  const fetchNextPage = useCallback(() => {
+    if (!hasMore || loadingMore) return;
+    fetchAllClips(nextCursor);
+  }, [hasMore, loadingMore, nextCursor]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // IntersectionObserver — trigger fetchNextPage when sentinel enters viewport
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          fetchNextPage();
+        }
+      },
+      { threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [fetchNextPage]);
 
 
   // Apply filters
@@ -458,7 +503,7 @@ function LibrarieContent() {
               Toate clipurile exportate din proiecte
             </p>
           </div>
-          <Button onClick={fetchAllClips} variant="outline" size="sm">
+          <Button onClick={() => fetchAllClips()} variant="outline" size="sm">
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
           </Button>
@@ -895,6 +940,24 @@ function LibrarieContent() {
             })}
           </div>
         )}
+        {/* Infinite scroll sentinel and status indicators */}
+        {!loading && clips.length > 0 && (
+          <>
+            {loadingMore && (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <span className="ml-2 text-sm text-muted-foreground">Se incarca mai multe clipuri...</span>
+              </div>
+            )}
+            {!hasMore && clips.length > 0 && (
+              <div className="flex items-center justify-center py-6">
+                <p className="text-sm text-muted-foreground">Toate clipurile au fost incarcate ({clips.length} total)</p>
+              </div>
+            )}
+            <div ref={sentinelRef} className="h-4" aria-hidden="true" />
+          </>
+        )}
+
         {/* Publish Dialog */}
         {publishDialogClip && (
           <PublishDialog
