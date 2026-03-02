@@ -1309,9 +1309,9 @@ async def preview_variant(
 @router.post("/render/{pipeline_id}", response_model=PipelineRenderResponse)
 @limiter.limit("5/minute")
 async def render_variants(
-    http_request: Request,
+    request: Request,
     pipeline_id: str,
-    request: PipelineRenderRequest,
+    render_request: PipelineRenderRequest,
     background_tasks: BackgroundTasks,
     profile: ProfileContext = Depends(get_profile_context)
 ):
@@ -1331,7 +1331,7 @@ async def render_variants(
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     # Validate all variant indices
-    for idx in request.variant_indices:
+    for idx in render_request.variant_indices:
         if idx < 0 or idx >= len(pipeline["scripts"]):
             raise HTTPException(
                 status_code=400,
@@ -1340,17 +1340,17 @@ async def render_variants(
 
     logger.info(
         f"[Profile {profile.profile_id}] Starting render for pipeline {pipeline_id}, "
-        f"variants: {request.variant_indices}"
+        f"variants: {render_request.variant_indices}"
     )
-    if request.interstitial_slides:
+    if render_request.interstitial_slides:
         logger.info(
             "[Profile %s] Received %d variant(s) with interstitial slides",
-            profile.profile_id, len(request.interstitial_slides)
+            profile.profile_id, len(render_request.interstitial_slides)
         )
-    if request.pip_overlays:
+    if render_request.pip_overlays:
         logger.info(
             "[Profile %s] Received %d segment(s) with PiP overlays",
-            profile.profile_id, len(request.pip_overlays)
+            profile.profile_id, len(render_request.pip_overlays)
         )
 
     # Fetch preset data
@@ -1361,16 +1361,16 @@ async def render_variants(
     try:
         preset_result = supabase.table("editai_export_presets")\
             .select("*")\
-            .eq("name", request.preset_name)\
+            .eq("name", render_request.preset_name)\
             .single()\
             .execute()
 
         if preset_result.data:
             preset_data = preset_result.data
         else:
-            logger.warning(f"Preset '{request.preset_name}' not found, using default")
+            logger.warning(f"Preset '{render_request.preset_name}' not found, using default")
             preset_data = {
-                "name": request.preset_name,
+                "name": render_request.preset_name,
                 "width": 1080,
                 "height": 1920,
                 "fps": 30,
@@ -1382,7 +1382,7 @@ async def render_variants(
     except Exception as e:
         logger.error(f"Failed to fetch preset: {e}")
         preset_data = {
-            "name": request.preset_name,
+            "name": render_request.preset_name,
             "width": 1080,
             "height": 1920,
             "fps": 30,
@@ -1394,21 +1394,21 @@ async def render_variants(
 
     # Build subtitle settings dict (camelCase keys to match SubtitleStyleConfig.from_dict)
     subtitle_settings = {
-        "fontSize": request.font_size,
-        "fontFamily": request.font_family,
-        "textColor": request.text_color,
-        "outlineColor": request.outline_color,
-        "outlineWidth": request.outline_width,
-        "positionY": request.position_y,
-        "shadowDepth": request.shadow_depth,
-        "enableGlow": request.enable_glow,
-        "glowBlur": request.glow_blur,
-        "adaptiveSizing": request.adaptive_sizing
+        "fontSize": render_request.font_size,
+        "fontFamily": render_request.font_family,
+        "textColor": render_request.text_color,
+        "outlineColor": render_request.outline_color,
+        "outlineWidth": render_request.outline_width,
+        "positionY": render_request.position_y,
+        "shadowDepth": render_request.shadow_depth,
+        "enableGlow": render_request.enable_glow,
+        "glowBlur": render_request.glow_blur,
+        "adaptiveSizing": render_request.adaptive_sizing
     }
 
     # Store source_video_ids in pipeline state for reference
-    if request.source_video_ids:
-        pipeline["source_video_ids"] = request.source_video_ids
+    if render_request.source_video_ids:
+        pipeline["source_video_ids"] = render_request.source_video_ids
 
     # Lock to guard concurrent writes to pipeline["render_jobs"]
     pipeline_id_str = str(pipeline_id)
@@ -1421,7 +1421,7 @@ async def render_variants(
 
     # Initialize render jobs for each variant and collect which ones to render
     variant_indices_to_render = []
-    for variant_index in request.variant_indices:
+    for variant_index in render_request.variant_indices:
         existing_job = pipeline["render_jobs"].get(variant_index)
         if existing_job and existing_job.get("status") == "processing":
             continue  # Skip — already rendering this variant
@@ -1469,8 +1469,8 @@ async def render_variants(
 
             # Extract match overrides for this variant (from timeline editor)
             variant_match_overrides = None
-            if request.match_overrides:
-                variant_match_overrides = request.match_overrides.get(vid) or request.match_overrides.get(str(vid))
+            if render_request.match_overrides:
+                variant_match_overrides = render_request.match_overrides.get(vid) or render_request.match_overrides.get(str(vid))
                 if variant_match_overrides:
                     logger.info(
                         f"[Profile {profile.profile_id}] Using {len(variant_match_overrides)} "
@@ -1479,8 +1479,8 @@ async def render_variants(
 
             # Extract interstitial slides for this variant (stored for Phase 46 render integration)
             variant_interstitial_slides = None
-            if request.interstitial_slides:
-                variant_interstitial_slides = request.interstitial_slides.get(str(vid)) or request.interstitial_slides.get(vid)
+            if render_request.interstitial_slides:
+                variant_interstitial_slides = render_request.interstitial_slides.get(str(vid)) or render_request.interstitial_slides.get(vid)
                 if variant_interstitial_slides:
                     logger.info(
                         f"[Profile {profile.profile_id}] Received {len(variant_interstitial_slides)} "
@@ -1501,7 +1501,7 @@ async def render_variants(
                     # For library audio: skip voice_settings check
                     # For generated audio: compare voice_settings
                     is_library = bool(existing_tts.get("library_asset_id"))
-                    settings_match = is_library or _voice_settings_match(existing_tts.get("voice_settings"), request.voice_settings)
+                    settings_match = is_library or _voice_settings_match(existing_tts.get("voice_settings"), render_request.voice_settings)
 
                     if settings_match:
                         audio_path_str = existing_tts.get("audio_path")
@@ -1527,13 +1527,13 @@ async def render_variants(
             # Extract overlay params for this variant
             # interstitial_slides is keyed by variant index (string); pip_overlays is shared (keyed by segment_id)
             variant_interstitial_slides = None
-            if request.interstitial_slides:
-                variant_slides = request.interstitial_slides.get(str(vid), [])
+            if render_request.interstitial_slides:
+                variant_slides = render_request.interstitial_slides.get(str(vid), [])
                 if variant_slides:
                     variant_interstitial_slides = variant_slides
                     logger.info(f"[Pipeline {pipeline_id}] Variant {vid}: {len(variant_slides)} interstitial slides")
 
-            variant_pip_overlays = request.pip_overlays if request.pip_overlays else None
+            variant_pip_overlays = render_request.pip_overlays if render_request.pip_overlays else None
             if variant_pip_overlays:
                 logger.info(f"[Pipeline {pipeline_id}] Variant {vid}: {len(variant_pip_overlays)} PiP overlays")
 
@@ -1563,30 +1563,30 @@ async def render_variants(
                         profile_id=profile.profile_id,
                         preset_data=preset_data,
                         subtitle_settings=subtitle_settings,
-                        elevenlabs_model=request.elevenlabs_model,
-                        voice_id=request.voice_id,
-                        source_video_ids=request.source_video_ids,
+                        elevenlabs_model=render_request.elevenlabs_model,
+                        voice_id=render_request.voice_id,
+                        source_video_ids=render_request.source_video_ids,
                         match_overrides=variant_match_overrides,
-                        enable_denoise=request.enable_denoise,
-                        denoise_strength=request.denoise_strength,
-                        enable_sharpen=request.enable_sharpen,
-                        sharpen_amount=request.sharpen_amount,
-                        enable_color=request.enable_color,
-                        brightness=request.brightness,
-                        contrast=request.contrast,
-                        saturation=request.saturation,
-                        shadow_depth=request.shadow_depth,
-                        enable_glow=request.enable_glow,
-                        glow_blur=request.glow_blur,
-                        adaptive_sizing=request.adaptive_sizing,
+                        enable_denoise=render_request.enable_denoise,
+                        denoise_strength=render_request.denoise_strength,
+                        enable_sharpen=render_request.enable_sharpen,
+                        sharpen_amount=render_request.sharpen_amount,
+                        enable_color=render_request.enable_color,
+                        brightness=render_request.brightness,
+                        contrast=render_request.contrast,
+                        saturation=render_request.saturation,
+                        shadow_depth=render_request.shadow_depth,
+                        enable_glow=render_request.enable_glow,
+                        glow_blur=render_request.glow_blur,
+                        adaptive_sizing=render_request.adaptive_sizing,
                         variant_index=vid,
-                        voice_settings=request.voice_settings,
+                        voice_settings=render_request.voice_settings,
                         reuse_audio_path=reuse_audio_path,
                         reuse_audio_duration=reuse_audio_duration,
                         reuse_srt_content=reuse_srt_content,
                         on_progress=on_progress,
-                        max_words_per_phrase=request.words_per_subtitle,
-                        min_segment_duration=request.min_segment_duration,
+                        max_words_per_phrase=render_request.words_per_subtitle,
+                        min_segment_duration=render_request.min_segment_duration,
                         interstitial_slides=variant_interstitial_slides,
                         pip_overlays=variant_pip_overlays,
                         avoid_segment_ids=render_avoid_ids if render_avoid_ids else None,
@@ -1776,7 +1776,7 @@ async def render_variants(
 
     return PipelineRenderResponse(
         pipeline_id=pipeline_id,
-        rendering_variants=request.variant_indices,
+        rendering_variants=render_request.variant_indices,
         total_variants=len(pipeline["scripts"])
     )
 

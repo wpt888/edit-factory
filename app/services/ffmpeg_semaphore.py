@@ -23,13 +23,14 @@ logger = logging.getLogger(__name__)
 
 # Max concurrent FINAL FFmpeg render processes (the heavy encode step).
 # Library, Pipeline, and Product routes all share this single gate.
-MAX_CONCURRENT_RENDERS = 3
+# Set to 1 to prevent WSL2 OOM crashes — renders queue instead of running in parallel.
+MAX_CONCURRENT_RENDERS = 1
 _ffmpeg_render_semaphore: asyncio.Semaphore | None = None
 
 # Max concurrent PREPARATORY FFmpeg processes (trim, extend, silence removal,
 # segment extraction, loudness measurement). These are lighter but still
 # spawn real FFmpeg/ffprobe subprocesses.
-MAX_CONCURRENT_PREP = 4
+MAX_CONCURRENT_PREP = 2
 _ffmpeg_prep_semaphore: asyncio.Semaphore | None = None
 
 
@@ -148,6 +149,36 @@ def safe_ffmpeg_run(
         stdout=stdout,
         stderr=stderr,
     )
+
+
+# =============================================================================
+# GPU (NVENC) detection — cached after first check
+# =============================================================================
+
+_nvenc_available: bool | None = None
+
+
+def is_nvenc_available() -> bool:
+    """Check if NVIDIA NVENC hardware encoder is available.
+
+    Result is cached after the first call so FFmpeg is only spawned once.
+    """
+    global _nvenc_available
+    if _nvenc_available is not None:
+        return _nvenc_available
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-encoders"],
+            capture_output=True, text=True, timeout=5,
+        )
+        _nvenc_available = "h264_nvenc" in result.stdout
+    except Exception:
+        _nvenc_available = False
+    if _nvenc_available:
+        logger.info("NVENC hardware encoder detected — GPU rendering enabled")
+    else:
+        logger.info("NVENC not available — using CPU encoding")
+    return _nvenc_available
 
 
 # =============================================================================

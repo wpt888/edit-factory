@@ -62,25 +62,37 @@ class PostizPublisher:
         )
     """
 
+    API_BASE_PATH = "/api/public/v1"
+
     def __init__(
         self,
         api_url: Optional[str] = None,
         api_key: Optional[str] = None
     ):
-        self.api_url = (api_url or os.getenv("POSTIZ_API_URL", "")).rstrip("/")
+        raw_url = (api_url or os.getenv("POSTIZ_API_URL", "")).rstrip("/")
         self.api_key = api_key or os.getenv("POSTIZ_API_KEY", "")
 
-        if not self.api_url:
+        if not raw_url:
             raise ValueError("POSTIZ_API_URL is required")
         if not self.api_key:
             raise ValueError("POSTIZ_API_KEY is required")
+
+        # Normalize: accept domain-only, domain/api/public/v1, or domain/public/v1
+        if raw_url.endswith("/api/public/v1"):
+            self.base_url = raw_url.removesuffix("/api/public/v1")
+        elif raw_url.endswith("/public/v1"):
+            self.base_url = raw_url.removesuffix("/public/v1")
+        else:
+            self.base_url = raw_url
+
+        self.api_url = f"{self.base_url}{self.API_BASE_PATH}"
 
         self.headers = {
             "Authorization": self.api_key,
             "Accept": "application/json"
         }
 
-        logger.info(f"PostizPublisher initialized with URL: {self.api_url}")
+        logger.info(f"PostizPublisher initialized with base: {self.base_url}, API: {self.api_url}")
 
     async def get_integrations(self, profile_id: Optional[str] = None) -> List[PostizIntegration]:
         """

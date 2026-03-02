@@ -857,11 +857,11 @@ export default function SettingsPage() {
             <Input
               value={postizUrl}
               onChange={(e) => setPostizUrl(e.target.value)}
-              placeholder="https://api.postiz.com"
+              placeholder="https://postiz.example.com"
               disabled={saving}
             />
             <p className="text-xs text-muted-foreground">
-              The URL of your Postiz API server
+              Domain-ul Postiz (ex: https://postiz.nortia.ro). API paths sunt adaugate automat.
             </p>
           </div>
 

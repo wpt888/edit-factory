@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -112,6 +112,7 @@ export function TimelineEditor({
   // Dialog state (used for both unmatched assignment and swap)
   const [assigningIndex, setAssigningIndex] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [sourceFilter, setSourceFilter] = useState<"same" | "all">("all");
 
   // Timeline view state
   const [selectedBlockIndex, setSelectedBlockIndex] = useState<number | null>(null);
@@ -429,12 +430,55 @@ export function TimelineEditor({
     previewSegmentEndTimeRef.current = undefined;
   }, [stopPreviewRafLoop]);
 
-  // Filtered segments based on search
-  const filteredSegments = availableSegments.filter((seg) => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return seg.keywords.some((kw) => kw.toLowerCase().includes(q));
-  });
+  // Filtered segments: proximity ±2 rule + source filter + keyword search
+  const filteredSegments = useMemo(() => {
+    let pool = availableSegments;
+
+    // Source video filter
+    if (sourceFilter === "same" && assigningIndex !== null) {
+      const currentSourceId = matches[assigningIndex]?.source_video_id;
+      if (currentSourceId) {
+        pool = pool.filter(seg => seg.source_video_id === currentSourceId);
+      }
+    }
+
+    // Proximity ±2: exclude segments already used at neighboring positions
+    if (assigningIndex !== null) {
+      const nearbySegmentIds = new Set<string>();
+      for (let offset = -2; offset <= 2; offset++) {
+        if (offset === 0) continue;
+        const neighborIdx = assigningIndex + offset;
+        if (neighborIdx >= 0 && neighborIdx < matches.length) {
+          const neighborId = matches[neighborIdx].segment_id;
+          if (neighborId) nearbySegmentIds.add(neighborId);
+        }
+      }
+      pool = pool.filter(seg => !nearbySegmentIds.has(seg.id));
+    }
+
+    // Keyword search filter
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      pool = pool.filter(seg => seg.keywords.some(kw => kw.toLowerCase().includes(q)));
+    }
+
+    return pool;
+  }, [availableSegments, assigningIndex, matches, searchQuery, sourceFilter]);
+
+  // Count how many segments were excluded by proximity rule (for UI indicator)
+  const proximityExcludedCount = useMemo(() => {
+    if (assigningIndex === null) return 0;
+    const nearbySegmentIds = new Set<string>();
+    for (let offset = -2; offset <= 2; offset++) {
+      if (offset === 0) continue;
+      const neighborIdx = assigningIndex + offset;
+      if (neighborIdx >= 0 && neighborIdx < matches.length) {
+        const neighborId = matches[neighborIdx].segment_id;
+        if (neighborId) nearbySegmentIds.add(neighborId);
+      }
+    }
+    return availableSegments.filter(seg => nearbySegmentIds.has(seg.id)).length;
+  }, [availableSegments, assigningIndex, matches]);
 
   // --- Dialog handlers ---
 
@@ -446,6 +490,7 @@ export function TimelineEditor({
   const handleCloseDialog = () => {
     setAssigningIndex(null);
     setSearchQuery("");
+    setSourceFilter("all");
   };
 
   const handleSelectSegment = (segment: SegmentOption) => {
@@ -1595,6 +1640,33 @@ export function TimelineEditor({
                   className="pl-9"
                   autoFocus
                 />
+              </div>
+
+              {/* Source filter tabs + proximity indicator */}
+              <div className="flex items-center justify-between">
+                <div className="flex gap-1">
+                  <Button
+                    variant={sourceFilter === "all" ? "default" : "outline"}
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => setSourceFilter("all")}
+                  >
+                    All sources
+                  </Button>
+                  <Button
+                    variant={sourceFilter === "same" ? "default" : "outline"}
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => setSourceFilter("same")}
+                  >
+                    Same source
+                  </Button>
+                </div>
+                {proximityExcludedCount > 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    {proximityExcludedCount} nearby excluded
+                  </span>
+                )}
               </div>
 
               {/* Segment list */}

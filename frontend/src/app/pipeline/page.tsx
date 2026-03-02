@@ -3171,6 +3171,36 @@ function PipelinePage() {
                 variantIndex={previewVariant}
                 profileId={currentProfile.id}
                 subtitleSettings={subtitleSettings}
+                availableSegments={availableSegments}
+                onMatchSwap={(matchIndex, newSegment) => {
+                  const updatedMatches = (previews[previewVariant]?.matches ?? []).map((match, idx) => {
+                    if (idx === matchIndex) {
+                      return {
+                        ...match,
+                        segment_id: newSegment.id,
+                        segment_keywords: newSegment.keywords,
+                        matched_keyword: newSegment.keywords[0] ?? null,
+                        confidence: 1.0,
+                        source_video_id: newSegment.source_video_id,
+                        segment_start_time: newSegment.start_time,
+                        segment_end_time: newSegment.end_time,
+                        thumbnail_path: newSegment.thumbnail_path,
+                        product_group: newSegment.product_group,
+                        is_auto_filled: false,
+                      };
+                    }
+                    return match;
+                  });
+                  setPreviews(prev => ({
+                    ...prev,
+                    [previewVariant]: {
+                      ...prev[previewVariant],
+                      matches: updatedMatches,
+                      matched_count: updatedMatches.filter(m => m.segment_id !== null).length,
+                      unmatched_count: updatedMatches.filter(m => m.segment_id === null).length,
+                    }
+                  }));
+                }}
               />
             )}
 

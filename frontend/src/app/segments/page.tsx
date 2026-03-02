@@ -128,6 +128,8 @@ export default function SegmentsPage() {
   const [uploadName, setUploadName] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const dragCounterRef = useRef(0);
 
   // Delete confirmation dialog
   const [deleteConfirm, setDeleteConfirm] = useState<{
@@ -410,6 +412,48 @@ export default function SegmentsPage() {
   }, [selectedVideo, fetchSegments, fetchProductGroups]);
 
   // Upload source video
+  // Drag and drop handlers for the left panel
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    if (e.dataTransfer.types.includes("Files")) {
+      setIsDraggingOver(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current === 0) {
+      setIsDraggingOver(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDraggingOver(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    const videoFile = files.find((f) => f.type.startsWith("video/"));
+    if (videoFile) {
+      setUploadFile(videoFile);
+      // Auto-fill name from filename (without extension)
+      const nameWithoutExt = videoFile.name.replace(/\.[^/.]+$/, "");
+      setUploadName(nameWithoutExt);
+      setUploadError(null);
+      setShowUploadDialog(true);
+    }
+  }, []);
+
   const handleUpload = async () => {
     if (!uploadFile || !uploadName.trim()) return;
 
@@ -824,7 +868,22 @@ export default function SegmentsPage() {
 
   // Left panel content - Source Videos
   const leftPanelContent = (
-    <div className="h-full flex flex-col">
+    <div
+      className="h-full flex flex-col relative"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {/* Drag overlay */}
+      {isDraggingOver && (
+        <div className="absolute inset-0 z-50 bg-primary/10 border-2 border-dashed border-primary rounded-lg flex items-center justify-center pointer-events-none">
+          <div className="text-center">
+            <Upload className="h-8 w-8 text-primary mx-auto mb-2" />
+            <p className="text-sm font-medium text-primary">Drop video here</p>
+          </div>
+        </div>
+      )}
       {/* Upload button */}
       <div className="p-3 border-b border-border">
         <Dialog open={showUploadDialog} onOpenChange={setShowUploadDialog}>
@@ -852,13 +911,62 @@ export default function SegmentsPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="video-file">Video File</Label>
-                <Input
-                  id="video-file"
-                  type="file"
-                  accept="video/*"
-                  onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-                />
+                <Label>Video File</Label>
+                <div
+                  className={`relative border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
+                    uploadFile
+                      ? "border-primary/50 bg-primary/5"
+                      : "border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/50"
+                  }`}
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith("video/"));
+                    if (file) {
+                      setUploadFile(file);
+                      if (!uploadName.trim()) {
+                        setUploadName(file.name.replace(/\.[^/.]+$/, ""));
+                      }
+                    }
+                  }}
+                  onClick={() => document.getElementById("video-file-input")?.click()}
+                >
+                  <input
+                    id="video-file-input"
+                    type="file"
+                    accept="video/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] || null;
+                      setUploadFile(file);
+                      if (file && !uploadName.trim()) {
+                        setUploadName(file.name.replace(/\.[^/.]+$/, ""));
+                      }
+                    }}
+                  />
+                  {uploadFile ? (
+                    <div className="flex items-center justify-center gap-2">
+                      <Video className="h-5 w-5 text-primary" />
+                      <span className="text-sm font-medium truncate max-w-[200px]">{uploadFile.name}</span>
+                      <button
+                        type="button"
+                        className="ml-1 p-0.5 rounded hover:bg-muted"
+                        onClick={(e) => { e.stopPropagation(); setUploadFile(null); }}
+                      >
+                        <X className="h-3.5 w-3.5 text-muted-foreground" />
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <Upload className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
+                      <p className="text-sm text-muted-foreground">
+                        Drag & drop or <span className="text-primary font-medium">click to browse</span>
+                      </p>
+                      <p className="text-xs text-muted-foreground/70 mt-1">MP4, MOV, AVI, MKV</p>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
             {uploadError && (
@@ -895,9 +1003,15 @@ export default function SegmentsPage() {
       <ScrollArea className={selectedSegment ? "flex-none max-h-[40%]" : "flex-1"}>
         <div className="space-y-1 p-2">
           {sourceVideos.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-8">
-              No videos uploaded yet
-            </p>
+            <div className="text-center py-8 px-4">
+              <Upload className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">
+                No videos uploaded yet
+              </p>
+              <p className="text-xs text-muted-foreground/70 mt-1">
+                Drag & drop a video here or click Upload
+              </p>
+            </div>
           ) : (
             sourceVideos.map((video) => (
               <div
