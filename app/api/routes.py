@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.responses import FileResponse
 
-from app.config import get_settings
+from app.config import get_settings, APP_VERSION
 from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import (
     validate_upload_size, validate_tts_text_length,
@@ -265,7 +265,7 @@ async def health_check():
 
     return HealthResponse(
         status="healthy" if ffmpeg_ok else "degraded",
-        version="1.0.0",
+        version=APP_VERSION,
         ffmpeg_available=ffmpeg_ok,
         redis_available=redis_ok
     )

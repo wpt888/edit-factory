@@ -6,7 +6,8 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
-APP_VERSION = "0.1.0"  # Keep in sync with electron/package.json version
+from app.version import get_version
+APP_VERSION = get_version()
 
 
 def _get_app_base_dir() -> Path:
