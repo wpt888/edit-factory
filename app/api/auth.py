@@ -3,7 +3,9 @@ Authentication utilities for Edit Factory API.
 Handles JWT verification and user extraction from Supabase tokens.
 """
 import logging
-from typing import Optional
+import time as _time
+import threading as _threading
+from typing import Optional, Dict
 from dataclasses import dataclass
 from fastapi import Depends, HTTPException, Header, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -13,6 +15,11 @@ from jwt.exceptions import PyJWTError
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Profile context cache: (user_id, profile_id_or_default) -> (ProfileContext, timestamp)
+_profile_cache: Dict[tuple, tuple] = {}
+_profile_cache_lock = _threading.Lock()
+_PROFILE_CACHE_TTL = 60  # seconds
 
 # Security scheme for Swagger UI
 security = HTTPBearer(auto_error=False)
@@ -189,6 +196,27 @@ def require_role(required_role: str):
 from app.db import get_supabase as _get_supabase
 
 
+def _cache_get_profile(user_id: str, profile_key: str) -> "Optional[ProfileContext]":
+    """Return cached ProfileContext if TTL not expired, else None."""
+    with _profile_cache_lock:
+        entry = _profile_cache.get((user_id, profile_key))
+        if entry is None:
+            return None
+        ctx, ts = entry
+        if _time.monotonic() - ts > _PROFILE_CACHE_TTL:
+            del _profile_cache[(user_id, profile_key)]
+            return None
+        return ctx
+
+
+def _cache_set_profile(user_id: str, profile_key: str, ctx: "ProfileContext") -> None:
+    """Store ProfileContext in cache with current timestamp. Evicts all if cache exceeds 1000."""
+    with _profile_cache_lock:
+        if len(_profile_cache) > 1000:
+            _profile_cache.clear()
+        _profile_cache[(user_id, profile_key)] = (ctx, _time.monotonic())
+
+
 async def get_profile_context(
     current_user: AuthUser = Depends(get_current_user),
     x_profile_id: Optional[str] = Header(None, alias="X-Profile-Id")
@@ -204,9 +232,24 @@ async def get_profile_context(
 
     # Development mode bypass
     if settings.auth_disabled or settings.desktop_mode:
+        profile_key = x_profile_id or "default"
+
         if x_profile_id:
+            # Check cache first for explicit dev profile
+            cached = _cache_get_profile(current_user.id, profile_key)
+            if cached:
+                logger.debug(f"Profile cache HIT (dev, explicit): {profile_key}")
+                return cached
             logger.warning(f"⚠️ Using explicit dev profile: {x_profile_id} (AUTH_DISABLED=true)")
-            return ProfileContext(profile_id=x_profile_id, user_id=current_user.id)
+            ctx = ProfileContext(profile_id=x_profile_id, user_id=current_user.id)
+            _cache_set_profile(current_user.id, profile_key, ctx)
+            return ctx
+
+        # Check cache for dev default profile
+        cached = _cache_get_profile(current_user.id, "default")
+        if cached:
+            logger.debug(f"Profile cache HIT (dev, default): {cached.profile_id}")
+            return cached
 
         # Try to find a real profile in the DB to avoid FK violations
         # NOTE: In dev mode, current_user.id is a hardcoded UUID. We filter by user_id
@@ -222,13 +265,16 @@ async def get_profile_context(
                 if result.data:
                     profile_id = result.data[0]["id"]
                     logger.warning(f"⚠️ Dev mode: using DB profile {profile_id}")
-                    return ProfileContext(profile_id=profile_id, user_id=current_user.id)
+                    ctx = ProfileContext(profile_id=profile_id, user_id=current_user.id)
+                    _cache_set_profile(current_user.id, "default", ctx)
+                    return ctx
             except Exception as e:
                 logger.warning(f"Dev mode: could not query profiles table: {e}")
 
         # Fallback if no DB profile found (will fail on FK-constrained inserts)
         profile_id = "00000000-0000-0000-0000-000000000000"
         logger.warning(f"⚠️ Dev mode: no profiles in DB, using fallback {profile_id}")
+        # Do NOT cache the fallback placeholder — it's not a real profile
         return ProfileContext(profile_id=profile_id, user_id=current_user.id)
 
     supabase = _get_supabase()
@@ -236,6 +282,12 @@ async def get_profile_context(
         raise HTTPException(status_code=503, detail="Database not available")
 
     if not x_profile_id:
+        # Check cache for default profile
+        cached = _cache_get_profile(current_user.id, "default")
+        if cached:
+            logger.debug(f"Profile cache HIT (default): {cached.profile_id}")
+            return cached
+
         # Auto-select default profile
         try:
             result = supabase.table("profiles")\
@@ -260,8 +312,17 @@ async def get_profile_context(
 
         profile_id = result.data["id"]
         logger.info(f"[Profile {profile_id}] Auto-selected default for user {current_user.id}")
+        ctx = ProfileContext(profile_id=profile_id, user_id=current_user.id)
+        _cache_set_profile(current_user.id, "default", ctx)
+        return ctx
     else:
         profile_id = x_profile_id
+
+        # Check cache for explicit profile
+        cached = _cache_get_profile(current_user.id, profile_id)
+        if cached:
+            logger.debug(f"Profile cache HIT (explicit): {profile_id}")
+            return cached
 
         # Validate profile exists
         try:
@@ -282,4 +343,6 @@ async def get_profile_context(
         if result.data["user_id"] != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
-    return ProfileContext(profile_id=profile_id, user_id=current_user.id)
+        ctx = ProfileContext(profile_id=profile_id, user_id=current_user.id)
+        _cache_set_profile(current_user.id, profile_id, ctx)
+        return ctx
