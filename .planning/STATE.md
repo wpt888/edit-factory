@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-03T01:34:11.378Z"
+last_updated: "2026-03-03T01:35:04.344Z"
 progress:
   total_phases: 32
-  completed_phases: 31
+  completed_phases: 32
   total_plans: 82
-  completed_plans: 81
+  completed_plans: 82
 ---
 
 # Project State
@@ -114,6 +114,8 @@ Recent decisions affecting v11:
 - [Phase 61-02]: ClipHoverPreview: preload=none, video element only rendered when showVideo=true (500ms hover delay)
 - [Phase 62-ux-polish-organization]: Tags stored as TEXT[] (Postgres array) with GIN index — no join table needed; .contains() maps to @> operator
 - [Phase 62-ux-polish-organization]: Tag filter is server-side via ?tag= param — count and data queries both apply filter for correct pagination totals
+- [Phase 62]: All UI strings translated to English; segments/page.tsx included despite not being in original plan scope
+- [Phase 62]: Dead marketing pages deleted — Next.js default 404 handling is sufficient, no custom 404 page needed
 
 ### Pending Todos
 
