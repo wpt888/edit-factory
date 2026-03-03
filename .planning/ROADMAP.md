@@ -152,6 +152,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 - [x] **Phase 60: Monitoring & Observability** - Sentry, extended health checks, failed render cleanup, file TTL (completed 2026-03-02)
 - [x] **Phase 61: UX Polish — Interactions** - Inline video player, AlertDialogs, soft-delete trash, drag-drop upload, keyboard shortcuts, hover preview (completed 2026-03-03)
 - [x] **Phase 62: UX Polish — Organization** - UI language consistency, dead page removal, clip tagging (completed 2026-03-03)
+- [ ] **Phase 63: v11 Gap Closure** - Translate remaining Romanian error strings, create Phase 61 VERIFICATION.md, update requirement checkboxes (gap closure from audit)
 
 ## Phase Details
 
@@ -267,6 +268,17 @@ Plans:
 - [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
 - [ ] 57-02-PLAN.md — GitHub Actions CI workflow
 
+### Phase 63: v11 Gap Closure
+**Goal**: Close all gaps identified by the v11 milestone audit — translate 32 remaining Romanian error strings to English, create missing Phase 61 VERIFICATION.md, and update requirement checkboxes for UX-03/UX-06/UX-08
+**Depends on**: Phase 62
+**Requirements**: UX-03, UX-04, UX-06, UX-08
+**Gap Closure**: Closes gaps from v11 audit (4 partial requirements + 1 integration gap)
+**Success Criteria** (what must be TRUE):
+  1. Every user-visible string in librarie/page.tsx, pipeline/page.tsx, and segments/page.tsx is in English — no Romanian error messages remain
+  2. Phase 61 has a VERIFICATION.md confirming soft-delete, drag-drop, and hover preview features are wired
+  3. REQUIREMENTS.md checkboxes for UX-03, UX-06, UX-08 are checked and UX-04 remains checked after the translation fix
+**Plans**: TBD
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -289,6 +301,7 @@ Plans:
 | 60. Monitoring & Observability | 2/2 | Complete    | 2026-03-02 | - |
 | 61. UX Polish — Interactions | 2/2 | Complete   | 2026-03-03 | - |
 | 62. UX Polish — Organization | 2/2 | Complete    | 2026-03-03 | - |
+| 63. v11 Gap Closure | 0/TBD | Pending    | - | - |
 
 ---
 *Last updated: 2026-03-02 after v11 roadmap creation*
