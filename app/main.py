@@ -119,6 +119,33 @@ async def _recover_stuck_jobs():
         logger.warning(f"Failed to recover stuck jobs: {e}")
 
 
+async def _cleanup_expired_trash():
+    """Permanently delete clips that have been in trash for more than 30 days."""
+    try:
+        from app.db import get_supabase
+        from app.api.library_routes import _delete_clip_files
+        from datetime import timedelta
+        supabase = get_supabase()
+        if not supabase:
+            return
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        expired = supabase.table("editai_clips")\
+            .select("id, raw_video_path, thumbnail_path, final_video_path")\
+            .eq("is_deleted", True)\
+            .lt("deleted_at", cutoff)\
+            .execute()
+        clips = expired.data or []
+        for clip in clips:
+            _delete_clip_files(clip)
+        if clips:
+            expired_ids = [c["id"] for c in clips]
+            supabase.table("editai_clips").delete().in_("id", expired_ids).execute()
+            supabase.table("editai_clip_content").delete().in_("clip_id", expired_ids).execute()
+            logger.info(f"Cleaned up {len(clips)} expired trash clips")
+    except Exception as e:
+        logger.warning(f"Failed to cleanup expired trash: {e}")
+
+
 async def _cleanup_expired_pipelines():
     """Delete expired pipeline and assembly job rows from Supabase."""
     try:
@@ -161,6 +188,7 @@ async def lifespan(app: FastAPI):
     await _recover_stuck_clips()
     await _recover_stuck_jobs()
     await _cleanup_expired_pipelines()
+    await _cleanup_expired_trash()
     # Mark stale JobStorage jobs (processing >10 min) as failed for crash recovery
     try:
         from app.services.job_storage import get_job_storage

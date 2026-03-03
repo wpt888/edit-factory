@@ -1843,30 +1843,25 @@ async def delete_clip(
     clip_id: str,
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Șterge un clip complet (fișiere + DB)."""
+    """Soft-delete a clip (move to trash)."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        # Get clip data first
-        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
+        clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", False).single().execute()
         if not clip.data:
             raise HTTPException(status_code=404, detail="Clip not found")
-
-        # Delete physical files
-        _delete_clip_files(clip.data)
-        # Delete from database
-        supabase.table("editai_clips").delete().eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
-        # Also delete associated clip content
-        supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
-        logger.info(f"Deleted clip {clip_id} and associated files")
-
+        supabase.table("editai_clips").update({
+            "is_deleted": True,
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", clip_id).execute()
+        logger.info(f"Soft-deleted clip {clip_id}")
         return {"status": "deleted", "clip_id": clip_id}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error deleting clip: {e}")
+        logger.error(f"Error soft-deleting clip: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -1879,7 +1874,7 @@ async def bulk_delete_clips(
     request: BulkDeleteRequest,
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Șterge mai multe clipuri simultan (fișiere + DB)."""
+    """Soft-delete multiple clips simultaneously (move to trash)."""
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -1889,11 +1884,12 @@ async def bulk_delete_clips(
     clip_ids = request.clip_ids
 
     try:
-        # Fetch all clips at once
+        # Fetch all active clips at once
         result = supabase.table("editai_clips")\
-            .select("id, raw_video_path, thumbnail_path, final_video_path")\
+            .select("id")\
             .in_("id", clip_ids)\
             .eq("profile_id", profile.profile_id)\
+            .eq("is_deleted", False)\
             .execute()
 
         found_clips = result.data or []
@@ -1904,20 +1900,17 @@ async def bulk_delete_clips(
             if clip_id not in found_ids:
                 failed.append({"id": clip_id, "error": "Not found"})
 
-        # Delete physical files for all found clips
-        for clip in found_clips:
-            _delete_clip_files(clip)
-
         if found_ids:
             found_id_list = list(found_ids)
-            # Batch delete clip_content
-            supabase.table("editai_clip_content").delete().in_("clip_id", found_id_list).execute()
-            # Batch delete clips
-            supabase.table("editai_clips").delete().in_("id", found_id_list).eq("profile_id", profile.profile_id).execute()
+            # Batch soft-delete clips
+            supabase.table("editai_clips").update({
+                "is_deleted": True,
+                "deleted_at": datetime.now(timezone.utc).isoformat(),
+            }).in_("id", found_id_list).eq("profile_id", profile.profile_id).execute()
 
         deleted = list(found_ids)
         for clip_id in deleted:
-            logger.info(f"Bulk delete: deleted clip {clip_id}")
+            logger.info(f"Bulk soft-delete: moved clip {clip_id} to trash")
 
     except Exception as e:
         logger.error(f"Error in bulk delete: {e}")
@@ -1933,6 +1926,90 @@ async def bulk_delete_clips(
         "failed_count": len(failed),
         "failed": failed
     }
+
+
+
+# ============== TRASH (SOFT-DELETE MANAGEMENT) ==============
+
+@router.get("/trash")
+async def list_trash(profile: ProfileContext = Depends(get_profile_context)):
+    """List soft-deleted clips (trash view)."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+    try:
+        result = supabase.table("editai_clips")\
+            .select("id, project_id, variant_index, variant_name, raw_video_path, thumbnail_path, duration, final_video_path, final_status, created_at, deleted_at")\
+            .eq("profile_id", profile.profile_id)\
+            .eq("is_deleted", True)\
+            .order("deleted_at", desc=True)\
+            .execute()
+        # Enrich with project names
+        clips = result.data or []
+        project_ids = list(set(c["project_id"] for c in clips if c.get("project_id")))
+        project_names = {}
+        if project_ids:
+            projects = supabase.table("editai_projects").select("id, name").in_("id", project_ids).execute()
+            project_names = {p["id"]: p["name"] for p in (projects.data or [])}
+        for clip in clips:
+            clip["project_name"] = project_names.get(clip.get("project_id"), "Unknown")
+            # Calculate days remaining before permanent deletion
+            if clip.get("deleted_at"):
+                from datetime import timedelta
+                deleted = datetime.fromisoformat(clip["deleted_at"].replace("Z", "+00:00"))
+                days_elapsed = (datetime.now(timezone.utc) - deleted).days
+                clip["days_remaining"] = max(0, 30 - days_elapsed)
+            else:
+                clip["days_remaining"] = 30
+        return {"clips": clips, "total": len(clips)}
+    except Exception as e:
+        logger.error(f"Error listing trash: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/clips/{clip_id}/restore")
+async def restore_clip(clip_id: str, profile: ProfileContext = Depends(get_profile_context)):
+    """Restore a soft-deleted clip from trash."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+    try:
+        clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", True).single().execute()
+        if not clip.data:
+            raise HTTPException(status_code=404, detail="Clip not found in trash")
+        supabase.table("editai_clips").update({
+            "is_deleted": False,
+            "deleted_at": None,
+        }).eq("id", clip_id).execute()
+        logger.info(f"Restored clip {clip_id} from trash")
+        return {"status": "restored", "clip_id": clip_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error restoring clip: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.delete("/clips/{clip_id}/permanent")
+async def permanently_delete_clip(clip_id: str, profile: ProfileContext = Depends(get_profile_context)):
+    """Permanently delete a clip from trash (files + DB)."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+    try:
+        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", True).single().execute()
+        if not clip.data:
+            raise HTTPException(status_code=404, detail="Clip not found in trash")
+        _delete_clip_files(clip.data)
+        supabase.table("editai_clips").delete().eq("id", clip_id).execute()
+        supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
+        logger.info(f"Permanently deleted clip {clip_id}")
+        return {"status": "permanently_deleted", "clip_id": clip_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error permanently deleting clip: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ============== CLIP CONTENT (TTS + SUBTITLES) ==============
