@@ -86,6 +86,8 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
   const startTimeRef = useRef<number | null>(null);
   const elapsedIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isCancelledRef = useRef(false);
+  const sseReconnectCountRef = useRef(0);
+  const MAX_SSE_RECONNECTS = 20;
 
   // Use refs for callbacks to avoid stale closures
   const onProgressRef = useRef(onProgress);
@@ -138,62 +140,9 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
     cleanup();
   }, [cleanup]);
 
-  // ─── SSE implementation ───────────────────────────────────────────────────
-
-  const startSSE = useCallback((jobId: string) => {
-    const apiBase =
-      process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
-    const url = `${apiBase}/jobs/${jobId}/stream`;
-    const eventSource = new EventSource(url);
-    eventSourceRef.current = eventSource;
-
-    eventSource.addEventListener("progress", (e: MessageEvent) => {
-      if (isCancelledRef.current) return;
-      const data = JSON.parse(e.data);
-      const job: Job = {
-        job_id: data.job_id,
-        status: data.status,
-        progress: data.progress,
-      };
-      setCurrentJob(job);
-      const progressNum = extractProgress(job);
-      setProgress(progressNum);
-      setStatusText(data.status);
-      const elapsed = startTimeRef.current
-        ? Math.floor((Date.now() - startTimeRef.current) / 1000)
-        : 0;
-      setEstimatedRemaining(calculateETA(progressNum, elapsed));
-      onProgressRef.current?.(progressNum, data.status, job);
-    });
-
-    eventSource.addEventListener("completed", (e: MessageEvent) => {
-      if (isCancelledRef.current) return;
-      const data = JSON.parse(e.data);
-      setProgress(100);
-      setStatusText("completed");
-      onCompleteRef.current?.(data.result);
-      cleanup();
-    });
-
-    eventSource.addEventListener("failed", (e: MessageEvent) => {
-      if (isCancelledRef.current) return;
-      const data = JSON.parse(e.data);
-      onErrorRef.current?.(data.error || "Job failed");
-      cleanup();
-    });
-
-    // heartbeat events are intentionally ignored — they just keep the connection alive
-
-    eventSource.onerror = () => {
-      // EventSource auto-reconnects by default on transient errors.
-      // Only log if we haven't cancelled intentionally.
-      if (!isCancelledRef.current) {
-        console.warn("[useJobPolling] SSE connection error, auto-reconnecting...");
-      }
-    };
-  }, [calculateETA, cleanup]);
-
   // ─── Polling fallback (for SSR / browsers without EventSource) ───────────
+
+  const pollFallbackRef = useRef<(jobId: string) => void>(() => {});
 
   const pollFallback = useCallback(
     async (jobId: string) => {
@@ -244,6 +193,69 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
     },
     [interval, calculateETA, cleanup]
   );
+  pollFallbackRef.current = pollFallback;
+
+  // ─── SSE implementation ───────────────────────────────────────────────────
+
+  const startSSE = useCallback((jobId: string) => {
+    const apiBase =
+      process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+    const url = `${apiBase}/jobs/${jobId}/stream`;
+    const eventSource = new EventSource(url);
+    eventSourceRef.current = eventSource;
+
+    eventSource.addEventListener("progress", (e: MessageEvent) => {
+      if (isCancelledRef.current) return;
+      sseReconnectCountRef.current = 0;
+      const data = JSON.parse(e.data);
+      const job: Job = {
+        job_id: data.job_id,
+        status: data.status,
+        progress: data.progress,
+      };
+      setCurrentJob(job);
+      const progressNum = extractProgress(job);
+      setProgress(progressNum);
+      setStatusText(data.status);
+      const elapsed = startTimeRef.current
+        ? Math.floor((Date.now() - startTimeRef.current) / 1000)
+        : 0;
+      setEstimatedRemaining(calculateETA(progressNum, elapsed));
+      onProgressRef.current?.(progressNum, data.status, job);
+    });
+
+    eventSource.addEventListener("completed", (e: MessageEvent) => {
+      if (isCancelledRef.current) return;
+      const data = JSON.parse(e.data);
+      setProgress(100);
+      setStatusText("completed");
+      onCompleteRef.current?.(data.result);
+      cleanup();
+    });
+
+    eventSource.addEventListener("failed", (e: MessageEvent) => {
+      if (isCancelledRef.current) return;
+      const data = JSON.parse(e.data);
+      onErrorRef.current?.(data.error || "Job failed");
+      cleanup();
+    });
+
+    // heartbeat events are intentionally ignored — they just keep the connection alive
+
+    eventSource.onerror = () => {
+      sseReconnectCountRef.current++;
+      if (sseReconnectCountRef.current > MAX_SSE_RECONNECTS) {
+        console.error("[useJobPolling] SSE max reconnects reached, falling back to polling");
+        eventSourceRef.current?.close();
+        eventSourceRef.current = null;
+        pollFallbackRef.current(jobId);
+        return;
+      }
+      if (!isCancelledRef.current) {
+        console.warn(`[useJobPolling] SSE reconnect attempt ${sseReconnectCountRef.current}/${MAX_SSE_RECONNECTS}`);
+      }
+    };
+  }, [calculateETA, cleanup]);
 
   // ─── Start (SSE preferred, polling fallback) ─────────────────────────────
 
@@ -259,6 +271,11 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
       setEstimatedRemaining("Calculez...");
       startTimeRef.current = Date.now();
 
+      // Clear any existing elapsed timer before creating new one
+      if (elapsedIntervalRef.current) {
+        clearInterval(elapsedIntervalRef.current);
+        elapsedIntervalRef.current = null;
+      }
       // Elapsed time counter (kept running throughout job)
       elapsedIntervalRef.current = setInterval(() => {
         if (startTimeRef.current) {

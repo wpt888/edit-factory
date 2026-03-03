@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 import { CreateFeedDialog } from "@/components/create-feed-dialog";
+import { BatchSettingsDialog, type BatchSettings } from "@/components/batch-settings-dialog";
 
 // Type definitions
 interface Feed {
@@ -115,6 +116,9 @@ export default function ProductsPage() {
 
   // Create feed dialog state
   const [createFeedOpen, setCreateFeedOpen] = useState(false);
+
+  // Batch settings dialog state
+  const [batchDialogOpen, setBatchDialogOpen] = useState(false);
 
   // Ref for sync timeout cleanup
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -369,20 +373,32 @@ export default function ProductsPage() {
     setSelectedProductIds(new Set());
   };
 
-  const handleBatchGenerate = async () => {
+  const handleBatchGenerate = async (settings: BatchSettings) => {
     setBatchLoading(true);
     try {
       const res = await apiPost("/products/batch-generate", {
         product_ids: Array.from(selectedProductIds),
         source: activeTab,
-        voiceover_mode: "quick",
-        tts_provider: "edge",
-        duration_s: 30,
-        encoding_preset: "tiktok",
+        ...settings,
       });
       if (res.ok) {
         const data = await res.json();
-        router.push(`/batch-generate?batch_id=${data.batch_id}`);
+        // Encode settings as short URL params for retry on batch-generate page
+        const settingsParams = new URLSearchParams();
+        if (settings.voiceover_mode !== "quick") settingsParams.set("vm", settings.voiceover_mode);
+        if (settings.tts_provider !== "edge") settingsParams.set("tts", settings.tts_provider);
+        if (settings.duration_s !== 30) settingsParams.set("dur", String(settings.duration_s));
+        if (settings.encoding_preset !== "tiktok") settingsParams.set("enc", settings.encoding_preset);
+        if (settings.cta_text !== "Comanda acum!") settingsParams.set("cta", settings.cta_text);
+        if (settings.voice_id) settingsParams.set("voice", settings.voice_id);
+        if (settings.ai_provider !== "gemini") settingsParams.set("ai", settings.ai_provider);
+        if (settings.enable_denoise) settingsParams.set("denoise", "1");
+        if (settings.enable_sharpen) settingsParams.set("sharpen", "1");
+        if (settings.enable_color_correction) settingsParams.set("cc", "1");
+        settingsParams.set("src", activeTab);
+
+        const paramStr = settingsParams.toString();
+        router.push(`/batch-generate?batch_id=${data.batch_id}${paramStr ? "&" + paramStr : ""}`);
       } else {
         const err = await res.json().catch(() => ({ detail: "Batch generation failed" }));
         toast.error(err.detail || "Batch generation failed");
@@ -391,6 +407,7 @@ export default function ProductsPage() {
       toast.error("Network error starting batch generation");
     } finally {
       setBatchLoading(false);
+      setBatchDialogOpen(false);
     }
   };
 
@@ -757,6 +774,15 @@ export default function ProductsPage() {
         onCreated={handleFeedCreated}
       />
 
+      {/* Batch settings dialog */}
+      <BatchSettingsDialog
+        open={batchDialogOpen}
+        onOpenChange={setBatchDialogOpen}
+        onConfirm={handleBatchGenerate}
+        productCount={selectedProductIds.size}
+        loading={batchLoading}
+      />
+
       {/* Sticky action bar — visible when products are selected */}
       {selectedProductIds.size > 0 && (
         <div className="fixed bottom-0 left-0 right-0 bg-card border-t shadow-lg z-50 p-4">
@@ -770,7 +796,7 @@ export default function ProductsPage() {
                 Clear
               </Button>
             </div>
-            <Button onClick={handleBatchGenerate} disabled={batchLoading}>
+            <Button onClick={() => setBatchDialogOpen(true)} disabled={batchLoading}>
               {batchLoading ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               ) : (

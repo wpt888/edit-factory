@@ -72,7 +72,7 @@ export function CreateProfileDialog({
       setName("");
       setDescription("");
     } catch (error) {
-      handleApiError(error, "Eroare la crearea profilului");
+      handleApiError(error, "Error creating profile");
     } finally {
       setLoading(false);
     }

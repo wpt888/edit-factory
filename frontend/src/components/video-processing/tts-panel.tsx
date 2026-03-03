@@ -116,8 +116,8 @@ export function TTSPanel({
       {/* Info message */}
       {!generateAudio && scriptText.length > 0 && (
         <p className="text-xs text-amber-600 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 rounded">
-          Voice-over-ul va fi generat separat dupa crearea variantelor.
-          Vei putea alege la care variante sa adaugi audio.
+          The voice-over will be generated separately after creating variants.
+          You will be able to choose which variants to add audio to.
         </p>
       )}
     </div>

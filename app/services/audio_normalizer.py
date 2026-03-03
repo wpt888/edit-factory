@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from app.services.ffmpeg_semaphore import safe_ffmpeg_run
+
 logger = logging.getLogger(__name__)
 
 
@@ -84,14 +86,7 @@ async def measure_loudness(
 
     try:
         # Execute FFmpeg and capture stderr (where loudnorm outputs JSON)
-        result = await asyncio.to_thread(
-            subprocess.run,
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False
-        )
+        result = await asyncio.to_thread(safe_ffmpeg_run, cmd, timeout_seconds, "loudness measurement")
 
         # Extract JSON from stderr — search for the loudnorm-specific JSON
         # by looking for the "input_i" key which is unique to loudnorm output
@@ -121,8 +116,8 @@ async def measure_loudness(
         logger.info(f"Loudness measured: {measurement}")
         return measurement
 
-    except subprocess.TimeoutExpired:
-        logger.error(f"FFmpeg timeout after {timeout_seconds}s measuring: {audio_path.name}")
+    except RuntimeError as timeout_err:
+        logger.error(f"FFmpeg timeout measuring {audio_path.name}: {timeout_err}")
         return None
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse loudnorm JSON: {e}")

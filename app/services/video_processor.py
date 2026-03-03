@@ -797,9 +797,10 @@ class VideoEditor:
                             "ffmpeg", "-y",
                             "-hwaccel", "cuda",
                             "-hwaccel_output_format", "cuda",
-                            "-i", str(video_path),
                             "-ss", str(seg.start_time),
+                            "-i", str(video_path),
                             "-t", str(seg.duration),
+                            "-avoid_negative_ts", "make_zero",
                         ]
                         # Pentru GPU: trebuie să descărcăm din CUDA înainte de filtru video
                         if video_filter:
@@ -823,16 +824,17 @@ class VideoEditor:
                     else:
                         cmd = [
                             "ffmpeg", "-y",
-                            "-i", str(video_path),
                             "-ss", str(seg.start_time),
+                            "-i", str(video_path),
                             "-t", str(seg.duration),
+                            "-avoid_negative_ts", "make_zero",
                         ]
                         if video_filter:
                             cmd.extend(["-vf", video_filter])
                         if audio_filter:
                             cmd.extend(["-af", audio_filter])
                         cmd.extend([
-                            "-c:v", "libx264",  # CPU codec
+                            "-c:v", self.video_codec,
                             "-profile:v", "high",
                             "-level:v", "4.0",
                             "-preset", "fast",

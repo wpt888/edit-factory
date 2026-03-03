@@ -202,7 +202,11 @@ export default function CreateImagePage() {
       const data = await res.json();
       setCurrentImageId(data.image_id);
 
-      // Start polling
+      // Start polling (clear any existing interval first)
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
       pollRef.current = setInterval(async () => {
         try {
           const statusRes = await apiGet(`/image-gen/${data.image_id}/status`);
@@ -370,10 +374,13 @@ export default function CreateImagePage() {
   };
 
   // ============== Image URL helper ==============
-  // Always use the FAL CDN URL (image_url) for display — local paths are not served.
-  // final_image_path (logo-composited) is server-side only; CDN URL still usable for preview.
+  // If logo was applied, serve the composited image via backend endpoint.
+  // Otherwise, use the FAL CDN URL for display.
   const getImageDisplayUrl = (img: GeneratedImage | null) => {
     if (!img) return "";
+    if (img.final_image_path) {
+      return `${API_URL}/image-gen/${img.id}/file`;
+    }
     return img.image_url || "";
   };
 
@@ -715,7 +722,7 @@ export default function CreateImagePage() {
               <CardTitle className="text-base">Generated Image</CardTitle>
             </CardHeader>
             <CardContent>
-              {addLogo && logoInfo.exists && currentImage.image_url ? (
+              {addLogo && logoInfo.exists && !currentImage.final_image_path && currentImage.image_url ? (
                 <LogoDragOverlay
                   imageUrl={currentImage.image_url}
                   logoUrl={`${API_URL}/image-gen/logo/file`}
@@ -726,9 +733,9 @@ export default function CreateImagePage() {
                   initialY={logoPosition.y}
                   initialScale={logoPosition.scale}
                 />
-              ) : currentImage.image_url ? (
+              ) : getImageDisplayUrl(currentImage) ? (
                 <img
-                  src={currentImage.image_url}
+                  src={getImageDisplayUrl(currentImage)}
                   alt="Generated"
                   className="w-full rounded-lg border"
                 />
@@ -739,9 +746,23 @@ export default function CreateImagePage() {
               )}
 
               {currentImage.final_image_path && (
-                <Badge variant="secondary" className="mt-2">
-                  <CheckCircle2 className="size-3 mr-1" /> Logo applied
-                </Badge>
+                <div className="flex items-center gap-2 mt-2">
+                  <Badge variant="secondary">
+                    <CheckCircle2 className="size-3 mr-1" /> Logo applied
+                  </Badge>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setCurrentImage((prev) =>
+                        prev ? { ...prev, final_image_path: null, logo_config: null } : prev
+                      );
+                      setAddLogo(true);
+                    }}
+                  >
+                    <Pencil className="size-3 mr-1" /> Reposition
+                  </Button>
+                </div>
               )}
             </CardContent>
           </Card>
@@ -847,9 +868,9 @@ export default function CreateImagePage() {
               <CardTitle className="text-base">Final Image</CardTitle>
             </CardHeader>
             <CardContent>
-              {currentImage.image_url ? (
+              {getImageDisplayUrl(currentImage) ? (
                 <img
-                  src={currentImage.image_url}
+                  src={getImageDisplayUrl(currentImage)}
                   alt="Final"
                   className="w-full rounded-lg border"
                 />

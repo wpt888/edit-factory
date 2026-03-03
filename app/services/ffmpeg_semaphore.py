@@ -181,6 +181,26 @@ def is_nvenc_available() -> bool:
     return _nvenc_available
 
 
+def get_prep_codec_params(
+    preset: str = "fast",
+    crf: int = 23,
+    include_audio: bool = True,
+) -> list[str]:
+    """Return codec params for preparatory FFmpeg operations.
+
+    Uses NVENC when available, falls back to libx264.
+    """
+    if is_nvenc_available():
+        params = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", str(crf)]
+    else:
+        params = ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
+
+    if include_audio:
+        params.extend(["-c:a", "aac"])
+
+    return params
+
+
 # =============================================================================
 # Disk space check
 # =============================================================================

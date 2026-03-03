@@ -30,7 +30,7 @@ from app.services.script_generator import get_script_generator
 from app.services.assembly_service import get_assembly_service, strip_product_group_tags
 
 # Global FFmpeg concurrency — shared across ALL routes (library, pipeline, product)
-from app.services.ffmpeg_semaphore import acquire_render_slot, check_disk_space
+from app.services.ffmpeg_semaphore import acquire_render_slot, check_disk_space, safe_ffmpeg_run, is_nvenc_available
 
 
 def _stable_hash(text: str) -> str:
@@ -1086,8 +1086,11 @@ async def generate_variant_tts(
             # Count words in script vs SRT for validation
             script_word_count = len(cleaned_text.split())
             if srt_content:
-                srt_lines = [line for block in srt_content.strip().split("\n\n") for line in block.split("\n")[2:] if line.strip()]
-                srt_word_count = sum(len(line.split()) for line in srt_lines)
+                srt_word_count = sum(
+                    len(line.split())
+                    for line in srt_content.split('\n')
+                    if line.strip() and not line.strip().isdigit() and '-->' not in line
+                )
             else:
                 srt_word_count = 0
 
@@ -1410,7 +1413,7 @@ async def render_variants(
                 "width": 1080,
                 "height": 1920,
                 "fps": 30,
-                "video_codec": "libx264",
+                "video_codec": "h264_nvenc" if is_nvenc_available() else "libx264",
                 "audio_codec": "aac",
                 "video_bitrate": "3M",
                 "audio_bitrate": "192k"
@@ -1422,7 +1425,7 @@ async def render_variants(
             "width": 1080,
             "height": 1920,
             "fps": 30,
-            "video_codec": "libx264",
+            "video_codec": "h264_nvenc" if is_nvenc_available() else "libx264",
             "audio_codec": "aac",
             "video_bitrate": "3M",
             "audio_bitrate": "192k"
@@ -1722,11 +1725,11 @@ async def render_variants(
                             thumb_dir = final_video_path.parent / "thumbnails"
                             thumb_dir.mkdir(parents=True, exist_ok=True)
                             thumb_path = thumb_dir / f"{final_video_path.stem}_thumb.jpg"
-                            subprocess.run([
+                            await asyncio.to_thread(safe_ffmpeg_run, [
                                 "ffmpeg", "-y", "-ss", "1", "-i", str(final_video_path),
                                 "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "3",
                                 str(thumb_path)
-                            ], capture_output=True, timeout=30)
+                            ], 30, "thumbnail")
                             if thumb_path.exists():
                                 with render_jobs_lock:
                                     job["thumbnail_path"] = str(thumb_path)
@@ -1739,12 +1742,12 @@ async def render_variants(
                         # Step C: Get video duration
                         duration = None
                         try:
-                            dur_result = subprocess.run([
+                            dur_result = await asyncio.to_thread(safe_ffmpeg_run, [
                                 "ffprobe", "-v", "error", "-show_entries",
                                 "format=duration",
                                 "-of", "default=noprint_wrappers=1:nokey=1",
                                 str(final_video_path)
-                            ], capture_output=True, text=True, timeout=30)
+                            ], 30, "duration probe")
                             if dur_result.returncode == 0:
                                 try:
                                     duration = float(dur_result.stdout.strip())
@@ -2016,11 +2019,11 @@ async def sync_pipeline_to_library(
             thumb_dir.mkdir(parents=True, exist_ok=True)
             thumb_path = thumb_dir / f"{final_video_path.stem}_thumb.jpg"
             if not thumb_path.exists():
-                subprocess.run([
+                await asyncio.to_thread(safe_ffmpeg_run, [
                     "ffmpeg", "-y", "-ss", "1", "-i", str(final_video_path),
                     "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "3",
                     str(thumb_path)
-                ], capture_output=True, timeout=30)
+                ], 30, "sync thumbnail")
             if not thumb_path.exists():
                 thumb_path = None
         except Exception:
@@ -2029,11 +2032,11 @@ async def sync_pipeline_to_library(
         # Duration
         duration = None
         try:
-            dur_result = subprocess.run([
+            dur_result = await asyncio.to_thread(safe_ffmpeg_run, [
                 "ffprobe", "-v", "error", "-show_entries", "format=duration",
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 str(final_video_path)
-            ], capture_output=True, text=True, timeout=30)
+            ], 30, "sync duration probe")
             if dur_result.returncode == 0:
                 try:
                     duration = float(dur_result.stdout.strip())

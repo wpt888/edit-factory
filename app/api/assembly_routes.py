@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from app.api.auth import ProfileContext, get_profile_context
 from app.db import get_supabase
 from app.services.assembly_service import get_assembly_service
+from app.services.ffmpeg_semaphore import is_nvenc_available
 from app.services.job_storage import get_job_storage
 
 logger = logging.getLogger(__name__)
@@ -285,7 +286,7 @@ async def render_assembly(
                 "width": 1080,
                 "height": 1920,
                 "fps": 30,
-                "video_codec": "libx264",
+                "video_codec": "h264_nvenc" if is_nvenc_available() else "libx264",
                 "audio_codec": "aac",
                 "video_bitrate": "3M",
                 "audio_bitrate": "192k"
@@ -298,7 +299,7 @@ async def render_assembly(
             "width": 1080,
             "height": 1920,
             "fps": 30,
-            "video_codec": "libx264",
+            "video_codec": "h264_nvenc" if is_nvenc_available() else "libx264",
             "audio_codec": "aac",
             "video_bitrate": "3M",
             "audio_bitrate": "192k"

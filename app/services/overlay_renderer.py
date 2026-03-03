@@ -32,6 +32,8 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Literal
 
+from app.services.ffmpeg_semaphore import safe_ffmpeg_run, get_prep_codec_params
+
 logger = logging.getLogger(__name__)
 
 # Output dimensions: portrait 1080x1920 (9:16 for TikTok/Reels/Shorts)
@@ -177,13 +179,7 @@ def _run_ffmpeg(cmd: list) -> subprocess.CompletedProcess:
         cmd.insert(1, "4")
         cmd.insert(1, "-threads")
     logger.debug("[overlay_renderer] FFmpeg cmd: %s", " ".join(str(c) for c in cmd))
-    return subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=300,
-    )
+    return safe_ffmpeg_run(cmd, 300, "overlay render")
 
 
 # ---------------------------------------------------------------------------
@@ -289,9 +285,8 @@ def _run_interstitial_ffmpeg(
         "-i", local_img,
         "-vf", vf,
         "-t", str(duration),
-        "-c:v", "libx264",
+        *get_prep_codec_params(include_audio=False),
         "-pix_fmt", "yuv420p",
-        "-preset", "fast",
         "-an",  # no audio
         output_path,
     ]
@@ -444,9 +439,8 @@ def _run_pip_ffmpeg(
         "-filter_complex", filter_complex,
         "-map", "[out]",
         "-map", "0:a?",       # copy audio from main video if present
-        "-c:v", "libx264",
+        *get_prep_codec_params(include_audio=False),
         "-pix_fmt", "yuv420p",
-        "-preset", "fast",
         "-c:a", "copy",
         "-shortest",          # end when shortest input finishes (main video)
         output_path,

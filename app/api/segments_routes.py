@@ -21,6 +21,7 @@ from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import validate_file_mime_type, ALLOWED_VIDEO_MIMES
 from app.utils import sanitize_filename as _sanitize_filename
 from app.rate_limit import limiter
+from app.services.ffmpeg_semaphore import get_prep_codec_params
 
 import logging
 
@@ -216,9 +217,7 @@ def _extract_segment_video(
             "-ss", str(start_time),
             "-i", str(source_path),
             "-t", str(duration),
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-preset", "fast",
+            *get_prep_codec_params(),
             str(output_path)
         ]
         result = subprocess.run(cmd, capture_output=True, timeout=300)
@@ -354,7 +353,7 @@ async def upload_source_video(
         try:
             cmd = [
                 "ffmpeg", "-y", "-threads", "4", "-i", str(video_path),
-                "-c:v", "libx264", "-c:a", "aac", "-preset", "fast",
+                *get_prep_codec_params(),
                 str(mp4_path)
             ]
             result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=600)

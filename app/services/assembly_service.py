@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Dict
 
 from app.config import get_settings
+from app.services.ffmpeg_semaphore import safe_ffmpeg_run, get_prep_codec_params
 from app.services.srt_validator import sanitize_srt_full
 
 logger = logging.getLogger(__name__)
@@ -208,7 +209,7 @@ class AssemblyService:
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 str(audio_path)
             ]
-            result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=300)
+            result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 30, "audio duration")
             if result.returncode == 0 and result.stdout.strip():
                 duration_str = result.stdout.strip()
                 if duration_str.replace('.', '', 1).isdigit():
@@ -905,24 +906,30 @@ class AssemblyService:
             gap = target_video_duration - current_timeline_pos
             logger.info(f"Extending timeline by {gap:.2f}s to cover audio duration + safety margin")
 
-            # Use seeded random segment for gap fill — prefer different source from last entry
-            if timeline and segments_data:
-                rng = random.Random(variant_index + 1000)
-                last_source = timeline[-1].source_video_path if timeline else None
-                diff_source = [s for s in segments_data if s.get("source_video_path") != last_source]
-                gap_pool = diff_source if diff_source else segments_data
-                gap_segment = rng.choice(gap_pool)
-                last_segment = gap_segment
-                source_video_path = last_segment.get("source_video_path")
-                segment_start = last_segment.get("start_time", 0.0)
-                segment_end = last_segment.get("end_time", segment_start + gap)
-
+            if timeline:
+                # Extend the last timeline entry to cover the gap.
+                # This preserves the last previewed segment instead of adding random content.
+                last_entry = timeline[-1]
+                timeline[-1] = TimelineEntry(
+                    source_video_path=last_entry.source_video_path,
+                    start_time=last_entry.start_time,
+                    end_time=last_entry.end_time,
+                    timeline_start=last_entry.timeline_start,
+                    timeline_duration=last_entry.timeline_duration + gap,
+                    transforms=last_entry.transforms,
+                )
+            elif segments_data:
+                # Fallback: no timeline entries yet, use first available segment
+                fallback = segments_data[0]
+                source_video_path = fallback.get("source_video_path")
+                segment_start = fallback.get("start_time", 0.0)
+                segment_end = fallback.get("end_time", segment_start + gap)
                 gap_entry = TimelineEntry(
                     source_video_path=source_video_path,
                     start_time=segment_start,
                     end_time=min(segment_end, segment_start + gap),
                     timeline_start=current_timeline_pos,
-                    timeline_duration=gap
+                    timeline_duration=gap,
                 )
                 timeline.append(gap_entry)
 
@@ -1067,12 +1074,12 @@ class AssemblyService:
                     "-ss", str(entry.start_time),
                     "-i", entry.source_video_path,
                     "-t", str(segment_duration),
-                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+                    *get_prep_codec_params(preset="ultrafast", crf=18, include_audio=False),
                     "-an", "-pix_fmt", "yuv420p",
                     str(segment_raw)
                 ]
                 result_extract = await asyncio.to_thread(
-                    subprocess.run, extract_cmd, capture_output=True, text=True, timeout=120
+                    safe_ffmpeg_run, extract_cmd, 120, "segment extract loop"
                 )
                 if result_extract.returncode != 0:
                     logger.error(f"Failed to extract raw segment {i}: {result_extract.stderr}")
@@ -1097,9 +1104,7 @@ class AssemblyService:
                 ])
 
             cmd.extend([
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "23",
+                *get_prep_codec_params(include_audio=False),
                 "-threads", "4",
                 "-an",
                 "-pix_fmt", "yuv420p",
@@ -1109,7 +1114,7 @@ class AssemblyService:
             logger.debug(f"Extracting segment {i}: {entry.source_video_path} [{entry.start_time:.2f}s - {entry.end_time:.2f}s]")
 
             async with semaphore:
-                result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=600)
+                result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 600, "segment extract")
 
             if result.returncode == 0 and segment_file.exists():
                 results[i] = segment_file
@@ -1212,16 +1217,14 @@ class AssemblyService:
             "-f", "concat",
             "-safe", "0",
             "-i", str(concat_file),
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "23",
+            *get_prep_codec_params(include_audio=False),
             "-pix_fmt", "yuv420p",
             str(assembled_path)
         ]
 
         logger.info(f"Concatenating {len(segment_files)} segments")
 
-        result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=600)
+        result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 600, "assembly concat")
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg concatenation failed: {result.stderr}")
 
@@ -1473,14 +1476,19 @@ class AssemblyService:
             # Step 6: Build timeline
             logger.info("Step 6/7: Building video timeline")
             _report("Building video timeline", 60)
+            # When match_overrides are provided, the user has already approved the preview.
+            # The preview player shows segments synced directly to SRT time (no intro, no merging).
+            # Render must reproduce exactly what the preview showed.
+            effective_intro = False if match_overrides else ultra_rapid_intro
+            effective_min_seg = 0.0 if match_overrides else min_segment_duration
             timeline = self.build_timeline(
                 match_results=match_results,
                 segments_data=segments_data,
                 audio_duration=audio_duration,
                 duration_overrides=duration_overrides,
                 variant_index=variant_index,
-                min_segment_duration=min_segment_duration,
-                ultra_rapid_intro=ultra_rapid_intro
+                min_segment_duration=effective_min_seg,
+                ultra_rapid_intro=effective_intro
             )
 
             # Step 7: Assemble video

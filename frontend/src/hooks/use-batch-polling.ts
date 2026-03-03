@@ -85,6 +85,7 @@ export function useBatchPolling(options: UseBatchPollingOptions): UseBatchPollin
   const poll = useCallback(
     async (batchId: string) => {
       if (isCancelledRef.current) return;
+      if (currentBatchIdRef.current !== batchId) return;  // Stale poll for previous batch
 
       try {
         const response = await apiFetch(
@@ -107,7 +108,7 @@ export function useBatchPolling(options: UseBatchPollingOptions): UseBatchPollin
           pollingRef.current = setTimeout(() => poll(batchId), interval);
         }
       } catch (error) {
-        handleApiError(error, "Eroare la actualizarea statusului");
+        handleApiError(error, "Error updating status");
         // Retry on network errors with doubled interval
         if (!isCancelledRef.current) {
           pollingRef.current = setTimeout(() => poll(batchId), interval * 2);

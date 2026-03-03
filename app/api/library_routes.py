@@ -50,7 +50,7 @@ _MAX_CANCELLED = 200
 # Global semaphore shared across ALL routes (library, pipeline, product)
 from app.services.ffmpeg_semaphore import (
     acquire_render_slot, acquire_prep_slot, safe_ffmpeg_run, check_disk_space,
-    is_nvenc_available,
+    is_nvenc_available, get_prep_codec_params,
 )
 # Keep legacy name for backwards compat with product_generate_routes import
 _ffmpeg_render_semaphore = None  # DEPRECATED — use acquire_render_slot() instead
@@ -136,10 +136,17 @@ def is_project_locked(project_id: str) -> bool:
 
 
 def cleanup_project_lock(project_id: str):
-    """Remove project lock when no longer needed."""
+    """Remove project lock only if it's not currently held by another task."""
     with _locks_lock:
-        if project_id in _project_locks:
+        lock = _project_locks.get(project_id)
+        if lock is None:
+            return
+        # Only delete if we can acquire (meaning nobody else holds it)
+        acquired = lock.acquire(blocking=False)
+        if acquired:
+            lock.release()
             del _project_locks[project_id]
+        # If we can't acquire, another task holds the lock — leave it in place
 
 # ============== PROGRESS TRACKING ==============
 _generation_progress: Dict[str, dict] = {}
@@ -361,7 +368,7 @@ async def serve_file(
         path=str(resolved_path),
         media_type=media_type or "application/octet-stream",
         filename=resolved_path.name if download else None,
-        headers={"Cache-Control": "public, max-age=3600"}
+        headers={"Cache-Control": "no-cache, must-revalidate"}
     )
 
 
@@ -426,7 +433,7 @@ async def download_clip_audio(
         path=str(file_path),
         media_type="audio/mpeg",
         filename=f"clip_{clip_id[:8]}.mp3",
-        headers={"Cache-Control": "public, max-age=3600"}
+        headers={"Cache-Control": "no-cache, must-revalidate"}
     )
 
 
@@ -807,7 +814,8 @@ async def _generate_raw_clips_task(
         )
 
         # Generăm clipuri RAW (fără audio, fără subtitrări)
-        result = processor.process_video(
+        result = await asyncio.to_thread(
+            processor.process_video,
             video_path=Path(video_path),
             output_name=f"project_{project_id[:8]}",
             target_duration=target_duration,
@@ -1376,7 +1384,7 @@ async def _generate_from_segments_task(
                             "-ss", str(seg["start_time"]),
                             "-i", seg["file_path"],
                             "-t", str(seg["duration"]),
-                            "-c:v", "libx264", "-preset", "fast",
+                            *get_prep_codec_params(include_audio=False),
                             *audio_filter_args,  # Filtrul audio pentru mute (dacă există)
                             "-c:a", "aac",
                             "-avoid_negative_ts", "make_zero",
@@ -1396,8 +1404,7 @@ async def _generate_from_segments_task(
                     "ffmpeg", "-y", "-threads", "4",
                     "-f", "concat", "-safe", "0",
                     "-i", str(concat_list_path),
-                    "-c:v", "libx264", "-preset", "fast",
-                    "-c:a", "aac",
+                    *get_prep_codec_params(),
                     str(output_path)
                 ]
 
@@ -1864,7 +1871,8 @@ async def remove_clip_audio(
         ]
 
         logger.info(f"Removing audio from clip {clip_id}: {video_path} -> {output_path}")
-        result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=300)
+        from app.services.ffmpeg_semaphore import safe_ffmpeg_run
+        result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 120, "remove clip audio")
 
         if result.returncode != 0:
             logger.error(f"FFmpeg error: {result.stderr}")
@@ -2367,16 +2375,18 @@ async def _render_final_clip_task(
 
     # Acquire project lock to prevent concurrent operations on same project
     lock = get_project_lock(project_id) if project_id else None
-    if lock and not lock.acquire(timeout=300):  # Wait up to 5 min for renders
-        logger.warning(f"Could not acquire lock for project {project_id} within timeout")
-        try:
-            supabase.table("editai_clips").update({
-                "final_status": "failed",
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", clip_id).eq("profile_id", profile_id).execute()
-        except Exception as e:
-            logger.error(f"Failed to mark clip {clip_id} as failed after lock timeout: {e}")
-        return
+    if lock:
+        acquired = await asyncio.to_thread(lock.acquire, True, 300)
+        if not acquired:
+            logger.warning(f"Could not acquire lock for project {project_id} within timeout")
+            try:
+                supabase.table("editai_clips").update({
+                    "final_status": "failed",
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+            except Exception as e:
+                logger.error(f"Failed to mark clip {clip_id} as failed after lock timeout: {e}")
+            return
 
     # Set clip status to processing now that we hold the lock
     try:
@@ -2441,11 +2451,12 @@ async def _render_final_clip_task(
                 logger.info(f"TTS with timestamps generated for clip {clip_id}: {tts_result.duration_seconds:.1f}s, model={elevenlabs_model}")
 
                 # Apply silence removal to timestamped audio
+                original_audio_path = audio_path
                 try:
                     from app.services.silence_remover import SilenceRemover
                     remover = SilenceRemover(min_silence_duration=0.25, padding=0.06, target_pause_duration=0.1)
                     trimmed_path = temp_dir / f"tts_trimmed_{clip_id}.mp3"
-                    silence_result = remover.remove_silence(audio_path, trimmed_path)
+                    silence_result = await asyncio.to_thread(remover.remove_silence, audio_path, trimmed_path)
                     audio_path = trimmed_path
                     silence_stats = {
                         'original_duration': silence_result.original_duration,
@@ -2455,11 +2466,18 @@ async def _render_final_clip_task(
 
                     # Remap TTS timestamps to match the trimmed audio
                     if silence_result.segments_map and tts_timestamps:
-                        from app.services.tts_subtitle_generator import remap_timestamps_dict
-                        tts_timestamps = remap_timestamps_dict(tts_timestamps, silence_result.segments_map)
-                        logger.info(f"Remapped TTS timestamps after silence removal ({len(silence_result.segments_map)} regions)")
+                        try:
+                            from app.services.tts_subtitle_generator import remap_timestamps_dict
+                            tts_timestamps = remap_timestamps_dict(tts_timestamps, silence_result.segments_map)
+                            logger.info(f"Remapped TTS timestamps after silence removal ({len(silence_result.segments_map)} regions)")
+                        except Exception as remap_err:
+                            # Remap failed — revert to original audio so timestamps stay in sync
+                            logger.warning(f"Timestamp remapping failed, reverting to original audio to preserve sync: {remap_err}")
+                            audio_path = original_audio_path
+                            silence_stats = None
                 except Exception as e:
                     logger.warning(f"Silence removal failed, using raw audio: {e}")
+                    audio_path = original_audio_path
 
             except Exception as e:
                 # Fallback to legacy TTS without timestamps
@@ -2531,9 +2549,9 @@ async def _render_final_clip_task(
         if audio_duration and audio_duration > 0:
             duration_diff = video_duration - audio_duration
 
-            if abs(duration_diff) < 0.5:
-                # Diferență neglijabilă, folosim video-ul original
-                logger.info(f"Video sync OK: video={video_duration:.1f}s, audio={audio_duration:.1f}s")
+            if abs(duration_diff) < 0.2:
+                # Diferență neglijabilă (<200ms), folosim video-ul original
+                logger.info(f"Video sync OK: video={video_duration:.1f}s, audio={audio_duration:.1f}s (diff={abs(duration_diff)*1000:.0f}ms)")
                 final_video_path = raw_video_path
 
             elif duration_diff > 0:
@@ -2589,7 +2607,8 @@ async def _render_final_clip_task(
                 _voice_settings = content_data.get("voice_settings", {})
                 _vs_key = ""
                 if _voice_settings:
-                    _vs_key = f"{_voice_settings.get('stability', 0.5):.2f}_{_voice_settings.get('similarity_boost', 0.75):.2f}_{_voice_settings.get('style', 0.0):.2f}_{_voice_settings.get('speed', 1.0):.2f}"
+                    _spk_boost = "1" if _voice_settings.get("use_speaker_boost", True) else "0"
+                    _vs_key = f"{_voice_settings.get('stability', 0.5):.2f}_{_voice_settings.get('similarity_boost', 0.75):.2f}_{_voice_settings.get('style', 0.0):.2f}_{_voice_settings.get('speed', 1.0):.2f}_{_spk_boost}"
                 _srt_cache_key = {"text": content_data["tts_text"], "voice_id": _tts_voice, "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "pause_version": "v2", "vs": _vs_key}
                 cached_srt = srt_cache_lookup(_srt_cache_key)
                 if cached_srt:
@@ -2693,10 +2712,13 @@ async def _render_final_clip_task(
 
     except Exception as e:
         logger.error(f"Error rendering clip {clip_id}: {e}")
-        supabase.table("editai_clips").update({
-            "final_status": "failed",
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+        try:
+            supabase.table("editai_clips").update({
+                "final_status": "failed",
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+        except Exception as db_err:
+            logger.error(f"CRITICAL: Failed to mark clip {clip_id} as failed in DB: {db_err}")
     finally:
         # Always cleanup temp files (even on error)
         try:
@@ -2750,13 +2772,12 @@ async def bulk_render_clips(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Randează mai multe clipuri selectate cu același preset."""
-    for clip_id in request.clip_ids:
-        background_tasks.add_task(
-            _start_render_for_clip,
-            clip_id=clip_id,
-            preset_name=request.preset_name,
-            profile_id=profile.profile_id
-        )
+    background_tasks.add_task(
+        _bulk_render_sequential,
+        clip_ids=request.clip_ids,
+        preset_name=request.preset_name,
+        profile_id=profile.profile_id
+    )
 
     return {
         "status": "processing",
@@ -2764,6 +2785,20 @@ async def bulk_render_clips(
         "preset": request.preset_name,
         "message": f"Rendering {len(request.clip_ids)} clips..."
     }
+
+
+async def _bulk_render_sequential(clip_ids: list, preset_name: str, profile_id: str):
+    """Process bulk renders sequentially instead of spawning N concurrent tasks."""
+    for clip_id in clip_ids:
+        try:
+            await _start_render_for_clip(
+                clip_id=clip_id,
+                preset_name=preset_name,
+                profile_id=profile_id
+            )
+        except Exception as e:
+            logger.error(f"Bulk render failed for clip {clip_id}: {e}")
+            # Continue with next clip instead of aborting entire batch
 
 
 async def _start_render_for_clip(clip_id: str, preset_name: str, profile_id: str = None):
@@ -2948,10 +2983,7 @@ def _trim_video_to_duration(input_path: Path, output_path: Path, target_duration
             "ffmpeg", "-y", "-threads", "4",
             "-i", str(input_path),
             "-t", str(target_duration),
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "23",
-            "-c:a", "aac",
+            *get_prep_codec_params(),
             "-b:a", "192k",
             "-movflags", "+faststart",
             str(output_path)
@@ -2980,10 +3012,7 @@ def _loop_video_to_duration(input_path: Path, output_path: Path, target_duration
             "-stream_loop", "-1",  # Loop infinit
             "-i", str(input_path),
             "-t", str(target_duration),
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "23",
-            "-c:a", "aac",
+            *get_prep_codec_params(),
             "-b:a", "192k",
             "-movflags", "+faststart",
             str(output_path)
@@ -3084,9 +3113,7 @@ def _extend_video_with_segments(
             base_cmd = [
                 "ffmpeg", "-y", "-threads", "4",
                 "-i", str(base_video),
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "23",
+                *get_prep_codec_params(include_audio=False),
                 "-an",
                 "-pix_fmt", "yuv420p",
                 str(base_no_audio)
@@ -3106,9 +3133,7 @@ def _extend_video_with_segments(
                     "-ss", str(seg["start_time"]),
                     "-i", seg["source_path"],
                     "-t", str(seg["duration"]),
-                    "-c:v", "libx264",
-                    "-preset", "fast",
-                    "-crf", "23",
+                    *get_prep_codec_params(include_audio=False),
                     "-an",  # No audio - will be replaced with TTS
                     "-pix_fmt", "yuv420p",
                     str(seg_output)
@@ -3136,9 +3161,7 @@ def _extend_video_with_segments(
                 "-safe", "0",
                 "-i", str(concat_list),
                 "-t", str(target_duration),  # Trim to exact duration
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "23",
+                *get_prep_codec_params(include_audio=False),
                 "-an",  # No audio
                 "-movflags", "+faststart",
                 str(output_path)

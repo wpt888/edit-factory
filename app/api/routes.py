@@ -526,7 +526,8 @@ async def process_job(job_id: str):
         video_path = Path(job["video_path"])
 
         # Voice muting e acum integrat în process_video pentru mute selectiv per segment
-        result = processor.process_video(
+        result = await asyncio.to_thread(
+            processor.process_video,
             video_path=video_path,
             output_name=job["output_name"],
             target_duration=job["target_duration"],

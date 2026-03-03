@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from app.services.ffmpeg_semaphore import safe_ffmpeg_run, get_prep_codec_params
 from app.services.textfile_helper import build_drawtext_filter, build_multi_drawtext, cleanup_textfiles
 
 logger = logging.getLogger(__name__)
@@ -245,7 +246,7 @@ def ensure_sale_badge(badge_dir: Path) -> Path:
         str(badge_path),
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    result = safe_ffmpeg_run(cmd, 30, "sale badge generation")
     if result.returncode != 0:
         logger.error("FFmpeg badge generation failed:\n%s", result.stderr[-2000:])
         raise RuntimeError(
@@ -596,9 +597,7 @@ def compose_product_video(
                 "-filter_complex", filter_complex,
                 "-map", "[out]",
                 "-t", str(config.duration_s),
-                "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-crf", "20",
+                *get_prep_codec_params(preset="veryfast", crf=20, include_audio=False),
                 "-pix_fmt", "yuv420p",
                 str(output_path),
             ]
@@ -622,9 +621,7 @@ def compose_product_video(
                 "-i", str(image_path),
                 "-vf", video_chain,
                 "-t", str(config.duration_s),
-                "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-crf", "20",
+                *get_prep_codec_params(preset="veryfast", crf=20, include_audio=False),
                 "-pix_fmt", "yuv420p",
                 str(output_path),
             ]
@@ -638,12 +635,7 @@ def compose_product_video(
                 config.template_name,
             )
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
+        result = safe_ffmpeg_run(cmd, 600, "compose product video")
 
         if result.returncode != 0:
             logger.error("FFmpeg failed:\n%s", result.stderr[-2000:])
@@ -696,7 +688,7 @@ def benchmark_zoompan(image_path: Path, duration_s: int = 30) -> dict:
                 f"pad={W_OUT}:{H_OUT}:(ow-iw)/2:(oh-ih)/2:black"
             ),
             "-t", str(duration_s),
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            *get_prep_codec_params(preset="veryfast", crf=20, include_audio=False),
             "-pix_fmt", "yuv420p",
             str(bench_simple),
         ]
@@ -718,7 +710,7 @@ def benchmark_zoompan(image_path: Path, duration_s: int = 30) -> dict:
                 f"d={n_frames}:s={W_OUT}x{H_OUT}:fps={fps}"
             ),
             "-t", str(duration_s),
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            *get_prep_codec_params(preset="veryfast", crf=20, include_audio=False),
             "-pix_fmt", "yuv420p",
             str(bench_zoompan),
         ]

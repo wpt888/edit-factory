@@ -104,7 +104,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch (error) {
-      handleApiError(error, "Eroare la incarcarea profilului");
+      handleApiError(error, "Error loading profile");
     }
   }, []);
 
@@ -134,7 +134,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
               }
             }
           } catch (e) {
-            handleApiError(e, "Eroare la context profil");
+            handleApiError(e, "Profile context error");
           }
         }
       }

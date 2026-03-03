@@ -398,6 +398,31 @@ async def serve_logo_file(ctx: ProfileContext = Depends(get_profile_context)):
     return FileResponse(logo_path)
 
 
+@router.get("/{image_id}/file")
+async def serve_image_file(
+    image_id: str,
+    ctx: ProfileContext = Depends(get_profile_context),
+):
+    """Serve the final image file (with logo if applied, otherwise base image)."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    img = supabase.table("generated_images")\
+        .select("final_image_path, image_local_path, profile_id")\
+        .eq("id", image_id).eq("profile_id", ctx.profile_id)\
+        .single().execute()
+
+    if not img.data:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    file_path = img.data.get("final_image_path") or img.data.get("image_local_path")
+    if not file_path or not Path(file_path).exists():
+        raise HTTPException(status_code=404, detail="Image file not available")
+
+    return FileResponse(file_path)
+
+
 @router.delete("/logo")
 async def delete_logo(ctx: ProfileContext = Depends(get_profile_context)):
     """Delete profile logo."""

@@ -81,7 +81,7 @@ export function CreateFeedDialog({
       setName("");
       setFeedUrl("");
     } catch (error) {
-      handleApiError(error, "Eroare la crearea feed-ului");
+      handleApiError(error, "Error creating feed");
     } finally {
       setLoading(false);
     }

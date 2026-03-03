@@ -68,7 +68,7 @@ class SubtitleStyleConfig:
             f"MarginV={self.margin_v}",
             "MarginL=40",
             "MarginR=40",
-            "WrapStyle=2",
+            "WrapStyle=0",
         ]
 
         # Glow effect: increase outline width and use semi-transparent outline
@@ -96,7 +96,11 @@ class SubtitleStyleConfig:
             style_parts.append(f"BackColour={self.shadow_color}")
             style_parts.append(f"BorderStyle={self.border_style}")
         else:
-            style_parts.append("Shadow=0")
+            # Default subtle shadow to match CSS preview textShadow
+            # Preview always has: textShadow: "0 1px 4px rgba(0,0,0,0.9)"
+            # &HE0000000 = ~88% opaque black, Shadow=1 for minimal offset
+            style_parts.append("Shadow=1")
+            style_parts.append("BackColour=&HE0000000")
             style_parts.append(f"BorderStyle={self.border_style}")
 
         return ",".join(style_parts)

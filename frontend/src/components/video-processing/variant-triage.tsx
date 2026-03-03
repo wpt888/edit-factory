@@ -108,10 +108,10 @@ export function VariantTriage({
 
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={selectAll}>
-            Selecteaza toate
+            Select all
           </Button>
           <Button variant="ghost" size="sm" onClick={deselectAll}>
-            Deselecteaza
+            Deselect
           </Button>
         </div>
       </div>
@@ -208,13 +208,13 @@ export function VariantTriage({
             ) : (
               <>
                 <Volume2 className="h-4 w-4 mr-2" />
-                Adauga Voice-over ({selectedCount} variante)
+                Add Voice-over ({selectedCount} variants)
               </>
             )}
           </Button>
           {selectedCount === 0 && !isAddingTts && (
             <p className="text-xs text-center text-muted-foreground mt-2">
-              Selecteaza cel putin o varianta pentru a adauga TTS
+              Select at least one variant to add TTS
             </p>
           )}
         </div>

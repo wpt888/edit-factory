@@ -84,11 +84,71 @@ def sanitize_srt_for_ffmpeg(srt_content: str) -> str:
     return '\n'.join(result)
 
 
-def sanitize_srt_full(srt_content: str) -> str:
-    """Apply all SRT sanitizations: HTML stripping + FFmpeg/libass escaping.
+def normalize_srt_newlines(srt_content: str) -> str:
+    """Join multiline subtitle text within each SRT entry into single lines.
 
-    Convenience function that chains sanitize_srt_text (XSS prevention)
-    and sanitize_srt_for_ffmpeg (ASS control sequence escaping).
+    HTML previews collapse newlines to spaces, but FFmpeg/libass renders them
+    as literal line breaks. This normalizer ensures render matches preview by
+    joining text lines within each entry with a space.
+
+    SRT structure (sequence numbers, timestamps, blank separators) is preserved.
+
+    Args:
+        srt_content: SRT file content (may have multiline text entries)
+
+    Returns:
+        SRT content with each entry's text on a single line
+    """
+    if not srt_content:
+        return srt_content
+
+    lines = srt_content.split('\n')
+    result = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Empty line (SRT entry separator) — preserve
+        if not stripped:
+            result.append(line)
+            i += 1
+            continue
+
+        # Sequence number (digit-only line) — preserve
+        if stripped.isdigit():
+            result.append(line)
+            i += 1
+            continue
+
+        # Timestamp line (contains " --> ") — preserve
+        if ' --> ' in stripped:
+            result.append(line)
+            i += 1
+            # Collect all text lines until next blank or end
+            text_parts = []
+            while i < len(lines) and lines[i].strip():
+                text_parts.append(lines[i].strip())
+                i += 1
+            # Join multiline text into single line
+            if text_parts:
+                result.append(' '.join(text_parts))
+            continue
+
+        # Fallback: preserve line as-is
+        result.append(line)
+        i += 1
+
+    return '\n'.join(result)
+
+
+def sanitize_srt_full(srt_content: str) -> str:
+    """Apply all SRT sanitizations: HTML stripping + newline normalization + FFmpeg/libass escaping.
+
+    Convenience function that chains:
+    1. sanitize_srt_text (XSS prevention)
+    2. normalize_srt_newlines (align render with preview)
+    3. sanitize_srt_for_ffmpeg (ASS control sequence escaping)
 
     Args:
         srt_content: Raw SRT file content
@@ -96,8 +156,9 @@ def sanitize_srt_full(srt_content: str) -> str:
     Returns:
         Fully sanitized SRT content safe for FFmpeg subtitle rendering
     """
-    content = sanitize_srt_text(srt_content)   # Strip HTML/XSS
-    content = sanitize_srt_for_ffmpeg(content)  # Escape for FFmpeg/libass
+    content = sanitize_srt_text(srt_content)      # Strip HTML/XSS
+    content = normalize_srt_newlines(content)      # Join multiline text entries
+    content = sanitize_srt_for_ffmpeg(content)     # Escape for FFmpeg/libass
     return content
 
 

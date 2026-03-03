@@ -10,6 +10,7 @@ from app.services.srt_validator import (
     sanitize_srt_text,
     sanitize_srt_for_ffmpeg,
     sanitize_srt_full,
+    normalize_srt_newlines,
 )
 
 
@@ -327,3 +328,60 @@ def test_srt_full_backslash_in_html_context():
     content = "Path is C:\\users\\test"
     result = sanitize_srt_full(content)
     assert "\\\\" in result
+
+
+# ---------------------------------------------------------------------------
+# normalize_srt_newlines tests
+# ---------------------------------------------------------------------------
+
+def test_normalize_multiline_text_joined():
+    """normalize_srt_newlines joins multiline subtitle text with spaces."""
+    srt = "1\n00:00:00,000 --> 00:00:01,000\nHello\nworld\n\n"
+    result = normalize_srt_newlines(srt)
+    assert "Hello world" in result
+    # Should NOT have Hello and world on separate lines
+    lines = result.split('\n')
+    text_lines = [l for l in lines if l.strip() and not l.strip().isdigit() and '-->' not in l]
+    assert len(text_lines) == 1
+    assert text_lines[0] == "Hello world"
+
+
+def test_normalize_single_line_unchanged():
+    """normalize_srt_newlines leaves single-line text unchanged."""
+    srt = "1\n00:00:00,000 --> 00:00:01,000\nHello world\n\n"
+    result = normalize_srt_newlines(srt)
+    assert "Hello world" in result
+
+
+def test_normalize_preserves_entry_separators():
+    """normalize_srt_newlines preserves blank lines between entries."""
+    srt = "1\n00:00:00,000 --> 00:00:01,000\nFirst\n\n2\n00:00:02,000 --> 00:00:03,000\nSecond\n\n"
+    result = normalize_srt_newlines(srt)
+    assert "First" in result
+    assert "Second" in result
+    # Both entries should still be separated
+    assert "\n\n" in result
+
+
+def test_normalize_three_line_text_joined():
+    """normalize_srt_newlines joins three-line subtitle text into one."""
+    srt = "1\n00:00:00,000 --> 00:00:01,000\nOne\nTwo\nThree\n\n"
+    result = normalize_srt_newlines(srt)
+    assert "One Two Three" in result
+
+
+def test_normalize_empty_input():
+    """normalize_srt_newlines with empty/None returns input unchanged."""
+    assert normalize_srt_newlines("") == ""
+    assert normalize_srt_newlines(None) is None
+
+
+def test_sanitize_srt_full_includes_normalization():
+    """sanitize_srt_full normalizes multiline text before FFmpeg escaping."""
+    srt = "1\n00:00:00,000 --> 00:00:01,000\nHello\nworld\n\n"
+    result = sanitize_srt_full(srt)
+    assert "Hello world" in result
+    # Should be single line, not two separate lines
+    lines = result.split('\n')
+    text_lines = [l for l in lines if l.strip() and not l.strip().isdigit() and '-->' not in l]
+    assert len(text_lines) == 1

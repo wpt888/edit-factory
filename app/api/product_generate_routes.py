@@ -791,18 +791,19 @@ async def _generate_product_video_task(
                 "adaptiveSizing": False,
             }
 
-        # _render_with_preset is async (FFmpeg runs in thread pool)
-        await _render_with_preset(
-            video_path=composed_path,
-            audio_path=tts_audio_path,
-            srt_path=srt_path,
-            subtitle_settings=subtitle_settings,
-            preset=preset_dict,
-            output_path=final_path,
-            enable_denoise=request.enable_denoise,
-            enable_sharpen=request.enable_sharpen,
-            enable_color=request.enable_color_correction,
-        )
+        # _render_with_preset is async (FFmpeg runs in thread pool) — WITH SEMAPHORE
+        async with acquire_render_slot():
+            await _render_with_preset(
+                video_path=composed_path,
+                audio_path=tts_audio_path,
+                srt_path=srt_path,
+                subtitle_settings=subtitle_settings,
+                preset=preset_dict,
+                output_path=final_path,
+                enable_denoise=request.enable_denoise,
+                enable_sharpen=request.enable_sharpen,
+                enable_color=request.enable_color_correction,
+            )
 
         logger.info("[%s] Final render complete: %s", job_id, final_path)
         job_storage.update_job(job_id, {"progress": "90"}, profile_id=profile_id)

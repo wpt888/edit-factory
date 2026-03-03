@@ -141,7 +141,7 @@ export function PublishDialog({
         setSelectedIds(new Set(data.map((i: Integration) => i.id)));
       } catch {
         setIntegrations([]);
-        toast.error("Nu s-au putut incarca platformele Postiz");
+        toast.error("Could not load Postiz platforms");
       } finally {
         setLoadingIntegrations(false);
       }
@@ -233,7 +233,7 @@ export function PublishDialog({
   // Publish
   const handlePublish = async () => {
     if (selectedIds.size === 0) {
-      toast.error("Selecteaza cel putin o platforma");
+      toast.error("Select at least one platform");
       return;
     }
 
@@ -264,7 +264,7 @@ export function PublishDialog({
       }
     } catch (err) {
       setDialogState("error");
-      setErrorMessage(err instanceof Error ? err.message : "Eroare la publicare");
+      setErrorMessage(err instanceof Error ? err.message : "Error publishing");
     }
   };
 
@@ -446,7 +446,7 @@ export function PublishDialog({
             <CheckCircle2 className="h-14 w-14 text-green-500" />
             <div className="text-center">
               <p className="text-lg font-semibold">
-                {scheduleEnabled ? "Postare programata!" : "Publicat cu succes!"}
+                {scheduleEnabled ? "Post scheduled!" : "Published successfully!"}
               </p>
               <p className="text-sm text-muted-foreground mt-1">
                 {progressStep}

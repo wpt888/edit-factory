@@ -99,11 +99,46 @@ function ProductJobCard({ job }: { job: ProductJobStatus }) {
   );
 }
 
+// Parse batch settings from URL search params (set by products page)
+function parseBatchSettings(params: URLSearchParams) {
+  return {
+    voiceover_mode: params.get("vm") || "quick",
+    tts_provider: params.get("tts") || "edge",
+    duration_s: parseInt(params.get("dur") || "30") || 30,
+    encoding_preset: params.get("enc") || "tiktok",
+    cta_text: params.get("cta") || "Comanda acum!",
+    voice_id: params.get("voice") || null,
+    ai_provider: params.get("ai") || "gemini",
+    source: params.get("src") || "feed",
+    enable_denoise: params.get("denoise") === "1",
+    enable_sharpen: params.get("sharpen") === "1",
+    enable_color_correction: params.get("cc") === "1",
+  };
+}
+
+// Rebuild settings params string for retry redirect
+function buildSettingsParams(settings: ReturnType<typeof parseBatchSettings>): string {
+  const p = new URLSearchParams();
+  if (settings.voiceover_mode !== "quick") p.set("vm", settings.voiceover_mode);
+  if (settings.tts_provider !== "edge") p.set("tts", settings.tts_provider);
+  if (settings.duration_s !== 30) p.set("dur", String(settings.duration_s));
+  if (settings.encoding_preset !== "tiktok") p.set("enc", settings.encoding_preset);
+  if (settings.cta_text !== "Comanda acum!") p.set("cta", settings.cta_text);
+  if (settings.voice_id) p.set("voice", settings.voice_id);
+  if (settings.ai_provider !== "gemini") p.set("ai", settings.ai_provider);
+  if (settings.source !== "feed") p.set("src", settings.source);
+  if (settings.enable_denoise) p.set("denoise", "1");
+  if (settings.enable_sharpen) p.set("sharpen", "1");
+  if (settings.enable_color_correction) p.set("cc", "1");
+  return p.toString();
+}
+
 // Main content — reads search params
 function BatchGenerateContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const batchId = searchParams.get("batch_id");
+  const batchSettings = parseBatchSettings(searchParams);
 
   const retryLoadingRef = useRef(false);
 
@@ -143,14 +178,22 @@ function BatchGenerateContent() {
     try {
       const res = await apiPost("/products/batch-generate", {
         product_ids: failedProductIds,
-        voiceover_mode: "quick",
-        tts_provider: "edge",
-        duration_s: 30,
-        encoding_preset: "tiktok",
+        source: batchSettings.source,
+        voiceover_mode: batchSettings.voiceover_mode,
+        tts_provider: batchSettings.tts_provider,
+        voice_id: batchSettings.voice_id,
+        ai_provider: batchSettings.ai_provider,
+        duration_s: batchSettings.duration_s,
+        encoding_preset: batchSettings.encoding_preset,
+        cta_text: batchSettings.cta_text,
+        enable_denoise: batchSettings.enable_denoise,
+        enable_sharpen: batchSettings.enable_sharpen,
+        enable_color_correction: batchSettings.enable_color_correction,
       });
       if (res.ok) {
         const data = await res.json();
-        router.push(`/batch-generate?batch_id=${data.batch_id}`);
+        const settingsStr = buildSettingsParams(batchSettings);
+        router.push(`/batch-generate?batch_id=${data.batch_id}${settingsStr ? "&" + settingsStr : ""}`);
       } else {
         const err = await res.json().catch(() => ({ detail: "Retry failed" }));
         toast.error(err.detail || "Retry failed");

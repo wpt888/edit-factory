@@ -175,7 +175,7 @@ export function VideoSegmentPlayer({
       containerRef.current.requestFullscreen().then(() => {
         setIsFullscreen(true);
       }).catch((err) => {
-        handleApiError(err, "Eroare la activarea fullscreen");
+        handleApiError(err, "Error activating fullscreen");
       });
     } else {
       document.exitFullscreen().then(() => {
@@ -196,14 +196,15 @@ export function VideoSegmentPlayer({
 
   // Mark segment (toggle start/end with C key)
   const toggleMark = useCallback(() => {
+    const exactTime = videoRef.current?.currentTime ?? currentTime;
     if (markStart === null) {
       // Set start point
-      setMarkStart(currentTime);
+      setMarkStart(exactTime);
       setIsMarking(true);
     } else {
       // Set end point and create segment
       const start = markStart;
-      const end = currentTime;
+      const end = exactTime;
 
       if (end > start) {
         onSegmentCreate(start, end);
@@ -234,16 +235,17 @@ export function VideoSegmentPlayer({
   // Toggle group mark (G key)
   const toggleGroupMark = useCallback(() => {
     if (!onGroupCreate) return;
+    const exactTime = videoRef.current?.currentTime ?? currentTime;
     if (groupMarkStart === null) {
       // Cancel any segment marking in progress
       setMarkStart(null);
       setIsMarking(false);
       // Set group start
-      setGroupMarkStart(currentTime);
+      setGroupMarkStart(exactTime);
       setIsGroupMarking(true);
     } else {
       const start = groupMarkStart;
-      const end = currentTime;
+      const end = exactTime;
       if (end > start) {
         onGroupCreate(start, end);
       } else if (start > end) {
@@ -253,6 +255,12 @@ export function VideoSegmentPlayer({
       setIsGroupMarking(false);
     }
   }, [groupMarkStart, currentTime, onGroupCreate]);
+
+  // Refs for values used in keyboard handler to avoid re-registering on every frame
+  const currentTimeRef = useRef(currentTime);
+  currentTimeRef.current = currentTime;
+  const markStartRef = useRef(markStart);
+  markStartRef.current = markStart;
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -276,15 +284,18 @@ export function VideoSegmentPlayer({
           break;
         case "i": // I - Set In point
           e.preventDefault();
-          setMarkStart(currentTime);
+          setMarkStart(videoRef.current?.currentTime ?? currentTimeRef.current);
           setIsMarking(true);
           break;
         case "o": // O - Set Out point
           e.preventDefault();
-          if (markStart !== null && currentTime > markStart) {
-            onSegmentCreate(markStart, currentTime);
-            setMarkStart(null);
-            setIsMarking(false);
+          {
+            const outTime = videoRef.current?.currentTime ?? currentTimeRef.current;
+            if (markStartRef.current !== null && outTime > markStartRef.current) {
+              onSegmentCreate(markStartRef.current, outTime);
+              setMarkStart(null);
+              setIsMarking(false);
+            }
           }
           break;
         case "escape": // Escape - Cancel marking
@@ -294,7 +305,7 @@ export function VideoSegmentPlayer({
         case "arrowleft":
           e.preventDefault();
           if (e.shiftKey) {
-            seekTo(currentTime - 5); // 5 seconds back
+            seekTo(currentTimeRef.current - 5); // 5 seconds back
           } else {
             frameStep(-1); // Frame back
           }
@@ -302,7 +313,7 @@ export function VideoSegmentPlayer({
         case "arrowright":
           e.preventDefault();
           if (e.shiftKey) {
-            seekTo(currentTime + 5); // 5 seconds forward
+            seekTo(currentTimeRef.current + 5); // 5 seconds forward
           } else {
             frameStep(1); // Frame forward
           }
@@ -332,7 +343,7 @@ export function VideoSegmentPlayer({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [togglePlay, toggleMark, toggleGroupMark, cancelMark, currentTime, markStart, seekTo, frameStep, onSegmentCreate, toggleFullscreen]);
+  }, [togglePlay, toggleMark, toggleGroupMark, cancelMark, seekTo, frameStep, onSegmentCreate, toggleFullscreen]);
 
   // Video event handlers with smooth playhead updates
   useEffect(() => {

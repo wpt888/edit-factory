@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 
+from app.services.ffmpeg_semaphore import safe_ffmpeg_run
+
 logger = logging.getLogger(__name__)
 
 # Try to import torch and silero
@@ -96,7 +98,7 @@ class VoiceDetector:
             str(output_path)
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = safe_ffmpeg_run(cmd, 60, "extract audio")
         if result.returncode != 0:
             logger.error(f"FFmpeg audio extraction failed: {result.stderr}")
             return False
@@ -113,7 +115,7 @@ class VoiceDetector:
             "-ac", "1",  # Mono
             str(output_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = safe_ffmpeg_run(cmd, 60, "convert to wav")
         if result.returncode != 0:
             logger.error(f"FFmpeg audio conversion failed: {result.stderr}")
             return False
@@ -163,12 +165,14 @@ class VoiceDetector:
                 elif audio.dtype == np.int32:
                     audio = audio.astype(np.float32) / 2147483648.0
 
-                # Resample dacă e necesar
+                # Resample dacă e necesar (rare — _extract_audio already produces 16kHz)
                 if sample_rate != self._sample_rate:
-                    # Simple resampling via interpolation
                     import scipy.signal
-                    num_samples = int(len(audio) * self._sample_rate / sample_rate)
-                    audio = scipy.signal.resample(audio, num_samples)
+                    # Use polyphase FIR filter for better phase preservation
+                    gcd = np.gcd(self._sample_rate, sample_rate)
+                    up = self._sample_rate // gcd
+                    down = sample_rate // gcd
+                    audio = scipy.signal.resample_poly(audio, up, down)
 
                 # Convert to mono
                 if len(audio.shape) > 1:
@@ -227,12 +231,15 @@ class VoiceDetector:
             )
 
             # Convertim la VoiceSegment
+            # Silero get_speech_timestamps returns only start/end, no per-segment
+            # probability. All returned segments passed the threshold, so confidence
+            # represents the minimum guaranteed probability (actual is >= threshold).
             voice_segments = []
             for ts in speech_timestamps:
                 seg = VoiceSegment(
                     start_time=ts['start'],
                     end_time=ts['end'],
-                    confidence=self.threshold  # Silero nu returnează confidence per segment
+                    confidence=self.threshold
                 )
                 voice_segments.append(seg)
 
@@ -330,7 +337,7 @@ def mute_voice_segments(
     logger.info(f"Muting {len(voice_segments)} voice segments in video")
     logger.debug(f"FFmpeg command: {' '.join(cmd)}")
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    result = safe_ffmpeg_run(cmd, 120, "mute voice segments")
     if result.returncode != 0:
         logger.error(f"FFmpeg mute failed: {result.stderr}")
         return False

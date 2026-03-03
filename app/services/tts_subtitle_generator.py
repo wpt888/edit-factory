@@ -161,8 +161,8 @@ def generate_srt_from_timestamps(
         char_start = start_times[i]
         char_end = end_times[i]
 
-        # Space indicates word boundary
-        if char == " ":
+        # Space or newline indicates word boundary
+        if char in (" ", "\n", "\r"):
             # Finalize current word if we have accumulated characters
             if current_word_chars:
                 word_text = "".join(current_word_chars).strip()
