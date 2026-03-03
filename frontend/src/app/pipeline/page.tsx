@@ -710,7 +710,7 @@ function PipelinePage() {
       }
     },
     onError: (err) => {
-      handleApiError(err, "Eroare la actualizarea statusului pipeline");
+      handleApiError(err, "Error updating pipeline status");
     },
   });
 
@@ -3689,7 +3689,7 @@ function PipelinePage() {
           open={!!publishVariant}
           onOpenChange={(open) => { if (!open) setPublishVariant(null); }}
           onPublished={() => {
-            toast.success("Publicat cu succes din pipeline!");
+            toast.success("Published successfully from pipeline!");
           }}
         />
       )}

@@ -204,7 +204,7 @@ function LibrarieContent() {
         window.location.href = "/login";
         return;
       }
-      handleApiError(error, "Eroare la incarcarea clipurilor");
+      handleApiError(error, "Error loading clips");
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -1318,12 +1318,12 @@ function LibrarieContent() {
             {loadingMore && (
               <div className="flex items-center justify-center py-6">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                <span className="ml-2 text-sm text-muted-foreground">Se incarca mai multe clipuri...</span>
+                <span className="ml-2 text-sm text-muted-foreground">Loading more clips...</span>
               </div>
             )}
             {!hasMore && clips.length > 0 && (
               <div className="flex items-center justify-center py-6">
-                <p className="text-sm text-muted-foreground">Toate clipurile au fost incarcate ({clips.length} total)</p>
+                <p className="text-sm text-muted-foreground">All clips loaded ({clips.length} total)</p>
               </div>
             )}
             <div ref={sentinelRef} className="h-4" aria-hidden="true" />

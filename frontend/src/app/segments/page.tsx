@@ -217,7 +217,7 @@ export default function SegmentsPage() {
         setSourceVideos(data);
       }
     } catch (error) {
-      handleApiError(error, "Eroare la incarcarea video-urilor sursa");
+      handleApiError(error, "Error loading source videos");
     }
   }, []);
 
@@ -244,7 +244,7 @@ export default function SegmentsPage() {
         setSegments(data);
       }
     } catch (error) {
-      handleApiError(error, "Eroare la incarcarea segmentelor");
+      handleApiError(error, "Error loading segments");
     } finally {
       setLoadingSegments(false);
     }
@@ -259,7 +259,7 @@ export default function SegmentsPage() {
         setAllSegments(data);
       }
     } catch (error) {
-      handleApiError(error, "Eroare la incarcarea tuturor segmentelor");
+      handleApiError(error, "Error loading all segments");
     }
   }, []);
 
@@ -335,7 +335,7 @@ export default function SegmentsPage() {
         }
       }
     } catch (error) {
-      handleApiError(error, "Eroare la stergerea segmentului");
+      handleApiError(error, "Error deleting segment");
     }
   }, [segments, allSegments, selectedVideo?.id]);
 
@@ -369,7 +369,7 @@ export default function SegmentsPage() {
         );
       }
     } catch (error) {
-      handleApiError(error, "Eroare la restaurarea segmentului");
+      handleApiError(error, "Error restoring segment");
     }
   }, []);
 
@@ -480,7 +480,7 @@ export default function SegmentsPage() {
         setUploadError(message);
       }
     } catch (error) {
-      handleApiError(error, "Eroare la incarcarea video-ului");
+      handleApiError(error, "Error loading video");
       setUploadError("Failed to upload video. Check your connection and try again.");
     } finally {
       setUploadingVideo(false);
@@ -507,7 +507,7 @@ export default function SegmentsPage() {
         }
       }
     } catch (error) {
-      handleApiError(error, "Eroare la stergerea video-ului");
+      handleApiError(error, "Error deleting video");
     }
   };
 
@@ -545,7 +545,7 @@ export default function SegmentsPage() {
       try {
         await apiDelete(`/segments/${seg.id}`);
       } catch (error) {
-        handleApiError(error, "Eroare la stergerea segmentului in unire");
+        handleApiError(error, "Error deleting segment during merge");
       }
     }
 
@@ -619,7 +619,7 @@ export default function SegmentsPage() {
         );
       }
     } catch (error) {
-      handleApiError(error, "Eroare la crearea segmentului");
+      handleApiError(error, "Error creating segment");
     }
   };
 
@@ -640,7 +640,7 @@ export default function SegmentsPage() {
         );
       }
     } catch (error) {
-      handleApiError(error, "Eroare la actualizarea segmentului");
+      handleApiError(error, "Error updating segment");
     }
 
     setEditingSegment(null);
@@ -683,7 +683,7 @@ export default function SegmentsPage() {
         setSelectedSegment((prev) => prev ? { ...prev, transforms } : prev);
       }
     } catch (error) {
-      handleApiError(error, "Eroare la salvarea transformarilor");
+      handleApiError(error, "Error saving transformations");
     }
   };
 
@@ -784,7 +784,7 @@ export default function SegmentsPage() {
         );
       }
     } catch (error) {
-      handleApiError(error, "Eroare la modificarea favoritului");
+      handleApiError(error, "Error toggling favorite");
     }
   };
 
@@ -805,7 +805,7 @@ export default function SegmentsPage() {
         await fetchSegments(selectedVideo.id);
       }
     } catch (error) {
-      handleApiError(error, "Eroare la crearea grupului de produse");
+      handleApiError(error, "Error creating product group");
     }
   };
 
@@ -825,7 +825,7 @@ export default function SegmentsPage() {
         await fetchSegments(selectedVideo.id);
       }
     } catch (error) {
-      handleApiError(error, "Eroare la actualizarea grupului");
+      handleApiError(error, "Error updating group");
     }
   };
 
@@ -838,7 +838,7 @@ export default function SegmentsPage() {
         await fetchSegments(selectedVideo.id);
       }
     } catch (error) {
-      handleApiError(error, "Eroare la stergerea grupului");
+      handleApiError(error, "Error deleting group");
     }
   };
 
@@ -987,7 +987,7 @@ export default function SegmentsPage() {
                 disabled={!uploadFile || !uploadName.trim() || uploadingVideo}
                 className="min-w-[100px]"
               >
-                {uploadingVideo ? "Se incarca..." : "Upload"}
+                {uploadingVideo ? "Uploading..." : "Upload"}
               </Button>
             </DialogFooter>
             {(!uploadFile || !uploadName.trim()) && (
@@ -1245,7 +1245,7 @@ export default function SegmentsPage() {
               title="Niciun segment"
               description={
                 viewMode === "current" && !selectedVideo
-                  ? "Selecteaza un video mai intai."
+                  ? "Select a video first."
                   : searchQuery || showFavoritesOnly || selectedKeywordFilter
                   ? "Niciun segment nu corespunde filtrelor."
                   : "Segmentele video selectate vor aparea aici."
