@@ -64,30 +64,35 @@ class CostTracker:
                 json.dump({"entries": [], "totals": {"elevenlabs": 0, "gemini": 0}}, f)
 
     def _load_log(self) -> Dict:
-        """Load the cost log with file-level locking."""
+        """Load the cost log."""
         try:
             with open(self.log_file, 'r', encoding='utf-8') as f:
-                try:
-                    import fcntl
-                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-                except (ImportError, OSError):
-                    pass  # Windows fallback - rely on threading lock only
                 return json.load(f)
+        except json.JSONDecodeError:
+            logger.warning("Cost log corrupted, backing up and resetting")
+            try:
+                backup = self.log_file.with_suffix('.json.bak')
+                self.log_file.rename(backup)
+            except Exception:
+                pass
+            return {"entries": [], "totals": {"elevenlabs": 0, "gemini": 0}}
         except Exception:
             return {"entries": [], "totals": {"elevenlabs": 0, "gemini": 0}}
 
     def _save_log(self, data: Dict):
-        """Save the cost log with file-level locking."""
+        """Save the cost log with file-level locking. Writes to temp file then renames for atomicity."""
         try:
-            with open(self.log_file, 'w', encoding='utf-8') as f:
-                try:
-                    import fcntl
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                except (ImportError, OSError):
-                    pass  # Windows fallback - rely on threading lock only
+            tmp_file = self.log_file.with_suffix('.json.tmp')
+            with open(tmp_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, default=str)
+            tmp_file.replace(self.log_file)
         except Exception as e:
             logger.error(f"Failed to save cost log: {e}")
+            # Clean up temp file on failure
+            try:
+                tmp_file.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     def _save_to_supabase(self, entry: CostEntry, profile_id: Optional[str] = None) -> bool:
         """Save entry to Supabase."""

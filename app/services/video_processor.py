@@ -122,6 +122,8 @@ class VideoAnalyzer:
             raise FileNotFoundError(f"Video not found: {video_path}")
 
         self.cap = cv2.VideoCapture(str(self.video_path))
+        if not self.cap.isOpened():
+            raise ValueError(f"Cannot open video file: {video_path}")
         self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30
         self.frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.duration = self.frame_count / self.fps if self.fps > 0 else 0
@@ -631,7 +633,10 @@ class VideoEditor:
             stdout, stderr = proc.communicate(timeout=600)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()  # Reap zombie process
+            try:
+                proc.communicate(timeout=10)  # Reap zombie process
+            except subprocess.TimeoutExpired:
+                pass  # Process is stuck, OS will clean up
             raise RuntimeError(f"FFmpeg {operation} timed out after 10 minutes")
 
         # Build a CompletedProcess-compatible object for downstream code
@@ -769,124 +774,140 @@ class VideoEditor:
         elif source_rotation == 180:
             video_filter = "hflip,vflip"  # 180° rotation
 
-        for i, seg in enumerate(segments):
-            temp_file = self.temp_dir / f"segment_{output_name}_{i:03d}.mp4"
+        try:
+            for i, seg in enumerate(segments):
+                temp_file = self.temp_dir / f"segment_{output_name}_{i:03d}.mp4"
 
-            # Verificăm dacă acest segment are voce care trebuie mutată
-            audio_filter = None
-            if voice_segments:
-                # Găsim vocile care se suprapun cu acest segment
-                overlapping_mutes = self._get_overlapping_voice_mutes(
-                    seg.start_time, seg.end_time, voice_segments
-                )
-                if overlapping_mutes:
-                    # Construim filtrul de volum pentru mute selectiv
-                    audio_filter = self._build_mute_filter(overlapping_mutes)
-                    logger.info(f"Segment {i+1}: Muting {len(overlapping_mutes)} voice portions")
+                # Verificăm dacă acest segment are voce care trebuie mutată
+                audio_filter = None
+                if voice_segments:
+                    # Găsim vocile care se suprapun cu acest segment
+                    overlapping_mutes = self._get_overlapping_voice_mutes(
+                        seg.start_time, seg.end_time, voice_segments
+                    )
+                    if overlapping_mutes:
+                        # Construim filtrul de volum pentru mute selectiv
+                        audio_filter = self._build_mute_filter(overlapping_mutes)
+                        logger.info(f"Segment {i+1}: Muting {len(overlapping_mutes)} voice portions")
 
-            # Funcție helper pentru a construi comanda
-            def build_cmd(use_gpu_encoding: bool):
-                if use_gpu_encoding:
-                    cmd = [
-                        "ffmpeg", "-y",
-                        "-hwaccel", "cuda",
-                        "-hwaccel_output_format", "cuda",
-                        "-i", str(video_path),
-                        "-ss", str(seg.start_time),
-                        "-t", str(seg.duration),
-                    ]
-                    # Pentru GPU: trebuie să descărcăm din CUDA înainte de filtru video
-                    if video_filter:
-                        cmd.extend(["-vf", f"hwdownload,format=nv12,{video_filter},hwupload_cuda"])
-                    if audio_filter:
-                        cmd.extend(["-af", audio_filter])
-                    cmd.extend([
-                        "-c:v", self.video_codec,
-                        "-preset", self.video_preset,
-                        "-cq", self.video_quality,
-                        # Keyframe interval (2 sec at 30fps)
-                        "-g", "60",
-                        "-bf", "2",
-                        # Audio
-                        "-c:a", "aac", "-b:a", "128k",
-                        "-ar", "48000", "-ac", "2",
-                        # Pixel format
-                        "-pix_fmt", "yuv420p",
-                        str(temp_file)
-                    ])
-                else:
-                    cmd = [
-                        "ffmpeg", "-y",
-                        "-i", str(video_path),
-                        "-ss", str(seg.start_time),
-                        "-t", str(seg.duration),
-                    ]
-                    if video_filter:
-                        cmd.extend(["-vf", video_filter])
-                    if audio_filter:
-                        cmd.extend(["-af", audio_filter])
-                    cmd.extend([
-                        "-c:v", "libx264",  # CPU codec
-                        "-profile:v", "high",
-                        "-level:v", "4.0",
-                        "-preset", "fast",
-                        "-crf", "23",
-                        # Keyframe interval (2 sec at 30fps) - prevents platform recompression
-                        "-g", "60",
-                        "-keyint_min", "60",
-                        "-sc_threshold", "0",
-                        "-bf", "2",
-                        # Audio
-                        "-c:a", "aac", "-b:a", "128k",
-                        "-ar", "48000", "-ac", "2",
-                        # Pixel format
-                        "-pix_fmt", "yuv420p",
-                        "-sar", "1:1",
-                        str(temp_file)
-                    ])
-                return cmd
+                # Funcție helper pentru a construi comanda
+                def build_cmd(use_gpu_encoding: bool):
+                    if use_gpu_encoding:
+                        cmd = [
+                            "ffmpeg", "-y",
+                            "-hwaccel", "cuda",
+                            "-hwaccel_output_format", "cuda",
+                            "-i", str(video_path),
+                            "-ss", str(seg.start_time),
+                            "-t", str(seg.duration),
+                        ]
+                        # Pentru GPU: trebuie să descărcăm din CUDA înainte de filtru video
+                        if video_filter:
+                            cmd.extend(["-vf", f"hwdownload,format=nv12,{video_filter},hwupload_cuda"])
+                        if audio_filter:
+                            cmd.extend(["-af", audio_filter])
+                        cmd.extend([
+                            "-c:v", self.video_codec,
+                            "-preset", self.video_preset,
+                            "-cq", self.video_quality,
+                            # Keyframe interval (2 sec at 30fps)
+                            "-g", "60",
+                            "-bf", "2",
+                            # Audio
+                            "-c:a", "aac", "-b:a", "128k",
+                            "-ar", "48000", "-ac", "2",
+                            # Pixel format
+                            "-pix_fmt", "yuv420p",
+                            str(temp_file)
+                        ])
+                    else:
+                        cmd = [
+                            "ffmpeg", "-y",
+                            "-i", str(video_path),
+                            "-ss", str(seg.start_time),
+                            "-t", str(seg.duration),
+                        ]
+                        if video_filter:
+                            cmd.extend(["-vf", video_filter])
+                        if audio_filter:
+                            cmd.extend(["-af", audio_filter])
+                        cmd.extend([
+                            "-c:v", "libx264",  # CPU codec
+                            "-profile:v", "high",
+                            "-level:v", "4.0",
+                            "-preset", "fast",
+                            "-crf", "23",
+                            # Keyframe interval (2 sec at 30fps) - prevents platform recompression
+                            "-g", "60",
+                            "-keyint_min", "60",
+                            "-sc_threshold", "0",
+                            "-bf", "2",
+                            # Audio
+                            "-c:a", "aac", "-b:a", "128k",
+                            "-ar", "48000", "-ac", "2",
+                            # Pixel format
+                            "-pix_fmt", "yuv420p",
+                            "-sar", "1:1",
+                            str(temp_file)
+                        ])
+                    return cmd
 
-            # Încearcă GPU, fallback pe CPU dacă eșuează
-            try:
-                cmd = build_cmd(self.use_gpu)
-                self._run_ffmpeg(cmd, f"extract segment {i+1}/{len(segments)}")
-            except RuntimeError as e:
-                error_lower = str(e).lower()
-                # Fallback pe CPU pentru erori NVENC sau filtergraph (combinația GPU + audio filter poate cauza probleme)
-                gpu_error_indicators = ["filtergraph", "cuda", "nvenc", "gpu", "device", "hwaccel", "out of memory", "cuvid", "filter not found"]
-                if self.use_gpu and any(indicator in error_lower for indicator in gpu_error_indicators):
-                    logger.warning(f"GPU encoding failed for segment {i+1}, falling back to CPU: {str(e)[:100]}")
-                    cmd = build_cmd(False)
-                    self._run_ffmpeg(cmd, f"extract segment {i+1}/{len(segments)} (CPU fallback)")
-                else:
-                    raise
+                # Încearcă GPU, fallback pe CPU dacă eșuează
+                try:
+                    cmd = build_cmd(self.use_gpu)
+                    self._run_ffmpeg(cmd, f"extract segment {i+1}/{len(segments)}")
+                except RuntimeError as e:
+                    error_lower = str(e).lower()
+                    # Fallback pe CPU pentru erori NVENC sau filtergraph (combinația GPU + audio filter poate cauza probleme)
+                    gpu_error_indicators = ["filtergraph", "cuda", "nvenc", "gpu", "device", "hwaccel", "out of memory", "cuvid", "filter not found"]
+                    if self.use_gpu and any(indicator in error_lower for indicator in gpu_error_indicators):
+                        logger.warning(f"GPU encoding failed for segment {i+1}, falling back to CPU: {str(e)[:100]}")
+                        cmd = build_cmd(False)
+                        self._run_ffmpeg(cmd, f"extract segment {i+1}/{len(segments)} (CPU fallback)")
+                    else:
+                        raise
 
-            segment_files.append(temp_file)
-            has_mute = " (voice muted)" if audio_filter else ""
-            logger.info(f"Extracted segment {i+1}/{len(segments)}: {seg.start_time:.1f}s-{seg.end_time:.1f}s{has_mute}")
+                segment_files.append(temp_file)
+                has_mute = " (voice muted)" if audio_filter else ""
+                logger.info(f"Extracted segment {i+1}/{len(segments)}: {seg.start_time:.1f}s-{seg.end_time:.1f}s{has_mute}")
+        except Exception:
+            # Clean up segment files created so far
+            for sf in segment_files:
+                try:
+                    sf.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            raise
 
         # Concatenare
         concat_file = self.temp_dir / f"concat_{output_name}.txt"
-        with open(concat_file, 'w', encoding='utf-8') as f:
-            for seg_file in segment_files:
-                escaped_path = str(seg_file).replace("'", "'\\''")
-                f.write(f"file '{escaped_path}'\n")
+        try:
+            with open(concat_file, 'w', encoding='utf-8') as f:
+                for seg_file in segment_files:
+                    escaped_path = str(seg_file).replace("'", "'\\''")
+                    f.write(f"file '{escaped_path}'\n")
 
-        output_video = self.output_dir / f"{output_name}_segments.mp4"
-        cmd = [
-            "ffmpeg", "-y",
-            "-f", "concat", "-safe", "0",
-            "-i", str(concat_file),
-            "-c", "copy",
-            str(output_video)
-        ]
+            output_video = self.output_dir / f"{output_name}_segments.mp4"
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", str(concat_file),
+                "-c", "copy",
+                str(output_video)
+            ]
 
-        self._run_ffmpeg(cmd, "concatenate segments")
-
-        # Cleanup segment files
-        for f in segment_files:
-            f.unlink(missing_ok=True)
-        concat_file.unlink(missing_ok=True)
+            self._run_ffmpeg(cmd, "concatenate segments")
+        finally:
+            # Clean up concat file and segment temps
+            try:
+                concat_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+            for sf in segment_files:
+                try:
+                    sf.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
         # NOTE: Don't track as intermediate - this may be the final output
         # The caller should track it if needed for further processing

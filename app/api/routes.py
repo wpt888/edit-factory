@@ -587,6 +587,10 @@ async def stream_job_progress(job_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Job not found")
 
     async def event_generator():
+        import time as _time
+        stream_start = _time.monotonic()
+        max_stream_duration = 600  # 10 minutes
+
         last_progress = None
         last_status = None
         heartbeat_counter = 0
@@ -594,6 +598,11 @@ async def stream_job_progress(job_id: str, request: Request):
         while True:
             # Check if client disconnected
             if await request.is_disconnected():
+                break
+
+            # Timeout after max duration to prevent stuck SSE streams
+            if _time.monotonic() - stream_start > max_stream_duration:
+                yield f"event: timeout\ndata: {json.dumps({'job_id': job_id, 'error': 'Stream timed out'})}\n\n"
                 break
 
             current_job = get_job_storage().get_job(job_id)
@@ -836,6 +845,8 @@ async def process_tts_generate_job(job_id: str):
 
     try:
         tts = get_elevenlabs_tts()
+        if tts is None:
+            raise Exception("ElevenLabs TTS unavailable - API key or voice ID not configured")
         settings = get_settings()
 
         # Output path
@@ -1010,6 +1021,8 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
 
     try:
         tts = get_elevenlabs_tts()
+        if tts is None:
+            raise Exception("ElevenLabs TTS unavailable - API key or voice ID not configured")
         settings = get_settings()
 
         video_paths = job["video_paths"]

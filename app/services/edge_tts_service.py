@@ -147,15 +147,23 @@ class EdgeTTSService:
 
         logger.info(f"Generating TTS: {len(text)} chars with voice {voice}")
 
-        communicate = edge_tts.Communicate(
-            text=text,
-            voice=voice,
-            rate=rate,
-            volume=volume,
-            pitch=pitch
-        )
-
-        await communicate.save(str(output_path))
+        for attempt in range(3):
+            try:
+                communicate = edge_tts.Communicate(
+                    text=text,
+                    voice=voice,
+                    rate=rate,
+                    volume=volume,
+                    pitch=pitch
+                )
+                await communicate.save(str(output_path))
+                break
+            except Exception as e:
+                if attempt < 2:
+                    logger.warning(f"Edge TTS attempt {attempt + 1} failed: {e}, retrying...")
+                    await asyncio.sleep(1)
+                else:
+                    raise
 
         logger.info(f"Audio saved: {output_path}")
         return output_path
@@ -177,7 +185,10 @@ class EdgeTTSService:
                 future = pool.submit(asyncio.run, self.generate_audio(
                     text, output_path, voice, rate, volume, pitch
                 ))
-                return future.result(timeout=60)
+                try:
+                    return future.result(timeout=120)
+                except concurrent.futures.TimeoutError:
+                    raise Exception(f"Edge TTS generation timed out after 120s for {len(text)} characters")
         except RuntimeError:
             # No running loop - safe to use asyncio.run
             return asyncio.run(self.generate_audio(
@@ -228,19 +239,28 @@ class EdgeTTSService:
 
             elif chunk["type"] == "WordBoundary":
                 # Construim SRT din word boundaries
-                start_ms = chunk["offset"] / 10000  # Convert to ms
-                duration_ms = chunk["duration"] / 10000
+                offset = chunk.get("offset")
+                duration = chunk.get("duration")
+                if offset is None or duration is None:
+                    logger.debug(f"Skipping WordBoundary chunk with missing offset/duration")
+                    continue
+                start_ms = offset / 10000  # Convert to ms
+                duration_ms = duration / 10000
                 end_ms = start_ms + duration_ms
 
                 start_srt = self._ms_to_srt_time(start_ms)
                 end_srt = self._ms_to_srt_time(end_ms)
-                word = chunk["text"]
+                word = chunk.get("text", "")
 
                 srt_content.append(f"{sub_index}")
                 srt_content.append(f"{start_srt} --> {end_srt}")
                 srt_content.append(word)
                 srt_content.append("")
                 sub_index += 1
+
+        # Warn if no word boundaries were received
+        if not srt_content:
+            logger.warning(f"No WordBoundary chunks received from Edge TTS - SRT file will be empty")
 
         # Salvăm SRT
         with open(srt_path, "w", encoding="utf-8") as f:

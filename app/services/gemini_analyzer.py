@@ -82,41 +82,43 @@ class GeminiVideoAnalyzer:
         if not cap.isOpened():
             raise ValueError(f"Cannot open video: {video_path}")
 
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = total_frames / fps if fps > 0 else 0
+        try:
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = total_frames / fps if fps > 0 else 0
 
-        logger.info(f"Video: {duration:.1f}s, {fps:.1f}fps, extracting every {interval}s")
+            logger.info(f"Video: {duration:.1f}s, {fps:.1f}fps, extracting every {interval}s")
 
-        frame_indices = []
-        current_time = 0
-        while current_time < duration:
-            frame_idx = int(current_time * fps)
-            frame_indices.append((current_time, frame_idx))
-            current_time += interval
+            frame_indices = []
+            current_time = 0
+            while current_time < duration:
+                frame_idx = int(current_time * fps)
+                frame_indices.append((current_time, frame_idx))
+                current_time += interval
 
-        for timestamp, frame_idx in frame_indices:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-            ret, frame = cap.read()
+            for timestamp, frame_idx in frame_indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                ret, frame = cap.read()
 
-            if not ret:
-                continue
+                if not ret:
+                    continue
 
-            # Resize pentru a reduce dimensiunea (max 720p width)
-            height, width = frame.shape[:2]
-            if width > 720:
-                scale = 720 / width
-                new_width = 720
-                new_height = int(height * scale)
-                frame = cv2.resize(frame, (new_width, new_height))
+                # Resize pentru a reduce dimensiunea (max 720p width)
+                height, width = frame.shape[:2]
+                if width > 720:
+                    scale = 720 / width
+                    new_width = 720
+                    new_height = int(height * scale)
+                    frame = cv2.resize(frame, (new_width, new_height))
 
-            # Encode as JPEG
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            frames.append((timestamp, buffer.tobytes()))
+                # Encode as JPEG
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                frames.append((timestamp, buffer.tobytes()))
 
-        cap.release()
-        logger.info(f"Extracted {len(frames)} frames")
-        return frames
+            logger.info(f"Extracted {len(frames)} frames")
+            return frames
+        finally:
+            cap.release()
 
     def _create_analysis_prompt(self, context: Optional[str] = None) -> str:
         """Creează promptul pentru Gemini."""

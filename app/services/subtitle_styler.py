@@ -106,11 +106,14 @@ class SubtitleStyleConfig:
         """Create SubtitleStyleConfig from frontend subtitle_settings dict."""
         # Convert hex to ASS color format
         def hex_to_ass(hex_color: str) -> str:
-            hex_color = hex_color.lstrip('#')
-            r = int(hex_color[0:2], 16)
-            g = int(hex_color[2:4], 16)
-            b = int(hex_color[4:6], 16)
-            return f"&H00{b:02X}{g:02X}{r:02X}"
+            try:
+                hex_color = hex_color.lstrip('#')
+                r = int(hex_color[0:2], 16)
+                g = int(hex_color[2:4], 16)
+                b = int(hex_color[4:6], 16)
+                return f"&H00{b:02X}{g:02X}{r:02X}"
+            except (ValueError, IndexError):
+                return "&H00FFFFFF"  # Fallback to white
 
         # Extract font family
         font_family = settings.get('fontFamily', 'Montserrat')
@@ -275,7 +278,7 @@ def build_subtitle_filter(
         srt_path_escaped = srt_path_escaped.replace(':', '\\:')
     srt_path_escaped = srt_path_escaped.replace('[', '\\[')
     srt_path_escaped = srt_path_escaped.replace(']', '\\]')
-    srt_path_escaped = srt_path_escaped.replace(' ', '\\ ')
+    # Spaces don't need escaping inside single-quoted FFmpeg subtitles filter path
 
     # Build filter
     filter_str = f"subtitles='{srt_path_escaped}':force_style='{force_style}'"

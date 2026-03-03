@@ -48,7 +48,7 @@ _MAX_PIPELINE_ENTRIES = 1000
 _library_project_lock = threading.Lock()
 
 # Per-pipeline render locks (prevents race conditions in concurrent variant renders)
-_render_locks: Dict[str, asyncio.Lock] = {}
+_render_locks: Dict[str, threading.Lock] = {}
 _render_locks_timestamps: Dict[str, float] = {}  # pipeline_id -> last acquired time
 _RENDER_LOCK_TTL = 3600  # 1 hour
 
@@ -83,15 +83,33 @@ def clear_pipeline_cancelled(pipeline_id: str):
 
 
 def _evict_stale_render_locks():
-    """Evict render locks not acquired for over 1 hour."""
+    """Evict render locks not acquired for over 1 hour.
+
+    Only evicts a lock if it can be acquired non-blocking (i.e., nobody holds it).
+    This prevents deleting a lock while another render is still using it.
+    """
     import time
     now = time.monotonic()
     stale = [k for k, ts in _render_locks_timestamps.items() if now - ts > _RENDER_LOCK_TTL]
+    evicted = 0
     for k in stale:
-        _render_locks.pop(k, None)
-        _render_locks_timestamps.pop(k, None)
-    if stale:
-        logger.debug(f"Evicted {len(stale)} stale render lock(s)")
+        lock = _render_locks.get(k)
+        if lock is None:
+            # Lock already removed, just clean up timestamp
+            _render_locks_timestamps.pop(k, None)
+            evicted += 1
+            continue
+        # Only evict if we can acquire the lock (nobody is holding it)
+        if lock.acquire(blocking=False):
+            lock.release()
+            _render_locks.pop(k, None)
+            _render_locks_timestamps.pop(k, None)
+            evicted += 1
+        else:
+            # Lock is held — skip eviction, update timestamp to retry later
+            logger.debug(f"Skipping eviction of render lock {k} — still held")
+    if evicted:
+        logger.debug(f"Evicted {evicted} stale render lock(s)")
 
 
 def _evict_old_pipelines():
@@ -120,7 +138,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
 
         row = {
             "id": pipeline_id,
-            "profile_id": pipeline_dict["profile_id"],
+            "profile_id": pipeline_dict.get("profile_id"),
             "idea": pipeline_dict.get("idea", ""),
             "context": pipeline_dict.get("context", ""),
             "provider": pipeline_dict.get("provider", "gemini"),
@@ -171,7 +189,11 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
         # Convert string keys back to int for previews and render_jobs
         previews = {}
         for k, v in (row.get("previews") or {}).items():
-            previews[int(k)] = v
+            try:
+                previews[int(k)] = v
+            except (ValueError, TypeError):
+                logger.warning(f"Skipping invalid preview key: {k}")
+                continue
             # Verify audio_path still exists on disk
             if isinstance(v, dict) and "preview_data" in v:
                 pd = v["preview_data"]
@@ -180,11 +202,19 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
 
         render_jobs = {}
         for k, v in (row.get("render_jobs") or {}).items():
-            render_jobs[int(k)] = v
+            try:
+                render_jobs[int(k)] = v
+            except (ValueError, TypeError):
+                logger.warning(f"Skipping invalid render_jobs key: {k}")
+                continue
 
         tts_previews = {}
         for k, v in (row.get("tts_previews") or {}).items():
-            tts_previews[int(k)] = v
+            try:
+                tts_previews[int(k)] = v
+            except (ValueError, TypeError):
+                logger.warning(f"Skipping invalid tts_previews key: {k}")
+                continue
             # Verify audio_path still exists on disk
             if isinstance(v, dict) and v.get("audio_path") and not Path(v["audio_path"]).exists():
                 v["audio_path"] = None
@@ -570,7 +600,7 @@ async def get_source_selection(
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
-    if pipeline["profile_id"] != profile.profile_id:
+    if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
     return {"source_video_ids": pipeline.get("source_video_ids", [])}
 
@@ -590,7 +620,7 @@ async def update_source_selection(
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
-    if pipeline["profile_id"] != profile.profile_id:
+    if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     pipeline["source_video_ids"] = request.source_video_ids
@@ -934,7 +964,7 @@ async def adopt_library_tts(
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
-    if pipeline["profile_id"] != profile.profile_id:
+    if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     if variant_index < 0 or variant_index >= len(pipeline["scripts"]):
@@ -1016,7 +1046,7 @@ async def generate_variant_tts(
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
-    if pipeline["profile_id"] != profile.profile_id:
+    if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     if variant_index < 0 or variant_index >= len(pipeline["scripts"]):
@@ -1109,7 +1139,7 @@ async def get_variant_tts_audio(
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
-    if pipeline["profile_id"] != profile.profile_id:
+    if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     tts_preview = pipeline.get("tts_previews", {}).get(variant_index)
@@ -1156,7 +1186,7 @@ async def preview_variant(
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
     # Validate ownership
-    if pipeline["profile_id"] != profile.profile_id:
+    if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     # Validate variant index
@@ -1174,7 +1204,9 @@ async def preview_variant(
     )
 
     # Check if TTS audio already exists from Step 2 preview
-    existing_tts = pipeline.get("tts_previews", {}).get(variant_index)
+    # Normalize key lookup: prefer int key, fall back to str for legacy entries
+    _tts_previews = pipeline.get("tts_previews", {})
+    existing_tts = _tts_previews.get(variant_index) or _tts_previews.get(str(variant_index))
     reuse_audio_path = None
     reuse_audio_duration = None
     if existing_tts:
@@ -1292,7 +1324,7 @@ async def preview_variant(
                 merge_group=m.get("merge_group"),
                 merge_group_duration=m.get("merge_group_duration"),
             )
-            for m in preview_data["matches"]
+            for m in preview_data.get("matches", [])
         ]
 
         return PipelinePreviewResponse(
@@ -1331,7 +1363,7 @@ async def render_variants(
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
     # Validate ownership
-    if pipeline["profile_id"] != profile.profile_id:
+    if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     # Validate all variant indices
@@ -1418,7 +1450,7 @@ async def render_variants(
     pipeline_id_str = str(pipeline_id)
     _evict_stale_render_locks()
     if pipeline_id_str not in _render_locks:
-        _render_locks[pipeline_id_str] = asyncio.Lock()
+        _render_locks[pipeline_id_str] = threading.Lock()
     import time as _time
     _render_locks_timestamps[pipeline_id_str] = _time.monotonic()
     render_jobs_lock = _render_locks[pipeline_id_str]
@@ -1453,7 +1485,7 @@ async def render_variants(
 
             # Check for cancellation before starting
             if is_pipeline_cancelled(pipeline_id):
-                async with render_jobs_lock:
+                with render_jobs_lock:
                     job["status"] = "cancelled"
                     job["current_step"] = "Cancelled by user"
                     job["progress"] = 0
@@ -1461,7 +1493,7 @@ async def render_variants(
                 return
 
             # Update progress
-            async with render_jobs_lock:
+            with render_jobs_lock:
                 job["current_step"] = "Generating TTS audio"
                 job["progress"] = 10
 
@@ -1498,7 +1530,9 @@ async def render_variants(
 
             # Hash comparison uses cleaned text (tags stripped) to match stored hash
             cleaned_render_text = strip_product_group_tags(script_text)
-            existing_tts = pipeline.get("tts_previews", {}).get(vid)
+            # Normalize key lookup: prefer int key, fall back to str for legacy entries
+            _tts_previews_render = pipeline.get("tts_previews", {})
+            existing_tts = _tts_previews_render.get(vid) or _tts_previews_render.get(str(vid))
             if existing_tts:
                 script_match = existing_tts.get("script_hash") == _stable_hash(cleaned_render_text)
                 if script_match:
@@ -1519,14 +1553,15 @@ async def render_variants(
                                 f"for variant {vid}"
                             )
                             # Skip TTS generation step — jump to segment matching
-                            async with render_jobs_lock:
+                            with render_jobs_lock:
                                 job["current_step"] = "Matching segments"
                                 job["progress"] = 30
 
             # Progress callback: assembly_service calls this at each major step
             def on_progress(step_name: str, pct: int):
-                job["current_step"] = step_name
-                job["progress"] = pct
+                with render_jobs_lock:
+                    job["current_step"] = step_name
+                    job["progress"] = pct
 
             # Extract overlay params for this variant
             # interstitial_slides is keyed by variant index (string); pip_overlays is shared (keyed by segment_id)
@@ -1552,7 +1587,7 @@ async def render_variants(
 
             # Check for cancellation before heavy render
             if is_pipeline_cancelled(pipeline_id):
-                async with render_jobs_lock:
+                with render_jobs_lock:
                     job["status"] = "cancelled"
                     job["current_step"] = "Cancelled by user"
                     job["progress"] = 0
@@ -1600,9 +1635,24 @@ async def render_variants(
                 )
             except asyncio.TimeoutError:
                 raise Exception("Render timed out after 15 minutes")
+            except RuntimeError as rt_err:
+                # Catch specific assembly errors (e.g., "No segments found in library.")
+                # so the job is marked failed with a clear message instead of stuck in "processing"
+                logger.error(
+                    f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
+                    f"variant {vid} assembly error: {rt_err}"
+                )
+                with render_jobs_lock:
+                    job["status"] = "failed"
+                    job["progress"] = 0
+                    job["current_step"] = "Assembly failed"
+                    job["error"] = str(rt_err)
+                    job["failed_at"] = datetime.now(timezone.utc).isoformat()
+                    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                return
 
             # Success — acquire lock before writing shared render_jobs dict
-            async with render_jobs_lock:
+            with render_jobs_lock:
                 job["status"] = "completed"
                 job["progress"] = 100
                 job["current_step"] = "Render complete"
@@ -1618,7 +1668,7 @@ async def render_variants(
                 _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
             # Save rendered clip to library
-            async with render_jobs_lock:
+            with render_jobs_lock:
                 job["library_saved"] = False
             try:
                 supabase_lib = get_supabase()
@@ -1678,7 +1728,7 @@ async def render_variants(
                                 str(thumb_path)
                             ], capture_output=True, timeout=30)
                             if thumb_path.exists():
-                                async with render_jobs_lock:
+                                with render_jobs_lock:
                                     job["thumbnail_path"] = str(thumb_path)
                             else:
                                 thumb_path = None
@@ -1696,7 +1746,10 @@ async def render_variants(
                                 str(final_video_path)
                             ], capture_output=True, text=True, timeout=30)
                             if dur_result.returncode == 0:
-                                duration = float(dur_result.stdout.strip())
+                                try:
+                                    duration = float(dur_result.stdout.strip())
+                                except ValueError:
+                                    logger.warning(f"ffprobe returned non-numeric duration: {dur_result.stdout.strip()!r}")
                         except Exception as dur_err:
                             logger.warning(f"Duration probe failed: {dur_err}")
 
@@ -1722,27 +1775,27 @@ async def render_variants(
                                 "final_status": "completed"
                             }).execute()
                             if clip_result.data and len(clip_result.data) > 0:
-                                async with render_jobs_lock:
+                                with render_jobs_lock:
                                     job["clip_id"] = clip_result.data[0].get("id")
                         else:
                             # Existing clip — store its ID
-                            async with render_jobs_lock:
+                            with render_jobs_lock:
                                 job["clip_id"] = existing_clip.data[0].get("id")
 
-                        async with render_jobs_lock:
+                        with render_jobs_lock:
                             job["library_saved"] = True
                         logger.info(
                             f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
                             f"variant {vid} saved to library project {library_project_id}"
                         )
                     else:
-                        async with render_jobs_lock:
+                        with render_jobs_lock:
                             job["library_error"] = "Failed to create or find library project"
                 else:
-                    async with render_jobs_lock:
+                    with render_jobs_lock:
                         job["library_error"] = "Supabase unavailable"
             except Exception as lib_err:
-                async with render_jobs_lock:
+                with render_jobs_lock:
                     job["library_error"] = str(lib_err)
                 logger.error(
                     f"[Profile {profile.profile_id}] Failed to save pipeline variant "
@@ -1756,7 +1809,7 @@ async def render_variants(
                 f"variant {vid} failed: {e}"
             )
             # Acquire lock before writing shared render_jobs dict
-            async with render_jobs_lock:
+            with render_jobs_lock:
                 job["status"] = "failed"
                 job["progress"] = 0
                 job["current_step"] = "Render failed"
@@ -1772,7 +1825,10 @@ async def render_variants(
             async with acquire_render_slot():
                 await do_render(vid)
         tasks = [_throttled_render(vid) for vid in variant_indices_to_render]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Render variant {variant_indices_to_render[i]} failed: {result}")
         # Clear cancellation flag after all renders complete
         clear_pipeline_cancelled(pipeline_id)
 
@@ -1898,7 +1954,7 @@ async def sync_pipeline_to_library(
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
-    if pipeline["profile_id"] != profile.profile_id:
+    if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     supabase = get_supabase()
@@ -1979,7 +2035,10 @@ async def sync_pipeline_to_library(
                 str(final_video_path)
             ], capture_output=True, text=True, timeout=30)
             if dur_result.returncode == 0:
-                duration = float(dur_result.stdout.strip())
+                try:
+                    duration = float(dur_result.stdout.strip())
+                except ValueError:
+                    logger.warning(f"ffprobe returned non-numeric duration: {dur_result.stdout.strip()!r}")
         except Exception:
             pass
 
@@ -2045,7 +2104,7 @@ async def restore_previews(
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
-    if pipeline["profile_id"] != profile.profile_id:
+    if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     stored_previews = pipeline.get("previews", {})
@@ -2113,7 +2172,7 @@ async def get_pipeline_audio(
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
-    if pipeline["profile_id"] != profile.profile_id:
+    if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     # Look up audio path from preview data

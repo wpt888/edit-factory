@@ -82,6 +82,7 @@ def _seconds_to_srt_time(seconds: float) -> str:
     Returns:
         SRT-formatted time string (e.g., "00:01:05,123")
     """
+    seconds = max(0.0, seconds)
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     secs = int(seconds % 60)

@@ -209,8 +209,10 @@ class AssemblyService:
                 str(audio_path)
             ]
             result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=300)
-            if result.returncode == 0:
-                return float(result.stdout.strip())
+            if result.returncode == 0 and result.stdout.strip():
+                duration_str = result.stdout.strip()
+                if duration_str.replace('.', '', 1).isdigit():
+                    return float(duration_str)
         except Exception as e:
             logger.warning(f"Could not get audio duration: {e}")
         return 0.0
@@ -243,13 +245,14 @@ class AssemblyService:
     def _srt_time_to_seconds(self, time_str: str) -> float:
         """Convert SRT time format to seconds."""
         try:
-            # Format: 00:00:01,000 or 00:00:01.000
             time_str = time_str.replace(",", ".")
             parts = time_str.split(":")
+            if len(parts) < 3:
+                return 0.0
             hours = int(parts[0])
             minutes = int(parts[1])
             seconds = float(parts[2])
-            return hours * 3600 + minutes * 60 + seconds
+            return max(0.0, hours * 3600 + minutes * 60 + seconds)
         except Exception:
             return 0.0
 
@@ -950,7 +953,7 @@ class AssemblyService:
                 # transforms — no segment diversity is lost during merging.
                 group_timeline_start = current.timeline_start
                 for se in sub_entries:
-                    proportion = se.timeline_duration / original_total if original_total > 0 else 1.0 / len(sub_entries)
+                    proportion = se.timeline_duration / original_total if original_total > 0 else 1.0 / max(len(sub_entries), 1)
                     new_duration = accumulated_duration * proportion
                     merged.append(TimelineEntry(
                         source_video_path=se.source_video_path,
@@ -1049,6 +1052,10 @@ class AssemblyService:
             # When segment is shorter than needed, loop it to fill the duration
             use_loop = segment_duration < needed_duration - 0.05
 
+            if not entry.source_video_path:
+                logger.error(f"Timeline entry {i} has no source_video_path, skipping")
+                return
+
             cmd = ["ffmpeg", "-y"]
 
             if use_loop:
@@ -1140,9 +1147,16 @@ class AssemblyService:
 
         # Collect successful segments in order
         segment_files = [f for f in results if f is not None]
+        failed_count = len(results) - len(segment_files)
 
-        if not segment_files:
-            raise RuntimeError("No segments were extracted successfully")
+        if failed_count == len(results):
+            raise RuntimeError(f"All {len(results)} segments failed to extract — cannot assemble video")
+
+        if failed_count > 0:
+            logger.warning(
+                f"{failed_count}/{len(results)} segments failed to extract — "
+                f"assembled video will be shorter than expected"
+            )
 
         # Generate and insert interstitial slide clips into segment list
         if interstitial_slides:
@@ -1381,7 +1395,7 @@ class AssemblyService:
             # Build segments data with source video paths
             segments_data = []
             for seg in segments_result.data:
-                source_video_path = seg.get("editai_source_videos", {}).get("file_path")
+                source_video_path = (seg.get("editai_source_videos") or {}).get("file_path")
                 if source_video_path:
                     segments_data.append({
                         "id": seg["id"],
@@ -1612,7 +1626,7 @@ class AssemblyService:
 
         segments_data = []
         for seg in segments_result.data:
-            source_video_path = seg.get("editai_source_videos", {}).get("file_path")
+            source_video_path = (seg.get("editai_source_videos") or {}).get("file_path")
             if source_video_path:
                 segments_data.append({
                     "id": seg["id"],

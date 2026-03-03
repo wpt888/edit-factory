@@ -407,14 +407,15 @@ class ElevenLabsTTS:
             await self.generate_audio(text, audio_path)
             stats["silence_removal"] = {"enabled": False}
 
-        # Add audio to video
-        result = self.add_audio_to_video(video_path, audio_path, output_path)
-
-        # Cleanup temp audio
         try:
-            audio_path.unlink()
-        except Exception:
-            pass
+            # Add audio to video
+            result = self.add_audio_to_video(video_path, audio_path, output_path)
+        finally:
+            # Cleanup temp audio regardless of success
+            try:
+                audio_path.unlink()
+            except Exception:
+                pass
 
         stats["output_video"] = str(result)
         return result, stats
@@ -424,11 +425,19 @@ _elevenlabs_instance = None
 _elevenlabs_lock = threading.Lock()
 
 
-def get_elevenlabs_tts() -> ElevenLabsTTS:
-    """Factory function to get ElevenLabsTTS singleton instance."""
+def get_elevenlabs_tts() -> Optional[ElevenLabsTTS]:
+    """Factory function to get ElevenLabsTTS singleton instance.
+
+    Returns None if ELEVENLABS_API_KEY or ELEVENLABS_VOICE_ID are not configured,
+    allowing callers to fall back to Edge TTS.
+    """
     global _elevenlabs_instance
     if _elevenlabs_instance is None:
         with _elevenlabs_lock:
             if _elevenlabs_instance is None:
-                _elevenlabs_instance = ElevenLabsTTS()
+                try:
+                    _elevenlabs_instance = ElevenLabsTTS()
+                except ValueError as e:
+                    logger.warning(f"ElevenLabs TTS unavailable (missing config): {e}")
+                    return None
     return _elevenlabs_instance

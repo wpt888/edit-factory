@@ -16,7 +16,7 @@ from typing import Optional, List, Dict
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Depends, Response, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.config import get_settings
 from app.services.file_storage import get_file_storage
@@ -99,9 +99,13 @@ def _cleanup_stale_locks():
             lock.release()
             stale_keys.append(pid)
     for pid in stale_keys:
-        _project_locks.pop(pid, None)
+        # Re-check: only delete if the lock is still uncontested
+        lock = _project_locks.get(pid)
+        if lock and lock.acquire(blocking=False):
+            lock.release()
+            _project_locks.pop(pid, None)
     if stale_keys:
-        logger.debug(f"[locks] Cleaned up {len(stale_keys)} stale project lock(s)")
+        logger.debug(f"[locks] Cleaned up stale project lock(s)")
 
 
 def get_project_lock(project_id: str) -> threading.Lock:
@@ -708,8 +712,14 @@ async def generate_raw_clips(
         video_filename = f"{job_id}_{_sanitize_filename(video.filename)}"
         final_video_path = settings.input_dir / video_filename
 
-        with open(final_video_path, "wb") as f:
-            shutil.copyfileobj(video.file, f)
+        try:
+            with open(final_video_path, "wb") as f:
+                shutil.copyfileobj(video.file, f)
+        except OSError as e:
+            if final_video_path.exists():
+                final_video_path.unlink(missing_ok=True)
+            logger.error(f"Failed to write uploaded file: {e}")
+            raise HTTPException(status_code=507, detail=f"Failed to save uploaded file: {e}")
     elif video_path:
         # User provided local path (for testing)
         local_path = Path(video_path)
@@ -1176,15 +1186,26 @@ async def _generate_from_segments_task(
     lock = get_project_lock(project_id)
     if not lock.acquire(blocking=False):
         logger.warning(f"Project {project_id} is already being processed, skipping")
+        if _gen_job_id:
+            try:
+                get_job_storage().update_job(_gen_job_id, {
+                    "status": "failed",
+                    "progress": "Project already being processed",
+                })
+            except Exception:
+                pass
         return
 
     try:
         # Update project status now that we hold the lock
-        supabase.table("editai_projects").update({
-            "status": "generating",
-            "target_duration": target_duration,
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", project_id).eq("profile_id", profile_id).execute()
+        try:
+            supabase.table("editai_projects").update({
+                "status": "generating",
+                "target_duration": target_duration,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", project_id).eq("profile_id", profile_id).execute()
+        except Exception as e:
+            logger.warning(f"Failed to update project status to 'generating': {e} — continuing anyway")
 
         # Initial progress
         update_generation_progress(project_id, 5, "Se pregătesc segmentele...", job_id=_gen_job_id)
@@ -1202,7 +1223,7 @@ async def _generate_from_segments_task(
                     "file_path": file_path,
                     "start_time": seg.get("start_time", 0),
                     "end_time": seg.get("end_time", 0),
-                    "duration": seg.get("end_time", 0) - seg.get("start_time", 0),
+                    "duration": (seg.get("end_time") or 0) - (seg.get("start_time") or 0),
                     "source_name": source_video.get("name", "unknown")
                 })
 
@@ -1319,7 +1340,8 @@ async def _generate_from_segments_task(
                 with open(concat_list_path, "w") as f:
                     for seg in segments_for_variant:
                         # Extragem segmentul din video sursă
-                        segment_output = settings.base_dir / "temp" / profile_id / f"seg_{project_id}_{variant_idx}_{seg['id'][:8]}.mp4"
+                        seg_id_short = (seg['id'] or 'unknown')[:8]
+                        segment_output = settings.base_dir / "temp" / profile_id / f"seg_{project_id}_{variant_idx}_{seg_id_short}.mp4"
 
                         # ============== VOICE MUTING: Construim filtrul audio dacă e necesar ==============
                         audio_filter_args = []
@@ -1397,18 +1419,22 @@ async def _generate_from_segments_task(
                 thumbnail_path = await asyncio.to_thread(_generate_thumbnail, output_path)
 
                 # Salvăm în DB
-                supabase.table("editai_clips").insert({
-                    "project_id": project_id,
-                    "profile_id": profile_id,
-                    "variant_index": variant_idx,
-                    "variant_name": f"variant_{variant_idx}",
-                    "raw_video_path": str(output_path),
-                    "thumbnail_path": str(thumbnail_path) if thumbnail_path else None,
-                    "duration": actual_duration,
-                    "is_selected": False,
-                    "is_deleted": False,
-                    "final_status": "pending"
-                }).execute()
+                try:
+                    supabase.table("editai_clips").insert({
+                        "project_id": project_id,
+                        "profile_id": profile_id,
+                        "variant_index": variant_idx,
+                        "variant_name": f"variant_{variant_idx}",
+                        "raw_video_path": str(output_path),
+                        "thumbnail_path": str(thumbnail_path) if thumbnail_path else None,
+                        "duration": actual_duration,
+                        "is_selected": False,
+                        "is_deleted": False,
+                        "final_status": "pending"
+                    }).execute()
+                except Exception as db_err:
+                    logger.error(f"Failed to save clip for variant {variant_idx}: {db_err}")
+                    continue
 
                 variants_created.append({
                     "variant_index": variant_idx,
@@ -2343,17 +2369,23 @@ async def _render_final_clip_task(
     lock = get_project_lock(project_id) if project_id else None
     if lock and not lock.acquire(timeout=300):  # Wait up to 5 min for renders
         logger.warning(f"Could not acquire lock for project {project_id} within timeout")
-        supabase.table("editai_clips").update({
-            "final_status": "failed",
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+        try:
+            supabase.table("editai_clips").update({
+                "final_status": "failed",
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+        except Exception as e:
+            logger.error(f"Failed to mark clip {clip_id} as failed after lock timeout: {e}")
         return
 
     # Set clip status to processing now that we hold the lock
-    supabase.table("editai_clips").update({
-        "final_status": "processing",
-        "updated_at": datetime.now(timezone.utc).isoformat()
-    }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+    try:
+        supabase.table("editai_clips").update({
+            "final_status": "processing",
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to update clip status to processing: {e}")
 
     # Initialize temp file paths for cleanup in finally block
     audio_path = None
@@ -2434,6 +2466,8 @@ async def _render_final_clip_task(
                 logger.warning(f"Timestamps generation failed, falling back to standard TTS: {e}")
                 from app.services.elevenlabs_tts import get_elevenlabs_tts
                 tts = get_elevenlabs_tts()
+                if tts is None:
+                    raise Exception("ElevenLabs TTS unavailable - API key or voice ID not configured")
                 audio_path, silence_stats = await tts.generate_audio_trimmed(
                     text=content_data["tts_text"],
                     output_path=audio_path,
@@ -2638,20 +2672,24 @@ async def _render_final_clip_task(
             "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("id", clip_id).eq("profile_id", profile_id).execute()
 
-        # Salvăm exportul
-        supabase.table("editai_exports").insert({
-            "clip_id": clip_id,
-            "preset_name": preset_data["name"],
-            "output_path": stored_path,
-            "file_size": output_path.stat().st_size,
-            "status": "completed"
-        }).execute()
+        render_succeeded = True
+
+        # Salvăm exportul — non-critical, must not revert clip status on failure
+        try:
+            supabase.table("editai_exports").insert({
+                "clip_id": clip_id,
+                "preset_name": preset_data["name"],
+                "output_path": stored_path,
+                "file_size": output_path.stat().st_size if output_path.exists() else 0,
+                "status": "completed"
+            }).execute()
+        except Exception as e:
+            logger.warning(f"Failed to insert export record for clip {clip_id}: {e}")
 
         # Actualizăm contorul din proiect
         _update_project_counts(clip_data["project_id"], profile_id)
 
         logger.info(f"Rendered final clip {clip_id} -> {output_path}")
-        render_succeeded = True
 
     except Exception as e:
         logger.error(f"Error rendering clip {clip_id}: {e}")
@@ -2692,6 +2730,15 @@ async def _render_final_clip_task(
 class BulkRenderRequest(BaseModel):
     clip_ids: List[str]
     preset_name: str = "instagram_reels"
+
+    @field_validator("clip_ids")
+    @classmethod
+    def validate_clip_ids(cls, v):
+        if len(v) > 50:
+            raise ValueError("Maximum 50 clips per bulk render request")
+        if len(v) == 0:
+            raise ValueError("At least one clip_id is required")
+        return v
 
 
 @router.post("/clips/bulk-render")

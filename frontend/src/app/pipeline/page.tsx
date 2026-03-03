@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, Suspense, Component } from "react";
+import type { ReactNode, ErrorInfo } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -160,11 +161,55 @@ interface ContextProduct {
   description: string;
 }
 
+// Error boundary prevents the entire page from going white on unexpected render errors.
+interface PipelineErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class PipelineErrorBoundary extends Component<{ children: ReactNode }, PipelineErrorBoundaryState> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): PipelineErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("[PipelinePage] Unhandled render error:", error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-screen gap-4 p-8">
+          <h2 className="text-xl font-semibold">Something went wrong</h2>
+          <p className="text-muted-foreground text-center max-w-md">
+            The pipeline page encountered an unexpected error. Please refresh the page to try again.
+          </p>
+          <p className="text-xs text-muted-foreground font-mono">{this.state.error?.message}</p>
+          <button
+            className="px-4 py-2 rounded bg-primary text-primary-foreground text-sm"
+            onClick={() => this.setState({ hasError: false, error: null })}
+          >
+            Try again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function PipelinePageWrapper() {
   return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><Loader2 className="h-8 w-8 animate-spin" /></div>}>
-      <PipelinePage />
-    </Suspense>
+    <PipelineErrorBoundary>
+      <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><Loader2 className="h-8 w-8 animate-spin" /></div>}>
+        <PipelinePage />
+      </Suspense>
+    </PipelineErrorBoundary>
   );
 }
 
@@ -292,6 +337,8 @@ function PipelinePage() {
   const previewAbortRef = useRef<AbortController | null>(null);
   const scriptAbortRef = useRef<AbortController | null>(null);
   const pendingBlobUrl = useRef<string | null>(null);
+  const ttsPlayAbortRef = useRef<AbortController | null>(null);
+  const audioPlayAbortRef = useRef<AbortController | null>(null);
 
   // TTS Library duplicate detection
   const [libraryMatches, setLibraryMatches] = useState<Record<number, { asset_id: string; audio_duration: number }>>({});
@@ -316,6 +363,7 @@ function PipelinePage() {
   const [groupTagSearch, setGroupTagSearch] = useState("");
   const sourceSelectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipelineIdRef = useRef<string | null>(null);
+  const initialSourceSelectionDone = useRef(false);
 
   // Product groups for tag insertion (fetched when source videos are selected)
   const [productGroups, setProductGroups] = useState<Array<{
@@ -549,9 +597,10 @@ function PipelinePage() {
     }
   };
 
-  // Safety net: auto-select all source videos when on step 2 with none selected
+  // Safety net: auto-select all source videos when on step 2 with none selected (first time only)
   useEffect(() => {
-    if (step === 2 && sourceVideos.length > 0 && selectedSourceIds.size === 0 && !sourceVideosLoading) {
+    if (step === 2 && sourceVideos.length > 0 && selectedSourceIds.size === 0 && !sourceVideosLoading && !initialSourceSelectionDone.current) {
+      initialSourceSelectionDone.current = true;
       const allIds = new Set(sourceVideos.map(v => v.id));
       setSelectedSourceIds(allIds);
     }
@@ -851,6 +900,7 @@ function PipelinePage() {
         if (res.ok) {
           const data = await res.json();
           newPreviews[i] = data;
+          setPreviews(prev => ({ ...prev, [i]: data }));
         } else {
           const errorData = await res.json().catch(() => ({
             detail: `Failed to preview variant ${i + 1}`,
@@ -876,7 +926,6 @@ function PipelinePage() {
       }
     }
 
-    setPreviews(newPreviews);
     setPreviewingIndex(null);
 
     // Collect available segments from the first preview response (all previews share same segment pool)
@@ -1026,6 +1075,7 @@ function PipelinePage() {
   // Reset all state
   const resetPipeline = () => {
     setStep(1);
+    initialSourceSelectionDone.current = false;
     setIdea("");
     setContext("");
     setContextProducts([]);
@@ -1431,9 +1481,14 @@ function PipelinePage() {
       URL.revokeObjectURL(pendingBlobUrl.current);
       pendingBlobUrl.current = null;
     }
-    apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}`)
+    audioPlayAbortRef.current?.abort();
+    const controller = new AbortController();
+    audioPlayAbortRef.current = controller;
+
+    apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}`, { signal: controller.signal })
       .then(res => res.blob())
       .then(blob => {
+        if (controller.signal.aborted) return;
         const url = URL.createObjectURL(blob);
         pendingBlobUrl.current = url;
         const audio = new Audio(url);
@@ -1443,6 +1498,7 @@ function PipelinePage() {
         audioRef.current = audio;
       })
       .catch((err) => {
+        if (controller.signal.aborted) return;
         console.warn("Audio playback failed:", err);
         setPlayingAudio(null);
       });
@@ -1469,9 +1525,15 @@ function PipelinePage() {
       }
       if (sourceSelectionTimer.current) clearTimeout(sourceSelectionTimer.current);
       if (ttsLibraryCheckTimer.current) clearTimeout(ttsLibraryCheckTimer.current);
+      if (scriptSaveTimer.current) clearTimeout(scriptSaveTimer.current);
+      if (catalogSearchTimer.current) clearTimeout(catalogSearchTimer.current);
+      if (voiceSettingsSaveTimer.current) clearTimeout(voiceSettingsSaveTimer.current);
+      if (subtitleSaveTimer.current) clearTimeout(subtitleSaveTimer.current);
       previewAbortRef.current?.abort();
       scriptAbortRef.current?.abort();
       regenerateAbortRef.current?.abort();
+      ttsPlayAbortRef.current?.abort();
+      audioPlayAbortRef.current?.abort();
     };
   }, []);
 
@@ -1692,6 +1754,19 @@ function PipelinePage() {
       }
     }
 
+    // Clean up any entries left in generating state (e.g. after abort)
+    setTtsResults(prev => {
+      const next = { ...prev };
+      let changed = false;
+      for (const key of Object.keys(next)) {
+        if (next[Number(key)]?.generating) {
+          delete next[Number(key)];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+
     setRegeneratingAll(false);
     setRegeneratingAllIndex(null);
   };
@@ -1783,15 +1858,20 @@ function PipelinePage() {
     };
 
     // Try Step 2 TTS audio first, fall back to Step 3 preview audio
-    apiGet(`/pipeline/tts-audio/${pipelineId}/${variantIndex}`)
+    ttsPlayAbortRef.current?.abort();
+    const controller = new AbortController();
+    ttsPlayAbortRef.current = controller;
+
+    apiGet(`/pipeline/tts-audio/${pipelineId}/${variantIndex}`, { signal: controller.signal })
       .then(res => res.blob())
       .then(playBlob)
       .catch(() => {
+        if (controller.signal.aborted) return;
         // Fallback: try preview audio (Step 3)
-        apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}`)
+        apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}`, { signal: controller.signal })
           .then(res => res.blob())
           .then(playBlob)
-          .catch(() => setPlayingTtsVariant(null));
+          .catch(() => { if (!controller.signal.aborted) setPlayingTtsVariant(null); });
       });
   };
 

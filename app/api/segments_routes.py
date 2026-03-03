@@ -4,6 +4,7 @@ Manual video segment selection system - Source videos, segments, and matching.
 """
 import uuid
 import subprocess
+import asyncio
 import json
 import struct
 import math
@@ -356,7 +357,7 @@ async def upload_source_video(
                 "-c:v", "libx264", "-c:a", "aac", "-preset", "fast",
                 str(mp4_path)
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=600)
             if result.returncode == 0:
                 video_path.unlink()  # remove original
                 video_path = mp4_path
@@ -598,6 +599,7 @@ def _extract_waveform(video_path: str, num_samples: int = 800, duration: float =
         "ffmpeg", "-y",
         "-i", str(video_path),
         "-vn",
+        "-t", "600",  # Limit to first 10 minutes to prevent OOM on long videos
         "-ac", "1",          # mono
         "-ar", "8000",       # 8kHz — enough for waveform viz
         "-f", "s16le",       # raw signed 16-bit little-endian
@@ -1678,13 +1680,14 @@ def _parse_srt(content: str) -> List[dict]:
 def _srt_time_to_seconds(time_str: str) -> float:
     """Convert SRT time format to seconds."""
     try:
-        # Format: 00:00:01,000 or 00:00:01.000
         time_str = time_str.replace(",", ".")
         parts = time_str.split(":")
+        if len(parts) < 3:
+            return 0.0
         hours = int(parts[0])
         minutes = int(parts[1])
         seconds = float(parts[2])
-        return hours * 3600 + minutes * 60 + seconds
+        return max(0.0, hours * 3600 + minutes * 60 + seconds)
     except Exception:
         return 0.0
 
