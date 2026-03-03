@@ -37,16 +37,16 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
 
           <div className="space-y-2">
             <h1 className="text-2xl font-bold">
-              Ceva nu a mers bine
+              Something went wrong
             </h1>
             <p className="text-muted-foreground text-sm">
-              A aparut o eroare neasteptata. Poti incerca sa reiei actiunea sau sa te intorci acasa.
+              An unexpected error occurred. You can try the action again or return home.
             </p>
           </div>
 
           {error.message && (
             <div className="bg-muted border border-border rounded-lg p-4 text-left">
-              <p className="text-xs text-muted-foreground mb-1 uppercase tracking-wide">Detalii eroare</p>
+              <p className="text-xs text-muted-foreground mb-1 uppercase tracking-wide">Error details</p>
               <code className="text-destructive text-sm break-all">{error.message}</code>
             </div>
           )}
@@ -56,14 +56,14 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
               onClick={reset}
               className="px-6 py-2.5 bg-primary text-primary-foreground font-medium rounded-lg hover:bg-primary/90 transition-colors"
             >
-              Incearca din nou
+              Try again
             </button>
             {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
             <a
               href="/"
               className="px-6 py-2.5 border border-border text-muted-foreground font-medium rounded-lg hover:bg-muted hover:text-foreground transition-colors inline-block"
             >
-              Inapoi acasa
+              Back home
             </a>
           </div>
         </div>

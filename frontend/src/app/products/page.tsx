@@ -607,8 +607,8 @@ export default function ProductsPage() {
           <EmptyState
             icon={<Package className="h-6 w-6" />}
             title="Niciun produs"
-            description="Importa produse dintr-un feed sau adauga manual."
-            action={{ label: "Adauga Feed", onClick: () => setCreateFeedOpen(true) }}
+            description="Import products from a feed or add manually."
+            action={{ label: "Add Feed", onClick: () => setCreateFeedOpen(true) }}
           />
         ) : loading ? (
           <div className="flex items-center justify-center py-20">
@@ -620,7 +620,7 @@ export default function ProductsPage() {
             title="Niciun produs"
             description={activeTab === "catalog"
               ? "Catalogul nu contine produse care sa corespunda filtrelor."
-              : "Importa produse dintr-un feed sau adauga manual."}
+              : "Import products from a feed or add manually."}
           />
         ) : (
           <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 ${selectedProductIds.size > 0 ? "pb-24" : ""}`}>

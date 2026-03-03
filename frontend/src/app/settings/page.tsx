@@ -138,7 +138,7 @@ export default function SettingsPage() {
         setElAccounts(data.accounts || [])
       }
     } catch (error) {
-      handleApiError(error, "Eroare la incarcarea conturilor ElevenLabs")
+      handleApiError(error, "Error loading ElevenLabs accounts")
     } finally {
       setElAccountsLoading(false)
     }
@@ -180,7 +180,7 @@ export default function SettingsPage() {
         setAccentColor(videoSettings.accent_color || "#FFFF00")
         setTemplateCta(videoSettings.cta_text || "Comanda acum!")
       } catch (error) {
-        handleApiError(error, "Eroare la incarcarea setarilor")
+        handleApiError(error, "Error loading settings")
       } finally {
         setInitialLoad(false)
       }
@@ -219,7 +219,7 @@ export default function SettingsPage() {
         const data = await response.json()
         setDashboard(data)
       } catch (error) {
-        handleApiError(error, "Eroare la incarcarea dashboard-ului")
+        handleApiError(error, "Error loading dashboard")
       } finally {
         setDashboardLoading(false)
       }
@@ -246,7 +246,7 @@ export default function SettingsPage() {
           setVoiceId("")
         }
       } catch (error) {
-        handleApiError(error, "Eroare la incarcarea vocilor")
+        handleApiError(error, "Error loading voices")
         setVoices([])
       } finally {
         setLoadingVoices(false)
@@ -882,7 +882,7 @@ export default function SettingsPage() {
               disabled={saving}
             />
             <p className="text-xs text-muted-foreground">
-              Domain-ul Postiz (ex: https://postiz.nortia.ro). API paths sunt adaugate automat.
+              Postiz domain (e.g.: https://postiz.nortia.ro). API paths are added automatically.
             </p>
           </div>
 

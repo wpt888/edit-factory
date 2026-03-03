@@ -195,9 +195,9 @@ function ProductVideoContent() {
           <div className="flex flex-col items-center justify-center py-20">
             <EmptyState
               icon={<Video className="h-6 w-6" />}
-              title="Selecteaza un produs din catalog"
-              description="Alege un produs din pagina de produse pentru a genera un video."
-              action={{ label: "Mergi la Catalog", onClick: () => router.push("/products") }}
+              title="Select a product from the catalog"
+              description="Choose a product from the products page to generate a video."
+              action={{ label: "Go to Catalog", onClick: () => router.push("/products") }}
             />
           </div>
         )}

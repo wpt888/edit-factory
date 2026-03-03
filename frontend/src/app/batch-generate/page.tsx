@@ -168,9 +168,9 @@ function BatchGenerateContent() {
       <div className="min-h-screen bg-background flex items-center justify-center">
         <EmptyState
           icon={<Layers className="h-6 w-6" />}
-          title="Nicio generare batch"
-          description="Selecteaza produse si configureaza o generare batch."
-          action={{ label: "Inapoi la Produse", onClick: () => { window.location.href = "/products"; } }}
+          title="No batch generation"
+          description="Select products and configure a batch generation."
+          action={{ label: "Back to Products", onClick: () => { window.location.href = "/products"; } }}
         />
       </div>
     );
