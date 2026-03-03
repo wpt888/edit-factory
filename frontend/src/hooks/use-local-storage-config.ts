@@ -32,7 +32,7 @@ export function useLocalStorageConfig<T>(
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (error) {
-      handleApiError(error, "Eroare la setari");
+      handleApiError(error, "Settings error");
     }
   }, [key, value, hydrated]);
 

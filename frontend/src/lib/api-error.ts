@@ -26,23 +26,23 @@ export class ApiError extends Error {
 export function handleApiError(error: unknown, context?: string): void {
   if (error instanceof ApiError) {
     if (error.status === 429) {
-      toast.error("Prea multe cereri. Incearca mai tarziu.");
+      toast.error("Too many requests. Try again later.");
       return;
     }
     if (error.status === 413) {
-      toast.error("Fisierul este prea mare.");
+      toast.error("File is too large.");
       return;
     }
     if (error.status === 409) {
-      toast.error("Operatiune in curs. Asteapta finalizarea.");
+      toast.error("Operation in progress. Wait for completion.");
       return;
     }
     if (error.isTimeout) {
-      toast.error("Cererea a expirat. Incearca din nou.");
+      toast.error("Request timed out. Try again.");
       return;
     }
     if (error.status >= 500) {
-      toast.error("Eroare de server. Incearca mai tarziu.");
+      toast.error("Server error. Try again later.");
       return;
     }
     if (error.detail) {
@@ -51,5 +51,5 @@ export function handleApiError(error: unknown, context?: string): void {
     }
   }
 
-  toast.error(context || "A aparut o eroare neasteptata.");
+  toast.error(context || "An unexpected error occurred.");
 }

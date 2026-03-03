@@ -34,7 +34,7 @@ export function useSubtitleSettings(storageKey?: string) {
     try {
       localStorage.setItem(fullKey, JSON.stringify(settings));
     } catch (error) {
-      handleApiError(error, "Eroare la setari");
+      handleApiError(error, "Settings error");
     }
   }, [settings, fullKey]);
 

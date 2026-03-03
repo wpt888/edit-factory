@@ -233,7 +233,7 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
         }
       } catch (error) {
         const apiModule = await import("@/lib/api");
-        apiModule.handleApiError(error, "Eroare la actualizarea statusului");
+        apiModule.handleApiError(error, "Error updating status");
         if (!isCancelledRef.current) {
           pollingRef.current = setTimeout(
             () => pollFallback(jobId),
