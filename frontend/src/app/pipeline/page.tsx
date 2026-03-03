@@ -791,10 +791,10 @@ function PipelinePage() {
       }
     } catch (err) {
       if (abortController.signal.aborted) return;
-      handleApiError(err, "Eroare la generarea scripturilor");
+      handleApiError(err, "Error generating scripts");
       if (err instanceof ApiError) {
         if (err.isTimeout) {
-          setError("Generarea scripturilor a expirat. Încearcă din nou.");
+          setError("Script generation timed out. Please try again.");
         } else {
           setError(err.detail || err.message || "Script generation failed. Please try again.");
         }
@@ -861,10 +861,10 @@ function PipelinePage() {
         }
       } catch (err) {
         if (abortController.signal.aborted) return;
-        handleApiError(err, "Eroare la previzualizarea variantelor");
+        handleApiError(err, "Error previewing variants");
         if (err instanceof ApiError) {
           if (err.isTimeout) {
-            setPreviewError("Previzualizarea a expirat. Încearcă din nou.");
+            setPreviewError("Preview timed out. Please try again.");
           } else {
             setPreviewError(err.detail || err.message || `Failed to preview variant ${i + 1}.`);
           }
@@ -988,10 +988,10 @@ function PipelinePage() {
       // already set above serve as placeholder until polling fills in real data.
       setStep(4);
     } catch (err) {
-      handleApiError(err, "Eroare la generarea variantelor");
+      handleApiError(err, "Error generating variants");
       if (err instanceof ApiError) {
         if (err.isTimeout) {
-          setPreviewError("Randarea a expirat. Încearcă din nou.");
+          setPreviewError("Render timed out. Please try again.");
         } else {
           setPreviewError(err.detail || err.message || "Failed to start render. Please try again.");
         }
@@ -1108,9 +1108,9 @@ function PipelinePage() {
     e.stopPropagation();
     setConfirmDialog({
       open: true,
-      title: "Șterge setul de scripturi",
-      description: "Sigur vrei să ștergi acest set de scripturi?",
-      confirmLabel: "Șterge",
+      title: "Delete script set",
+      description: "Are you sure you want to delete this script set?",
+      confirmLabel: "Delete",
       variant: "destructive",
       onConfirm: async () => {
         setConfirmDialog((prev) => ({ ...prev, loading: true }));
@@ -2507,7 +2507,7 @@ function PipelinePage() {
 
                   <div className="border-t pt-3 space-y-1.5">
                     <div className="flex justify-between">
-                      <Label className="text-xs">Cuvinte per subtitrare</Label>
+                      <Label className="text-xs">Words per subtitle</Label>
                       <span className="text-xs text-muted-foreground">{wordsPerSubtitle}</span>
                     </div>
                     <Slider
@@ -2519,12 +2519,12 @@ function PipelinePage() {
                       <span>1</span>
                       <span>4</span>
                     </div>
-                    <p className="text-[10px] text-muted-foreground">Mai putine cuvinte = subtitrari mai dinamice (TikTok style)</p>
+                    <p className="text-[10px] text-muted-foreground">Fewer words = more dynamic subtitles (TikTok style)</p>
                   </div>
 
                   <div className="border-t pt-3 space-y-1.5">
                     <div className="flex justify-between">
-                      <Label className="text-xs">Durată minimă segment (sec)</Label>
+                      <Label className="text-xs">Minimum segment duration (sec)</Label>
                       <span className="text-xs text-muted-foreground">{minSegmentDuration}s</span>
                     </div>
                     <Slider
@@ -2536,7 +2536,7 @@ function PipelinePage() {
                       <span>0.5s</span>
                       <span>5s</span>
                     </div>
-                    <p className="text-[10px] text-muted-foreground">Segmentele video nu se schimbă mai repede de această durată</p>
+                    <p className="text-[10px] text-muted-foreground">Video segments won&apos;t change faster than this duration</p>
                   </div>
 
                   <div className="border-t pt-3">
@@ -2547,12 +2547,12 @@ function PipelinePage() {
                         onCheckedChange={(checked) => setUltraRapidIntro(checked === true)}
                       />
                       <Label htmlFor="ultra-rapid-intro" className="text-xs cursor-pointer">
-                        Secvențe ultra-rapide la început
+                        Ultra-fast sequences at the start
                       </Label>
                     </div>
                     {ultraRapidIntro && (
                       <p className="text-[10px] text-muted-foreground mt-1 ml-6">
-                        Primele ~2 secunde vor conține 3-4 secvențe foarte scurte (0.5s) din cele mai bune momente
+                        The first ~2 seconds will contain 3-4 very short sequences (0.5s) from the best moments
                       </p>
                     )}
                   </div>
@@ -2583,7 +2583,7 @@ function PipelinePage() {
                               variant="ghost"
                               size="icon"
                               className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                              title="Șterge scriptul"
+                              title="Delete script"
                               onClick={() => {
                                 const newScripts = scripts.filter((_, i) => i !== index);
                                 setScripts(newScripts);
@@ -2632,7 +2632,7 @@ function PipelinePage() {
                         <Alert className="border-blue-500/50 bg-blue-500/10">
                           <Info className="h-4 w-4 text-blue-500" />
                           <AlertDescription className="text-blue-700 dark:text-blue-400 text-sm">
-                            Scriptul depășește materialul video disponibil ({Math.round(totalSegmentDuration)}s) cu ~{estimatedDuration - Math.round(totalSegmentDuration)}s. Segmentele vor fi repetate pentru a acoperi diferența.
+                            Script exceeds available video material ({Math.round(totalSegmentDuration)}s) by ~{estimatedDuration - Math.round(totalSegmentDuration)}s. Segments will be repeated to cover the difference.
                           </AlertDescription>
                         </Alert>
                       </div>
@@ -2974,13 +2974,13 @@ function PipelinePage() {
                   <AlertDescription className="flex items-center justify-between flex-wrap gap-2">
                     <span className="text-green-800 dark:text-green-300">
                       {ttsCount === scripts.length
-                        ? "Toate scripturile au voice-over generat"
-                        : `${ttsCount} din ${scripts.length} scripturi au voice-over. Restul de ${scripts.length - ttsCount} vor fi generate automat.`}
+                        ? "All scripts have voice-over generated"
+                        : `${ttsCount} of ${scripts.length} scripts have voice-over. The remaining ${scripts.length - ttsCount} will be generated automatically.`}
                     </span>
                     <div className="flex items-center gap-2">
                       {selectedSourceIds.size === 0 && (
                         <span className="text-xs text-amber-600 dark:text-amber-400">
-                          Selectează un videoclip cu segmente mai sus ↑
+                          Select a video clip with segments above ↑
                         </span>
                       )}
                       <Button
@@ -2991,7 +2991,7 @@ function PipelinePage() {
                         disabled={isGenerating || previewingIndex !== null || sourceVideos.length === 0 || selectedSourceIds.size === 0}
                       >
                         <ArrowRight className="h-3.5 w-3.5 mr-1" />
-                        {previewingIndex !== null ? "Se generează preview..." : "Continuă la Preview"}
+                        {previewingIndex !== null ? "Generating preview..." : "Continue to Preview"}
                       </Button>
                     </div>
                   </AlertDescription>
@@ -3014,13 +3014,13 @@ function PipelinePage() {
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                       {allTtsReady
-                        ? `Generare preview ${previewingIndex + 1} din ${scripts.length}...`
+                        ? `Generating preview ${previewingIndex + 1} of ${scripts.length}...`
                         : `Generating voice-over ${previewingIndex + 1} of ${scripts.length}...`}
                     </>
                   ) : (
                     <>
                       <Sparkles className="h-4 w-4 mr-2" />
-                      {allTtsReady ? "Generează Preview-uri" : "Generate Voice-Overs"}
+                      {allTtsReady ? "Generate Previews" : "Generate Voice-Overs"}
                     </>
                   )}
                 </Button>
@@ -3289,9 +3289,9 @@ function PipelinePage() {
                   if (isRendering) {
                     setConfirmDialog({
                       open: true,
-                      title: "Renderizare în progres",
-                      description: "Renderizarea este în progres. Ești sigur că vrei să începi un pipeline nou?",
-                      confirmLabel: "Începe pipeline nou",
+                      title: "Render in progress",
+                      description: "A render is in progress. Are you sure you want to start a new pipeline?",
+                      confirmLabel: "Start new pipeline",
                       variant: "destructive",
                       onConfirm: () => {
                         setConfirmDialog((prev) => ({ ...prev, open: false }));
@@ -3402,7 +3402,7 @@ function PipelinePage() {
                       <Alert className="border-yellow-500/50 bg-yellow-500/10">
                         <AlertTriangle className="h-4 w-4 text-yellow-500" />
                         <AlertDescription className="text-yellow-700 dark:text-yellow-400">
-                          Video renderizat cu succes, dar nu a fost salvat în library.
+                          Video rendered successfully, but was not saved to the library.
                           {status.library_error && <span className="block text-xs mt-1 opacity-75">{status.library_error}</span>}
                           <Button
                             variant="link"
@@ -3513,7 +3513,7 @@ function PipelinePage() {
                               onClick={(e) => handleDeletePipeline(item.pipeline_id, e)}
                               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleDeletePipeline(item.pipeline_id, e as unknown as React.MouseEvent); } }}
                               className="p-1 rounded hover:bg-destructive/10 hover:text-destructive transition-colors"
-                              title="Șterge pipeline"
+                              title="Delete pipeline"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                             </span>

@@ -69,16 +69,16 @@ export function SecondaryVideosForm({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Video className="h-4 w-4 text-muted-foreground" />
-          <Label className="font-medium">Videouri Secundare (Multi-Video)</Label>
+          <Label className="font-medium">Secondary Videos (Multi-Video)</Label>
         </div>
         {configuredCount > 0 && (
-          <Badge variant="secondary">{configuredCount} configurate</Badge>
+          <Badge variant="secondary">{configuredCount} configured</Badge>
         )}
       </div>
 
       {/* Description */}
       <p className="text-sm text-muted-foreground">
-        Adauga videouri care vor fi inserate automat cand apar anumite cuvinte cheie in subtitrari.
+        Add videos that will be automatically inserted when certain keywords appear in the subtitles.
       </p>
 
       {/* Video slots */}
@@ -129,7 +129,7 @@ export function SecondaryVideosForm({
                     disabled={disabled}
                   >
                     <Upload className="h-4 w-4" />
-                    Selecteaza Video
+                    Select Video
                   </Button>
                 )}
               </div>
@@ -138,11 +138,11 @@ export function SecondaryVideosForm({
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <Tag className="h-3 w-3 text-muted-foreground" />
-                  <Label className="text-xs">Keywords (separate cu virgula)</Label>
+                  <Label className="text-xs">Keywords (comma-separated)</Label>
                 </div>
                 <Input
                   type="text"
-                  placeholder="produs, calitate, premium..."
+                  placeholder="product, quality, premium..."
                   value={video.keywords}
                   onChange={(e) => updateVideo(index, { keywords: e.target.value })}
                   disabled={disabled || !video.file}
@@ -157,7 +157,7 @@ export function SecondaryVideosForm({
       {/* Segment Duration slider */}
       <div className="space-y-3 pt-2">
         <div className="flex justify-between items-center">
-          <Label>Durata Segment Inserat</Label>
+          <Label>Inserted Segment Duration</Label>
           <span className="text-sm text-muted-foreground">{segmentDuration}s</span>
         </div>
         <Slider
@@ -170,15 +170,15 @@ export function SecondaryVideosForm({
           className="w-full"
         />
         <p className="text-xs text-muted-foreground">
-          Cat timp va fi afisat clipul secundar cand apare un keyword
+          How long the secondary clip will be shown when a keyword appears
         </p>
       </div>
 
       {/* Info message */}
       {configuredCount > 0 && (
         <div className="text-xs bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 px-3 py-2 rounded">
-          <strong>Nota:</strong> Este necesar un fisier SRT pentru a detecta momentele
-          cand apar keyword-urile. Incarca sau genereaza subtitrari inainte de procesare.
+          <strong>Note:</strong> An SRT file is required to detect the moments
+          when keywords appear. Upload or generate subtitles before processing.
         </div>
       )}
     </div>

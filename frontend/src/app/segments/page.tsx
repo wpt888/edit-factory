@@ -992,7 +992,7 @@ export default function SegmentsPage() {
             </DialogFooter>
             {(!uploadFile || !uploadName.trim()) && (
               <p className="text-xs text-muted-foreground mt-2">
-                * Completează numele și selectează un fișier video pentru a activa butonul Upload
+                * Fill in the name and select a video file to enable the Upload button
               </p>
             )}
           </DialogContent>
@@ -1692,7 +1692,7 @@ export default function SegmentsPage() {
                 <div className="mt-4 p-3 border border-primary/50 rounded-md bg-primary/5">
                   <p className="text-sm font-medium text-primary flex items-center gap-2">
                     <Merge className="h-4 w-4" />
-                    Dacă unești, noul segment va fi:
+                    If you merge, the new segment will be:
                   </p>
                   <p className="text-sm font-mono mt-1">
                     {formatTimeDetailed(
@@ -1718,18 +1718,18 @@ export default function SegmentsPage() {
               <div className="flex flex-col gap-2 p-6 pt-4 border-t">
                 <div className="flex justify-end gap-2">
                   <Button variant="outline" onClick={() => setOverlapInfo(null)}>
-                    Anulează
+                    Cancel
                   </Button>
                   <Button variant="secondary" onClick={handleCreateSeparate}>
-                    Creează separat
+                    Create separately
                   </Button>
                   <Button onClick={handleMergeSegments}>
                     <Merge className="h-4 w-4 mr-2" />
-                    Unește segmentele
+                    Merge segments
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground text-right">
-                  &quot;Creează separat&quot; va crea segmentul fără a modifica cele existente
+                  &quot;Create separately&quot; will create the segment without modifying existing ones
                 </p>
               </div>
             </div>

@@ -127,14 +127,14 @@ export function SubtitleEditor({
         {!compact && (
           <div className="flex items-center gap-2">
             <Type className="h-4 w-4 text-muted-foreground" />
-            <h3 className="font-semibold">Stil Subtitrari</h3>
+            <h3 className="font-semibold">Subtitle Style</h3>
           </div>
         )}
 
         {/* Font Size */}
         <div className="space-y-3">
           <div className="flex justify-between items-center">
-            <Label>Marime Font</Label>
+            <Label>Font Size</Label>
             <span className="text-sm text-muted-foreground">{settings.fontSize}px</span>
           </div>
           <Slider
@@ -175,14 +175,14 @@ export function SubtitleEditor({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Text Color */}
           <ColorPicker
-            label="Culoare Text"
+            label="Text Color"
             value={settings.textColor}
             onChange={(value) => updateSetting("textColor", value)}
           />
 
           {/* Outline Color */}
           <ColorPicker
-            label="Culoare Contur"
+            label="Outline Color"
             value={settings.outlineColor}
             onChange={(value) => updateSetting("outlineColor", value)}
           />
@@ -191,7 +191,7 @@ export function SubtitleEditor({
         {/* Outline Width */}
         <div className="space-y-3">
           <div className="flex justify-between items-center">
-            <Label>Grosime Contur</Label>
+            <Label>Outline Width</Label>
             <span className="text-sm text-muted-foreground">{settings.outlineWidth}px</span>
           </div>
           <Slider
@@ -207,7 +207,7 @@ export function SubtitleEditor({
         {/* Position Y */}
         <div className="space-y-3">
           <div className="flex justify-between items-center">
-            <Label>Pozitie Verticala (Y)</Label>
+            <Label>Vertical Position (Y)</Label>
             <span className="text-sm text-muted-foreground">{settings.positionY}%</span>
           </div>
           <Slider
@@ -230,9 +230,9 @@ export function SubtitleEditor({
           <Separator />
           <div className="space-y-3">
             <div className="flex justify-between items-center">
-              <Label className="text-base font-semibold">Preview Live</Label>
+              <Label className="text-base font-semibold">Live Preview</Label>
               {isLoadingVideoInfo && (
-                <span className="text-xs text-muted-foreground">Se incarca...</span>
+                <span className="text-xs text-muted-foreground">Loading...</span>
               )}
             </div>
 
@@ -265,7 +265,7 @@ export function SubtitleEditor({
                     transform: "translateY(-50%)",
                   }}
                 >
-                  {subtitleLines.length > 0 ? subtitleLines[0].text : "Exemplu de text subtitrare"}
+                  {subtitleLines.length > 0 ? subtitleLines[0].text : "Sample subtitle text"}
                 </div>
               </div>
             </div>
@@ -276,7 +276,7 @@ export function SubtitleEditor({
                 {videoInfo.width}x{videoInfo.height} ({videoInfo.aspect_ratio})
               </p>
               <p className="text-xs text-muted-foreground">
-                Font: {settings.fontSize}px | Contur: {settings.outlineWidth}px | Y: {settings.positionY}%
+                Font: {settings.fontSize}px | Outline: {settings.outlineWidth}px | Y: {settings.positionY}%
               </p>
             </div>
           </div>
@@ -289,16 +289,16 @@ export function SubtitleEditor({
           <Separator />
           <div className="space-y-4">
             <div className="flex justify-between items-center">
-              <h3 className="font-semibold">Editor Subtitrari</h3>
+              <h3 className="font-semibold">Subtitle Editor</h3>
               {subtitleLines.length > 0 && (
-                <Badge variant="secondary">{subtitleLines.length} linii</Badge>
+                <Badge variant="secondary">{subtitleLines.length} lines</Badge>
               )}
             </div>
 
             {subtitleLines.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
-                <p>Incarca un fisier SRT pentru a edita subtitrările</p>
-                <p className="text-sm mt-1">sau lasa AI-ul sa genereze automat</p>
+                <p>Upload an SRT file to edit subtitles</p>
+                <p className="text-sm mt-1">or let AI generate them automatically</p>
               </div>
             ) : (
               <ScrollArea className="h-[300px] border rounded-lg">
@@ -326,7 +326,7 @@ export function SubtitleEditor({
                         </DialogTrigger>
                         <DialogContent>
                           <DialogHeader>
-                            <DialogTitle>Editeaza Subtitrarea #{line.id}</DialogTitle>
+                            <DialogTitle>Edit Subtitle #{line.id}</DialogTitle>
                             <DialogDescription>
                               {line.start} → {line.end}
                             </DialogDescription>
@@ -339,7 +339,7 @@ export function SubtitleEditor({
                           <DialogFooter>
                             <DialogClose asChild>
                               <Button variant="outline">
-                                Inchide
+                                Close
                               </Button>
                             </DialogClose>
                           </DialogFooter>

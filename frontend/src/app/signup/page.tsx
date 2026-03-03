@@ -34,14 +34,14 @@ export default function SignupPage() {
 
     // Validate passwords match
     if (password !== confirmPassword) {
-      setError("Parolele nu coincid");
+      setError("Passwords do not match");
       setLoading(false);
       return;
     }
 
     // Validate password strength
     if (password.length < 6) {
-      setError("Parola trebuie să aibă cel puțin 6 caractere");
+      setError("Password must be at least 6 characters");
       setLoading(false);
       return;
     }
@@ -58,7 +58,7 @@ export default function SignupPage() {
 
       if (error) {
         if (error.message.includes("already registered")) {
-          setError("Acest email este deja înregistrat");
+          setError("This email is already registered");
         } else {
           setError(error.message);
         }
@@ -68,7 +68,7 @@ export default function SignupPage() {
       // Show success message
       setSuccess(true);
     } catch {
-      setError("A apărut o eroare. Te rugăm să încerci din nou.");
+      setError("An error occurred. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -82,10 +82,10 @@ export default function SignupPage() {
             <div className="flex justify-center mb-4">
               <CheckCircle2 className="h-16 w-16 text-green-500" />
             </div>
-            <CardTitle className="text-2xl">Verifică-ți emailul</CardTitle>
+            <CardTitle className="text-2xl">Check your email</CardTitle>
             <CardDescription>
-              Am trimis un link de confirmare la <strong>{email}</strong>.
-              Te rugăm să îți verifici emailul și să dai click pe link pentru a-ți activa contul.
+              We sent a confirmation link to <strong>{email}</strong>.
+              Please check your email and click the link to activate your account.
             </CardDescription>
           </CardHeader>
           <CardFooter className="flex flex-col gap-4">
@@ -94,7 +94,7 @@ export default function SignupPage() {
               className="w-full"
               onClick={() => router.push("/login")}
             >
-              Înapoi la autentificare
+              Back to sign in
             </Button>
           </CardFooter>
         </Card>
@@ -112,9 +112,9 @@ export default function SignupPage() {
               <span className="text-2xl font-bold">EditAI</span>
             </div>
           </div>
-          <CardTitle className="text-2xl">Creează un cont</CardTitle>
+          <CardTitle className="text-2xl">Create an account</CardTitle>
           <CardDescription>
-            Înregistrează-te pentru a începe să folosești platforma
+            Sign up to start using the platform
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSignup}>
@@ -130,7 +130,7 @@ export default function SignupPage() {
               <Input
                 id="email"
                 type="email"
-                placeholder="nume@exemplu.com"
+                placeholder="name@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -139,7 +139,7 @@ export default function SignupPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">Parolă</Label>
+              <Label htmlFor="password">Password</Label>
               <Input
                 id="password"
                 type="password"
@@ -151,11 +151,11 @@ export default function SignupPage() {
                 autoComplete="new-password"
               />
               <p className="text-xs text-muted-foreground">
-                Minimum 6 caractere
+                Minimum 6 characters
               </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="confirmPassword">Confirmă parola</Label>
+              <Label htmlFor="confirmPassword">Confirm password</Label>
               <Input
                 id="confirmPassword"
                 type="password"
@@ -173,16 +173,16 @@ export default function SignupPage() {
               {loading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Se creează contul...
+                  Creating account...
                 </>
               ) : (
-                "Înregistrare"
+                "Sign Up"
               )}
             </Button>
             <p className="text-sm text-muted-foreground text-center">
-              Ai deja un cont?{" "}
+              Already have an account?{" "}
               <Link href="/login" className="text-primary hover:underline">
-                Autentifică-te
+                Sign in
               </Link>
             </p>
           </CardFooter>

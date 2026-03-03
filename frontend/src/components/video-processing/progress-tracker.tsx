@@ -42,28 +42,28 @@ export function ProgressTracker({
         return {
           icon: <Loader2 className="h-4 w-4 animate-spin" />,
           variant: "secondary" as const,
-          label: "In asteptare",
+          label: "Pending",
           color: "text-yellow-600",
         };
       case "processing":
         return {
           icon: <Loader2 className="h-4 w-4 animate-spin" />,
           variant: "default" as const,
-          label: "Procesare",
+          label: "Processing",
           color: "text-blue-600",
         };
       case "completed":
         return {
           icon: <CheckCircle2 className="h-4 w-4" />,
           variant: "default" as const,
-          label: "Finalizat",
+          label: "Completed",
           color: "text-green-600",
         };
       case "failed":
         return {
           icon: <AlertCircle className="h-4 w-4" />,
           variant: "destructive" as const,
-          label: "Esuat",
+          label: "Failed",
           color: "text-red-600",
         };
       default:
@@ -100,7 +100,7 @@ export function ProgressTracker({
             className="h-8 px-2"
           >
             <X className="h-4 w-4 mr-1" />
-            Anuleaza
+            Cancel
           </Button>
         )}
       </div>
@@ -123,7 +123,7 @@ export function ProgressTracker({
 
         {isActive && estimatedRemaining && (
           <span className="text-xs">
-            Timp ramas: {estimatedRemaining}
+            Time remaining: {estimatedRemaining}
           </span>
         )}
       </div>

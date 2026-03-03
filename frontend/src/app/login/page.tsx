@@ -39,9 +39,9 @@ export default function LoginPage() {
 
       if (error) {
         if (error.message.includes("Invalid login credentials")) {
-          setError("Email sau parolă incorectă");
+          setError("Incorrect email or password");
         } else if (error.message.includes("Email not confirmed")) {
-          setError("Te rugăm să îți confirmi emailul înainte de a te autentifica");
+          setError("Please confirm your email before signing in");
         } else {
           setError(error.message);
         }
@@ -52,7 +52,7 @@ export default function LoginPage() {
       router.push("/librarie");
       router.refresh();
     } catch {
-      setError("A apărut o eroare. Te rugăm să încerci din nou.");
+      setError("An error occurred. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -68,9 +68,9 @@ export default function LoginPage() {
               <span className="text-2xl font-bold">EditAI</span>
             </div>
           </div>
-          <CardTitle className="text-2xl">Bine ai revenit!</CardTitle>
+          <CardTitle className="text-2xl">Welcome back!</CardTitle>
           <CardDescription>
-            Introdu datele tale pentru a te autentifica
+            Enter your credentials to sign in
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleLogin}>
@@ -86,7 +86,7 @@ export default function LoginPage() {
               <Input
                 id="email"
                 type="email"
-                placeholder="nume@exemplu.com"
+                placeholder="name@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -95,7 +95,7 @@ export default function LoginPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">Parolă</Label>
+              <Label htmlFor="password">Password</Label>
               <Input
                 id="password"
                 type="password"
@@ -113,16 +113,16 @@ export default function LoginPage() {
               {loading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Se autentifică...
+                  Signing in...
                 </>
               ) : (
-                "Autentificare"
+                "Sign In"
               )}
             </Button>
             <p className="text-sm text-muted-foreground text-center">
-              Nu ai un cont?{" "}
+              Don&apos;t have an account?{" "}
               <Link href="/signup" className="text-primary hover:underline">
-                Înregistrează-te
+                Sign up
               </Link>
             </p>
           </CardFooter>

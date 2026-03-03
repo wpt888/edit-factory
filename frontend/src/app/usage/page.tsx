@@ -115,7 +115,7 @@ export default function UsagePage() {
       const data = await res.json();
       setGeminiStatus(data);
     } catch (error) {
-      handleApiError(error, "Eroare la verificarea statusului Gemini");
+      handleApiError(error, "Error checking Gemini status");
     } finally {
       setTestingGemini(false);
     }
@@ -139,8 +139,8 @@ export default function UsagePage() {
       // Also fetch Gemini status
       await fetchGeminiStatus();
     } catch (err) {
-      handleApiError(err, "Eroare la incarcarea statisticilor");
-      setError("Nu s-a putut conecta la server. Verifică că backend-ul rulează pe port 8000.");
+      handleApiError(err, "Error loading statistics");
+      setError("Could not connect to server. Make sure the backend is running on port 8000.");
     } finally {
       setLoading(false);
     }
@@ -153,7 +153,7 @@ export default function UsagePage() {
       setAllEntries(data.entries || []);
       setShowAllEntries(true);
     } catch (error) {
-      handleApiError(error, "Eroare la incarcarea costurilor");
+      handleApiError(error, "Error loading costs");
     }
   };
 
@@ -178,7 +178,7 @@ export default function UsagePage() {
   const formatCost = (cost: number) => `$${cost.toFixed(4)}`;
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return "-";
-    return new Date(dateStr).toLocaleString("ro-RO", {
+    return new Date(dateStr).toLocaleString("en-US", {
       day: "2-digit",
       month: "2-digit",
       year: "numeric",
@@ -370,7 +370,7 @@ export default function UsagePage() {
                       <div className="flex items-center gap-2">
                         {acc.is_primary && (
                           <Badge variant="default" className="text-xs">
-                            ACTIV
+                            ACTIVE
                           </Badge>
                         )}
                         <Badge variant="outline" className="text-xs">
@@ -614,8 +614,8 @@ export default function UsagePage() {
                       <TableCell colSpan={6} className="py-4">
                         <EmptyState
                           icon={<BarChart3 className="h-6 w-6" />}
-                          title="Nicio utilizare"
-                          description="Costurile API vor fi inregistrate aici."
+                          title="No usage yet"
+                          description="API costs will be recorded here."
                         />
                       </TableCell>
                     </TableRow>

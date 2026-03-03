@@ -38,6 +38,7 @@ import {
   AlertCircle,
   Link,
   Undo2,
+  Tag,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, ApiError, handleApiError } from "@/lib/api";
@@ -48,6 +49,7 @@ import { PublishDialog } from "@/components/PublishDialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { InlineVideoPlayer } from "@/components/inline-video-player";
 import { ClipHoverPreview } from "@/components/clip-hover-preview";
+import { ClipTagEditor } from "@/components/clip-tag-editor";
 
 interface ClipWithProject {
   id: string;
@@ -67,6 +69,7 @@ interface ClipWithProject {
   has_subtitles: boolean;
   has_voiceover: boolean;
   has_audio?: boolean;
+  tags?: string[];
 }
 
 
@@ -91,6 +94,12 @@ function LibrarieContent() {
   const [filterPostiz, setFilterPostiz] = useState<string>(
     searchParams.get("postiz") || "all"
   );
+
+  // Tag filter state
+  const [filterTag, setFilterTag] = useState<string>(
+    searchParams.get("tag") || ""
+  );
+  const [availableTags, setAvailableTags] = useState<string[]>([]);
 
   // Pagination state
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -165,16 +174,19 @@ function LibrarieContent() {
   );
 
   // Fetch all clips — supports cursor-based pagination
-  const fetchAllClips = async (cursor?: string | null) => {
+  const fetchAllClips = async (cursor?: string | null, tagFilter?: string) => {
     try {
       if (cursor) {
         setLoadingMore(true);
       } else {
         setLoading(true);
       }
-      const url = cursor
-        ? `/library/all-clips?cursor=${encodeURIComponent(cursor)}`
-        : "/library/all-clips";
+      const activeTag = tagFilter !== undefined ? tagFilter : filterTag;
+      const params = new URLSearchParams();
+      if (cursor) params.set("cursor", cursor);
+      if (activeTag) params.set("tag", activeTag);
+      const paramStr = params.toString();
+      const url = `/library/all-clips${paramStr ? `?${paramStr}` : ""}`;
       const res = await apiGetWithRetry(url);
       const data = await res.json();
       if (cursor) {
@@ -202,8 +214,8 @@ function LibrarieContent() {
   // Load next page via cursor
   const fetchNextPage = useCallback(() => {
     if (!hasMore || loadingMore) return;
-    fetchAllClips(nextCursor);
-  }, [hasMore, loadingMore, nextCursor]); // eslint-disable-line react-hooks/exhaustive-deps
+    fetchAllClips(nextCursor, filterTag);
+  }, [hasMore, loadingMore, nextCursor, filterTag]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // IntersectionObserver — trigger fetchNextPage when sentinel enters viewport
   useEffect(() => {
@@ -301,8 +313,13 @@ function LibrarieContent() {
       result = result.filter((clip) => clip.postiz_status === filterPostiz);
     }
 
+    // Tag filter (client-side; server already filters, this keeps it in sync)
+    if (filterTag) {
+      result = result.filter((clip) => (clip.tags || []).includes(filterTag));
+    }
+
     setFilteredClips(result);
-  }, [clips, searchQuery, filterSubtitles, filterVoiceover, filterPostiz]);
+  }, [clips, searchQuery, filterSubtitles, filterVoiceover, filterPostiz, filterTag]);
 
   // Fetch Postiz connection status
   const fetchPostizStatus = async () => {
@@ -315,6 +332,17 @@ function LibrarieContent() {
     }
   };
 
+  // Fetch available tags for the filter dropdown
+  const fetchAvailableTags = async () => {
+    try {
+      const res = await apiGet("/library/tags");
+      const data = await res.json();
+      setAvailableTags(data.tags || []);
+    } catch {
+      // Non-critical — tag filter still works, just won't show dropdown options
+    }
+  };
+
   // Initial fetch - profile-aware
   const profileId = currentProfile?.id;
   useEffect(() => {
@@ -322,7 +350,8 @@ function LibrarieContent() {
     if (!profileId) return; // No profile selected
     fetchAllClips();
     fetchPostizStatus();
-  }, [profileLoading, profileId]);
+    fetchAvailableTags();
+  }, [profileLoading, profileId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle filter changes with URL update
   const handleSearchChange = (value: string) => {
@@ -345,6 +374,34 @@ function LibrarieContent() {
     updateURL({ postiz: value });
   };
 
+  const handleTagFilter = (value: string) => {
+    const newTag = value === "all" ? "" : value;
+    setFilterTag(newTag);
+    updateURL({ tag: newTag });
+    // Reset clip list and re-fetch with the new tag filter
+    setClips([]);
+    setNextCursor(null);
+    setHasMore(true);
+    fetchAllClips(null, newTag);
+  };
+
+  // Update clip tags — saves to backend and updates local state optimistically
+  const updateClipTags = async (clipId: string, newTags: string[]) => {
+    // Optimistic update
+    setClips((prev) =>
+      prev.map((c) => (c.id === clipId ? { ...c, tags: newTags } : c))
+    );
+    try {
+      await apiPatch(`/library/clips/${clipId}`, { tags: newTags });
+      // Refresh available tags to include any newly added tags
+      fetchAvailableTags();
+    } catch (error) {
+      handleApiError(error, "Error saving tags");
+      // Revert optimistic update — re-fetch clips to get server state
+      fetchAllClips(null, filterTag);
+    }
+  };
+
   // Get Postiz status badge
   const getPostizBadge = (clip: ClipWithProject) => {
     const status = clip.postiz_status || "not_sent";
@@ -352,19 +409,19 @@ function LibrarieContent() {
       case "sent":
         return {
           color: "bg-green-500 text-white",
-          label: "Trimis",
+          label: "Sent",
           icon: <CheckCircle2 className="h-3 w-3 mr-1" />,
         };
       case "scheduled":
         return {
           color: "bg-blue-500 text-white",
-          label: "Programat",
+          label: "Scheduled",
           icon: <Clock className="h-3 w-3 mr-1" />,
         };
       default:
         return {
           color: "bg-muted text-muted-foreground",
-          label: "Netrimis",
+          label: "Not sent",
           icon: null,
         };
     }
@@ -394,7 +451,7 @@ function LibrarieContent() {
       );
       setRenameClipId(null);
     } catch (error) {
-      handleApiError(error, "Eroare la redenumirea clipului");
+      handleApiError(error, "Error renaming clip");
       setRenameClipId(null);
     }
   };
@@ -403,9 +460,9 @@ function LibrarieContent() {
   const openRemoveAudioConfirm = (clip: ClipWithProject) => {
     setConfirmDialog({
       open: true,
-      title: "Elimină sunetul",
-      description: "Sigur vrei să scoți definitiv sunetul din acest videoclip? Această acțiune nu poate fi anulată.",
-      confirmLabel: "Elimină sunetul",
+      title: "Remove Audio",
+      description: "Are you sure you want to permanently remove audio from this clip? This action cannot be undone.",
+      confirmLabel: "Remove Audio",
       variant: "destructive",
       onConfirm: async () => {
         setConfirmDialog((prev) => ({ ...prev, loading: true }));
@@ -418,9 +475,9 @@ function LibrarieContent() {
               c.id === clip.id ? { ...c, has_audio: false, raw_video_path: data.video_path } : c
             )
           );
-          toast.success("Sunetul a fost eliminat cu succes!");
+          toast.success("Audio removed successfully!");
         } catch (error) {
-          handleApiError(error, "Eroare la eliminarea sunetului");
+          handleApiError(error, "Error removing audio");
         } finally {
           setRemovingAudioClipId(null);
           setConfirmDialog((prev) => ({ ...prev, open: false, loading: false }));
@@ -433,9 +490,9 @@ function LibrarieContent() {
   const openDeleteConfirm = (clip: ClipWithProject) => {
     setConfirmDialog({
       open: true,
-      title: "Șterge clipul",
-      description: `Sigur vrei să ștergi definitiv "${clip.variant_name || `Varianta ${clip.variant_index}`}"? Această acțiune nu poate fi anulată.`,
-      confirmLabel: "Șterge",
+      title: "Delete Clip",
+      description: `Are you sure you want to permanently delete "${clip.variant_name || `Variant ${clip.variant_index}`}"? This action cannot be undone.`,
+      confirmLabel: "Delete",
       variant: "destructive",
       onConfirm: async () => {
         setConfirmDialog((prev) => ({ ...prev, loading: true }));
@@ -443,9 +500,9 @@ function LibrarieContent() {
         try {
           await apiDelete(`/library/clips/${clip.id}`);
           setClips((prev) => prev.filter((c) => c.id !== clip.id));
-          toast.success("Clipul a fost șters cu succes!");
+          toast.success("Clip deleted successfully!");
         } catch (error) {
-          handleApiError(error, "Eroare la stergerea clipului");
+          handleApiError(error, "Error deleting clip");
         } finally {
           setDeletingClipId(null);
           setConfirmDialog((prev) => ({ ...prev, open: false, loading: false }));
@@ -482,9 +539,9 @@ function LibrarieContent() {
     const count = selectedClipIds.size;
     setConfirmDialog({
       open: true,
-      title: "Șterge clipurile selectate",
-      description: `Sigur vrei să ștergi definitiv ${count} clipuri selectate? Această acțiune nu poate fi anulată.`,
-      confirmLabel: `Șterge ${count} clipuri`,
+      title: "Delete Selected Clips",
+      description: `Are you sure you want to permanently delete ${count} selected clips? This action cannot be undone.`,
+      confirmLabel: `Delete ${count} clips`,
       variant: "destructive",
       onConfirm: async () => {
         setConfirmDialog((prev) => ({ ...prev, loading: true }));
@@ -496,9 +553,9 @@ function LibrarieContent() {
           const data = await res.json();
           setClips((prev) => prev.filter((c) => !selectedClipIds.has(c.id)));
           setSelectedClipIds(new Set());
-          toast.success(`${data.deleted_count} clipuri au fost șterse cu succes!${data.failed_count > 0 ? ` ${data.failed_count} au eșuat.` : ""}`);
+          toast.success(`${data.deleted_count} clips deleted successfully!${data.failed_count > 0 ? ` ${data.failed_count} failed.` : ""}`);
         } catch (error) {
-          handleApiError(error, "Eroare la stergerea clipurilor");
+          handleApiError(error, "Error deleting clips");
         } finally {
           setBulkDeleting(false);
           setConfirmDialog((prev) => ({ ...prev, open: false, loading: false }));
@@ -521,7 +578,7 @@ function LibrarieContent() {
       document.body.removeChild(a);
       URL.revokeObjectURL(blobUrl);
     } catch {
-      toast.error("Eroare la descărcare");
+      toast.error("Download error");
     }
   };
 
@@ -531,9 +588,9 @@ function LibrarieContent() {
     const count = selectedClipIds.size;
     setConfirmDialog({
       open: true,
-      title: "Trimite la Postiz",
-      description: `Sigur vrei să trimiți ${count} clipuri selectate către Postiz?`,
-      confirmLabel: `Trimite ${count} clipuri`,
+      title: "Send to Postiz",
+      description: `Are you sure you want to send ${count} selected clips to Postiz?`,
+      confirmLabel: `Send ${count} clips`,
       variant: "default",
       onConfirm: async () => {
         setConfirmDialog((prev) => ({ ...prev, loading: true }));
@@ -557,9 +614,9 @@ function LibrarieContent() {
             )
           );
           setSelectedClipIds(new Set());
-          toast.success(`${data.uploaded_count} clipuri au fost trimise către Postiz!${data.failed_count > 0 ? ` ${data.failed_count} au eșuat.` : ""}`);
+          toast.success(`${data.uploaded_count} clips sent to Postiz!${data.failed_count > 0 ? ` ${data.failed_count} failed.` : ""}`);
         } catch (error) {
-          handleApiError(error, "Eroare la trimiterea clipurilor catre Postiz");
+          handleApiError(error, "Error sending clips to Postiz");
         } finally {
           setBulkUploading(false);
           setConfirmDialog((prev) => ({ ...prev, open: false, loading: false }));
@@ -647,9 +704,9 @@ function LibrarieContent() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold">Librărie</h1>
+            <h1 className="text-2xl font-bold">Library</h1>
             <p className="text-muted-foreground">
-              Toate clipurile exportate din proiecte
+              All exported clips from projects
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -779,17 +836,17 @@ function LibrarieContent() {
               <div className="flex items-center gap-2 text-sm">
                 <Badge variant="outline" className="border-green-500 text-green-600 gap-1">
                   <Link className="h-3 w-3" />
-                  {postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")} — {postizStatus.integrations_count} {postizStatus.integrations_count === 1 ? "cont" : "conturi"}
+                  {postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")} — {postizStatus.integrations_count} {postizStatus.integrations_count === 1 ? "account" : "accounts"}
                 </Badge>
               </div>
             ) : (
               <div className="flex items-center gap-2 text-sm">
                 <Badge variant="destructive" className="gap-1">
                   <AlertCircle className="h-3 w-3" />
-                  Postiz neconfigurat
+                  Postiz not configured
                 </Badge>
                 <a href="/settings" className="text-xs text-muted-foreground hover:underline">
-                  Configurează în Settings
+                  Configure in Settings
                 </a>
               </div>
             )}
@@ -803,12 +860,12 @@ function LibrarieContent() {
               {/* Search */}
               <div className="flex-1 min-w-[200px]">
                 <Label className="text-sm text-muted-foreground mb-2 block">
-                  Căutare
+                  Search
                 </Label>
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
-                    placeholder="Caută după proiect sau variantă..."
+                    placeholder="Search by project or variant..."
                     value={searchQuery}
                     onChange={(e) => handleSearchChange(e.target.value)}
                     className="pl-10"
@@ -820,16 +877,16 @@ function LibrarieContent() {
               <div className="w-[160px]">
                 <Label className="text-sm text-muted-foreground mb-2 block">
                   <Subtitles className="h-3 w-3 inline mr-1" />
-                  Subtitrări
+                  Subtitles
                 </Label>
                 <Select value={filterSubtitles} onValueChange={handleSubtitlesFilter}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">Toate</SelectItem>
-                    <SelectItem value="with">Cu subtitrări</SelectItem>
-                    <SelectItem value="without">Fără subtitrări</SelectItem>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="with">With subtitles</SelectItem>
+                    <SelectItem value="without">Without subtitles</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -845,9 +902,9 @@ function LibrarieContent() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">Toate</SelectItem>
-                    <SelectItem value="with">Cu voiceover</SelectItem>
-                    <SelectItem value="without">Fără voiceover</SelectItem>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="with">With voiceover</SelectItem>
+                    <SelectItem value="without">Without voiceover</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -856,25 +913,65 @@ function LibrarieContent() {
               <div className="w-[160px]">
                 <Label className="text-sm text-muted-foreground mb-2 block">
                   <Share2 className="h-3 w-3 inline mr-1" />
-                  Status Postiz
+                  Postiz Status
                 </Label>
                 <Select value={filterPostiz} onValueChange={handlePostizFilter}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">Toate</SelectItem>
-                    <SelectItem value="not_sent">Netrimis</SelectItem>
-                    <SelectItem value="scheduled">Programat</SelectItem>
-                    <SelectItem value="sent">Trimis</SelectItem>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="not_sent">Not sent</SelectItem>
+                    <SelectItem value="scheduled">Scheduled</SelectItem>
+                    <SelectItem value="sent">Sent</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Tag filter */}
+              <div className="w-[160px]">
+                <Label className="text-sm text-muted-foreground mb-2 block">
+                  <Tag className="h-3 w-3 inline mr-1" />
+                  Tag
+                </Label>
+                <Select value={filterTag || "all"} onValueChange={handleTagFilter}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="All Tags" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Tags</SelectItem>
+                    {availableTags.map((tag) => (
+                      <SelectItem key={tag} value={tag}>
+                        {tag}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
             </div>
 
+            {/* Active tag filter badge */}
+            {filterTag && (
+              <div className="mt-3 flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Filtered by tag:</span>
+                <Badge variant="secondary" className="text-xs gap-1">
+                  <Tag className="h-3 w-3" />
+                  {filterTag}
+                  <button
+                    type="button"
+                    className="ml-0.5 hover:text-destructive transition-colors"
+                    onClick={() => handleTagFilter("all")}
+                    aria-label="Clear tag filter"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              </div>
+            )}
+
             {/* Filter summary */}
             <div className="mt-4 text-sm text-muted-foreground">
-              {filteredClips.length} din {clips.length} clipuri
+              {filteredClips.length} of {clips.length} clips
             </div>
           </CardContent>
         </Card>}
@@ -887,7 +984,7 @@ function LibrarieContent() {
                 <div className="flex items-center gap-3">
                   <CheckSquare className="h-5 w-5 text-primary" />
                   <span className="font-medium">
-                    {selectedClipIds.size} {selectedClipIds.size === 1 ? "clip selectat" : "clipuri selectate"}
+                    {selectedClipIds.size} {selectedClipIds.size === 1 ? "clip selected" : "clips selected"}
                   </span>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -898,7 +995,7 @@ function LibrarieContent() {
                     disabled={selectedClipIds.size === filteredClips.length}
                   >
                     <CheckSquare className="h-4 w-4 mr-2" />
-                    Selectează toate ({filteredClips.length})
+                    Select all ({filteredClips.length})
                   </Button>
                   <Button
                     variant="outline"
@@ -906,7 +1003,7 @@ function LibrarieContent() {
                     onClick={clearSelection}
                   >
                     <XCircle className="h-4 w-4 mr-2" />
-                    Deselectează
+                    Deselect
                   </Button>
                   <div className="w-px h-6 bg-border mx-2" />
                   <Button
@@ -920,21 +1017,21 @@ function LibrarieContent() {
                     ) : (
                       <Trash2 className="h-4 w-4 mr-2" />
                     )}
-                    Șterge selectate
+                    Delete selected
                   </Button>
                   <Button
                     size="sm"
                     className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600 disabled:opacity-50"
                     onClick={openBulkUploadConfirm}
                     disabled={bulkDeleting || bulkUploading || !postizStatus?.connected}
-                    title={postizStatus?.connected ? `Trimite la ${postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")}` : "Postiz neconfigurat — configurează în Settings"}
+                    title={postizStatus?.connected ? `Send to ${postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")}` : "Postiz not configured — configure in Settings"}
                   >
                     {bulkUploading ? (
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     ) : (
                       <Share2 className="h-4 w-4 mr-2" />
                     )}
-                    Trimite la Postiz
+                    Send to Postiz
                   </Button>
                 </div>
               </div>
@@ -950,8 +1047,14 @@ function LibrarieContent() {
         ) : filteredClips.length === 0 ? (
           <EmptyState
             icon={<Film className="h-6 w-6" />}
-            title="Nicio editare"
-            description={clips.length === 0 ? "Clipurile procesate vor aparea aici." : "Modifica filtrele pentru a vedea clipuri."}
+            title="No edits yet"
+            description={
+              clips.length === 0
+                ? "Processed clips will appear here."
+                : filterTag
+                ? `No clips with tag "${filterTag}".`
+                : "Adjust the filters to see clips."
+            }
           />
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
@@ -1055,7 +1158,7 @@ function LibrarieContent() {
                               e.stopPropagation();
                               downloadFile(`/library/clips/${clip.id}/srt`, `clip_${clip.id.slice(0, 8)}.srt`);
                             }}
-                            title="Descarcă subtitrări SRT"
+                            title="Download SRT subtitles"
                           >
                             <FileText className="h-4 w-4" />
                           </Button>
@@ -1068,7 +1171,7 @@ function LibrarieContent() {
                               e.stopPropagation();
                               downloadFile(`/library/clips/${clip.id}/audio`, `clip_${clip.id.slice(0, 8)}.mp3`);
                             }}
-                            title="Descarcă audio TTS"
+                            title="Download TTS audio"
                           >
                             <Mic className="h-4 w-4" />
                           </Button>
@@ -1081,7 +1184,7 @@ function LibrarieContent() {
                             e.stopPropagation();
                             openPublishDialog(clip);
                           }}
-                          title={postizStatus?.connected ? "Publica pe Social Media" : "Postiz neconfigurat — configureaza in Settings"}
+                          title={postizStatus?.connected ? "Publish to Social Media" : "Postiz not configured — configure in Settings"}
                         >
                           <Share2 className="h-4 w-4" />
                         </Button>
@@ -1100,17 +1203,17 @@ function LibrarieContent() {
                         {removingAudioClipId === clip.id ? (
                           <>
                             <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                            Se procesează...
+                            Processing...
                           </>
                         ) : clip.has_audio === false ? (
                           <>
                             <VolumeX className="h-3 w-3 mr-1" />
-                            Fără sunet
+                            No audio
                           </>
                         ) : (
                           <>
                             <VolumeX className="h-3 w-3 mr-1" />
-                            Elimină sunetul
+                            Remove audio
                           </>
                         )}
                       </Button>
@@ -1124,7 +1227,7 @@ function LibrarieContent() {
                           openDeleteConfirm(clip);
                         }}
                         className="text-xs"
-                        title="Șterge clipul definitiv"
+                        title="Delete clip permanently"
                       >
                         {deletingClipId === clip.id ? (
                           <Loader2 className="h-3 w-3 animate-spin" />
@@ -1172,7 +1275,7 @@ function LibrarieContent() {
                     ) : (
                       <div className="flex items-center gap-1">
                         <p className="text-sm font-medium truncate flex-1">
-                          {clip.variant_name || `Varianta ${clip.variant_index}`}
+                          {clip.variant_name || `Variant ${clip.variant_index}`}
                         </p>
                         <Button
                           size="icon"
@@ -1181,9 +1284,9 @@ function LibrarieContent() {
                           onClick={(e) => {
                             e.stopPropagation();
                             setRenameClipId(clip.id);
-                            setRenameValue(clip.variant_name || `Varianta ${clip.variant_index}`);
+                            setRenameValue(clip.variant_name || `Variant ${clip.variant_index}`);
                           }}
-                          title="Redenumește"
+                          title="Rename"
                         >
                           <Pencil className="h-3 w-3" />
                         </Button>
@@ -1192,6 +1295,17 @@ function LibrarieContent() {
                     <p className="text-xs text-muted-foreground truncate">
                       {clip.project_name}
                     </p>
+                    {/* Tag editor */}
+                    <div
+                      className="mt-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <ClipTagEditor
+                        clipId={clip.id}
+                        tags={clip.tags || []}
+                        onTagsChange={(newTags) => updateClipTags(clip.id, newTags)}
+                      />
+                    </div>
                   </CardContent>
                 </Card>
               );
