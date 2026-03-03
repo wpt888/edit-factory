@@ -17,6 +17,7 @@ import { apiGetWithRetry, apiPost, apiPatch, apiDelete, handleApiError } from "@
 import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import { useProfile } from "@/contexts/profile-context"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 
 interface Voice {
   voice_id: string
@@ -107,6 +108,17 @@ export default function SettingsPage() {
   const [showNewAccountKey, setShowNewAccountKey] = useState(false)
   const [addingAccount, setAddingAccount] = useState(false)
   const [accountActionLoading, setAccountActionLoading] = useState<string | null>(null)
+
+  // Confirm dialog state
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean
+    title: string
+    description: string
+    confirmLabel: string
+    variant: "destructive" | "default"
+    onConfirm: () => void
+    loading?: boolean
+  }>({ open: false, title: "", description: "", confirmLabel: "", variant: "default", onConfirm: () => {} })
 
   // Desktop version state
   const [appVersion, setAppVersion] = useState<string | null>(null)
@@ -395,19 +407,28 @@ export default function SettingsPage() {
     }
   }
 
-  const handleDeleteAccount = async (accountId: string) => {
-    if (!confirm("Delete this ElevenLabs account?")) return
-
-    setAccountActionLoading(accountId)
-    try {
-      const response = await apiDelete(`/elevenlabs-accounts/${accountId}`)
-      if (!response.ok) throw new Error("Failed to delete account")
-      loadAccounts()
-    } catch (error) {
-      handleApiError(error, "Failed to delete account")
-    } finally {
-      setAccountActionLoading(null)
-    }
+  const handleDeleteAccount = (accountId: string) => {
+    setConfirmDialog({
+      open: true,
+      title: "Delete ElevenLabs Account",
+      description: "Delete this ElevenLabs account?",
+      confirmLabel: "Delete",
+      variant: "destructive",
+      onConfirm: async () => {
+        setConfirmDialog((prev) => ({ ...prev, loading: true }))
+        setAccountActionLoading(accountId)
+        try {
+          const response = await apiDelete(`/elevenlabs-accounts/${accountId}`)
+          if (!response.ok) throw new Error("Failed to delete account")
+          loadAccounts()
+        } catch (error) {
+          handleApiError(error, "Failed to delete account")
+        } finally {
+          setAccountActionLoading(null)
+          setConfirmDialog((prev) => ({ ...prev, open: false, loading: false }))
+        }
+      },
+    })
   }
 
   const handleSetPrimary = async (accountId: string) => {
@@ -1096,6 +1117,18 @@ export default function SettingsPage() {
           Edit Factory v{appVersion}
         </div>
       )}
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        open={confirmDialog.open}
+        onOpenChange={(open) => setConfirmDialog((prev) => ({ ...prev, open }))}
+        title={confirmDialog.title}
+        description={confirmDialog.description}
+        confirmLabel={confirmDialog.confirmLabel}
+        variant={confirmDialog.variant}
+        onConfirm={confirmDialog.onConfirm}
+        loading={confirmDialog.loading}
+      />
     </div>
   )
 }

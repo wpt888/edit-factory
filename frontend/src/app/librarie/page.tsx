@@ -44,6 +44,8 @@ import { toast } from "sonner";
 import { useProfile } from "@/contexts/profile-context";
 import { EmptyState } from "@/components/empty-state";
 import { PublishDialog } from "@/components/PublishDialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { InlineVideoPlayer } from "@/components/inline-video-player";
 
 interface ClipWithProject {
   id: string;
@@ -122,6 +124,21 @@ function LibrarieContent() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkUploading, setBulkUploading] = useState(false);
 
+  // Confirm dialog state (single shared dialog)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean;
+    title: string;
+    description: string;
+    confirmLabel: string;
+    variant: "destructive" | "default";
+    onConfirm: () => void;
+    loading?: boolean;
+  }>({ open: false, title: "", description: "", confirmLabel: "", variant: "default", onConfirm: () => {} });
+
+  // Inline video player state
+  const [playingClip, setPlayingClip] = useState<ClipWithProject | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
   // Update URL with filters
   const updateURL = useCallback(
     (params: Record<string, string>) => {
@@ -194,6 +211,52 @@ function LibrarieContent() {
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [fetchNextPage]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip when focused on an input/textarea/contenteditable
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+      ) {
+        return;
+      }
+
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        if (selectedClipIds.size === 1) {
+          const clipId = Array.from(selectedClipIds)[0];
+          const clip = clips.find((c) => c.id === clipId);
+          if (clip) openDeleteConfirm(clip);
+        } else if (selectedClipIds.size > 1) {
+          openBulkDeleteConfirm();
+        }
+      } else if (e.key === "Escape") {
+        if (playingClip) {
+          setPlayingClip(null);
+        } else if (confirmDialog.open) {
+          setConfirmDialog((prev) => ({ ...prev, open: false }));
+        } else if (selectedClipIds.size > 0) {
+          setSelectedClipIds(new Set());
+        }
+      } else if (e.key === " ") {
+        if (playingClip && videoRef.current) {
+          e.preventDefault();
+          if (videoRef.current.paused) {
+            videoRef.current.play().catch(() => {});
+          } else {
+            videoRef.current.pause();
+          }
+        }
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [selectedClipIds, clips, playingClip, confirmDialog.open]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   // Apply filters
@@ -327,47 +390,59 @@ function LibrarieContent() {
     }
   };
 
-  // Remove audio from clip
-  const removeAudio = async (clip: ClipWithProject) => {
-    if (!confirm("Sigur vrei să scoți definitiv sunetul din acest videoclip? Această acțiune nu poate fi anulată.")) {
-      return;
-    }
-
-    setRemovingAudioClipId(clip.id);
-    try {
-      const res = await apiPost(`/library/clips/${clip.id}/remove-audio`);
-      const data = await res.json();
-      // Update local state
-      setClips((prev) =>
-        prev.map((c) =>
-          c.id === clip.id ? { ...c, has_audio: false, raw_video_path: data.video_path } : c
-        )
-      );
-      toast.success("Sunetul a fost eliminat cu succes!");
-    } catch (error) {
-      handleApiError(error, "Eroare la eliminarea sunetului");
-    } finally {
-      setRemovingAudioClipId(null);
-    }
+  // Remove audio from clip — opens confirm dialog
+  const openRemoveAudioConfirm = (clip: ClipWithProject) => {
+    setConfirmDialog({
+      open: true,
+      title: "Elimină sunetul",
+      description: "Sigur vrei să scoți definitiv sunetul din acest videoclip? Această acțiune nu poate fi anulată.",
+      confirmLabel: "Elimină sunetul",
+      variant: "destructive",
+      onConfirm: async () => {
+        setConfirmDialog((prev) => ({ ...prev, loading: true }));
+        setRemovingAudioClipId(clip.id);
+        try {
+          const res = await apiPost(`/library/clips/${clip.id}/remove-audio`);
+          const data = await res.json();
+          setClips((prev) =>
+            prev.map((c) =>
+              c.id === clip.id ? { ...c, has_audio: false, raw_video_path: data.video_path } : c
+            )
+          );
+          toast.success("Sunetul a fost eliminat cu succes!");
+        } catch (error) {
+          handleApiError(error, "Eroare la eliminarea sunetului");
+        } finally {
+          setRemovingAudioClipId(null);
+          setConfirmDialog((prev) => ({ ...prev, open: false, loading: false }));
+        }
+      },
+    });
   };
 
-  // Delete clip permanently
-  const deleteClip = async (clip: ClipWithProject) => {
-    if (!confirm(`Sigur vrei să ștergi definitiv "${clip.variant_name || `Varianta ${clip.variant_index}`}"? Această acțiune nu poate fi anulată.`)) {
-      return;
-    }
-
-    setDeletingClipId(clip.id);
-    try {
-      await apiDelete(`/library/clips/${clip.id}`);
-      // Remove from local state
-      setClips((prev) => prev.filter((c) => c.id !== clip.id));
-      toast.success("Clipul a fost șters cu succes!");
-    } catch (error) {
-      handleApiError(error, "Eroare la stergerea clipului");
-    } finally {
-      setDeletingClipId(null);
-    }
+  // Delete clip permanently — opens confirm dialog
+  const openDeleteConfirm = (clip: ClipWithProject) => {
+    setConfirmDialog({
+      open: true,
+      title: "Șterge clipul",
+      description: `Sigur vrei să ștergi definitiv "${clip.variant_name || `Varianta ${clip.variant_index}`}"? Această acțiune nu poate fi anulată.`,
+      confirmLabel: "Șterge",
+      variant: "destructive",
+      onConfirm: async () => {
+        setConfirmDialog((prev) => ({ ...prev, loading: true }));
+        setDeletingClipId(clip.id);
+        try {
+          await apiDelete(`/library/clips/${clip.id}`);
+          setClips((prev) => prev.filter((c) => c.id !== clip.id));
+          toast.success("Clipul a fost șters cu succes!");
+        } catch (error) {
+          handleApiError(error, "Eroare la stergerea clipului");
+        } finally {
+          setDeletingClipId(null);
+          setConfirmDialog((prev) => ({ ...prev, open: false, loading: false }));
+        }
+      },
+    });
   };
 
   // Multi-select handlers
@@ -392,29 +467,35 @@ function LibrarieContent() {
     setSelectedClipIds(new Set());
   };
 
-  // Bulk delete selected clips
-  const bulkDeleteSelected = async () => {
+  // Bulk delete selected clips — opens confirm dialog
+  const openBulkDeleteConfirm = () => {
     if (selectedClipIds.size === 0) return;
-
-    if (!confirm(`Sigur vrei să ștergi definitiv ${selectedClipIds.size} clipuri selectate? Această acțiune nu poate fi anulată.`)) {
-      return;
-    }
-
-    setBulkDeleting(true);
-    try {
-      const res = await apiPost("/library/clips/bulk-delete", {
-        clip_ids: Array.from(selectedClipIds),
-      });
-      const data = await res.json();
-      // Remove deleted clips from local state
-      setClips((prev) => prev.filter((c) => !selectedClipIds.has(c.id)));
-      setSelectedClipIds(new Set());
-      toast.success(`${data.deleted_count} clipuri au fost șterse cu succes!${data.failed_count > 0 ? ` ${data.failed_count} au eșuat.` : ""}`);
-    } catch (error) {
-      handleApiError(error, "Eroare la stergerea clipurilor");
-    } finally {
-      setBulkDeleting(false);
-    }
+    const count = selectedClipIds.size;
+    setConfirmDialog({
+      open: true,
+      title: "Șterge clipurile selectate",
+      description: `Sigur vrei să ștergi definitiv ${count} clipuri selectate? Această acțiune nu poate fi anulată.`,
+      confirmLabel: `Șterge ${count} clipuri`,
+      variant: "destructive",
+      onConfirm: async () => {
+        setConfirmDialog((prev) => ({ ...prev, loading: true }));
+        setBulkDeleting(true);
+        try {
+          const res = await apiPost("/library/clips/bulk-delete", {
+            clip_ids: Array.from(selectedClipIds),
+          });
+          const data = await res.json();
+          setClips((prev) => prev.filter((c) => !selectedClipIds.has(c.id)));
+          setSelectedClipIds(new Set());
+          toast.success(`${data.deleted_count} clipuri au fost șterse cu succes!${data.failed_count > 0 ? ` ${data.failed_count} au eșuat.` : ""}`);
+        } catch (error) {
+          handleApiError(error, "Eroare la stergerea clipurilor");
+        } finally {
+          setBulkDeleting(false);
+          setConfirmDialog((prev) => ({ ...prev, open: false, loading: false }));
+        }
+      },
+    });
   };
 
   // Download helper for SRT/Audio files
@@ -435,41 +516,47 @@ function LibrarieContent() {
     }
   };
 
-  // Bulk upload to Postiz
-  const bulkUploadToPostiz = async () => {
+  // Bulk upload to Postiz — opens confirm dialog
+  const openBulkUploadConfirm = () => {
     if (selectedClipIds.size === 0) return;
+    const count = selectedClipIds.size;
+    setConfirmDialog({
+      open: true,
+      title: "Trimite la Postiz",
+      description: `Sigur vrei să trimiți ${count} clipuri selectate către Postiz?`,
+      confirmLabel: `Trimite ${count} clipuri`,
+      variant: "default",
+      onConfirm: async () => {
+        setConfirmDialog((prev) => ({ ...prev, loading: true }));
+        setBulkUploading(true);
+        try {
+          // Prepare clips data
+          const selectedClips = clips.filter((c) => selectedClipIds.has(c.id));
+          const clipsData = selectedClips.map((clip) => ({
+            clip_id: clip.id,
+            video_path: clip.final_video_path || clip.raw_video_path,
+          }));
 
-    if (!confirm(`Sigur vrei să trimiți ${selectedClipIds.size} clipuri selectate către Postiz?`)) {
-      return;
-    }
-
-    setBulkUploading(true);
-    try {
-      // Prepare clips data
-      const selectedClips = clips.filter((c) => selectedClipIds.has(c.id));
-      const clipsData = selectedClips.map((clip) => ({
-        clip_id: clip.id,
-        video_path: clip.final_video_path || clip.raw_video_path,
-      }));
-
-      const res = await apiPost("/postiz/bulk-upload", {
-        clips: clipsData,
-      });
-      const data = await res.json();
-      // Update postiz_status locally for uploaded clips
-      const uploadedIds = new Set(data.uploaded.map((u: { clip_id: string }) => u.clip_id));
-      setClips((prev) =>
-        prev.map((c) =>
-          uploadedIds.has(c.id) ? { ...c, postiz_status: "sent" as const } : c
-        )
-      );
-      setSelectedClipIds(new Set());
-      toast.success(`${data.uploaded_count} clipuri au fost trimise către Postiz!${data.failed_count > 0 ? ` ${data.failed_count} au eșuat.` : ""}`);
-    } catch (error) {
-      handleApiError(error, "Eroare la trimiterea clipurilor catre Postiz");
-    } finally {
-      setBulkUploading(false);
-    }
+          const res = await apiPost("/postiz/bulk-upload", {
+            clips: clipsData,
+          });
+          const data = await res.json();
+          const uploadedIds = new Set(data.uploaded.map((u: { clip_id: string }) => u.clip_id));
+          setClips((prev) =>
+            prev.map((c) =>
+              uploadedIds.has(c.id) ? { ...c, postiz_status: "sent" as const } : c
+            )
+          );
+          setSelectedClipIds(new Set());
+          toast.success(`${data.uploaded_count} clipuri au fost trimise către Postiz!${data.failed_count > 0 ? ` ${data.failed_count} au eșuat.` : ""}`);
+        } catch (error) {
+          handleApiError(error, "Eroare la trimiterea clipurilor catre Postiz");
+        } finally {
+          setBulkUploading(false);
+          setConfirmDialog((prev) => ({ ...prev, open: false, loading: false }));
+        }
+      },
+    });
   };
 
   // Handle no profile selected
@@ -649,7 +736,7 @@ function LibrarieContent() {
                   <Button
                     variant="destructive"
                     size="sm"
-                    onClick={bulkDeleteSelected}
+                    onClick={openBulkDeleteConfirm}
                     disabled={bulkDeleting || bulkUploading}
                   >
                     {bulkDeleting ? (
@@ -662,7 +749,7 @@ function LibrarieContent() {
                   <Button
                     size="sm"
                     className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600 disabled:opacity-50"
-                    onClick={bulkUploadToPostiz}
+                    onClick={openBulkUploadConfirm}
                     disabled={bulkDeleting || bulkUploading || !postizStatus?.connected}
                     title={postizStatus?.connected ? `Trimite la ${postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")}` : "Postiz neconfigurat — configurează în Settings"}
                   >
@@ -766,11 +853,7 @@ function LibrarieContent() {
                           variant="outline"
                           onClick={(e) => {
                             e.stopPropagation();
-                            const videoPath = clip.final_video_path || clip.raw_video_path;
-                            window.open(
-                              `${API_URL}/library/files/${encodeURIComponent(videoPath)}?v=${clip.id}`,
-                              "_blank"
-                            );
+                            setPlayingClip(clip);
                           }}
                         >
                           <Play className="h-4 w-4" />
@@ -835,7 +918,7 @@ function LibrarieContent() {
                         disabled={clip.has_audio === false || removingAudioClipId === clip.id}
                         onClick={(e) => {
                           e.stopPropagation();
-                          removeAudio(clip);
+                          openRemoveAudioConfirm(clip);
                         }}
                         className="text-xs"
                       >
@@ -863,7 +946,7 @@ function LibrarieContent() {
                         disabled={deletingClipId === clip.id}
                         onClick={(e) => {
                           e.stopPropagation();
-                          deleteClip(clip);
+                          openDeleteConfirm(clip);
                         }}
                         className="text-xs"
                         title="Șterge clipul definitiv"
@@ -976,6 +1059,29 @@ function LibrarieContent() {
                 )
               );
             }}
+          />
+        )}
+
+        {/* Confirm Dialog */}
+        <ConfirmDialog
+          open={confirmDialog.open}
+          onOpenChange={(open) => setConfirmDialog((prev) => ({ ...prev, open }))}
+          title={confirmDialog.title}
+          description={confirmDialog.description}
+          confirmLabel={confirmDialog.confirmLabel}
+          variant={confirmDialog.variant}
+          onConfirm={confirmDialog.onConfirm}
+          loading={confirmDialog.loading}
+        />
+
+        {/* Inline Video Player */}
+        {playingClip && (
+          <InlineVideoPlayer
+            open={!!playingClip}
+            onOpenChange={(open) => { if (!open) setPlayingClip(null); }}
+            videoUrl={`${API_URL}/library/files/${encodeURIComponent(playingClip.final_video_path || playingClip.raw_video_path)}?v=${playingClip.id}`}
+            title={playingClip.variant_name || `Varianta ${playingClip.variant_index}`}
+            videoRef={videoRef}
           />
         )}
       </main>

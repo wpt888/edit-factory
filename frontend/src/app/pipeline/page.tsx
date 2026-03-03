@@ -61,6 +61,7 @@ import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
 import { PublishDialog } from "@/components/PublishDialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ProductPickerDialog } from "@/components/product-picker-dialog";
 import { ImagePickerDialog } from "@/components/image-picker-dialog";
 import type { AssociationResponse } from "@/components/product-picker-dialog";
@@ -225,6 +226,7 @@ function PipelinePage() {
   const [voiceSpeakerBoost, setVoiceSpeakerBoost] = useState(true);
   const [wordsPerSubtitle, setWordsPerSubtitle] = useState(2);
   const [minSegmentDuration, setMinSegmentDuration] = useState(2.0);
+  const [ultraRapidIntro, setUltraRapidIntro] = useState(true);
   const voiceSettingsLoaded = useRef(false);
 
   // Step 4: Render
@@ -247,6 +249,17 @@ function PipelinePage() {
   const [expandedIdeas, setExpandedIdeas] = useState<Set<string>>(new Set());
   const [playingAudio, setPlayingAudio] = useState<string | null>(null); // "pipelineId-variantIndex"
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Confirm dialog state (shared)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean;
+    title: string;
+    description: string;
+    confirmLabel: string;
+    variant: "destructive" | "default";
+    onConfirm: () => void;
+    loading?: boolean;
+  }>({ open: false, title: "", description: "", confirmLabel: "", variant: "default", onConfirm: () => {} });
 
   // Context collapse state
   const [contextExpanded, setContextExpanded] = useState(true);
@@ -830,6 +843,7 @@ function PipelinePage() {
           },
           words_per_subtitle: wordsPerSubtitle,
           min_segment_duration: minSegmentDuration,
+          ultra_rapid_intro: ultraRapidIntro,
         }, { timeout: 300_000, signal: abortController.signal }); // 5 min — TTS generation + SRT can be slow
 
         if (abortController.signal.aborted) return;
@@ -956,6 +970,7 @@ function PipelinePage() {
         },
         words_per_subtitle: wordsPerSubtitle,
         min_segment_duration: minSegmentDuration,
+        ultra_rapid_intro: ultraRapidIntro,
         font_size: subtitleSettings.fontSize,
         font_family: subtitleSettings.fontFamily,
         text_color: subtitleSettings.textColor,
@@ -1089,21 +1104,31 @@ function PipelinePage() {
   };
 
   // History sidebar: delete a pipeline
-  const handleDeletePipeline = async (id: string, e: React.MouseEvent) => {
+  const handleDeletePipeline = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm("Sigur vrei să ștergi acest set de scripturi?")) return;
-    try {
-      // apiDelete throws on non-2xx, so if we reach here it succeeded.
-      await apiDelete(`/pipeline/${id}`);
-      setHistoryPipelines(prev => prev.filter(p => p.pipeline_id !== id));
-      if (selectedHistoryId === id) {
-        setSelectedHistoryId(null);
-        setHistoryScripts([]);
-        setHistorySelectedScripts(new Set());
-      }
-    } catch (err) {
-      handleApiError(err, "Failed to delete pipeline");
-    }
+    setConfirmDialog({
+      open: true,
+      title: "Șterge setul de scripturi",
+      description: "Sigur vrei să ștergi acest set de scripturi?",
+      confirmLabel: "Șterge",
+      variant: "destructive",
+      onConfirm: async () => {
+        setConfirmDialog((prev) => ({ ...prev, loading: true }));
+        try {
+          await apiDelete(`/pipeline/${id}`);
+          setHistoryPipelines(prev => prev.filter(p => p.pipeline_id !== id));
+          if (selectedHistoryId === id) {
+            setSelectedHistoryId(null);
+            setHistoryScripts([]);
+            setHistorySelectedScripts(new Set());
+          }
+        } catch (err) {
+          handleApiError(err, "Failed to delete pipeline");
+        } finally {
+          setConfirmDialog((prev) => ({ ...prev, open: false, loading: false }));
+        }
+      },
+    });
   };
 
   // History sidebar: auto-load on mount and when profile changes
@@ -1164,6 +1189,7 @@ function PipelinePage() {
           if (tts?.voice_speaker_boost !== undefined) setVoiceSpeakerBoost(tts.voice_speaker_boost);
           if (tts?.words_per_subtitle !== undefined) setWordsPerSubtitle(tts.words_per_subtitle);
           if (tts?.min_segment_duration !== undefined) setMinSegmentDuration(tts.min_segment_duration);
+          if (tts?.ultra_rapid_intro !== undefined) setUltraRapidIntro(tts.ultra_rapid_intro);
         }
       } catch {
         // Silently fail — voice selector still works with default
@@ -1489,6 +1515,8 @@ function PipelinePage() {
     if (wps !== null) setWordsPerSubtitle(parseInt(wps, 10));
     const msd = localStorage.getItem("ef_min_segment_duration");
     if (msd !== null) setMinSegmentDuration(parseFloat(msd));
+    const uri = localStorage.getItem("ef_ultra_rapid_intro");
+    if (uri !== null) setUltraRapidIntro(uri === "true");
     voiceSettingsLoaded.current = true;
     // If no voice values were stored, hydration won't trigger a re-render,
     // so pre-mark as hydrated to avoid skipping the first real user change
@@ -1505,7 +1533,8 @@ function PipelinePage() {
     localStorage.setItem("ef_voice_speaker_boost", String(voiceSpeakerBoost));
     localStorage.setItem("ef_words_per_subtitle", String(wordsPerSubtitle));
     localStorage.setItem("ef_min_segment_duration", String(minSegmentDuration));
-  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration]);
+    localStorage.setItem("ef_ultra_rapid_intro", String(ultraRapidIntro));
+  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro]);
 
   // Debounced auto-save voice settings to profile
   useEffect(() => {
@@ -1528,13 +1557,14 @@ function PipelinePage() {
             voice_speaker_boost: voiceSpeakerBoost,
             words_per_subtitle: wordsPerSubtitle,
             min_segment_duration: minSegmentDuration,
+            ultra_rapid_intro: ultraRapidIntro,
           },
         });
       } catch {
         // Silent — settings still work locally via localStorage
       }
     }, 1000);
-  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, currentProfile]);
+  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, currentProfile]);
 
   // Per-script TTS: generate voice-over for a single script
   const handleGenerateTts = async (variantIndex: number) => {
@@ -2508,6 +2538,24 @@ function PipelinePage() {
                     </div>
                     <p className="text-[10px] text-muted-foreground">Segmentele video nu se schimbă mai repede de această durată</p>
                   </div>
+
+                  <div className="border-t pt-3">
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="ultra-rapid-intro"
+                        checked={ultraRapidIntro}
+                        onCheckedChange={(checked) => setUltraRapidIntro(checked === true)}
+                      />
+                      <Label htmlFor="ultra-rapid-intro" className="text-xs cursor-pointer">
+                        Secvențe ultra-rapide la început
+                      </Label>
+                    </div>
+                    {ultraRapidIntro && (
+                      <p className="text-[10px] text-muted-foreground mt-1 ml-6">
+                        Primele ~2 secunde vor conține 3-4 secvențe foarte scurte (0.5s) din cele mai bune momente
+                      </p>
+                    )}
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -3238,8 +3286,21 @@ function PipelinePage() {
                   </Button>
                 )}
                 <Button variant="outline" onClick={() => {
-                  if (isRendering && !confirm("Renderizarea este în progres. Ești sigur că vrei să începi un pipeline nou?")) return;
-                  resetPipeline();
+                  if (isRendering) {
+                    setConfirmDialog({
+                      open: true,
+                      title: "Renderizare în progres",
+                      description: "Renderizarea este în progres. Ești sigur că vrei să începi un pipeline nou?",
+                      confirmLabel: "Începe pipeline nou",
+                      variant: "destructive",
+                      onConfirm: () => {
+                        setConfirmDialog((prev) => ({ ...prev, open: false }));
+                        resetPipeline();
+                      },
+                    });
+                  } else {
+                    resetPipeline();
+                  }
                 }}>
                   <Sparkles className="h-4 w-4 mr-2" />
                   Start New Pipeline
@@ -3632,6 +3693,18 @@ function PipelinePage() {
           }}
         />
       )}
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        open={confirmDialog.open}
+        onOpenChange={(open) => setConfirmDialog((prev) => ({ ...prev, open }))}
+        title={confirmDialog.title}
+        description={confirmDialog.description}
+        confirmLabel={confirmDialog.confirmLabel}
+        variant={confirmDialog.variant}
+        onConfirm={confirmDialog.onConfirm}
+        loading={confirmDialog.loading}
+      />
     </div>
   );
 }
