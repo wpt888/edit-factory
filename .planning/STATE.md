@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-03T00:34:57.561Z"
+last_updated: "2026-03-03T01:05:35.719Z"
 progress:
   total_phases: 31
-  completed_phases: 30
+  completed_phases: 31
   total_plans: 80
-  completed_plans: 79
+  completed_plans: 80
 ---
 
 # Project State
@@ -18,22 +18,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** Automated video production from any input — an idea, a product feed, or a collection — get social-media-ready videos at scale.
-**Current focus:** Phase 61 — UX Polish — Interactions
+**Current focus:** Phase 62 — UX Polish — Organization
 
 ## Current Position
 
-Phase: 61 of 62 (in progress)
-Plan: 1 of 2 in phase 61
-Status: Phase 61 Plan 01 complete — AlertDialogs, inline video player, keyboard shortcuts
-Last activity: 2026-03-03 — Phase 61-01: Inline Video Player, AlertDialogs & Keyboard Shortcuts (2/2 tasks, TypeScript clean)
+Phase: 62 of 62 (not started)
+Plan: 0 of TBD in phase 62 (needs planning)
+Status: Phase 61 complete — advancing to Phase 62
+Last activity: 2026-03-03 — Phase 61 complete (all 2 plans executed), setup page Suspense fix
 
-Progress: [███████░░░] 78% (v11: 6/8 phases complete, phase 61 in progress 1/2)
+Progress: [█████████░] 90% (v11: 8/8 phases started, phase 62 is last)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 111 (across v2-v11)
-- Total phases completed: 58
+- Total plans completed: 113 (across v2-v11)
+- Total phases completed: 59
 - Total milestones shipped: 10
 
 **By Milestone:**
@@ -58,6 +58,7 @@ Progress: [███████░░░] 78% (v11: 6/8 phases complete, phase 
 | Phase 60 P60-01 | 17 | 2 tasks | 6 files |
 | Phase 60 P60-02 | 12 | 2 tasks | 3 files |
 | Phase 61 P01 | 35 | 2 tasks | 6 files |
+| Phase 61-ux-polish-interactions P02 | 27 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -108,6 +109,8 @@ Recent decisions affecting v11:
 - [Phase 60]: Output TTL cleanup targets output/finals/ and output/tts/ only — raw clips never touched; OUTPUT_TTL_HOURS=0 disables startup cleanup
 - [Phase 61]: Single shared confirmDialog state per component replaces browser confirm() — AlertDialog pattern using Radix UI AlertDialog
 - [Phase 61]: InlineVideoPlayer accepts optional externalRef (RefObject) for keyboard Space key play/pause control from parent
+- [Phase 61-02]: Soft-delete: files kept on disk until /permanent endpoint or 30-day startup cleanup; migration 024 needs manual Supabase SQL Editor application
+- [Phase 61-02]: ClipHoverPreview: preload=none, video element only rendered when showVideo=true (500ms hover delay)
 
 ### Pending Todos
 
@@ -125,9 +128,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-03
-Stopped at: Phase 61 Plan 01 complete — Shadcn AlertDialogs replace all 7 confirm() calls, inline video player, keyboard shortcuts
+Stopped at: Phase 61 complete — all 2 plans executed (AlertDialogs, inline video, soft-delete trash, hover preview, drag-drop)
 Resume file: None
-Next action: Execute Phase 61 Plan 02 (61-02 — next plan in phase)
+Next action: Plan Phase 62 (UX Polish — Organization)
 
 ---
-*Last updated: 2026-03-03 after Phase 60 completion*
+*Last updated: 2026-03-03 after Phase 61 completion*

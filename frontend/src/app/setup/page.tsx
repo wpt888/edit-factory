@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { Suspense, useState, useEffect } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { apiPost, apiGet } from "@/lib/api"
 import { ApiError } from "@/lib/api-error"
@@ -14,7 +14,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
 import { CheckCircle, AlertCircle, Loader2, Film, ChevronRight, ChevronLeft, ArrowRight } from "lucide-react"
 
-export default function SetupPage() {
+function SetupPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const isEditMode = searchParams.get("mode") === "edit"
@@ -474,5 +474,17 @@ export default function SetupPage() {
         )}
       </div>
     </div>
+  )
+}
+
+export default function SetupPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    }>
+      <SetupPageContent />
+    </Suspense>
   )
 }

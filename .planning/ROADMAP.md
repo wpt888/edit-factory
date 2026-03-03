@@ -150,7 +150,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 - [x] **Phase 58: Architecture Upgrade** - Redis job queue, persistent pipeline/assembly state, cloud storage support (completed 2026-03-02)
 - [x] **Phase 59: Performance Optimization** - Cursor pagination, SSE job progress, profile caching, TTS cache metrics (completed 2026-03-02)
 - [x] **Phase 60: Monitoring & Observability** - Sentry, extended health checks, failed render cleanup, file TTL (completed 2026-03-02)
-- [ ] **Phase 61: UX Polish — Interactions** - Inline video player, AlertDialogs, soft-delete trash, drag-drop upload, keyboard shortcuts, hover preview
+- [x] **Phase 61: UX Polish — Interactions** - Inline video player, AlertDialogs, soft-delete trash, drag-drop upload, keyboard shortcuts, hover preview (completed 2026-03-03)
 - [ ] **Phase 62: UX Polish — Organization** - UI language consistency, dead page removal, clip tagging
 
 ## Phase Details
@@ -287,7 +287,7 @@ Plans:
 | 58. Architecture Upgrade | 3/3 | Complete    | 2026-03-02 | - |
 | 59. Performance Optimization | 3/3 | Complete    | 2026-03-02 | - |
 | 60. Monitoring & Observability | 2/2 | Complete    | 2026-03-02 | - |
-| 61. UX Polish — Interactions | 1/2 | In Progress|  | - |
+| 61. UX Polish — Interactions | 2/2 | Complete   | 2026-03-03 | - |
 | 62. UX Polish — Organization | v11 | 0/TBD | Not started | - |
 
 ---

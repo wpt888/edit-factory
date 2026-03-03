@@ -464,7 +464,7 @@ export default function SegmentsPage() {
       formData.append("video", uploadFile);
       formData.append("name", uploadName.trim());
 
-      const res = await apiUpload("/segments/source-videos", formData);
+      const res = await apiUpload("/segments/source-videos", formData, { timeout: 600000 });
 
       if (res.ok) {
         const newVideo = await res.json();

@@ -29,6 +29,23 @@ router = APIRouter(prefix="/segments", tags=["segments"])
 from app.db import get_supabase
 
 
+def _refresh_segments_count(supabase, video_id: str, profile_id: str) -> None:
+    """Recount segments for a source video and update the cached column."""
+    try:
+        count_result = supabase.table("editai_segments")\
+            .select("id", count="exact")\
+            .eq("source_video_id", video_id)\
+            .eq("profile_id", profile_id)\
+            .execute()
+        new_count = count_result.count or 0
+        supabase.table("editai_source_videos")\
+            .update({"segments_count": new_count})\
+            .eq("id", video_id)\
+            .execute()
+    except Exception as e:
+        logger.warning(f"Failed to refresh segments_count for video {video_id}: {e}")
+
+
 # ============== PYDANTIC MODELS ==============
 
 class SourceVideoCreate(BaseModel):
@@ -787,6 +804,8 @@ async def create_segment(
                 update_fields["keywords"] = kw
             supabase.table("editai_segments").update(update_fields).eq("id", segment_id).execute()
 
+        _refresh_segments_count(supabase, video_id, profile.profile_id)
+
         return SegmentResponse(
             id=segment_id,
             source_video_id=video_id,
@@ -1085,9 +1104,9 @@ async def delete_segment(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    # Get segment files first (scoped to profile)
+    # Get segment data first (scoped to profile)
     result = supabase.table("editai_segments")\
-        .select("extracted_video_path, thumbnail_path")\
+        .select("source_video_id, extracted_video_path, thumbnail_path")\
         .eq("id", segment_id)\
         .eq("profile_id", profile.profile_id)\
         .execute()
@@ -1096,12 +1115,15 @@ async def delete_segment(
         raise HTTPException(status_code=404, detail="Segment not found")
 
     seg = result.data[0]
+    source_video_id = seg["source_video_id"]
 
     # Delete from database
     supabase.table("editai_segments").delete()\
         .eq("id", segment_id)\
         .eq("profile_id", profile.profile_id)\
         .execute()
+
+    _refresh_segments_count(supabase, source_video_id, profile.profile_id)
 
     # Delete files
     if seg.get("extracted_video_path"):

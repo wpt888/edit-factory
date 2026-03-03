@@ -737,7 +737,8 @@ class AssemblyService:
         audio_duration: float,
         duration_overrides: Optional[List[Optional[float]]] = None,
         variant_index: int = 0,
-        min_segment_duration: float = 2.0
+        min_segment_duration: float = 2.0,
+        ultra_rapid_intro: bool = True
     ) -> List[TimelineEntry]:
         """
         Build video timeline from match results.
@@ -770,13 +771,91 @@ class AssemblyService:
 
         current_timeline_pos = 0.0
 
+        # Ultra-rapid intro: prepend 3-4 micro-segments from highest-scored segments
+        if ultra_rapid_intro and segments_data:
+            MICRO_COUNT = 4
+            MICRO_DURATION = 0.50  # seconds per micro-segment (4 x 0.5 = 2.0s intro)
+
+            # Sort segments by duration (longer = more content to pick from) as proxy for quality
+            scored = sorted(segments_data, key=lambda s: s.get("end_time", 0) - s.get("start_time", 0), reverse=True)
+
+            # Pick top MICRO_COUNT visually diverse segments
+            used_sources = set()
+            intro_segments = []
+            for seg in scored:
+                if len(intro_segments) >= MICRO_COUNT:
+                    break
+                # Ensure diversity: different source videos or different time regions
+                source_key = (seg.get("source_video_path", ""), round(seg.get("start_time", 0) / 5))
+                if source_key in used_sources:
+                    continue
+                used_sources.add(source_key)
+                intro_segments.append(seg)
+
+            # Create micro timeline entries
+            for seg in intro_segments:
+                seg_start = seg.get("start_time", 0.0)
+                seg_end = seg.get("end_time", seg_start + MICRO_DURATION)
+                # Extract from the middle of the segment for best content
+                seg_mid = (seg_start + seg_end) / 2
+                micro_start = max(seg_start, seg_mid - MICRO_DURATION / 2)
+
+                entry = TimelineEntry(
+                    source_video_path=seg.get("source_video_path"),
+                    start_time=micro_start,
+                    end_time=micro_start + MICRO_DURATION,
+                    timeline_start=current_timeline_pos,
+                    timeline_duration=MICRO_DURATION,
+                    transforms=seg.get("transforms"),
+                )
+                timeline.append(entry)
+                current_timeline_pos += MICRO_DURATION
+
+            logger.info(f"Ultra-rapid intro: added {len(intro_segments)} micro-segments ({current_timeline_pos:.2f}s)")
+
         for idx, match in enumerate(match_results):
             # Determine which segment to use
             if match.segment_id and match.segment_id in segment_lookup:
                 segment = segment_lookup[match.segment_id]
+            elif match.segment_id and match.source_video_id and match.segment_start_time is not None:
+                # Segment not in current DB query but override carries full data —
+                # reconstruct a synthetic segment dict so the user's choice is honoured.
+                logger.warning(
+                    f"Segment {match.segment_id} from override not found in DB query — "
+                    f"reconstructing from override data for SRT entry: '{match.srt_text}'"
+                )
+                # Find source_video_path from any segment with same source_video_id
+                sv_path = None
+                for seg in segments_data:
+                    if seg.get("source_video_id") == match.source_video_id:
+                        sv_path = seg.get("source_video_path")
+                        break
+                if sv_path:
+                    segment = {
+                        "id": match.segment_id,
+                        "source_video_id": match.source_video_id,
+                        "start_time": match.segment_start_time,
+                        "end_time": match.segment_end_time or (match.segment_start_time + 5.0),
+                        "source_video_path": sv_path,
+                        "keywords": match.segment_keywords,
+                        "transforms": None,
+                    }
+                elif fallback_segment:
+                    segment = fallback_segment
+                    logger.warning(f"Could not resolve source_video_path for override segment {match.segment_id}")
+                else:
+                    logger.warning(f"No segment available for SRT entry: '{match.srt_text}'")
+                    continue
             elif fallback_segment:
                 segment = fallback_segment
-                logger.debug(f"Using fallback segment for unmatched SRT entry: '{match.srt_text}'")
+                if match.segment_id:
+                    logger.warning(
+                        f"Override segment_id {match.segment_id} NOT FOUND in segment_lookup "
+                        f"({len(segment_lookup)} segments) — falling back to first segment. "
+                        f"SRT entry: '{match.srt_text}'"
+                    )
+                else:
+                    logger.debug(f"Using fallback segment for unmatched SRT entry: '{match.srt_text}'")
             else:
                 logger.warning(f"No segment available for SRT entry: '{match.srt_text}'")
                 continue
@@ -1166,6 +1245,7 @@ class AssemblyService:
         on_progress=None,  # Optional[Callable[[str, int], None]]
         max_words_per_phrase: int = 2,
         min_segment_duration: float = 2.0,
+        ultra_rapid_intro: bool = True,
         interstitial_slides: Optional[List[dict]] = None,
         pip_overlays: Optional[Dict[str, dict]] = None,
         avoid_segment_ids: Optional[set] = None,
@@ -1288,8 +1368,9 @@ class AssemblyService:
             if source_video_ids:
                 logger.info(f"Filtering to {len(source_video_ids)} source video(s)")
             segments_query = supabase.table("editai_segments")\
-                .select("id, source_video_id, start_time, end_time, keywords, transforms, product_group, editai_source_videos(file_path)")\
-                .eq("profile_id", profile_id)
+                .select("id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, editai_source_videos(file_path)")\
+                .eq("profile_id", profile_id)\
+                .order("id")
             if source_video_ids:
                 segments_query = segments_query.in_("source_video_id", source_video_ids)
             segments_result = segments_query.execute()
@@ -1311,6 +1392,7 @@ class AssemblyService:
                         "keywords": seg.get("keywords") or [],
                         "source_video_path": source_video_path,
                         "transforms": seg.get("transforms"),
+                        "thumbnail_path": seg.get("thumbnail_path"),
                         "product_group": seg.get("product_group"),
                     })
 
@@ -1328,8 +1410,18 @@ class AssemblyService:
             # Step 5: Match SRT to segments (or apply timeline editor overrides)
             _report("Matching segments to script", 50)
             if match_overrides:
+                # Diagnostic: log segment IDs from overrides vs available segments
+                override_seg_ids = {m.get("segment_id") for m in match_overrides if m.get("segment_id")}
+                available_seg_ids = {seg["id"] for seg in segments_data}
+                missing_ids = override_seg_ids - available_seg_ids
+                if missing_ids:
+                    logger.warning(
+                        f"Step 5/7: {len(missing_ids)} override segment IDs NOT in DB query results: "
+                        f"{list(missing_ids)[:5]}... (total available: {len(available_seg_ids)})"
+                    )
                 logger.info(
-                    f"Step 5/7: Applying {len(match_overrides)} match overrides from timeline editor"
+                    f"Step 5/7: Applying {len(match_overrides)} match overrides from timeline editor "
+                    f"({len(override_seg_ids)} unique segments, {len(missing_ids)} missing)"
                 )
                 match_results = [
                     MatchResult(
@@ -1341,6 +1433,12 @@ class AssemblyService:
                         segment_keywords=m.get("segment_keywords") or [],
                         matched_keyword=m.get("matched_keyword"),
                         confidence=m.get("confidence", 0.0),
+                        is_auto_filled=m.get("is_auto_filled", False),
+                        product_group=m.get("product_group"),
+                        source_video_id=m.get("source_video_id"),
+                        segment_start_time=m.get("segment_start_time"),
+                        segment_end_time=m.get("segment_end_time"),
+                        thumbnail_path=m.get("thumbnail_path"),
                     )
                     for m in match_overrides
                 ]
@@ -1367,7 +1465,8 @@ class AssemblyService:
                 audio_duration=audio_duration,
                 duration_overrides=duration_overrides,
                 variant_index=variant_index,
-                min_segment_duration=min_segment_duration
+                min_segment_duration=min_segment_duration,
+                ultra_rapid_intro=ultra_rapid_intro
             )
 
             # Step 7: Assemble video
@@ -1433,7 +1532,8 @@ class AssemblyService:
         voice_settings: Optional[dict] = None,
         max_words_per_phrase: int = 2,
         min_segment_duration: float = 2.0,
-        avoid_segment_ids: Optional[set] = None
+        avoid_segment_ids: Optional[set] = None,
+        ultra_rapid_intro: bool = True
     ) -> dict:
         """
         Preview-only: TTS -> SRT -> match -> timeline (no rendering).
@@ -1501,7 +1601,8 @@ class AssemblyService:
             logger.info(f"Filtering to {len(source_video_ids)} source video(s)")
         segments_query = supabase.table("editai_segments")\
             .select("id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, editai_source_videos(file_path)")\
-            .eq("profile_id", profile_id)
+            .eq("profile_id", profile_id)\
+            .order("id")
         if source_video_ids:
             segments_query = segments_query.in_("source_video_id", source_video_ids)
         segments_result = segments_query.execute()
@@ -1548,7 +1649,8 @@ class AssemblyService:
             segments_data=segments_data,
             audio_duration=audio_duration,
             variant_index=variant_index,
-            min_segment_duration=min_segment_duration
+            min_segment_duration=min_segment_duration,
+            ultra_rapid_intro=ultra_rapid_intro
         )
 
         # Count matched vs unmatched

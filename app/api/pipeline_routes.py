@@ -347,6 +347,8 @@ class PipelineRenderRequest(BaseModel):
     words_per_subtitle: int = 2
     # Minimum video segment duration (seconds) — groups short SRT phrases
     min_segment_duration: float = 2.0
+    # Ultra-rapid intro: 3-4 micro-segments at the start for hook effect
+    ultra_rapid_intro: bool = True
     # Interstitial product image slides: variant_index -> list of slide configs
     # Phase 46 will implement FFmpeg rendering — this phase just stores the data
     interstitial_slides: Optional[Dict[str, List[dict]]] = None
@@ -1139,7 +1141,8 @@ async def preview_variant(
     source_video_ids: Optional[List[str]] = Body(None, embed=True),
     voice_settings: Optional[Dict[str, Any]] = Body(None, embed=True),
     words_per_subtitle: int = Body(2, embed=True),
-    min_segment_duration: float = Body(2.0, embed=True)
+    min_segment_duration: float = Body(2.0, embed=True),
+    ultra_rapid_intro: bool = Body(True, embed=True)
 ):
     """
     Preview segment matching for a single variant.
@@ -1234,7 +1237,8 @@ async def preview_variant(
             voice_settings=voice_settings,
             max_words_per_phrase=words_per_subtitle,
             min_segment_duration=min_segment_duration,
-            avoid_segment_ids=avoid_ids if avoid_ids else None
+            avoid_segment_ids=avoid_ids if avoid_ids else None,
+            ultra_rapid_intro=ultra_rapid_intro
         )
 
         # Track which segments this variant used (for cross-variant deprioritization)
@@ -1587,6 +1591,7 @@ async def render_variants(
                         on_progress=on_progress,
                         max_words_per_phrase=render_request.words_per_subtitle,
                         min_segment_duration=render_request.min_segment_duration,
+                        ultra_rapid_intro=render_request.ultra_rapid_intro,
                         interstitial_slides=variant_interstitial_slides,
                         pip_overlays=variant_pip_overlays,
                         avoid_segment_ids=render_avoid_ids if render_avoid_ids else None,

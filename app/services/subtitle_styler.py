@@ -66,6 +66,9 @@ class SubtitleStyleConfig:
             f"Bold={self.bold}",
             f"Alignment={self.alignment}",
             f"MarginV={self.margin_v}",
+            "MarginL=40",
+            "MarginR=40",
+            "WrapStyle=2",
         ]
 
         # Glow effect: increase outline width and use semi-transparent outline
