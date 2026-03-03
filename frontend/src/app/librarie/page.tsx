@@ -37,6 +37,7 @@ import {
   FileText,
   AlertCircle,
   Link,
+  Undo2,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, ApiError, handleApiError } from "@/lib/api";
@@ -46,6 +47,7 @@ import { EmptyState } from "@/components/empty-state";
 import { PublishDialog } from "@/components/PublishDialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { InlineVideoPlayer } from "@/components/inline-video-player";
+import { ClipHoverPreview } from "@/components/clip-hover-preview";
 
 interface ClipWithProject {
   id: string;
@@ -123,6 +125,13 @@ function LibrarieContent() {
   const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkUploading, setBulkUploading] = useState(false);
+
+  // View mode (library vs trash)
+  const [viewMode, setViewMode] = useState<"library" | "trash">("library");
+  const [trashClips, setTrashClips] = useState<(ClipWithProject & { days_remaining?: number; deleted_at?: string })[]>([]);
+  const [loadingTrash, setLoadingTrash] = useState(false);
+  const [restoringClipId, setRestoringClipId] = useState<string | null>(null);
+  const [permanentlyDeletingClipId, setPermanentlyDeletingClipId] = useState<string | null>(null);
 
   // Confirm dialog state (single shared dialog)
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -559,6 +568,59 @@ function LibrarieContent() {
     });
   };
 
+  // Fetch trash clips
+  const fetchTrash = async () => {
+    setLoadingTrash(true);
+    try {
+      const res = await apiGet("/library/trash");
+      const data = await res.json();
+      setTrashClips(data.clips || []);
+    } catch (error) {
+      handleApiError(error, "Error loading trash");
+    } finally {
+      setLoadingTrash(false);
+    }
+  };
+
+  // Restore clip from trash
+  const restoreClip = async (clipId: string) => {
+    setRestoringClipId(clipId);
+    try {
+      await apiPost(`/library/clips/${clipId}/restore`);
+      setTrashClips((prev) => prev.filter((c) => c.id !== clipId));
+      toast.success("Clip restored successfully!");
+    } catch (error) {
+      handleApiError(error, "Error restoring clip");
+    } finally {
+      setRestoringClipId(null);
+    }
+  };
+
+  // Permanently delete clip — opens confirm dialog
+  const openPermanentDeleteConfirm = (clip: ClipWithProject & { days_remaining?: number }) => {
+    setConfirmDialog({
+      open: true,
+      title: "Permanently Delete Clip",
+      description: `Are you sure you want to permanently delete "${clip.variant_name || `Variant ${clip.variant_index}`}"? This will remove the files and cannot be undone.`,
+      confirmLabel: "Delete Permanently",
+      variant: "destructive",
+      onConfirm: async () => {
+        setConfirmDialog((prev) => ({ ...prev, loading: true }));
+        setPermanentlyDeletingClipId(clip.id);
+        try {
+          await apiDelete(`/library/clips/${clip.id}/permanent`);
+          setTrashClips((prev) => prev.filter((c) => c.id !== clip.id));
+          toast.success("Clip permanently deleted.");
+        } catch (error) {
+          handleApiError(error, "Error permanently deleting clip");
+        } finally {
+          setPermanentlyDeletingClipId(null);
+          setConfirmDialog((prev) => ({ ...prev, open: false, loading: false }));
+        }
+      },
+    });
+  };
+
   // Handle no profile selected
   if (!profileLoading && !currentProfile) {
     return (
@@ -590,14 +652,128 @@ function LibrarieContent() {
               Toate clipurile exportate din proiecte
             </p>
           </div>
-          <Button onClick={() => fetchAllClips()} variant="outline" size="sm">
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            {/* Library/Trash toggle */}
+            <Button
+              variant={viewMode === "library" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setViewMode("library")}
+            >
+              Library
+            </Button>
+            <Button
+              variant={viewMode === "trash" ? "default" : "outline"}
+              size="sm"
+              onClick={() => { setViewMode("trash"); fetchTrash(); }}
+            >
+              <Trash2 className="h-4 w-4 mr-1" />
+              Trash
+            </Button>
+            <Button onClick={() => viewMode === "library" ? fetchAllClips() : fetchTrash()} variant="outline" size="sm">
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Refresh
+            </Button>
+          </div>
         </div>
 
+        {/* Trash View */}
+        {viewMode === "trash" && (
+          <div>
+            <div className="mb-4">
+              <p className="text-sm text-muted-foreground">
+                Clips in trash are permanently deleted after 30 days.
+              </p>
+            </div>
+            {loadingTrash ? (
+              <div className="flex items-center justify-center py-20">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+              </div>
+            ) : trashClips.length === 0 ? (
+              <EmptyState
+                icon={<Trash2 className="h-6 w-6" />}
+                title="Trash is empty"
+                description="Deleted clips will appear here for 30 days before being permanently removed."
+              />
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                {trashClips.map((clip) => (
+                  <Card key={clip.id} className="overflow-hidden">
+                    {/* Thumbnail */}
+                    <div className="aspect-[9/16] bg-muted relative">
+                      {clip.thumbnail_path ? (
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <img
+                          src={`${API_URL}/library/files/${encodeURIComponent(clip.thumbnail_path)}?v=${clip.id}`}
+                          alt={clip.variant_name || `Variant ${clip.variant_index}`}
+                          className="w-full h-full object-cover opacity-60"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center opacity-60">
+                          <Film className="h-12 w-12 text-muted-foreground" />
+                        </div>
+                      )}
+                      {/* Days remaining badge */}
+                      <Badge
+                        className={`absolute bottom-2 left-2 text-xs ${
+                          (clip.days_remaining ?? 30) <= 3
+                            ? "bg-red-500 text-white"
+                            : (clip.days_remaining ?? 30) <= 7
+                            ? "bg-orange-500 text-white"
+                            : "bg-black/70 text-white"
+                        }`}
+                      >
+                        {clip.days_remaining ?? 30}d left
+                      </Badge>
+                    </div>
+                    {/* Info */}
+                    <CardContent className="p-2">
+                      <p className="text-sm font-medium truncate">
+                        {clip.variant_name || `Variant ${clip.variant_index}`}
+                      </p>
+                      <p className="text-xs text-muted-foreground truncate mb-2">
+                        {clip.project_name}
+                      </p>
+                      {/* Actions */}
+                      <div className="flex gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-1 text-xs"
+                          disabled={restoringClipId === clip.id}
+                          onClick={() => restoreClip(clip.id)}
+                          title="Restore clip"
+                        >
+                          {restoringClipId === clip.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Undo2 className="h-3 w-3" />
+                          )}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          className="flex-1 text-xs"
+                          disabled={permanentlyDeletingClipId === clip.id}
+                          onClick={() => openPermanentDeleteConfirm(clip)}
+                          title="Permanently delete"
+                        >
+                          {permanentlyDeletingClipId === clip.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3 w-3" />
+                          )}
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Postiz connection indicator */}
-        {postizStatus && (
+        {viewMode === "library" && postizStatus && (
           <div className="mb-4">
             {postizStatus.connected ? (
               <div className="flex items-center gap-2 text-sm">
@@ -620,8 +796,8 @@ function LibrarieContent() {
           </div>
         )}
 
-        {/* Filters */}
-        <Card className="mb-6">
+        {/* Filters - library mode only */}
+        {viewMode === "library" && <Card className="mb-6">
           <CardContent className="pt-6">
             <div className="flex flex-wrap gap-4 items-end">
               {/* Search */}
@@ -701,10 +877,10 @@ function LibrarieContent() {
               {filteredClips.length} din {clips.length} clipuri
             </div>
           </CardContent>
-        </Card>
+        </Card>}
 
-        {/* Selection Toolbar - appears when clips are selected */}
-        {selectedClipIds.size > 0 && (
+        {/* Selection Toolbar - appears when clips are selected (library mode only) */}
+        {viewMode === "library" && selectedClipIds.size > 0 && (
           <Card className="mb-6 border-primary bg-primary/5">
             <CardContent className="py-3">
               <div className="flex items-center justify-between flex-wrap gap-3">
@@ -766,8 +942,8 @@ function LibrarieContent() {
           </Card>
         )}
 
-        {/* Clips grid */}
-        {(profileLoading || loading) ? (
+        {/* Clips grid - library mode only */}
+        {viewMode === "library" && ((profileLoading || loading) ? (
           <div className="flex items-center justify-center py-20">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
           </div>
@@ -789,17 +965,16 @@ function LibrarieContent() {
                   }`}
                   onClick={() => toggleClipSelection(clip.id)}
                 >
-                  {/* Thumbnail */}
-                  <div className="aspect-[9/16] bg-muted relative group">
-                    {clip.thumbnail_path ? (
-                      /* eslint-disable-next-line @next/next/no-img-element */
-                      <img
-                        src={`${API_URL}/library/files/${encodeURIComponent(clip.thumbnail_path)}?v=${clip.id}`}
-                        alt={clip.variant_name || `Variant ${clip.variant_index}`}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center">
+                  {/* Thumbnail with hover video preview */}
+                  <ClipHoverPreview
+                    thumbnailPath={clip.thumbnail_path}
+                    videoPath={clip.final_video_path || clip.raw_video_path}
+                    clipId={clip.id}
+                    alt={clip.variant_name || `Variant ${clip.variant_index}`}
+                  >
+                    {/* Film icon for clips without thumbnail */}
+                    {!clip.thumbnail_path && (
+                      <div className="absolute inset-0 flex items-center justify-center">
                         <Film className="h-12 w-12 text-muted-foreground" />
                       </div>
                     )}
@@ -958,7 +1133,7 @@ function LibrarieContent() {
                         )}
                       </Button>
                     </div>
-                  </div>
+                  </ClipHoverPreview>
 
                   {/* Info with rename */}
                   <CardContent className="p-2">
@@ -1022,9 +1197,9 @@ function LibrarieContent() {
               );
             })}
           </div>
-        )}
-        {/* Infinite scroll sentinel and status indicators */}
-        {!loading && clips.length > 0 && (
+        ))}
+        {/* Infinite scroll sentinel and status indicators - library mode only */}
+        {viewMode === "library" && !loading && clips.length > 0 && (
           <>
             {loadingMore && (
               <div className="flex items-center justify-center py-6">
