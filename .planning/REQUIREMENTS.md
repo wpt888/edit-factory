@@ -35,13 +35,13 @@ Requirements for Production Polish & Platform Hardening. Each maps to roadmap ph
 
 ### UX
 
-- [ ] **UX-01**: User can preview clips inline via embedded HTML5 video player in library page (no new tab)
-- [ ] **UX-02**: Destructive actions (delete, remove-audio, bulk-delete) use Shadcn/UI AlertDialog instead of window.confirm()
+- [x] **UX-01**: User can preview clips inline via embedded HTML5 video player in library page (no new tab)
+- [x] **UX-02**: Destructive actions (delete, remove-audio, bulk-delete) use Shadcn/UI AlertDialog instead of window.confirm()
 - [ ] **UX-03**: User can recover deleted clips via soft-delete with 30-day trash retention
 - [ ] **UX-04**: UI text language is consistent — all Romanian or all English with i18n framework
 - [ ] **UX-05**: Vestigial marketing pages (statsai, preturi, functionalitati, cum-functioneaza, contact, testimoniale) are removed from routing
 - [ ] **UX-06**: User can upload video files via drag-and-drop onto the upload area
-- [ ] **UX-07**: User can use keyboard shortcuts for common operations (Delete to remove, Escape to close, Space to play/pause)
+- [x] **UX-07**: User can use keyboard shortcuts for common operations (Delete to remove, Escape to close, Space to play/pause)
 - [ ] **UX-08**: User can hover over clip thumbnails to see animated video preview (autoplay on hover)
 - [ ] **UX-09**: User can tag clips and organize them into custom categories/folders
 
@@ -110,13 +110,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MON-02 | Phase 60 | Complete |
 | MON-03 | Phase 60 | Complete |
 | MON-04 | Phase 60 | Complete |
-| UX-01 | Phase 61 | Pending |
-| UX-02 | Phase 61 | Pending |
+| UX-01 | Phase 61 | Complete |
+| UX-02 | Phase 61 | Complete |
 | UX-03 | Phase 61 | Pending |
 | UX-04 | Phase 62 | Pending |
 | UX-05 | Phase 62 | Pending |
 | UX-06 | Phase 61 | Pending |
-| UX-07 | Phase 61 | Pending |
+| UX-07 | Phase 61 | Complete |
 | UX-08 | Phase 61 | Pending |
 | UX-09 | Phase 62 | Pending |
 | PERF-01 | Phase 59 | Complete |
