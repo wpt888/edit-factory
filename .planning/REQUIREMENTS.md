@@ -43,7 +43,7 @@ Requirements for Production Polish & Platform Hardening. Each maps to roadmap ph
 - [ ] **UX-06**: User can upload video files via drag-and-drop onto the upload area
 - [x] **UX-07**: User can use keyboard shortcuts for common operations (Delete to remove, Escape to close, Space to play/pause)
 - [ ] **UX-08**: User can hover over clip thumbnails to see animated video preview (autoplay on hover)
-- [ ] **UX-09**: User can tag clips and organize them into custom categories/folders
+- [x] **UX-09**: User can tag clips and organize them into custom categories/folders
 
 ### Performance
 
@@ -118,7 +118,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UX-06 | Phase 61 | Pending |
 | UX-07 | Phase 61 | Complete |
 | UX-08 | Phase 61 | Pending |
-| UX-09 | Phase 62 | Pending |
+| UX-09 | Phase 62 | Complete |
 | PERF-01 | Phase 59 | Complete |
 | PERF-02 | Phase 59 | Complete |
 | PERF-03 | Phase 59 | Complete |
