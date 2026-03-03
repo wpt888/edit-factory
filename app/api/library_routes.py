@@ -1512,11 +1512,38 @@ async def list_project_clips(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/tags")
+async def list_tags(profile: ProfileContext = Depends(get_profile_context)):
+    """Return all unique tags used across clips for this profile."""
+    supabase = get_supabase()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+    try:
+        # Query all non-deleted clips' tags for this profile
+        result = supabase.table("editai_clips")\
+            .select("tags")\
+            .eq("is_deleted", False)\
+            .eq("profile_id", profile.profile_id)\
+            .execute()
+
+        # Flatten and deduplicate all tags
+        all_tags: set = set()
+        for row in (result.data or []):
+            for tag in (row.get("tags") or []):
+                all_tags.add(tag)
+
+        return {"tags": sorted(all_tags)}
+    except Exception as e:
+        logger.error(f"Error listing tags: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @router.get("/all-clips")
 async def list_all_clips(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     cursor: Optional[str] = Query(default=None, description="ISO 8601 timestamp — return clips older than this value (cursor-based pagination)"),
+    tag: Optional[str] = Query(default=None, description="Filter clips by tag"),
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Listează toate clipurile pentru librărie cu suport cursor-based pagination."""
@@ -1525,12 +1552,14 @@ async def list_all_clips(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        # Total count query — always counts ALL clips for this profile (no cursor filter)
-        count_result = supabase.table("editai_clips")\
+        # Total count query — counts clips for this profile (with optional tag filter)
+        count_query = supabase.table("editai_clips")\
             .select("id", count="exact")\
             .eq("is_deleted", False)\
-            .eq("profile_id", profile.profile_id)\
-            .execute()
+            .eq("profile_id", profile.profile_id)
+        if tag:
+            count_query = count_query.contains("tags", [tag])
+        count_result = count_query.execute()
         total = count_result.count if count_result.count is not None else 0
 
         # Data query — apply cursor filter when provided, otherwise use offset
@@ -1538,6 +1567,8 @@ async def list_all_clips(
             .select("*, editai_projects!inner(name)")\
             .eq("is_deleted", False)\
             .eq("profile_id", profile.profile_id)
+        if tag:
+            query = query.contains("tags", [tag])
 
         if cursor:
             # Cursor-based: return clips created before the cursor timestamp
@@ -1594,6 +1625,7 @@ async def list_all_clips(
                 "has_subtitles": bool(content.get("srt_content")),
                 "has_voiceover": bool(content.get("tts_audio_path")),
                 "has_audio": has_audio,
+                "tags": clip.get("tags") or [],
             })
 
         # Compute next_cursor: the created_at of the last clip if a full page was returned
@@ -1649,6 +1681,7 @@ class ClipUpdateRequest(BaseModel):
     postiz_status: Optional[str] = None
     postiz_post_id: Optional[str] = None
     postiz_scheduled_at: Optional[str] = None
+    tags: Optional[List[str]] = None  # User-defined tags for clip organization
 
 
 @router.patch("/clips/{clip_id}")
@@ -1675,6 +1708,10 @@ async def update_clip(
             update_data["postiz_post_id"] = request.postiz_post_id
         if request.postiz_scheduled_at is not None:
             update_data["postiz_scheduled_at"] = request.postiz_scheduled_at
+        if request.tags is not None:
+            # Normalize tags: lowercase, strip whitespace, deduplicate, limit to 20 tags
+            clean_tags = list(set(tag.strip().lower() for tag in request.tags if tag.strip()))[:20]
+            update_data["tags"] = clean_tags
 
         result = supabase.table("editai_clips").update(update_data).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
 
