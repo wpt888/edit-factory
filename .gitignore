@@ -8,6 +8,7 @@
 !frontend/.env.production
 .env.development
 *.pem
+.mcp.json
 *.key
 credentials/
 secrets/
@@ -141,6 +142,20 @@ Tmux-Orchestrator/
 .venv-wsl/
 *.backup
 supabase/.temp/
+
+# Automated test outputs (generated, not source)
+testing/reports/
+testing/claude_results/
+testing/.auto_monitor.pid
+testing/.claude_loop.pid
+testing/.test_state.json
+
+# Screenshot verification artifacts
+imagini_ss/
+frontend/.playwright-mcp/
+
+# GSD/AI loop runtime artifacts
+progress.txt
 
 # Keep directory structure
 !.gitkeep
