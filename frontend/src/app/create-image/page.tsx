@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { apiPost, apiGet, apiPut, apiDelete } from "@/lib/api";
+import { apiPost, apiGet, apiPut, apiDelete, apiUpload } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -173,11 +173,43 @@ export default function CreateImagePage() {
   // ============== Template selection fills prompt ==============
 
   useEffect(() => {
-    if (selectedTemplateId) {
+    if (selectedTemplateId && selectedTemplateId !== "none") {
       const tpl = templates.find((t) => t.id === selectedTemplateId);
-      if (tpl) setPromptText(tpl.prompt_template);
+      if (tpl) {
+        let prompt = tpl.prompt_template;
+        // Auto-fill placeholders if a product is selected
+        const product = products.find((p) => p.id === selectedProductId);
+        if (product) {
+          prompt = prompt
+            .replace(/\{title\}/g, product.title || "")
+            .replace(/\{brand\}/g, product.brand || "")
+            .replace(/\{price\}/g, product.price || "")
+            .replace(/\{description\}/g, product.description || "");
+        }
+        setPromptText(prompt);
+      }
     }
-  }, [selectedTemplateId, templates]);
+  }, [selectedTemplateId, templates, selectedProductId, products]);
+
+  // ============== Product selection fills placeholders in prompt ==============
+
+  useEffect(() => {
+    if (selectedProductId && selectedProductId !== "none" && promptText) {
+      const product = products.find((p) => p.id === selectedProductId);
+      if (product) {
+        // Only substitute if there are placeholders in the prompt
+        if (/\{(title|brand|price|description)\}/.test(promptText)) {
+          setPromptText((prev) =>
+            prev
+              .replace(/\{title\}/g, product.title || "")
+              .replace(/\{brand\}/g, product.brand || "")
+              .replace(/\{price\}/g, product.price || "")
+              .replace(/\{description\}/g, product.description || "")
+          );
+        }
+      }
+    }
+  }, [selectedProductId]);
 
   // ============== Generation ==============
 
@@ -254,7 +286,7 @@ export default function CreateImagePage() {
     formData.append("file", file);
 
     try {
-      const res = await apiPost("/image-gen/logo/upload", formData);
+      const res = await apiUpload("/image-gen/logo/upload", formData);
       if (res.ok) {
         await fetchLogoInfo();
       }

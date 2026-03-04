@@ -181,6 +181,40 @@ def is_nvenc_available() -> bool:
     return _nvenc_available
 
 
+# =============================================================================
+# Preview semaphore — separate from production, lighter limit
+# =============================================================================
+
+MAX_CONCURRENT_PREVIEW = 2
+_ffmpeg_preview_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_preview_semaphore() -> asyncio.Semaphore:
+    """Lazily create preview semaphore in the running event loop."""
+    global _ffmpeg_preview_semaphore
+    if _ffmpeg_preview_semaphore is None:
+        _ffmpeg_preview_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PREVIEW)
+    return _ffmpeg_preview_semaphore
+
+
+def acquire_preview_slot(timeout: float = SEMAPHORE_ACQUIRE_TIMEOUT):
+    """Acquire a slot for a preview FFmpeg render (fast, low-quality).
+
+    Usage::
+
+        async with acquire_preview_slot():
+            await assemble_and_render_preview(...)
+    """
+    return _SemaphoreWithTimeout(_get_preview_semaphore(), timeout, "preview")
+
+
+def get_preview_codec_params(use_gpu: bool = False) -> list[str]:
+    """Return fast, low-quality codec params for preview renders (540x960, ultrafast)."""
+    if use_gpu:
+        return ["-c:v", "h264_nvenc", "-preset", "p1", "-cq", "40"]
+    return ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "32"]
+
+
 def get_prep_codec_params(
     preset: str = "fast",
     crf: int = 23,

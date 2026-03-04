@@ -32,6 +32,8 @@ from typing import List, Optional, Tuple, Dict
 
 from app.config import get_settings
 from app.services.ffmpeg_semaphore import safe_ffmpeg_run, get_prep_codec_params
+
+TARGET_FPS = 30  # All segments normalized to this frame rate before concat
 from app.services.srt_validator import sanitize_srt_full
 
 logger = logging.getLogger(__name__)
@@ -478,7 +480,7 @@ class AssemblyService:
                 return segments_data[0] if segments_data else None
 
             n = len(ids)
-            min_reuse_distance = max(2, n - 1)
+            min_reuse_distance = max(2, n)
             group_last_used = last_used_at.get(grp, {})
 
             ptr = rr_pointer.get(grp, 0) % n
@@ -499,17 +501,13 @@ class AssemblyService:
                 last_pos = group_last_used.get(sid, -999)
                 if (current_srt_idx - last_pos) < min_reuse_distance:
                     continue
-                # Skip consecutive identical segment
-                if sid == exclude_id and n > 1:
+                # Skip consecutive identical segment (always, even with n==1)
+                if sid == exclude_id:
                     continue
 
                 seg = segment_lookup[sid]
                 seg_source = seg.get("source_video_id")
                 is_avoided = sid in _avoid_ids
-
-                if best_any is None:
-                    best_any = seg
-                    best_any_idx = idx
 
                 # Check overlapping-time adjacency
                 same_source_overlap = (
@@ -522,6 +520,11 @@ class AssemblyService:
                 )
                 if same_source_overlap:
                     continue
+
+                # Track best fallback (after overlap check so it's never an overlapping segment)
+                if best_any is None:
+                    best_any = seg
+                    best_any_idx = idx
 
                 # Non-overlapping candidate found
                 if not is_avoided:
@@ -546,12 +549,30 @@ class AssemblyService:
                 group_last_used[chosen["id"]] = current_srt_idx
                 return chosen
 
-            # All on cooldown — pick the segment with oldest last_used_at
-            oldest_sid = min(ids, key=lambda s: group_last_used.get(s, -999))
-            oldest_idx = ids.index(oldest_sid)
-            rr_pointer[grp] = (oldest_idx + 1) % n
-            group_last_used[oldest_sid] = current_srt_idx
-            return segment_lookup[oldest_sid]
+            # All on cooldown — pick the segment with oldest last_used_at,
+            # but still respect exclude_id to prevent consecutive duplicates,
+            # and prefer segments not in _avoid_ids.
+            candidates = sorted(ids, key=lambda s: group_last_used.get(s, -999))
+            # Try: non-excluded + non-avoided, then non-excluded + avoided, then any
+            fallback = None
+            for sid in candidates:
+                if sid == exclude_id:
+                    continue
+                if sid not in _avoid_ids:
+                    fallback = sid
+                    break
+            if fallback is None:
+                for sid in candidates:
+                    if sid == exclude_id:
+                        continue
+                    fallback = sid
+                    break
+            if fallback is None:
+                fallback = candidates[0]  # absolute last resort
+            fallback_idx = ids.index(fallback)
+            rr_pointer[grp] = (fallback_idx + 1) % n
+            group_last_used[fallback] = current_srt_idx
+            return segment_lookup[fallback]
 
         def _mark_keyword_consumed(seg_id: str, group: Optional[str], current_srt_idx: int):
             """
@@ -566,7 +587,7 @@ class AssemblyService:
             """Check if segment has passed its cooldown period."""
             grp = _resolve_group(group)
             ids = group_seg_ids.get(grp, [])
-            min_reuse_distance = max(2, len(ids) - 1)
+            min_reuse_distance = max(2, len(ids))
             group_last_used = last_used_at.get(grp, {})
             last_pos = group_last_used.get(seg_id, -999)
             return (current_srt_idx - last_pos) >= min_reuse_distance
@@ -643,7 +664,9 @@ class AssemblyService:
                     non_prev = [c for c in top_candidates if c[0]["id"] != prev_segment_id]
                     pool = non_prev if non_prev else top_candidates
                 else:
-                    pool = non_overlapping
+                    # Also filter out consecutive duplicate from non-overlapping pool
+                    non_dup = [c for c in non_overlapping if c[0]["id"] != prev_segment_id]
+                    pool = non_dup if non_dup else non_overlapping
 
                 # Prefer segments with oldest cooldown (most spacing) and not in avoid set
                 if len(pool) > 1:
@@ -770,8 +793,10 @@ class AssemblyService:
         # Build segment lookup
         segment_lookup = {seg["id"]: seg for seg in segments_data}
 
-        # Get fallback segment (first available)
+        # Fallback segments: rotate through available segments to avoid
+        # always repeating segments_data[0] when unmatched entries exist.
         fallback_segment = segments_data[0] if segments_data else None
+        _fallback_idx = 0
 
         current_timeline_pos = 0.0
         intro_entry_count = 0  # Track how many intro micro-segments were added
@@ -857,11 +882,16 @@ class AssemblyService:
                     logger.warning(f"No segment available for SRT entry: '{match.srt_text}'")
                     continue
             elif fallback_segment:
-                segment = fallback_segment
+                # Rotate through segments to avoid repeating the same one
+                segment = segments_data[_fallback_idx % len(segments_data)]
+                _fallback_idx += 1
                 if match.segment_id:
-                    logger.warning(
-                        f"Override segment_id {match.segment_id} NOT FOUND in segment_lookup "
-                        f"({len(segment_lookup)} segments) — falling back to first segment. "
+                    logger.error(
+                        f"RENDER MISMATCH: Override segment_id {match.segment_id} NOT FOUND "
+                        f"in segment_lookup ({len(segment_lookup)} segments) AND reconstruction "
+                        f"failed (source_video_id={match.source_video_id}, "
+                        f"segment_start_time={match.segment_start_time}). "
+                        f"Using fallback segment '{segment.get('id')}'. "
                         f"SRT entry: '{match.srt_text}'"
                     )
                 else:
@@ -889,7 +919,9 @@ class AssemblyService:
                 # Segment is long enough, trim it
                 use_end = segment_start + needed_duration
             else:
-                # Segment is too short, use full segment (will be extended/looped later)
+                # Segment is too short — use full segment duration.
+                # build_timeline caller should ensure segments are split
+                # rather than relying on FFmpeg looping.
                 use_end = segment_end
 
             timeline_entry = TimelineEntry(
@@ -904,6 +936,16 @@ class AssemblyService:
             timeline.append(timeline_entry)
             current_timeline_pos += needed_duration
 
+            # Diagnostic: log each timeline entry's source for debugging render mismatches
+            if idx < 10 or idx == len(match_results) - 1:
+                logger.info(
+                    f"  timeline[{idx}]: seg={segment.get('id', '?')!r} "
+                    f"src={Path(source_video_path).name if source_video_path else 'NONE'} "
+                    f"clip={segment_start:.2f}-{use_end:.2f}s "
+                    f"@timeline={current_timeline_pos - needed_duration:.2f}s "
+                    f"dur={needed_duration:.2f}s"
+                )
+
         # Handle gap between last SRT entry and audio end
         # Add 0.5s safety margin so video track fully covers audio (prevents subtitle cutoff
         # from floating-point accumulation in segment durations during concat)
@@ -913,18 +955,44 @@ class AssemblyService:
             logger.info(f"Extending timeline by {gap:.2f}s to cover audio duration + safety margin")
 
             if len(timeline) > intro_entry_count:
-                # Extend the last BODY timeline entry to cover the gap.
-                # This preserves the last previewed segment instead of adding random content.
-                # Never extend an intro micro-segment (they must stay short).
                 last_entry = timeline[-1]
-                timeline[-1] = TimelineEntry(
-                    source_video_path=last_entry.source_video_path,
-                    start_time=last_entry.start_time,
-                    end_time=last_entry.end_time,
-                    timeline_start=last_entry.timeline_start,
-                    timeline_duration=last_entry.timeline_duration + gap,
-                    transforms=last_entry.transforms,
-                )
+                # For large gaps, try to use a DIFFERENT segment than the last
+                # to avoid visual repetition at the end of the video.
+                if gap > 1.5 and segments_data:
+                    alt_segments = [s for s in segments_data if s.get("source_video_path") != last_entry.source_video_path]
+                    if alt_segments:
+                        alt = max(alt_segments, key=lambda s: s.get("end_time", 0) - s.get("start_time", 0))
+                        alt_start = alt.get("start_time", 0.0)
+                        alt_end = alt.get("end_time", alt_start + gap)
+                        timeline.append(TimelineEntry(
+                            source_video_path=alt.get("source_video_path"),
+                            start_time=alt_start,
+                            end_time=alt_end,
+                            timeline_start=current_timeline_pos,
+                            timeline_duration=gap,
+                            transforms=alt.get("transforms"),
+                        ))
+                        logger.info(f"Gap fill: added diverse segment instead of extending last entry")
+                    else:
+                        # No alternative — extend last entry
+                        timeline[-1] = TimelineEntry(
+                            source_video_path=last_entry.source_video_path,
+                            start_time=last_entry.start_time,
+                            end_time=last_entry.end_time,
+                            timeline_start=last_entry.timeline_start,
+                            timeline_duration=last_entry.timeline_duration + gap,
+                            transforms=last_entry.transforms,
+                        )
+                else:
+                    # Small gap or no segments — extend the last entry
+                    timeline[-1] = TimelineEntry(
+                        source_video_path=last_entry.source_video_path,
+                        start_time=last_entry.start_time,
+                        end_time=last_entry.end_time,
+                        timeline_start=last_entry.timeline_start,
+                        timeline_duration=last_entry.timeline_duration + gap,
+                        transforms=last_entry.transforms,
+                    )
             elif segments_data:
                 # Fallback: no timeline entries yet, use first available segment
                 fallback = segments_data[0]
@@ -950,6 +1018,16 @@ class AssemblyService:
             # Preserve intro micro-segments untouched
             for intro_idx in range(intro_entry_count):
                 merged.append(timeline[intro_idx])
+            # Sliding window of recent representative paths — prevents repetition
+            # across a wider range than just the immediately preceding group.
+            # Track source_video_path for diversity (not exact coordinates, since
+            # trimming can produce different start/end for visually identical content).
+            recent_reps: list = []  # list of source_video_path strings
+            # Dynamic window: at least 3, but scale with unique segment count
+            # so small pools never repeat consecutively
+            _unique_sources = set(e.source_video_path for e in timeline[intro_entry_count:])
+            DIVERSITY_WINDOW = max(3, len(_unique_sources))
+
             i = intro_entry_count
             while i < len(timeline):
                 current = timeline[i]
@@ -961,14 +1039,48 @@ class AssemblyService:
                     last_merged_idx += 1
                     accumulated_duration += timeline[last_merged_idx].timeline_duration
 
-                # Pick the longest sub-entry as representative (best visual content)
+                # Pick representative: avoid any source_video_path used in the
+                # last DIVERSITY_WINDOW groups.  Compare by path only (not exact
+                # coordinates) so trimmed variants of the same clip are still
+                # caught as duplicates.  Prefer diversity FIRST, then duration.
                 sub_entries = timeline[i:last_merged_idx + 1]
-                representative = max(sub_entries, key=lambda e: e.timeline_duration)
+                recent_paths = set(recent_reps[-DIVERSITY_WINDOW:])
 
+                diverse_candidates = [
+                    e for e in sub_entries
+                    if e.source_video_path not in recent_paths
+                ]
+                if diverse_candidates:
+                    # Among diverse candidates, pick longest
+                    representative = max(diverse_candidates, key=lambda e: e.timeline_duration)
+                elif len(recent_paths) > 1:
+                    # All sub-entries share paths with recent — pick the one whose
+                    # path was used LEAST recently (furthest back in recent_reps)
+                    def _staleness(e):
+                        try:
+                            # Higher index = more recent, so we want lowest index
+                            return -next(
+                                j for j in range(len(recent_reps) - 1, -1, -1)
+                                if recent_reps[j] == e.source_video_path
+                            )
+                        except StopIteration:
+                            return 999  # not found = very stale = good
+                    representative = max(sub_entries, key=_staleness)
+                else:
+                    representative = max(sub_entries, key=lambda e: e.timeline_duration)
+                recent_reps.append(representative.source_video_path)
+
+                # Extend end_time to cover accumulated_duration so FFmpeg doesn't
+                # loop a short clip.  If the source video is shorter than this,
+                # the loop fallback in assemble_video still handles it.
+                extended_end = max(
+                    representative.end_time,
+                    representative.start_time + accumulated_duration,
+                )
                 merged.append(TimelineEntry(
                     source_video_path=representative.source_video_path,
                     start_time=representative.start_time,
-                    end_time=representative.end_time,
+                    end_time=extended_end,
                     timeline_start=current.timeline_start,
                     timeline_duration=accumulated_duration,
                     transforms=representative.transforms,
@@ -985,7 +1097,7 @@ class AssemblyService:
                 merged[-1] = TimelineEntry(
                     source_video_path=prev.source_video_path,
                     start_time=prev.start_time,
-                    end_time=prev.end_time,
+                    end_time=max(prev.end_time, prev.start_time + combined_duration),
                     timeline_start=prev.timeline_start,
                     timeline_duration=combined_duration,
                     transforms=prev.transforms,
@@ -999,6 +1111,51 @@ class AssemblyService:
                 f"Merged timeline: {len(timeline)} entries -> {len(merged)} entries "
                 f"(min_segment_duration={min_segment_duration}s)"
             )
+
+            # --- Post-merge consecutive dedup pass ---
+            # Scan for consecutive entries using the same source_video_path and
+            # swap duplicates with an alternative from the full segment pool.
+            all_source_paths = list(_unique_sources)
+            dedup_swaps = 0
+            for idx in range(intro_entry_count + 1, len(merged)):
+                if merged[idx].source_video_path == merged[idx - 1].source_video_path:
+                    # Find an alternative source path not used by neighbors
+                    neighbor_paths = {merged[idx - 1].source_video_path}
+                    if idx + 1 < len(merged):
+                        neighbor_paths.add(merged[idx + 1].source_video_path)
+                    alternatives = [p for p in all_source_paths if p not in neighbor_paths]
+                    if alternatives:
+                        # Pick the alternative least recently used in the timeline
+                        # by scanning backward from current position
+                        alt_path = alternatives[0]
+                        for a in alternatives:
+                            # Simple heuristic: pick first alternative not seen recently
+                            recent_in_merged = [
+                                m.source_video_path for m in merged[max(0, idx - 3):idx]
+                            ]
+                            if a not in recent_in_merged:
+                                alt_path = a
+                                break
+                        # Find the timeline entry with the longest clip for this source
+                        # to minimize FFmpeg looping (avoid always picking the first short clip)
+                        alt_entry = max(
+                            (e for e in timeline if e.source_video_path == alt_path),
+                            key=lambda e: e.end_time - e.start_time,
+                            default=None,
+                        )
+                        if alt_entry:
+                            merged[idx] = TimelineEntry(
+                                source_video_path=alt_path,
+                                start_time=alt_entry.start_time,
+                                end_time=alt_entry.end_time,
+                                timeline_start=merged[idx].timeline_start,
+                                timeline_duration=merged[idx].timeline_duration,
+                                transforms=alt_entry.transforms,
+                            )
+                            dedup_swaps += 1
+            if dedup_swaps:
+                logger.info(f"Post-merge dedup: swapped {dedup_swaps} consecutive duplicates")
+
             timeline = merged
 
         total_duration = sum(e.timeline_duration for e in timeline)
@@ -1077,6 +1234,9 @@ class AssemblyService:
                     "-i", entry.source_video_path,
                     "-t", str(segment_duration),
                     *get_prep_codec_params(preset="ultrafast", crf=18, include_audio=False),
+                    "-r", str(TARGET_FPS),
+                    "-fps_mode", "cfr",
+                    "-video_track_timescale", "15360",
                     "-an", "-pix_fmt", "yuv420p",
                     str(segment_raw)
                 ]
@@ -1109,6 +1269,10 @@ class AssemblyService:
 
             cmd.extend([
                 *get_prep_codec_params(include_audio=False),
+                "-r", str(TARGET_FPS),
+                "-fps_mode", "cfr",
+                "-video_track_timescale", "15360",
+                "-force_key_frames", "expr:eq(n,0)",
                 "-threads", "4",
                 "-an",
                 "-pix_fmt", "yuv420p",
@@ -1221,8 +1385,8 @@ class AssemblyService:
             "-f", "concat",
             "-safe", "0",
             "-i", str(concat_file),
-            *get_prep_codec_params(include_audio=False),
-            "-pix_fmt", "yuv420p",
+            "-c", "copy",
+            "-video_track_timescale", "15360",
             str(assembled_path)
         ]
 
@@ -1270,6 +1434,7 @@ class AssemblyService:
         interstitial_slides: Optional[List[dict]] = None,
         pip_overlays: Optional[Dict[str, dict]] = None,
         avoid_segment_ids: Optional[set] = None,
+        _preview_mode: bool = False,
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
@@ -1425,6 +1590,80 @@ class AssemblyService:
                     "Please re-upload source videos or re-create segments."
                 )
 
+            # When match_overrides are present, ensure ALL referenced segments
+            # are in segments_data — even if they weren't returned by the filtered
+            # query.  This prevents fallback-to-first-segment when the override
+            # references a segment from a source video outside the current filter.
+            if match_overrides:
+                existing_seg_ids = {seg["id"] for seg in segments_data}
+                missing_seg_ids = [
+                    m.get("segment_id") for m in match_overrides
+                    if m.get("segment_id") and m["segment_id"] not in existing_seg_ids
+                ]
+                if missing_seg_ids:
+                    logger.info(
+                        f"Fetching {len(missing_seg_ids)} override segments missing from "
+                        f"filtered query: {missing_seg_ids[:5]}..."
+                    )
+                    missing_result = supabase.table("editai_segments")\
+                        .select("id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, editai_source_videos(file_path)")\
+                        .in_("id", missing_seg_ids)\
+                        .execute()
+                    added = 0
+                    for seg in (missing_result.data or []):
+                        sv_path = (seg.get("editai_source_videos") or {}).get("file_path")
+                        if sv_path:
+                            segments_data.append({
+                                "id": seg["id"],
+                                "source_video_id": seg["source_video_id"],
+                                "start_time": seg["start_time"],
+                                "end_time": seg["end_time"],
+                                "duration": seg["end_time"] - seg["start_time"],
+                                "keywords": seg.get("keywords") or [],
+                                "source_video_path": sv_path,
+                                "transforms": seg.get("transforms"),
+                                "thumbnail_path": seg.get("thumbnail_path"),
+                                "product_group": seg.get("product_group"),
+                            })
+                            added += 1
+                    if added:
+                        logger.info(f"Added {added} missing override segments to segments_data")
+
+                # Also pre-build a source_video_id -> file_path map from overrides'
+                # source_video_ids so the reconstruction path in build_timeline can
+                # always resolve the video file path.
+                override_sv_ids = {
+                    m.get("source_video_id") for m in match_overrides
+                    if m.get("source_video_id")
+                }
+                existing_sv_ids = {seg["source_video_id"] for seg in segments_data}
+                missing_sv_ids = list(override_sv_ids - existing_sv_ids)
+                if missing_sv_ids:
+                    logger.info(
+                        f"Fetching file paths for {len(missing_sv_ids)} source videos "
+                        f"referenced by overrides but not in segments_data"
+                    )
+                    sv_result = supabase.table("editai_source_videos")\
+                        .select("id, file_path")\
+                        .in_("id", missing_sv_ids)\
+                        .execute()
+                    # Store as synthetic segment entries so build_timeline can find sv_path
+                    for sv in (sv_result.data or []):
+                        if sv.get("file_path"):
+                            segments_data.append({
+                                "id": f"_sv_placeholder_{sv['id']}",
+                                "source_video_id": sv["id"],
+                                "start_time": 0.0,
+                                "end_time": 0.0,
+                                "duration": 0.0,
+                                "keywords": [],
+                                "source_video_path": sv["file_path"],
+                                "transforms": None,
+                                "thumbnail_path": None,
+                                "product_group": None,
+                            })
+                    logger.info(f"Added {len(sv_result.data or [])} source video path placeholders")
+
             # Assign product groups from script tags to SRT entries
             srt_product_groups = assign_groups_to_srt(script_text, srt_entries)
 
@@ -1466,42 +1705,26 @@ class AssemblyService:
                 # Extract duration overrides (parallel list, None where not overridden)
                 duration_overrides = [m.get("duration_override") for m in match_overrides]
 
-                # ── Collapse merge groups ──────────────────────────────────
-                # The preview player shows ONE continuous video clip per merge
-                # group (all phrases in the group share the same segment and
-                # play for merge_group_duration).  Without collapsing, the
-                # render would create N tiny clips (one per SRT phrase, ~0.4s)
-                # all extracted from the SAME start_time — producing stutter.
-                # Fix: keep only the first entry per merge group and set its
-                # duration_override to merge_group_duration so build_timeline
-                # produces one continuous extraction matching the preview.
-                has_merge_groups = any(
-                    m.get("merge_group") is not None for m in match_overrides
+                # ── Skip merge group collapse ─────────────────────────────
+                # Each SRT entry keeps its own segment from the round-robin.
+                # This ensures maximum visual diversity — short segments (0.5s)
+                # are acceptable, but repeating/looping the same segment is not.
+                # The round-robin already guarantees consecutive entries have
+                # different segments, so no collapse is needed.
+                logger.info(
+                    f"Step 5/7: Keeping all {len(match_results)} entries "
+                    f"(no merge group collapse — each entry keeps its own segment)"
                 )
-                if has_merge_groups:
-                    seen_groups: set = set()
-                    collapsed_results = []
-                    collapsed_overrides = []
-                    for idx_c, m_raw in enumerate(match_overrides):
-                        group = m_raw.get("merge_group")
-                        if group is not None:
-                            if group in seen_groups:
-                                continue  # skip subsequent entries in same group
-                            seen_groups.add(group)
-                            # Use merge_group_duration as this entry's duration
-                            group_dur = m_raw.get("merge_group_duration")
-                            collapsed_overrides.append(
-                                group_dur if group_dur else m_raw.get("duration_override")
-                            )
-                        else:
-                            collapsed_overrides.append(m_raw.get("duration_override"))
-                        collapsed_results.append(match_results[idx_c])
+                # No duration overrides — each entry uses its natural SRT timing
+                duration_overrides = None
+                # Log render entries for debugging
+                for c_idx, c_match in enumerate(match_results):
+                    seg_id_short = (c_match.segment_id or "NONE")[:8]
                     logger.info(
-                        f"Step 5/7: Collapsed {len(match_results)} matches into "
-                        f"{len(collapsed_results)} entries ({len(seen_groups)} merge groups)"
+                        f"  render_entry[{c_idx}]: seg={seg_id_short}... "
+                        f"srt={c_match.srt_start:.2f}-{c_match.srt_end:.2f}s "
+                        f"({c_match.srt_end - c_match.srt_start:.2f}s)"
                     )
-                    match_results = collapsed_results
-                    duration_overrides = collapsed_overrides
             else:
                 logger.info("Step 5/7: Matching SRT phrases to segments")
                 match_results = self.match_srt_to_segments(
@@ -1536,6 +1759,18 @@ class AssemblyService:
                 ultra_rapid_intro=effective_intro
             )
 
+            # Log final render timeline for debugging
+            for t_idx, t_entry in enumerate(timeline):
+                src_name = Path(t_entry.source_video_path).name if t_entry.source_video_path else "NONE"
+                seg_dur = t_entry.end_time - t_entry.start_time
+                will_loop = seg_dur < t_entry.timeline_duration - 0.05
+                logger.info(
+                    f"  render_timeline[{t_idx}]: src={src_name} "
+                    f"clip={t_entry.start_time:.2f}-{t_entry.end_time:.2f}s ({seg_dur:.2f}s) "
+                    f"timeline_dur={t_entry.timeline_duration:.2f}s "
+                    f"{'LOOP' if will_loop else 'ok'}"
+                )
+
             # Step 7: Assemble video
             logger.info("Step 7/7: Assembling and rendering final video")
             _report("Assembling video segments", 70)
@@ -1569,7 +1804,8 @@ class AssemblyService:
                 enable_color=enable_color,
                 brightness=brightness,
                 contrast=contrast,
-                saturation=saturation
+                saturation=saturation,
+                _preview_mode=_preview_mode,
             )
 
             logger.info(f"Assembly complete: {final_output_path}")
@@ -1586,6 +1822,75 @@ class AssemblyService:
             except Exception:
                 pass
 
+    async def assemble_and_render_preview(
+        self,
+        script_text: str,
+        profile_id: str,
+        pipeline_id: str,
+        variant_index: int = 0,
+        match_overrides: Optional[List[dict]] = None,
+        source_video_ids: Optional[List[str]] = None,
+        reuse_audio_path: Optional[str] = None,
+        reuse_audio_duration: Optional[float] = None,
+        reuse_srt_content: Optional[str] = None,
+        subtitle_settings: Optional[dict] = None,
+        min_segment_duration: float = 3.0,
+        on_progress=None,
+        max_words_per_phrase: int = 2,
+    ) -> Path:
+        """
+        Fast preview render using assemble_and_render() with preview-mode settings.
+
+        Uses 540x960, ultrafast encoding, CRF 32, no loudnorm, no filters, no PiP,
+        no interstitials, no ultra_rapid_intro. Produces a real MP4 that matches
+        the final render's segment order exactly.
+
+        Returns:
+            Path to the preview MP4 file.
+        """
+        # Build a lightweight 540x960 preset
+        preview_preset = {
+            "name": "Preview",
+            "width": 540,
+            "height": 960,
+            "fps": 30,
+            "video_codec": "libx264",
+            "audio_codec": "aac",
+            "video_bitrate": "1M",
+            "audio_bitrate": "128k",
+        }
+
+        # Output to a preview-specific directory
+        output_dir = self.settings.output_dir / profile_id / "previews"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        preview_filename = f"preview_{pipeline_id[:8]}_{variant_index}_{uuid.uuid4().hex[:6]}.mp4"
+        # We don't set the output path here — assemble_and_render creates its own.
+        # Instead we pass _preview_mode and the preset, and return the path.
+
+        return await self.assemble_and_render(
+            script_text=script_text,
+            profile_id=profile_id,
+            preset_data=preview_preset,
+            subtitle_settings=subtitle_settings,
+            match_overrides=match_overrides,
+            source_video_ids=source_video_ids,
+            reuse_audio_path=reuse_audio_path,
+            reuse_audio_duration=reuse_audio_duration,
+            reuse_srt_content=reuse_srt_content,
+            on_progress=on_progress,
+            max_words_per_phrase=max_words_per_phrase,
+            min_segment_duration=min_segment_duration,
+            # Preview-specific: disable expensive features
+            enable_denoise=False,
+            enable_sharpen=False,
+            enable_color=False,
+            ultra_rapid_intro=False,
+            interstitial_slides=None,
+            pip_overlays=None,
+            variant_index=variant_index,
+            _preview_mode=True,
+        )
+
     async def preview_matches(
         self,
         script_text: str,
@@ -1600,7 +1905,8 @@ class AssemblyService:
         max_words_per_phrase: int = 2,
         min_segment_duration: float = 3.0,
         avoid_segment_ids: Optional[set] = None,
-        ultra_rapid_intro: bool = True
+        ultra_rapid_intro: bool = True,
+        reuse_srt_content: Optional[str] = None
     ) -> dict:
         """
         Preview-only: TTS -> SRT -> match -> timeline (no rendering).
@@ -1637,26 +1943,35 @@ class AssemblyService:
         logger.info("Preview Step 2/4: Generating SRT subtitles")
         from app.services.tts_cache import srt_cache_lookup, srt_cache_store
         _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "wpf": max_words_per_phrase}
-        cached_srt = srt_cache_lookup(_srt_cache_key)
-        if cached_srt:
-            srt_content = cached_srt
-        elif timestamps:
-            srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
-            if srt_content:
-                srt_cache_store(_srt_cache_key, srt_content)
+
+        if reuse_srt_content:
+            # SRT already available from Step 2 tts_previews — use directly
+            srt_content = reuse_srt_content
+            logger.info("Preview Step 2/4: Reusing SRT content from Step 2 tts_previews")
+            # Populate SRT cache so future calls (render, etc.) also hit cache
+            srt_cache_store(_srt_cache_key, srt_content)
         else:
-            # Reusing audio but no SRT cache hit — must regenerate TTS for timestamps
-            logger.info("Preview Step 2/4: SRT cache miss, regenerating TTS for timestamps")
-            audio_path, audio_duration, timestamps = await self.generate_tts_with_timestamps(
-                script_text=cleaned_text,
-                profile_id=profile_id,
-                elevenlabs_model=elevenlabs_model,
-                voice_id=voice_id,
-                voice_settings=voice_settings
-            )
-            srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
-            if srt_content:
-                srt_cache_store(_srt_cache_key, srt_content)
+            cached_srt = srt_cache_lookup(_srt_cache_key)
+            if cached_srt:
+                srt_content = cached_srt
+            elif timestamps:
+                srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
+                if srt_content:
+                    srt_cache_store(_srt_cache_key, srt_content)
+            else:
+                # Reusing audio but no SRT available — regenerate TTS only for timestamps
+                # IMPORTANT: Do NOT overwrite audio_path — keep the original Step 2 audio
+                logger.info("Preview Step 2/4: SRT cache miss, regenerating TTS for timestamps only")
+                _, _, timestamps = await self.generate_tts_with_timestamps(
+                    script_text=cleaned_text,
+                    profile_id=profile_id,
+                    elevenlabs_model=elevenlabs_model,
+                    voice_id=voice_id,
+                    voice_settings=voice_settings
+                )
+                srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
+                if srt_content:
+                    srt_cache_store(_srt_cache_key, srt_content)
         srt_entries = self._parse_srt(srt_content)
 
         # Assign product groups from script tags to SRT entries

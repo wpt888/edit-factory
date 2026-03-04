@@ -66,9 +66,12 @@ class SubtitleStyleConfig:
             f"Bold={self.bold}",
             f"Alignment={self.alignment}",
             f"MarginV={self.margin_v}",
-            "MarginL=40",
-            "MarginR=40",
-            "WrapStyle=0",
+            "MarginL=60",
+            "MarginR=60",
+            # WrapStyle=2: no automatic line wrapping — break only on \N.
+            # WrapStyle=0 (smart wrap) causes FFmpeg to wrap long phrases onto
+            # two lines, while the CSS preview shows them on a single line.
+            "WrapStyle=2",
         ]
 
         # Glow effect: increase outline width and use semi-transparent outline
@@ -167,8 +170,8 @@ def calculate_adaptive_font_size(
     srt_path: Path,
     base_font_size: int = 48,
     min_font_size: int = 32,
-    max_chars_threshold: int = 40,
-    max_chars_limit: int = 60
+    max_chars_threshold: int = 25,
+    max_chars_limit: int = 40
 ) -> Tuple[int, int]:
     """
     Calculate adaptive font size based on longest subtitle line.
@@ -256,8 +259,8 @@ def build_subtitle_filter(
             srt_path=srt_path,
             base_font_size=base_size,
             min_font_size=max(16, base_size - 16),
-            max_chars_threshold=40,
-            max_chars_limit=60
+            max_chars_threshold=25,
+            max_chars_limit=40
         )
         settings['fontSize'] = adaptive_size
         logger.info(f"Adaptive sizing: {max_chars} chars → {adaptive_size}px (base: {base_size}px)")

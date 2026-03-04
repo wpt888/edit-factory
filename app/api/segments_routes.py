@@ -66,6 +66,7 @@ class SourceVideoResponse(BaseModel):
     fps: Optional[float]
     file_size_bytes: Optional[int]
     segments_count: int
+    status: str = "ready"
     created_at: str
 
 class SegmentCreate(BaseModel):
@@ -305,16 +306,93 @@ async def _reassign_all_segments(supabase, video_id: str, profile_id: str):
 
 # ============== SOURCE VIDEOS ENDPOINTS ==============
 
+def _process_source_video_background(
+    video_id: str,
+    video_path: Path,
+    profile_id: str,
+):
+    """Background task: transcode (if needed), extract metadata, generate thumbnail."""
+    supabase = get_supabase()
+    if not supabase:
+        logger.error(f"[BG] No DB for source video {video_id}")
+        return
+
+    source_dir = video_path.parent
+    current_path = video_path
+
+    try:
+        # Auto-transcode non-mp4 formats to .mp4 for browser compatibility
+        non_mp4_formats = {'.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm'}
+        if current_path.suffix.lower() in non_mp4_formats:
+            mp4_path = current_path.with_suffix('.mp4')
+            logger.info(f"[BG] Transcoding {current_path.suffix} to .mp4: {current_path.name}")
+            try:
+                cmd = [
+                    "ffmpeg", "-y", "-threads", "4", "-i", str(current_path),
+                    *get_prep_codec_params(),
+                    str(mp4_path)
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                if result.returncode == 0:
+                    current_path.unlink()
+                    current_path = mp4_path
+                    logger.info(f"[BG] Transcode successful: {mp4_path.name}")
+                else:
+                    logger.error(f"[BG] Transcode failed: {result.stderr}")
+            except subprocess.TimeoutExpired:
+                logger.error(f"[BG] Transcode timed out for {current_path.name}")
+                if mp4_path.exists():
+                    mp4_path.unlink(missing_ok=True)
+            except Exception as e:
+                logger.error(f"[BG] Transcode error: {e}")
+
+        # Get video metadata
+        video_info = _get_video_info(current_path)
+
+        # Generate thumbnail
+        thumbnail_path = source_dir / f"{video_id}_thumb.jpg"
+        _generate_thumbnail(current_path, thumbnail_path, timestamp=1)
+
+        # Update DB with metadata and set status=ready
+        supabase.table("editai_source_videos").update({
+            "file_path": str(current_path),
+            "thumbnail_path": str(thumbnail_path) if thumbnail_path.exists() else None,
+            "duration": video_info.get("duration"),
+            "width": video_info.get("width"),
+            "height": video_info.get("height"),
+            "fps": video_info.get("fps"),
+            "file_size_bytes": video_info.get("file_size_bytes"),
+            "status": "ready",
+        }).eq("id", video_id).execute()
+
+        logger.info(f"[BG] Source video {video_id} ready")
+
+    except Exception as e:
+        logger.error(f"[BG] Failed to process source video {video_id}: {e}")
+        try:
+            supabase.table("editai_source_videos").update({
+                "status": "error",
+            }).eq("id", video_id).execute()
+        except Exception:
+            pass
+
+
 @router.post("/source-videos", response_model=SourceVideoResponse)
 @limiter.limit("10/minute")
 async def upload_source_video(
     request: Request,
+    background_tasks: BackgroundTasks,
     video: UploadFile = File(...),
     name: str = Form(...),
     description: Optional[str] = Form(default=None),
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Upload a source video for segment extraction."""
+    """Upload a source video for segment extraction.
+
+    Saves the file to disk and returns immediately with status='processing'.
+    Transcoding, metadata extraction, and thumbnail generation run in background.
+    Poll GET /source-videos/{id} until status='ready'.
+    """
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -324,11 +402,9 @@ async def upload_source_video(
     settings = get_settings()
     settings.ensure_dirs()
 
-    # Generate unique ID and save video
     video_id = str(uuid.uuid4())
     safe_filename = _sanitize_filename(video.filename)
 
-    # Create source_videos directory
     source_dir = settings.base_dir / "source_videos"
     source_dir.mkdir(parents=True, exist_ok=True)
 
@@ -340,80 +416,53 @@ async def upload_source_video(
     # Validate actual MIME type via magic-number inspection (blocks disguised malicious files)
     await validate_file_mime_type(video, ALLOWED_VIDEO_MIMES, "video")
 
-    # Save uploaded file via streaming (avoid loading entire file into memory)
+    # Save uploaded file with 1MB buffer (much faster on WSL2/NTFS)
     import shutil as _shutil
     with open(video_path, "wb") as f:
-        _shutil.copyfileobj(video.file, f)
+        _shutil.copyfileobj(video.file, f, length=1024 * 1024)
 
-    # Auto-transcode non-mp4 formats to .mp4 for browser compatibility
-    non_mp4_formats = {'.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm'}
-    if video_path.suffix.lower() in non_mp4_formats:
-        mp4_path = video_path.with_suffix('.mp4')
-        logger.info(f"Transcoding {video_path.suffix} to .mp4: {video_path.name}")
-        try:
-            cmd = [
-                "ffmpeg", "-y", "-threads", "4", "-i", str(video_path),
-                *get_prep_codec_params(),
-                str(mp4_path)
-            ]
-            result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=600)
-            if result.returncode == 0:
-                video_path.unlink()  # remove original
-                video_path = mp4_path
-                logger.info(f"Transcode successful: {mp4_path.name}")
-            else:
-                logger.error(f"Transcode failed: {result.stderr}")
-                # Keep original file, continue with it
-        except subprocess.TimeoutExpired:
-            logger.error(f"Transcode timed out for {video_path.name}")
-            if mp4_path.exists():
-                mp4_path.unlink(missing_ok=True)
-        except Exception as e:
-            logger.error(f"Transcode error: {e}")
-
-    # Get video metadata
-    video_info = _get_video_info(video_path)
-
-    # Generate thumbnail
-    thumbnail_path = source_dir / f"{video_id}_thumb.jpg"
-    _generate_thumbnail(video_path, thumbnail_path, timestamp=1)
-
-    # Save to database
+    # Insert DB record immediately with status=processing
+    now_iso = datetime.now(timezone.utc).isoformat()
     try:
-        result = supabase.table("editai_source_videos").insert({
+        supabase.table("editai_source_videos").insert({
             "id": video_id,
             "profile_id": profile.profile_id,
             "name": name,
             "description": description,
             "file_path": str(video_path),
-            "thumbnail_path": str(thumbnail_path) if thumbnail_path.exists() else None,
-            "duration": video_info.get("duration"),
-            "width": video_info.get("width"),
-            "height": video_info.get("height"),
-            "fps": video_info.get("fps"),
-            "file_size_bytes": video_info.get("file_size_bytes"),
-            "segments_count": 0
+            "thumbnail_path": None,
+            "duration": None,
+            "width": None,
+            "height": None,
+            "fps": None,
+            "file_size_bytes": None,
+            "segments_count": 0,
+            "status": "processing",
         }).execute()
-
-        return SourceVideoResponse(
-            id=video_id,
-            name=name,
-            description=description,
-            file_path=str(video_path),
-            thumbnail_path=str(thumbnail_path) if thumbnail_path.exists() else None,
-            duration=video_info.get("duration"),
-            width=video_info.get("width"),
-            height=video_info.get("height"),
-            fps=video_info.get("fps"),
-            file_size_bytes=video_info.get("file_size_bytes"),
-            segments_count=0,
-            created_at=datetime.now(timezone.utc).isoformat()
-        )
     except Exception as e:
-        # Cleanup on failure
         video_path.unlink(missing_ok=True)
-        thumbnail_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Failed to save video: {e}")
+
+    # Transcode + metadata + thumbnail run in background
+    background_tasks.add_task(
+        _process_source_video_background, video_id, video_path, profile.profile_id
+    )
+
+    return SourceVideoResponse(
+        id=video_id,
+        name=name,
+        description=description,
+        file_path=str(video_path),
+        thumbnail_path=None,
+        duration=None,
+        width=None,
+        height=None,
+        fps=None,
+        file_size_bytes=None,
+        segments_count=0,
+        status="processing",
+        created_at=now_iso,
+    )
 
 
 @router.get("/source-videos", response_model=List[SourceVideoResponse])
@@ -450,6 +499,7 @@ async def list_source_videos(
             fps=v.get("fps"),
             file_size_bytes=v.get("file_size_bytes"),
             segments_count=v.get("segments_count", 0),
+            status=v.get("status", "ready"),
             created_at=v["created_at"]
         )
         for v in result.data
@@ -488,6 +538,7 @@ async def get_source_video(
         fps=v.get("fps"),
         file_size_bytes=v.get("file_size_bytes"),
         segments_count=v.get("segments_count", 0),
+        status=v.get("status", "ready"),
         created_at=v["created_at"]
     )
 
@@ -556,11 +607,13 @@ async def stream_source_video(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    result = supabase.table("editai_source_videos")\
-        .select("file_path")\
-        .eq("id", video_id)\
-        .eq("profile_id", effective_profile_id)\
-        .execute()
+    result = await asyncio.to_thread(
+        lambda: supabase.table("editai_source_videos")
+            .select("file_path")
+            .eq("id", video_id)
+            .eq("profile_id", effective_profile_id)
+            .execute()
+    )
 
     if not result.data:
         raise HTTPException(status_code=404, detail="Source video not found")
@@ -581,7 +634,7 @@ async def stream_source_video(
     return FileResponse(
         path=str(video_path),
         media_type=media_type,
-        filename=video_path.name,
+        content_disposition_type="inline",
         headers={"Cache-Control": "public, max-age=3600"}
     )
 

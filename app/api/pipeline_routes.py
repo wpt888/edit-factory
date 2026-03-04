@@ -30,7 +30,7 @@ from app.services.script_generator import get_script_generator
 from app.services.assembly_service import get_assembly_service, strip_product_group_tags
 
 # Global FFmpeg concurrency — shared across ALL routes (library, pipeline, product)
-from app.services.ffmpeg_semaphore import acquire_render_slot, check_disk_space, safe_ffmpeg_run, is_nvenc_available
+from app.services.ffmpeg_semaphore import acquire_render_slot, acquire_preview_slot, check_disk_space, safe_ffmpeg_run, is_nvenc_available
 
 
 def _stable_hash(text: str) -> str:
@@ -405,6 +405,7 @@ class VariantStatus(BaseModel):
     error: Optional[str] = None
     library_saved: Optional[bool] = None
     library_error: Optional[str] = None
+    render_fingerprint: Optional[str] = None
 
 
 class VariantPreviewInfo(BaseModel):
@@ -1082,10 +1083,23 @@ async def generate_variant_tts(
         script_word_count = None
         srt_word_count = None
         if _timestamps:
+            wpf = request.words_per_subtitle or 2
             srt_content = await assembly_service.generate_srt_from_timestamps(
                 _timestamps,
-                max_words_per_phrase=request.words_per_subtitle or 2
+                max_words_per_phrase=wpf
             )
+            # Populate SRT cache so Step 3 preview_matches finds a hit
+            # (prevents unnecessary TTS regeneration that produces different audio)
+            if srt_content:
+                from app.services.tts_cache import srt_cache_store
+                _srt_cache_key = {
+                    "text": cleaned_text,
+                    "voice_id": request.voice_id or "",
+                    "model_id": request.elevenlabs_model,
+                    "provider": "elevenlabs_ts",
+                    "wpf": wpf
+                }
+                srt_cache_store(_srt_cache_key, srt_content)
             # Count words in script vs SRT for validation
             script_word_count = len(cleaned_text.split())
             if srt_content:
@@ -1141,7 +1155,7 @@ async def get_variant_tts_audio(
 
     Reads from tts_previews (Step 2 per-script TTS) rather than previews (Step 3 full preview).
     """
-    pipeline = _get_pipeline_or_load(pipeline_id)
+    pipeline = await asyncio.to_thread(_get_pipeline_or_load, pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
@@ -1163,7 +1177,8 @@ async def get_variant_tts_audio(
     return FileResponse(
         path=str(audio_path),
         media_type="audio/mpeg",
-        filename=f"pipeline_{pipeline_id}_tts_variant_{variant_index}.mp3"
+        content_disposition_type="inline",
+        headers={"Cache-Control": "public, max-age=3600"}
     )
 
 
@@ -1215,6 +1230,7 @@ async def preview_variant(
     existing_tts = _tts_previews.get(variant_index) or _tts_previews.get(str(variant_index))
     reuse_audio_path = None
     reuse_audio_duration = None
+    reuse_srt_content = None
     if existing_tts:
         # Verify script and voice settings haven't changed since TTS was generated
         # TTS hashes use cleaned text (tags stripped) so tag edits don't invalidate
@@ -1240,8 +1256,14 @@ async def preview_variant(
             if audio_path_str and Path(audio_path_str).exists() and Path(audio_path_str).stat().st_size > 100:
                 reuse_audio_path = audio_path_str
                 reuse_audio_duration = existing_tts.get("audio_duration")
+                # Also grab SRT content from Step 2 to avoid TTS regeneration
+                stored_srt = existing_tts.get("srt_content")
+                stored_wpf = existing_tts.get("words_per_subtitle")
+                if stored_srt and stored_wpf == words_per_subtitle:
+                    reuse_srt_content = stored_srt
                 logger.info(
                     f"[Profile {profile.profile_id}] Reusing Step 2 TTS audio for variant {variant_index}"
+                    f"{' (with SRT)' if reuse_srt_content else ' (SRT not available)'}"
                 )
             else:
                 logger.info(
@@ -1276,7 +1298,8 @@ async def preview_variant(
             max_words_per_phrase=words_per_subtitle,
             min_segment_duration=min_segment_duration,
             avoid_segment_ids=avoid_ids if avoid_ids else None,
-            ultra_rapid_intro=ultra_rapid_intro
+            ultra_rapid_intro=ultra_rapid_intro,
+            reuse_srt_content=reuse_srt_content
         )
 
         # Track which segments this variant used (for cross-variant deprioritization)
@@ -1300,6 +1323,7 @@ async def preview_variant(
         if variant_index not in pipeline["tts_previews"]:
             pipeline["tts_previews"][variant_index] = {}
         pipeline["tts_previews"][variant_index]["srt_content"] = preview_data.get("srt_content", "")
+        pipeline["tts_previews"][variant_index]["words_per_subtitle"] = words_per_subtitle
         # Also persist audio info from preview_data if tts_previews was empty
         # (covers the case where Step 2 standalone TTS was skipped entirely)
         if not pipeline["tts_previews"][variant_index].get("audio_path"):
@@ -1481,9 +1505,37 @@ async def render_variants(
     # Define render function for a single variant
     async def do_render(vid):
         try:
+            # ── Render fingerprint: unique hash of ALL render-affecting parameters ──
+            import hashlib as _hashlib
+            _fp_parts = [
+                f"vid={vid}",
+                f"preset={render_request.preset_name}",
+                f"voice={render_request.voice_id}",
+                f"model={render_request.elevenlabs_model}",
+                f"wpf={render_request.words_per_subtitle}",
+                f"min_seg={render_request.min_segment_duration}",
+                f"ultra_rapid={render_request.ultra_rapid_intro}",
+                f"font={render_request.font_size}/{render_request.font_family}",
+                f"colors={render_request.text_color}/{render_request.outline_color}",
+                f"denoise={render_request.enable_denoise}/{render_request.denoise_strength}",
+                f"sharpen={render_request.enable_sharpen}/{render_request.sharpen_amount}",
+                f"color={render_request.enable_color}/{render_request.brightness}/{render_request.contrast}/{render_request.saturation}",
+            ]
+            # Include match_overrides segment IDs in fingerprint
+            _mo = render_request.match_overrides
+            if _mo:
+                _mo_variant = _mo.get(vid) or _mo.get(str(vid))
+                if _mo_variant:
+                    _seg_ids = [m.get("segment_id", "none") for m in _mo_variant]
+                    _fp_parts.append(f"segments={','.join(str(s) for s in _seg_ids)}")
+            _render_fingerprint = _hashlib.md5("|".join(_fp_parts).encode()).hexdigest()[:12]
+
             logger.info(
-                f"[Profile {profile.profile_id}] Rendering pipeline {pipeline_id} "
-                f"variant {vid}"
+                f"[Profile {profile.profile_id}] ═══ RENDER START ═══ "
+                f"pipeline={pipeline_id} variant={vid} fingerprint={_render_fingerprint}"
+            )
+            logger.info(
+                f"[RENDER {_render_fingerprint}] Parameters: {' | '.join(_fp_parts)}"
             )
 
             job = pipeline["render_jobs"][vid]
@@ -1515,9 +1567,28 @@ async def render_variants(
                 variant_match_overrides = render_request.match_overrides.get(vid) or render_request.match_overrides.get(str(vid))
                 if variant_match_overrides:
                     logger.info(
-                        f"[Profile {profile.profile_id}] Using {len(variant_match_overrides)} "
+                        f"[RENDER {_render_fingerprint}] Using {len(variant_match_overrides)} "
                         f"match overrides for variant {vid}"
                     )
+                    # Log each match override for debugging
+                    for _mi, _mo_entry in enumerate(variant_match_overrides[:10]):  # first 10
+                        logger.info(
+                            f"[RENDER {_render_fingerprint}]   override[{_mi}]: "
+                            f"srt_idx={_mo_entry.get('srt_index')} "
+                            f"seg_id={_mo_entry.get('segment_id', 'NONE')!r} "
+                            f"text={_mo_entry.get('srt_text', '')[:40]!r} "
+                            f"start={_mo_entry.get('srt_start'):.2f}-{_mo_entry.get('srt_end'):.2f}"
+                        )
+                else:
+                    logger.warning(
+                        f"[RENDER {_render_fingerprint}] match_overrides present but EMPTY "
+                        f"for variant {vid} (keys: {list(render_request.match_overrides.keys())})"
+                    )
+            else:
+                logger.warning(
+                    f"[RENDER {_render_fingerprint}] NO match_overrides sent — "
+                    f"render will use auto-matching (may differ from preview!)"
+                )
 
             # Extract interstitial slides for this variant (stored for Phase 46 render integration)
             variant_interstitial_slides = None
@@ -1552,16 +1623,49 @@ async def render_variants(
                         if audio_path_str and Path(audio_path_str).exists() and Path(audio_path_str).stat().st_size > 100:
                             reuse_audio_path = audio_path_str
                             reuse_audio_duration = existing_tts.get("audio_duration")
-                            reuse_srt_content = existing_tts.get("srt_content")
+
+                            # ── SRT reuse guard ──────────────────────────────
+                            # Only reuse cached SRT if words_per_subtitle hasn't
+                            # changed since the preview generated it.  The SRT
+                            # groups words into subtitle phrases using this param;
+                            # reusing a stale SRT would show wrong subtitle grouping.
+                            cached_wpf = existing_tts.get("words_per_subtitle")
+                            render_wpf = render_request.words_per_subtitle
+                            if cached_wpf is not None and cached_wpf != render_wpf:
+                                logger.info(
+                                    f"[RENDER {_render_fingerprint}] SRT reuse BLOCKED: "
+                                    f"words_per_subtitle changed ({cached_wpf} -> {render_wpf})"
+                                )
+                                # Audio is still reusable, only SRT needs regeneration
+                                reuse_srt_content = None
+                            else:
+                                reuse_srt_content = existing_tts.get("srt_content")
+
                             logger.info(
-                                f"[Profile {profile.profile_id}] Reusing "
+                                f"[RENDER {_render_fingerprint}] Reusing "
                                 f"{'library' if is_library else 'cached'} TTS audio "
-                                f"for variant {vid}"
+                                f"for variant {vid} "
+                                f"(srt_reused={'YES' if reuse_srt_content else 'NO'})"
                             )
                             # Skip TTS generation step — jump to segment matching
                             with render_jobs_lock:
                                 job["current_step"] = "Matching segments"
                                 job["progress"] = 30
+                    else:
+                        logger.info(
+                            f"[RENDER {_render_fingerprint}] TTS reuse BLOCKED: "
+                            f"voice_settings mismatch"
+                        )
+                else:
+                    logger.info(
+                        f"[RENDER {_render_fingerprint}] TTS reuse BLOCKED: "
+                        f"script_hash mismatch"
+                    )
+            else:
+                logger.info(
+                    f"[RENDER {_render_fingerprint}] No cached TTS found — "
+                    f"will generate fresh audio"
+                )
 
             # Progress callback: assembly_service calls this at each major step
             def on_progress(step_name: str, pct: int):
@@ -1663,7 +1767,19 @@ async def render_variants(
                 job["progress"] = 100
                 job["current_step"] = "Render complete"
                 job["final_video_path"] = str(final_video_path)
+                job["render_fingerprint"] = _render_fingerprint
                 job["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+                # Log final output for debugging stale-video reports
+                _file_size_mb = 0
+                try:
+                    _file_size_mb = final_video_path.stat().st_size / (1024 * 1024)
+                except Exception:
+                    pass
+                logger.info(
+                    f"[RENDER {_render_fingerprint}] ═══ RENDER COMPLETE ═══ "
+                    f"output={final_video_path.name} size={_file_size_mb:.1f}MB"
+                )
 
                 logger.info(
                     f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
@@ -1759,11 +1875,12 @@ async def render_variants(
                         except Exception as dur_err:
                             logger.warning(f"Duration probe failed: {dur_err}")
 
-                        # Step D: Insert clip row (skip if already exists for this variant)
+                        # Step D: Upsert clip row (update if already exists for this variant)
                         existing_clip = supabase_lib.table("editai_clips")\
                             .select("id")\
                             .eq("project_id", library_project_id)\
                             .eq("variant_index", vid)\
+                            .eq("is_deleted", False)\
                             .limit(1)\
                             .execute()
                         if not existing_clip.data:
@@ -1784,9 +1901,21 @@ async def render_variants(
                                 with render_jobs_lock:
                                     job["clip_id"] = clip_result.data[0].get("id")
                         else:
-                            # Existing clip — store its ID
+                            # Existing clip — UPDATE with new video path and metadata
+                            existing_id = existing_clip.data[0].get("id")
+                            supabase_lib.table("editai_clips").update({
+                                "raw_video_path": str(final_video_path),
+                                "final_video_path": str(final_video_path),
+                                "thumbnail_path": str(thumb_path) if thumb_path else None,
+                                "duration": duration,
+                                "final_status": "completed",
+                                "is_deleted": False,
+                            }).eq("id", existing_id).execute()
                             with render_jobs_lock:
-                                job["clip_id"] = existing_clip.data[0].get("id")
+                                job["clip_id"] = existing_id
+                            logger.info(
+                                f"Updated existing clip {existing_id} with new video path"
+                            )
 
                         with render_jobs_lock:
                             job["library_saved"] = True
@@ -1894,7 +2023,8 @@ async def get_pipeline_status(pipeline_id: str):
                 clip_id=job.get("clip_id"),
                 error=sanitized_error,
                 library_saved=job.get("library_saved"),
-                library_error=sanitized_lib_error
+                library_error=sanitized_lib_error,
+                render_fingerprint=job.get("render_fingerprint")
             ))
         else:
             # Variant not yet rendered
@@ -1998,18 +2128,16 @@ async def sync_pipeline_to_library(
             raise HTTPException(status_code=500, detail="Failed to create library project")
         library_project_id = proj_result.data[0]["id"]
 
-    # Check which clips already exist
+    # Check which clips already exist (fetch id + variant_index for update)
     existing_clips = supabase.table("editai_clips")\
-        .select("variant_index")\
+        .select("id, variant_index")\
         .eq("project_id", library_project_id)\
+        .eq("is_deleted", False)\
         .execute()
-    existing_indices = {c["variant_index"] for c in (existing_clips.data or [])}
+    existing_map = {c["variant_index"]: c["id"] for c in (existing_clips.data or [])}
 
     synced = 0
     for vid, job in sorted(completed_variants.items()):
-        if vid in existing_indices:
-            continue
-
         final_video_path = Path(job["final_video_path"])
         if not final_video_path.exists():
             logger.warning(f"Pipeline {pipeline_id} variant {vid}: video file not found at {final_video_path}")
@@ -2048,26 +2176,39 @@ async def sync_pipeline_to_library(
         except Exception:
             pass
 
-        # Insert clip
-        clip_result = supabase.table("editai_clips").insert({
-            "project_id": library_project_id,
-            "profile_id": profile.profile_id,
-            "variant_index": vid,
-            "variant_name": f"variant_{vid + 1}",
-            "raw_video_path": str(final_video_path),
-            "final_video_path": str(final_video_path),
-            "thumbnail_path": str(thumb_path) if thumb_path else None,
-            "duration": duration,
-            "is_selected": False,
-            "is_deleted": False,
-            "final_status": "completed"
-        }).execute()
+        # Upsert clip (update if exists, insert if new)
+        if vid in existing_map:
+            existing_id = existing_map[vid]
+            supabase.table("editai_clips").update({
+                "raw_video_path": str(final_video_path),
+                "final_video_path": str(final_video_path),
+                "thumbnail_path": str(thumb_path) if thumb_path else None,
+                "duration": duration,
+                "final_status": "completed",
+                "is_deleted": False,
+            }).eq("id", existing_id).execute()
+            job["clip_id"] = existing_id
+            logger.info(f"Pipeline {pipeline_id} variant {vid}: updated existing clip {existing_id}")
+        else:
+            clip_result = supabase.table("editai_clips").insert({
+                "project_id": library_project_id,
+                "profile_id": profile.profile_id,
+                "variant_index": vid,
+                "variant_name": f"variant_{vid + 1}",
+                "raw_video_path": str(final_video_path),
+                "final_video_path": str(final_video_path),
+                "thumbnail_path": str(thumb_path) if thumb_path else None,
+                "duration": duration,
+                "is_selected": False,
+                "is_deleted": False,
+                "final_status": "completed"
+            }).execute()
+            if clip_result.data and len(clip_result.data) > 0:
+                job["clip_id"] = clip_result.data[0].get("id")
 
         # Mark as saved in render_jobs so status endpoint reflects it
         job["library_saved"] = True
         job.pop("library_error", None)
-        if clip_result.data and len(clip_result.data) > 0:
-            job["clip_id"] = clip_result.data[0].get("id")
 
         synced += 1
         logger.info(f"Pipeline {pipeline_id} variant {vid} synced to library project {library_project_id}")
@@ -2081,6 +2222,7 @@ async def sync_pipeline_to_library(
         total_clips = supabase.table("editai_clips")\
             .select("id", count="exact")\
             .eq("project_id", library_project_id)\
+            .eq("is_deleted", False)\
             .execute()
         supabase.table("editai_projects")\
             .update({"variants_count": total_clips.count or synced})\
@@ -2174,7 +2316,7 @@ async def get_pipeline_audio(
 
     Requires authentication — only the owning profile can access audio.
     """
-    pipeline = _get_pipeline_or_load(pipeline_id)
+    pipeline = await asyncio.to_thread(_get_pipeline_or_load, pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
@@ -2193,7 +2335,8 @@ async def get_pipeline_audio(
                 audio_path = Path(audio_path_str)
                 if audio_path.exists():
                     return FileResponse(path=str(audio_path), media_type="audio/mpeg",
-                        filename=f"pipeline_{pipeline_id}_variant_{variant_index}.mp3")
+                        content_disposition_type="inline",
+                        headers={"Cache-Control": "public, max-age=3600"})
         raise HTTPException(status_code=404, detail="No preview available for this variant")
 
     preview_data = preview.get("preview_data", {})
@@ -2209,5 +2352,219 @@ async def get_pipeline_audio(
     return FileResponse(
         path=str(audio_path),
         media_type="audio/mpeg",
-        filename=f"pipeline_{pipeline_id}_variant_{variant_index}.mp3"
+        content_disposition_type="inline",
+        headers={"Cache-Control": "public, max-age=3600"}
+    )
+
+
+# ============== SERVER-SIDE PREVIEW RENDER ENDPOINTS ==============
+
+class PreviewRenderRequest(BaseModel):
+    """Request model for server-side FFmpeg preview render."""
+    match_overrides: List[dict]
+    source_video_ids: Optional[List[str]] = None
+    min_segment_duration: float = 3.0
+    subtitle_settings: Optional[dict] = None
+    words_per_subtitle: int = 2
+
+
+class PreviewRenderStatusResponse(BaseModel):
+    """Response model for preview render status."""
+    status: str  # "processing", "completed", "failed"
+    progress: int = 0
+    current_step: str = ""
+    matches_fingerprint: Optional[str] = None
+    error: Optional[str] = None
+
+
+@router.post("/render-preview/{pipeline_id}/{variant_index}")
+@limiter.limit("10/minute")
+async def render_preview(
+    request: Request,
+    pipeline_id: str,
+    variant_index: int,
+    render_request: PreviewRenderRequest,
+    background_tasks: BackgroundTasks,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Start a fast server-side FFmpeg preview render for a variant.
+
+    Uses 540x960, ultrafast encoding, CRF 32, no loudnorm.
+    Produces a real MP4 that matches the final render's segment order.
+    Requires TTS audio + SRT to already exist in pipeline["tts_previews"].
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    if variant_index < 0 or variant_index >= len(pipeline["scripts"]):
+        raise HTTPException(status_code=400, detail=f"Invalid variant_index: {variant_index}")
+
+    # Validate TTS audio exists
+    _tts = pipeline.get("tts_previews", {})
+    tts_data = _tts.get(variant_index) or _tts.get(str(variant_index))
+    if not tts_data:
+        raise HTTPException(status_code=400, detail="TTS audio not generated yet. Run Preview All first.")
+
+    audio_path_str = tts_data.get("audio_path")
+    if not audio_path_str or not Path(audio_path_str).exists():
+        raise HTTPException(status_code=400, detail="TTS audio file missing from disk. Re-run Preview All.")
+
+    # Compute fingerprint from segment IDs
+    seg_ids = [str(m.get("segment_id", "none")) for m in render_request.match_overrides]
+    matches_fingerprint = hashlib.md5("|".join(seg_ids).encode()).hexdigest()[:12]
+
+    # Initialize preview_renders dict if needed
+    if "preview_renders" not in pipeline:
+        pipeline["preview_renders"] = {}
+
+    # Cache hit: if fingerprint matches + file exists, return completed immediately
+    existing = pipeline["preview_renders"].get(variant_index)
+    if existing:
+        if (existing.get("matches_fingerprint") == matches_fingerprint
+                and existing.get("status") == "completed"
+                and existing.get("preview_video_path")
+                and Path(existing["preview_video_path"]).exists()):
+            return {"status": "completed", "matches_fingerprint": matches_fingerprint}
+
+        # Clean up old preview file before starting new render
+        old_path = existing.get("preview_video_path")
+        if old_path and Path(old_path).exists():
+            try:
+                Path(old_path).unlink()
+            except Exception:
+                pass
+
+    # Initialize render state
+    pipeline["preview_renders"][variant_index] = {
+        "status": "processing",
+        "progress": 0,
+        "current_step": "Starting preview render",
+        "preview_video_path": None,
+        "matches_fingerprint": matches_fingerprint,
+        "error": None,
+    }
+
+    script_text = pipeline["scripts"][variant_index]
+    reuse_srt_content = tts_data.get("srt_content")
+    reuse_audio_duration = tts_data.get("audio_duration")
+
+    async def _do_preview_render():
+        render_state = pipeline["preview_renders"][variant_index]
+        try:
+            async with acquire_preview_slot():
+                assembly_service = get_assembly_service()
+
+                def on_progress(step_name: str, pct: int):
+                    render_state["current_step"] = step_name
+                    render_state["progress"] = pct
+
+                preview_path = await asyncio.wait_for(
+                    assembly_service.assemble_and_render_preview(
+                        script_text=script_text,
+                        profile_id=profile.profile_id,
+                        pipeline_id=pipeline_id,
+                        variant_index=variant_index,
+                        match_overrides=render_request.match_overrides,
+                        source_video_ids=render_request.source_video_ids,
+                        reuse_audio_path=audio_path_str,
+                        reuse_audio_duration=reuse_audio_duration,
+                        reuse_srt_content=reuse_srt_content,
+                        subtitle_settings=render_request.subtitle_settings,
+                        min_segment_duration=render_request.min_segment_duration,
+                        on_progress=on_progress,
+                        max_words_per_phrase=render_request.words_per_subtitle,
+                    ),
+                    timeout=300  # 5-minute timeout for preview
+                )
+
+                render_state["status"] = "completed"
+                render_state["progress"] = 100
+                render_state["current_step"] = "Preview ready"
+                render_state["preview_video_path"] = str(preview_path)
+                logger.info(f"Preview render completed: {preview_path}")
+
+        except asyncio.TimeoutError:
+            render_state["status"] = "failed"
+            render_state["error"] = "Preview render timed out after 5 minutes"
+            render_state["current_step"] = "Failed"
+            logger.error(f"Preview render timeout for pipeline {pipeline_id} variant {variant_index}")
+        except Exception as e:
+            render_state["status"] = "failed"
+            render_state["error"] = str(e)
+            render_state["current_step"] = "Failed"
+            logger.error(f"Preview render failed for pipeline {pipeline_id} variant {variant_index}: {e}")
+
+    background_tasks.add_task(_do_preview_render)
+
+    return {"status": "processing", "matches_fingerprint": matches_fingerprint}
+
+
+@router.get("/preview-status/{pipeline_id}/{variant_index}", response_model=PreviewRenderStatusResponse)
+async def get_preview_status(
+    pipeline_id: str,
+    variant_index: int,
+):
+    """
+    Get status of a server-side preview render.
+
+    Intentionally public (same pattern as /status endpoint) — pipeline UUID
+    acts as capability token.
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    render_state = pipeline.get("preview_renders", {}).get(variant_index)
+    if not render_state:
+        return PreviewRenderStatusResponse(
+            status="not_started",
+            progress=0,
+            current_step="Not started",
+        )
+
+    return PreviewRenderStatusResponse(
+        status=render_state.get("status", "not_started"),
+        progress=render_state.get("progress", 0),
+        current_step=render_state.get("current_step", ""),
+        matches_fingerprint=render_state.get("matches_fingerprint"),
+        error=render_state.get("error"),
+    )
+
+
+@router.get("/preview-video/{pipeline_id}/{variant_index}")
+async def get_preview_video(
+    pipeline_id: str,
+    variant_index: int,
+):
+    """
+    Stream the preview MP4 video for a variant.
+
+    Supports HTTP Range requests for seeking. Intentionally public
+    (same pattern as /status endpoint).
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    render_state = pipeline.get("preview_renders", {}).get(variant_index)
+    if not render_state or render_state.get("status") != "completed":
+        raise HTTPException(status_code=404, detail="Preview not ready")
+
+    video_path_str = render_state.get("preview_video_path")
+    if not video_path_str or not Path(video_path_str).exists():
+        raise HTTPException(status_code=404, detail="Preview video file not found")
+
+    return FileResponse(
+        path=video_path_str,
+        media_type="video/mp4",
+        content_disposition_type="inline",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "public, max-age=300",
+        }
     )

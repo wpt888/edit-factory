@@ -63,6 +63,7 @@ interface SourceVideo {
   height?: number;
   fps?: number;
   segments_count: number;
+  status?: string;
   created_at: string;
 }
 
@@ -467,13 +468,38 @@ export default function SegmentsPage() {
       const res = await apiUpload("/segments/source-videos", formData, { timeout: 600000 });
 
       if (res.ok) {
-        const newVideo = await res.json();
+        const newVideo = await res.json() as SourceVideo;
         setSourceVideos((prev) => [newVideo, ...prev]);
         setSelectedVideo(newVideo);
         setShowUploadDialog(false);
         setUploadName("");
         setUploadFile(null);
         setUploadError(null);
+
+        // Poll until background processing finishes
+        if (newVideo.status === "processing") {
+          const pollId = setInterval(async () => {
+            try {
+              const pollRes = await apiGetWithRetry(`/segments/source-videos/${newVideo.id}`);
+              if (!pollRes.ok) { clearInterval(pollId); return; }
+              const updated: SourceVideo = await pollRes.json();
+              if (updated.status === "ready" || updated.status === "error") {
+                clearInterval(pollId);
+                setSourceVideos((prev) =>
+                  prev.map((v) => (v.id === updated.id ? updated : v))
+                );
+                setSelectedVideo((prev) =>
+                  prev?.id === updated.id ? updated : prev
+                );
+                if (updated.status === "error") {
+                  setUploadError("Video processing failed. Try re-uploading.");
+                }
+              }
+            } catch {
+              clearInterval(pollId);
+            }
+          }, 2000);
+        }
       } else {
         const errorData = await res.json().catch(() => null);
         const message = errorData?.detail || `Upload failed (${res.status})`;
@@ -1021,7 +1047,7 @@ export default function SegmentsPage() {
                     ? "bg-primary/10 border border-primary/50"
                     : "hover:bg-muted"
                 }`}
-                onClick={() => setSelectedVideo(video)}
+                onClick={() => video.status !== "processing" && setSelectedVideo(video)}
               >
                 {/* Thumbnail */}
                 <div className="w-14 h-9 bg-muted rounded flex items-center justify-center overflow-hidden flex-shrink-0">
@@ -1042,11 +1068,23 @@ export default function SegmentsPage() {
                   <p className="text-xs font-medium truncate">
                     {video.name}
                   </p>
-                  <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                    <span>{formatTime(video.duration || 0)}</span>
-                    <span>•</span>
-                    <span>{video.segments_count} seg</span>
-                  </div>
+                  {video.status === "processing" ? (
+                    <div className="flex items-center gap-1 text-[10px] text-amber-500">
+                      <RefreshCw className="h-3 w-3 animate-spin" />
+                      <span>Processing...</span>
+                    </div>
+                  ) : video.status === "error" ? (
+                    <div className="flex items-center gap-1 text-[10px] text-red-500">
+                      <AlertTriangle className="h-3 w-3" />
+                      <span>Error</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                      <span>{formatTime(video.duration || 0)}</span>
+                      <span>•</span>
+                      <span>{video.segments_count} seg</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Delete button */}

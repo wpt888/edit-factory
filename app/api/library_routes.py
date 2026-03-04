@@ -3319,7 +3319,9 @@ async def _render_with_preset(
     enable_color: bool = False,
     brightness: float = 0.0,
     contrast: float = 1.0,
-    saturation: float = 1.0
+    saturation: float = 1.0,
+    # Preview mode: skip loudnorm, use ultrafast codec
+    _preview_mode: bool = False,
 ):
     """
     Randează video-ul final cu preset optimizat pentru social media.
@@ -3394,11 +3396,11 @@ async def _render_with_preset(
     if filters:
         cmd.extend(["-vf", ",".join(filters)])
 
-    # Audio normalization (two-pass loudnorm)
+    # Audio normalization (two-pass loudnorm) — skip in preview mode for speed
     audio_filters = []
     encoding_preset = None  # Will be set in audio normalization or encoding params block
 
-    if has_audio and audio_path:  # Only normalize real audio, not silent
+    if not _preview_mode and has_audio and audio_path:  # Only normalize real audio, not silent
         # Get encoding preset to check if normalization is enabled
         preset_name = preset.get("name", "Generic")
         platform_map = {
@@ -3438,45 +3440,55 @@ async def _render_with_preset(
     if audio_filters:
         cmd.extend(["-af", ",".join(audio_filters)])
 
-    # Reuse encoding_preset from audio normalization block (or compute if first time)
-    if not encoding_preset:
-        preset_name = preset.get("name", "Generic")
-        platform_map = {
-            "TikTok": "tiktok",
-            "Instagram Reels": "reels",
-            "YouTube Shorts": "youtube_shorts",
-            "Generic": "generic"
-        }
-        platform_key = platform_map.get(preset_name, "generic")
-        encoding_preset = get_preset(platform_key)
-    logger.info(f"Using encoding preset: {encoding_preset.name} (platform: {encoding_preset.platform})")
+    # Preview mode: use ultrafast codec params, skip encoding preset
+    if _preview_mode:
+        from app.services.ffmpeg_semaphore import get_preview_codec_params
+        _use_gpu = is_nvenc_available()
+        encoding_params = get_preview_codec_params(use_gpu=_use_gpu)
+        # Add audio codec
+        encoding_params.extend(["-c:a", "aac", "-b:a", "128k"])
+        logger.info(f"Preview mode: using {'GPU' if _use_gpu else 'CPU'} ultrafast encoding")
+    else:
+        # Reuse encoding_preset from audio normalization block (or compute if first time)
+        if not encoding_preset:
+            preset_name = preset.get("name", "Generic")
+            platform_map = {
+                "TikTok": "tiktok",
+                "Instagram Reels": "reels",
+                "YouTube Shorts": "youtube_shorts",
+                "Generic": "generic"
+            }
+            platform_key = platform_map.get(preset_name, "generic")
+            encoding_preset = get_preset(platform_key)
+        logger.info(f"Using encoding preset: {encoding_preset.name} (platform: {encoding_preset.platform})")
 
-    # Use GPU encoding when NVENC is available (much faster + frees CPU)
-    _use_gpu = is_nvenc_available()
-    encoding_params = encoding_preset.to_ffmpeg_params(use_gpu=_use_gpu)
-    logger.info(f"Encoding with {'GPU (NVENC)' if _use_gpu else 'CPU (libx264)'}")
+        # Use GPU encoding when NVENC is available (much faster + frees CPU)
+        _use_gpu = is_nvenc_available()
+        encoding_params = encoding_preset.to_ffmpeg_params(use_gpu=_use_gpu)
+        logger.info(f"Encoding with {'GPU (NVENC)' if _use_gpu else 'CPU (libx264)'}")
 
-    # Extract audio bitrate from encoding params for comparison
-    preset_audio_bitrate = encoding_preset.audio_bitrate
+    # Extract audio bitrate from encoding params for comparison (skip in preview mode)
+    if not _preview_mode and encoding_preset:
+        preset_audio_bitrate = encoding_preset.audio_bitrate
 
-    # Override audio bitrate if database preset has higher value
-    db_audio_bitrate = preset.get("audio_bitrate", "192k")
-    if db_audio_bitrate and db_audio_bitrate != preset_audio_bitrate:
-        # Parse bitrates for comparison (e.g., "320k" -> 320)
-        try:
-            db_bitrate_val = int(db_audio_bitrate.lower().replace("k", ""))
-            preset_bitrate_val = int(preset_audio_bitrate.lower().replace("k", ""))
-        except (ValueError, AttributeError):
-            logger.warning(f"Could not parse audio bitrates: db={db_audio_bitrate}, preset={preset_audio_bitrate}, using defaults")
-            db_bitrate_val = 192
-            preset_bitrate_val = 192
-        if db_bitrate_val > preset_bitrate_val:
-            logger.info(f"Database audio bitrate {db_audio_bitrate} higher than preset {preset_audio_bitrate}, using database value")
-            # Update audio bitrate in encoding params
-            for i, param in enumerate(encoding_params):
-                if param == "-b:a":
-                    encoding_params[i+1] = db_audio_bitrate
-                    break
+        # Override audio bitrate if database preset has higher value
+        db_audio_bitrate = preset.get("audio_bitrate", "192k")
+        if db_audio_bitrate and db_audio_bitrate != preset_audio_bitrate:
+            # Parse bitrates for comparison (e.g., "320k" -> 320)
+            try:
+                db_bitrate_val = int(db_audio_bitrate.lower().replace("k", ""))
+                preset_bitrate_val = int(preset_audio_bitrate.lower().replace("k", ""))
+            except (ValueError, AttributeError):
+                logger.warning(f"Could not parse audio bitrates: db={db_audio_bitrate}, preset={preset_audio_bitrate}, using defaults")
+                db_bitrate_val = 192
+                preset_bitrate_val = 192
+            if db_bitrate_val > preset_bitrate_val:
+                logger.info(f"Database audio bitrate {db_audio_bitrate} higher than preset {preset_audio_bitrate}, using database value")
+                # Update audio bitrate in encoding params
+                for i, param in enumerate(encoding_params):
+                    if param == "-b:a":
+                        encoding_params[i+1] = db_audio_bitrate
+                        break
 
     # Add FPS setting (from database preset)
     cmd.extend(["-r", str(preset.get("fps", 30))])

@@ -139,6 +139,8 @@ export function TimelineEditor({
   const previewSegmentEndTimeRef = useRef<number | undefined>(undefined);
   const matchesRef = useRef(matches);
   const previewRafIdRef = useRef<number | null>(null);
+  const seekGraceTimestampRef = useRef(0);
+  const lastReportedTimeRef = useRef(0);
 
   // Keep refs in sync (state → ref for use in callbacks)
   // Note: isPreviewPlayingRef is also set synchronously in togglePreviewPlayPause to avoid 1-frame stale reads
@@ -185,8 +187,8 @@ export function TimelineEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoIdsKey]);
 
-  // Can we show the preview? Need pipelineId and at least one video match
-  const canPreview = !!(pipelineId && variantIndex !== undefined && videoMatches.length > 0);
+  // Can we show the preview? Need pipelineId, profileId, and at least one video match
+  const canPreview = !!(pipelineId && variantIndex !== undefined && profileId && videoMatches.length > 0);
 
   // --- Continuous preview helpers (same pattern as VariantPreviewPlayer) ---
 
@@ -200,6 +202,30 @@ export function TimelineEditor({
     const match = matchesRef.current[matchIdx];
     if (!match?.source_video_id || match.segment_start_time == null) return;
 
+    // Check if we're staying within the same merge group.
+    // Within a merge group, multiple SRT phrases share the same video segment.
+    // Only check merge_group equality — entries may have different segment_ids
+    // from independent matching, but the render uses only the first entry's segment.
+    const prevIdx = previewActiveIndexRef.current;
+    const prevMatch = matchesRef.current[prevIdx];
+    const sameMergeGroup =
+      prevMatch &&
+      match.merge_group != null &&
+      prevMatch.merge_group != null &&
+      match.merge_group === prevMatch.merge_group;
+
+    if (sameMergeGroup) {
+      // Same merge group — just update the index, don't seek.
+      // MUST also update React state so the display toggle CSS re-renders.
+      setPreviewActiveIndex(matchIdx);
+      previewActiveIndexRef.current = matchIdx;
+      return;
+    }
+
+    // Update active index state + ref so display toggle re-renders
+    setPreviewActiveIndex(matchIdx);
+    previewActiveIndexRef.current = matchIdx;
+
     for (const vid of Object.values(previewVideoRefs.current)) {
       if (vid) vid.pause();
     }
@@ -207,16 +233,19 @@ export function TimelineEditor({
     const activeVideo = previewVideoRefs.current[match.source_video_id];
     if (!activeVideo) return;
 
-    // Set segment end boundary — NEVER exceed the DB segment_end_time.
-    if (match.merge_group_duration != null && match.segment_start_time != null && match.segment_end_time != null) {
+    // Set segment end boundary — cap by merge_group_duration if available.
+    if (match.merge_group_duration != null && match.segment_start_time != null) {
       const mergeEnd = match.segment_start_time + match.merge_group_duration;
-      previewSegmentEndTimeRef.current = Math.min(mergeEnd, match.segment_end_time);
+      previewSegmentEndTimeRef.current = match.segment_end_time != null
+        ? Math.min(mergeEnd, match.segment_end_time)
+        : mergeEnd;
     } else {
       previewSegmentEndTimeRef.current = match.segment_end_time ?? undefined;
     }
 
     // Wait for seek to complete before playing — prevents showing frames
     // from the old position during the async seek (50-150ms window).
+    seekGraceTimestampRef.current = performance.now();
     const alreadyAtTarget = Math.abs(activeVideo.currentTime - match.segment_start_time) < 0.05;
     if (alreadyAtTarget) {
       if (isPreviewPlayingRef.current) {
@@ -244,33 +273,18 @@ export function TimelineEditor({
         return;
       }
       const time = audio.currentTime;
-      setPreviewCurrentTime(time);
+      if (Math.abs(time - lastReportedTimeRef.current) > 0.1) {
+        lastReportedTimeRef.current = time;
+        setPreviewCurrentTime(time);
+      }
 
       const newIdx = findActiveMatch(time);
       if (newIdx !== previewActiveIndexRef.current) {
-        const ms = matchesRef.current;
-        const newMatch = ms[newIdx];
-
-        setPreviewActiveIndex(newIdx);
-        previewActiveIndexRef.current = newIdx;
-
-        // Always re-seek on match transition. Merge groups can contain
-        // segments from completely different time ranges in the source video,
-        // so we must seek to each segment's start_time — not just at group boundaries.
-        // Only skip the seek if the video is already within 0.1s of the target
-        // (truly contiguous segments on the same source video).
-        const activeVideo = newMatch?.source_video_id
-          ? previewVideoRefs.current[newMatch.source_video_id]
-          : null;
-        const alreadyAtTarget = activeVideo && newMatch?.segment_start_time != null
-          && Math.abs(activeVideo.currentTime - newMatch.segment_start_time) < 0.1;
-
-        if (!alreadyAtTarget) {
-          syncPreviewVideo(newIdx);
-        } else {
-          // Update end boundary even if we skip the seek
-          previewSegmentEndTimeRef.current = newMatch?.segment_end_time ?? undefined;
-        }
+        // Always delegate to syncPreviewVideo — it handles merge-group
+        // transitions, seeking, boundary updates, and same-group skipping.
+        // DO NOT update previewActiveIndexRef here — syncPreviewVideo reads
+        // the OLD value to detect merge-group transitions.
+        syncPreviewVideo(newIdx);
       }
 
       previewRafIdRef.current = requestAnimationFrame(loop);
@@ -323,9 +337,17 @@ export function TimelineEditor({
     if (!isPreviewActive) return;
 
     const enforceLoop = () => {
-      // Keep loop alive even when paused — it will just skip enforcement.
-      // This prevents the loop from dying and never restarting on resume.
-      if (isPreviewPlayingRef.current) {
+      // When paused, use a slow setTimeout poll instead of tight rAF to save CPU.
+      if (!isPreviewPlayingRef.current) {
+        segmentEnforceRafRef.current = window.setTimeout(() => {
+          segmentEnforceRafRef.current = requestAnimationFrame(enforceLoop);
+        }, 100) as unknown as number;
+        return;
+      }
+      // Skip enforcement during seek grace period — async seek hasn't
+      // completed yet, so currentTime is stale from the previous segment.
+      const inGrace = performance.now() - seekGraceTimestampRef.current < 200;
+      if (!inGrace) {
         for (const vid of Object.values(previewVideoRefs.current)) {
           if (!vid || vid.paused) continue;
           if (
@@ -342,6 +364,7 @@ export function TimelineEditor({
 
     return () => {
       if (segmentEnforceRafRef.current != null) {
+        clearTimeout(segmentEnforceRafRef.current);
         cancelAnimationFrame(segmentEnforceRafRef.current);
         segmentEnforceRafRef.current = null;
       }
@@ -371,6 +394,16 @@ export function TimelineEditor({
       if (match?.source_video_id) {
         const vid = previewVideoRefs.current[match.source_video_id];
         if (vid) {
+          // Set segment end boundary before playing
+          if (match.merge_group_duration != null && match.segment_start_time != null) {
+            const mergeEnd = match.segment_start_time + match.merge_group_duration;
+            previewSegmentEndTimeRef.current = match.segment_end_time != null
+              ? Math.min(mergeEnd, match.segment_end_time)
+              : mergeEnd;
+          } else {
+            previewSegmentEndTimeRef.current = match.segment_end_time ?? undefined;
+          }
+          seekGraceTimestampRef.current = performance.now();
           vid.currentTime = match.segment_start_time ?? vid.currentTime;
           vid.play().catch(() => {});
         }
@@ -425,23 +458,53 @@ export function TimelineEditor({
   }, [isPreviewActive, syncPreviewVideo]);
 
   const activatePreview = useCallback(() => {
+    seekGraceTimestampRef.current = performance.now();
     setIsPreviewActive(true);
     setPreviewActiveIndex(0);
     previewActiveIndexRef.current = 0;
     setPreviewCurrentTime(0);
-    // Auto-play after a short delay to let audio element load
-    setTimeout(() => {
+
+    // Wait for React to mount the audio element, then wait for it to be playable.
+    // Uses requestAnimationFrame to wait for the next render, then checks readyState.
+    const tryStart = () => {
       const audio = previewAudioRef.current;
-      if (audio) {
-        audio.currentTime = 0;
-        audio.play().then(() => {
-          isPreviewPlayingRef.current = true;
-          setIsPreviewPlaying(true);
-          syncPreviewVideo(0);
-          startPreviewRafLoop();
-        }).catch(() => {});
+      if (!audio) {
+        // Audio not mounted yet — retry next frame (React render pending)
+        requestAnimationFrame(tryStart);
+        return;
       }
-    }, 100);
+
+      const beginPlayback = () => {
+        audio.currentTime = 0;
+        isPreviewPlayingRef.current = true;
+        setIsPreviewPlaying(true);
+        seekGraceTimestampRef.current = performance.now();
+        syncPreviewVideo(0);
+        startPreviewRafLoop();
+        audio.play().catch(() => {
+          isPreviewPlayingRef.current = false;
+          setIsPreviewPlaying(false);
+        });
+      };
+
+      if (audio.readyState >= 2) {
+        // Already loaded (cached) — play immediately
+        beginPlayback();
+      } else {
+        // Wait for audio to be playable
+        const onCanPlay = () => {
+          audio.removeEventListener("canplay", onCanPlay);
+          beginPlayback();
+        };
+        audio.addEventListener("canplay", onCanPlay);
+        // Safety: if audio loads very fast between checks
+        if (audio.readyState >= 2) {
+          audio.removeEventListener("canplay", onCanPlay);
+          beginPlayback();
+        }
+      }
+    };
+    requestAnimationFrame(tryStart);
   }, [syncPreviewVideo, startPreviewRafLoop]);
 
   const deactivatePreview = useCallback(() => {
@@ -529,21 +592,30 @@ export function TimelineEditor({
   const handleSelectSegment = (segment: SegmentOption) => {
     if (assigningIndex === null) return;
 
+    // When swapping a segment, propagate to ALL entries in the same merge group.
+    // The render collapse uses the first entry's segment for the whole group,
+    // so all entries must agree for preview and render to match.
+    const targetGroup = matches[assigningIndex]?.merge_group;
+    const segmentFields = {
+      segment_id: segment.id,
+      segment_keywords: segment.keywords,
+      matched_keyword: segment.keywords[0] ?? null,
+      confidence: 1.0,
+      source_video_id: segment.source_video_id,
+      segment_start_time: segment.start_time,
+      segment_end_time: segment.end_time,
+      thumbnail_path: segment.thumbnail_path,
+      product_group: segment.product_group,
+      is_auto_filled: false,
+    };
+
     const updatedMatches = matches.map((match, idx) => {
+      // Update the clicked entry AND all entries in the same merge group
       if (idx === assigningIndex) {
-        return {
-          ...match,
-          segment_id: segment.id,
-          segment_keywords: segment.keywords,
-          matched_keyword: segment.keywords[0] ?? null,
-          confidence: 1.0,
-          source_video_id: segment.source_video_id,
-          segment_start_time: segment.start_time,
-          segment_end_time: segment.end_time,
-          thumbnail_path: segment.thumbnail_path,
-          product_group: segment.product_group,
-          is_auto_filled: false,
-        };
+        return { ...match, ...segmentFields };
+      }
+      if (targetGroup != null && match.merge_group === targetGroup) {
+        return { ...match, ...segmentFields };
       }
       return match;
     });
@@ -681,7 +753,14 @@ export function TimelineEditor({
     const video = videoRef.current;
     const sourceVideoId = match.source_video_id;
     const startTime = match.segment_start_time ?? 0;
-    const endTime = match.segment_end_time;
+    // Respect merge_group_duration — don't play beyond what the render will use.
+    // Without this, a 5s segment plays fully even if only 2.8s is needed.
+    let endTime = match.segment_end_time;
+    if (match.merge_group_duration != null && match.segment_start_time != null) {
+      const mergeEnd = match.segment_start_time + match.merge_group_duration;
+      // If segment_end_time exists, cap by it. If not, use mergeEnd alone.
+      endTime = endTime != null ? Math.min(mergeEnd, endTime) : mergeEnd;
+    }
 
     // Change src when source_video_id or start time changes (handles same-source segments)
     if (sourceVideoId && (sourceVideoId !== lastSourceVideoId.current || startTime !== lastStartTime.current) && profileId) {
@@ -696,14 +775,18 @@ export function TimelineEditor({
       video.play().catch(() => {});
     };
 
-    const handleTimeUpdate = () => {
+    // rAF enforcement loop (60fps) replaces timeupdate (4Hz) to prevent ~250ms overshoot
+    let enforcementRaf: number | null = null;
+    const enforceEnd = () => {
       if (endTime !== undefined && video.currentTime >= endTime) {
         video.pause();
+        enforcementRaf = null;
+        return;
       }
+      enforcementRaf = requestAnimationFrame(enforceEnd);
     };
 
     video.addEventListener("loadeddata", handleLoaded);
-    video.addEventListener("timeupdate", handleTimeUpdate);
 
     // If video is already loaded (same source), just seek
     if (video.readyState >= 2) {
@@ -711,9 +794,12 @@ export function TimelineEditor({
       video.play().catch(() => {});
     }
 
+    // Start enforcement after seek
+    enforcementRaf = requestAnimationFrame(enforceEnd);
+
     return () => {
       video.removeEventListener("loadeddata", handleLoaded);
-      video.removeEventListener("timeupdate", handleTimeUpdate);
+      if (enforcementRaf != null) cancelAnimationFrame(enforcementRaf);
     };
   }, [viewMode, selectedBlockIndex, matches, profileId]);
 
@@ -791,16 +877,20 @@ export function TimelineEditor({
         )}
       </div>
 
+      {/* Preload audio as soon as preview is possible — mounted before isPreviewActive
+          so it has time to load before user clicks Play Preview */}
+      {canPreview && (
+        <audio
+          ref={previewAudioRef}
+          src={`${API_URL}/pipeline/audio/${pipelineId}/${variantIndex}`}
+          preload="auto"
+          style={{ display: "none" }}
+        />
+      )}
+
       {/* Inline continuous preview player */}
       {isPreviewActive && pipelineId && variantIndex !== undefined && profileId && (
         <div className="rounded-lg border bg-card mb-3 overflow-hidden">
-          {/* Hidden audio element */}
-          <audio
-            ref={previewAudioRef}
-            src={`${API_URL}/pipeline/audio/${pipelineId}/${variantIndex}`}
-            preload="auto"
-          />
-
           {/* Video display with subtitle overlay */}
           <div
             className="relative mx-auto bg-black flex items-center justify-center"
@@ -1071,7 +1161,7 @@ export function TimelineEditor({
                         transition-all select-none overflow-hidden
                         ${borderColor} ${bgColor}
                         ${isSelected && !isPreviewActive ? "ring-2 ring-primary ring-offset-1" : ""}
-                        ${isPreviewHighlighted ? "ring-2 ring-green-400 ring-offset-1 animate-pulse" : ""}
+                        ${isPreviewHighlighted ? "ring-2 ring-green-400 ring-offset-1 brightness-110" : ""}
                       `}
                       style={{
                         width: `max(${isMulti ? 90 : 60}px, ${widthPercent}%)`,

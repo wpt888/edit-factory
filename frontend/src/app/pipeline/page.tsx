@@ -121,6 +121,7 @@ interface VariantStatus {
   error?: string;
   library_saved?: boolean;
   library_error?: string;
+  render_fingerprint?: string;
 }
 
 interface VariantPreviewInfo {
@@ -385,6 +386,38 @@ function PipelinePage() {
   const [subtitleSettingsLoaded, setSubtitleSettingsLoaded] = useState(false);
   const subtitleSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceSettingsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Stable per-index callback refs for TimelineEditor props
+  const matchesChangeHandlers = useRef<Record<number, (matches: MatchPreview[]) => void>>({});
+  const getMatchesChangeHandler = useCallback((index: number) => {
+    if (!matchesChangeHandlers.current[index]) {
+      matchesChangeHandlers.current[index] = (updatedMatches: MatchPreview[]) => {
+        setPreviews(prev => {
+          const current = prev[index] || {} as PreviewData;
+          return {
+            ...prev,
+            [index]: {
+              ...current,
+              matches: updatedMatches,
+              matched_count: updatedMatches.filter(m => m.segment_id !== null).length,
+              unmatched_count: updatedMatches.filter(m => m.segment_id === null).length,
+            }
+          };
+        });
+      };
+    }
+    return matchesChangeHandlers.current[index];
+  }, []);
+
+  const interstitialSlidesChangeHandlers = useRef<Record<number, (slides: InterstitialSlide[]) => void>>({});
+  const getInterstitialSlidesChangeHandler = useCallback((index: number) => {
+    if (!interstitialSlidesChangeHandlers.current[index]) {
+      interstitialSlidesChangeHandlers.current[index] = (slides: InterstitialSlide[]) => {
+        setInterstitialSlides(prev => ({ ...prev, [index]: slides }));
+      };
+    }
+    return interstitialSlidesChangeHandlers.current[index];
+  }, []);
 
   // Keep pipelineIdRef in sync for use in closures/timeouts
   useEffect(() => { pipelineIdRef.current = pipelineId; }, [pipelineId]);
@@ -965,6 +998,11 @@ function PipelinePage() {
     for (const idx of Array.from(selectedVariants)) {
       if (previews[idx]?.matches && previews[idx].matches.length > 0) {
         matchOverrides[idx] = previews[idx].matches;
+      } else {
+        console.warn(
+          `[Render] Variant ${idx}: no match_overrides available — render will use auto-matching (may differ from preview!). ` +
+          `previews[${idx}] exists: ${!!previews[idx]}, matches count: ${previews[idx]?.matches?.length ?? 0}`
+        );
       }
     }
 
@@ -1966,6 +2004,7 @@ function PipelinePage() {
                         : step > s.num
                         ? "bg-green-600 text-white cursor-pointer hover:bg-green-700 transition-colors"
                         : (s.num === 3 && step === 2 && Object.keys(previews).length > 0)
+                          || (s.num === 4 && step === 3 && variantStatuses.length > 0)
                         ? "bg-blue-600 text-white cursor-pointer hover:bg-blue-700 transition-colors"
                         : "bg-secondary text-muted-foreground"
                     }`}
@@ -1973,6 +2012,8 @@ function PipelinePage() {
                       if (step > s.num) setStep(s.num);
                       // Allow forward nav to Step 3 from Step 2 when previews exist
                       if (s.num === 3 && step === 2 && Object.keys(previews).length > 0) setStep(3);
+                      // Allow forward nav to Step 4 from Step 3 when render was started
+                      if (s.num === 4 && step === 3 && variantStatuses.length > 0) setStep(4);
                     }}
                   >
                     {step > s.num ? <CheckCircle className="h-5 w-5" /> : s.num}
@@ -3268,20 +3309,8 @@ function PipelinePage() {
                         variantIndex={index}
                         subtitleSettings={subtitleSettings}
                         interstitialSlides={interstitialSlides[index] ?? []}
-                        onInterstitialSlidesChange={(slides) => {
-                          setInterstitialSlides(prev => ({ ...prev, [index]: slides }));
-                        }}
-                        onMatchesChange={(updatedMatches) => {
-                          setPreviews(prev => ({
-                            ...prev,
-                            [index]: {
-                              ...prev[index],
-                              matches: updatedMatches,
-                              matched_count: updatedMatches.filter(m => m.segment_id !== null).length,
-                              unmatched_count: updatedMatches.filter(m => m.segment_id === null).length,
-                            }
-                          }));
-                        }}
+                        onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(index)}
+                        onMatchesChange={getMatchesChangeHandler(index)}
                       />
                     </CardContent>
                   </Card>
@@ -3299,36 +3328,9 @@ function PipelinePage() {
                 variantIndex={previewVariant}
                 profileId={currentProfile.id}
                 subtitleSettings={subtitleSettings}
-                availableSegments={availableSegments}
-                onMatchSwap={(matchIndex, newSegment) => {
-                  const updatedMatches = (previews[previewVariant]?.matches ?? []).map((match, idx) => {
-                    if (idx === matchIndex) {
-                      return {
-                        ...match,
-                        segment_id: newSegment.id,
-                        segment_keywords: newSegment.keywords,
-                        matched_keyword: newSegment.keywords[0] ?? null,
-                        confidence: 1.0,
-                        source_video_id: newSegment.source_video_id,
-                        segment_start_time: newSegment.start_time,
-                        segment_end_time: newSegment.end_time,
-                        thumbnail_path: newSegment.thumbnail_path,
-                        product_group: newSegment.product_group,
-                        is_auto_filled: false,
-                      };
-                    }
-                    return match;
-                  });
-                  setPreviews(prev => ({
-                    ...prev,
-                    [previewVariant]: {
-                      ...prev[previewVariant],
-                      matches: updatedMatches,
-                      matched_count: updatedMatches.filter(m => m.segment_id !== null).length,
-                      unmatched_count: updatedMatches.filter(m => m.segment_id === null).length,
-                    }
-                  }));
-                }}
+                sourceVideoIds={Array.from(selectedSourceIds)}
+                minSegmentDuration={minSegmentDuration}
+                wordsPerSubtitle={wordsPerSubtitle}
               />
             )}
 
@@ -3435,6 +3437,13 @@ function PipelinePage() {
                     {/* Current step */}
                     <p className="text-sm text-muted-foreground">{status.current_step}</p>
 
+                    {/* Render fingerprint (debug: unique per render parameters) */}
+                    {status.render_fingerprint && (
+                      <p className="text-xs font-mono text-muted-foreground/60">
+                        Render ID: {status.render_fingerprint}
+                      </p>
+                    )}
+
                     {/* Inline video player + download button */}
                     {status.status === "completed" && status.final_video_path && (
                       <div className="space-y-3">
@@ -3449,7 +3458,7 @@ function PipelinePage() {
                           preload="none"
                         >
                           <source
-                            src={`${API_URL}/library/files/${encodeURIComponent(status.final_video_path)}`}
+                            src={`${API_URL}/library/files/${encodeURIComponent(status.final_video_path)}?v=${Date.now()}`}
                             type="video/mp4"
                           />
                           Your browser does not support HTML5 video.
@@ -3458,7 +3467,7 @@ function PipelinePage() {
                           <a
                             href={`${API_URL}/library/files/${encodeURIComponent(
                               status.final_video_path
-                            )}`}
+                            )}?v=${Date.now()}`}
                             download
                           >
                             <Download className="h-4 w-4 mr-2" />
