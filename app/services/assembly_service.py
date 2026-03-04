@@ -741,7 +741,7 @@ class AssemblyService:
         audio_duration: float,
         duration_overrides: Optional[List[Optional[float]]] = None,
         variant_index: int = 0,
-        min_segment_duration: float = 2.0,
+        min_segment_duration: float = 3.0,
         ultra_rapid_intro: bool = True
     ) -> List[TimelineEntry]:
         """
@@ -774,6 +774,7 @@ class AssemblyService:
         fallback_segment = segments_data[0] if segments_data else None
 
         current_timeline_pos = 0.0
+        intro_entry_count = 0  # Track how many intro micro-segments were added
 
         # Ultra-rapid intro: prepend 3-4 micro-segments from highest-scored segments
         if ultra_rapid_intro and segments_data:
@@ -800,22 +801,27 @@ class AssemblyService:
             for seg in intro_segments:
                 seg_start = seg.get("start_time", 0.0)
                 seg_end = seg.get("end_time", seg_start + MICRO_DURATION)
+                seg_duration = seg_end - seg_start
                 # Extract from the middle of the segment for best content
                 seg_mid = (seg_start + seg_end) / 2
                 micro_start = max(seg_start, seg_mid - MICRO_DURATION / 2)
+                # Clamp end_time to never exceed segment boundary
+                micro_end = min(micro_start + MICRO_DURATION, seg_end)
+                actual_micro_duration = micro_end - micro_start
 
                 entry = TimelineEntry(
                     source_video_path=seg.get("source_video_path"),
                     start_time=micro_start,
-                    end_time=micro_start + MICRO_DURATION,
+                    end_time=micro_end,
                     timeline_start=current_timeline_pos,
-                    timeline_duration=MICRO_DURATION,
+                    timeline_duration=actual_micro_duration,
                     transforms=seg.get("transforms"),
                 )
                 timeline.append(entry)
-                current_timeline_pos += MICRO_DURATION
+                current_timeline_pos += actual_micro_duration
 
-            logger.info(f"Ultra-rapid intro: added {len(intro_segments)} micro-segments ({current_timeline_pos:.2f}s)")
+            intro_entry_count = len(intro_segments)
+            logger.info(f"Ultra-rapid intro: added {intro_entry_count} micro-segments ({current_timeline_pos:.2f}s)")
 
         for idx, match in enumerate(match_results):
             # Determine which segment to use
@@ -906,9 +912,10 @@ class AssemblyService:
             gap = target_video_duration - current_timeline_pos
             logger.info(f"Extending timeline by {gap:.2f}s to cover audio duration + safety margin")
 
-            if timeline:
-                # Extend the last timeline entry to cover the gap.
+            if len(timeline) > intro_entry_count:
+                # Extend the last BODY timeline entry to cover the gap.
                 # This preserves the last previewed segment instead of adding random content.
+                # Never extend an intro micro-segment (they must stay short).
                 last_entry = timeline[-1]
                 timeline[-1] = TimelineEntry(
                     source_video_path=last_entry.source_video_path,
@@ -933,14 +940,17 @@ class AssemblyService:
                 )
                 timeline.append(gap_entry)
 
-        # Post-process: merge short consecutive entries to meet min_segment_duration.
-        # ALL sub-entries within a merged group survive as individual TimelineEntry
-        # objects — diversity from the round-robin is fully preserved. The
-        # accumulated group duration is redistributed proportionally across the
-        # sub-entries so that each segment receives its fair share of screen time.
+        # Post-process: merge short consecutive entries into single segments to
+        # meet min_segment_duration.  When a group of entries is merged, the
+        # longest entry's source video is kept and its duration is extended to
+        # cover the whole group — this eliminates rapid visual cuts.
+        # IMPORTANT: intro micro-segments are preserved as-is (they're meant to be rapid).
         if min_segment_duration > 0 and len(timeline) > 1:
             merged = []
-            i = 0
+            # Preserve intro micro-segments untouched
+            for intro_idx in range(intro_entry_count):
+                merged.append(timeline[intro_idx])
+            i = intro_entry_count
             while i < len(timeline):
                 current = timeline[i]
                 accumulated_duration = current.timeline_duration
@@ -951,39 +961,31 @@ class AssemblyService:
                     last_merged_idx += 1
                     accumulated_duration += timeline[last_merged_idx].timeline_duration
 
-                # Collect all sub-entries in this merged group
+                # Pick the longest sub-entry as representative (best visual content)
                 sub_entries = timeline[i:last_merged_idx + 1]
-                original_total = sum(e.timeline_duration for e in sub_entries)
+                representative = max(sub_entries, key=lambda e: e.timeline_duration)
 
-                # Redistribute accumulated_duration proportionally across sub-entries.
-                # Every sub-entry keeps its own source_video_path, start_time, and
-                # transforms — no segment diversity is lost during merging.
-                group_timeline_start = current.timeline_start
-                for se in sub_entries:
-                    proportion = se.timeline_duration / original_total if original_total > 0 else 1.0 / max(len(sub_entries), 1)
-                    new_duration = accumulated_duration * proportion
-                    merged.append(TimelineEntry(
-                        source_video_path=se.source_video_path,
-                        start_time=se.start_time,
-                        end_time=se.start_time + new_duration,
-                        timeline_start=group_timeline_start,
-                        timeline_duration=new_duration,
-                        transforms=se.transforms,
-                    ))
-                    group_timeline_start += new_duration
+                merged.append(TimelineEntry(
+                    source_video_path=representative.source_video_path,
+                    start_time=representative.start_time,
+                    end_time=representative.end_time,
+                    timeline_start=current.timeline_start,
+                    timeline_duration=accumulated_duration,
+                    transforms=representative.transforms,
+                ))
 
                 i = last_merged_idx + 1
 
             # If the last entry is shorter than minimum, absorb it into
-            # the previous entry (acceptable edge case — only the very last entry)
-            if len(merged) >= 2 and merged[-1].timeline_duration < min_segment_duration:
+            # the previous entry — but only if prev is a body entry (not intro)
+            if len(merged) >= 2 and merged[-1].timeline_duration < min_segment_duration and len(merged) - 1 >= intro_entry_count:
                 last = merged.pop()
                 prev = merged[-1]
                 combined_duration = prev.timeline_duration + last.timeline_duration
                 merged[-1] = TimelineEntry(
                     source_video_path=prev.source_video_path,
                     start_time=prev.start_time,
-                    end_time=prev.start_time + combined_duration,
+                    end_time=prev.end_time,
                     timeline_start=prev.timeline_start,
                     timeline_duration=combined_duration,
                     transforms=prev.transforms,
@@ -1095,11 +1097,13 @@ class AssemblyService:
                 ])
             else:
                 # Without loop, -ss before -i enables fast seeking
-                # Use needed_duration (not segment_duration) to match timeline exactly
+                # CRITICAL: clamp to segment_duration so FFmpeg never reads past
+                # the user-defined segment end_time boundary
+                clamped_duration = min(needed_duration, segment_duration)
                 cmd.extend([
                     "-ss", str(entry.start_time),
                     "-i", entry.source_video_path,
-                    "-t", str(needed_duration),
+                    "-t", str(clamped_duration),
                     "-vf", ",".join(transform_filters),
                 ])
 
@@ -1261,7 +1265,7 @@ class AssemblyService:
         reuse_srt_content: Optional[str] = None,
         on_progress=None,  # Optional[Callable[[str, int], None]]
         max_words_per_phrase: int = 2,
-        min_segment_duration: float = 2.0,
+        min_segment_duration: float = 3.0,
         ultra_rapid_intro: bool = True,
         interstitial_slides: Optional[List[dict]] = None,
         pip_overlays: Optional[Dict[str, dict]] = None,
@@ -1461,6 +1465,43 @@ class AssemblyService:
                 ]
                 # Extract duration overrides (parallel list, None where not overridden)
                 duration_overrides = [m.get("duration_override") for m in match_overrides]
+
+                # ── Collapse merge groups ──────────────────────────────────
+                # The preview player shows ONE continuous video clip per merge
+                # group (all phrases in the group share the same segment and
+                # play for merge_group_duration).  Without collapsing, the
+                # render would create N tiny clips (one per SRT phrase, ~0.4s)
+                # all extracted from the SAME start_time — producing stutter.
+                # Fix: keep only the first entry per merge group and set its
+                # duration_override to merge_group_duration so build_timeline
+                # produces one continuous extraction matching the preview.
+                has_merge_groups = any(
+                    m.get("merge_group") is not None for m in match_overrides
+                )
+                if has_merge_groups:
+                    seen_groups: set = set()
+                    collapsed_results = []
+                    collapsed_overrides = []
+                    for idx_c, m_raw in enumerate(match_overrides):
+                        group = m_raw.get("merge_group")
+                        if group is not None:
+                            if group in seen_groups:
+                                continue  # skip subsequent entries in same group
+                            seen_groups.add(group)
+                            # Use merge_group_duration as this entry's duration
+                            group_dur = m_raw.get("merge_group_duration")
+                            collapsed_overrides.append(
+                                group_dur if group_dur else m_raw.get("duration_override")
+                            )
+                        else:
+                            collapsed_overrides.append(m_raw.get("duration_override"))
+                        collapsed_results.append(match_results[idx_c])
+                    logger.info(
+                        f"Step 5/7: Collapsed {len(match_results)} matches into "
+                        f"{len(collapsed_results)} entries ({len(seen_groups)} merge groups)"
+                    )
+                    match_results = collapsed_results
+                    duration_overrides = collapsed_overrides
             else:
                 logger.info("Step 5/7: Matching SRT phrases to segments")
                 match_results = self.match_srt_to_segments(
@@ -1477,8 +1518,12 @@ class AssemblyService:
             logger.info("Step 6/7: Building video timeline")
             _report("Building video timeline", 60)
             # When match_overrides are provided, the user has already approved the preview.
-            # The preview player shows segments synced directly to SRT time (no intro, no merging).
-            # Render must reproduce exactly what the preview showed.
+            # Ultra-rapid intro is disabled (preview doesn't show it).
+            # Merge grouping is also disabled because the collapse pass above (lines 1469-1504)
+            # already reduced N entries to M groups using merge_group metadata.  Running
+            # build_timeline's merge pass again would re-merge the already-collapsed entries,
+            # picking a "representative" whose start_time/end_time covers only a fraction of
+            # the timeline_duration — triggering FFmpeg looping and producing repeated frames.
             effective_intro = False if match_overrides else ultra_rapid_intro
             effective_min_seg = 0.0 if match_overrides else min_segment_duration
             timeline = self.build_timeline(
@@ -1553,7 +1598,7 @@ class AssemblyService:
         reuse_audio_duration: Optional[float] = None,
         voice_settings: Optional[dict] = None,
         max_words_per_phrase: int = 2,
-        min_segment_duration: float = 2.0,
+        min_segment_duration: float = 3.0,
         avoid_segment_ids: Optional[set] = None,
         ultra_rapid_intro: bool = True
     ) -> dict:

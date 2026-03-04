@@ -172,12 +172,16 @@ export function VariantPreviewPlayer({
         ? videoRefs.current[prevMatch.source_video_id]
         : null;
 
+      // CRITICAL: always use the DB segment_end_time as the hard boundary
+      // so the preview never plays past the user-defined segment end
       segmentEndTimeRef.current = match.segment_end_time ?? undefined;
+
 
       const finishSwitch = () => {
         // Update active match (triggers React re-render for display toggle)
         setActiveMatchIndex(matchIdx);
         activeMatchIndexRef.current = matchIdx;
+        pendingSyncIdxRef.current = -1; // Clear seek-storm guard
 
         if (isPlayingRef.current) {
           incomingVideo.play().catch(() => {});
@@ -213,6 +217,8 @@ export function VariantPreviewPlayer({
 
   // rAF ref for cleanup
   const rafIdRef = useRef<number | null>(null);
+  // Guard against seek-storm: tracks which index syncVideoToMatch was last called with
+  const pendingSyncIdxRef = useRef<number>(-1);
 
   // rAF loop — tracks audio.currentTime at ~60fps for near-instant segment detection
   const startRafLoop = useCallback(() => {
@@ -228,7 +234,13 @@ export function VariantPreviewPlayer({
 
       const newIdx = findActiveMatch(time);
       if (newIdx !== activeMatchIndexRef.current) {
-        syncVideoToMatch(newIdx);
+        // Guard against seek-storm: syncVideoToMatch updates activeMatchIndexRef
+        // only after seeked event fires. Prevent re-calling on every rAF frame
+        // by checking if we already initiated a sync for this index.
+        if (newIdx !== pendingSyncIdxRef.current) {
+          pendingSyncIdxRef.current = newIdx;
+          syncVideoToMatch(newIdx);
+        }
       }
 
       rafIdRef.current = requestAnimationFrame(loop);
@@ -273,27 +285,34 @@ export function VariantPreviewPlayer({
     };
   }, [stopRafLoop]);
 
-  // Video timeupdate listeners for segment_end_time enforcement
-  // Re-register only when the set of video elements changes
-  useEffect(() => {
-    const handlers: Array<[HTMLVideoElement, () => void]> = [];
+  // Video segment_end_time enforcement via rAF (60fps instead of timeupdate's ~4Hz).
+  // This prevents ~250ms overshoot past segment boundaries.
+  const segmentEnforceRafRef = useRef<number | null>(null);
 
-    for (const vid of Object.values(videoRefs.current)) {
-      if (!vid) continue;
-      const handler = () => {
-        if (
-          segmentEndTimeRef.current != null &&
-          vid.currentTime >= segmentEndTimeRef.current
-        ) {
-          vid.pause();
+  useEffect(() => {
+    const enforceLoop = () => {
+      // Keep loop alive even when paused — prevents it from dying
+      // and never restarting when user resumes playback.
+      if (isPlayingRef.current) {
+        for (const vid of Object.values(videoRefs.current)) {
+          if (!vid || vid.paused) continue;
+          if (
+            segmentEndTimeRef.current != null &&
+            vid.currentTime >= segmentEndTimeRef.current
+          ) {
+            vid.pause();
+          }
         }
-      };
-      vid.addEventListener("timeupdate", handler);
-      handlers.push([vid, handler]);
-    }
+      }
+      segmentEnforceRafRef.current = requestAnimationFrame(enforceLoop);
+    };
+    segmentEnforceRafRef.current = requestAnimationFrame(enforceLoop);
 
     return () => {
-      handlers.forEach(([vid, h]) => vid.removeEventListener("timeupdate", h));
+      if (segmentEnforceRafRef.current != null) {
+        cancelAnimationFrame(segmentEnforceRafRef.current);
+        segmentEnforceRafRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoIdsKey]);
@@ -315,12 +334,14 @@ export function VariantPreviewPlayer({
       setIsPlaying(true);
       isPlayingRef.current = true;
       audio.play().catch(() => {});
-      // Resume active video
+      // Resume active video — always seek to segment_start_time to prevent
+      // playing from wherever the video was left (which could be outside the segment)
       const match = matchesRef.current[activeMatchIndexRef.current];
-      if (match?.source_video_id) {
+      if (match?.source_video_id && match.segment_start_time != null) {
         const vid = videoRefs.current[match.source_video_id];
         if (vid) {
-          vid.currentTime = match.segment_start_time ?? vid.currentTime;
+          segmentEndTimeRef.current = match.segment_end_time ?? undefined;
+          vid.currentTime = match.segment_start_time;
           vid.play().catch(() => {});
         }
       }

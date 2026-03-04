@@ -1920,7 +1920,7 @@ async def delete_clip(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", False).single().execute()
+        clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", False).execute()
         if not clip.data:
             raise HTTPException(status_code=404, detail="Clip not found")
         supabase.table("editai_clips").update({

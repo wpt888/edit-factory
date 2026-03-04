@@ -270,7 +270,7 @@ function PipelinePage() {
   const [voiceSpeed, setVoiceSpeed] = useState(1.0);
   const [voiceSpeakerBoost, setVoiceSpeakerBoost] = useState(true);
   const [wordsPerSubtitle, setWordsPerSubtitle] = useState(2);
-  const [minSegmentDuration, setMinSegmentDuration] = useState(2.0);
+  const [minSegmentDuration, setMinSegmentDuration] = useState(3.0);
   const [ultraRapidIntro, setUltraRapidIntro] = useState(true);
   const voiceSettingsLoaded = useRef(false);
 

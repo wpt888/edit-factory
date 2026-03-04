@@ -207,18 +207,30 @@ export function TimelineEditor({
     const activeVideo = previewVideoRefs.current[match.source_video_id];
     if (!activeVideo) return;
 
-    activeVideo.currentTime = match.segment_start_time;
-
-    // If this match belongs to a merge group, let the video play for the
-    // full group duration instead of pausing at the individual segment end.
-    if (match.merge_group_duration != null && match.segment_start_time != null) {
-      previewSegmentEndTimeRef.current = match.segment_start_time + match.merge_group_duration;
+    // Set segment end boundary — NEVER exceed the DB segment_end_time.
+    if (match.merge_group_duration != null && match.segment_start_time != null && match.segment_end_time != null) {
+      const mergeEnd = match.segment_start_time + match.merge_group_duration;
+      previewSegmentEndTimeRef.current = Math.min(mergeEnd, match.segment_end_time);
     } else {
       previewSegmentEndTimeRef.current = match.segment_end_time ?? undefined;
     }
 
-    if (isPreviewPlayingRef.current) {
-      activeVideo.play().catch(() => {});
+    // Wait for seek to complete before playing — prevents showing frames
+    // from the old position during the async seek (50-150ms window).
+    const alreadyAtTarget = Math.abs(activeVideo.currentTime - match.segment_start_time) < 0.05;
+    if (alreadyAtTarget) {
+      if (isPreviewPlayingRef.current) {
+        activeVideo.play().catch(() => {});
+      }
+    } else {
+      const onSeeked = () => {
+        activeVideo.removeEventListener("seeked", onSeeked);
+        if (isPreviewPlayingRef.current) {
+          activeVideo.play().catch(() => {});
+        }
+      };
+      activeVideo.addEventListener("seeked", onSeeked);
+      activeVideo.currentTime = match.segment_start_time;
     }
   }, []);
 
@@ -237,15 +249,27 @@ export function TimelineEditor({
       const newIdx = findActiveMatch(time);
       if (newIdx !== previewActiveIndexRef.current) {
         const ms = matchesRef.current;
-        const oldGroup = ms[previewActiveIndexRef.current]?.merge_group;
-        const newGroup = ms[newIdx]?.merge_group;
-        // Only switch video when entering a DIFFERENT merge group (or no groups)
-        const groupChanged = oldGroup === undefined || newGroup === undefined || oldGroup !== newGroup;
+        const newMatch = ms[newIdx];
 
         setPreviewActiveIndex(newIdx);
         previewActiveIndexRef.current = newIdx;
-        if (groupChanged) {
+
+        // Always re-seek on match transition. Merge groups can contain
+        // segments from completely different time ranges in the source video,
+        // so we must seek to each segment's start_time — not just at group boundaries.
+        // Only skip the seek if the video is already within 0.1s of the target
+        // (truly contiguous segments on the same source video).
+        const activeVideo = newMatch?.source_video_id
+          ? previewVideoRefs.current[newMatch.source_video_id]
+          : null;
+        const alreadyAtTarget = activeVideo && newMatch?.segment_start_time != null
+          && Math.abs(activeVideo.currentTime - newMatch.segment_start_time) < 0.1;
+
+        if (!alreadyAtTarget) {
           syncPreviewVideo(newIdx);
+        } else {
+          // Update end boundary even if we skip the seek
+          previewSegmentEndTimeRef.current = newMatch?.segment_end_time ?? undefined;
         }
       }
 
@@ -291,27 +315,36 @@ export function TimelineEditor({
     };
   }, [isPreviewActive, stopPreviewRafLoop]);
 
-  // Video segment_end_time enforcement
+  // Video segment_end_time enforcement via rAF (60fps instead of timeupdate's ~4Hz).
+  // This prevents the ~250ms overshoot that timeupdate allows past segment boundaries.
+  const segmentEnforceRafRef = useRef<number | null>(null);
+
   useEffect(() => {
     if (!isPreviewActive) return;
-    const handlers: Array<[HTMLVideoElement, () => void]> = [];
 
-    for (const vid of Object.values(previewVideoRefs.current)) {
-      if (!vid) continue;
-      const handler = () => {
-        if (
-          previewSegmentEndTimeRef.current != null &&
-          vid.currentTime >= previewSegmentEndTimeRef.current
-        ) {
-          vid.pause();
+    const enforceLoop = () => {
+      // Keep loop alive even when paused — it will just skip enforcement.
+      // This prevents the loop from dying and never restarting on resume.
+      if (isPreviewPlayingRef.current) {
+        for (const vid of Object.values(previewVideoRefs.current)) {
+          if (!vid || vid.paused) continue;
+          if (
+            previewSegmentEndTimeRef.current != null &&
+            vid.currentTime >= previewSegmentEndTimeRef.current
+          ) {
+            vid.pause();
+          }
         }
-      };
-      vid.addEventListener("timeupdate", handler);
-      handlers.push([vid, handler]);
-    }
+      }
+      segmentEnforceRafRef.current = requestAnimationFrame(enforceLoop);
+    };
+    segmentEnforceRafRef.current = requestAnimationFrame(enforceLoop);
 
     return () => {
-      handlers.forEach(([vid, h]) => vid.removeEventListener("timeupdate", h));
+      if (segmentEnforceRafRef.current != null) {
+        cancelAnimationFrame(segmentEnforceRafRef.current);
+        segmentEnforceRafRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPreviewActive, videoIdsKey]);

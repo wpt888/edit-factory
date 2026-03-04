@@ -376,7 +376,7 @@ class PipelineRenderRequest(BaseModel):
     # Subtitle word grouping
     words_per_subtitle: int = 2
     # Minimum video segment duration (seconds) — groups short SRT phrases
-    min_segment_duration: float = 2.0
+    min_segment_duration: float = 3.0
     # Ultra-rapid intro: 3-4 micro-segments at the start for hook effect
     ultra_rapid_intro: bool = True
     # Interstitial product image slides: variant_index -> list of slide configs
@@ -662,6 +662,9 @@ async def update_pipeline_scripts(
         raise HTTPException(status_code=400, detail="scripts list cannot be empty")
     if len(request.scripts) > 10:
         raise HTTPException(status_code=400, detail="Maximum 10 scripts allowed")
+    for i, script in enumerate(request.scripts):
+        if len(script) > 5000:
+            raise HTTPException(status_code=400, detail=f"Script {i+1} exceeds 5000 character limit ({len(script)} chars)")
 
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
@@ -1174,7 +1177,7 @@ async def preview_variant(
     source_video_ids: Optional[List[str]] = Body(None, embed=True),
     voice_settings: Optional[Dict[str, Any]] = Body(None, embed=True),
     words_per_subtitle: int = Body(2, embed=True),
-    min_segment_duration: float = Body(2.0, embed=True),
+    min_segment_duration: float = Body(3.0, embed=True),
     ultra_rapid_intro: bool = Body(True, embed=True)
 ):
     """
@@ -1331,12 +1334,12 @@ async def preview_variant(
         ]
 
         return PipelinePreviewResponse(
-            audio_duration=preview_data["audio_duration"],
-            srt_content=preview_data["srt_content"],
+            audio_duration=preview_data.get("audio_duration", 0.0),
+            srt_content=preview_data.get("srt_content", ""),
             matches=matches,
-            total_phrases=preview_data["total_phrases"],
-            matched_count=preview_data["matched_count"],
-            unmatched_count=preview_data["unmatched_count"],
+            total_phrases=preview_data.get("total_phrases", 0),
+            matched_count=preview_data.get("matched_count", 0),
+            unmatched_count=preview_data.get("unmatched_count", 0),
             available_segments=preview_data.get("available_segments", [])
         )
 
