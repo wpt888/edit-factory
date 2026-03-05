@@ -487,6 +487,14 @@ export function TimelineEditor({
         });
       };
 
+      // FE-12: Handle audio load errors gracefully
+      audio.onerror = () => {
+        console.warn("[TimelineEditor] Audio failed to load for preview playback");
+        isPreviewPlayingRef.current = false;
+        setIsPreviewPlaying(false);
+        setIsPreviewActive(false);
+      };
+
       if (audio.readyState >= 2) {
         // Already loaded (cached) — play immediately
         beginPlayback();
@@ -770,11 +778,6 @@ export function TimelineEditor({
       video.load();
     }
 
-    const handleLoaded = () => {
-      video.currentTime = startTime;
-      video.play().catch(() => {});
-    };
-
     // rAF enforcement loop (60fps) replaces timeupdate (4Hz) to prevent ~250ms overshoot
     let enforcementRaf: number | null = null;
     const enforceEnd = () => {
@@ -786,16 +789,25 @@ export function TimelineEditor({
       enforcementRaf = requestAnimationFrame(enforceEnd);
     };
 
-    video.addEventListener("loadeddata", handleLoaded);
-
-    // If video is already loaded (same source), just seek
-    if (video.readyState >= 2) {
+    // FE-13: Start enforcement once — triggered by play, not duplicated outside.
+    const startPlayAndEnforce = () => {
       video.currentTime = startTime;
       video.play().catch(() => {});
-    }
+      // Cancel any previous enforcement before starting new one
+      if (enforcementRaf != null) cancelAnimationFrame(enforcementRaf);
+      enforcementRaf = requestAnimationFrame(enforceEnd);
+    };
 
-    // Start enforcement after seek
-    enforcementRaf = requestAnimationFrame(enforceEnd);
+    const handleLoaded = () => {
+      startPlayAndEnforce();
+    };
+
+    video.addEventListener("loadeddata", handleLoaded);
+
+    // If video is already loaded (same source), just seek and play
+    if (video.readyState >= 2) {
+      startPlayAndEnforce();
+    }
 
     return () => {
       video.removeEventListener("loadeddata", handleLoaded);

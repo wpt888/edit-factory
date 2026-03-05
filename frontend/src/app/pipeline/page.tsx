@@ -361,6 +361,10 @@ function PipelinePage() {
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
   const [sourceVideosLoading, setSourceVideosLoading] = useState(false);
   const [sourceVideoSearch, setSourceVideoSearch] = useState("");
+  // FE-16: This is a single shared search string for all variants' group tag dropdowns.
+  // Ideally this would be Record<number, string> (per-variant) to prevent search state leaking
+  // across variants when multiple group tag dropdowns are open. Left as-is for now because
+  // only one dropdown can be open at a time in the current UI, making the leak harmless.
   const [groupTagSearch, setGroupTagSearch] = useState("");
   const sourceSelectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipelineIdRef = useRef<string | null>(null);
@@ -460,11 +464,9 @@ function PipelinePage() {
       if (brand && brand !== "all") params.set("brand", brand);
       if (category && category !== "all") params.set("category", category);
       const res = await apiGet(`/catalog/products?${params}`);
-      if (res.ok) {
-        const data = await res.json();
-        setCatalogProducts(data.products || []);
-        setCatalogPagination(data.pagination || { page: 1, page_size: 20, total: 0, total_pages: 1 });
-      }
+      const data = await res.json();
+      setCatalogProducts(data.products || []);
+      setCatalogPagination(data.pagination || { page: 1, page_size: 20, total: 0, total_pages: 1 });
     } catch (err) {
       handleApiError(err, "Failed to load catalog products");
     } finally {
@@ -476,10 +478,8 @@ function PipelinePage() {
   const fetchCatalogFilters = useCallback(async () => {
     try {
       const res = await apiGet("/catalog/products/filters");
-      if (res.ok) {
-        const data = await res.json();
-        setCatalogFilters({ brands: data.brands || [], categories: data.categories || [] });
-      }
+      const data = await res.json();
+      setCatalogFilters({ brands: data.brands || [], categories: data.categories || [] });
     } catch (err) {
       handleApiError(err, "Failed to load catalog filters");
     }
@@ -490,17 +490,15 @@ function PipelinePage() {
     setSourceVideosLoading(true);
     try {
       const res = await apiGet("/segments/source-videos");
-      if (res.ok) {
-        const data = await res.json();
-        setSourceVideos(data || []);
-        // Auto-select all if no selection has been made yet
-        setSelectedSourceIds(prev => {
-          if (prev.size === 0 && data.length > 0) {
-            return new Set(data.map((v: { id: string }) => v.id));
-          }
-          return prev;
-        });
-      }
+      const data = await res.json();
+      setSourceVideos(data || []);
+      // Auto-select all if no selection has been made yet
+      setSelectedSourceIds(prev => {
+        if (prev.size === 0 && data.length > 0) {
+          return new Set(data.map((v: { id: string }) => v.id));
+        }
+        return prev;
+      });
     } catch (err) {
       handleApiError(err, "Failed to load source videos");
     } finally {
@@ -514,10 +512,8 @@ function PipelinePage() {
     if (!currentProfile?.id) return;
     apiGet("/pipeline/segment-duration")
       .then(async (res) => {
-        if (res.ok) {
-          const data = await res.json();
-          setTotalSegmentDuration(data.total_segment_duration || 0);
-        }
+        const data = await res.json();
+        setTotalSegmentDuration(data.total_segment_duration || 0);
       })
       .catch((err) => {
         console.warn("Failed to fetch segment duration:", err);
@@ -529,11 +525,9 @@ function PipelinePage() {
     if (!currentProfile?.id) return;
     apiGet(`/profiles/${currentProfile.id}/ai-instructions`)
       .then(async (res) => {
-        if (res.ok) {
-          const data = await res.json();
-          setAiInstructions(data.ai_instructions || "");
-          if (data.ai_instructions) setAiRulesExpanded(true);
-        }
+        const data = await res.json();
+        setAiInstructions(data.ai_instructions || "");
+        if (data.ai_instructions) setAiRulesExpanded(true);
       })
       .catch((err) => {
         console.warn("Failed to load AI instructions:", err);
@@ -565,12 +559,10 @@ function PipelinePage() {
     let restored = false;
     try {
       const res = await apiGet(`/pipeline/${pid}/source-selection`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.source_video_ids && data.source_video_ids.length > 0) {
-          setSelectedSourceIds(new Set(data.source_video_ids));
-          restored = true;
-        }
+      const data = await res.json();
+      if (data.source_video_ids && data.source_video_ids.length > 0) {
+        setSelectedSourceIds(new Set(data.source_video_ids));
+        restored = true;
       }
     } catch {
       // Ignore — fresh pipeline or column not yet migrated
@@ -630,7 +622,11 @@ function PipelinePage() {
     }
   };
 
-  // Safety net: auto-select all source videos when on step 2 with none selected (first time only)
+  // Safety net: auto-select all source videos when on step 2 with none selected (first time only).
+  // FE-11: This effect fires only once per component lifecycle because initialSourceSelectionDone
+  // is a ref that persists across re-renders. The guard prevents re-selecting all videos after a
+  // user deliberately deselects some. The selectedSourceIds.size === 0 check ensures this only
+  // triggers when no selection exists (e.g., fresh page load or after restoreSourceSelection clears).
   useEffect(() => {
     if (step === 2 && sourceVideos.length > 0 && selectedSourceIds.size === 0 && !sourceVideosLoading && !initialSourceSelectionDone.current) {
       initialSourceSelectionDone.current = true;
@@ -648,10 +644,8 @@ function PipelinePage() {
     const ids = Array.from(selectedSourceIds).join(",");
     apiGet(`/segments/product-groups-bulk?source_video_ids=${encodeURIComponent(ids)}`)
       .then(async (res) => {
-        if (res.ok) {
-          const data = await res.json();
-          setProductGroups(data);
-        }
+        const data = await res.json();
+        setProductGroups(data);
       })
       .catch(() => setProductGroups([]));
   }, [selectedSourceIds]);
@@ -703,6 +697,12 @@ function PipelinePage() {
     if (next) {
       fetchCatalogProducts("", "all", "all", 1);
       if (catalogFilters.brands.length === 0) fetchCatalogFilters();
+    } else {
+      // FE-10: Clear pending debounced search when catalog closes
+      if (catalogSearchTimer.current) {
+        clearTimeout(catalogSearchTimer.current);
+        catalogSearchTimer.current = null;
+      }
     }
   };
 
@@ -767,6 +767,15 @@ function PipelinePage() {
     [pipelineId]
   );
 
+  // FE-15: Memoize cache-bust timestamp so it only changes when variant completion status changes,
+  // not on every render. This prevents unnecessary video re-fetches in the Step 4 render results.
+  const completedFingerprint = useMemo(
+    () => variantStatuses.filter(v => v.status === "completed").map(v => v.variant_index).join(","),
+    [variantStatuses]
+  );
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally depend on derived completedFingerprint
+  const videoCacheBust = useMemo(() => Date.now(), [completedFingerprint]);
+
   const { startPolling: startRenderPolling, stopPolling: stopRenderPolling } = usePolling<{
     variants: VariantStatus[];
   }>({
@@ -807,10 +816,12 @@ function PipelinePage() {
   }, [pipelineId, isRendering, step]);
 
   // One-time status check when entering Step 4 (detect already-complete variants)
+  // FE-04: Removed isRendering guard — this check must run regardless of rendering state
+  // so that returning to Step 4 (e.g. via history) shows completed variants.
   useEffect(() => {
-    if (step === 4 && pipelineId && isRendering) {
+    if (step === 4 && pipelineId) {
       apiGet(`/pipeline/status/${pipelineId}`)
-        .then(res => res.ok ? res.json() : null)
+        .then(res => res.json())
         .then(data => {
           if (!data?.variants) return;
           // Filter out not_started variants (same logic as polling onData)
@@ -830,7 +841,7 @@ function PipelinePage() {
         .catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, pipelineId]); // intentionally exclude isRendering to run only on step change
+  }, [step, pipelineId]);
 
   // Step 1: Generate scripts
   const handleGenerate = async () => {
@@ -859,18 +870,14 @@ function PipelinePage() {
 
       if (abortController.signal.aborted) return;
 
-      if (res.ok) {
-        const data = await res.json();
-        setPipelineId(data.pipeline_id);
-        setScripts((data.scripts || []).map(formatScript));
-        setTotalSegmentDuration(data.total_segment_duration || 0);
-        setStep(2);
-      } else {
-        const errorData = await res.json().catch(() => ({
-          detail: "Failed to generate scripts",
-        }));
-        setError(errorData.detail || "Failed to generate scripts");
-      }
+      // apiPost throws on non-OK responses — no need for res.ok check (FE-01)
+      const data = await res.json();
+      setPipelineId(data.pipeline_id);
+      setScripts((data.scripts || []).map(formatScript));
+      setTotalSegmentDuration(data.total_segment_duration || 0);
+      setStep(2);
+      // FE-09: Refresh history sidebar so the new pipeline appears
+      fetchHistory();
     } catch (err) {
       if (abortController.signal.aborted) return;
       handleApiError(err, "Error generating scripts");
@@ -908,70 +915,64 @@ function PipelinePage() {
     setPreviewError(null);
     const newPreviews: Record<number, PreviewData> = {};
 
-    for (let i = 0; i < scripts.length; i++) {
-      if (abortController.signal.aborted) return;
-      setPreviewingIndex(i);
-      try {
-        const res = await apiPost(`/pipeline/preview/${pipelineId}/${i}`, {
-          elevenlabs_model: elevenlabsModel,
-          voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
-          source_video_ids: selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined,
-          voice_settings: {
-            stability: voiceStability,
-            similarity_boost: voiceSimilarity,
-            style: voiceStyle,
-            speed: voiceSpeed,
-            use_speaker_boost: voiceSpeakerBoost,
-          },
-          words_per_subtitle: wordsPerSubtitle,
-          min_segment_duration: minSegmentDuration,
-          ultra_rapid_intro: ultraRapidIntro,
-        }, { timeout: 300_000, signal: abortController.signal }); // 5 min — TTS generation + SRT can be slow
-
+    // FE-05: Wrap in try/finally to guarantee setPreviewingIndex(null) is always called
+    try {
+      for (let i = 0; i < scripts.length; i++) {
         if (abortController.signal.aborted) return;
+        setPreviewingIndex(i);
+        try {
+          const res = await apiPost(`/pipeline/preview/${pipelineId}/${i}`, {
+            elevenlabs_model: elevenlabsModel,
+            voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
+            source_video_ids: selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined,
+            voice_settings: {
+              stability: voiceStability,
+              similarity_boost: voiceSimilarity,
+              style: voiceStyle,
+              speed: voiceSpeed,
+              use_speaker_boost: voiceSpeakerBoost,
+            },
+            words_per_subtitle: wordsPerSubtitle,
+            min_segment_duration: minSegmentDuration,
+            ultra_rapid_intro: ultraRapidIntro,
+          }, { timeout: 300_000, signal: abortController.signal }); // 5 min — TTS generation + SRT can be slow
 
-        if (res.ok) {
+          if (abortController.signal.aborted) return;
+
+          // apiPost throws on non-OK responses — no need for res.ok check (FE-01)
           const data = await res.json();
           newPreviews[i] = data;
           setPreviews(prev => ({ ...prev, [i]: data }));
-        } else {
-          const errorData = await res.json().catch(() => ({
-            detail: `Failed to preview variant ${i + 1}`,
-          }));
-          setPreviewError(errorData.detail || `Failed to preview variant ${i + 1}`);
-          setPreviewingIndex(null);
+        } catch (err) {
+          if (abortController.signal.aborted) return;
+          handleApiError(err, "Error previewing variants");
+          if (err instanceof ApiError) {
+            if (err.isTimeout) {
+              setPreviewError("Preview timed out. Please try again.");
+            } else {
+              setPreviewError(err.detail || err.message || `Failed to preview variant ${i + 1}.`);
+            }
+          } else {
+            setPreviewError("Network error. Please check if the backend is running.");
+          }
           return;
         }
-      } catch (err) {
-        if (abortController.signal.aborted) return;
-        handleApiError(err, "Error previewing variants");
-        if (err instanceof ApiError) {
-          if (err.isTimeout) {
-            setPreviewError("Preview timed out. Please try again.");
-          } else {
-            setPreviewError(err.detail || err.message || `Failed to preview variant ${i + 1}.`);
-          }
-        } else {
-          setPreviewError("Network error. Please check if the backend is running.");
-        }
-        setPreviewingIndex(null);
-        return;
       }
+
+      // Collect available segments from the first preview response (all previews share same segment pool)
+      const firstPreview = Object.values(newPreviews)[0];
+      if (firstPreview?.available_segments && firstPreview.available_segments.length > 0) {
+        setAvailableSegments(firstPreview.available_segments);
+      }
+
+      // Select all variants by default
+      const allIndices = new Set(scripts.map((_, i) => i));
+      setSelectedVariants(allIndices);
+
+      setStep(3);
+    } finally {
+      setPreviewingIndex(null);
     }
-
-    setPreviewingIndex(null);
-
-    // Collect available segments from the first preview response (all previews share same segment pool)
-    const firstPreview = Object.values(newPreviews)[0];
-    if (firstPreview?.available_segments && firstPreview.available_segments.length > 0) {
-      setAvailableSegments(firstPreview.available_segments);
-    }
-
-    // Select all variants by default
-    const allIndices = new Set(scripts.map((_, i) => i));
-    setSelectedVariants(allIndices);
-
-    setStep(3);
   };
 
   // Step 3: Render selected variants
@@ -1139,15 +1140,14 @@ function PipelinePage() {
     }
   };
 
-  // History sidebar: fetch pipeline list
+  // History sidebar: fetch pipeline list (shared function used by mount, profile change, and post-generate refresh)
   const fetchHistory = async () => {
+    if (!currentProfile?.id) return; // FE-17: guard against undefined profile
     setHistoryLoading(true);
     try {
       const res = await apiGet("/pipeline/list?limit=20");
-      if (res.ok) {
-        const data = await res.json();
-        setHistoryPipelines(data.pipelines || []);
-      }
+      const data = await res.json();
+      setHistoryPipelines(data.pipelines || []);
     } catch (err) {
       handleApiError(err, "Failed to load pipeline history");
     } finally {
@@ -1170,20 +1170,18 @@ function PipelinePage() {
     setHistorySelectedScripts(new Set());
     try {
       const res = await apiGet(`/pipeline/status/${id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setHistoryScripts(data.scripts || []);
-        // Select all by default
-        setHistorySelectedScripts(new Set((data.scripts || []).map((_: string, i: number) => i)));
-        // Store preview info for audio indicators
-        if (data.preview_info) {
-          setHistoryPreviewInfo(data.preview_info);
-        } else {
-          setHistoryPreviewInfo({});
-        }
-        // Store TTS info (Step 2 per-script TTS)
-        setHistoryTtsInfo(data.tts_info || {});
+      const data = await res.json();
+      setHistoryScripts(data.scripts || []);
+      // Select all by default
+      setHistorySelectedScripts(new Set((data.scripts || []).map((_: string, i: number) => i)));
+      // Store preview info for audio indicators
+      if (data.preview_info) {
+        setHistoryPreviewInfo(data.preview_info);
+      } else {
+        setHistoryPreviewInfo({});
       }
+      // Store TTS info (Step 2 per-script TTS)
+      setHistoryTtsInfo(data.tts_info || {});
     } catch (err) {
       handleApiError(err, "Failed to load pipeline scripts");
     } finally {
@@ -1192,7 +1190,7 @@ function PipelinePage() {
   };
 
   // History sidebar: delete a pipeline
-  const handleDeletePipeline = (id: string, e: React.MouseEvent) => {
+  const handleDeletePipeline = (id: string, e: React.SyntheticEvent) => {
     e.stopPropagation();
     setConfirmDialog({
       open: true,
@@ -1241,10 +1239,8 @@ function PipelinePage() {
       setVoicesLoading(true);
       try {
         const res = await apiGetWithRetry("/tts/voices?provider=elevenlabs");
-        if (res.ok) {
-          const data = await res.json();
-          setVoices(data.voices || []);
-        }
+        const data = await res.json();
+        setVoices(data.voices || []);
       } catch (err) {
         handleApiError(err, "Failed to load voices");
       } finally {
@@ -1260,25 +1256,23 @@ function PipelinePage() {
     const loadDefaultVoice = async () => {
       try {
         const res = await apiGetWithRetry(`/profiles/${currentProfile.id}`);
-        if (res.ok) {
-          const data = await res.json();
-          const tts = data.tts_settings;
-          const savedVoiceId = tts?.voice_id;
-          if (savedVoiceId) {
-            setDefaultVoiceId(savedVoiceId);
-            // Pre-select if user hasn't manually chosen yet
-            setVoiceId((prev) => prev === "" ? savedVoiceId : prev);
-          }
-          // Hydrate voice settings from profile (overrides localStorage defaults)
-          if (tts?.voice_stability !== undefined) setVoiceStability(tts.voice_stability);
-          if (tts?.voice_similarity !== undefined) setVoiceSimilarity(tts.voice_similarity);
-          if (tts?.voice_style !== undefined) setVoiceStyle(tts.voice_style);
-          if (tts?.voice_speed !== undefined) setVoiceSpeed(tts.voice_speed);
-          if (tts?.voice_speaker_boost !== undefined) setVoiceSpeakerBoost(tts.voice_speaker_boost);
-          if (tts?.words_per_subtitle !== undefined) setWordsPerSubtitle(tts.words_per_subtitle);
-          if (tts?.min_segment_duration !== undefined) setMinSegmentDuration(tts.min_segment_duration);
-          if (tts?.ultra_rapid_intro !== undefined) setUltraRapidIntro(tts.ultra_rapid_intro);
+        const data = await res.json();
+        const tts = data.tts_settings;
+        const savedVoiceId = tts?.voice_id;
+        if (savedVoiceId) {
+          setDefaultVoiceId(savedVoiceId);
+          // Pre-select if user hasn't manually chosen yet
+          setVoiceId((prev) => prev === "" ? savedVoiceId : prev);
         }
+        // Hydrate voice settings from profile (overrides localStorage defaults)
+        if (tts?.voice_stability !== undefined) setVoiceStability(tts.voice_stability);
+        if (tts?.voice_similarity !== undefined) setVoiceSimilarity(tts.voice_similarity);
+        if (tts?.voice_style !== undefined) setVoiceStyle(tts.voice_style);
+        if (tts?.voice_speed !== undefined) setVoiceSpeed(tts.voice_speed);
+        if (tts?.voice_speaker_boost !== undefined) setVoiceSpeakerBoost(tts.voice_speaker_boost);
+        if (tts?.words_per_subtitle !== undefined) setWordsPerSubtitle(tts.words_per_subtitle);
+        if (tts?.min_segment_duration !== undefined) setMinSegmentDuration(tts.min_segment_duration);
+        if (tts?.ultra_rapid_intro !== undefined) setUltraRapidIntro(tts.ultra_rapid_intro);
       } catch {
         // Silently fail — voice selector still works with default
       }
@@ -1292,10 +1286,8 @@ function PipelinePage() {
     const loadSubtitleSettings = async () => {
       try {
         const res = await apiGetWithRetry(`/profiles/${currentProfile.id}/subtitle-settings`);
-        if (res.ok) {
-          const data = await res.json();
-          setSubtitleSettings({ ...DEFAULT_SUBTITLE_SETTINGS, ...data });
-        }
+        const data = await res.json();
+        setSubtitleSettings({ ...DEFAULT_SUBTITLE_SETTINGS, ...data });
       } catch {
         // Use defaults
       } finally {
@@ -1342,14 +1334,12 @@ function PipelinePage() {
     const checkDuplicates = async () => {
       try {
         const res = await apiPost("/tts-library/check-duplicates", { texts: scripts });
-        if (res.ok) {
-          const data = await res.json();
-          const parsed: Record<number, { asset_id: string; audio_duration: number }> = {};
-          for (const [key, val] of Object.entries(data.matches || {})) {
-            parsed[parseInt(key)] = val as { asset_id: string; audio_duration: number };
-          }
-          setLibraryMatches(parsed);
+        const data = await res.json();
+        const parsed: Record<number, { asset_id: string; audio_duration: number }> = {};
+        for (const [key, val] of Object.entries(data.matches || {})) {
+          parsed[parseInt(key)] = val as { asset_id: string; audio_duration: number };
         }
+        setLibraryMatches(parsed);
       } catch (err) {
         console.warn("TTS library duplicate check failed:", err);
       }
@@ -1369,8 +1359,8 @@ function PipelinePage() {
     setSavingDefault(true);
     try {
       const selectedVoice = voices.find(v => v.voice_id === voiceId);
+      // apiGetWithRetry throws on non-OK responses (FE-01)
       const res = await apiGetWithRetry(`/profiles/${currentProfile.id}`);
-      if (!res.ok) throw new Error("Failed to load profile");
       const profileData = await res.json();
       const existingTts = profileData.tts_settings || {};
 
@@ -1381,8 +1371,7 @@ function PipelinePage() {
         voice_name: selectedVoice?.name || "",
       };
 
-      const patchRes = await apiPatch(`/profiles/${currentProfile.id}`, { tts_settings: ttsSettings });
-      if (!patchRes.ok) throw new Error("Failed to save default voice");
+      await apiPatch(`/profiles/${currentProfile.id}`, { tts_settings: ttsSettings });
       setDefaultVoiceId(voiceId);
     } catch (err) {
       handleApiError(err, "Failed to save default voice");
@@ -1435,19 +1424,17 @@ function PipelinePage() {
       if (allHavePreviews && historyScripts.length > 0) {
         apiGet(`/pipeline/${pid}/restore-previews`)
           .then(async (previewRes) => {
-            if (previewRes.ok) {
-              const previewData = await previewRes.json();
-              if (previewData.previews && Object.keys(previewData.previews).length > 0) {
-                const restoredPreviews: Record<number, PreviewData> = {};
-                for (const [key, val] of Object.entries(previewData.previews)) {
-                  restoredPreviews[Number(key)] = val as PreviewData;
-                }
-                setPreviews(restoredPreviews);
-                if (previewData.available_segments?.length > 0) {
-                  setAvailableSegments(previewData.available_segments);
-                }
-                setSelectedVariants(new Set(historyScripts.map((_, i) => i)));
+            const previewData = await previewRes.json();
+            if (previewData.previews && Object.keys(previewData.previews).length > 0) {
+              const restoredPreviews: Record<number, PreviewData> = {};
+              for (const [key, val] of Object.entries(previewData.previews)) {
+                restoredPreviews[Number(key)] = val as PreviewData;
               }
+              setPreviews(restoredPreviews);
+              if (previewData.available_segments?.length > 0) {
+                setAvailableSegments(previewData.available_segments);
+              }
+              setSelectedVariants(new Set(historyScripts.map((_, i) => i)));
             }
           })
           .catch((err) => {
@@ -1471,24 +1458,22 @@ function PipelinePage() {
         provider: "imported",
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        const pid = data.pipeline_id;
-        setPipelineId(pid);
-        setScripts((data.scripts || []).map(formatScript));
-        setStep(2);
-        setSelectedHistoryId(null);
-        setHistoryScripts([]);
-        setHistorySelectedScripts(new Set());
-        setPreviews({});
-        setPreviewError(null);
-        // New pipeline — re-apply source video auto-select
-        setSelectedSourceIds(new Set());
-        fetchSourceVideos();
-      } else {
-        const errorData = await res.json().catch(() => ({ detail: "Failed to import scripts" }));
-        setError(errorData.detail || "Failed to import scripts");
-      }
+      // apiPost throws on non-OK responses (FE-01)
+      const data = await res.json();
+      const pid = data.pipeline_id;
+      setPipelineId(pid);
+      setScripts((data.scripts || []).map(formatScript));
+      setStep(2);
+      setSelectedHistoryId(null);
+      setHistoryScripts([]);
+      setHistorySelectedScripts(new Set());
+      setPreviews({});
+      setPreviewError(null);
+      // New pipeline — re-apply source video auto-select
+      setSelectedSourceIds(new Set());
+      fetchSourceVideos();
+      // FE-09: Refresh history sidebar so the imported pipeline appears
+      fetchHistory();
     } catch (err) {
       handleApiError(err, "Failed to import scripts");
     } finally {
@@ -1529,10 +1514,19 @@ function PipelinePage() {
         if (controller.signal.aborted) return;
         const url = URL.createObjectURL(blob);
         pendingBlobUrl.current = url;
+        // FE-06: Single cleanup function prevents double-revocation from onended+onerror race
+        let revoked = false;
+        const cleanupBlob = () => {
+          if (revoked) return;
+          revoked = true;
+          setPlayingAudio(null);
+          if (pendingBlobUrl.current === url) pendingBlobUrl.current = null;
+          URL.revokeObjectURL(url);
+        };
         const audio = new Audio(url);
-        audio.onended = () => { setPlayingAudio(null); pendingBlobUrl.current = null; URL.revokeObjectURL(url); };
-        audio.onerror = () => { setPlayingAudio(null); pendingBlobUrl.current = null; URL.revokeObjectURL(url); };
-        audio.play().catch(() => { setPlayingAudio(null); pendingBlobUrl.current = null; URL.revokeObjectURL(url); });
+        audio.onended = cleanupBlob;
+        audio.onerror = cleanupBlob;
+        audio.play().catch(cleanupBlob);
         audioRef.current = audio;
       })
       .catch((err) => {
@@ -1636,7 +1630,13 @@ function PipelinePage() {
     localStorage.setItem("ef_ultra_rapid_intro", String(ultraRapidIntro));
   }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro]);
 
-  // Debounced auto-save voice settings to profile
+  // Debounced auto-save voice settings to profile.
+  // FE-07: This uses a read-then-patch pattern (GET profile -> merge tts_settings -> PATCH)
+  // which appears fragile due to potential race conditions. In practice it is safe because:
+  // 1. The 1500ms debounce ensures rapid slider changes coalesce into a single save.
+  // 2. Only one profile is active at a time, so concurrent writes from other tabs are unlikely.
+  // 3. The merge preserves unrelated tts_settings fields (voice_id, voice_name) that other
+  //    save paths may have written.
   useEffect(() => {
     if (!voiceSettingsLoaded.current || !voiceSettingsHydrated.current) return;
     if (!currentProfile) return;
@@ -1644,7 +1644,6 @@ function PipelinePage() {
     voiceSettingsSaveTimer.current = setTimeout(async () => {
       try {
         const res = await apiGetWithRetry(`/profiles/${currentProfile.id}`);
-        if (!res.ok) return;
         const profileData = await res.json();
         const existingTts = profileData.tts_settings || {};
         await apiPatch(`/profiles/${currentProfile.id}`, {
@@ -1690,28 +1689,19 @@ function PipelinePage() {
         min_segment_duration: minSegmentDuration,
       }, { timeout: 300_000 });
 
-      if (res.ok) {
-        const data = await res.json();
-        setTtsResults(prev => ({
-          ...prev,
-          [variantIndex]: {
-            audio_duration: data.audio_duration,
-            generating: false,
-            stale: false,
-            srt_content: data.srt_content,
-            script_word_count: data.script_word_count,
-            srt_word_count: data.srt_word_count,
-          }
-        }));
-      } else {
-        const errorData = await res.json().catch(() => ({ detail: "TTS generation failed" }));
-        setPreviewError(errorData.detail || "TTS generation failed");
-        setTtsResults(prev => {
-          const next = { ...prev };
-          delete next[variantIndex];
-          return next;
-        });
-      }
+      // apiPost throws on non-OK responses (FE-01)
+      const data = await res.json();
+      setTtsResults(prev => ({
+        ...prev,
+        [variantIndex]: {
+          audio_duration: data.audio_duration,
+          generating: false,
+          stale: false,
+          srt_content: data.srt_content,
+          script_word_count: data.script_word_count,
+          srt_word_count: data.srt_word_count,
+        }
+      }));
     } catch (err) {
       handleApiError(err, "TTS generation error");
       if (err instanceof ApiError && err.isTimeout) {
@@ -1765,25 +1755,19 @@ function PipelinePage() {
 
         if (abortController.signal.aborted) break;
 
-        if (res.ok) {
-          const data = await res.json();
-          setTtsResults(prev => ({
-            ...prev,
-            [i]: {
-              audio_duration: data.audio_duration,
-              generating: false,
-              stale: false,
-              srt_content: data.srt_content,
-              script_word_count: data.script_word_count,
-              srt_word_count: data.srt_word_count,
-            }
-          }));
-        } else {
-          const errorData = await res.json().catch(() => ({ detail: `TTS failed for script ${i + 1}` }));
-          setPreviewError(errorData.detail || `TTS failed for script ${i + 1}`);
-          setTtsResults(prev => { const next = { ...prev }; delete next[i]; return next; });
-          break;
-        }
+        // apiPost throws on non-OK responses (FE-01)
+        const data = await res.json();
+        setTtsResults(prev => ({
+          ...prev,
+          [i]: {
+            audio_duration: data.audio_duration,
+            generating: false,
+            stale: false,
+            srt_content: data.srt_content,
+            script_word_count: data.script_word_count,
+            srt_word_count: data.srt_word_count,
+          }
+        }));
       } catch (err) {
         if (abortController.signal.aborted) break;
         handleApiError(err, "TTS regeneration error");
@@ -1842,21 +1826,12 @@ function PipelinePage() {
         asset_id: match.asset_id,
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        setTtsResults(prev => ({
-          ...prev,
-          [variantIndex]: { audio_duration: data.audio_duration, generating: false, stale: false }
-        }));
-      } else {
-        const errorData = await res.json().catch(() => ({ detail: "Failed to load library audio" }));
-        setPreviewError(errorData.detail || "Failed to load library audio");
-        setTtsResults(prev => {
-          const next = { ...prev };
-          delete next[variantIndex];
-          return next;
-        });
-      }
+      // apiPost throws on non-OK responses (FE-01)
+      const data = await res.json();
+      setTtsResults(prev => ({
+        ...prev,
+        [variantIndex]: { audio_duration: data.audio_duration, generating: false, stale: false }
+      }));
     } catch (err) {
       handleApiError(err, "Library TTS adoption error");
       setPreviewError("Failed to load library audio. Please try generating instead.");
@@ -1888,10 +1863,18 @@ function PipelinePage() {
 
     const playBlob = (blob: Blob) => {
       const url = URL.createObjectURL(blob);
+      // FE-06: Single cleanup prevents double-revocation from onended+onerror race
+      let revoked = false;
+      const cleanup = () => {
+        if (revoked) return;
+        revoked = true;
+        setPlayingTtsVariant(null);
+        URL.revokeObjectURL(url);
+      };
       const audio = new Audio(url);
-      audio.onended = () => { setPlayingTtsVariant(null); URL.revokeObjectURL(url); };
-      audio.onerror = () => { setPlayingTtsVariant(null); URL.revokeObjectURL(url); };
-      audio.play().catch(() => { setPlayingTtsVariant(null); URL.revokeObjectURL(url); });
+      audio.onended = cleanup;
+      audio.onerror = cleanup;
+      audio.play().catch(cleanup);
       ttsAudioRef.current = audio;
     };
 
@@ -1933,15 +1916,13 @@ function PipelinePage() {
       const params = new URLSearchParams();
       params.set("segment_ids", segmentIds.join(","));
       const res = await apiGetWithRetry(`/associations/segments?${params}`);
-      if (res.ok) {
-        const json = await res.json();
-        const assocMap = json.associations || {};
-        const map: Record<string, AssociationResponse> = {};
-        for (const [segId, assoc] of Object.entries(assocMap)) {
-          if (assoc) map[segId] = assoc as AssociationResponse;
-        }
-        setAssociations(prev => ({ ...prev, ...map }));
+      const json = await res.json();
+      const assocMap = json.associations || {};
+      const map: Record<string, AssociationResponse> = {};
+      for (const [segId, assoc] of Object.entries(assocMap)) {
+        if (assoc) map[segId] = assoc as AssociationResponse;
       }
+      setAssociations(prev => ({ ...prev, ...map }));
     } catch (error) {
       handleApiError(error, "Failed to load product associations");
     }
@@ -3424,7 +3405,7 @@ function PipelinePage() {
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-muted-foreground">Progress</span>
-                        <span className="font-semibold">{status.progress}%</span>
+                        <span className="font-semibold">{Math.round(status.progress)}%</span>
                       </div>
                       <div className="w-full bg-secondary rounded-full h-2">
                         <div
@@ -3458,7 +3439,7 @@ function PipelinePage() {
                           preload="none"
                         >
                           <source
-                            src={`${API_URL}/library/files/${encodeURIComponent(status.final_video_path)}?v=${Date.now()}`}
+                            src={`${API_URL}/library/files/${encodeURIComponent(status.final_video_path)}?v=${videoCacheBust}`}
                             type="video/mp4"
                           />
                           Your browser does not support HTML5 video.
@@ -3467,7 +3448,7 @@ function PipelinePage() {
                           <a
                             href={`${API_URL}/library/files/${encodeURIComponent(
                               status.final_video_path
-                            )}?v=${Date.now()}`}
+                            )}?v=${videoCacheBust}`}
                             download
                           >
                             <Download className="h-4 w-4 mr-2" />
@@ -3501,10 +3482,8 @@ function PipelinePage() {
                               try {
                                 await apiPost(`/pipeline/sync-to-library/${pipelineId}`);
                                 const res = await apiGet(`/pipeline/status/${pipelineId}`);
-                                if (res.ok) {
-                                  const data = await res.json();
-                                  if (data?.variants) setVariantStatuses(data.variants);
-                                }
+                                const data = await res.json();
+                                if (data?.variants) setVariantStatuses(data.variants);
                               } catch {
                                 // ignore — user can retry
                               }
@@ -3600,7 +3579,7 @@ function PipelinePage() {
                               role="button"
                               tabIndex={0}
                               onClick={(e) => handleDeletePipeline(item.pipeline_id, e)}
-                              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleDeletePipeline(item.pipeline_id, e as unknown as React.MouseEvent); } }}
+                              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleDeletePipeline(item.pipeline_id, e); } }}
                               className="p-1 rounded hover:bg-destructive/10 hover:text-destructive transition-colors"
                               title="Delete pipeline"
                             >

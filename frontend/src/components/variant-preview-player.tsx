@@ -42,13 +42,15 @@ export function VariantPreviewPlayer({
   const [currentStep, setCurrentStep] = useState("");
   const [matchesFingerprint, setMatchesFingerprint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelledRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Stop polling on unmount or close
   const stopPolling = useCallback(() => {
+    cancelledRef.current = true;
     if (pollRef.current) {
-      clearInterval(pollRef.current);
+      clearTimeout(pollRef.current);
       pollRef.current = null;
     }
   }, []);
@@ -102,11 +104,7 @@ export function VariantPreviewPlayer({
           }
         );
 
-        if (!resp.ok) {
-          const errData = await resp.json().catch(() => ({}));
-          throw new Error(errData.detail || `Server error ${resp.status}`);
-        }
-
+        // apiPost already throws on non-OK responses (FE-02: removed dead !resp.ok check)
         const result = await resp.json();
         const fp = result.matches_fingerprint;
         setMatchesFingerprint(fp);
@@ -119,8 +117,10 @@ export function VariantPreviewPlayer({
           return;
         }
 
-        // Start polling for status
-        pollRef.current = setInterval(async () => {
+        // Start polling for status using setTimeout chain to prevent overlapping polls (FE-02)
+        cancelledRef.current = false;
+        const pollStatus = async () => {
+          if (cancelledRef.current) return;
           try {
             const statusResp = await apiGet(
               `/pipeline/preview-status/${pipelineId}/${variantIndex}`
@@ -132,15 +132,22 @@ export function VariantPreviewPlayer({
             if (statusData.status === "completed") {
               setStatus("completed");
               stopPolling();
+              return;
             } else if (statusData.status === "failed") {
               setStatus("failed");
               setError(statusData.error ?? "Preview render failed");
               stopPolling();
+              return;
             }
           } catch {
             // Polling error — keep trying
           }
-        }, 2000);
+          // Re-schedule only if not cancelled
+          if (!cancelledRef.current) {
+            pollRef.current = setTimeout(pollStatus, 2000);
+          }
+        };
+        pollRef.current = setTimeout(pollStatus, 2000);
       } catch (err: unknown) {
         setStatus("failed");
         setError(err instanceof Error ? err.message : "Failed to start preview render");

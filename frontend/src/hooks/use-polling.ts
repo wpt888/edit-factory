@@ -5,7 +5,7 @@
 // that do not yet have SSE streaming counterparts.
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { apiFetch } from "@/lib/api";
+import { apiGet } from "@/lib/api";
 
 export interface UsePollingOptions<T> {
   /** API endpoint to poll (relative path, e.g., "/assembly/status/123") */
@@ -81,9 +81,9 @@ export function usePolling<T>(options: UsePollingOptions<T>): UsePollingReturn<T
   }, [clearPolling]);
 
   const startPolling = useCallback(() => {
-    if (isCancelledRef.current) {
-      isCancelledRef.current = false;
-    }
+    // Always reset cancelled flag unconditionally so polling can restart
+    // even if stopPolling was called before (FE-03)
+    isCancelledRef.current = false;
     clearPolling();
     currentIntervalRef.current = interval;
     setIsPolling(true);
@@ -93,7 +93,7 @@ export function usePolling<T>(options: UsePollingOptions<T>): UsePollingReturn<T
       if (isCancelledRef.current) return;
 
       try {
-        const response = await apiFetch(endpoint);
+        const response = await apiGet(endpoint);
         const result: T = await response.json();
         setData(result);
         setError(null);
