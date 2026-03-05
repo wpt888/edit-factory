@@ -95,12 +95,12 @@ def _db_load_assembly_job(job_id: str) -> Optional[dict]:
         result = supabase.table("editai_assembly_jobs")\
             .select("*")\
             .eq("id", job_id)\
-            .single()\
+            .limit(1)\
             .execute()
         if not result.data:
             return None
 
-        row = result.data
+        row = result.data[0]
         job = {
             "status": row.get("status", "processing"),
             "progress": row.get("progress", 0),
@@ -274,11 +274,11 @@ async def render_assembly(
         preset_result = supabase.table("editai_export_presets")\
             .select("*")\
             .eq("name", request.preset_name)\
-            .single()\
+            .limit(1)\
             .execute()
 
         if preset_result.data:
-            preset_data = preset_result.data
+            preset_data = preset_result.data[0]
         else:
             # Fallback to default preset
             logger.warning(f"Preset '{request.preset_name}' not found, using default")

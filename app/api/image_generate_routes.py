@@ -173,17 +173,17 @@ async def generate_image(
     if req.template_id:
         try:
             tpl = supabase.table("image_prompt_templates")\
-                .select("*").eq("id", req.template_id).single().execute()
+                .select("*").eq("id", req.template_id).limit(1).execute()
             if tpl.data:
-                template_name = tpl.data["name"]
-                final_prompt = tpl.data["prompt_template"]
+                template_name = tpl.data[0]["name"]
+                final_prompt = tpl.data[0]["prompt_template"]
                 # Substitute placeholders if product provided
                 if req.product_id:
                     product = supabase.table("v_catalog_products_grouped")\
                         .select("title,brand,price,description")\
-                        .eq("id", req.product_id).single().execute()
+                        .eq("id", req.product_id).limit(1).execute()
                     if product.data:
-                        p = product.data
+                        p = product.data[0]
                         final_prompt = final_prompt.format(
                             title=p.get("title", ""),
                             brand=p.get("brand", ""),
@@ -239,9 +239,9 @@ async def get_generation_status(
             supabase = get_supabase()
             if supabase:
                 row = supabase.table("generated_images")\
-                    .select("*").eq("id", image_id).single().execute()
+                    .select("*").eq("id", image_id).limit(1).execute()
                 if row.data:
-                    return row.data
+                    return row.data[0]
             return cached
         return progress
 
@@ -249,9 +249,9 @@ async def get_generation_status(
     supabase = get_supabase()
     if supabase:
         row = supabase.table("generated_images")\
-            .select("*").eq("id", image_id).single().execute()
+            .select("*").eq("id", image_id).limit(1).execute()
         if row.data:
-            return row.data
+            return row.data[0]
 
     raise HTTPException(status_code=404, detail="Image not found")
 
@@ -293,18 +293,18 @@ async def apply_logo(
     # Get image record
     img = supabase.table("generated_images")\
         .select("*").eq("id", image_id).eq("profile_id", ctx.profile_id)\
-        .single().execute()
+        .limit(1).execute()
     if not img.data:
         raise HTTPException(status_code=404, detail="Image not found")
 
-    base_path = img.data.get("image_local_path")
+    base_path = img.data[0].get("image_local_path")
     if not base_path or not Path(base_path).exists():
         raise HTTPException(status_code=400, detail="Source image not available locally")
 
     # Get profile logo
     profile = supabase.table("profiles")\
-        .select("logo_path").eq("id", ctx.profile_id).single().execute()
-    logo_path = profile.data.get("logo_path") if profile.data else None
+        .select("logo_path").eq("id", ctx.profile_id).limit(1).execute()
+    logo_path = profile.data[0].get("logo_path") if profile.data else None
     if not logo_path or not Path(logo_path).exists():
         raise HTTPException(status_code=400, detail="No logo uploaded for this profile")
 
@@ -373,9 +373,9 @@ async def get_logo_info(ctx: ProfileContext = Depends(get_profile_context)):
         return {"logo_path": None}
 
     profile = supabase.table("profiles")\
-        .select("logo_path").eq("id", ctx.profile_id).single().execute()
+        .select("logo_path").eq("id", ctx.profile_id).limit(1).execute()
 
-    logo_path = profile.data.get("logo_path") if profile.data else None
+    logo_path = profile.data[0].get("logo_path") if profile.data else None
     exists = logo_path and Path(logo_path).exists()
 
     return {"logo_path": logo_path if exists else None, "exists": exists}
@@ -389,9 +389,9 @@ async def serve_logo_file(ctx: ProfileContext = Depends(get_profile_context)):
         raise HTTPException(status_code=503, detail="Database unavailable")
 
     profile = supabase.table("profiles")\
-        .select("logo_path").eq("id", ctx.profile_id).single().execute()
+        .select("logo_path").eq("id", ctx.profile_id).limit(1).execute()
 
-    logo_path = profile.data.get("logo_path") if profile.data else None
+    logo_path = profile.data[0].get("logo_path") if profile.data else None
     if not logo_path or not Path(logo_path).exists():
         raise HTTPException(status_code=404, detail="No logo uploaded for this profile")
 
@@ -411,12 +411,12 @@ async def serve_image_file(
     img = supabase.table("generated_images")\
         .select("final_image_path, image_local_path, profile_id")\
         .eq("id", image_id).eq("profile_id", ctx.profile_id)\
-        .single().execute()
+        .limit(1).execute()
 
     if not img.data:
         raise HTTPException(status_code=404, detail="Image not found")
 
-    file_path = img.data.get("final_image_path") or img.data.get("image_local_path")
+    file_path = img.data[0].get("final_image_path") or img.data[0].get("image_local_path")
     if not file_path or not Path(file_path).exists():
         raise HTTPException(status_code=404, detail="Image file not available")
 
@@ -431,11 +431,11 @@ async def delete_logo(ctx: ProfileContext = Depends(get_profile_context)):
         raise HTTPException(status_code=503, detail="Database unavailable")
 
     profile = supabase.table("profiles")\
-        .select("logo_path").eq("id", ctx.profile_id).single().execute()
+        .select("logo_path").eq("id", ctx.profile_id).limit(1).execute()
 
-    if profile.data and profile.data.get("logo_path"):
+    if profile.data and profile.data[0].get("logo_path"):
         try:
-            Path(profile.data["logo_path"]).unlink(missing_ok=True)
+            Path(profile.data[0]["logo_path"]).unlink(missing_ok=True)
         except Exception:
             pass
 
@@ -462,12 +462,12 @@ async def send_to_telegram(
 
     img = supabase.table("generated_images")\
         .select("*").eq("id", image_id).eq("profile_id", ctx.profile_id)\
-        .single().execute()
+        .limit(1).execute()
     if not img.data:
         raise HTTPException(status_code=404, detail="Image not found")
 
     # Use final (with logo) if available, otherwise base image
-    file_path = img.data.get("final_image_path") or img.data.get("image_local_path")
+    file_path = img.data[0].get("final_image_path") or img.data[0].get("image_local_path")
     if not file_path or not Path(file_path).exists():
         raise HTTPException(status_code=400, detail="Image file not available locally")
 
@@ -490,7 +490,7 @@ async def send_to_telegram(
 
     result = sender.send_photo(
         file_path=file_path,
-        caption=req.caption or f"AI Generated Image - {img.data.get('template_name', 'custom')}",
+        caption=req.caption or f"AI Generated Image - {img.data[0].get('template_name', 'custom')}",
         reply_markup=inline_keyboard,
     )
 
@@ -510,11 +510,11 @@ async def send_to_postiz(
 
     img = supabase.table("generated_images")\
         .select("*").eq("id", image_id).eq("profile_id", ctx.profile_id)\
-        .single().execute()
+        .limit(1).execute()
     if not img.data:
         raise HTTPException(status_code=404, detail="Image not found")
 
-    file_path = img.data.get("final_image_path") or img.data.get("image_local_path")
+    file_path = img.data[0].get("final_image_path") or img.data[0].get("image_local_path")
     if not file_path or not Path(file_path).exists():
         raise HTTPException(status_code=400, detail="Image file not available locally")
 
@@ -544,7 +544,7 @@ async def send_to_postiz(
         integrations_info = {i.id: i.type for i in integrations}
 
         # Step 3: Create post
-        caption = req.caption or f"AI Generated Image — {img.data.get('template_name', 'custom')}"
+        caption = req.caption or f"AI Generated Image — {img.data[0].get('template_name', 'custom')}"
         result = await publisher.create_post(
             media_id=media.id,
             media_path=media.path,

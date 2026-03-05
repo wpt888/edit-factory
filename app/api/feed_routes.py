@@ -184,13 +184,13 @@ async def get_feed(
         .select("*")\
         .eq("id", feed_id)\
         .eq("profile_id", profile.profile_id)\
-        .single()\
+        .limit(1)\
         .execute()
 
     if not result.data:
         raise HTTPException(status_code=404, detail="Feed not found")
 
-    return result.data
+    return result.data[0]
 
 
 @router.delete("/{feed_id}")
@@ -208,7 +208,7 @@ async def delete_feed(
         .select("id")\
         .eq("id", feed_id)\
         .eq("profile_id", profile.profile_id)\
-        .single()\
+        .limit(1)\
         .execute()
 
     if not existing.data:
@@ -248,13 +248,13 @@ async def sync_feed(
         .select("id, feed_url, sync_status")\
         .eq("id", feed_id)\
         .eq("profile_id", profile.profile_id)\
-        .single()\
+        .limit(1)\
         .execute()
 
     if not result.data:
         raise HTTPException(status_code=404, detail="Feed not found")
 
-    feed = result.data
+    feed = result.data[0]
 
     # Prevent concurrent syncs on the same feed
     if feed.get("sync_status") == "syncing":

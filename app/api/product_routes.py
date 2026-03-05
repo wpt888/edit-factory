@@ -50,7 +50,7 @@ async def get_product_filters(
         .select("id")\
         .eq("id", feed_id)\
         .eq("profile_id", profile.profile_id)\
-        .single()\
+        .limit(1)\
         .execute()
 
     if not feed_check.data:
@@ -105,7 +105,7 @@ async def list_products(
         .select("id, product_count")\
         .eq("id", feed_id)\
         .eq("profile_id", profile.profile_id)\
-        .single()\
+        .limit(1)\
         .execute()
 
     if not feed_check.data:
@@ -160,7 +160,7 @@ async def list_products(
         count_result = count_query.execute()
         total = count_result.count or 0
     else:
-        total = feed_check.data.get("product_count", 0) or 0
+        total = feed_check.data[0].get("product_count", 0) or 0
 
     return {
         "products": products,

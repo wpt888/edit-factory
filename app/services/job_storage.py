@@ -107,20 +107,20 @@ class JobStorage:
         """
         if self._supabase:
             try:
-                result = self._supabase.table("jobs").select("*").eq("id", job_id).single().execute()
-                if result.data:
-                    # DB-02: Normalize return format — merge top-level fields into data dict
-                    row = result.data
-                    job_data = row.get("data", {})
-                    # Merge top-level DB fields so callers always see a consistent shape
-                    for key in ("id", "status", "progress", "profile_id", "created_at", "updated_at"):
-                        if key in row and key not in job_data:
-                            job_data[key] = row[key]
-                    # Ensure status from DB row overrides stale data-blob status
-                    if "status" in row:
-                        job_data["status"] = row["status"]
-                    return job_data
-                return None
+                result = self._supabase.table("jobs").select("*").eq("id", job_id).limit(1).execute()
+                if not result.data:
+                    return None
+                # DB-02: Normalize return format — merge top-level fields into data dict
+                row = result.data[0]
+                job_data = row.get("data", {})
+                # Merge top-level DB fields so callers always see a consistent shape
+                for key in ("id", "status", "progress", "profile_id", "created_at", "updated_at"):
+                    if key in row and key not in job_data:
+                        job_data[key] = row[key]
+                # Ensure status from DB row overrides stale data-blob status
+                if "status" in row:
+                    job_data["status"] = row["status"]
+                return job_data
             except Exception as e:
                 logger.error(f"JobStorage: Supabase error fetching job {job_id}: {e}")
                 # Only fall through to memory if job might exist there (created during Supabase outage)

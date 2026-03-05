@@ -21,7 +21,7 @@ from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import validate_file_mime_type, ALLOWED_VIDEO_MIMES
 from app.utils import sanitize_filename as _sanitize_filename
 from app.rate_limit import limiter
-from app.services.ffmpeg_semaphore import get_prep_codec_params
+from app.services.ffmpeg_semaphore import get_prep_codec_params, safe_ffmpeg_run
 
 import logging
 

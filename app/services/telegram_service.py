@@ -109,11 +109,11 @@ def get_telegram_sender(profile_id: str) -> TelegramSender:
                 supabase.table("profiles")
                 .select("tts_settings")
                 .eq("id", profile_id)
-                .single()
+                .limit(1)
                 .execute()
             )
             if result.data:
-                tts_settings = result.data.get("tts_settings") or {}
+                tts_settings = result.data[0].get("tts_settings") or {}
                 telegram_config = tts_settings.get("telegram") or {}
                 bot_token = telegram_config.get("bot_token")
                 chat_id = telegram_config.get("chat_id")

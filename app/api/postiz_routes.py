@@ -393,14 +393,14 @@ async def publish_clip(
         result = supabase.table("editai_clips")\
             .select("*, editai_projects!inner(profile_id)")\
             .eq("id", request.clip_id)\
-            .single()\
+            .limit(1)\
             .execute()
     except Exception:
         raise HTTPException(status_code=404, detail="Clip not found")
     if not result.data:
         raise HTTPException(status_code=404, detail="Clip not found")
 
-    clip = result.data
+    clip = result.data[0]
 
     # Verify ownership
     if clip["editai_projects"]["profile_id"] != profile.profile_id:
