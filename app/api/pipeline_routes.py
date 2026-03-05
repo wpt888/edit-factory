@@ -21,7 +21,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body, Query, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api.auth import ProfileContext, get_profile_context
 from app.db import get_supabase
@@ -294,8 +294,8 @@ def _voice_settings_match(a: Optional[dict], b: Optional[dict]) -> bool:
 
 class PipelineGenerateRequest(BaseModel):
     """Request model for pipeline generation."""
-    idea: str                           # User's video idea/concept
-    context: str = ""                   # Product/brand context
+    idea: str = Field(..., max_length=2000)       # User's video idea/concept
+    context: str = Field(default="", max_length=5000)  # Product/brand context
     variant_count: int = 3              # Number of script variants (1-10)
     provider: str = "gemini"            # "gemini" or "claude"
 
@@ -769,8 +769,10 @@ async def import_pipeline(
 
 
 @router.post("/generate", response_model=PipelineGenerateResponse)
+@limiter.limit("5/minute")
 async def generate_pipeline(
     request: PipelineGenerateRequest,
+    http_request: Request,
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """
@@ -862,7 +864,9 @@ async def generate_pipeline(
 
     try:
         generator = get_script_generator()
-        scripts = generator.generate_scripts(
+        # SCR-03: Run synchronous AI call in a thread to avoid blocking the async event loop
+        scripts = await asyncio.to_thread(
+            generator.generate_scripts,
             idea=request.idea,
             context=request.context,
             keywords=unique_keywords,
@@ -912,10 +916,11 @@ async def generate_pipeline(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Pipeline generation failed: {e}")
+        # SCR-11: Log detailed error server-side but return sanitized message to client
+        logger.error(f"Pipeline generation failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=503,
-            detail=f"Pipeline generation service unavailable: {str(e)}"
+            detail="Pipeline generation service unavailable. Please try again later."
         )
 
 

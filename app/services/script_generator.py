@@ -41,9 +41,10 @@ class ScriptGenerator:
         self.gemini_model = gemini_model
         self.anthropic_model = anthropic_model
 
-        # Lazy-initialized clients
+        # Lazy-initialized clients (protected by _client_lock for thread safety)
         self._gemini_client = None
         self._anthropic_client = None
+        self._client_lock = threading.Lock()
 
         logger.info(f"ScriptGenerator initialized (gemini_model={gemini_model})")
 
@@ -111,6 +112,10 @@ class ScriptGenerator:
             clean_scripts = [self._sanitize_for_tts(script) for script in scripts]
 
             logger.info(f"Successfully generated {len(clean_scripts)} scripts")
+
+            # SCR-12: Fail explicitly if no valid scripts were produced
+            if not clean_scripts:
+                raise ValueError("No valid scripts generated — AI response could not be parsed into scripts")
 
             if len(clean_scripts) < variant_count:
                 logger.warning(
@@ -204,11 +209,13 @@ Begin generation now:"""
 
     def _generate_with_gemini(self, prompt: str) -> str:
         """Generate content using Gemini API."""
-        if self._gemini_client is None:
-            self._gemini_client = genai.Client(
-                api_key=self.gemini_api_key,
-                http_options={"timeout": 120_000},
-            )
+        with self._client_lock:
+            if self._gemini_client is None:
+                self._gemini_client = genai.Client(
+                    api_key=self.gemini_api_key,
+                    # timeout is in milliseconds for the Gemini HTTP client (120_000ms = 120s)
+                    http_options={"timeout": 120_000},
+                )
 
         logger.info(f"Calling Gemini API with model {self.gemini_model}")
 
@@ -217,15 +224,29 @@ Begin generation now:"""
             contents=prompt
         )
 
+        # SCR-01: Validate response before accessing .text
+        if not response.candidates:
+            raise RuntimeError("Gemini returned no candidates")
+
+        finish_reason = getattr(response.candidates[0], "finish_reason", None)
+        if finish_reason is not None:
+            # finish_reason may be an enum or string depending on SDK version
+            reason_str = str(finish_reason).upper()
+            if "SAFETY" in reason_str or "RECITATION" in reason_str:
+                raise RuntimeError(
+                    f"Gemini response blocked by safety filter (finish_reason={finish_reason})"
+                )
+
         return response.text
 
     def _generate_with_claude(self, prompt: str) -> str:
         """Generate content using Anthropic Claude API."""
-        if self._anthropic_client is None:
-            self._anthropic_client = anthropic.Anthropic(
-                api_key=self.anthropic_api_key,
-                timeout=120.0,
-            )
+        with self._client_lock:
+            if self._anthropic_client is None:
+                self._anthropic_client = anthropic.Anthropic(
+                    api_key=self.anthropic_api_key,
+                    timeout=120.0,
+                )
 
         logger.info("Calling Anthropic Claude API")
 
@@ -237,6 +258,12 @@ Begin generation now:"""
                 "content": prompt
             }]
         )
+
+        # SCR-02: Validate response before accessing content
+        if not response.content:
+            raise RuntimeError("Claude returned empty response")
+        if response.content[0].type != "text":
+            raise RuntimeError(f"Unexpected content type: {response.content[0].type}")
 
         return response.content[0].text
 
@@ -251,8 +278,17 @@ Begin generation now:"""
         Returns:
             List of individual script texts
         """
-        # Split by delimiter
+        # Split by primary delimiter
         scripts = raw_response.split("---SCRIPT---")
+
+        # SCR-07: Fallback delimiter — if primary delimiter yields only 1 chunk,
+        # try numbered format like "Script 1:", "Script 2:", etc.
+        if len([s for s in scripts if s.strip()]) <= 1:
+            numbered_parts = re.split(r'(?:^|\n)\s*Script\s+\d+\s*:\s*', raw_response, flags=re.IGNORECASE)
+            numbered_parts = [p for p in numbered_parts if p.strip()]
+            if len(numbered_parts) > 1:
+                logger.info(f"Primary delimiter failed, using numbered 'Script N:' fallback ({len(numbered_parts)} scripts found)")
+                scripts = numbered_parts
 
         # Clean each script
         cleaned = []
@@ -316,12 +352,17 @@ Begin generation now:"""
         # Remove markdown links [text](url)
         text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
 
-        # Remove stage directions in brackets — e.g. [pause], [dramatic]
-        # Note: do NOT remove content from brackets that look like [ProductGroup] tags
-        # since users may insert those manually. The brackets remover below only runs
-        # during script generation sanitization (before user edits), so any AI-generated
-        # bracket content that slipped through is still removed here.
-        text = re.sub(r'\[([^\]]+)\]', '', text)  # [pause], [dramatic]
+        # SCR-09: Remove only common stage-direction brackets (e.g. [pause], [laughs],
+        # [music], [dramatic pause], [soft voice]).  Product group tags like [ProductName]
+        # are stripped earlier in the pipeline flow by strip_product_group_tags(), so they
+        # should not reach here.  This targeted regex avoids removing unexpected bracket
+        # content that may be legitimate speech.
+        _stage_directions = (
+            r'pause|laughs?|music|dramatic|whisper|softly|loudly|silence|beat|'
+            r'sigh|clap|gasp|cheer|applause|dramatic\s+pause|soft\s+voice|'
+            r'voice\s+over|narrator|transition|fade|cut|intro|outro'
+        )
+        text = re.sub(rf'\[\s*(?:{_stage_directions})\s*\]', '', text, flags=re.IGNORECASE)
         # Remove single-word stage directions in parentheses — e.g. (whisper), (loudly)
         # but preserve multi-word parenthetical phrases that are legitimate speech.
         text = re.sub(r'\((\w+)\)', '', text)  # (whisper), (loudly) — single-word only
@@ -376,3 +417,16 @@ def get_script_generator() -> ScriptGenerator:
                 )
 
     return _script_generator
+
+
+def reset_script_generator() -> None:
+    """
+    Reset the ScriptGenerator singleton instance.
+
+    Useful for API key rotation or configuration changes at runtime.
+    The next call to get_script_generator() will create a fresh instance.
+    """
+    global _script_generator
+    with _script_generator_lock:
+        _script_generator = None
+        logger.info("ScriptGenerator singleton has been reset")
