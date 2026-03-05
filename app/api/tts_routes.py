@@ -164,7 +164,7 @@ async def list_voices(
         raise HTTPException(status_code=501, detail=str(e))
     except Exception as e:
         logger.error(f"[Profile {profile.profile_id}] Error listing voices: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list voices: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to list voices")
 
 
 async def _generate_tts_background(
@@ -467,7 +467,7 @@ async def clone_voice_endpoint(
         raise
     except Exception as e:
         logger.error(f"[Profile {profile.profile_id}] Voice cloning failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Voice cloning failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Voice cloning failed")
     finally:
         # Clean up temp file
         if temp_path.exists():

@@ -446,7 +446,7 @@ async def upload_source_video(
         }).execute()
     except Exception as e:
         video_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=f"Failed to save video: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save video")
 
     # Transcode + metadata + thumbnail run in background
     background_tasks.add_task(
@@ -797,7 +797,7 @@ async def get_source_video_voice_detection(
         }
     except Exception as e:
         logger.error(f"Voice detection failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Voice detection failed: {e}")
+        raise HTTPException(status_code=500, detail="Voice detection failed")
 
 
 # ============== SEGMENTS ENDPOINTS ==============
@@ -891,7 +891,7 @@ async def create_segment(
         )
     except Exception as e:
         thumbnail_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=f"Failed to create segment: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create segment")
 
 
 @router.get("/source-videos/{video_id}/segments", response_model=List[SegmentResponse])

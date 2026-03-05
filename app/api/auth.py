@@ -84,7 +84,7 @@ def verify_jwt_token(token: str) -> dict:
             headers={"WWW-Authenticate": "Bearer"}
         )
     except PyJWTError as e:
-        logger.warning(f"JWT verification failed: {e}")
+        logger.warning(f"JWT verification failed: {type(e).__name__}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",

@@ -241,7 +241,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     from fastapi.responses import JSONResponse
     if isinstance(exc, ValueError):
         logger.warning(f"Bad request: {exc}")
-        return JSONResponse(status_code=400, content={"detail": str(exc)})
+        return JSONResponse(status_code=400, content={"detail": "Invalid request parameters"})
     if isinstance(exc, TypeError):
         logger.warning(f"Bad request (TypeError): {exc}")
         return JSONResponse(status_code=400, content={"detail": "Invalid request parameters"})

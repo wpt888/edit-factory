@@ -1227,7 +1227,7 @@ async def generate_variant_tts(
 
     except Exception as e:
         logger.error(f"[Profile {profile.profile_id}] TTS generation failed for variant {variant_index}: {e}")
-        raise HTTPException(status_code=500, detail=f"TTS generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="TTS generation failed")
 
 
 @router.get("/tts-audio/{pipeline_id}/{variant_index}")

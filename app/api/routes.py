@@ -463,7 +463,7 @@ async def create_job(
         except json.JSONDecodeError as e:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid JSON in subtitle_settings: {str(e)}"
+                detail="Invalid JSON in subtitle_settings"
             )
 
     # Limitam variant_count la 1-10

@@ -733,7 +733,7 @@ async def generate_raw_clips(
             if final_video_path.exists():
                 final_video_path.unlink(missing_ok=True)
             logger.error(f"Failed to write uploaded file: {e}")
-            raise HTTPException(status_code=507, detail=f"Failed to save uploaded file: {e}")
+            raise HTTPException(status_code=507, detail="Failed to save uploaded file")
     elif video_path:
         # User provided local path (for testing)
         local_path = Path(video_path)
@@ -1923,7 +1923,7 @@ async def remove_clip_audio(
 
         if result.returncode != 0:
             logger.error(f"FFmpeg error: {result.stderr}")
-            raise HTTPException(status_code=500, detail=f"Failed to remove audio: {result.stderr}")
+            raise HTTPException(status_code=500, detail="Failed to remove audio")
 
         # Update database with new video path
         update_data = {
@@ -2036,7 +2036,7 @@ async def bulk_delete_clips(
         # If batch operation failed, mark all non-already-failed as failed
         for clip_id in clip_ids:
             if clip_id not in [f["id"] for f in failed] and clip_id not in deleted:
-                failed.append({"id": clip_id, "error": str(e)})
+                failed.append({"id": clip_id, "error": "Internal error"})
 
     return {
         "status": "completed",

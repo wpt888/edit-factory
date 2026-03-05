@@ -594,7 +594,7 @@ async def send_to_postiz(
         raise
     except Exception as e:
         logger.error(f"Postiz send failed for image {image_id}: {e}")
-        raise HTTPException(status_code=502, detail=f"Postiz error: {str(e)[:200]}")
+        raise HTTPException(status_code=502, detail="Failed to publish to Postiz")
 
 
 # ============== Template endpoints ==============
