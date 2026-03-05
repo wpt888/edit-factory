@@ -146,18 +146,28 @@ class JobStorage:
         """
         # DB-04: Do in-memory update inside lock, Supabase I/O outside lock
         with self._update_lock:
-            # Get current job inside lock to prevent TOCTOU race
+            # Read from in-memory store first (no network call while holding lock)
+            job = self._memory_store.get(job_id)
+            if job is None:
+                # Not in memory — will try Supabase outside lock below
+                pass
+            else:
+                # Merge updates into in-memory copy
+                job = job.copy()
+                job.update(updates)
+                job["updated_at"] = datetime.now(timezone.utc).isoformat()
+                self._memory_store[job_id] = job.copy()
+
+        # If not found in memory, try Supabase (outside lock)
+        if job is None:
             job = self.get_job(job_id)
             if not job:
                 logger.warning(f"JobStorage: Job {job_id} not found for update")
                 return None
-
-            # Merge updates
             job.update(updates)
             job["updated_at"] = datetime.now(timezone.utc).isoformat()
-
-            # Always update in-memory copy inside lock
-            self._memory_store[job_id] = job.copy()
+            with self._update_lock:
+                self._memory_store[job_id] = job.copy()
 
         # Supabase I/O outside lock to avoid holding lock during network calls
         if self._supabase:
@@ -324,16 +334,14 @@ class JobStorage:
         cutoff_iso = cutoff.isoformat()
         cleaned = 0
 
-        # DB-05: Use bulk UPDATE instead of N+1 individual updates
+        # DB-05: Update status columns without overwriting the data JSONB blob.
+        # The data column contains project_id, profile_id, input_path, etc. that
+        # must be preserved for post-mortem debugging.
         if self._supabase:
             try:
                 result = self._supabase.table("jobs").update({
                     "status": "failed",
                     "progress": "Server restarted — job did not complete",
-                    "data": {
-                        "status": "failed",
-                        "error": "Job was still processing when server restarted"
-                    },
                     "updated_at": datetime.now(timezone.utc).isoformat()
                 }).eq("status", "processing").lt("updated_at", cutoff_iso).execute()
                 if result.data:
@@ -343,7 +351,9 @@ class JobStorage:
                 logger.warning(f"Supabase stale job cleanup failed: {e}")
 
         # DB-14: Also clean in-memory jobs and sync to Supabase
-        for job_id, job in list(self._memory_store.items()):
+        with self._update_lock:
+            snapshot = list(self._memory_store.items())
+        for job_id, job in snapshot:
             if isinstance(job, dict) and job.get("status") == "processing":
                 updated = job.get("updated_at", "")
                 if updated and updated < cutoff_iso:

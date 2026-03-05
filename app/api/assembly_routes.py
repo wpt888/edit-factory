@@ -32,7 +32,8 @@ _MAX_MEMORY_ENTRIES = 1000
 def _evict_old_entries(store: dict, max_entries: int = _MAX_MEMORY_ENTRIES):
     """Remove oldest entries if store exceeds max size."""
     if len(store) > max_entries:
-        to_remove = sorted(store.keys())[:len(store) - max_entries]
+        snapshot = list(store.keys())
+        to_remove = sorted(snapshot)[:len(snapshot) - max_entries]
         for key in to_remove:
             store.pop(key, None)
 
@@ -460,7 +461,9 @@ async def get_assembly_status(
         if not loaded:
             raise HTTPException(status_code=404, detail="Job not found")
 
-    job = _assembly_jobs[job_id]
+    job = _assembly_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
 
     # Sanitize error details for public endpoint
     error_msg = None

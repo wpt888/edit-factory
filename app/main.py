@@ -1,6 +1,7 @@
 """
 Edit Factory - FastAPI Application
 """
+import asyncio
 import os
 import logging
 from pathlib import Path
@@ -61,6 +62,63 @@ logger = logging.getLogger(__name__)
 
 # Get settings
 settings = get_settings()
+
+def _recover_stuck_projects_sync():
+    """Synchronous version of stuck project recovery (runs in thread)."""
+    try:
+        from app.db import get_supabase
+        supabase = get_supabase()
+        if not supabase:
+            return
+        result = supabase.table("editai_projects").select("id").eq("status", "generating").execute()
+        if result.data:
+            for proj in result.data:
+                supabase.table("editai_projects").update({
+                    "status": "failed",
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", proj["id"]).execute()
+            logger.info(f"Recovered {len(result.data)} stuck projects (generating -> failed)")
+    except Exception as e:
+        logger.warning(f"Failed to recover stuck projects: {e}")
+
+
+def _recover_stuck_clips_sync():
+    """Synchronous version of stuck clip recovery (runs in thread)."""
+    try:
+        from app.db import get_supabase
+        supabase = get_supabase()
+        if not supabase:
+            return
+        result = supabase.table("editai_clips").select("id").eq("final_status", "processing").execute()
+        if result.data:
+            for clip in result.data:
+                supabase.table("editai_clips").update({
+                    "final_status": "failed",
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", clip["id"]).execute()
+            logger.info(f"Recovered {len(result.data)} stuck clips (processing -> failed)")
+    except Exception as e:
+        logger.warning(f"Failed to recover stuck clips: {e}")
+
+
+def _recover_stuck_jobs_sync():
+    """Synchronous version of stuck job recovery (runs in thread)."""
+    try:
+        from app.db import get_supabase
+        supabase = get_supabase()
+        if not supabase:
+            return
+        result = supabase.table("jobs").select("id").eq("status", "processing").execute()
+        if result.data:
+            for job in result.data:
+                supabase.table("jobs").update({
+                    "status": "failed",
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", job["id"]).execute()
+            logger.info(f"Recovered {len(result.data)} stuck jobs (processing -> failed)")
+    except Exception as e:
+        logger.warning(f"Failed to recover stuck jobs: {e}")
+
 
 async def _recover_stuck_projects():
     """Recover projects stuck in 'generating' status (e.g. from server crash)."""
@@ -175,7 +233,17 @@ async def _cleanup_expired_pipelines():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup — increase default threadpool to prevent starvation under parallel load.
+    # Default is min(32, cpu_count+4) ≈ 8 threads, which gets exhausted when 6 concurrent
+    # render tasks each block on project lock acquisition via asyncio.to_thread().
+    import concurrent.futures
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=32))
+
+    # Initialize FFmpeg semaphores in the running event loop
+    from app.services.ffmpeg_semaphore import init_semaphores
+    init_semaphores()
+
     settings.ensure_dirs()
     if settings.auth_disabled and not settings.debug:
         logger.critical("⚠️ AUTH_DISABLED=true in non-debug mode! This is a security risk.")
@@ -184,9 +252,9 @@ async def lifespan(app: FastAPI):
     logger.info("Edit Factory started")
     logger.info(f"  Input dir: {settings.input_dir.absolute()}")
     logger.info(f"  Output dir: {settings.output_dir.absolute()}")
-    await _recover_stuck_projects()
-    await _recover_stuck_clips()
-    await _recover_stuck_jobs()
+    await asyncio.to_thread(_recover_stuck_projects_sync)
+    await asyncio.to_thread(_recover_stuck_clips_sync)
+    await asyncio.to_thread(_recover_stuck_jobs_sync)
     await _cleanup_expired_pipelines()
     await _cleanup_expired_trash()
     # Mark stale JobStorage jobs (processing >10 min) as failed for crash recovery
@@ -228,9 +296,12 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     from fastapi.responses import JSONResponse
-    if isinstance(exc, (ValueError, TypeError)):
+    if isinstance(exc, ValueError):
         logger.warning(f"Bad request: {exc}")
         return JSONResponse(status_code=400, content={"detail": str(exc)})
+    if isinstance(exc, TypeError):
+        logger.warning(f"Bad request (TypeError): {exc}")
+        return JSONResponse(status_code=400, content={"detail": "Invalid request parameters"})
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 

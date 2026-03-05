@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
+import threading
 import cv2
 import numpy as np
 from scipy.fftpack import dct
@@ -122,6 +123,7 @@ class VideoAnalyzer:
         if not self.video_path.exists():
             raise FileNotFoundError(f"Video not found: {video_path}")
 
+        self._cap_lock = threading.Lock()
         self.cap = cv2.VideoCapture(str(self.video_path))
         if not self.cap.isOpened():
             raise ValueError(f"Cannot open video file: {video_path}")
@@ -177,10 +179,11 @@ class VideoAnalyzer:
             return 0
 
     def _read_frame_at(self, frame_idx: int) -> Optional[np.ndarray]:
-        """Citeste un frame specific."""
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-        ret, frame = self.cap.read()
-        return frame if ret else None
+        """Citeste un frame specific (thread-safe via lock)."""
+        with self._cap_lock:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = self.cap.read()
+            return frame if ret else None
 
     def _calculate_blur_score(self, frame: np.ndarray) -> float:
         """

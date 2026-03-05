@@ -262,7 +262,8 @@ class ElevenLabsTTS:
         logger.info(f"Adding audio to video: {video_path.name}")
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            from app.services.ffmpeg_semaphore import safe_ffmpeg_run
+            result = safe_ffmpeg_run(cmd, timeout=300, operation="add_audio_to_video")
 
             if result.returncode != 0:
                 # Fallback: try simple replacement without mixing
@@ -278,7 +279,7 @@ class ElevenLabsTTS:
                     "-b:a", "192k",
                     str(output_path)
                 ]
-                result = subprocess.run(cmd_simple, capture_output=True, text=True, timeout=300)
+                result = safe_ffmpeg_run(cmd_simple, timeout=300, operation="add_audio_simple")
 
                 if result.returncode != 0:
                     raise Exception(f"FFmpeg error: {result.stderr}")
@@ -286,8 +287,8 @@ class ElevenLabsTTS:
             logger.info(f"Video with audio saved to: {output_path}")
             return output_path
 
-        except subprocess.TimeoutExpired:
-            raise Exception("FFmpeg timeout - video may be too long")
+        except RuntimeError as e:
+            raise Exception(str(e))
         except Exception as e:
             logger.error(f"Failed to add audio to video: {e}")
             raise

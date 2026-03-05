@@ -494,11 +494,11 @@ def is_postiz_configured(profile_id: Optional[str] = None) -> bool:
                 result = supabase.table("profiles")\
                     .select("tts_settings")\
                     .eq("id", profile_id)\
-                    .single()\
+                    .limit(1)\
                     .execute()
 
                 if result.data:
-                    tts_settings = result.data.get("tts_settings") or {}
+                    tts_settings = result.data[0].get("tts_settings") or {}
                     postiz_config = tts_settings.get("postiz") or {}
                     api_url = postiz_config.get("api_url")
                     api_key = postiz_config.get("api_key")

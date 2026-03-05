@@ -418,8 +418,13 @@ async def upload_source_video(
 
     # Save uploaded file with 1MB buffer (much faster on WSL2/NTFS)
     import shutil as _shutil
-    with open(video_path, "wb") as f:
-        _shutil.copyfileobj(video.file, f, length=1024 * 1024)
+    try:
+        with open(video_path, "wb") as f:
+            _shutil.copyfileobj(video.file, f, length=1024 * 1024)
+    except Exception:
+        # Clean up partial file on write failure
+        Path(video_path).unlink(missing_ok=True)
+        raise
 
     # Insert DB record immediately with status=processing
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -736,7 +741,8 @@ async def get_source_video_waveform(
 
     duration = result.data[0].get("duration") or 0
 
-    waveform = _extract_waveform(str(video_path), num_samples=samples, duration=duration)
+    import asyncio
+    waveform = await asyncio.to_thread(_extract_waveform, str(video_path), samples, duration)
 
     return {
         "video_id": video_id,
@@ -1006,6 +1012,8 @@ async def list_product_groups_bulk(
     ids = [vid.strip() for vid in source_video_ids.split(",") if vid.strip()]
     if not ids:
         return []
+    if len(ids) > 50:
+        raise HTTPException(status_code=400, detail="Too many IDs (max 50)")
 
     try:
         result = supabase.table("editai_product_groups")\

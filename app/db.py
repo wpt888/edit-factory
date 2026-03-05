@@ -20,7 +20,13 @@ def get_supabase():
                     settings = get_settings()
                     if settings.supabase_url and settings.supabase_key:
                         key = settings.supabase_service_role_key or settings.supabase_key
-                        _httpx_client = httpx.Client()
+                        _httpx_client = httpx.Client(
+                            limits=httpx.Limits(
+                                max_connections=50,
+                                max_keepalive_connections=20,
+                            ),
+                            timeout=httpx.Timeout(30.0, connect=10.0),
+                        )
                         options = SyncClientOptions(
                             httpx_client=_httpx_client,
                         )
@@ -43,11 +49,12 @@ def get_supabase():
 def close_supabase():
     """Close the httpx client and reset the Supabase singleton."""
     global _httpx_client, _supabase_client
-    if _httpx_client:
-        try:
-            _httpx_client.close()
-        except Exception:
-            pass
-        _httpx_client = None
-    _supabase_client = None
+    with _supabase_lock:
+        if _httpx_client:
+            try:
+                _httpx_client.close()
+            except Exception:
+                pass
+            _httpx_client = None
+        _supabase_client = None
     logger.info("Supabase client closed")

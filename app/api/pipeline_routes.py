@@ -66,11 +66,10 @@ _pipeline_state_locks_meta: threading.Lock = threading.Lock()
 
 def _get_pipeline_state_lock(pipeline_id: str) -> threading.Lock:
     """Get or create a lock for pipeline state mutations."""
-    if pipeline_id not in _pipeline_state_locks:
-        with _pipeline_state_locks_meta:
-            if pipeline_id not in _pipeline_state_locks:
-                _pipeline_state_locks[pipeline_id] = threading.Lock()
-    return _pipeline_state_locks[pipeline_id]
+    with _pipeline_state_locks_meta:
+        if pipeline_id not in _pipeline_state_locks:
+            _pipeline_state_locks[pipeline_id] = threading.Lock()
+        return _pipeline_state_locks[pipeline_id]
 
 # Cancel infrastructure for pipeline renders
 import time as _time_mod
@@ -219,12 +218,12 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
         result = supabase.table("editai_pipelines")\
             .select("*")\
             .eq("id", pipeline_id)\
-            .single()\
+            .limit(1)\
             .execute()
         if not result.data:
             return None
 
-        row = result.data
+        row = result.data[0]
         # Convert string keys back to int for previews and render_jobs
         previews = {}
         for k, v in (row.get("previews") or {}).items():
@@ -440,6 +439,7 @@ class PipelineRenderResponse(BaseModel):
     pipeline_id: str
     rendering_variants: List[int]       # Which variants are being rendered
     total_variants: int                 # Total variants in pipeline
+    message: Optional[str] = None       # Informational message (e.g. all already rendering)
 
 
 class VariantStatus(BaseModel):
@@ -588,10 +588,10 @@ async def delete_pipeline(
             result = supabase.table("editai_pipelines")\
                 .select("id, profile_id")\
                 .eq("id", pipeline_id)\
-                .single()\
+                .limit(1)\
                 .execute()
             if result.data:
-                if result.data.get("profile_id") != profile.profile_id:
+                if result.data[0].get("profile_id") != profile.profile_id:
                     raise HTTPException(status_code=403, detail="Not authorized to delete this pipeline")
                 supabase.table("editai_pipelines")\
                     .delete()\
@@ -917,10 +917,10 @@ async def generate_pipeline(
             profile_result = supabase.table("profiles")\
                 .select("ai_instructions")\
                 .eq("id", profile.profile_id)\
-                .single()\
+                .limit(1)\
                 .execute()
             if profile_result.data:
-                ai_instructions = profile_result.data.get("ai_instructions") or ""
+                ai_instructions = profile_result.data[0].get("ai_instructions") or ""
         except Exception as e:
             logger.warning(f"Failed to fetch AI instructions for profile {profile.profile_id}: {e}")
 
@@ -959,6 +959,9 @@ async def generate_pipeline(
             "variant_count": len(scripts),
             "keyword_count": len(unique_keywords),
             "previews": {},
+            "tts_previews": {},
+            "segment_usage": {},
+            "preview_renders": {},
             "render_jobs": {},
             "created_at": datetime.now(timezone.utc).isoformat(),
             "profile_id": profile.profile_id
@@ -1061,7 +1064,7 @@ async def adopt_library_tts(
             .eq("id", request.asset_id)\
             .eq("profile_id", profile.profile_id)\
             .eq("status", "ready")\
-            .single()\
+            .limit(1)\
             .execute()
     except Exception as e:
         raise HTTPException(status_code=404, detail="TTS asset not found in library")
@@ -1069,7 +1072,7 @@ async def adopt_library_tts(
     if not result.data:
         raise HTTPException(status_code=404, detail="TTS asset not found in library")
 
-    asset = result.data
+    asset = result.data[0]
     audio_path = asset.get("mp3_path")
     if not audio_path or not Path(audio_path).exists():
         raise HTTPException(status_code=404, detail="TTS audio file no longer exists on disk")
@@ -1513,11 +1516,11 @@ async def render_variants(
         preset_result = supabase.table("editai_export_presets")\
             .select("*")\
             .eq("name", render_request.preset_name)\
-            .single()\
+            .limit(1)\
             .execute()
 
         if preset_result.data:
-            preset_data = preset_result.data
+            preset_data = preset_result.data[0]
         else:
             logger.warning(f"Preset '{render_request.preset_name}' not found, using default")
             preset_data = {
@@ -1574,21 +1577,23 @@ async def render_variants(
     _script_count_snapshot = len(pipeline["scripts"])
 
     # Initialize render jobs for each variant and collect which ones to render
+    state_lock = _get_pipeline_state_lock(pipeline_id)
     variant_indices_to_render = []
-    for variant_index in render_request.variant_indices:
-        existing_job = pipeline["render_jobs"].get(variant_index)
-        if existing_job and existing_job.get("status") == "processing":
-            continue  # Skip — already rendering this variant
+    with state_lock:
+        for variant_index in render_request.variant_indices:
+            existing_job = pipeline["render_jobs"].get(variant_index)
+            if existing_job and existing_job.get("status") == "processing":
+                continue  # Skip — already rendering this variant
 
-        pipeline["render_jobs"][variant_index] = {
-            "status": "processing",
-            "progress": 0,
-            "current_step": "Initializing render",
-            "final_video_path": None,
-            "error": None,
-            "started_at": datetime.now(timezone.utc).isoformat()
-        }
-        variant_indices_to_render.append(variant_index)
+            pipeline["render_jobs"][variant_index] = {
+                "status": "processing",
+                "progress": 0,
+                "current_step": "Initializing render",
+                "final_video_path": None,
+                "error": None,
+                "started_at": datetime.now(timezone.utc).isoformat()
+            }
+            variant_indices_to_render.append(variant_index)
 
     # Define render function for a single variant
     async def do_render(vid):
@@ -1601,9 +1606,10 @@ async def render_variants(
                 )
                 return
 
-            # PIP-04: Clear cancellation flag per-variant at render start (not globally after gather)
-            # This ensures each variant starts with a clean slate
-            clear_pipeline_cancelled(pipeline_id)
+            # PIP-04: Check cancellation before starting render
+            if is_pipeline_cancelled(pipeline_id):
+                logger.info(f"Pipeline {pipeline_id} variant {vid} skipped: cancelled")
+                return
 
             # ── Render fingerprint: unique hash of ALL render-affecting parameters ──
             import hashlib as _hashlib
@@ -2070,12 +2076,15 @@ async def render_variants(
         import time as _time
         _render_locks_timestamps[pipeline_id_str] = _time.monotonic()
         background_tasks.add_task(_render_all_variants)
+    else:
+        logger.info(f"Pipeline {pipeline_id}: all requested variants already rendering, nothing new to start")
 
     # PIP-16: Return actual variant_indices_to_render, not the original request list
     return PipelineRenderResponse(
         pipeline_id=pipeline_id,
         rendering_variants=variant_indices_to_render,
-        total_variants=len(pipeline["scripts"])
+        total_variants=len(pipeline["scripts"]),
+        message="All requested variants are already rendering" if not variant_indices_to_render else None
     )
 
 
