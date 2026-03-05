@@ -351,28 +351,32 @@ class JobStorage:
                 logger.warning(f"Supabase stale job cleanup failed: {e}")
 
         # DB-14: Also clean in-memory jobs and sync to Supabase
+        # Keep snapshot AND mutation inside the lock to prevent races
+        supabase_updates = []
         with self._update_lock:
-            snapshot = list(self._memory_store.items())
-        for job_id, job in snapshot:
-            if isinstance(job, dict) and job.get("status") == "processing":
-                updated = job.get("updated_at", "")
-                if updated and updated < cutoff_iso:
-                    job["status"] = "failed"
-                    job["progress"] = "Server restarted — job did not complete"
-                    job["error"] = "Job was still processing when server restarted"
-                    job["updated_at"] = datetime.now(timezone.utc).isoformat()
-                    cleaned += 1
-                    # Sync stale in-memory job status to Supabase
-                    if self._supabase:
-                        try:
-                            self._supabase.table("jobs").update({
+            for job_id, job in list(self._memory_store.items()):
+                if isinstance(job, dict) and job.get("status") == "processing":
+                    updated = job.get("updated_at", "")
+                    if updated and updated < cutoff_iso:
+                        job["status"] = "failed"
+                        job["progress"] = "Server restarted — job did not complete"
+                        job["error"] = "Job was still processing when server restarted"
+                        job["updated_at"] = datetime.now(timezone.utc).isoformat()
+                        cleaned += 1
+                        # Collect Supabase sync data (do I/O outside lock)
+                        if self._supabase:
+                            supabase_updates.append((job_id, {
                                 "status": "failed",
                                 "progress": job["progress"],
-                                "data": job,
+                                "data": dict(job),
                                 "updated_at": job["updated_at"]
-                            }).eq("id", job_id).execute()
-                        except Exception as e:
-                            logger.warning(f"Failed to sync stale in-memory job {job_id} to Supabase: {e}")
+                            }))
+        # Sync stale in-memory job status to Supabase (outside lock)
+        for job_id, update_data in supabase_updates:
+            try:
+                self._supabase.table("jobs").update(update_data).eq("id", job_id).execute()
+            except Exception as e:
+                logger.warning(f"Failed to sync stale in-memory job {job_id} to Supabase: {e}")
 
         return cleaned
 

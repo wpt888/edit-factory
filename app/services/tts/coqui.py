@@ -29,7 +29,7 @@ class CoquiTTSService(TTSService):
     # Class-level model cache (singleton pattern)
     _model_cache: Dict[str, 'TTS'] = {}
     _model_lock: Optional[asyncio.Lock] = None
-    _model_lock_init = __import__("threading").Lock()
+    _model_lock_init = asyncio.Lock()
 
     def __init__(
         self,
@@ -49,11 +49,7 @@ class CoquiTTSService(TTSService):
         self.model_name = model_name
         self._cloned_voices: Dict[str, Path] = {}
 
-        # Initialize lock on first instantiation (thread-safe)
-        if CoquiTTSService._model_lock is None:
-            with CoquiTTSService._model_lock_init:
-                if CoquiTTSService._model_lock is None:
-                    CoquiTTSService._model_lock = asyncio.Lock()
+        # Lock initialization moved to _get_model() (async context required for asyncio.Lock)
 
         # Check GPU availability
         try:
@@ -92,6 +88,12 @@ class CoquiTTSService(TTSService):
         Returns:
             Initialized TTS model
         """
+        # Initialize lock lazily in async context
+        if CoquiTTSService._model_lock is None:
+            async with CoquiTTSService._model_lock_init:
+                if CoquiTTSService._model_lock is None:
+                    CoquiTTSService._model_lock = asyncio.Lock()
+
         # Check cache first (outside lock for performance)
         if self.model_name in CoquiTTSService._model_cache:
             return CoquiTTSService._model_cache[self.model_name]

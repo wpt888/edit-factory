@@ -13,7 +13,6 @@ import asyncio
 import logging
 import shutil
 import subprocess
-import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -37,36 +36,36 @@ _ffmpeg_prep_semaphore: asyncio.Semaphore | None = None
 # Threading lock to prevent race condition during lazy semaphore creation.
 # Without this, two concurrent coroutines could each create their own
 # Semaphore instance, bypassing the concurrency limit entirely.
-_semaphore_init_lock = threading.Lock()
+_semaphore_init_lock = asyncio.Lock()
 
 
-def init_semaphores() -> None:
+async def init_semaphores() -> None:
     """Create all semaphores eagerly inside the running event loop.
 
     Call this once during FastAPI lifespan startup so that the semaphores
     are bound to the correct event loop before any request handler runs.
     """
-    _get_render_semaphore()
-    _get_prep_semaphore()
-    _get_preview_semaphore()
+    await _get_render_semaphore()
+    await _get_prep_semaphore()
+    await _get_preview_semaphore()
     logger.info("FFmpeg semaphores initialized")
 
 
-def _get_render_semaphore() -> asyncio.Semaphore:
+async def _get_render_semaphore() -> asyncio.Semaphore:
     """Lazily create render semaphore in the running event loop."""
     global _ffmpeg_render_semaphore
     if _ffmpeg_render_semaphore is None:
-        with _semaphore_init_lock:
+        async with _semaphore_init_lock:
             if _ffmpeg_render_semaphore is None:
                 _ffmpeg_render_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RENDERS)
     return _ffmpeg_render_semaphore
 
 
-def _get_prep_semaphore() -> asyncio.Semaphore:
+async def _get_prep_semaphore() -> asyncio.Semaphore:
     """Lazily create prep semaphore in the running event loop."""
     global _ffmpeg_prep_semaphore
     if _ffmpeg_prep_semaphore is None:
-        with _semaphore_init_lock:
+        async with _semaphore_init_lock:
             if _ffmpeg_prep_semaphore is None:
                 _ffmpeg_prep_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PREP)
     return _ffmpeg_prep_semaphore
@@ -105,26 +104,28 @@ class _SemaphoreWithTimeout:
         return False
 
 
-def acquire_render_slot(timeout: float = SEMAPHORE_ACQUIRE_TIMEOUT):
+async def acquire_render_slot(timeout: float = SEMAPHORE_ACQUIRE_TIMEOUT):
     """Acquire a slot for a heavy FFmpeg render (final encode).
 
     Usage::
 
-        async with acquire_render_slot():
+        async with await acquire_render_slot():
             await _render_with_preset(...)
     """
-    return _SemaphoreWithTimeout(_get_render_semaphore(), timeout, "render")
+    sem = await _get_render_semaphore()
+    return _SemaphoreWithTimeout(sem, timeout, "render")
 
 
-def acquire_prep_slot(timeout: float = SEMAPHORE_ACQUIRE_TIMEOUT):
+async def acquire_prep_slot(timeout: float = SEMAPHORE_ACQUIRE_TIMEOUT):
     """Acquire a slot for a preparatory FFmpeg operation (trim/extend/silence).
 
     Usage::
 
-        async with acquire_prep_slot():
+        async with await acquire_prep_slot():
             await asyncio.to_thread(subprocess.run, cmd, ...)
     """
-    return _SemaphoreWithTimeout(_get_prep_semaphore(), timeout, "prep")
+    sem = await _get_prep_semaphore()
+    return _SemaphoreWithTimeout(sem, timeout, "prep")
 
 
 # =============================================================================
@@ -214,25 +215,26 @@ MAX_CONCURRENT_PREVIEW = 2
 _ffmpeg_preview_semaphore: asyncio.Semaphore | None = None
 
 
-def _get_preview_semaphore() -> asyncio.Semaphore:
+async def _get_preview_semaphore() -> asyncio.Semaphore:
     """Lazily create preview semaphore in the running event loop."""
     global _ffmpeg_preview_semaphore
     if _ffmpeg_preview_semaphore is None:
-        with _semaphore_init_lock:
+        async with _semaphore_init_lock:
             if _ffmpeg_preview_semaphore is None:
                 _ffmpeg_preview_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PREVIEW)
     return _ffmpeg_preview_semaphore
 
 
-def acquire_preview_slot(timeout: float = SEMAPHORE_ACQUIRE_TIMEOUT):
+async def acquire_preview_slot(timeout: float = SEMAPHORE_ACQUIRE_TIMEOUT):
     """Acquire a slot for a preview FFmpeg render (fast, low-quality).
 
     Usage::
 
-        async with acquire_preview_slot():
+        async with await acquire_preview_slot():
             await assemble_and_render_preview(...)
     """
-    return _SemaphoreWithTimeout(_get_preview_semaphore(), timeout, "preview")
+    sem = await _get_preview_semaphore()
+    return _SemaphoreWithTimeout(sem, timeout, "preview")
 
 
 def get_preview_codec_params(use_gpu: bool = False) -> list[str]:

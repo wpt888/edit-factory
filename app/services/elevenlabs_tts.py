@@ -2,6 +2,7 @@
 ElevenLabs TTS Service.
 Generates high-quality voice-over using ElevenLabs API.
 """
+import asyncio
 import os
 import logging
 import subprocess
@@ -419,8 +420,8 @@ class ElevenLabsTTS:
                 await self.generate_audio(text, audio_path)
                 stats["silence_removal"] = {"enabled": False}
 
-            # Add audio to video
-            result = self.add_audio_to_video(video_path, audio_path, output_path)
+            # Add audio to video (blocking FFmpeg subprocess — run in thread)
+            result = await asyncio.to_thread(self.add_audio_to_video, video_path, audio_path, output_path)
 
             stats["output_video"] = str(result)
             return result, stats

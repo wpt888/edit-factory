@@ -1414,7 +1414,7 @@ async def _generate_from_segments_task(
                             str(segment_output)
                         ]
 
-                        async with acquire_prep_slot():
+                        async with await acquire_prep_slot():
                             result = await asyncio.to_thread(safe_ffmpeg_run, extract_cmd, 300, "segment extract")
                         if result.returncode != 0:
                             logger.error(f"FFmpeg extract error: {result.stderr}")
@@ -1431,7 +1431,7 @@ async def _generate_from_segments_task(
                     str(output_path)
                 ]
 
-                async with acquire_prep_slot():
+                async with await acquire_prep_slot():
                     result = await asyncio.to_thread(safe_ffmpeg_run, concat_cmd, 300, "segment concat")
                 if result.returncode != 0:
                     logger.error(f"FFmpeg concat error: {result.stderr}")
@@ -2622,7 +2622,7 @@ async def _render_final_clip_task(
                 # VIDEO MAI LUNG: Trimează video la durata audio
                 logger.info(f"Video > Audio ({video_duration:.1f}s > {audio_duration:.1f}s): trimming video")
                 adjusted_video_path = temp_dir / f"trimmed_{clip_id}.mp4"
-                async with acquire_prep_slot():
+                async with await acquire_prep_slot():
                     await asyncio.to_thread(_trim_video_to_duration, raw_video_path, adjusted_video_path, audio_duration)
                 final_video_path = adjusted_video_path
 
@@ -2633,7 +2633,7 @@ async def _render_final_clip_task(
 
                 # Încercăm să extindem cu segmente din proiect
                 adjusted_video_path = temp_dir / f"extended_{clip_id}.mp4"
-                async with acquire_prep_slot():
+                async with await acquire_prep_slot():
                     extended = await asyncio.to_thread(
                         _extend_video_with_segments,
                         base_video=raw_video_path,
@@ -2649,7 +2649,7 @@ async def _render_final_clip_task(
                 else:
                     # Fallback: loop video pentru a umple gap-ul
                     logger.warning(f"Could not extend with segments, using loop fallback")
-                    async with acquire_prep_slot():
+                    async with await acquire_prep_slot():
                         await asyncio.to_thread(_loop_video_to_duration, raw_video_path, adjusted_video_path, audio_duration)
                     if adjusted_video_path.exists():
                         final_video_path = adjusted_video_path
@@ -2723,7 +2723,7 @@ async def _render_final_clip_task(
         # Pre-render disk space check
         check_disk_space(output_dir)
 
-        async with acquire_render_slot():
+        async with await acquire_render_slot():
             await _render_with_preset(
                 video_path=final_video_path,
                 audio_path=audio_path,

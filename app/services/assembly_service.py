@@ -1255,7 +1255,7 @@ class AssemblyService:
 
             segment_raw = None  # VID-14: track for cleanup
             try:
-                async with acquire_prep_slot():
+                async with await acquire_prep_slot():
                     cmd = ["ffmpeg", "-y"]
 
                     if use_loop:

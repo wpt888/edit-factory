@@ -2,9 +2,9 @@
 Authentication utilities for Edit Factory API.
 Handles JWT verification and user extraction from Supabase tokens.
 """
+import asyncio
 import logging
 import time as _time
-import threading as _threading
 from typing import Optional, Dict
 from dataclasses import dataclass
 from fastapi import Depends, HTTPException, Header, status
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 # Profile context cache: (user_id, profile_id_or_default) -> (ProfileContext, timestamp)
 _profile_cache: Dict[tuple, tuple] = {}
-_profile_cache_lock = _threading.Lock()
+_profile_cache_lock = asyncio.Lock()
 _PROFILE_CACHE_TTL = 60  # seconds
 
 # Security scheme for Swagger UI
@@ -196,9 +196,9 @@ def require_role(required_role: str):
 from app.db import get_supabase as _get_supabase
 
 
-def _cache_get_profile(user_id: str, profile_key: str) -> "Optional[ProfileContext]":
+async def _cache_get_profile(user_id: str, profile_key: str) -> "Optional[ProfileContext]":
     """Return cached ProfileContext if TTL not expired, else None."""
-    with _profile_cache_lock:
+    async with _profile_cache_lock:
         entry = _profile_cache.get((user_id, profile_key))
         if entry is None:
             return None
@@ -209,9 +209,9 @@ def _cache_get_profile(user_id: str, profile_key: str) -> "Optional[ProfileConte
         return ctx
 
 
-def _cache_set_profile(user_id: str, profile_key: str, ctx: "ProfileContext") -> None:
+async def _cache_set_profile(user_id: str, profile_key: str, ctx: "ProfileContext") -> None:
     """Store ProfileContext in cache with current timestamp. DB-12: Evicts oldest 10% if cache exceeds 1000."""
-    with _profile_cache_lock:
+    async with _profile_cache_lock:
         if len(_profile_cache) > 1000:
             # Snapshot + sort outside mutation, then evict oldest 10%
             snapshot = list(_profile_cache.items())
@@ -241,17 +241,17 @@ async def get_profile_context(
 
         if x_profile_id:
             # Check cache first for explicit dev profile
-            cached = _cache_get_profile(current_user.id, profile_key)
+            cached = await _cache_get_profile(current_user.id, profile_key)
             if cached:
                 logger.debug(f"Profile cache HIT (dev, explicit): {profile_key}")
                 return cached
             logger.warning(f"⚠️ Using explicit dev profile: {x_profile_id} (AUTH_DISABLED=true)")
             ctx = ProfileContext(profile_id=x_profile_id, user_id=current_user.id)
-            _cache_set_profile(current_user.id, profile_key, ctx)
+            await _cache_set_profile(current_user.id, profile_key, ctx)
             return ctx
 
         # Check cache for dev default profile
-        cached = _cache_get_profile(current_user.id, "default")
+        cached = await _cache_get_profile(current_user.id, "default")
         if cached:
             logger.debug(f"Profile cache HIT (dev, default): {cached.profile_id}")
             return cached
@@ -271,7 +271,7 @@ async def get_profile_context(
                     profile_id = result.data[0]["id"]
                     logger.warning(f"⚠️ Dev mode: using DB profile {profile_id}")
                     ctx = ProfileContext(profile_id=profile_id, user_id=current_user.id)
-                    _cache_set_profile(current_user.id, "default", ctx)
+                    await _cache_set_profile(current_user.id, "default", ctx)
                     return ctx
             except Exception as e:
                 logger.warning(f"Dev mode: could not query profiles table: {e}")
@@ -290,7 +290,7 @@ async def get_profile_context(
 
     if not x_profile_id:
         # Check cache for default profile
-        cached = _cache_get_profile(current_user.id, "default")
+        cached = await _cache_get_profile(current_user.id, "default")
         if cached:
             logger.debug(f"Profile cache HIT (default): {cached.profile_id}")
             return cached
@@ -312,13 +312,13 @@ async def get_profile_context(
         profile_id = result.data[0]["id"]
         logger.info(f"[Profile {profile_id}] Auto-selected default for user {current_user.id}")
         ctx = ProfileContext(profile_id=profile_id, user_id=current_user.id)
-        _cache_set_profile(current_user.id, "default", ctx)
+        await _cache_set_profile(current_user.id, "default", ctx)
         return ctx
     else:
         profile_id = x_profile_id
 
         # Check cache for explicit profile
-        cached = _cache_get_profile(current_user.id, profile_id)
+        cached = await _cache_get_profile(current_user.id, profile_id)
         if cached:
             logger.debug(f"Profile cache HIT (explicit): {profile_id}")
             return cached
@@ -338,5 +338,5 @@ async def get_profile_context(
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
         ctx = ProfileContext(profile_id=profile_id, user_id=current_user.id)
-        _cache_set_profile(current_user.id, profile_id, ctx)
+        await _cache_set_profile(current_user.id, profile_id, ctx)
         return ctx

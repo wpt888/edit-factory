@@ -2065,7 +2065,7 @@ async def render_variants(
     # Run all variant renders in parallel via asyncio.gather (throttled by semaphore)
     async def _render_all_variants():
         async def _throttled_render(vid):
-            async with acquire_render_slot():
+            async with await acquire_render_slot():
                 await do_render(vid)
         tasks = [_throttled_render(vid) for vid in variant_indices_to_render]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -2609,7 +2609,7 @@ async def render_preview(
     async def _do_preview_render():
         render_state = pipeline["preview_renders"][variant_index]
         try:
-            async with acquire_preview_slot():
+            async with await acquire_preview_slot():
                 assembly_service = get_assembly_service()
 
                 def on_progress(step_name: str, pct: int):

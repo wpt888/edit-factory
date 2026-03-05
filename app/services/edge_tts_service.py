@@ -5,7 +5,6 @@ Calitate excelentă, multe voci, fără costuri.
 import asyncio
 import concurrent.futures
 import logging
-import threading
 from pathlib import Path
 from typing import List, Dict, Optional
 from dataclasses import dataclass
@@ -71,7 +70,7 @@ class EdgeTTSService:
     # Class-level cache shared across all instances
     _voices_cache: Optional[List[Voice]] = None
     _voices_cache_lock: Optional[asyncio.Lock] = None
-    _voices_cache_init_lock = threading.Lock()
+    _voices_cache_init_lock = asyncio.Lock()
 
     def __init__(self, output_dir: Optional[Path] = None):
         """
@@ -93,7 +92,7 @@ class EdgeTTSService:
         """
         if EdgeTTSService._voices_cache is None:
             if EdgeTTSService._voices_cache_lock is None:
-                with EdgeTTSService._voices_cache_init_lock:
+                async with EdgeTTSService._voices_cache_init_lock:
                     if EdgeTTSService._voices_cache_lock is None:
                         EdgeTTSService._voices_cache_lock = asyncio.Lock()
             async with EdgeTTSService._voices_cache_lock:

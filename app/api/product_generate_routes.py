@@ -746,7 +746,7 @@ async def _generate_product_video_task(
 
         # compose_product_video is synchronous (FFmpeg subprocess) — throttled by global semaphore
         check_disk_space(settings.output_dir)
-        async with acquire_render_slot():
+        async with await acquire_render_slot():
             await asyncio.to_thread(
                 compose_product_video,
                 image_path=image_path,
@@ -791,7 +791,7 @@ async def _generate_product_video_task(
             }
 
         # _render_with_preset is async (FFmpeg runs in thread pool) — WITH SEMAPHORE
-        async with acquire_render_slot():
+        async with await acquire_render_slot():
             await _render_with_preset(
                 video_path=composed_path,
                 audio_path=tts_audio_path,

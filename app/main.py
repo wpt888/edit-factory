@@ -122,56 +122,60 @@ def _recover_stuck_jobs_sync():
 
 async def _cleanup_expired_trash():
     """Permanently delete clips that have been in trash for more than 30 days."""
-    try:
-        from app.db import get_supabase
-        from app.api.library_routes import _delete_clip_files
-        from datetime import timedelta
-        supabase = get_supabase()
-        if not supabase:
-            return
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-        expired = supabase.table("editai_clips")\
-            .select("id, raw_video_path, thumbnail_path, final_video_path")\
-            .eq("is_deleted", True)\
-            .lt("deleted_at", cutoff)\
-            .execute()
-        clips = expired.data or []
-        for clip in clips:
-            _delete_clip_files(clip)
-        if clips:
-            expired_ids = [c["id"] for c in clips]
-            supabase.table("editai_clips").delete().in_("id", expired_ids).execute()
-            supabase.table("editai_clip_content").delete().in_("clip_id", expired_ids).execute()
-            logger.info(f"Cleaned up {len(clips)} expired trash clips")
-    except Exception as e:
-        logger.warning(f"Failed to cleanup expired trash: {e}")
+    def _do_cleanup():
+        try:
+            from app.db import get_supabase
+            from app.api.library_routes import _delete_clip_files
+            from datetime import timedelta
+            supabase = get_supabase()
+            if not supabase:
+                return
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+            expired = supabase.table("editai_clips")\
+                .select("id, raw_video_path, thumbnail_path, final_video_path")\
+                .eq("is_deleted", True)\
+                .lt("deleted_at", cutoff)\
+                .execute()
+            clips = expired.data or []
+            for clip in clips:
+                _delete_clip_files(clip)
+            if clips:
+                expired_ids = [c["id"] for c in clips]
+                supabase.table("editai_clips").delete().in_("id", expired_ids).execute()
+                supabase.table("editai_clip_content").delete().in_("clip_id", expired_ids).execute()
+                logger.info(f"Cleaned up {len(clips)} expired trash clips")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup expired trash: {e}")
+    await asyncio.to_thread(_do_cleanup)
 
 
 async def _cleanup_expired_pipelines():
     """Delete expired pipeline and assembly job rows from Supabase."""
-    try:
-        from app.db import get_supabase
-        supabase = get_supabase()
-        if not supabase:
-            return
-        now = datetime.now(timezone.utc).isoformat()
+    def _do_cleanup():
+        try:
+            from app.db import get_supabase
+            supabase = get_supabase()
+            if not supabase:
+                return
+            now = datetime.now(timezone.utc).isoformat()
 
-        result1 = supabase.table("editai_pipelines")\
-            .delete()\
-            .lt("expires_at", now)\
-            .execute()
-        count1 = len(result1.data) if result1.data else 0
+            result1 = supabase.table("editai_pipelines")\
+                .delete()\
+                .lt("expires_at", now)\
+                .execute()
+            count1 = len(result1.data) if result1.data else 0
 
-        result2 = supabase.table("editai_assembly_jobs")\
-            .delete()\
-            .lt("expires_at", now)\
-            .execute()
-        count2 = len(result2.data) if result2.data else 0
+            result2 = supabase.table("editai_assembly_jobs")\
+                .delete()\
+                .lt("expires_at", now)\
+                .execute()
+            count2 = len(result2.data) if result2.data else 0
 
-        if count1 or count2:
-            logger.info(f"Cleaned up {count1} expired pipelines, {count2} expired assembly jobs")
-    except Exception as e:
-        logger.warning(f"Failed to cleanup expired pipelines: {e}")
+            if count1 or count2:
+                logger.info(f"Cleaned up {count1} expired pipelines, {count2} expired assembly jobs")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup expired pipelines: {e}")
+    await asyncio.to_thread(_do_cleanup)
 
 
 @asynccontextmanager
@@ -185,7 +189,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize FFmpeg semaphores in the running event loop
     from app.services.ffmpeg_semaphore import init_semaphores
-    init_semaphores()
+    await init_semaphores()
 
     settings.ensure_dirs()
     if settings.auth_disabled and not settings.debug and not getattr(settings, 'desktop_mode', False):
