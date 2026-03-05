@@ -603,7 +603,6 @@ export function VideoSegmentPlayer({
       .finally(() => { if (!cancelled) setWaveformLoading(false); });
     return () => {
       cancelled = true;
-      setWaveformData([]);
       setVoiceRegions([]);
       setShowVoiceOverlay(false);
       voiceFetchedRef.current.delete(sourceVideoId);

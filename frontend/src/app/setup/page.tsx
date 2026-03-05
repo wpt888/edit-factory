@@ -71,18 +71,18 @@ function SetupPageContent() {
       .catch((err: unknown) => {
         if (err instanceof ApiError) {
           if (err.status === 404) {
-            // Not activated — stay on wizard Step 1
             setCheckingLicense(false)
             return
           }
           if (err.status === 403) {
-            // License expired — show re-activation in Step 1
             setLicenseError("Your license has expired or is invalid. Please re-activate.")
             setCheckingLicense(false)
             return
           }
         }
-        // Network error or unexpected — assume first run, stay on wizard
+        if (err instanceof TypeError) {
+          toast.error("Network error")
+        }
         setCheckingLicense(false)
       })
   }, [isEditMode, router])

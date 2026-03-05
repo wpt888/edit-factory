@@ -177,6 +177,7 @@ export function ProductPickerDialog({
       setPage(1);
       setProducts([]);
     }
+    return () => { fetchAbortRef.current?.abort(); };
   }, [open, fetchFilterOptions]);
 
   // ---- Fetch products ----

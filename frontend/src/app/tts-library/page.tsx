@@ -363,7 +363,7 @@ export default function TTSLibraryPage() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      console.warn("Clipboard API not available (insecure context?)");
+      toast.error("Failed to copy");
     }
   }
 

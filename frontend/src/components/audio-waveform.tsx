@@ -38,6 +38,7 @@ export function AudioWaveform({
   const [waveformData, setWaveformData] = useState<Float32Array | null>(null);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(0);
+  const [resizeTick, setResizeTick] = useState(0);
 
   // Downsample audio buffer to ~150 bars
   const downsample = useCallback((buffer: AudioBuffer, targetBars: number): Float32Array => {
@@ -165,15 +166,14 @@ export function AudioWaveform({
 
       ctx.fillRect(x, y, Math.max(1, barWidth - 0.5), barHeight);
     }
-  }, [waveformData, progress, height]);
+  }, [waveformData, progress, height, resizeTick]);
 
   // Bug #138: ResizeObserver to redraw canvas on container resize
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     const observer = new ResizeObserver(() => {
-      // Force re-render by updating a counter (the draw useEffect above will fire)
-      setProgress((p) => p); // no-op state update to trigger re-draw
+      setResizeTick((c) => c + 1);
     });
     observer.observe(container);
     return () => observer.disconnect();

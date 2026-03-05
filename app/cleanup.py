@@ -136,9 +136,9 @@ def cleanup_old_jobs(days: int, dry_run: bool) -> int:
         # Preview: count matching jobs without deleting
         terminal_statuses = {"failed", "completed", "cancelled"}
         count = 0
-        if storage._supabase:
+        if storage.supabase:
             try:
-                result = storage._supabase.table("jobs").select("id,status,created_at")\
+                result = storage.supabase.table("jobs").select("id,status,created_at")\
                     .lt("created_at", cutoff.isoformat()).execute()
                 matching = [r for r in (result.data or []) if r.get("status") in terminal_statuses]
                 count = len(matching)
@@ -152,8 +152,8 @@ def cleanup_old_jobs(days: int, dry_run: bool) -> int:
                 logger.warning("Could not query jobs for dry-run", extra={"error": str(exc)})
         else:
             # In-memory fallback — snapshot under lock to avoid concurrent modification
-            with storage._update_lock:
-                snapshot = list(storage._memory_store.items())
+            with storage.update_lock:
+                snapshot = list(storage.memory_store.items())
             for job_id, job in snapshot:
                 if job.get("status") in terminal_statuses:
                     created_str = job.get("created_at", "")
@@ -173,14 +173,14 @@ def cleanup_old_jobs(days: int, dry_run: bool) -> int:
         return count
 
     # Actual deletion via Supabase
-    if storage._supabase:
+    if storage.supabase:
         count = storage.cleanup_old_jobs(days)
     else:
         # In-memory fallback: manually remove old failed/completed jobs
         terminal_statuses = {"failed", "completed", "cancelled"}
         to_delete = []
-        with storage._update_lock:
-            snapshot = list(storage._memory_store.items())
+        with storage.update_lock:
+            snapshot = list(storage.memory_store.items())
         for job_id, job in snapshot:
             if job.get("status") in terminal_statuses:
                 created_str = job.get("created_at", "")
@@ -190,9 +190,9 @@ def cleanup_old_jobs(days: int, dry_run: bool) -> int:
                         to_delete.append(job_id)
                 except ValueError:
                     pass
-        with storage._update_lock:
+        with storage.update_lock:
             for job_id in to_delete:
-                storage._memory_store.pop(job_id, None)
+                storage.memory_store.pop(job_id, None)
         count = len(to_delete)
         logger.info("Removed in-memory jobs", extra={"count": count})
 

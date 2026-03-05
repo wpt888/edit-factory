@@ -1022,15 +1022,21 @@ async def list_product_groups_bulk(
             .order("start_time")\
             .execute()
 
+        group_labels = [g["label"] for g in result.data]
+        seg_counts = {}
+        if group_labels:
+            count_result = supabase.table("editai_segments")\
+                .select("product_group", count="exact")\
+                .in_("source_video_id", ids)\
+                .eq("profile_id", profile.profile_id)\
+                .in_("product_group", group_labels)\
+                .execute()
+            for row in (count_result.data or []):
+                key = row.get("product_group")
+                seg_counts[key] = seg_counts.get(key, 0) + 1
+
         groups = []
         for g in result.data:
-            seg_count = supabase.table("editai_segments")\
-                .select("id", count="exact")\
-                .eq("source_video_id", g["source_video_id"])\
-                .eq("profile_id", profile.profile_id)\
-                .eq("product_group", g["label"])\
-                .execute()
-
             groups.append(ProductGroupResponse(
                 id=g["id"],
                 source_video_id=g["source_video_id"],
@@ -1038,7 +1044,7 @@ async def list_product_groups_bulk(
                 start_time=g["start_time"],
                 end_time=g["end_time"],
                 color=g.get("color"),
-                segments_count=seg_count.count or 0,
+                segments_count=seg_counts.get(g["label"], 0),
                 created_at=g["created_at"]
             ))
 

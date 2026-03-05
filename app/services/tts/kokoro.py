@@ -163,13 +163,17 @@ class KokoroTTSService(TTSService):
         # Generate audio using kokoro library
         # Run in thread pool to avoid blocking event loop
         def _generate():
-            # kokoro library generates audio
-            # Using voice_id parameter for voice selection
-            audio_data, sample_rate = kokoro.generate(
-                text=text,
-                voice=voice_id,
-                **kwargs
-            )
+            try:
+                audio_data, sample_rate = kokoro.generate(
+                    text=text,
+                    voice=voice_id,
+                    **kwargs
+                )
+            except Exception as e:
+                raise RuntimeError(
+                    f"kokoro.generate() failed (Kokoro integration unverified — "
+                    f"the API may differ from expected signature): {e}"
+                ) from e
             return audio_data, sample_rate
 
         # Execute in thread pool

@@ -352,7 +352,9 @@ async def serve_file(
         else:
             remote_key = file_path
         try:
-            cache_path = settings.output_dir / ".storage_cache" / Path(file_path).name
+            import hashlib as _hl
+            cache_name = _hl.md5(file_path.encode()).hexdigest() + Path(file_path).suffix
+            cache_path = settings.output_dir / ".storage_cache" / cache_name
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             resolved_path = file_storage.retrieve(remote_key, cache_path)
         except Exception as e:
@@ -1414,8 +1416,12 @@ async def _generate_from_segments_task(
                             str(segment_output)
                         ]
 
-                        async with await acquire_prep_slot():
-                            result = await asyncio.to_thread(safe_ffmpeg_run, extract_cmd, 300, "segment extract")
+                        try:
+                            async with await acquire_prep_slot():
+                                result = await asyncio.to_thread(safe_ffmpeg_run, extract_cmd, 300, "segment extract")
+                        except (subprocess.CalledProcessError, RuntimeError) as ffmpeg_err:
+                            logger.error(f"FFmpeg extract failed: {ffmpeg_err}")
+                            continue
                         if result.returncode != 0:
                             logger.error(f"FFmpeg extract error: {result.stderr}")
                             continue

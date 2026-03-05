@@ -114,7 +114,7 @@ export function PublishDialog({
   const [errorMessage, setErrorMessage] = useState("");
   const [publishJobId, setPublishJobId] = useState<string | null>(null);
 
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollCountRef = useRef(0);
   const MAX_POLL_COUNT = 200; // ~5 min at 1.5s intervals
 
@@ -155,12 +155,12 @@ export function PublishDialog({
   // Cleanup poll on unmount or when dialog closes
   useEffect(() => {
     if (!open && pollRef.current) {
-      clearInterval(pollRef.current);
+      clearTimeout(pollRef.current);
       pollRef.current = null;
     }
     return () => {
       if (pollRef.current) {
-        clearInterval(pollRef.current);
+        clearTimeout(pollRef.current);
         pollRef.current = null;
       }
     };
@@ -209,12 +209,13 @@ export function PublishDialog({
 
   // Poll progress
   const startPolling = useCallback((jobId: string) => {
-    if (pollRef.current) clearInterval(pollRef.current);
+    if (pollRef.current) clearTimeout(pollRef.current);
     pollCountRef.current = 0;
-    pollRef.current = setInterval(async () => {
+
+    const pollOnce = async () => {
       pollCountRef.current++;
       if (pollCountRef.current > MAX_POLL_COUNT) {
-        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = null;
         setDialogState("error");
         setErrorMessage("Timeout — publicarea dureaza prea mult. Verifica in Postiz.");
         return;
@@ -226,18 +227,23 @@ export function PublishDialog({
         setProgressPercent(data.percentage || 0);
 
         if (data.status === "completed") {
-          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
           setDialogState("success");
           onPublished?.();
+          return;
         } else if (data.status === "failed" || data.status === "completed_with_errors") {
-          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
           setDialogState("error");
           setErrorMessage(data.step || "Publicarea a esuat");
+          return;
         }
       } catch {
         // Keep polling on transient errors
       }
-    }, 1500);
+      pollRef.current = setTimeout(pollOnce, 1500);
+    };
+
+    pollRef.current = setTimeout(pollOnce, 1500);
   }, [onPublished]);
 
   // Publish
@@ -295,7 +301,7 @@ export function PublishDialog({
   };
 
   const handleClose = () => {
-    if (pollRef.current) clearInterval(pollRef.current);
+    if (pollRef.current) clearTimeout(pollRef.current);
     onOpenChange(false);
   };
 

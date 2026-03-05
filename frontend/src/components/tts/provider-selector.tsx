@@ -76,6 +76,7 @@ export function ProviderSelector({ value, onChange, disabled }: ProviderSelector
                   id={provider.id}
                   disabled={disabled}
                   className="mt-1"
+                  onClick={(e) => e.stopPropagation()}
                 />
                 <div className="flex-1 space-y-2">
                   <div className="flex items-center justify-between gap-2">

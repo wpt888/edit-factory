@@ -80,6 +80,8 @@ function LibrarieContent() {
 
   // State
   const [clips, setClips] = useState<ClipWithProject[]>([]);
+  const clipsRef = useRef(clips);
+  useEffect(() => { clipsRef.current = clips; }, [clips]);
   // filteredClips is derived via useMemo below (no useState needed)
   const [loading, setLoading] = useState(true);
 
@@ -137,6 +139,8 @@ function LibrarieContent() {
 
   // Multi-select state
   const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
+  const selectedClipIdsRef = useRef(selectedClipIds);
+  useEffect(() => { selectedClipIdsRef.current = selectedClipIds; }, [selectedClipIds]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkUploading, setBulkUploading] = useState(false);
 
@@ -387,6 +391,7 @@ function LibrarieContent() {
   };
 
   const handleTagFilter = (value: string) => {
+    if (!currentProfile) return;
     const newTag = value === "all" ? "" : value;
     setFilterTag(newTag);
     updateURL({ tag: newTag });
@@ -485,6 +490,7 @@ function LibrarieContent() {
         setRemovingAudioClipId(clip.id);
         try {
           const res = await apiPost(`/library/clips/${clip.id}/remove-audio`);
+          if (!isMountedRef.current) return;
           const data = await res.json();
           setClips((prev) =>
             prev.map((c) =>
@@ -515,6 +521,7 @@ function LibrarieContent() {
         setDeletingClipId(clip.id);
         try {
           await apiDelete(`/library/clips/${clip.id}`);
+          if (!isMountedRef.current) return;
           setClips((prev) => prev.filter((c) => c.id !== clip.id));
           toast.success("Clip deleted successfully!");
         } catch (error) {
@@ -563,11 +570,12 @@ function LibrarieContent() {
         setConfirmDialog((prev) => ({ ...prev, loading: true }));
         setBulkDeleting(true);
         try {
+          const ids = selectedClipIdsRef.current;
           const res = await apiPost("/library/clips/bulk-delete", {
-            clip_ids: Array.from(selectedClipIds),
+            clip_ids: Array.from(ids),
           });
           const data = await res.json();
-          setClips((prev) => prev.filter((c) => !selectedClipIds.has(c.id)));
+          setClips((prev) => prev.filter((c) => !ids.has(c.id)));
           setSelectedClipIds(new Set());
           toast.success(`${data.deleted_count} clips deleted successfully!${data.failed_count > 0 ? ` ${data.failed_count} failed.` : ""}`);
         } catch (error) {
@@ -616,7 +624,7 @@ function LibrarieContent() {
         setBulkUploading(true);
         try {
           // Prepare clips data
-          const selectedClips = clips.filter((c) => selectedClipIds.has(c.id));
+          const selectedClips = clipsRef.current.filter((c) => selectedClipIdsRef.current.has(c.id));
           const clipsData = selectedClips.map((clip) => ({
             clip_id: clip.id,
             video_path: clip.final_video_path || clip.raw_video_path,

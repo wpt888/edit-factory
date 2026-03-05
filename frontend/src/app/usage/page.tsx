@@ -164,12 +164,6 @@ export default function UsagePage() {
 
   useEffect(() => {
     fetchData();
-    // Load saved budget from localStorage (Bug #132: validate parseFloat)
-    const savedBudget = localStorage.getItem("editai_budget");
-    if (savedBudget) {
-      const parsed = parseFloat(savedBudget);
-      if (!isNaN(parsed) && parsed > 0) setBudget(parsed);
-    }
   }, [fetchData]);
 
   const saveBudget = (value: number) => {

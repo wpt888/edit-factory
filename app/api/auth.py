@@ -115,7 +115,10 @@ async def get_current_user(
 
     # Development mode bypass - WARNING: Only use for local development!
     if settings.auth_disabled or settings.desktop_mode:
-        logger.warning("Auth bypassed — %s", "desktop mode" if settings.desktop_mode else "AUTH_DISABLED=true")
+        if settings.auth_disabled and settings.desktop_mode:
+            logger.warning("Auth bypassed — BOTH auth_disabled AND desktop_mode are true (dual bypass)")
+        else:
+            logger.warning("Auth bypassed — %s", "desktop mode" if settings.desktop_mode else "AUTH_DISABLED=true")
         return AuthUser(
             user_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             email="desktop@local" if settings.desktop_mode else "dev@localhost",
@@ -265,7 +268,8 @@ async def get_profile_context(
                 # First try scoped to the dev user_id
                 result = supabase.table("profiles").select("id").eq("user_id", current_user.id).eq("is_default", True).limit(1).execute()
                 if not result.data:
-                    # Fallback: pick any default profile (only safe because auth_disabled=True)
+                    result = supabase.table("profiles").select("id").eq("user_id", current_user.id).limit(1).execute()
+                if not result.data:
                     result = supabase.table("profiles").select("id").eq("is_default", True).limit(1).execute()
                 if result.data:
                     profile_id = result.data[0]["id"]

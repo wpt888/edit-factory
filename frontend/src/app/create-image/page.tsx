@@ -114,6 +114,8 @@ export default function CreateImagePage() {
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const productSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null); // Bug #158
+  const productSearchRef = useRef(productSearch);
+  productSearchRef.current = productSearch;
 
   // ============== Data fetching ==============
 
@@ -178,7 +180,7 @@ export default function CreateImagePage() {
   useEffect(() => {
     if (productSearchTimer.current) clearTimeout(productSearchTimer.current);
     productSearchTimer.current = setTimeout(() => {
-      fetchProducts(productSearch);
+      fetchProducts(productSearchRef.current);
     }, 400);
     return () => { if (productSearchTimer.current) clearTimeout(productSearchTimer.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps

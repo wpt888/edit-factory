@@ -67,7 +67,13 @@ export async function apiFetch(
     });
   } catch (err) {
     const fetchErr = err as Error;
-    if (fetchErr.name === "TimeoutError" || fetchErr.name === "AbortError") {
+    if (fetchErr.name === "AbortError") {
+      if (existingSignal?.aborted) {
+        throw new ApiError(0, "Request aborted", false);
+      }
+      throw new ApiError(0, "Request timed out", true);
+    }
+    if (fetchErr.name === "TimeoutError") {
       throw new ApiError(0, "Request timed out", true);
     }
     // Wrap network TypeError in ApiError for consistent error handling (Bug #109)
@@ -128,6 +134,7 @@ export async function apiGetWithRetry(
 
       // Do not retry on the last attempt
       if (attempt < maxRetries) {
+        if (options.signal?.aborted) throw new ApiError(0, "Request aborted", false);
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }

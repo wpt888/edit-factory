@@ -147,53 +147,53 @@ export default function SettingsPage() {
   // Load current profile TTS settings
   useEffect(() => {
     if (profileLoading || !currentProfile) return
+    const controller = new AbortController()
 
     const loadSettings = async () => {
       try {
-        const response = await apiGetWithRetry(`/profiles/${currentProfile.id}`)
+        const response = await apiGetWithRetry(`/profiles/${currentProfile.id}`, { signal: controller.signal })
+        if (controller.signal.aborted) return
 
         const data = await response.json()
         const ttsSettings = data.tts_settings || {}
 
-        // Always use elevenlabs
         setProvider("elevenlabs")
         if (ttsSettings.voice_id) {
           setVoiceId(ttsSettings.voice_id)
         }
 
-        // Load Postiz settings
         const postizSettings = ttsSettings.postiz || {}
         setPostizUrl(postizSettings.api_url || "")
         setPostizKey(postizSettings.api_key || "")
         setPostizEnabled(postizSettings.enabled || false)
 
-        // Load monthly quota
         if (data.monthly_quota_usd !== undefined && data.monthly_quota_usd !== null) {
           setMonthlyQuota(data.monthly_quota_usd.toString())
         }
 
-        // Load template settings
         const videoSettings = data.video_template_settings || {}
         setTemplateName(videoSettings.template_name || "product_spotlight")
         setPrimaryColor(videoSettings.primary_color || "#FF0000")
         setAccentColor(videoSettings.accent_color || "#FFFF00")
         setTemplateCta(videoSettings.cta_text || "Comanda acum!")
       } catch (error) {
+        if (controller.signal.aborted) return
         handleApiError(error, "Error loading settings")
       } finally {
         setInitialLoad(false)
       }
     }
 
-    // Fetch available template presets
     const loadTemplates = async () => {
       try {
-        const tmplRes = await apiGetWithRetry("/profiles/templates")
+        const tmplRes = await apiGetWithRetry("/profiles/templates", { signal: controller.signal })
+        if (controller.signal.aborted) return
         const tmplData = await tmplRes.json()
         if (Array.isArray(tmplData)) {
           setAvailableTemplates(tmplData)
         }
       } catch (err) {
+        if (controller.signal.aborted) return
         console.warn("Failed to load templates:", err)
       }
     }
@@ -201,20 +201,24 @@ export default function SettingsPage() {
     loadSettings()
     loadAccounts()
     loadTemplates()
+    return () => { controller.abort() }
   }, [currentProfile, profileLoading, loadAccounts])
 
   // Load dashboard data
   useEffect(() => {
     if (profileLoading || !currentProfile) return
+    const controller = new AbortController()
 
     const loadDashboard = async () => {
       setDashboardLoading(true)
       try {
-        const response = await apiGetWithRetry(`/profiles/${currentProfile.id}/dashboard?time_range=30d`)
+        const response = await apiGetWithRetry(`/profiles/${currentProfile.id}/dashboard?time_range=30d`, { signal: controller.signal })
+        if (controller.signal.aborted) return
 
         const data = await response.json()
         setDashboard(data)
       } catch (error) {
+        if (controller.signal.aborted) return
         handleApiError(error, "Error loading dashboard")
       } finally {
         setDashboardLoading(false)
@@ -222,6 +226,7 @@ export default function SettingsPage() {
     }
 
     loadDashboard()
+    return () => { controller.abort() }
   }, [currentProfile, profileLoading])
 
   // Load voices when provider changes

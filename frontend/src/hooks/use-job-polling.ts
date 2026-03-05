@@ -279,6 +279,10 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
       sseReconnectCountRef.current++;
       if (sseReconnectCountRef.current > MAX_SSE_RECONNECTS) {
         console.error("[useJobPolling] SSE max reconnects reached, falling back to polling");
+        if (elapsedIntervalRef.current) {
+          clearInterval(elapsedIntervalRef.current);
+          elapsedIntervalRef.current = null;
+        }
         eventSourceRef.current?.close();
         eventSourceRef.current = null;
         pollFallbackRef.current(jobId);

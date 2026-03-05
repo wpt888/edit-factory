@@ -277,7 +277,7 @@ function PipelinePage() {
   const [wordsPerSubtitle, setWordsPerSubtitle] = useState(2);
   const [minSegmentDuration, setMinSegmentDuration] = useState(3.0);
   const [ultraRapidIntro, setUltraRapidIntro] = useState(true);
-  const voiceSettingsLoaded = useRef(false);
+  const [voiceSettingsLoaded, setVoiceSettingsLoaded] = useState(false);
   // Ref to avoid stale closures in debounced save timeout (Bug #87)
   const voiceSettingsValuesRef = useRef({ voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro });
 
@@ -932,7 +932,7 @@ function PipelinePage() {
     // FE-05: Wrap in try/finally to guarantee setPreviewingIndex(null) is always called
     try {
       for (let i = 0; i < scripts.length; i++) {
-        if (abortController.signal.aborted) return;
+        if (abortController.signal.aborted) { setPreviewingIndex(null); return; }
         setPreviewingIndex(i);
         try {
           const res = await apiPost(`/pipeline/preview/${pipelineId}/${i}`, {
@@ -951,14 +951,14 @@ function PipelinePage() {
             ultra_rapid_intro: ultraRapidIntro,
           }, { timeout: 300_000, signal: abortController.signal }); // 5 min — TTS generation + SRT can be slow
 
-          if (abortController.signal.aborted) return;
+          if (abortController.signal.aborted) { setPreviewingIndex(null); return; }
 
           // apiPost throws on non-OK responses — no need for res.ok check (FE-01)
           const data = await res.json();
           newPreviews[i] = data;
           setPreviews(prev => ({ ...prev, [i]: data }));
         } catch (err) {
-          if (abortController.signal.aborted) return;
+          if (abortController.signal.aborted) { setPreviewingIndex(null); return; }
           handleApiError(err, "Error previewing variants");
           // Clear partial previews on failure (Bug #56)
           setPreviews({});
@@ -1236,8 +1236,8 @@ function PipelinePage() {
 
   // History sidebar: auto-load on mount and when profile changes
   useEffect(() => {
+    if (!currentProfile?.id) return;
     fetchHistory();
-    // Reset expanded history when profile changes
     setSelectedHistoryId(null);
     setHistoryScripts([]);
     setHistorySelectedScripts(new Set());
@@ -1597,7 +1597,7 @@ function PipelinePage() {
   const voiceSettingsHydrated = useRef(false);
   useEffect(() => {
     // Wait until localStorage hydration is complete
-    if (!voiceSettingsLoaded.current) return;
+    if (!voiceSettingsLoaded) return;
     // The first trigger after hydration is the hydrated values settling — skip it
     if (!voiceSettingsHydrated.current) {
       voiceSettingsHydrated.current = true;
@@ -1612,7 +1612,7 @@ function PipelinePage() {
       }
       return next;
     });
-  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost]);
+  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost]);
 
   // Load voice settings from localStorage after hydration
   useEffect(() => {
@@ -1633,7 +1633,7 @@ function PipelinePage() {
     if (msd !== null) setMinSegmentDuration(parseFloat(msd));
     const uri = localStorage.getItem("ef_ultra_rapid_intro");
     if (uri !== null) setUltraRapidIntro(uri === "true");
-    voiceSettingsLoaded.current = true;
+    setVoiceSettingsLoaded(true);
     // If no voice values were stored, hydration won't trigger a re-render,
     // so pre-mark as hydrated to avoid skipping the first real user change
     if (!hasVoiceValues) voiceSettingsHydrated.current = true;
@@ -1646,7 +1646,7 @@ function PipelinePage() {
 
   // Persist voice settings to localStorage (skip initial render before load)
   useEffect(() => {
-    if (!voiceSettingsLoaded.current) return;
+    if (!voiceSettingsLoaded) return;
     localStorage.setItem("ef_voice_stability", String(voiceStability));
     localStorage.setItem("ef_voice_similarity", String(voiceSimilarity));
     localStorage.setItem("ef_voice_style", String(voiceStyle));
@@ -1655,7 +1655,7 @@ function PipelinePage() {
     localStorage.setItem("ef_words_per_subtitle", String(wordsPerSubtitle));
     localStorage.setItem("ef_min_segment_duration", String(minSegmentDuration));
     localStorage.setItem("ef_ultra_rapid_intro", String(ultraRapidIntro));
-  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro]);
+  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro]);
 
   // Debounced auto-save voice settings to profile.
   // FE-07: This uses a read-then-patch pattern (GET profile -> merge tts_settings -> PATCH)
@@ -1665,7 +1665,7 @@ function PipelinePage() {
   // 3. The merge preserves unrelated tts_settings fields (voice_id, voice_name) that other
   //    save paths may have written.
   useEffect(() => {
-    if (!voiceSettingsLoaded.current || !voiceSettingsHydrated.current) return;
+    if (!voiceSettingsLoaded || !voiceSettingsHydrated.current) return;
     if (!currentProfile) return;
     if (voiceSettingsSaveTimer.current) clearTimeout(voiceSettingsSaveTimer.current);
     voiceSettingsSaveTimer.current = setTimeout(async () => {
@@ -1694,7 +1694,7 @@ function PipelinePage() {
         // Silent — settings still work locally via localStorage
       }
     }, 1000);
-  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, currentProfile]);
+  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, currentProfile]);
 
   // Per-script TTS: generate voice-over for a single script
   const handleGenerateTts = async (variantIndex: number) => {

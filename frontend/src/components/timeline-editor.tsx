@@ -137,6 +137,7 @@ export function TimelineEditor({
   const isPreviewPlayingRef = useRef(false);
   const previewActiveIndexRef = useRef(0);
   const previewSegmentEndTimeRef = useRef<number | undefined>(undefined);
+  const pendingCanPlayRef = useRef<(() => void) | null>(null);
   const matchesRef = useRef(matches);
   const previewRafIdRef = useRef<number | null>(null);
   const seekGraceTimestampRef = useRef(0);
@@ -521,9 +522,11 @@ export function TimelineEditor({
       } else {
         // Wait for audio to be playable
         const onCanPlay = () => {
+          pendingCanPlayRef.current = null;
           audio.removeEventListener("canplay", onCanPlay);
           beginPlayback();
         };
+        pendingCanPlayRef.current = onCanPlay;
         audio.addEventListener("canplay", onCanPlay);
         // Safety: if audio loads very fast between checks
         if (audio.readyState >= 2) {
@@ -539,6 +542,11 @@ export function TimelineEditor({
     stopPreviewRafLoop();
     const audio = previewAudioRef.current;
     if (audio) {
+      audio.onerror = null;
+      if (pendingCanPlayRef.current) {
+        audio.removeEventListener("canplay", pendingCanPlayRef.current);
+        pendingCanPlayRef.current = null;
+      }
       audio.pause();
       audio.currentTime = 0;
     }

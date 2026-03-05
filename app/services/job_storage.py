@@ -26,6 +26,18 @@ class JobStorage:
         self._MAX_CANCELLED = 500
         self._init_supabase()
 
+    @property
+    def supabase(self):
+        return self._supabase
+
+    @property
+    def update_lock(self):
+        return self._update_lock
+
+    @property
+    def memory_store(self):
+        return self._memory_store
+
     def _init_supabase(self):
         """Initialize Supabase client."""
         try:

@@ -49,7 +49,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const refreshSession = useCallback(async () => {
     try {
-      const { data, error } = await supabase.auth.getSession();
+      const { data, error } = await supabase.auth.refreshSession();
       if (error) {
         console.error("Error refreshing session:", error);
         setUser(null);
@@ -85,7 +85,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     // Initial session check
     const initAuth = async () => {
       try {
-        const { data, error } = await supabase.auth.getSession();
+        const { data, error } = await supabase.auth.refreshSession();
         if (!isMountedRef.current) return;
         if (error) {
           console.error("Error getting session:", error);

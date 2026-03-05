@@ -735,11 +735,14 @@ export default function SegmentsPage() {
   };
 
   // Fetch product associations for a batch of segment IDs
+  const fetchedAssocIdsRef = useRef<Set<string>>(new Set());
   const fetchAssociations = useCallback(async (segmentIds: string[]) => {
-    if (segmentIds.length === 0) return;
+    const unfetched = segmentIds.filter(id => !fetchedAssocIdsRef.current.has(id));
+    if (unfetched.length === 0) return;
+    unfetched.forEach(id => fetchedAssocIdsRef.current.add(id));
     try {
       const params = new URLSearchParams();
-      params.set("segment_ids", segmentIds.join(","));
+      params.set("segment_ids", unfetched.join(","));
       const res = await apiGetWithRetry(`/associations/segments?${params}`);
       if (res.ok) {
         const json = await res.json();
