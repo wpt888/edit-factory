@@ -5,12 +5,21 @@ import { Job } from "@/types/video-processing";
 
 export function extractProgress(job: Job): number {
   const raw = job.progress;
+  // Handle numeric progress directly (Bug #110)
+  if (typeof raw === "number") {
+    return Math.max(0, Math.min(100, Math.round(raw)));
+  }
+  if (!raw) {
+    if (job.status === "processing") return 10;
+    if (job.status === "completed") return 100;
+    return 0;
+  }
   // Try numeric string first
   const num = parseInt(raw);
   if (!isNaN(num) && num >= 0 && num <= 100) return num;
 
   // Try fraction pattern "2/5"
-  const fractionMatch = raw?.match(/(\d+)\s*\/\s*(\d+)/);
+  const fractionMatch = raw.match(/(\d+)\s*\/\s*(\d+)/);
   if (fractionMatch) {
     const [, done, total] = fractionMatch;
     if (parseInt(total) === 0) return 0;
@@ -18,7 +27,7 @@ export function extractProgress(job: Job): number {
   }
 
   // Try percentage pattern "50%"
-  const pctMatch = raw?.match(/(\d+)%/);
+  const pctMatch = raw.match(/(\d+)%/);
   if (pctMatch) return parseInt(pctMatch[1]);
 
   // Status-based fallback
@@ -99,7 +108,8 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
 
   // Calculate ETA based on progress and elapsed time
   const calculateETA = useCallback((currentProgress: number, elapsed: number) => {
-    if (currentProgress <= 10 || elapsed < 5) {
+    // Guard against near-zero division (Bug #113)
+    if (currentProgress <= 15 || elapsed < 5) {
       return "Calculez...";
     }
 
@@ -150,9 +160,9 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
 
       try {
         // Dynamic import to avoid issues during SSR
+        // apiFetch already throws ApiError on non-2xx (Bug #68)
         const { apiFetch } = await import("@/lib/api");
         const response = await apiFetch(`/jobs/${jobId}`);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const job: Job = await response.json();
         setCurrentJob(job);
@@ -212,6 +222,8 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
         job_id: data.job_id,
         status: data.status,
         progress: data.progress,
+        error: data.error,       // Include error/result fields (Bug #44)
+        result: data.result,
       };
       setCurrentJob(job);
       const progressNum = extractProgress(job);

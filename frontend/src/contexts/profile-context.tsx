@@ -104,7 +104,8 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch (error) {
-      handleApiError(error, "Error loading profile");
+      // Background refresh — don't show toast to user (Bug #41)
+      console.warn("Error loading profiles:", error);
     }
   }, []);
 
@@ -123,18 +124,31 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
         if (storedProfiles) {
           try {
-            const parsed: Profile[] = JSON.parse(storedProfiles);
-            setProfilesState(parsed);
+            const parsed = JSON.parse(storedProfiles);
+            // Basic shape check: must be array of objects with id and name (Bug #111)
+            if (Array.isArray(parsed) && parsed.every((p: unknown) =>
+              typeof p === "object" && p !== null && "id" in p && "name" in p
+            )) {
+              const validProfiles = parsed as Profile[];
+              setProfilesState(validProfiles);
 
-            if (storedProfileId) {
-              const profile = parsed.find((p) => p.id === storedProfileId);
-              if (profile) {
-                setCurrentProfileState(profile);
-                hasCachedData = true;
+              if (storedProfileId) {
+                const profile = validProfiles.find((p) => p.id === storedProfileId);
+                if (profile) {
+                  setCurrentProfileState(profile);
+                  hasCachedData = true;
+                }
               }
+            } else {
+              // Corrupted data — clear it
+              localStorage.removeItem(STORAGE_KEYS.PROFILES);
+              localStorage.removeItem(STORAGE_KEYS.PROFILE_ID);
             }
-          } catch (e) {
-            handleApiError(e, "Profile context error");
+          } catch {
+            // Parse error — clear corrupted data silently (Bug #112)
+            console.warn("Corrupted profile cache, clearing localStorage");
+            localStorage.removeItem(STORAGE_KEYS.PROFILES);
+            localStorage.removeItem(STORAGE_KEYS.PROFILE_ID);
           }
         }
       }

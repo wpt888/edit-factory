@@ -124,12 +124,16 @@ export function usePolling<T>(options: UsePollingOptions<T>): UsePollingReturn<T
   }, [endpoint, interval, stopPolling, clearPolling]);
 
   // Auto-start when enabled becomes true or endpoint changes
+  // startPolling internally calls clearPolling, so old polls are cleaned up (Bug #114)
   useEffect(() => {
     if (enabled) {
       startPolling();
     } else {
       stopPolling();
     }
+    return () => {
+      clearPolling();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, endpoint]);
 

@@ -66,12 +66,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const signOut = useCallback(async () => {
     try {
       await supabase.auth.signOut();
+    } catch (error) {
+      console.error("Error signing out:", error);
+    } finally {
+      // Always clear local state and redirect, even if signOut API fails (Bug #43)
       setUser(null);
       setSession(null);
       router.push("/login");
-      router.refresh();
-    } catch (error) {
-      console.error("Error signing out:", error);
     }
   }, [supabase, router]);
 
@@ -99,6 +100,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+      // Skip INITIAL_SESSION — already handled by initAuth above (Bug #42)
+      if (event === "INITIAL_SESSION") return;
+
       setSession(newSession);
       setUser(newSession?.user ?? null);
 

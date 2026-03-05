@@ -52,7 +52,7 @@ export interface JobProgress {
 export interface Job {
   job_id: string;
   status: "pending" | "processing" | "completed" | "failed";
-  progress: string;
+  progress: string | number;
   error?: string;
   result?: {
     final_video?: string;
@@ -92,7 +92,7 @@ export interface Project {
   id: string;
   name: string;
   description?: string;
-  status: "draft" | "generating" | "ready_for_triage" | "processing_finals" | "completed" | "failed";
+  status: "draft" | "generating" | "ready_for_triage" | "processing_finals" | "completed" | "failed" | "error";
   target_duration: number;
   context_text?: string;
   created_at: string;
@@ -127,7 +127,7 @@ export interface ClipContent {
 // Default values
 export const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
   fontSize: 48,
-  fontFamily: "var(--font-montserrat), Montserrat, sans-serif",
+  fontFamily: "Montserrat",
   textColor: "#FFFFFF",
   outlineColor: "#000000",
   outlineWidth: 3,

@@ -40,7 +40,9 @@ export async function apiFetch(
     ...customHeaders, // Custom headers can override
   };
 
-  const url = endpoint.startsWith("http") ? endpoint : `${API_URL}${endpoint}`;
+  // Prevent double-slash when API_URL has trailing slash (Bug #154)
+  const base = API_URL.replace(/\/+$/, "");
+  const url = endpoint.startsWith("http") ? endpoint : `${base}${endpoint}`;
 
   // Use caller-provided signal if given, otherwise create a timeout signal
   const signal = existingSignal ?? AbortSignal.timeout(timeout);
@@ -56,6 +58,10 @@ export async function apiFetch(
     const fetchErr = err as Error;
     if (fetchErr.name === "TimeoutError" || fetchErr.name === "AbortError") {
       throw new ApiError(0, "Request timed out", true);
+    }
+    // Wrap network TypeError in ApiError for consistent error handling (Bug #109)
+    if (fetchErr instanceof TypeError) {
+      throw new ApiError(0, fetchErr.message || "Network error", true);
     }
     throw fetchErr;
   }
@@ -128,7 +134,8 @@ export async function apiPost<T = unknown>(
   return apiFetch(endpoint, {
     ...options,
     method: "POST",
-    body: body ? JSON.stringify(body) : undefined,
+    // Use !== checks to allow falsy values like 0, "", false (Bug #108)
+    body: body !== undefined && body !== null ? JSON.stringify(body) : undefined,
   });
 }
 
@@ -143,7 +150,7 @@ export async function apiPatch<T = unknown>(
   return apiFetch(endpoint, {
     ...options,
     method: "PATCH",
-    body: body ? JSON.stringify(body) : undefined,
+    body: body !== undefined && body !== null ? JSON.stringify(body) : undefined,
   });
 }
 
@@ -158,7 +165,7 @@ export async function apiPut<T = unknown>(
   return apiFetch(endpoint, {
     ...options,
     method: "PUT",
-    body: body ? JSON.stringify(body) : undefined,
+    body: body !== undefined && body !== null ? JSON.stringify(body) : undefined,
   });
 }
 

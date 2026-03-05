@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { handleApiError } from "@/lib/api";
+
 
 /**
  * Hook for persisting state to localStorage with type safety
@@ -32,7 +32,12 @@ export function useLocalStorageConfig<T>(
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (error) {
-      handleApiError(error, "Settings error");
+      // Show specific message for storage quota errors (Bug #115)
+      if (error instanceof DOMException && error.name === "QuotaExceededError") {
+        console.warn("localStorage quota exceeded for key:", key);
+      } else {
+        console.warn("Failed to persist setting to localStorage:", error);
+      }
     }
   }, [key, value, hydrated]);
 
