@@ -210,10 +210,14 @@ def _cache_get_profile(user_id: str, profile_key: str) -> "Optional[ProfileConte
 
 
 def _cache_set_profile(user_id: str, profile_key: str, ctx: "ProfileContext") -> None:
-    """Store ProfileContext in cache with current timestamp. Evicts all if cache exceeds 1000."""
+    """Store ProfileContext in cache with current timestamp. DB-12: Evicts oldest 10% if cache exceeds 1000."""
     with _profile_cache_lock:
         if len(_profile_cache) > 1000:
-            _profile_cache.clear()
+            # Evict oldest 10% instead of clearing everything
+            sorted_entries = sorted(_profile_cache.items(), key=lambda item: item[1][1])  # sort by timestamp
+            evict_count = max(1, len(_profile_cache) // 10)
+            for key, _ in sorted_entries[:evict_count]:
+                _profile_cache.pop(key, None)
         _profile_cache[(user_id, profile_key)] = (ctx, _time.monotonic())
 
 
@@ -271,11 +275,13 @@ async def get_profile_context(
             except Exception as e:
                 logger.warning(f"Dev mode: could not query profiles table: {e}")
 
-        # Fallback if no DB profile found (will fail on FK-constrained inserts)
-        profile_id = "00000000-0000-0000-0000-000000000000"
-        logger.warning(f"⚠️ Dev mode: no profiles in DB, using fallback {profile_id}")
-        # Do NOT cache the fallback placeholder — it's not a real profile
-        return ProfileContext(profile_id=profile_id, user_id=current_user.id)
+        # DB-11: Return HTTP 503 instead of picking an arbitrary placeholder profile
+        # that would fail on FK-constrained inserts anyway
+        logger.error("Dev mode: no profiles found in DB — cannot proceed without a valid profile")
+        raise HTTPException(
+            status_code=503,
+            detail="No profiles found in database. Please create a profile first (run account setup or insert a row into the profiles table)."
+        )
 
     supabase = _get_supabase()
     if not supabase:

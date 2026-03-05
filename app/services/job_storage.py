@@ -109,8 +109,17 @@ class JobStorage:
             try:
                 result = self._supabase.table("jobs").select("*").eq("id", job_id).single().execute()
                 if result.data:
-                    # Extract job data from JSONB column
-                    return result.data.get("data", {})
+                    # DB-02: Normalize return format — merge top-level fields into data dict
+                    row = result.data
+                    job_data = row.get("data", {})
+                    # Merge top-level DB fields so callers always see a consistent shape
+                    for key in ("id", "status", "progress", "profile_id", "created_at", "updated_at"):
+                        if key in row and key not in job_data:
+                            job_data[key] = row[key]
+                    # Ensure status from DB row overrides stale data-blob status
+                    if "status" in row:
+                        job_data["status"] = row["status"]
+                    return job_data
                 return None
             except Exception as e:
                 logger.error(f"JobStorage: Supabase error fetching job {job_id}: {e}")
@@ -135,6 +144,7 @@ class JobStorage:
         Returns:
             Updated job data or None if not found
         """
+        # DB-04: Do in-memory update inside lock, Supabase I/O outside lock
         with self._update_lock:
             # Get current job inside lock to prevent TOCTOU race
             job = self.get_job(job_id)
@@ -146,36 +156,34 @@ class JobStorage:
             job.update(updates)
             job["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-            if self._supabase:
-                try:
-                    # Build update data
-                    update_data = {
-                        "status": job.get("status"),
-                        "progress": job.get("progress"),
-                        "data": job,
-                        "updated_at": job["updated_at"]
-                    }
-                    # Include profile_id if provided
-                    if profile_id:
-                        update_data["profile_id"] = profile_id
+            # Always update in-memory copy inside lock
+            self._memory_store[job_id] = job.copy()
 
-                    # Update in Supabase
-                    self._supabase.table("jobs").update(update_data).eq("id", job_id).execute()
+        # Supabase I/O outside lock to avoid holding lock during network calls
+        if self._supabase:
+            try:
+                # Build update data
+                update_data = {
+                    "status": job.get("status"),
+                    "progress": job.get("progress"),
+                    "data": job,
+                    "updated_at": job["updated_at"]
+                }
+                # Include profile_id if provided
+                if profile_id:
+                    update_data["profile_id"] = profile_id
 
-                    if profile_id:
-                        logger.debug(f"[Profile {profile_id}] JobStorage: Updated job {job_id} in Supabase")
-                    else:
-                        logger.debug(f"JobStorage: Updated job {job_id} in Supabase")
-                    return job
-                except Exception as e:
-                    logger.error(f"JobStorage: Failed to update job in Supabase: {e}, using memory")
-                    # Fallback to memory
-                    self._memory_store[job_id] = job
-                    return job
-            else:
-                # In-memory storage
-                self._memory_store[job_id] = job
-                return job
+                # Update in Supabase
+                self._supabase.table("jobs").update(update_data).eq("id", job_id).execute()
+
+                if profile_id:
+                    logger.debug(f"[Profile {profile_id}] JobStorage: Updated job {job_id} in Supabase")
+                else:
+                    logger.debug(f"JobStorage: Updated job {job_id} in Supabase")
+            except Exception as e:
+                logger.error(f"JobStorage: Failed to update job in Supabase: {e}, memory copy preserved")
+
+        return job
 
     def list_jobs(self, status: Optional[str] = None, profile_id: Optional[str] = None, limit: int = 100) -> list:
         """
@@ -226,7 +234,11 @@ class JobStorage:
         """
         if self._supabase:
             try:
-                self._supabase.table("jobs").delete().eq("id", job_id).execute()
+                # DB-16: Check result.data before returning True
+                result = self._supabase.table("jobs").delete().eq("id", job_id).execute()
+                if not result.data:
+                    logger.warning(f"JobStorage: Delete returned no data for job {job_id}")
+                    return False
                 logger.info(f"JobStorage: Deleted job {job_id} from Supabase")
                 return True
             except Exception as e:
@@ -312,30 +324,45 @@ class JobStorage:
         cutoff_iso = cutoff.isoformat()
         cleaned = 0
 
-        # Try Supabase first
+        # DB-05: Use bulk UPDATE instead of N+1 individual updates
         if self._supabase:
             try:
-                result = self._supabase.table("jobs").select("id,status,updated_at").eq("status", "processing").lt("updated_at", cutoff_iso).execute()
+                result = self._supabase.table("jobs").update({
+                    "status": "failed",
+                    "progress": "Server restarted — job did not complete",
+                    "data": {
+                        "status": "failed",
+                        "error": "Job was still processing when server restarted"
+                    },
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }).eq("status", "processing").lt("updated_at", cutoff_iso).execute()
                 if result.data:
-                    for job in result.data:
-                        self.update_job(job["id"], {
-                            "status": "failed",
-                            "progress": "Server restarted — job did not complete",
-                            "error": "Job was still processing when server restarted"
-                        })
-                        cleaned += 1
-                    logger.info(f"Cleaned up {cleaned} stale processing jobs")
+                    cleaned = len(result.data)
+                    logger.info(f"Cleaned up {cleaned} stale processing jobs (bulk UPDATE)")
             except Exception as e:
                 logger.warning(f"Supabase stale job cleanup failed: {e}")
 
-        # Also clean in-memory jobs
+        # DB-14: Also clean in-memory jobs and sync to Supabase
         for job_id, job in list(self._memory_store.items()):
             if isinstance(job, dict) and job.get("status") == "processing":
                 updated = job.get("updated_at", "")
                 if updated and updated < cutoff_iso:
                     job["status"] = "failed"
+                    job["progress"] = "Server restarted — job did not complete"
                     job["error"] = "Job was still processing when server restarted"
+                    job["updated_at"] = datetime.now(timezone.utc).isoformat()
                     cleaned += 1
+                    # Sync stale in-memory job status to Supabase
+                    if self._supabase:
+                        try:
+                            self._supabase.table("jobs").update({
+                                "status": "failed",
+                                "progress": job["progress"],
+                                "data": job,
+                                "updated_at": job["updated_at"]
+                            }).eq("id", job_id).execute()
+                        except Exception as e:
+                            logger.warning(f"Failed to sync stale in-memory job {job_id} to Supabase: {e}")
 
         return cleaned
 
@@ -353,6 +380,16 @@ class JobStorage:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         count = 0
 
+        # DB-15: Do Supabase cleanup first, then in-memory cleanup
+        if self._supabase:
+            try:
+                result = self._supabase.table("jobs").delete().in_("status", ["failed", "completed", "cancelled"]).lt("created_at", cutoff).execute()
+                db_count = len(result.data) if result.data else 0
+                logger.info(f"JobStorage: Cleaned up {db_count} old jobs from Supabase (older than {days} days)")
+                count += db_count
+            except Exception as e:
+                logger.error(f"JobStorage: Failed to cleanup old jobs from Supabase: {e}")
+
         # Clean up in-memory store
         expired_keys = [
             job_id for job_id, job in self._memory_store.items()
@@ -363,16 +400,6 @@ class JobStorage:
         if expired_keys:
             logger.info(f"JobStorage: Cleaned up {len(expired_keys)} old jobs from memory")
         count += len(expired_keys)
-
-        # Clean up Supabase
-        if self._supabase:
-            try:
-                result = self._supabase.table("jobs").delete().in_("status", ["failed", "completed", "cancelled"]).lt("created_at", cutoff).execute()
-                db_count = len(result.data) if result.data else 0
-                logger.info(f"JobStorage: Cleaned up {db_count} old jobs from Supabase (older than {days} days)")
-                count += db_count
-            except Exception as e:
-                logger.error(f"JobStorage: Failed to cleanup old jobs from Supabase: {e}")
 
         return count
 

@@ -95,32 +95,42 @@ class CostTracker:
                 pass
 
     def _save_to_supabase(self, entry: CostEntry, profile_id: Optional[str] = None) -> bool:
-        """Save entry to Supabase."""
+        """Save entry to Supabase with retry and exponential backoff (DB-09)."""
         if not self._supabase:
             return False
 
-        try:
-            data = {
-                "service": entry.service,
-                "operation": entry.operation,
-                "cost": entry.cost_usd,
-                "profile_id": profile_id,
-                "metadata": {
-                    "job_id": entry.job_id,
-                    "units": entry.input_units,
-                    "details": entry.details,
-                },
-            }
+        import time
 
-            result = self._supabase.table("api_costs").insert(data).execute()
-            if profile_id:
-                logger.info(f"[Profile {profile_id}] Cost saved: {entry.service} - ${entry.cost_usd}")
-            else:
-                logger.info(f"Cost saved to Supabase: {entry.service} - ${entry.cost_usd}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save to Supabase: {e}")
-            return False
+        data = {
+            "service": entry.service,
+            "operation": entry.operation,
+            "cost": entry.cost_usd,
+            "profile_id": profile_id,
+            "metadata": {
+                "job_id": entry.job_id,
+                "units": entry.input_units,
+                "details": entry.details,
+            },
+        }
+
+        delays = [1, 2, 4]  # DB-09: 3-attempt retry with 1s, 2s, 4s backoff
+        last_error = None
+        for attempt in range(3):
+            try:
+                result = self._supabase.table("api_costs").insert(data).execute()
+                if profile_id:
+                    logger.info(f"[Profile {profile_id}] Cost saved: {entry.service} - ${entry.cost_usd}")
+                else:
+                    logger.info(f"Cost saved to Supabase: {entry.service} - ${entry.cost_usd}")
+                return True
+            except Exception as e:
+                last_error = e
+                if attempt < 2:
+                    logger.warning(f"Failed to save to Supabase (attempt {attempt + 1}/3): {e}, retrying in {delays[attempt]}s")
+                    time.sleep(delays[attempt])
+
+        logger.error(f"Failed to save to Supabase after 3 attempts: {last_error}")
+        return False
 
     def log_elevenlabs_tts(
         self,
@@ -218,10 +228,17 @@ class CostTracker:
         return self._get_summary_from_local(profile_id=profile_id)
 
     def _get_summary_from_supabase(self, profile_id: Optional[str] = None) -> Dict:
-        """Get summary from Supabase."""
+        """Get summary from Supabase.
+
+        DB-10: Ideally this would use an RPC call like:
+            supabase.rpc('aggregate_costs', {'p_profile_id': profile_id})
+        backed by: SELECT service, SUM(cost) as total FROM api_costs GROUP BY service
+        For now, we use .select("service, cost") with server-side column filtering
+        to minimize data transfer, and aggregate client-side.
+        """
         today = datetime.now(timezone.utc).date().isoformat()
 
-        # Get totals - filter by profile if provided
+        # Get totals - filter by profile if provided (DB-10: select only needed columns)
         query = self._supabase.table("api_costs").select("service, cost")
         if profile_id:
             query = query.eq("profile_id", profile_id)
@@ -377,7 +394,9 @@ class CostTracker:
             Tuple of (exceeded: bool, current_costs: float, quota: float)
         """
         if monthly_quota <= 0:
-            return False, 0.0, 0.0  # Unlimited
+            # DB-24: Return real cost values even when quota is unlimited
+            current = self.get_monthly_costs(profile_id)
+            return False, current, 0.0  # Unlimited — never exceeded, but report actual costs
 
         current = self.get_monthly_costs(profile_id)
         exceeded = current >= monthly_quota
@@ -398,9 +417,11 @@ def get_cost_tracker() -> CostTracker:
                 from app.config import get_settings
                 settings = get_settings()
                 _tracker = CostTracker(settings.logs_dir)
-    # Reinitialize supabase if not connected
+    # DB-21: Protect re-initialization with lock to prevent concurrent _init_supabase calls
     elif _tracker._supabase is None:
-        _tracker._init_supabase()
+        with _tracker_lock:
+            if _tracker._supabase is None:
+                _tracker._init_supabase()
     return _tracker
 
 

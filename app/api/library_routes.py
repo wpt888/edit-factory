@@ -16,7 +16,7 @@ from typing import Optional, List, Dict
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Depends, Response, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.config import get_settings
 from app.services.file_storage import get_file_storage
@@ -160,7 +160,7 @@ def _evict_old_progress():
     """Evict oldest entries when _generation_progress exceeds limit. Caller must hold _progress_lock."""
     if len(_generation_progress) <= _MAX_PROGRESS_ENTRIES:
         return
-    sorted_keys = sorted(_generation_progress, key=lambda k: _generation_progress[k].get("updated_at", ""))
+    sorted_keys = sorted(_generation_progress, key=lambda k: _generation_progress[k].get("updated_at", "1970-01-01T00:00:00+00:00"))  # DB-25: proper ISO default for missing updated_at
     to_remove = sorted_keys[:len(_generation_progress) - _MAX_PROGRESS_ENTRIES]
     for key in to_remove:
         _generation_progress.pop(key, None)
@@ -225,8 +225,8 @@ def clear_generation_progress(project_id: str):
 # ============== PYDANTIC MODELS ==============
 
 class ProjectCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
+    name: str = Field(..., max_length=200)  # DB-13: max_length validators
+    description: Optional[str] = Field(default=None, max_length=2000)  # DB-13
     target_duration: int = 20
     context_text: Optional[str] = None
 
@@ -389,13 +389,14 @@ async def download_clip_srt(
     if not clip.data:
         raise HTTPException(status_code=404, detail="Clip not found")
 
-    # Get SRT content from clip_content
-    content = supabase.table("editai_clip_content").select("srt_content").eq("clip_id", clip_id).single().execute()
-    if not content.data or not content.data.get("srt_content"):
+    # DB-06: Use .limit(1) instead of .single() to avoid exception when no rows
+    content_result = supabase.table("editai_clip_content").select("srt_content").eq("clip_id", clip_id).limit(1).execute()
+    content_row = content_result.data[0] if content_result.data else None
+    if not content_row or not content_row.get("srt_content"):
         raise HTTPException(status_code=404, detail="No subtitles available for this clip")
 
     return Response(
-        content=content.data["srt_content"],
+        content=content_row["srt_content"],
         media_type="text/plain",
         headers={"Content-Disposition": f'attachment; filename="clip_{clip_id[:8]}.srt"'}
     )
@@ -416,13 +417,14 @@ async def download_clip_audio(
     if not clip.data:
         raise HTTPException(status_code=404, detail="Clip not found")
 
-    # Get audio path from clip_content
-    content = supabase.table("editai_clip_content").select("tts_audio_path").eq("clip_id", clip_id).single().execute()
-    if not content.data or not content.data.get("tts_audio_path"):
+    # DB-06: Use .limit(1) instead of .single() to avoid exception when no rows
+    content_result = supabase.table("editai_clip_content").select("tts_audio_path").eq("clip_id", clip_id).limit(1).execute()
+    content_row = content_result.data[0] if content_result.data else None
+    if not content_row or not content_row.get("tts_audio_path"):
         raise HTTPException(status_code=404, detail="No audio available for this clip")
 
     settings = get_settings()
-    file_path = Path(content.data["tts_audio_path"])
+    file_path = Path(content_row["tts_audio_path"])
     if not file_path.is_absolute():
         file_path = settings.base_dir / file_path
 
@@ -578,6 +580,10 @@ async def update_project(
     supabase = get_supabase()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
+
+    # DB-20: Check if project is currently locked by a background task
+    if is_project_locked(project_id):
+        raise HTTPException(status_code=409, detail="Project is currently being processed")
 
     allowed_fields = ["name", "description", "target_duration", "context_text"]
     filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
@@ -769,10 +775,15 @@ async def _generate_raw_clips_task(
     variant_count: int,
     target_duration: int,
     context_text: Optional[str],
-    profile_id: Optional[str] = "default"
+    profile_id: Optional[str] = None  # DB-08: default None instead of "default"
 ):
     """Task pentru generarea clipurilor raw în background."""
     from app.services.video_processor import VideoProcessorService
+
+    # DB-08: Guard against missing profile_id
+    if not profile_id:
+        logger.error(f"Cannot generate raw clips for project {project_id}: profile_id is required")
+        return
 
     logger.info(f"[Profile {profile_id}] Starting raw clip generation for project {project_id}")
 
@@ -1159,11 +1170,16 @@ async def _generate_from_segments_task(
     tts_text: Optional[str],
     mute_source_voice: bool,
     start_variant_index: int = 1,
-    profile_id: Optional[str] = "default"
+    profile_id: Optional[str] = None  # DB-08: default None instead of "default"
 ):
     """Task pentru generarea clipurilor din segmente în background."""
     import subprocess
     import random
+
+    # DB-08: Guard against missing profile_id
+    if not profile_id:
+        logger.error(f"Cannot generate from segments for project {project_id}: profile_id is required")
+        return
 
     logger.info(f"[Profile {profile_id}] Starting clip generation from segments for project {project_id}")
 
@@ -1491,6 +1507,15 @@ async def _generate_from_segments_task(
             if not status_result.data:
                 logger.warning(f"Status update returned no data for project {project_id}")
             logger.info(f"Added {len(variants_created)} new clips (total: {total_count}) for project {project_id}")
+            # DB-03: Mark generation job as completed on success
+            if _gen_job_id:
+                try:
+                    get_job_storage().update_job(_gen_job_id, {
+                        "status": "completed",
+                        "progress": f"Generated {len(variants_created)} clips",
+                    })
+                except Exception:
+                    pass
         else:
             status_result = supabase.table("editai_projects").update({
                 "status": "failed",
@@ -1512,6 +1537,18 @@ async def _generate_from_segments_task(
         except Exception as db_err:
             logger.error(f"Failed to update project {project_id} status to failed: {db_err}")
     finally:
+        # DB-03: Ensure generation job is always closed (completed or failed)
+        if _gen_job_id:
+            try:
+                job = get_job_storage().get_job(_gen_job_id)
+                if job and job.get("status") == "processing":
+                    # If we get here with status still "processing", mark as failed
+                    get_job_storage().update_job(_gen_job_id, {
+                        "status": "failed",
+                        "progress": "Job did not complete normally",
+                    })
+            except Exception as _je:
+                logger.warning(f"Failed to close generation job {_gen_job_id}: {_je}")
         lock.release()
         cleanup_project_lock(project_id)
         clear_generation_progress(project_id)
@@ -1923,10 +1960,11 @@ async def delete_clip(
         clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", False).execute()
         if not clip.data:
             raise HTTPException(status_code=404, detail="Clip not found")
+        # DB-01: Include profile_id filter to prevent IDOR
         supabase.table("editai_clips").update({
             "is_deleted": True,
             "deleted_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", clip_id).execute()
+        }).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
         logger.info(f"Soft-deleted clip {clip_id}")
         return {"status": "deleted", "clip_id": clip_id}
     except HTTPException:
@@ -2045,13 +2083,15 @@ async def restore_clip(clip_id: str, profile: ProfileContext = Depends(get_profi
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
     try:
-        clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", True).single().execute()
-        if not clip.data:
+        # DB-06: Use .limit(1) instead of .single()
+        clip_result = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", True).limit(1).execute()
+        if not clip_result.data:
             raise HTTPException(status_code=404, detail="Clip not found in trash")
+        # DB-01/DB-07: Include profile_id filter to prevent IDOR
         supabase.table("editai_clips").update({
             "is_deleted": False,
             "deleted_at": None,
-        }).eq("id", clip_id).execute()
+        }).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
         logger.info(f"Restored clip {clip_id} from trash")
         return {"status": "restored", "clip_id": clip_id}
     except HTTPException:
@@ -2068,12 +2108,14 @@ async def permanently_delete_clip(clip_id: str, profile: ProfileContext = Depend
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
     try:
-        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", True).single().execute()
-        if not clip.data:
+        # DB-06: Use .limit(1) instead of .single()
+        clip_result = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", True).limit(1).execute()
+        if not clip_result.data:
             raise HTTPException(status_code=404, detail="Clip not found in trash")
-        _delete_clip_files(clip.data)
-        supabase.table("editai_clips").delete().eq("id", clip_id).execute()
+        _delete_clip_files(clip_result.data[0])
+        # DB-01/DB-07: Delete content first (child), then clip record (parent); include profile_id filter
         supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
+        supabase.table("editai_clips").delete().eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
         logger.info(f"Permanently deleted clip {clip_id}")
         return {"status": "permanently_deleted", "clip_id": clip_id}
     except HTTPException:
@@ -2149,18 +2191,19 @@ async def copy_content_from_clip(
         if not src_clip.data:
             raise HTTPException(status_code=404, detail="Source clip not found")
 
-        # Obținem conținutul sursă
-        source = supabase.table("editai_clip_content").select("*").eq("clip_id", source_clip_id).single().execute()
-        if not source.data:
+        # DB-06: Use .limit(1) instead of .single() to avoid exception when no rows
+        source_result = supabase.table("editai_clip_content").select("*").eq("clip_id", source_clip_id).limit(1).execute()
+        source_row = source_result.data[0] if source_result.data else None
+        if not source_row:
             raise HTTPException(status_code=404, detail="Source content not found")
 
         # Copiem la destinație
         content_data = {
             "clip_id": clip_id,
-            "tts_text": source.data.get("tts_text"),
-            "tts_voice_id": source.data.get("tts_voice_id"),
-            "srt_content": source.data.get("srt_content"),
-            "subtitle_settings": source.data.get("subtitle_settings"),
+            "tts_text": source_row.get("tts_text"),
+            "tts_voice_id": source_row.get("tts_voice_id"),
+            "srt_content": source_row.get("srt_content"),
+            "subtitle_settings": source_row.get("subtitle_settings"),
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
 
@@ -2496,13 +2539,15 @@ async def _render_final_clip_task(
 
             audio_duration = await asyncio.to_thread(_get_audio_duration, audio_path)
 
-            # Persist timestamps and model to Supabase for Phase 13 subtitle generation
+            # DB-17: Use upsert with on_conflict to prevent duplicate key errors
             if tts_timestamps:
                 try:
-                    supabase.table("editai_clip_content").update({
+                    supabase.table("editai_clip_content").upsert({
+                        "clip_id": clip_id,
                         "tts_timestamps": tts_timestamps,
-                        "tts_model": elevenlabs_model
-                    }).eq("clip_id", clip_id).execute()
+                        "tts_model": elevenlabs_model,
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }, on_conflict="clip_id").execute()
                     logger.info(f"TTS timestamps persisted for clip {clip_id}")
                 except Exception as e:
                     logger.warning(f"Failed to persist TTS timestamps: {e}")
@@ -2537,9 +2582,12 @@ async def _render_final_clip_task(
                 tts_persist_dir.mkdir(parents=True, exist_ok=True)
                 tts_persist_path = tts_persist_dir / f"clip_{clip_id}.mp3"
                 shutil.copy2(str(audio_path), str(tts_persist_path))
-                supabase.table("editai_clip_content").update({
-                    "tts_audio_path": str(tts_persist_path)
-                }).eq("clip_id", clip_id).execute()
+                # DB-17: Use upsert with on_conflict to prevent duplicate key errors
+                supabase.table("editai_clip_content").upsert({
+                    "clip_id": clip_id,
+                    "tts_audio_path": str(tts_persist_path),
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }, on_conflict="clip_id").execute()
                 logger.info(f"TTS audio persisted for clip {clip_id}: {tts_persist_path}")
             except Exception as e:
                 tts_persist_failed = True

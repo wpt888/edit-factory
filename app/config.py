@@ -141,6 +141,12 @@ class Settings(BaseSettings):
 # NOTE: Phase 50 (Setup Wizard) must call get_settings.cache_clear()
 # after writing a new .env to AppData, then call get_settings() again
 # to pick up new values.
+#
+# DB-23: The @lru_cache decorator means the Settings instance is created once and
+# reused for the lifetime of the process. Any fields that depend on runtime state
+# (e.g. dynamically configured paths, feature flags toggled via admin API) will
+# NOT update unless get_settings.cache_clear() is called first. This is intentional
+# for performance; only the Setup Wizard flow needs to clear and rebuild.
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
