@@ -131,6 +131,7 @@ export default function SegmentsPage() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const dragCounterRef = useRef(0);
+  const uploadPollRef = useRef<ReturnType<typeof setInterval> | null>(null); // Bug #52
 
   // Delete confirmation dialog
   const [deleteConfirm, setDeleteConfirm] = useState<{
@@ -437,6 +438,17 @@ export default function SegmentsPage() {
     e.stopPropagation();
   }, []);
 
+  // Safety net: reset drag state on document-level dragend/drop (Bug #126)
+  useEffect(() => {
+    const resetDrag = () => { dragCounterRef.current = 0; setIsDraggingOver(false); };
+    document.addEventListener("dragend", resetDrag);
+    document.addEventListener("drop", resetDrag);
+    return () => {
+      document.removeEventListener("dragend", resetDrag);
+      document.removeEventListener("drop", resetDrag);
+    };
+  }, []);
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -476,15 +488,16 @@ export default function SegmentsPage() {
         setUploadFile(null);
         setUploadError(null);
 
-        // Poll until background processing finishes
+        // Poll until background processing finishes (Bug #52: store in ref for cleanup)
         if (newVideo.status === "processing") {
-          const pollId = setInterval(async () => {
+          if (uploadPollRef.current) clearInterval(uploadPollRef.current);
+          uploadPollRef.current = setInterval(async () => {
             try {
               const pollRes = await apiGetWithRetry(`/segments/source-videos/${newVideo.id}`);
-              if (!pollRes.ok) { clearInterval(pollId); return; }
+              if (!pollRes.ok) { if (uploadPollRef.current) { clearInterval(uploadPollRef.current); uploadPollRef.current = null; } return; }
               const updated: SourceVideo = await pollRes.json();
               if (updated.status === "ready" || updated.status === "error") {
-                clearInterval(pollId);
+                if (uploadPollRef.current) { clearInterval(uploadPollRef.current); uploadPollRef.current = null; }
                 setSourceVideos((prev) =>
                   prev.map((v) => (v.id === updated.id ? updated : v))
                 );
@@ -496,7 +509,7 @@ export default function SegmentsPage() {
                 }
               }
             } catch {
-              clearInterval(pollId);
+              if (uploadPollRef.current) { clearInterval(uploadPollRef.current); uploadPollRef.current = null; }
             }
           }, 2000);
         }
@@ -608,15 +621,12 @@ export default function SegmentsPage() {
     setOverlapInfo(null);
   };
 
-  // Save segment with keywords
+  // Save segment with keywords (Bug #125: keep popup open until API success)
   const handleSaveSegment = async (keywords: string[], notes: string) => {
     if (!selectedVideo || !pendingSegment) return;
 
-    // Close popup immediately to prevent double-creation
     const segmentToSave = { ...pendingSegment };
     const videoId = selectedVideo.id;
-    setPendingSegment(null);
-    setShowKeywordPopup(false);
 
     try {
       const res = await apiPost(
@@ -631,11 +641,9 @@ export default function SegmentsPage() {
 
       if (res.ok) {
         const newSegment = await res.json();
-        // Add source video name for display
         newSegment.source_video_name = selectedVideo.name;
         setSegments((prev) => [...prev, newSegment].sort((a, b) => a.start_time - b.start_time));
         setAllSegments((prev) => [...prev, newSegment].sort((a, b) => a.start_time - b.start_time));
-        // Update source video segments count
         setSourceVideos((prev) =>
           prev.map((v) =>
             v.id === videoId
@@ -643,6 +651,9 @@ export default function SegmentsPage() {
               : v
           )
         );
+        // Close popup only after API success
+        setPendingSegment(null);
+        setShowKeywordPopup(false);
       }
     } catch (error) {
       handleApiError(error, "Error creating segment");
@@ -753,6 +764,11 @@ export default function SegmentsPage() {
     const ids = allSegments.map(s => s.id);
     if (ids.length > 0) fetchAssociations(ids);
   }, [allSegments, fetchAssociations]);
+
+  // Cleanup upload poll on unmount (Bug #52)
+  useEffect(() => {
+    return () => { if (uploadPollRef.current) clearInterval(uploadPollRef.current); };
+  }, []);
 
   // Association handler callbacks
   const handleProductSelected = (association: AssociationResponse) => {

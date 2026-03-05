@@ -105,11 +105,16 @@ function LibrarieContent() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false); // Synchronous guard for pagination (Bug #118)
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   // Rename state
   const [renameClipId, setRenameClipId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+
+  // Mounted ref for async safety (Bug #119)
+  const isMountedRef = useRef(true);
+  useEffect(() => { return () => { isMountedRef.current = false; }; }, []);
 
   // Audio removal state
   const [removingAudioClipId, setRemovingAudioClipId] = useState<string | null>(null);
@@ -173,10 +178,11 @@ function LibrarieContent() {
     [router, searchParams]
   );
 
-  // Fetch all clips — supports cursor-based pagination
-  const fetchAllClips = async (cursor?: string | null, tagFilter?: string) => {
+  // Fetch all clips — supports cursor-based pagination (Bug #46: wrapped in useCallback)
+  const fetchAllClips = useCallback(async (cursor?: string | null, tagFilter?: string) => {
     try {
       if (cursor) {
+        loadingMoreRef.current = true;
         setLoadingMore(true);
       } else {
         setLoading(true);
@@ -208,14 +214,16 @@ function LibrarieContent() {
     } finally {
       setLoading(false);
       setLoadingMore(false);
+      loadingMoreRef.current = false;
     }
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterTag]);
 
   // Load next page via cursor
   const fetchNextPage = useCallback(() => {
-    if (!hasMore || loadingMore) return;
+    if (!hasMore || loadingMoreRef.current) return; // Use ref for synchronous guard (Bug #118)
     fetchAllClips(nextCursor, filterTag);
-  }, [hasMore, loadingMore, nextCursor, filterTag]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hasMore, nextCursor, filterTag, fetchAllClips]);
 
   // IntersectionObserver — trigger fetchNextPage when sentinel enters viewport
   useEffect(() => {
@@ -387,6 +395,8 @@ function LibrarieContent() {
 
   // Update clip tags — saves to backend and updates local state optimistically
   const updateClipTags = async (clipId: string, newTags: string[]) => {
+    // Store previous tags for rollback (Bug #47)
+    const previousTags = clips.find((c) => c.id === clipId)?.tags ?? [];
     // Optimistic update
     setClips((prev) =>
       prev.map((c) => (c.id === clipId ? { ...c, tags: newTags } : c))
@@ -397,8 +407,10 @@ function LibrarieContent() {
       fetchAvailableTags();
     } catch (error) {
       handleApiError(error, "Error saving tags");
-      // Revert optimistic update — re-fetch clips to get server state
-      fetchAllClips(null, filterTag);
+      // Revert to previous tags (Bug #47)
+      setClips((prev) =>
+        prev.map((c) => (c.id === clipId ? { ...c, tags: previousTags } : c))
+      );
     }
   };
 
@@ -566,19 +578,22 @@ function LibrarieContent() {
 
   // Download helper for SRT/Audio files
   const downloadFile = async (url: string, filename: string) => {
+    let blobUrl: string | null = null;
     try {
       const res = await apiGet(url);
       const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
+      blobUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = blobUrl;
       a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(blobUrl);
     } catch {
       toast.error("Download error");
+    } finally {
+      // Always revoke blob URL to prevent memory leak (Bug #117)
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
     }
   };
 

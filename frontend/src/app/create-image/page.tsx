@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { apiPost, apiGet, apiPut, apiDelete, apiUpload } from "@/lib/api";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -112,6 +113,7 @@ export default function CreateImagePage() {
   const [productSearch, setProductSearch] = useState("");
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const productSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null); // Bug #158
 
   // ============== Data fetching ==============
 
@@ -151,9 +153,10 @@ export default function CreateImagePage() {
     }
   }, []);
 
-  const fetchProducts = useCallback(async () => {
+  const fetchProducts = useCallback(async (search?: string) => {
     try {
-      const params = productSearch ? `?search=${encodeURIComponent(productSearch)}&page_size=20` : "?page_size=20";
+      const q = search ?? productSearch;
+      const params = q ? `?search=${encodeURIComponent(q)}&page_size=20` : "?page_size=20";
       const res = await apiGet(`/catalog/products${params}`);
       if (res.ok) {
         const data = await res.json();
@@ -162,13 +165,24 @@ export default function CreateImagePage() {
     } catch {
       // ignore
     }
-  }, [productSearch]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     fetchTemplates();
     fetchLogoInfo();
     fetchProducts();
   }, [fetchTemplates, fetchLogoInfo, fetchProducts]);
+
+  // Debounced product search (Bug #158)
+  useEffect(() => {
+    if (productSearchTimer.current) clearTimeout(productSearchTimer.current);
+    productSearchTimer.current = setTimeout(() => {
+      fetchProducts(productSearch);
+    }, 400);
+    return () => { if (productSearchTimer.current) clearTimeout(productSearchTimer.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productSearch]);
 
   // ============== Template selection fills prompt ==============
 
@@ -209,7 +223,8 @@ export default function CreateImagePage() {
         }
       }
     }
-  }, [selectedProductId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- products is intentionally omitted to only trigger on selection change
+  }, [selectedProductId, products]);
 
   // ============== Generation ==============
 
@@ -400,9 +415,17 @@ export default function CreateImagePage() {
     await fetchTemplates();
   };
 
+  const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null); // Bug #124
   const handleDeleteTemplate = async (id: string) => {
-    await apiDelete(`/image-gen/templates/${id}`);
-    await fetchTemplates();
+    setDeletingTemplateId(id);
+    try {
+      await apiDelete(`/image-gen/templates/${id}`);
+      await fetchTemplates();
+    } catch (err) {
+      toast.error("Failed to delete template"); // Bug #123
+    } finally {
+      setDeletingTemplateId(null);
+    }
   };
 
   // ============== Image URL helper ==============
@@ -444,6 +467,8 @@ export default function CreateImagePage() {
               variant="outline"
               size="sm"
               onClick={() => {
+                // Clear any active poll (Bug #51)
+                if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
                 setStep(1);
                 setCurrentImage(null);
                 setCurrentImageId(null);

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -73,6 +73,8 @@ export default function SettingsPage() {
 
   const [provider, setProvider] = useState("elevenlabs")
   const [voiceId, setVoiceId] = useState("")
+  const voiceIdRef = useRef(voiceId); // Bug #60: stable ref for async callbacks
+  voiceIdRef.current = voiceId;
   const [voices, setVoices] = useState<Voice[]>([])
   const [loadingVoices, setLoadingVoices] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -241,8 +243,8 @@ export default function SettingsPage() {
         const data = await response.json()
         setVoices(data.voices || [])
 
-        // Reset voice selection if current voice not available in new provider
-        if (voiceId && !data.voices.find((v: Voice) => v.voice_id === voiceId)) {
+        // Reset voice selection if current voice not available in new provider (Bug #60: use ref)
+        if (voiceIdRef.current && !data.voices.find((v: Voice) => v.voice_id === voiceIdRef.current)) {
           setVoiceId("")
         }
       } catch (error) {

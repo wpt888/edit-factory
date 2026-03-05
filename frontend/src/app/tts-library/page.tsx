@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { apiGetWithRetry, apiPost, apiPut, apiDelete, API_URL } from "@/lib/api";
+import { toast } from "sonner";
 import { useProfile } from "@/contexts/profile-context";
 import { TTSAsset, ELEVENLABS_MODELS } from "@/types/video-processing";
 import { Button } from "@/components/ui/button";
@@ -208,7 +209,7 @@ export default function TTSLibraryPage() {
     const audio = new Audio(BASE_URL + asset.mp3_url);
     audio.onended = () => setPlayingId(null);
     audio.onerror = () => setPlayingId(null);
-    audio.play();
+    audio.play().catch(() => setPlayingId(null)); // Bug #58
     audioRef.current = audio;
     setPlayingId(asset.id);
   }
@@ -225,13 +226,13 @@ export default function TTSLibraryPage() {
       audio.onended = () => setPlayingId(null);
       audio.onerror = () => setPlayingId(null);
       audio.currentTime = time;
-      audio.play();
+      audio.play().catch(() => setPlayingId(null)); // Bug #58
       audioRef.current = audio;
       setPlayingId(asset.id);
     } else if (audioRef.current) {
       audioRef.current.currentTime = time;
       if (audioRef.current.paused) {
-        audioRef.current.play();
+        audioRef.current.play().catch(() => {}); // Bug #58
       }
     }
   }
@@ -249,8 +250,8 @@ export default function TTSLibraryPage() {
       setCreateOpen(false);
       setCreateText("");
       setCreateModel("eleven_flash_v2_5");
-    } catch {
-      // silent
+    } catch (err) {
+      toast.error("Failed to create TTS asset"); // Bug #59
     } finally {
       setCreating(false);
     }
@@ -269,7 +270,7 @@ export default function TTSLibraryPage() {
       );
       setEditingAsset(null);
     } catch {
-      // silent
+      toast.error("Failed to update TTS asset"); // Bug #59
     } finally {
       setSaving(false);
     }
@@ -286,7 +287,7 @@ export default function TTSLibraryPage() {
         setPlayingId(null);
       }
     } catch {
-      // silent
+      toast.error("Failed to delete TTS asset"); // Bug #129
     }
     setDeleteConfirm(null);
   }
@@ -349,8 +350,8 @@ export default function TTSLibraryPage() {
     setEditingAsset(asset);
   }
 
-  function copySrt(content: string) {
-    navigator.clipboard.writeText(content);
+  async function copySrt(content: string) {
+    await navigator.clipboard.writeText(content); // Bug #162
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }

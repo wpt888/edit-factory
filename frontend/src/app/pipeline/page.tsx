@@ -359,6 +359,8 @@ function PipelinePage() {
     segments_count: number;
   }>>([]);
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
+  const selectedSourceIdsRef = useRef(selectedSourceIds); // Bug #120: ref for async callbacks
+  selectedSourceIdsRef.current = selectedSourceIds;
   const [sourceVideosLoading, setSourceVideosLoading] = useState(false);
   const [sourceVideoSearch, setSourceVideoSearch] = useState("");
   // FE-16: This is a single shared search string for all variants' group tag dropdowns.
@@ -924,7 +926,7 @@ function PipelinePage() {
           const res = await apiPost(`/pipeline/preview/${pipelineId}/${i}`, {
             elevenlabs_model: elevenlabsModel,
             voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
-            source_video_ids: selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined,
+            source_video_ids: selectedSourceIdsRef.current.size > 0 ? Array.from(selectedSourceIdsRef.current) : undefined, // Bug #120: use ref
             voice_settings: {
               stability: voiceStability,
               similarity_boost: voiceSimilarity,
@@ -946,6 +948,9 @@ function PipelinePage() {
         } catch (err) {
           if (abortController.signal.aborted) return;
           handleApiError(err, "Error previewing variants");
+          // Clear partial previews on failure (Bug #56)
+          setPreviews({});
+          setPreviewingIndex(null);
           if (err instanceof ApiError) {
             if (err.isTimeout) {
               setPreviewError("Preview timed out. Please try again.");
@@ -1045,7 +1050,7 @@ function PipelinePage() {
         preset_name: presetName,
         elevenlabs_model: elevenlabsModel,
         voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
-        source_video_ids: selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined,
+        source_video_ids: selectedSourceIdsRef.current.size > 0 ? Array.from(selectedSourceIdsRef.current) : undefined, // Bug #120
         match_overrides: Object.keys(matchOverrides).length > 0 ? matchOverrides : undefined,
         interstitial_slides: filteredInterstitialSlides,
         pip_overlays: Object.keys(pipOverlays).length > 0 ? pipOverlays : undefined,
@@ -1140,9 +1145,9 @@ function PipelinePage() {
     }
   };
 
-  // History sidebar: fetch pipeline list (shared function used by mount, profile change, and post-generate refresh)
-  const fetchHistory = async () => {
-    if (!currentProfile?.id) return; // FE-17: guard against undefined profile
+  // History sidebar: fetch pipeline list (Bug #54: wrapped in useCallback)
+  const fetchHistory = useCallback(async () => {
+    if (!currentProfile?.id) return;
     setHistoryLoading(true);
     try {
       const res = await apiGet("/pipeline/list?limit=20");
@@ -1153,7 +1158,7 @@ function PipelinePage() {
     } finally {
       setHistoryLoading(false);
     }
-  };
+  }, [currentProfile?.id]);
 
   // History sidebar: fetch scripts for a specific pipeline
   const fetchHistoryScripts = async (id: string) => {
@@ -1555,12 +1560,14 @@ function PipelinePage() {
         URL.revokeObjectURL(pendingBlobUrl.current);
         pendingBlobUrl.current = null;
       }
-      if (sourceSelectionTimer.current) clearTimeout(sourceSelectionTimer.current);
-      if (ttsLibraryCheckTimer.current) clearTimeout(ttsLibraryCheckTimer.current);
-      if (scriptSaveTimer.current) clearTimeout(scriptSaveTimer.current);
-      if (catalogSearchTimer.current) clearTimeout(catalogSearchTimer.current);
-      if (voiceSettingsSaveTimer.current) clearTimeout(voiceSettingsSaveTimer.current);
-      if (subtitleSaveTimer.current) clearTimeout(subtitleSaveTimer.current);
+      // Clear all timer refs and null them out (Bug #49, #55)
+      if (aiInstructionsSaveTimer.current) { clearTimeout(aiInstructionsSaveTimer.current); aiInstructionsSaveTimer.current = null; }
+      if (sourceSelectionTimer.current) { clearTimeout(sourceSelectionTimer.current); sourceSelectionTimer.current = null; }
+      if (ttsLibraryCheckTimer.current) { clearTimeout(ttsLibraryCheckTimer.current); ttsLibraryCheckTimer.current = null; }
+      if (scriptSaveTimer.current) { clearTimeout(scriptSaveTimer.current); scriptSaveTimer.current = null; }
+      if (catalogSearchTimer.current) { clearTimeout(catalogSearchTimer.current); catalogSearchTimer.current = null; }
+      if (voiceSettingsSaveTimer.current) { clearTimeout(voiceSettingsSaveTimer.current); voiceSettingsSaveTimer.current = null; }
+      if (subtitleSaveTimer.current) { clearTimeout(subtitleSaveTimer.current); subtitleSaveTimer.current = null; }
       previewAbortRef.current?.abort();
       scriptAbortRef.current?.abort();
       regenerateAbortRef.current?.abort();
@@ -1571,7 +1578,9 @@ function PipelinePage() {
 
   // Mark existing TTS results as stale when voice settings change (user-initiated only)
   // voiceSettingsHydrated captures the settings value AFTER localStorage hydration.
-  // Any change after that point is a real user change.
+  // Any change after that point is a real user change. (Bug #48: React batches all
+  // setState calls from the hydration useEffect into a single render, so skipping
+  // the first trigger after voiceSettingsLoaded is sufficient.)
   const voiceSettingsHydrated = useRef(false);
   useEffect(() => {
     // Wait until localStorage hydration is complete
@@ -1990,11 +1999,20 @@ function PipelinePage() {
                         : "bg-secondary text-muted-foreground"
                     }`}
                     onClick={() => {
-                      if (step > s.num) setStep(s.num);
+                      if (step > s.num) {
+                        setStep(s.num);
+                        setPreviewError(null);
+                      }
                       // Allow forward nav to Step 3 from Step 2 when previews exist
-                      if (s.num === 3 && step === 2 && Object.keys(previews).length > 0) setStep(3);
+                      if (s.num === 3 && step === 2 && Object.keys(previews).length > 0) {
+                        setStep(3);
+                        setPreviewError(null);
+                      }
                       // Allow forward nav to Step 4 from Step 3 when render was started
-                      if (s.num === 4 && step === 3 && variantStatuses.length > 0) setStep(4);
+                      if (s.num === 4 && step === 3 && variantStatuses.length > 0) {
+                        setStep(4);
+                        setPreviewError(null);
+                      }
                     }}
                   >
                     {step > s.num ? <CheckCircle className="h-5 w-5" /> : s.num}
@@ -2435,7 +2453,7 @@ function PipelinePage() {
                     <RefreshCw className="h-3.5 w-3.5 mr-1.5" />Regenerate All Voice-overs
                   </Button>
                 )}
-                <Button variant="outline" onClick={() => setStep(1)}>
+                <Button variant="outline" onClick={() => { setStep(1); setPreviewError(null); }}>
                   <ArrowLeft className="h-4 w-4 mr-2" />
                   Back to Input
                 </Button>
@@ -3131,7 +3149,7 @@ function PipelinePage() {
             {Object.keys(previews).length > 0 && (
               <Button
                 variant="outline"
-                onClick={() => setStep(3)}
+                onClick={() => { setStep(3); setPreviewError(null); }}
                 className="w-full"
                 size="lg"
               >
@@ -3152,7 +3170,7 @@ function PipelinePage() {
               <h2 className="text-2xl font-semibold">
                 Preview & Select Variants ({selectedVariants.size} selected)
               </h2>
-              <Button variant="outline" onClick={() => setStep(2)}>
+              <Button variant="outline" onClick={() => { setStep(2); setPreviewError(null); }}>
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Back to Scripts
               </Button>
@@ -3689,6 +3707,7 @@ function PipelinePage() {
                                     setSelectedSourceIds(new Set());
                                     restoreSourceSelection(selectedHistoryId);
                                     setStep(2);
+                                    setPreviewError(null);
                                     setSelectedHistoryId(null);
                                     setHistoryScripts([]);
                                     setHistorySelectedScripts(new Set());

@@ -48,9 +48,8 @@ export default function LoginPage() {
         return;
       }
 
-      // Redirect to library on success
+      // Redirect to library on success (Bug #165: router.refresh() after push is redundant)
       router.push("/librarie");
-      router.refresh();
     } catch {
       setError("An error occurred. Please try again.");
     } finally {

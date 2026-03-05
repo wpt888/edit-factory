@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -94,21 +94,26 @@ function ProductVideoContent() {
   // Default voice based on TTS provider
   const defaultVoice = ttsProvider === "edge" ? "ro-RO-EmilNeural" : "";
 
+  // Bug #130: isMounted ref for async callback safety
+  const isMountedRef = useRef(true);
+  useEffect(() => { return () => { isMountedRef.current = false; }; }, []);
+
   // Job polling
   const { startPolling, stopPolling, isPolling, progress, statusText, elapsedTime, estimatedRemaining } =
     useJobPolling({
       interval: 2000,
       onProgress: (p, status) => {
-        // progress updates handled by hook state
         void p;
         void status;
       },
       onComplete: () => {
+        if (!isMountedRef.current) return; // Bug #130
         setIsGenerating(false);
         setIsComplete(true);
         toast.success("Video generated successfully! View it in the library.");
       },
       onError: (error) => {
+        if (!isMountedRef.current) return; // Bug #130
         setIsGenerating(false);
         setHasError(true);
         toast.error(`Generation failed: ${error}`);

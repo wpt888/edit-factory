@@ -159,13 +159,15 @@ export default function ProductsPage() {
   }, [debouncedSearch, onSale, category, brand]);
 
   // ---- Feed tab logic ----
+  const selectedFeedIdRef = useRef(selectedFeedId); // Bug #127: ref to avoid dep loop
+  selectedFeedIdRef.current = selectedFeedId;
   const fetchFeeds = useCallback(async () => {
     try {
       const res = await apiGetWithRetry("/feeds");
       if (res.ok) {
         const data = await res.json();
         setFeeds(data);
-        if (data.length > 0 && !selectedFeedId) {
+        if (data.length > 0 && !selectedFeedIdRef.current) {
           setSelectedFeedId(data[0].id);
           setSelectedFeed(data[0]);
         }
@@ -175,7 +177,7 @@ export default function ProductsPage() {
     } catch {
       toast.error("Network error loading feeds");
     }
-  }, [selectedFeedId]);
+  }, []);
 
   useEffect(() => {
     if (!currentProfile || activeTab !== "feed") return;

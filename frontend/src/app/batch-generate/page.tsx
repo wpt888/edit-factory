@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, Suspense } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -140,7 +140,7 @@ function BatchGenerateContent() {
   const batchId = searchParams.get("batch_id");
   const batchSettings = parseBatchSettings(searchParams);
 
-  const retryLoadingRef = useRef(false);
+  const [retryLoading, setRetryLoading] = useState(false); // Bug #131: useState for UI reactivity
 
   const { startPolling, stopPolling, isPolling, batchStatus, productJobs, completedCount, failedCount, totalCount } =
     useBatchPolling({
@@ -154,24 +154,25 @@ function BatchGenerateContent() {
       },
     });
 
-  // Start polling when batch_id is present
+  // Start polling when batch_id is present (Bug #159: cleanup on unmount)
   useEffect(() => {
     if (batchId) {
       startPolling(batchId);
     }
-  }, [batchId, startPolling]);
+    return () => { stopPolling(); };
+  }, [batchId, startPolling, stopPolling]);
 
   // Retry failed products
   const handleRetryFailed = async () => {
-    if (retryLoadingRef.current) return;
-    retryLoadingRef.current = true;
+    if (retryLoading) return;
+    setRetryLoading(true);
 
     const failedProductIds = productJobs
       .filter((j) => j.status === "failed")
       .map((j) => j.product_id);
 
     if (failedProductIds.length === 0) {
-      retryLoadingRef.current = false;
+      setRetryLoading(false);
       return;
     }
 
@@ -201,7 +202,7 @@ function BatchGenerateContent() {
     } catch {
       toast.error("Network error retrying batch");
     } finally {
-      retryLoadingRef.current = false;
+      setRetryLoading(false);
     }
   };
 

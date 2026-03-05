@@ -105,7 +105,12 @@ export default function UsagePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [testingGemini, setTestingGemini] = useState(false);
-  const [budget, setBudget] = useState<number>(50); // Default $50 budget
+  const [budget, setBudget] = useState<number>(() => { // Bug #163: lazy init from localStorage
+    if (typeof window === "undefined") return 50;
+    const stored = localStorage.getItem("ef_usage_budget");
+    if (stored) { const n = parseFloat(stored); if (!isNaN(n) && n > 0) return n; }
+    return 50;
+  });
   const [showAllEntries, setShowAllEntries] = useState(false);
 
   const fetchGeminiStatus = useCallback(async () => {
@@ -159,10 +164,11 @@ export default function UsagePage() {
 
   useEffect(() => {
     fetchData();
-    // Load saved budget from localStorage
+    // Load saved budget from localStorage (Bug #132: validate parseFloat)
     const savedBudget = localStorage.getItem("editai_budget");
     if (savedBudget) {
-      setBudget(parseFloat(savedBudget));
+      const parsed = parseFloat(savedBudget);
+      if (!isNaN(parsed) && parsed > 0) setBudget(parsed);
     }
   }, [fetchData]);
 
@@ -250,7 +256,7 @@ export default function UsagePage() {
                   <Input
                     type="number"
                     value={budget}
-                    onChange={(e) => saveBudget(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => { const v = parseFloat(e.target.value); saveBudget(isNaN(v) ? 0 : v); }}
                     className="w-24 bg-muted/50 border-border"
                     min={0}
                     step={10}

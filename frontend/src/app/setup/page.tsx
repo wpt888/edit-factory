@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useState, useEffect } from "react"
+import { Suspense, useState, useEffect, useRef } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { apiPost, apiGet } from "@/lib/api"
 import { ApiError } from "@/lib/api-error"
@@ -22,6 +22,8 @@ function SetupPageContent() {
   // Step tracking
   const [currentStep, setCurrentStep] = useState(1)
   const [checkingLicense, setCheckingLicense] = useState(!isEditMode) // Skip check in edit mode
+  const stepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Bug #164
+  useEffect(() => { return () => { if (stepTimerRef.current) clearTimeout(stepTimerRef.current); }; }, []);
 
   // Step 1: License
   const [licenseKey, setLicenseKey] = useState("")
@@ -120,8 +122,8 @@ function SetupPageContent() {
       await apiPost("/desktop/license/activate", { license_key: licenseKey.trim() })
       setLicenseValid(true)
       toast.success("License activated successfully!")
-      // Auto-advance to step 2 after short delay for user to see success
-      setTimeout(() => setCurrentStep(2), 800)
+      // Auto-advance to step 2 after short delay for user to see success (Bug #164: store in ref)
+      stepTimerRef.current = setTimeout(() => setCurrentStep(2), 800)
     } catch (err: unknown) {
       const msg = err instanceof ApiError
         ? err.detail || "Activation failed"
