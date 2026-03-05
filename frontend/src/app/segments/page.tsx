@@ -489,8 +489,12 @@ export default function SegmentsPage() {
         setUploadError(null);
 
         // Poll until background processing finishes (Bug #52: store in ref for cleanup)
+        // Clear any existing poll before starting new one (Bug #99)
+        if (uploadPollRef.current) {
+          clearInterval(uploadPollRef.current);
+          uploadPollRef.current = null;
+        }
         if (newVideo.status === "processing") {
-          if (uploadPollRef.current) clearInterval(uploadPollRef.current);
           uploadPollRef.current = setInterval(async () => {
             try {
               const pollRes = await apiGetWithRetry(`/segments/source-videos/${newVideo.id}`);

@@ -135,10 +135,8 @@ export default function SettingsPage() {
     setElAccountsLoading(true)
     try {
       const response = await apiGetWithRetry("/elevenlabs-accounts/")
-      if (response.ok) {
-        const data = await response.json()
-        setElAccounts(data.accounts || [])
-      }
+      const data = await response.json()
+      setElAccounts(data.accounts || [])
     } catch (error) {
       handleApiError(error, "Error loading ElevenLabs accounts")
     } finally {
@@ -153,7 +151,6 @@ export default function SettingsPage() {
     const loadSettings = async () => {
       try {
         const response = await apiGetWithRetry(`/profiles/${currentProfile.id}`)
-        if (!response.ok) throw new Error("Failed to load profile settings")
 
         const data = await response.json()
         const ttsSettings = data.tts_settings || {}
@@ -192,11 +189,9 @@ export default function SettingsPage() {
     const loadTemplates = async () => {
       try {
         const tmplRes = await apiGetWithRetry("/profiles/templates")
-        if (tmplRes.ok) {
-          const tmplData = await tmplRes.json()
-          if (Array.isArray(tmplData)) {
-            setAvailableTemplates(tmplData)
-          }
+        const tmplData = await tmplRes.json()
+        if (Array.isArray(tmplData)) {
+          setAvailableTemplates(tmplData)
         }
       } catch (err) {
         console.warn("Failed to load templates:", err)
@@ -216,7 +211,6 @@ export default function SettingsPage() {
       setDashboardLoading(true)
       try {
         const response = await apiGetWithRetry(`/profiles/${currentProfile.id}/dashboard?time_range=30d`)
-        if (!response.ok) throw new Error("Failed to load dashboard")
 
         const data = await response.json()
         setDashboard(data)
@@ -238,7 +232,6 @@ export default function SettingsPage() {
       setLoadingVoices(true)
       try {
         const response = await apiGetWithRetry(`/tts/voices?provider=${provider}`)
-        if (!response.ok) throw new Error("Failed to load voices")
 
         const data = await response.json()
         setVoices(data.voices || [])
@@ -331,9 +324,7 @@ export default function SettingsPage() {
         updates.monthly_quota_usd = quotaValue
       }
 
-      const response = await apiPatch(`/profiles/${currentProfile.id}`, updates)
-
-      if (!response.ok) throw new Error("Failed to save settings")
+      await apiPatch(`/profiles/${currentProfile.id}`, updates)
 
       toast.success("Settings saved successfully (TTS, Postiz, and Template)")
     } catch (error) {
@@ -357,7 +348,6 @@ export default function SettingsPage() {
 
     try {
       const response = await apiGetWithRetry("/postiz/status")
-      if (!response.ok) throw new Error("Connection failed")
 
       const data = await response.json()
       if (data.connected) {
@@ -389,11 +379,6 @@ export default function SettingsPage() {
         api_key: newAccountKey.trim(),
       })
 
-      if (!response.ok) {
-        const err = await response.json()
-        throw new Error(err.detail || "Failed to add account")
-      }
-
       const data = await response.json()
       const tier = data.subscription?.tier || "unknown"
       toast.success(`Account added! Tier: ${tier}`)
@@ -420,8 +405,7 @@ export default function SettingsPage() {
         setConfirmDialog((prev) => ({ ...prev, loading: true }))
         setAccountActionLoading(accountId)
         try {
-          const response = await apiDelete(`/elevenlabs-accounts/${accountId}`)
-          if (!response.ok) throw new Error("Failed to delete account")
+          await apiDelete(`/elevenlabs-accounts/${accountId}`)
           loadAccounts()
         } catch (error) {
           handleApiError(error, "Failed to delete account")
@@ -436,8 +420,7 @@ export default function SettingsPage() {
   const handleSetPrimary = async (accountId: string) => {
     setAccountActionLoading(accountId)
     try {
-      const response = await apiPost(`/elevenlabs-accounts/${accountId}/set-primary`)
-      if (!response.ok) throw new Error("Failed to set primary")
+      await apiPost(`/elevenlabs-accounts/${accountId}/set-primary`)
       loadAccounts()
     } catch (error) {
       handleApiError(error, "Failed to set primary account")
@@ -450,7 +433,6 @@ export default function SettingsPage() {
     setAccountActionLoading(accountId)
     try {
       const response = await apiPost(`/elevenlabs-accounts/${accountId}/refresh`)
-      if (!response.ok) throw new Error("Failed to refresh")
       const data = await response.json()
       if (data.account) {
         setElAccounts(prev => prev.map(a => a.id === accountId ? { ...a, ...data.account } : a))

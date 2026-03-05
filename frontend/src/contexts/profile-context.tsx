@@ -111,12 +111,8 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
    * Initialize profiles on mount
    * Strategy: Hydrate from localStorage first (instant UI), then fetch from API (fresh data)
    */
-  const isMountedRef = useRef(true);
   useEffect(() => {
-    return () => { isMountedRef.current = false; };
-  }, []);
-
-  useEffect(() => {
+    const isMountedRef = { current: true };
     async function initialize() {
       let hasCachedData = false;
 
@@ -172,6 +168,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     }
 
     initialize();
+    return () => { isMountedRef.current = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run once on mount
 

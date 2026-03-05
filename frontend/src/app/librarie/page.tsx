@@ -356,6 +356,10 @@ function LibrarieContent() {
   useEffect(() => {
     if (profileLoading) return; // Wait for profile context
     if (!profileId) return; // No profile selected
+    // Reset clips on profile switch to avoid stale data from previous profile (Bug #75)
+    setClips([]);
+    setNextCursor(null);
+    setHasMore(true);
     fetchAllClips();
     fetchPostizStatus();
     fetchAvailableTags();

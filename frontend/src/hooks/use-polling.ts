@@ -94,6 +94,7 @@ export function usePolling<T>(options: UsePollingOptions<T>): UsePollingReturn<T
 
       try {
         const response = await apiGet(endpoint);
+        if (isCancelledRef.current) return;
         const result: T = await response.json();
         setData(result);
         setError(null);

@@ -163,6 +163,7 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
         // apiFetch already throws ApiError on non-2xx (Bug #68)
         const { apiFetch } = await import("@/lib/api");
         const response = await apiFetch(`/jobs/${jobId}`);
+        if (isCancelledRef.current) return;
 
         const job: Job = await response.json();
         setCurrentJob(job);
@@ -191,8 +192,7 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
           pollingRef.current = setTimeout(() => pollFallback(jobId), interval);
         }
       } catch (error) {
-        const apiModule = await import("@/lib/api");
-        apiModule.handleApiError(error, "Error updating status");
+        console.warn("Job poll error, retrying:", error);
         if (!isCancelledRef.current) {
           pollingRef.current = setTimeout(
             () => pollFallback(jobId),

@@ -92,10 +92,6 @@ export function useBatchPolling(options: UseBatchPollingOptions): UseBatchPollin
           `/products/batch/${batchId}/status`
         );
 
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
         const status: BatchStatus = await response.json();
         // Validate shape before using
         if (!status || typeof status.status !== "string" || typeof status.total !== "number") {

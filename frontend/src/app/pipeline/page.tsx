@@ -278,6 +278,8 @@ function PipelinePage() {
   const [minSegmentDuration, setMinSegmentDuration] = useState(3.0);
   const [ultraRapidIntro, setUltraRapidIntro] = useState(true);
   const voiceSettingsLoaded = useRef(false);
+  // Ref to avoid stale closures in debounced save timeout (Bug #87)
+  const voiceSettingsValuesRef = useRef({ voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro });
 
   // Step 4: Render
   const [selectedVariants, setSelectedVariants] = useState<Set<number>>(new Set());
@@ -1637,6 +1639,11 @@ function PipelinePage() {
     if (!hasVoiceValues) voiceSettingsHydrated.current = true;
   }, []);
 
+  // Keep voice settings ref in sync for debounced save (Bug #87)
+  useEffect(() => {
+    voiceSettingsValuesRef.current = { voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro };
+  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro]);
+
   // Persist voice settings to localStorage (skip initial render before load)
   useEffect(() => {
     if (!voiceSettingsLoaded.current) return;
@@ -1664,6 +1671,8 @@ function PipelinePage() {
     voiceSettingsSaveTimer.current = setTimeout(async () => {
       const profileId = currentProfileIdRef.current;
       if (!profileId) return;
+      // Read from ref to avoid stale closure values (Bug #87)
+      const vs = voiceSettingsValuesRef.current;
       try {
         const res = await apiGetWithRetry(`/profiles/${profileId}`);
         const profileData = await res.json();
@@ -1671,14 +1680,14 @@ function PipelinePage() {
         await apiPatch(`/profiles/${profileId}`, {
           tts_settings: {
             ...existingTts,
-            voice_stability: voiceStability,
-            voice_similarity: voiceSimilarity,
-            voice_style: voiceStyle,
-            voice_speed: voiceSpeed,
-            voice_speaker_boost: voiceSpeakerBoost,
-            words_per_subtitle: wordsPerSubtitle,
-            min_segment_duration: minSegmentDuration,
-            ultra_rapid_intro: ultraRapidIntro,
+            voice_stability: vs.voiceStability,
+            voice_similarity: vs.voiceSimilarity,
+            voice_style: vs.voiceStyle,
+            voice_speed: vs.voiceSpeed,
+            voice_speaker_boost: vs.voiceSpeakerBoost,
+            words_per_subtitle: vs.wordsPerSubtitle,
+            min_segment_duration: vs.minSegmentDuration,
+            ultra_rapid_intro: vs.ultraRapidIntro,
           },
         });
       } catch {
