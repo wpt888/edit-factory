@@ -214,14 +214,18 @@ class AssemblyService:
             result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 30, "audio duration")
             if result.returncode == 0 and result.stdout.strip():
                 duration_str = result.stdout.strip()
-                if duration_str.replace('.', '', 1).isdigit():
-                    return float(duration_str)
+                try:
+                    val = float(duration_str)
+                    return val if val > 0 else 0.0
+                except ValueError:
+                    return 0.0
         except Exception as e:
             logger.warning(f"Could not get audio duration: {e}")
         return 0.0
 
     def _parse_srt(self, content: str) -> List[dict]:
         """Parse SRT content into list of entries with timestamps."""
+        content = content.replace('\r\n', '\n')
         entries = []
         blocks = content.strip().split("\n\n")
 
@@ -265,7 +269,8 @@ class AssemblyService:
         profile_id: str,
         elevenlabs_model: str = "eleven_flash_v2_5",
         voice_id: Optional[str] = None,
-        voice_settings: Optional[dict] = None
+        voice_settings: Optional[dict] = None,
+        temp_dir: Optional[Path] = None
     ) -> Tuple[Path, float, dict]:
         """
         Generate TTS audio with timestamps and apply silence removal.
@@ -276,8 +281,9 @@ class AssemblyService:
         from app.services.tts.elevenlabs import ElevenLabsTTSService
         from app.services.silence_remover import SilenceRemover
 
-        # Create temp directory for this assembly
-        temp_dir = self.settings.base_dir / "temp" / profile_id / f"assembly_{uuid.uuid4().hex[:8]}"
+        # Use provided temp_dir or create a new one
+        if temp_dir is None:
+            temp_dir = self.settings.base_dir / "temp" / profile_id / f"assembly_{uuid.uuid4().hex[:8]}"
         temp_dir.mkdir(parents=True, exist_ok=True)
 
         # Generate TTS with timestamps (profile_id enables multi-account failover)
@@ -1029,14 +1035,29 @@ class AssemblyService:
             DIVERSITY_WINDOW = max(3, len(_unique_sources))
 
             i = intro_entry_count
+            MAX_ITERATIONS = len(timeline) * 1000  # Safety cap to prevent infinite loops
+            _iter_count = 0
             while i < len(timeline):
+                _iter_count += 1
+                if _iter_count > MAX_ITERATIONS:
+                    logger.error(f"build_timeline merge loop exceeded {MAX_ITERATIONS} iterations, breaking")
+                    break
+
                 current = timeline[i]
+                # Skip segments with zero/negative duration
+                if current.timeline_duration <= 0.001:
+                    i += 1
+                    continue
+
                 accumulated_duration = current.timeline_duration
                 last_merged_idx = i
 
                 # Absorb following entries while under minimum
                 while accumulated_duration < min_segment_duration and last_merged_idx + 1 < len(timeline):
                     last_merged_idx += 1
+                    # Skip zero-duration entries in accumulation
+                    if timeline[last_merged_idx].timeline_duration <= 0.001:
+                        continue
                     accumulated_duration += timeline[last_merged_idx].timeline_duration
 
                 # Pick representative: avoid any source_video_path used in the
@@ -1115,6 +1136,7 @@ class AssemblyService:
             # --- Post-merge consecutive dedup pass ---
             # Scan for consecutive entries using the same source_video_path and
             # swap duplicates with an alternative from the full segment pool.
+            # Snapshot source paths before dedup loop
             all_source_paths = list(_unique_sources)
             dedup_swaps = 0
             for idx in range(intro_entry_count + 1, len(merged)):
@@ -1203,6 +1225,10 @@ class AssemblyService:
             segment_duration = entry.end_time - entry.start_time
             needed_duration = entry.timeline_duration
 
+            if segment_duration <= 0:
+                logger.error(f"Timeline entry {i} has zero/negative segment_duration ({segment_duration:.4f}s), skipping")
+                return
+
             # Build per-segment transform filters
             transform = SegmentTransform.from_dict(entry.transforms)
             transform_filters = transform.to_ffmpeg_filters(width=target_w, height=target_h)
@@ -1222,66 +1248,66 @@ class AssemblyService:
                 logger.error(f"Timeline entry {i} has no source_video_path, skipping")
                 return
 
-            cmd = ["ffmpeg", "-y"]
-
-            if use_loop:
-                # Extract just the segment to a temp file, then loop it
-                # This prevents bleeding past segment end_time
-                segment_raw = temp_dir / f"segment_{i:03d}_raw.mp4"
-                extract_cmd = [
-                    "ffmpeg", "-y", "-threads", "4",
-                    "-ss", str(entry.start_time),
-                    "-i", entry.source_video_path,
-                    "-t", str(segment_duration),
-                    *get_prep_codec_params(preset="ultrafast", crf=18, include_audio=False),
-                    "-r", str(TARGET_FPS),
-                    "-fps_mode", "cfr",
-                    "-video_track_timescale", "15360",
-                    "-an", "-pix_fmt", "yuv420p",
-                    str(segment_raw)
-                ]
-                result_extract = await asyncio.to_thread(
-                    safe_ffmpeg_run, extract_cmd, 120, "segment extract loop"
-                )
-                if result_extract.returncode != 0:
-                    logger.error(f"Failed to extract raw segment {i}: {result_extract.stderr}")
-                    return
-
-                # Loop the extracted segment (contains only segment content)
-                loop_count = math.ceil(needed_duration / segment_duration)
-                cmd.extend([
-                    "-stream_loop", str(loop_count),
-                    "-i", str(segment_raw),
-                    "-t", str(needed_duration),
-                    "-vf", ",".join(transform_filters),
-                ])
-            else:
-                # Without loop, -ss before -i enables fast seeking
-                # CRITICAL: clamp to segment_duration so FFmpeg never reads past
-                # the user-defined segment end_time boundary
-                clamped_duration = min(needed_duration, segment_duration)
-                cmd.extend([
-                    "-ss", str(entry.start_time),
-                    "-i", entry.source_video_path,
-                    "-t", str(clamped_duration),
-                    "-vf", ",".join(transform_filters),
-                ])
-
-            cmd.extend([
-                *get_prep_codec_params(include_audio=False),
-                "-r", str(TARGET_FPS),
-                "-fps_mode", "cfr",
-                "-video_track_timescale", "15360",
-                "-force_key_frames", "expr:eq(n,0)",
-                "-threads", "4",
-                "-an",
-                "-pix_fmt", "yuv420p",
-                str(segment_file)
-            ])
-
             logger.debug(f"Extracting segment {i}: {entry.source_video_path} [{entry.start_time:.2f}s - {entry.end_time:.2f}s]")
 
             async with semaphore:
+                cmd = ["ffmpeg", "-y"]
+
+                if use_loop:
+                    # Extract just the segment to a temp file, then loop it
+                    # This prevents bleeding past segment end_time
+                    segment_raw = temp_dir / f"segment_{i:03d}_raw.mp4"
+                    extract_cmd = [
+                        "ffmpeg", "-y", "-threads", "4",
+                        "-ss", str(entry.start_time),
+                        "-i", entry.source_video_path,
+                        "-t", str(segment_duration),
+                        *get_prep_codec_params(preset="ultrafast", crf=18, include_audio=False),
+                        "-r", str(TARGET_FPS),
+                        "-fps_mode", "cfr",
+                        "-video_track_timescale", "15360",
+                        "-an", "-pix_fmt", "yuv420p",
+                        str(segment_raw)
+                    ]
+                    result_extract = await asyncio.to_thread(
+                        safe_ffmpeg_run, extract_cmd, 120, "segment extract loop"
+                    )
+                    if result_extract.returncode != 0:
+                        logger.error(f"Failed to extract raw segment {i}: {result_extract.stderr}")
+                        return
+
+                    # Loop the extracted segment (contains only segment content)
+                    loop_count = math.ceil(needed_duration / segment_duration)
+                    cmd.extend([
+                        "-stream_loop", str(loop_count),
+                        "-i", str(segment_raw),
+                        "-t", str(needed_duration),
+                        "-vf", ",".join(transform_filters),
+                    ])
+                else:
+                    # Without loop, -ss before -i enables fast seeking
+                    # CRITICAL: clamp to segment_duration so FFmpeg never reads past
+                    # the user-defined segment end_time boundary
+                    clamped_duration = min(needed_duration, segment_duration)
+                    cmd.extend([
+                        "-ss", str(entry.start_time),
+                        "-i", entry.source_video_path,
+                        "-t", str(clamped_duration),
+                        "-vf", ",".join(transform_filters),
+                    ])
+
+                cmd.extend([
+                    *get_prep_codec_params(include_audio=False),
+                    "-r", str(TARGET_FPS),
+                    "-fps_mode", "cfr",
+                    "-video_track_timescale", "15360",
+                    "-force_key_frames", "expr:eq(n,0)",
+                    "-threads", "4",
+                    "-an",
+                    "-pix_fmt", "yuv420p",
+                    str(segment_file)
+                ])
+
                 result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 600, "segment extract")
 
             if result.returncode == 0 and segment_file.exists():
@@ -1340,7 +1366,8 @@ class AssemblyService:
             slide_clips: Dict[int, List[Path]] = {}
             for slide in sorted_slides:
                 idx = slide.get("afterMatchIndex", -1)
-                clip_path = temp_dir / f"interstitial_{slide.get('id', 'x')}.mp4"
+                slide_id = re.sub(r'[^a-zA-Z0-9_\-]', '_', str(slide.get('id', 'x')))
+                clip_path = temp_dir / f"interstitial_{slide_id}.mp4"
                 try:
                     result = await generate_interstitial_clip(
                         image_url_or_path=slide["imageUrl"],
@@ -1491,7 +1518,8 @@ class AssemblyService:
                     profile_id=profile_id,
                     elevenlabs_model=elevenlabs_model,
                     voice_id=voice_id,
-                    voice_settings=voice_settings
+                    voice_settings=voice_settings,
+                    temp_dir=temp_dir
                 )
                 _report("TTS audio ready", 25)
 
@@ -1519,9 +1547,13 @@ class AssemblyService:
                         profile_id=profile_id,
                         elevenlabs_model=elevenlabs_model,
                         voice_id=voice_id,
-                        voice_settings=voice_settings
+                        voice_settings=voice_settings,
+                        temp_dir=temp_dir
                     )
                     srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
+
+            if not srt_content:
+                raise RuntimeError("SRT subtitle generation failed — no content produced")
 
             srt_path = temp_dir / "subtitles.srt"
             with open(srt_path, 'w', encoding='utf-8') as f:
@@ -1702,6 +1734,12 @@ class AssemblyService:
                     )
                     for m in match_overrides
                 ]
+                # Clamp srt_start/srt_end to valid ranges
+                for mr in match_results:
+                    mr.srt_start = max(0.0, mr.srt_start)
+                    if mr.srt_end <= mr.srt_start:
+                        mr.srt_end = mr.srt_start + 0.1
+
                 # Extract duration overrides (parallel list, None where not overridden)
                 duration_overrides = [m.get("duration_override") for m in match_overrides]
 
@@ -1860,13 +1898,6 @@ class AssemblyService:
             "audio_bitrate": "128k",
         }
 
-        # Output to a preview-specific directory
-        output_dir = self.settings.output_dir / profile_id / "previews"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        preview_filename = f"preview_{pipeline_id[:8]}_{variant_index}_{uuid.uuid4().hex[:6]}.mp4"
-        # We don't set the output path here — assemble_and_render creates its own.
-        # Instead we pass _preview_mode and the preset, and return the path.
-
         return await self.assemble_and_render(
             script_text=script_text,
             profile_id=profile_id,
@@ -1944,6 +1975,7 @@ class AssemblyService:
         from app.services.tts_cache import srt_cache_lookup, srt_cache_store
         _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "wpf": max_words_per_phrase}
 
+        srt_content = ""
         if reuse_srt_content:
             # SRT already available from Step 2 tts_previews — use directly
             srt_content = reuse_srt_content
@@ -1972,6 +2004,9 @@ class AssemblyService:
                 srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
                 if srt_content:
                     srt_cache_store(_srt_cache_key, srt_content)
+
+        if not srt_content:
+            raise RuntimeError("SRT subtitle generation failed — no content produced in preview_matches")
         srt_entries = self._parse_srt(srt_content)
 
         # Assign product groups from script tags to SRT entries
@@ -2122,7 +2157,8 @@ class AssemblyService:
                     logger.debug(f"Cleaned up preview temp dir: {temp_dir}")
             except Exception:
                 pass
-        cleanup_timer = threading.Timer(1800, _cleanup_temp)
+        # 2 hours — preview temp files needed until render completes
+        cleanup_timer = threading.Timer(7200, _cleanup_temp)
         cleanup_timer.daemon = True
         cleanup_timer.start()
 

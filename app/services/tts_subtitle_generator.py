@@ -283,6 +283,8 @@ def generate_srt_from_timestamps(
                 end = min(start + MIN_DURATION, phrases[i + 1]["start"])
             else:
                 end = start + MIN_DURATION
+        # Ensure end is always after start (clamping above may invert them)
+        end = max(start + 0.001, end)
 
         # Merge zero-duration entries instead of dropping them
         if end - start < 0.001:
