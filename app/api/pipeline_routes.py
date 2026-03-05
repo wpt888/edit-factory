@@ -49,8 +49,13 @@ _library_project_lock = threading.Lock()
 
 # Per-pipeline render locks (prevents race conditions in concurrent variant renders)
 _render_locks: Dict[str, threading.Lock] = {}
+_render_locks_meta_lock = threading.Lock()  # PIP-02: guards creation of new entries in _render_locks
 _render_locks_timestamps: Dict[str, float] = {}  # pipeline_id -> last acquired time
 _RENDER_LOCK_TTL = 3600  # 1 hour
+
+# Per-pipeline preview locks (prevents concurrent preview renders from racing) — PIP-05
+_preview_locks: Dict[str, threading.Lock] = {}
+_preview_locks_meta_lock = threading.Lock()
 
 # Cancel infrastructure for pipeline renders
 import time as _time_mod
@@ -87,40 +92,47 @@ def _evict_stale_render_locks():
 
     Only evicts a lock if it can be acquired non-blocking (i.e., nobody holds it).
     This prevents deleting a lock while another render is still using it.
+    PIP-15: Guarded with _render_locks_meta_lock to prevent races on _render_locks dict.
     """
     import time
     now = time.monotonic()
-    stale = [k for k, ts in _render_locks_timestamps.items() if now - ts > _RENDER_LOCK_TTL]
-    evicted = 0
-    for k in stale:
-        lock = _render_locks.get(k)
-        if lock is None:
-            # Lock already removed, just clean up timestamp
-            _render_locks_timestamps.pop(k, None)
-            evicted += 1
-            continue
-        # Only evict if we can acquire the lock (nobody is holding it)
-        if lock.acquire(blocking=False):
-            lock.release()
-            _render_locks.pop(k, None)
-            _render_locks_timestamps.pop(k, None)
-            evicted += 1
-        else:
-            # Lock is held — skip eviction, update timestamp to retry later
-            logger.debug(f"Skipping eviction of render lock {k} — still held")
-    if evicted:
-        logger.debug(f"Evicted {evicted} stale render lock(s)")
+    with _render_locks_meta_lock:
+        stale = [k for k, ts in _render_locks_timestamps.items() if now - ts > _RENDER_LOCK_TTL]
+        evicted = 0
+        for k in stale:
+            lock = _render_locks.get(k)
+            if lock is None:
+                # Lock already removed, just clean up timestamp
+                _render_locks_timestamps.pop(k, None)
+                evicted += 1
+                continue
+            # Only evict if we can acquire the lock (nobody is holding it)
+            if lock.acquire(blocking=False):
+                lock.release()
+                _render_locks.pop(k, None)
+                _render_locks_timestamps.pop(k, None)
+                evicted += 1
+            else:
+                # Lock is held — skip eviction, update timestamp to retry later
+                logger.debug(f"Skipping eviction of render lock {k} — still held")
+        if evicted:
+            logger.debug(f"Evicted {evicted} stale render lock(s)")
 
 
 def _evict_old_pipelines():
-    """Remove oldest entries if store exceeds max size."""
+    """Remove oldest entries if store exceeds max size.
+    PIP-09: Also cleans up associated render locks under _render_locks_meta_lock.
+    """
     if len(_pipelines) > _MAX_PIPELINE_ENTRIES:
         to_remove = sorted(_pipelines.keys(),
             key=lambda k: _pipelines[k].get("created_at", "")
         )[:len(_pipelines) - _MAX_PIPELINE_ENTRIES]
         logger.info(f"Evicting {len(to_remove)} old pipelines (cache size: {len(_pipelines)})")
-        for key in to_remove:
-            _pipelines.pop(key, None)
+        with _render_locks_meta_lock:
+            for key in to_remove:
+                _pipelines.pop(key, None)
+                _render_locks.pop(key, None)
+                _render_locks_timestamps.pop(key, None)
 
 
 # ============== DB PERSISTENCE HELPERS ==============
@@ -135,6 +147,8 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
         previews_json = {str(k): v for k, v in pipeline_dict.get("previews", {}).items()}
         render_jobs_json = {str(k): v for k, v in pipeline_dict.get("render_jobs", {}).items()}
         tts_previews_json = {str(k): v for k, v in pipeline_dict.get("tts_previews", {}).items()}
+        # PIP-14: Include preview render paths in serialization
+        preview_renders_json = {str(k): v for k, v in pipeline_dict.get("preview_renders", {}).items()}
 
         row = {
             "id": pipeline_id,
@@ -148,6 +162,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
             "previews": previews_json,
             "render_jobs": render_jobs_json,
             "tts_previews": tts_previews_json,
+            "preview_renders": preview_renders_json,
             "source_video_ids": pipeline_dict.get("source_video_ids", []),
         }
         supabase.table("editai_pipelines").upsert(row).execute()
@@ -219,6 +234,15 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             if isinstance(v, dict) and v.get("audio_path") and not Path(v["audio_path"]).exists():
                 v["audio_path"] = None
 
+        # PIP-14: Load preview_renders from DB
+        preview_renders = {}
+        for k, v in (row.get("preview_renders") or {}).items():
+            try:
+                preview_renders[int(k)] = v
+            except (ValueError, TypeError):
+                logger.warning(f"Skipping invalid preview_renders key: {k}")
+                continue
+
         pipeline = {
             "pipeline_id": pipeline_id,
             "profile_id": row["profile_id"],
@@ -231,6 +255,7 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "previews": previews,
             "render_jobs": render_jobs,
             "tts_previews": tts_previews,
+            "preview_renders": preview_renders,
             "source_video_ids": row.get("source_video_ids") or [],
             "created_at": row.get("created_at", ""),
         }
@@ -422,10 +447,13 @@ class VariantTtsInfo(BaseModel):
 
 
 class PipelineStatusResponse(BaseModel):
-    """Response model for status endpoint."""
+    """Response model for status endpoint.
+    PIP-10: scripts removed from polling endpoint to reduce payload size.
+    Scripts are available via the dedicated GET /pipeline/{id}/scripts endpoint.
+    """
     pipeline_id: str
-    scripts: List[str]
     provider: str
+    variant_count: int = 0
     variants: List[VariantStatus]
     preview_info: Dict[str, VariantPreviewInfo] = {}
     tts_info: Dict[str, VariantTtsInfo] = {}
@@ -575,12 +603,25 @@ async def cancel_pipeline_render(
 
     mark_pipeline_cancelled(pipeline_id)
 
-    # Mark all processing render jobs as cancelled
-    for idx, job in pipeline.get("render_jobs", {}).items():
-        if job.get("status") == "processing":
-            job["status"] = "cancelled"
-            job["current_step"] = "Cancelled by user"
-            job["progress"] = 0
+    # PIP-03: Acquire per-pipeline render lock before mutating render_jobs state
+    pipeline_id_str = str(pipeline_id)
+    with _render_locks_meta_lock:
+        render_lock = _render_locks.get(pipeline_id_str)
+
+    if render_lock:
+        with render_lock:
+            for idx, job in pipeline.get("render_jobs", {}).items():
+                if job.get("status") == "processing":
+                    job["status"] = "cancelled"
+                    job["current_step"] = "Cancelled by user"
+                    job["progress"] = 0
+    else:
+        # No render lock exists (no active render) — safe to mutate directly
+        for idx, job in pipeline.get("render_jobs", {}).items():
+            if job.get("status") == "processing":
+                job["status"] = "cancelled"
+                job["current_step"] = "Cancelled by user"
+                job["progress"] = 0
 
     _db_update_render_jobs(pipeline_id, pipeline.get("render_jobs", {}))
 
@@ -1401,6 +1442,10 @@ async def render_variants(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
+    # PIP-17: Validate variant_indices is non-empty
+    if not render_request.variant_indices:
+        raise HTTPException(status_code=400, detail="variant_indices must not be empty")
+
     # Validate all variant indices
     for idx in render_request.variant_indices:
         if idx < 0 or idx >= len(pipeline["scripts"]):
@@ -1482,13 +1527,16 @@ async def render_variants(
         pipeline["source_video_ids"] = render_request.source_video_ids
 
     # Lock to guard concurrent writes to pipeline["render_jobs"]
+    # PIP-02: Use meta lock to guard creation of new entries in _render_locks
     pipeline_id_str = str(pipeline_id)
     _evict_stale_render_locks()
-    if pipeline_id_str not in _render_locks:
-        _render_locks[pipeline_id_str] = threading.Lock()
-    import time as _time
-    _render_locks_timestamps[pipeline_id_str] = _time.monotonic()
-    render_jobs_lock = _render_locks[pipeline_id_str]
+    with _render_locks_meta_lock:
+        if pipeline_id_str not in _render_locks:
+            _render_locks[pipeline_id_str] = threading.Lock()
+        render_jobs_lock = _render_locks[pipeline_id_str]
+
+    # PIP-12: Snapshot script count for bound checks inside do_render
+    _script_count_snapshot = len(pipeline["scripts"])
 
     # Initialize render jobs for each variant and collect which ones to render
     variant_indices_to_render = []
@@ -1510,6 +1558,18 @@ async def render_variants(
     # Define render function for a single variant
     async def do_render(vid):
         try:
+            # PIP-12: Bound check — ensure variant index is still valid
+            if vid >= _script_count_snapshot:
+                logger.warning(
+                    f"Pipeline {pipeline_id} variant {vid} skipped: "
+                    f"index >= script_count ({_script_count_snapshot})"
+                )
+                return
+
+            # PIP-04: Clear cancellation flag per-variant at render start (not globally after gather)
+            # This ensures each variant starts with a clean slate
+            clear_pipeline_cancelled(pipeline_id)
+
             # ── Render fingerprint: unique hash of ALL render-affecting parameters ──
             import hashlib as _hashlib
             _fp_parts = [
@@ -1543,6 +1603,9 @@ async def render_variants(
                 f"[RENDER {_render_fingerprint}] Parameters: {' | '.join(_fp_parts)}"
             )
 
+            # PIP-04: pipeline is a mutable dict reference from _pipelines — all access
+            # through pipeline[...] sees the latest state. Cancellation checks use
+            # is_pipeline_cancelled() which reads from the separate _cancelled_pipelines dict.
             job = pipeline["render_jobs"][vid]
             script_text = pipeline["scripts"][vid]
 
@@ -1595,15 +1658,8 @@ async def render_variants(
                     f"render will use auto-matching (may differ from preview!)"
                 )
 
-            # Extract interstitial slides for this variant (stored for Phase 46 render integration)
-            variant_interstitial_slides = None
-            if render_request.interstitial_slides:
-                variant_interstitial_slides = render_request.interstitial_slides.get(str(vid)) or render_request.interstitial_slides.get(vid)
-                if variant_interstitial_slides:
-                    logger.info(
-                        f"[Profile {profile.profile_id}] Received {len(variant_interstitial_slides)} "
-                        f"interstitial slide(s) for variant {vid} (stored for Phase 46 render)"
-                    )
+            # PIP-07: Removed dead first assignment of variant_interstitial_slides
+            # (was overwritten later in the function). The actual lookup is below.
 
             # Check for reusable TTS audio from pipeline state
             reuse_audio_path = None
@@ -1679,10 +1735,10 @@ async def render_variants(
                     job["progress"] = pct
 
             # Extract overlay params for this variant
-            # interstitial_slides is keyed by variant index (string); pip_overlays is shared (keyed by segment_id)
+            # PIP-07: interstitial_slides may be keyed by str(vid) or int(vid) — try both with `or` fallback
             variant_interstitial_slides = None
             if render_request.interstitial_slides:
-                variant_slides = render_request.interstitial_slides.get(str(vid), [])
+                variant_slides = render_request.interstitial_slides.get(str(vid)) or render_request.interstitial_slides.get(vid) or []
                 if variant_slides:
                     variant_interstitial_slides = variant_slides
                     logger.info(f"[Pipeline {pipeline_id}] Variant {vid}: {len(variant_slides)} interstitial slides")
@@ -1763,7 +1819,8 @@ async def render_variants(
                     job["current_step"] = "Assembly failed"
                     job["error"] = str(rt_err)
                     job["failed_at"] = datetime.now(timezone.utc).isoformat()
-                    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                # PIP-06: Persist failure to DB OUTSIDE the lock
+                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
                 return
 
             # Success — acquire lock before writing shared render_jobs dict
@@ -1775,24 +1832,24 @@ async def render_variants(
                 job["render_fingerprint"] = _render_fingerprint
                 job["completed_at"] = datetime.now(timezone.utc).isoformat()
 
-                # Log final output for debugging stale-video reports
-                _file_size_mb = 0
-                try:
-                    _file_size_mb = final_video_path.stat().st_size / (1024 * 1024)
-                except Exception:
-                    pass
-                logger.info(
-                    f"[RENDER {_render_fingerprint}] ═══ RENDER COMPLETE ═══ "
-                    f"output={final_video_path.name} size={_file_size_mb:.1f}MB"
-                )
+            # Log final output for debugging stale-video reports
+            _file_size_mb = 0
+            try:
+                _file_size_mb = final_video_path.stat().st_size / (1024 * 1024)
+            except Exception:
+                pass
+            logger.info(
+                f"[RENDER {_render_fingerprint}] ═══ RENDER COMPLETE ═══ "
+                f"output={final_video_path.name} size={_file_size_mb:.1f}MB"
+            )
 
-                logger.info(
-                    f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
-                    f"variant {vid} completed: {final_video_path}"
-                )
+            logger.info(
+                f"[Profile {profile.profile_id}] Pipeline {pipeline_id} "
+                f"variant {vid} completed: {final_video_path}"
+            )
 
-                # Persist render result to DB
-                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+            # PIP-01: Persist render result to DB OUTSIDE the lock (I/O should not hold lock)
+            _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
             # Save rendered clip to library
             with render_jobs_lock:
@@ -1956,8 +2013,8 @@ async def render_variants(
                 job["error"] = str(e)
                 job["failed_at"] = datetime.now(timezone.utc).isoformat()
 
-                # Persist failure to DB
-                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+            # PIP-06: Persist failure to DB OUTSIDE the lock
+            _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
     # Run all variant renders in parallel via asyncio.gather (throttled by semaphore)
     async def _render_all_variants():
@@ -1969,15 +2026,20 @@ async def render_variants(
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.error(f"Render variant {variant_indices_to_render[i]} failed: {result}")
-        # Clear cancellation flag after all renders complete
-        clear_pipeline_cancelled(pipeline_id)
+        # PIP-08: Cancellation flag is now cleared per-variant at render start,
+        # not globally here, to prevent a stale flag from cancelling a new render
+        # that starts while a previous one's gather is still wrapping up.
 
     if variant_indices_to_render:
+        # PIP-18: Only update render lock timestamp when we actually have variants to render
+        import time as _time
+        _render_locks_timestamps[pipeline_id_str] = _time.monotonic()
         background_tasks.add_task(_render_all_variants)
 
+    # PIP-16: Return actual variant_indices_to_render, not the original request list
     return PipelineRenderResponse(
         pipeline_id=pipeline_id,
-        rendering_variants=render_request.variant_indices,
+        rendering_variants=variant_indices_to_render,
         total_variants=len(pipeline["scripts"])
     )
 
@@ -2068,14 +2130,34 @@ async def get_pipeline_status(pipeline_id: str):
                 audio_duration=audio_duration,
             )
 
+    # PIP-10: scripts removed from status polling response to reduce payload
     return PipelineStatusResponse(
         pipeline_id=pipeline_id,
-        scripts=pipeline["scripts"],
         provider=pipeline["provider"],
+        variant_count=len(pipeline["scripts"]),
         variants=variants,
         preview_info=preview_info,
         tts_info=tts_info,
     )
+
+
+@router.get("/scripts/{pipeline_id}")
+async def get_pipeline_scripts(pipeline_id: str):
+    """
+    PIP-10: Dedicated endpoint for retrieving pipeline scripts.
+
+    Separated from /status to keep polling responses lightweight.
+    Intentionally public (same pattern as /status) — pipeline UUID
+    acts as capability token.
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    return {
+        "pipeline_id": pipeline_id,
+        "scripts": pipeline.get("scripts", []),
+    }
 
 
 @router.post("/sync-to-library/{pipeline_id}")
@@ -2111,27 +2193,28 @@ async def sync_pipeline_to_library(
     if not completed_variants:
         return {"synced": 0, "message": "No completed variants to sync"}
 
-    # Get or create a library project for this pipeline
+    # PIP-13: Lock the SELECT+INSERT for library project to prevent races
     pipeline_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
-    existing = supabase.table("editai_projects")\
-        .select("id")\
-        .eq("profile_id", profile.profile_id)\
-        .eq("name", pipeline_name)\
-        .limit(1)\
-        .execute()
+    with _library_project_lock:
+        existing = supabase.table("editai_projects")\
+            .select("id")\
+            .eq("profile_id", profile.profile_id)\
+            .eq("name", pipeline_name)\
+            .limit(1)\
+            .execute()
 
-    if existing.data:
-        library_project_id = existing.data[0]["id"]
-    else:
-        proj_result = supabase.table("editai_projects").insert({
-            "profile_id": profile.profile_id,
-            "name": pipeline_name,
-            "description": f"Auto-generated from pipeline {pipeline_id}",
-            "status": "completed",
-        }).execute()
-        if not proj_result.data:
-            raise HTTPException(status_code=500, detail="Failed to create library project")
-        library_project_id = proj_result.data[0]["id"]
+        if existing.data:
+            library_project_id = existing.data[0]["id"]
+        else:
+            proj_result = supabase.table("editai_projects").insert({
+                "profile_id": profile.profile_id,
+                "name": pipeline_name,
+                "description": f"Auto-generated from pipeline {pipeline_id}",
+                "status": "completed",
+            }).execute()
+            if not proj_result.data:
+                raise HTTPException(status_code=500, detail="Failed to create library project")
+            library_project_id = proj_result.data[0]["id"]
 
     # Check which clips already exist (fetch id + variant_index for update)
     existing_clips = supabase.table("editai_clips")\
@@ -2444,7 +2527,22 @@ async def render_preview(
             except Exception:
                 pass
 
-    # Initialize render state
+    # PIP-05: Per-pipeline preview lock to prevent concurrent preview renders from racing
+    preview_lock_key = f"{pipeline_id}:{variant_index}"
+    with _preview_locks_meta_lock:
+        if preview_lock_key not in _preview_locks:
+            _preview_locks[preview_lock_key] = threading.Lock()
+        preview_lock = _preview_locks[preview_lock_key]
+
+    # Try to acquire preview lock non-blocking — if another preview is in progress, skip
+    if not preview_lock.acquire(blocking=False):
+        existing_state = pipeline.get("preview_renders", {}).get(variant_index)
+        if existing_state and existing_state.get("status") == "processing":
+            return {"status": "processing", "matches_fingerprint": existing_state.get("matches_fingerprint")}
+        # Lock held but no processing state — force acquire
+        preview_lock.acquire()
+
+    # Initialize render state (we hold the lock)
     pipeline["preview_renders"][variant_index] = {
         "status": "processing",
         "progress": 0,
@@ -2453,6 +2551,7 @@ async def render_preview(
         "matches_fingerprint": matches_fingerprint,
         "error": None,
     }
+    preview_lock.release()
 
     script_text = pipeline["scripts"][variant_index]
     reuse_srt_content = tts_data.get("srt_content")
