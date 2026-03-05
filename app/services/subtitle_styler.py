@@ -3,6 +3,7 @@ Subtitle style builder for FFmpeg ASS force_style parameter.
 Implements shadow depth, glow effects, and adaptive font sizing.
 """
 import logging
+import re
 import srt
 from dataclasses import dataclass
 from typing import Tuple
@@ -115,10 +116,17 @@ class SubtitleStyleConfig:
         def hex_to_ass(hex_color: str) -> str:
             try:
                 hex_color = hex_color.lstrip('#')
+                # VID-09: Normalize to 8 hex digits — handle both #RRGGBB and #RRGGBBAA
+                if len(hex_color) == 6:
+                    hex_color = hex_color + "00"  # Add alpha=00 (fully opaque in ASS)
+                elif len(hex_color) != 8:
+                    return "&H00FFFFFF"  # Unsupported length, fallback to white
                 r = int(hex_color[0:2], 16)
                 g = int(hex_color[2:4], 16)
                 b = int(hex_color[4:6], 16)
-                return f"&H00{b:02X}{g:02X}{r:02X}"
+                a = int(hex_color[6:8], 16)
+                # ASS color format: &HAABBGGRR (AA=alpha where 00=opaque, FF=transparent)
+                return f"&H{a:02X}{b:02X}{g:02X}{r:02X}"
             except (ValueError, IndexError):
                 return "&H00FFFFFF"  # Fallback to white
 
@@ -206,10 +214,9 @@ def calculate_adaptive_font_size(
         for subtitle in subtitles:
             lines = subtitle.content.split('\n')
             for line in lines:
-                # Strip HTML tags
-                clean_line = line.replace('<i>', '').replace('</i>', '')
-                clean_line = clean_line.replace('<b>', '').replace('</b>', '')
-                clean_line = clean_line.replace('<u>', '').replace('</u>', '')
+                # VID-10: Strip HTML tags and ASS override tags before measuring
+                clean_line = re.sub(r'<[^>]+>', '', line)       # HTML tags like <i>, <b>
+                clean_line = re.sub(r'\{[^}]+\}', '', clean_line)  # ASS override tags like {\an8}
                 line_length = len(clean_line.strip())
                 max_line_length = max(max_line_length, line_length)
 

@@ -41,11 +41,13 @@ class DenoiseConfig:
         """
         Generate FFmpeg hqdn3d filter string.
 
-        Auto-derives chroma_spatial (luma * 0.75), luma_temporal (luma * 1.5),
-        and chroma_temporal from luma_spatial.
+        Auto-derives from luma_spatial:
+        - chroma_spatial = luma_spatial * 0.75
+        - luma_temporal = luma_spatial * 1.5
+        - chroma_temporal = chroma_spatial * 1.5 (derived from chroma_spatial, not luma_spatial)
 
         Returns:
-            Filter string like "hqdn3d=2.0:1.5:3.0:2.25" or None if disabled/invalid
+            Filter string like "hqdn3d=2.0:1.50:3.0:2.25" or None if disabled/invalid
         """
         if not self.enabled or not self.validate():
             return None

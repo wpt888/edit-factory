@@ -68,16 +68,18 @@ class EncodingPreset(BaseModel):
                 "-crf", str(self.crf),
             ])
 
-        # Keyframe controls (both GPU and CPU)
+        # Keyframe controls
         params.extend([
             "-g", str(self.gop_size),  # GOP size (keyframe interval)
-            "-keyint_min", str(self.keyint_min),  # Minimum keyframe interval
-            "-sc_threshold", "0",  # Disable scene change detection
         ])
 
-        # B-frames: only safe for CPU (libx264). Some NVENC GPUs don't support -bf.
+        # VID-17: -keyint_min and -sc_threshold are CPU-only (libx264) flags
         if not use_gpu:
-            params.extend(["-bf", "2"])  # Use 2 B-frames for better compression
+            params.extend([
+                "-keyint_min", str(self.keyint_min),  # Minimum keyframe interval
+                "-sc_threshold", "0",  # Disable scene change detection
+                "-bf", "2",  # B-frames for better compression (CPU only)
+            ])
 
         # Audio settings
         params.extend([
@@ -95,11 +97,12 @@ class EncodingPreset(BaseModel):
         params.extend(["-threads", "4"])
 
         # Bitrate ceiling to prevent runaway file sizes (CPU only; GPU uses its own rate control)
+        # VID-11: Use kbps for precision — avoids int truncation from Mbps rounding
         if not use_gpu:
-            max_bitrate = int(self.target_bitrate_mbps * 1.5)
+            max_bitrate_kbps = int(self.target_bitrate_mbps * 1500)  # 1.5x target in kbps
             params.extend([
-                "-maxrate", f"{max_bitrate}M",
-                "-bufsize", f"{max_bitrate * 2}M",
+                "-maxrate", f"{max_bitrate_kbps}k",
+                "-bufsize", f"{max_bitrate_kbps * 2}k",
             ])
 
         logger.debug(f"Generated FFmpeg params for {self.name} (GPU: {use_gpu})")

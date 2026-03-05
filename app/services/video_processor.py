@@ -31,6 +31,7 @@ except ImportError:
     AnalyzedSegment = None
 
 from app.services.srt_validator import sanitize_srt_full as _sanitize_srt_full
+from app.services.ffmpeg_semaphore import safe_ffmpeg_run
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ class VideoSegment:
             (1 - abs(self.avg_brightness - 0.5)) * 0.05
         )
 
-    def is_visually_similar(self, other: 'VideoSegment', threshold: int = 12) -> bool:
+    def is_visually_similar(self, other: 'VideoSegment', threshold: int = 8) -> bool:
         """Verifica similaritatea vizuala cu alt segment."""
         if not self.visual_hashes or not other.visual_hashes:
             return False
@@ -334,16 +335,22 @@ class VideoAnalyzer:
             # Calculam scorurile
             motion_score, variance_score, blur_score, contrast_score = self._calculate_motion_for_interval(start_frame, end_frame)
 
-            # Calculam hash-uri pentru mid-point (optimized: was 3 positions [0.1, 0.5, 0.9])
-            # Single mid-point is sufficient for duplicate detection while reducing CPU usage by 66%
+            # Calculam hash-uri pentru mid-point (single-point sufficient for duplicate detection)
+            # VID-13: Brightness sampled at 3 positions for representative average
             visual_hashes = []
             brightness_samples = []
 
-            for pos in [0.5]:  # Optimized: only mid-point needed for duplicate detection
+            # phash at mid-point only (sufficient for duplicate detection with tighter threshold)
+            mid_frame_idx = start_frame + int((end_frame - start_frame) * 0.5)
+            mid_frame = self._read_frame_at(mid_frame_idx)
+            if mid_frame is not None:
+                visual_hashes.append(compute_phash(mid_frame))
+
+            # Brightness at 3 positions for better representative sampling
+            for pos in [0.1, 0.5, 0.9]:
                 frame_idx = start_frame + int((end_frame - start_frame) * pos)
                 frame = self._read_frame_at(frame_idx)
                 if frame is not None:
-                    visual_hashes.append(compute_phash(frame))
                     brightness_samples.append(np.mean(frame) / 255.0)
 
             avg_brightness = np.mean(brightness_samples) if brightness_samples else 0.5
@@ -396,7 +403,7 @@ class VideoAnalyzer:
         target_duration: float,
         min_segment: float = 1.5,
         max_segment: float = 3.0,  # Max 3 secunde pentru dinamism
-        similarity_threshold: int = 12,
+        similarity_threshold: int = 8,  # VID-12: tightened from 12 for single-sample phash mode
         min_motion: float = 0.008,
         progress_callback: Optional[callable] = None
     ) -> List[VideoSegment]:
@@ -519,8 +526,18 @@ class VideoEditor:
             self.video_preset = "fast"
             self.video_quality = "23"
 
+        # VID-15: Encoding preset reference (can override video_quality)
+        self._encoding_preset = None
+
         # Track intermediate files for cleanup
         self._intermediate_files: List[Path] = []
+
+    def apply_encoding_preset(self, preset) -> None:
+        """VID-15: Apply CRF/quality from an EncodingPreset when available."""
+        if preset is not None and hasattr(preset, 'crf'):
+            self._encoding_preset = preset
+            self.video_quality = str(preset.crf)
+            logger.info(f"Applied encoding preset CRF: {preset.crf}")
 
         # Voice detector (lazy loading)
         self._voice_detector = None
@@ -621,8 +638,12 @@ class VideoEditor:
         Raises:
             RuntimeError: Daca FFmpeg esueaza
         """
+        # Operate on a copy to avoid mutating the caller's list (VID-08)
+        cmd = list(cmd)
+
         # Inject thread limit to prevent CPU saturation
-        if "-threads" not in cmd:
+        # Skip when -hwaccel is present — GPU acceleration manages its own threading (VID-03)
+        if "-threads" not in cmd and "-hwaccel" not in cmd:
             cmd.insert(1, "4")
             cmd.insert(1, "-threads")
 
@@ -813,7 +834,7 @@ class VideoEditor:
                             "-cq", self.video_quality,
                             # Keyframe interval (2 sec at 30fps)
                             "-g", "60",
-                            "-bf", "2",
+                            # -bf omitted for GPU — some NVENC GPUs don't support B-frames (VID-05)
                             # Audio
                             "-c:a", "aac", "-b:a", "128k",
                             "-ar", "48000", "-ac", "2",
@@ -886,7 +907,8 @@ class VideoEditor:
         try:
             with open(concat_file, 'w', encoding='utf-8') as f:
                 for seg_file in segment_files:
-                    escaped_path = str(seg_file).replace("'", "'\\''")
+                    # FFmpeg concat demuxer needs backslashes and single quotes escaped (VID-06)
+                    escaped_path = str(seg_file).replace('\\', '\\\\').replace("'", "\\'")
                     f.write(f"file '{escaped_path}'\n")
 
             output_video = self.output_dir / f"{output_name}_segments.mp4"
@@ -928,14 +950,15 @@ class VideoEditor:
             "-of", "json",
             str(audio_path)
         ]
+        # VID-01: Initialize audio_duration as None; only use -t when we have a valid duration
+        audio_duration = None
         result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
         try:
             if result.returncode != 0:
                 raise ValueError(f"ffprobe failed with code {result.returncode}")
             audio_duration = float(json.loads(result.stdout)['format']['duration'])
         except (json.JSONDecodeError, KeyError, ValueError) as probe_err:
-            logger.warning(f"ffprobe failed for {audio_path}: {probe_err}, defaulting to 0")
-            audio_duration = 0
+            logger.warning(f"ffprobe failed for {audio_path}: {probe_err}, audio_duration unknown")
 
         if self.use_gpu:
             cmd = [
@@ -943,26 +966,33 @@ class VideoEditor:
                 "-hwaccel", "cuda",
                 "-i", str(video_path),
                 "-i", str(audio_path),
-                "-t", str(audio_duration),
+            ]
+            if audio_duration is not None:
+                cmd.extend(["-t", str(audio_duration)])
+            cmd.extend([
                 "-map", "0:v", "-map", "1:a",
                 "-c:v", self.video_codec,
                 "-preset", self.video_preset,
                 "-cq", self.video_quality,
+                "-pix_fmt", "yuv420p",  # VID-07: ensure compatibility for GPU path
                 "-c:a", "aac",
                 str(output_video)
-            ]
+            ])
         else:
             cmd = [
                 "ffmpeg", "-y",
                 "-i", str(video_path),
                 "-i", str(audio_path),
-                "-t", str(audio_duration),
+            ]
+            if audio_duration is not None:
+                cmd.extend(["-t", str(audio_duration)])
+            cmd.extend([
                 "-map", "0:v", "-map", "1:a",
                 "-c:v", self.video_codec,
                 "-preset", self.video_preset,
                 "-c:a", "aac",
                 str(output_video)
-            ]
+            ])
 
         self._run_ffmpeg(cmd, "add audio")
 
@@ -1080,10 +1110,15 @@ class VideoEditor:
         # 2. Escape-uim : cu \:
         # 3. Escape-uim ' cu '\'' (inchidem quote, adaugam escaped quote, redeschidem)
         # 4. Escape-uim [ si ] care sunt speciale in ffmpeg filters
+        # VID-02: Drive-letter-aware colon escaping (matches subtitle_styler.py pattern)
         srt_path_escaped = str(srt_path)
         srt_path_escaped = srt_path_escaped.replace('\\', '/')
         srt_path_escaped = srt_path_escaped.replace("'", "'\\''")
-        srt_path_escaped = srt_path_escaped.replace(':', '\\:')
+        # Only escape colons that are NOT part of a Windows drive letter (e.g. C:/)
+        if len(srt_path_escaped) > 1 and srt_path_escaped[1] == ':':
+            srt_path_escaped = srt_path_escaped[0:2] + srt_path_escaped[2:].replace(':', '\\:')
+        else:
+            srt_path_escaped = srt_path_escaped.replace(':', '\\:')
         srt_path_escaped = srt_path_escaped.replace('[', '\\[')
         srt_path_escaped = srt_path_escaped.replace(']', '\\]')
 
@@ -1137,8 +1172,8 @@ class VideoEditor:
         concat_file = self.temp_dir / f"concat_{output_name}.txt"
         with open(concat_file, 'w', encoding='utf-8') as f:
             for seg_file in segment_files:
-                # Escape path pentru ffmpeg concat
-                escaped_path = str(seg_file).replace("'", "'\\''")
+                # FFmpeg concat demuxer needs backslashes and single quotes escaped (VID-06)
+                escaped_path = str(seg_file).replace('\\', '\\\\').replace("'", "\\'")
                 f.write(f"file '{escaped_path}'\n")
 
         output_video = self.output_dir / f"{output_name}_segments.mp4"
@@ -2134,7 +2169,7 @@ class VideoProcessorService:
                     "-cq", self.editor.video_quality,
                     # Keyframe interval (2 sec at 30fps)
                     "-g", "60",
-                    "-bf", "2",
+                    # -bf omitted for GPU — some NVENC GPUs don't support B-frames (VID-05)
                     # Audio
                     "-c:a", "aac", "-b:a", "128k",
                     "-ar", "48000", "-ac", "2",
@@ -2167,18 +2202,20 @@ class VideoProcessorService:
                     str(temp_file)
                 ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            # VID-04: Use safe_ffmpeg_run instead of raw subprocess.run
+            result = safe_ffmpeg_run(cmd, timeout=120, operation=f"extract timeline item {i+1}/{len(timeline)}")
             if result.returncode == 0:
                 segment_files.append(temp_file)
                 self.editor._track_intermediate(temp_file)
                 logger.info(f"Extracted timeline item {i+1}/{len(timeline)}: {item['source']} at {seg.start_time:.1f}s")
             else:
                 # Parse error for better logging
-                stderr = result.stderr
+                stderr = result.stderr or ""
                 error_lines = [line for line in stderr.split('\n') if 'error' in line.lower()]
                 error_msg = error_lines[0] if error_lines else stderr[-300:]
                 logger.error(f"FFmpeg failed for timeline item {i+1}/{len(timeline)}: {error_msg}")
                 logger.debug(f"Full FFmpeg stderr: {stderr}")
+                raise RuntimeError(f"FFmpeg failed for timeline item {i+1}: {error_msg}")
 
         # Concatenăm toate segmentele
         if not segment_files:

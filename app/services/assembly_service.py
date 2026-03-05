@@ -1250,70 +1250,79 @@ class AssemblyService:
 
             logger.debug(f"Extracting segment {i}: {entry.source_video_path} [{entry.start_time:.2f}s - {entry.end_time:.2f}s]")
 
-            async with semaphore:
-                cmd = ["ffmpeg", "-y"]
+            segment_raw = None  # VID-14: track for cleanup
+            try:
+                async with semaphore:
+                    cmd = ["ffmpeg", "-y"]
 
-                if use_loop:
-                    # Extract just the segment to a temp file, then loop it
-                    # This prevents bleeding past segment end_time
-                    segment_raw = temp_dir / f"segment_{i:03d}_raw.mp4"
-                    extract_cmd = [
-                        "ffmpeg", "-y", "-threads", "4",
-                        "-ss", str(entry.start_time),
-                        "-i", entry.source_video_path,
-                        "-t", str(segment_duration),
-                        *get_prep_codec_params(preset="ultrafast", crf=18, include_audio=False),
+                    if use_loop:
+                        # Extract just the segment to a temp file, then loop it
+                        # This prevents bleeding past segment end_time
+                        segment_raw = temp_dir / f"segment_{i:03d}_raw.mp4"
+                        extract_cmd = [
+                            "ffmpeg", "-y", "-threads", "4",
+                            "-ss", str(entry.start_time),
+                            "-i", entry.source_video_path,
+                            "-t", str(segment_duration),
+                            *get_prep_codec_params(preset="ultrafast", crf=18, include_audio=False),
+                            "-r", str(TARGET_FPS),
+                            "-fps_mode", "cfr",
+                            "-video_track_timescale", "15360",
+                            "-an", "-pix_fmt", "yuv420p",
+                            str(segment_raw)
+                        ]
+                        result_extract = await asyncio.to_thread(
+                            safe_ffmpeg_run, extract_cmd, 120, "segment extract loop"
+                        )
+                        if result_extract.returncode != 0:
+                            logger.error(f"Failed to extract raw segment {i}: {result_extract.stderr}")
+                            return
+
+                        # Loop the extracted segment (contains only segment content)
+                        loop_count = math.ceil(needed_duration / segment_duration)
+                        cmd.extend([
+                            "-stream_loop", str(loop_count),
+                            "-i", str(segment_raw),
+                            "-t", str(needed_duration),
+                            "-vf", ",".join(transform_filters),
+                        ])
+                    else:
+                        # Without loop, -ss before -i enables fast seeking
+                        # CRITICAL: clamp to segment_duration so FFmpeg never reads past
+                        # the user-defined segment end_time boundary
+                        clamped_duration = min(needed_duration, segment_duration)
+                        cmd.extend([
+                            "-ss", str(entry.start_time),
+                            "-i", entry.source_video_path,
+                            "-t", str(clamped_duration),
+                            "-vf", ",".join(transform_filters),
+                        ])
+
+                    cmd.extend([
+                        *get_prep_codec_params(include_audio=False),
                         "-r", str(TARGET_FPS),
                         "-fps_mode", "cfr",
                         "-video_track_timescale", "15360",
-                        "-an", "-pix_fmt", "yuv420p",
-                        str(segment_raw)
-                    ]
-                    result_extract = await asyncio.to_thread(
-                        safe_ffmpeg_run, extract_cmd, 120, "segment extract loop"
-                    )
-                    if result_extract.returncode != 0:
-                        logger.error(f"Failed to extract raw segment {i}: {result_extract.stderr}")
-                        return
-
-                    # Loop the extracted segment (contains only segment content)
-                    loop_count = math.ceil(needed_duration / segment_duration)
-                    cmd.extend([
-                        "-stream_loop", str(loop_count),
-                        "-i", str(segment_raw),
-                        "-t", str(needed_duration),
-                        "-vf", ",".join(transform_filters),
+                        "-force_key_frames", "expr:eq(n,0)",
+                        "-threads", "4",
+                        "-an",
+                        "-pix_fmt", "yuv420p",
+                        str(segment_file)
                     ])
+
+                    result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 600, "segment extract")
+
+                if result.returncode == 0 and segment_file.exists():
+                    results[i] = segment_file
                 else:
-                    # Without loop, -ss before -i enables fast seeking
-                    # CRITICAL: clamp to segment_duration so FFmpeg never reads past
-                    # the user-defined segment end_time boundary
-                    clamped_duration = min(needed_duration, segment_duration)
-                    cmd.extend([
-                        "-ss", str(entry.start_time),
-                        "-i", entry.source_video_path,
-                        "-t", str(clamped_duration),
-                        "-vf", ",".join(transform_filters),
-                    ])
-
-                cmd.extend([
-                    *get_prep_codec_params(include_audio=False),
-                    "-r", str(TARGET_FPS),
-                    "-fps_mode", "cfr",
-                    "-video_track_timescale", "15360",
-                    "-force_key_frames", "expr:eq(n,0)",
-                    "-threads", "4",
-                    "-an",
-                    "-pix_fmt", "yuv420p",
-                    str(segment_file)
-                ])
-
-                result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 600, "segment extract")
-
-            if result.returncode == 0 and segment_file.exists():
-                results[i] = segment_file
-            else:
-                logger.error(f"Failed to extract segment {i}: {result.stderr}")
+                    logger.error(f"Failed to extract segment {i}: {result.stderr}")
+            finally:
+                # VID-14: Clean up intermediate raw segment file used for looping
+                if segment_raw is not None:
+                    try:
+                        segment_raw.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
         logger.info(f"Extracting {len(timeline)} segments in parallel (max {max_parallel} concurrent)")
         await asyncio.gather(*(extract_segment(i, entry) for i, entry in enumerate(timeline)))
@@ -2158,9 +2167,10 @@ class AssemblyService:
             except Exception:
                 pass
         # 2 hours — preview temp files needed until render completes
-        cleanup_timer = threading.Timer(7200, _cleanup_temp)
-        cleanup_timer.daemon = True
-        cleanup_timer.start()
+        # VID-18: daemon thread runs independently; local ref prevents premature GC
+        _cleanup_timer = threading.Timer(7200, _cleanup_temp)
+        _cleanup_timer.daemon = True
+        _cleanup_timer.start()
 
         return {
             "audio_path": str(audio_path),
