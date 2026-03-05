@@ -1700,6 +1700,9 @@ function PipelinePage() {
   const handleGenerateTts = async (variantIndex: number) => {
     if (!pipelineId) return;
 
+    // Bug #88: prevent concurrent TTS calls for the same variant
+    if (ttsResults[variantIndex]?.generating) return;
+
     setTtsResults(prev => ({
       ...prev,
       [variantIndex]: { audio_duration: 0, generating: true, stale: false }

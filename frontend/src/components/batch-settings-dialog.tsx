@@ -97,7 +97,7 @@ export function BatchSettingsDialog({
       tts_provider: ttsProvider,
       voice_id: voiceId || defaultVoice || null,
       ai_provider: aiProvider,
-      duration_s: parseInt(duration),
+      duration_s: parseInt(duration, 10) || 30,
       encoding_preset: encodingPreset,
       cta_text: ctaText,
       enable_denoise: enableDenoise,

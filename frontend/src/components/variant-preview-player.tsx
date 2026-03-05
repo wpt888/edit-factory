@@ -46,6 +46,10 @@ export function VariantPreviewPlayer({
   const cancelledRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
+  // Bug #119: keep a ref to matches so the render effect always uses the latest value
+  const matchesRef = useRef(matches);
+  useEffect(() => { matchesRef.current = matches; }, [matches]);
+
   // Stop polling on unmount or close
   const stopPolling = useCallback(() => {
     cancelledRef.current = true;
@@ -69,7 +73,7 @@ export function VariantPreviewPlayer({
         const resp = await apiPost(
           `/pipeline/render-preview/${pipelineId}/${variantIndex}`,
           {
-            match_overrides: matches.map((m) => ({
+            match_overrides: matchesRef.current.map((m) => ({
               srt_index: m.srt_index,
               srt_text: m.srt_text,
               srt_start: m.srt_start,

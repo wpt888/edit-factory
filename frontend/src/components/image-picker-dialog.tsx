@@ -12,7 +12,7 @@
 
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -58,6 +58,9 @@ export function ImagePickerDialog({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // Bug #128: stabilize currentSelectedUrls to avoid re-fetch on every parent render
+  const selectedUrlsKey = JSON.stringify(currentSelectedUrls);
+
   // ---- Fetch images on open ----
   useEffect(() => {
     if (!open) {
@@ -89,7 +92,9 @@ export function ImagePickerDialog({
     })();
 
     return () => { cancelled = true; };
-  }, [open, catalogProductId, currentSelectedUrls]);
+    // Bug #128: use stable key instead of array reference
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, catalogProductId, selectedUrlsKey]);
 
   // ---- Toggle image selection ----
   const toggleImage = (url: string) => {

@@ -483,10 +483,13 @@ export function TimelineEditor({
 
     // Wait for React to mount the audio element, then wait for it to be playable.
     // Uses requestAnimationFrame to wait for the next render, then checks readyState.
+    let attempts = 0;
     const tryStart = () => {
       const audio = previewAudioRef.current;
       if (!audio) {
         // Audio not mounted yet — retry next frame (React render pending)
+        // Bug #117: cap retries to prevent infinite rAF loop on unmount
+        if (++attempts > 100) return;
         requestAnimationFrame(tryStart);
         return;
       }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -21,6 +21,19 @@ export function VoiceCloningUpload({ onVoiceCloned }: VoiceCloningUploadProps) {
   const [success, setSuccess] = useState<string | null>(null)
   const [duration, setDuration] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const objectUrlRef = useRef<string | null>(null)
+  const isMountedRef = useRef(true)
+
+  // Bug #122/#123: cleanup object URL and track mount state
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current)
+        objectUrlRef.current = null
+      }
+    }
+  }, [])
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -32,7 +45,10 @@ export function VoiceCloningUpload({ onVoiceCloned }: VoiceCloningUploadProps) {
 
     // Validate audio duration client-side
     const audio = new Audio()
+    // Bug #122: revoke previous objectUrl before creating new one
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
     const objectUrl = URL.createObjectURL(file)
+    objectUrlRef.current = objectUrl
     audio.src = objectUrl
 
     audio.addEventListener("loadedmetadata", () => {
@@ -98,8 +114,12 @@ export function VoiceCloningUpload({ onVoiceCloned }: VoiceCloningUploadProps) {
         throw new Error(errData.detail || "Failed to clone voice")
       }
 
+      // Bug #123: guard against unmounted state after await
+      if (!isMountedRef.current) return
+
       const data = await response.json()
 
+      if (!isMountedRef.current) return
       setSuccess(`Voice "${data.voice_name}" cloned successfully! Voice ID: ${data.voice_id}`)
       setVoiceName("")
       setSelectedFile(null)

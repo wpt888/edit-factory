@@ -1016,7 +1016,7 @@ export function VideoSegmentPlayer({
         <Button
           variant="ghost"
           size="icon"
-          onClick={() => seekTo(currentTime - 5)}
+          onClick={() => seekTo((videoRef.current?.currentTime ?? 0) - 5)}
           title="5 seconds back (Shift+Left)"
         >
           <SkipBack className="h-4 w-4" />
@@ -1024,7 +1024,7 @@ export function VideoSegmentPlayer({
         <Button
           variant="ghost"
           size="icon"
-          onClick={() => seekTo(currentTime + 5)}
+          onClick={() => seekTo((videoRef.current?.currentTime ?? 0) + 5)}
           title="5 seconds forward (Shift+Right)"
         >
           <SkipForward className="h-4 w-4" />

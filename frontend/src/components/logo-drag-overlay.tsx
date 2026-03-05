@@ -33,6 +33,15 @@ export function LogoDragOverlay({
   const dragOffset = useRef({ x: 0, y: 0 });
   const [displaySize, setDisplaySize] = useState({ width: 0, height: 0 });
 
+  // Bug #127: refs for values used in drag-end effect to avoid stale closures
+  const positionRef = useRef(position);
+  const scaleRef = useRef(scale);
+  const toRealRef = useRef<(x: number, y: number) => { x: number; y: number }>(() => ({ x: 0, y: 0 }));
+  const onPositionChangeRef = useRef(onPositionChange);
+  useEffect(() => { positionRef.current = position; }, [position]);
+  useEffect(() => { scaleRef.current = scale; }, [scale]);
+  useEffect(() => { onPositionChangeRef.current = onPositionChange; }, [onPositionChange]);
+
   // Bug #169: sync state when parent provides new initial values
   useEffect(() => { setPosition({ x: initialX, y: initialY }); }, [initialX, initialY]);
   useEffect(() => { setScale(initialScale); }, [initialScale]);
@@ -65,6 +74,7 @@ export function LogoDragOverlay({
     },
     [imageWidth, imageHeight, displaySize]
   );
+  useEffect(() => { toRealRef.current = toReal; }, [toReal]);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -114,11 +124,11 @@ export function LogoDragOverlay({
     };
   }, [dragging]);
 
-  // Notify parent when dragging ends
+  // Notify parent when dragging ends — Bug #127: use refs for current values
   useEffect(() => {
-    if (!dragging && position.x !== initialX && position.y !== initialY) {
-      const real = toReal(position.x, position.y);
-      onPositionChange(real.x, real.y, scale);
+    if (!dragging && positionRef.current.x !== initialX && positionRef.current.y !== initialY) {
+      const real = toRealRef.current(positionRef.current.x, positionRef.current.y);
+      onPositionChangeRef.current(real.x, real.y, scaleRef.current);
     }
     // Only fire when dragging transitions to false
     // eslint-disable-next-line react-hooks/exhaustive-deps

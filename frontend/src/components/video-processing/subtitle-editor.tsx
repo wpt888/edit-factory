@@ -40,6 +40,9 @@ import {
   VideoInfo,
 } from "@/types/video-processing";
 
+// Bug #126: stable default to avoid invalidating useMemo on every render
+const DEFAULT_VIDEO_INFO: VideoInfo = { width: 1080, height: 1920, duration: 0, fps: 30, aspect_ratio: "9:16", is_vertical: true };
+
 interface SubtitleEditorProps {
   /** Current subtitle settings */
   settings: SubtitleSettings;
@@ -70,7 +73,7 @@ export function SubtitleEditor({
   onLinesChange,
   showPreview = true,
   previewHeight = 600,
-  videoInfo = { width: 1080, height: 1920, duration: 0, fps: 30, aspect_ratio: "9:16", is_vertical: true },
+  videoInfo = DEFAULT_VIDEO_INFO,
   isLoadingVideoInfo = false,
   className = "",
   compact = false,

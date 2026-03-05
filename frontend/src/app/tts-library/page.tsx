@@ -179,7 +179,14 @@ export default function TTSLibraryPage() {
   useEffect(() => {
     const hasGenerating = assets.some((a) => a.status === "generating");
     if (!hasGenerating) return;
-    const interval = setInterval(fetchAssets, 3000);
+    const interval = setInterval(async () => {
+      try {
+        await fetchAssets();
+      } catch (err) {
+        // Bug #79: don't let fetch errors stop the polling interval
+        console.warn("Failed to refresh TTS assets:", err);
+      }
+    }, 3000);
     return () => clearInterval(interval);
   }, [assets, fetchAssets]);
 

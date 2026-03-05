@@ -254,10 +254,12 @@ export default function CreateImagePage() {
         clearInterval(pollRef.current);
         pollRef.current = null;
       }
+      let pollErrorCount = 0;
       pollRef.current = setInterval(async () => {
         try {
           const statusRes = await apiGet(`/image-gen/${data.image_id}/status`);
           if (statusRes.ok) {
+            pollErrorCount = 0; // reset on success
             const statusData = await statusRes.json();
             setGenerationStatus(statusData.status || "generating");
 
@@ -274,8 +276,16 @@ export default function CreateImagePage() {
               setGenerationStatus(`Failed: ${statusData.error_message || statusData.error || "Unknown error"}`);
             }
           }
-        } catch {
-          // polling error, continue
+        } catch (err) {
+          // Bug #90: stop polling after repeated errors
+          console.error("Image poll error:", err);
+          pollErrorCount++;
+          if (pollErrorCount > 5) {
+            clearInterval(pollRef.current!);
+            pollRef.current = null;
+            setGenerating(false);
+            setGenerationStatus("Image generation check failed. Please try again.");
+          }
         }
       }, 2000);
     } catch (err) {
