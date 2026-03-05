@@ -77,9 +77,25 @@ class VoiceDetector:
                 repo_or_dir='snakers4/silero-vad',
                 model='silero_vad',
                 force_reload=False,
-                trust_repo=True
+                trust_repo=True,
+                verbose=False
             )
             logger.info("Silero VAD model loaded successfully")
+        except (OSError, ConnectionError, TimeoutError) as e:
+            logger.warning(f"Network unavailable for Silero VAD download, trying cached: {e}")
+            try:
+                self.model, self.utils = torch.hub.load(
+                    repo_or_dir='snakers4/silero-vad',
+                    model='silero_vad',
+                    force_reload=False,
+                    trust_repo=True,
+                    verbose=False,
+                    source='local'
+                )
+                logger.info("Silero VAD model loaded from cache")
+            except Exception as e2:
+                logger.error(f"Failed to load Silero VAD model (no cache available): {e2}")
+                self.model = None
         except Exception as e:
             logger.error(f"Failed to load Silero VAD model: {e}")
             self.model = None
@@ -138,50 +154,55 @@ class VoiceDetector:
 
             return waveform.squeeze()
         except ImportError:
-            # Fallback: use scipy (requires WAV format)
-            try:
-                from scipy.io import wavfile
-                import numpy as np
+            pass  # Fall through to scipy fallback
+        except Exception as e:
+            logger.warning(f"Failed to load audio file {audio_path}: {e}")
+            # Fall through to scipy fallback
 
-                audio_path = Path(audio_path)
+        # Fallback: use scipy (requires WAV format)
+        try:
+            from scipy.io import wavfile
+            import numpy as np
 
-                # Dacă nu e WAV, convertim mai întâi via FFmpeg
-                if audio_path.suffix.lower() not in ['.wav', '.wave']:
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                        tmp_wav = Path(tmp.name)
-                    try:
-                        if not self._convert_to_wav(audio_path, tmp_wav):
-                            return None
-                        audio_path = tmp_wav
-                        sample_rate, audio = wavfile.read(str(audio_path))
-                    finally:
-                        tmp_wav.unlink(missing_ok=True)
-                else:
+            audio_path = Path(audio_path)
+
+            # Dacă nu e WAV, convertim mai întâi via FFmpeg
+            if audio_path.suffix.lower() not in ['.wav', '.wave']:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                    tmp_wav = Path(tmp.name)
+                try:
+                    if not self._convert_to_wav(audio_path, tmp_wav):
+                        return None
+                    audio_path = tmp_wav
                     sample_rate, audio = wavfile.read(str(audio_path))
+                finally:
+                    tmp_wav.unlink(missing_ok=True)
+            else:
+                sample_rate, audio = wavfile.read(str(audio_path))
 
-                # Convert to float
-                if audio.dtype == np.int16:
-                    audio = audio.astype(np.float32) / 32768.0
-                elif audio.dtype == np.int32:
-                    audio = audio.astype(np.float32) / 2147483648.0
+            # Convert to float
+            if audio.dtype == np.int16:
+                audio = audio.astype(np.float32) / 32768.0
+            elif audio.dtype == np.int32:
+                audio = audio.astype(np.float32) / 2147483648.0
 
-                # Resample dacă e necesar (rare — _extract_audio already produces 16kHz)
-                if sample_rate != self._sample_rate:
-                    import scipy.signal
-                    # Use polyphase FIR filter for better phase preservation
-                    gcd = np.gcd(self._sample_rate, sample_rate)
-                    up = self._sample_rate // gcd
-                    down = sample_rate // gcd
-                    audio = scipy.signal.resample_poly(audio, up, down)
+            # Resample dacă e necesar (rare — _extract_audio already produces 16kHz)
+            if sample_rate != self._sample_rate:
+                import scipy.signal
+                # Use polyphase FIR filter for better phase preservation
+                gcd = np.gcd(self._sample_rate, sample_rate)
+                up = self._sample_rate // gcd
+                down = sample_rate // gcd
+                audio = scipy.signal.resample_poly(audio, up, down)
 
-                # Convert to mono
-                if len(audio.shape) > 1:
-                    audio = audio.mean(axis=1)
+            # Convert to mono
+            if len(audio.shape) > 1:
+                audio = audio.mean(axis=1)
 
-                return torch.from_numpy(audio.astype(np.float32))
-            except Exception as e:
-                logger.error(f"Failed to read audio: {e}")
-                return None
+            return torch.from_numpy(audio.astype(np.float32))
+        except Exception as e:
+            logger.error(f"Failed to read audio: {e}")
+            return None
 
     def detect_voice(self, video_path: Path) -> List[VoiceSegment]:
         """

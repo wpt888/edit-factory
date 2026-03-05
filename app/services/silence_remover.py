@@ -133,7 +133,7 @@ class SilenceRemover:
         current_end = sorted_segs[0].end_time + self.padding
 
         for seg in sorted_segs[1:]:
-            seg_start = seg.start_time - self.padding
+            seg_start = max(0.0, seg.start_time - self.padding)
             seg_end = seg.end_time + self.padding
 
             # Calculăm gap-ul între segmente

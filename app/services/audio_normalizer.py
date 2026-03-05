@@ -5,6 +5,7 @@ Implements two-pass EBU R128 loudness normalization using FFmpeg's loudnorm filt
 import asyncio
 import json
 import logging
+import math
 import re
 import subprocess
 from dataclasses import dataclass
@@ -105,12 +106,24 @@ async def measure_loudness(
             return None
 
         # Extract required fields
+        input_i = float(data["input_i"])
+        input_tp = float(data["input_tp"])
+        input_lra = float(data["input_lra"])
+        input_thresh = float(data["input_thresh"])
+        target_offset = float(data["target_offset"])
+
+        # Check for inf/nan values (silent or corrupt audio)
+        for name, val in [("input_i", input_i), ("input_tp", input_tp), ("input_lra", input_lra)]:
+            if math.isinf(val) or math.isnan(val):
+                logger.warning(f"Loudness measurement returned {name}={val} (silent or corrupt audio), skipping normalization")
+                return None
+
         measurement = LoudnormMeasurement(
-            input_i=float(data["input_i"]),
-            input_tp=float(data["input_tp"]),
-            input_lra=float(data["input_lra"]),
-            input_thresh=float(data["input_thresh"]),
-            target_offset=float(data["target_offset"])
+            input_i=input_i,
+            input_tp=input_tp,
+            input_lra=input_lra,
+            input_thresh=input_thresh,
+            target_offset=target_offset
         )
 
         logger.info(f"Loudness measured: {measurement}")
@@ -118,9 +131,6 @@ async def measure_loudness(
 
     except RuntimeError as timeout_err:
         logger.error(f"FFmpeg timeout measuring {audio_path.name}: {timeout_err}")
-        return None
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse loudnorm JSON: {e}")
         return None
     except (KeyError, ValueError) as e:
         logger.error(f"Invalid loudnorm data format: {e}")

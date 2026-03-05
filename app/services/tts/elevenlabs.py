@@ -16,6 +16,8 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+ELEVENLABS_MAX_CHARS = 5000
+
 
 @retry(
     stop=stop_after_attempt(3),
@@ -135,7 +137,7 @@ class ElevenLabsTTSService(TTSService):
                 response = await client.get(url, headers=headers)
 
                 if response.status_code != 200:
-                    logger.error(f"ElevenLabs API error: {response.status_code} - {response.text}")
+                    logger.error(f"ElevenLabs API error: {response.status_code} - {response.content.decode('utf-8', errors='replace')}")
                     raise Exception(f"Failed to fetch voices: {response.status_code}")
 
                 data = response.json()
@@ -233,6 +235,9 @@ class ElevenLabsTTSService(TTSService):
             "voice_settings": voice_settings
         }
 
+        if len(text) > ELEVENLABS_MAX_CHARS:
+            raise ValueError(f"Text too long ({len(text)} chars, max {ELEVENLABS_MAX_CHARS})")
+
         logger.info(f"Generating TTS for {len(text)} characters with voice {voice_id}...")
 
         try:
@@ -243,7 +248,7 @@ class ElevenLabsTTSService(TTSService):
                 response = await self._try_failover(response, url, headers, data)
 
             if response.status_code != 200:
-                error_detail = response.text
+                error_detail = response.content.decode("utf-8", errors="replace")
                 logger.error(f"ElevenLabs API error: {response.status_code} - {error_detail}")
                 raise Exception(f"ElevenLabs API error: {response.status_code} - {error_detail}")
 
@@ -310,6 +315,7 @@ class ElevenLabsTTSService(TTSService):
         Rotates through available keys via AccountManager.
         Returns the last response (success or final failure).
         """
+        headers = dict(headers)
         current_key = headers.get("xi-api-key", self.api_key)
         current_hint = f"...{current_key[-4:]}" if len(current_key) >= 4 else "..."
 
@@ -432,7 +438,7 @@ class ElevenLabsTTSService(TTSService):
                 response = await self._try_failover(response, url, headers, data)
 
             if response.status_code != 200:
-                error_detail = response.text
+                error_detail = response.content.decode("utf-8", errors="replace")
                 logger.error(f"ElevenLabs API error: {response.status_code} - {error_detail}")
                 raise Exception(f"ElevenLabs API error: {response.status_code} - {error_detail}")
 

@@ -14,6 +14,8 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 logger = logging.getLogger(__name__)
 
+ELEVENLABS_MAX_CHARS = 5000
+
 
 @retry(
     stop=stop_after_attempt(3),
@@ -134,13 +136,16 @@ class ElevenLabsTTS:
             "voice_settings": voice_settings
         }
 
+        if len(text) > ELEVENLABS_MAX_CHARS:
+            raise ValueError(f"Text too long ({len(text)} chars, max {ELEVENLABS_MAX_CHARS})")
+
         logger.info(f"Generating TTS for {len(text)} characters...")
 
         try:
             response = await _call_elevenlabs_api(url, headers, data)
 
             if response.status_code != 200:
-                error_detail = response.text
+                error_detail = response.content.decode("utf-8", errors="replace")
                 logger.error(f"ElevenLabs API error: {response.status_code} - {error_detail}")
                 raise Exception(f"ElevenLabs API error: {response.status_code} - {error_detail}")
 
@@ -384,45 +389,50 @@ class ElevenLabsTTS:
         Returns:
             Tuple of (output_path, processing_stats)
         """
-        if temp_dir is None:
-            temp_dir = Path(tempfile.gettempdir()) / "elevenlabs_tts"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-
-        stats = {}
-
-        # Generate audio with silence removal
-        audio_filename = f"tts_{output_path.stem}.mp3"
-        audio_path = temp_dir / audio_filename
-
-        if remove_silence:
-            audio_path, silence_stats = await self.generate_audio_trimmed(
-                text=text,
-                output_path=audio_path,
-                remove_silence=True,
-                min_silence_duration=min_silence_duration,
-                silence_padding=silence_padding
-            )
-            stats["silence_removal"] = silence_stats
+        _owns_temp_dir = temp_dir is None
+        if _owns_temp_dir:
+            _temp_ctx = tempfile.TemporaryDirectory(prefix="elevenlabs_tts_")
+            temp_dir = Path(_temp_ctx.name)
         else:
-            await self.generate_audio(text, audio_path)
-            stats["silence_removal"] = {"enabled": False}
+            _temp_ctx = None
+            temp_dir.mkdir(parents=True, exist_ok=True)
 
         try:
+            stats = {}
+
+            # Generate audio with silence removal
+            audio_filename = f"tts_{output_path.stem}.mp3"
+            audio_path = temp_dir / audio_filename
+
+            if remove_silence:
+                audio_path, silence_stats = await self.generate_audio_trimmed(
+                    text=text,
+                    output_path=audio_path,
+                    remove_silence=True,
+                    min_silence_duration=min_silence_duration,
+                    silence_padding=silence_padding
+                )
+                stats["silence_removal"] = silence_stats
+            else:
+                await self.generate_audio(text, audio_path)
+                stats["silence_removal"] = {"enabled": False}
+
             # Add audio to video
             result = self.add_audio_to_video(video_path, audio_path, output_path)
-        finally:
-            # Cleanup temp audio regardless of success
-            try:
-                audio_path.unlink()
-            except Exception:
-                pass
 
-        stats["output_video"] = str(result)
-        return result, stats
+            stats["output_video"] = str(result)
+            return result, stats
+        finally:
+            if _temp_ctx is not None:
+                try:
+                    _temp_ctx.cleanup()
+                except Exception:
+                    pass
 
 
 _elevenlabs_instance = None
 _elevenlabs_lock = threading.Lock()
+_UNAVAILABLE = object()
 
 
 def get_elevenlabs_tts() -> Optional[ElevenLabsTTS]:
@@ -432,12 +442,18 @@ def get_elevenlabs_tts() -> Optional[ElevenLabsTTS]:
     allowing callers to fall back to Edge TTS.
     """
     global _elevenlabs_instance
+    if _elevenlabs_instance is _UNAVAILABLE:
+        logger.warning("ElevenLabs TTS previously failed init, returning None")
+        return None
     if _elevenlabs_instance is None:
         with _elevenlabs_lock:
+            if _elevenlabs_instance is _UNAVAILABLE:
+                return None
             if _elevenlabs_instance is None:
                 try:
                     _elevenlabs_instance = ElevenLabsTTS()
                 except ValueError as e:
                     logger.warning(f"ElevenLabs TTS unavailable (missing config): {e}")
+                    _elevenlabs_instance = _UNAVAILABLE
                     return None
     return _elevenlabs_instance

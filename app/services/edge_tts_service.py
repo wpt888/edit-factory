@@ -5,7 +5,6 @@ Calitate excelentă, multe voci, fără costuri.
 import asyncio
 import concurrent.futures
 import logging
-import threading
 from pathlib import Path
 from typing import List, Dict, Optional
 from dataclasses import dataclass
@@ -13,6 +12,9 @@ import edge_tts
 from app.services.srt_validator import sanitize_srt_full
 
 logger = logging.getLogger(__name__)
+
+# Module-level singleton executor to avoid creating multiple ThreadPoolExecutors
+_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 
 @dataclass
@@ -67,7 +69,7 @@ class EdgeTTSService:
 
     # Class-level cache shared across all instances
     _voices_cache: Optional[List[Voice]] = None
-    _voices_cache_lock = threading.Lock()
+    _voices_cache_lock = asyncio.Lock()
 
     def __init__(self, output_dir: Optional[Path] = None):
         """
@@ -88,7 +90,7 @@ class EdgeTTSService:
             Lista de voci disponibile
         """
         if EdgeTTSService._voices_cache is None:
-            with EdgeTTSService._voices_cache_lock:
+            async with EdgeTTSService._voices_cache_lock:
                 if EdgeTTSService._voices_cache is None:
                     voices_list = await edge_tts.list_voices()
                     EdgeTTSService._voices_cache = [
@@ -112,9 +114,8 @@ class EdgeTTSService:
         try:
             asyncio.get_running_loop()
             # We're inside an async context - run in a separate thread to avoid deadlock
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, self.list_voices(language))
-                return future.result(timeout=60)
+            future = _executor.submit(asyncio.run, self.list_voices(language))
+            return future.result(timeout=60)
         except RuntimeError:
             # No running loop - safe to use asyncio.run
             return asyncio.run(self.list_voices(language))
@@ -163,7 +164,7 @@ class EdgeTTSService:
                     logger.warning(f"Edge TTS attempt {attempt + 1} failed: {e}, retrying...")
                     await asyncio.sleep(1)
                 else:
-                    raise
+                    raise RuntimeError(f"Edge TTS error: {e}") from e
 
         logger.info(f"Audio saved: {output_path}")
         return output_path
@@ -181,14 +182,13 @@ class EdgeTTSService:
         try:
             asyncio.get_running_loop()
             # We're inside an async context - run in a separate thread to avoid deadlock
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, self.generate_audio(
-                    text, output_path, voice, rate, volume, pitch
-                ))
-                try:
-                    return future.result(timeout=120)
-                except concurrent.futures.TimeoutError:
-                    raise Exception(f"Edge TTS generation timed out after 120s for {len(text)} characters")
+            future = _executor.submit(asyncio.run, self.generate_audio(
+                text, output_path, voice, rate, volume, pitch
+            ))
+            try:
+                return future.result(timeout=120)
+            except concurrent.futures.TimeoutError:
+                raise Exception(f"Edge TTS generation timed out after 120s for {len(text)} characters")
         except RuntimeError:
             # No running loop - safe to use asyncio.run
             return asyncio.run(self.generate_audio(
@@ -231,36 +231,45 @@ class EdgeTTSService:
         srt_content = []
         sub_index = 1
 
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                # Salvăm audio chunk
-                with open(audio_path, "ab") as f:
-                    f.write(chunk["data"])
+        try:
+            with open(audio_path, "wb") as audio_file:
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        audio_file.write(chunk["data"])
 
-            elif chunk["type"] == "WordBoundary":
-                # Construim SRT din word boundaries
-                offset = chunk.get("offset")
-                duration = chunk.get("duration")
-                if offset is None or duration is None:
-                    logger.debug(f"Skipping WordBoundary chunk with missing offset/duration")
-                    continue
-                start_ms = offset / 10000  # Convert to ms
-                duration_ms = duration / 10000
-                end_ms = start_ms + duration_ms
+                    elif chunk["type"] == "WordBoundary":
+                        # Construim SRT din word boundaries
+                        offset = chunk.get("offset")
+                        duration = chunk.get("duration")
+                        if offset is None or duration is None:
+                            logger.debug(f"Skipping WordBoundary chunk with missing offset/duration")
+                            continue
+                        start_ms = offset / 10000  # Convert to ms
+                        duration_ms = duration / 10000
+                        end_ms = start_ms + duration_ms
 
-                start_srt = self._ms_to_srt_time(start_ms)
-                end_srt = self._ms_to_srt_time(end_ms)
-                word = chunk.get("text", "")
+                        start_srt = self._ms_to_srt_time(start_ms)
+                        end_srt = self._ms_to_srt_time(end_ms)
+                        word = chunk.get("text", "")
 
-                srt_content.append(f"{sub_index}")
-                srt_content.append(f"{start_srt} --> {end_srt}")
-                srt_content.append(word)
-                srt_content.append("")
-                sub_index += 1
+                        srt_content.append(f"{sub_index}")
+                        srt_content.append(f"{start_srt} --> {end_srt}")
+                        srt_content.append(word)
+                        srt_content.append("")
+                        sub_index += 1
+        except Exception:
+            # Cleanup partial audio file on failure
+            if audio_path.exists():
+                audio_path.unlink(missing_ok=True)
+            raise
 
         # Warn if no word boundaries were received
         if not srt_content:
             logger.warning(f"No WordBoundary chunks received from Edge TTS - SRT file will be empty")
+
+        # Verify audio output is valid
+        if not audio_path.exists() or audio_path.stat().st_size == 0:
+            raise RuntimeError("Edge TTS produced empty output")
 
         # Salvăm SRT
         with open(srt_path, "w", encoding="utf-8") as f:
@@ -280,11 +289,10 @@ class EdgeTTSService:
         """Versiune sincronă pentru generate_with_subtitles."""
         try:
             asyncio.get_running_loop()
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, self.generate_with_subtitles(
-                    text, audio_path, srt_path, voice, rate
-                ))
-                return future.result(timeout=120)
+            future = _executor.submit(asyncio.run, self.generate_with_subtitles(
+                text, audio_path, srt_path, voice, rate
+            ))
+            return future.result(timeout=120)
         except RuntimeError:
             return asyncio.run(self.generate_with_subtitles(
                 text, audio_path, srt_path, voice, rate
@@ -358,11 +366,10 @@ class EdgeTTSService:
         """Versiune sincronă pentru generate_variants."""
         try:
             asyncio.get_running_loop()
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, self.generate_variants(
-                    texts, output_dir, voices, base_name
-                ))
-                return future.result(timeout=300)
+            future = _executor.submit(asyncio.run, self.generate_variants(
+                texts, output_dir, voices, base_name
+            ))
+            return future.result(timeout=300)
         except RuntimeError:
             return asyncio.run(self.generate_variants(
                 texts, output_dir, voices, base_name

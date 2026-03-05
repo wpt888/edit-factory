@@ -87,6 +87,8 @@ def _evict_if_needed(cache_dir: Path) -> None:
                 f.unlink(missing_ok=True)
                 meta = f.with_suffix('.meta.json')
                 meta.unlink(missing_ok=True)
+                srt = f.with_suffix('.srt')
+                srt.unlink(missing_ok=True)
     except Exception as e:
         logger.warning(f"Cache eviction error: {e}")
 
