@@ -2,6 +2,7 @@
 Postiz Social Media Publishing Routes.
 Handles video publishing to social media via Postiz API.
 """
+import threading
 import uuid
 import logging
 from datetime import datetime, timedelta, timezone
@@ -80,11 +81,12 @@ class PostizStatusResponse(BaseModel):
 
 # ============== PROGRESS TRACKING ==============
 _publish_progress: Dict[str, dict] = {}
+_publish_progress_lock = threading.Lock()
 _MAX_PROGRESS_ENTRIES = 1000
 
 
 def _evict_old_progress():
-    """Remove oldest entries if store exceeds max size."""
+    """Remove oldest entries if store exceeds max size. Caller must hold _publish_progress_lock."""
     if len(_publish_progress) > _MAX_PROGRESS_ENTRIES:
         to_remove = sorted(_publish_progress.keys(), key=lambda k: _publish_progress[k].get("updated_at", ""))[:len(_publish_progress) - _MAX_PROGRESS_ENTRIES]
         for key in to_remove:
@@ -93,18 +95,20 @@ def _evict_old_progress():
 
 def update_publish_progress(job_id: str, step: str, percentage: int, status: str = "in_progress"):
     """Update progress for a publish job."""
-    _evict_old_progress()
-    _publish_progress[job_id] = {
-        "step": step,
-        "percentage": percentage,
-        "status": status,
-        "updated_at": datetime.now(timezone.utc).isoformat()
-    }
+    with _publish_progress_lock:
+        _evict_old_progress()
+        _publish_progress[job_id] = {
+            "step": step,
+            "percentage": percentage,
+            "status": status,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
 
 
 def get_publish_progress(job_id: str) -> Optional[dict]:
     """Get progress for a publish job."""
-    return _publish_progress.get(job_id)
+    with _publish_progress_lock:
+        return _publish_progress.get(job_id)
 
 
 # ============== HELPER FUNCTIONS ==============
@@ -238,7 +242,7 @@ async def upload_to_postiz(
     # Path traversal protection
     resolved = video_path.resolve()
     allowed_dirs = [settings.output_dir.resolve(), settings.base_dir.resolve()]
-    if not any(str(resolved).startswith(str(d)) for d in allowed_dirs):
+    if not any(resolved.is_relative_to(d) for d in allowed_dirs):
         raise HTTPException(status_code=403, detail="Access denied")
 
     try:
@@ -322,6 +326,13 @@ async def bulk_upload_to_postiz(
                 if not video_path.exists():
                     failed.append({"clip_id": clip_id, "error": f"Video file not found: {video_path_str}"})
                     continue
+
+        # Path traversal protection
+        resolved = video_path.resolve()
+        allowed_dirs = [settings.output_dir.resolve(), settings.base_dir.resolve()]
+        if not any(resolved.is_relative_to(d) for d in allowed_dirs):
+            failed.append({"clip_id": clip_id, "error": "Access denied"})
+            continue
 
         try:
             logger.info(f"Bulk upload: uploading {video_path} to Postiz")

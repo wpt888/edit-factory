@@ -29,6 +29,7 @@ class CoquiTTSService(TTSService):
     # Class-level model cache (singleton pattern)
     _model_cache: Dict[str, 'TTS'] = {}
     _model_lock: Optional[asyncio.Lock] = None
+    _model_lock_init = __import__("threading").Lock()
 
     def __init__(
         self,
@@ -48,9 +49,11 @@ class CoquiTTSService(TTSService):
         self.model_name = model_name
         self._cloned_voices: Dict[str, Path] = {}
 
-        # Initialize lock on first instantiation
+        # Initialize lock on first instantiation (thread-safe)
         if CoquiTTSService._model_lock is None:
-            CoquiTTSService._model_lock = asyncio.Lock()
+            with CoquiTTSService._model_lock_init:
+                if CoquiTTSService._model_lock is None:
+                    CoquiTTSService._model_lock = asyncio.Lock()
 
         # Check GPU availability
         try:
@@ -102,8 +105,6 @@ class CoquiTTSService(TTSService):
             logger.info(f"Loading Coqui TTS model: {self.model_name}")
 
             # Run synchronous TTS() initialization in executor
-            loop = asyncio.get_event_loop()
-
             def load_model():
                 # Lazy import to avoid loading PyTorch on module import
                 from TTS.api import TTS
@@ -113,7 +114,7 @@ class CoquiTTSService(TTSService):
                 model = TTS(self.model_name).to(device)
                 return model
 
-            model = await loop.run_in_executor(None, load_model)
+            model = await asyncio.to_thread(load_model)
 
             # Cache for future use
             CoquiTTSService._model_cache[self.model_name] = model
@@ -184,8 +185,6 @@ class CoquiTTSService(TTSService):
         model = await self._get_model()
 
         # Generate audio in executor (synchronous operation)
-        loop = asyncio.get_event_loop()
-
         def generate():
             model.tts_to_file(
                 text=text,
@@ -194,7 +193,7 @@ class CoquiTTSService(TTSService):
                 file_path=str(output_path)
             )
 
-        await loop.run_in_executor(None, generate)
+        await asyncio.to_thread(generate)
 
         # Calculate duration
         import librosa

@@ -69,7 +69,7 @@ class EdgeTTSService:
 
     # Class-level cache shared across all instances
     _voices_cache: Optional[List[Voice]] = None
-    _voices_cache_lock = asyncio.Lock()
+    _voices_cache_lock: Optional[asyncio.Lock] = None
 
     def __init__(self, output_dir: Optional[Path] = None):
         """
@@ -90,6 +90,8 @@ class EdgeTTSService:
             Lista de voci disponibile
         """
         if EdgeTTSService._voices_cache is None:
+            if EdgeTTSService._voices_cache_lock is None:
+                EdgeTTSService._voices_cache_lock = asyncio.Lock()
             async with EdgeTTSService._voices_cache_lock:
                 if EdgeTTSService._voices_cache is None:
                     voices_list = await edge_tts.list_voices()

@@ -33,7 +33,7 @@ def _get_fernet():
                 key = key.encode()
                 Fernet(key)  # validate
             except Exception:
-                derived = hashlib.sha256(key).digest()
+                derived = hashlib.sha256(key if isinstance(key, bytes) else key.encode("utf-8")).digest()
                 key = base64.urlsafe_b64encode(derived)
     return Fernet(key)
 

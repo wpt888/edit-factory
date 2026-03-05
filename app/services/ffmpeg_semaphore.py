@@ -13,6 +13,7 @@ import asyncio
 import logging
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -33,12 +34,31 @@ _ffmpeg_render_semaphore: asyncio.Semaphore | None = None
 MAX_CONCURRENT_PREP = 2
 _ffmpeg_prep_semaphore: asyncio.Semaphore | None = None
 
+# Threading lock to prevent race condition during lazy semaphore creation.
+# Without this, two concurrent coroutines could each create their own
+# Semaphore instance, bypassing the concurrency limit entirely.
+_semaphore_init_lock = threading.Lock()
+
+
+def init_semaphores() -> None:
+    """Create all semaphores eagerly inside the running event loop.
+
+    Call this once during FastAPI lifespan startup so that the semaphores
+    are bound to the correct event loop before any request handler runs.
+    """
+    _get_render_semaphore()
+    _get_prep_semaphore()
+    _get_preview_semaphore()
+    logger.info("FFmpeg semaphores initialized")
+
 
 def _get_render_semaphore() -> asyncio.Semaphore:
     """Lazily create render semaphore in the running event loop."""
     global _ffmpeg_render_semaphore
     if _ffmpeg_render_semaphore is None:
-        _ffmpeg_render_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RENDERS)
+        with _semaphore_init_lock:
+            if _ffmpeg_render_semaphore is None:
+                _ffmpeg_render_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RENDERS)
     return _ffmpeg_render_semaphore
 
 
@@ -46,7 +66,9 @@ def _get_prep_semaphore() -> asyncio.Semaphore:
     """Lazily create prep semaphore in the running event loop."""
     global _ffmpeg_prep_semaphore
     if _ffmpeg_prep_semaphore is None:
-        _ffmpeg_prep_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PREP)
+        with _semaphore_init_lock:
+            if _ffmpeg_prep_semaphore is None:
+                _ffmpeg_prep_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PREP)
     return _ffmpeg_prep_semaphore
 
 # Timeout (seconds) waiting to acquire a semaphore slot before giving up.
@@ -141,7 +163,10 @@ def safe_ffmpeg_run(
         stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.communicate()  # Drain pipes & reap zombie
+        try:
+            proc.communicate(timeout=10)  # Drain pipes & reap zombie (bounded wait)
+        except subprocess.TimeoutExpired:
+            logger.warning(f"{operation}: process did not exit within 10s after kill")
         raise RuntimeError(f"{operation} timed out after {timeout}s")
     return subprocess.CompletedProcess(
         args=cmd,
@@ -193,7 +218,9 @@ def _get_preview_semaphore() -> asyncio.Semaphore:
     """Lazily create preview semaphore in the running event loop."""
     global _ffmpeg_preview_semaphore
     if _ffmpeg_preview_semaphore is None:
-        _ffmpeg_preview_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PREVIEW)
+        with _semaphore_init_lock:
+            if _ffmpeg_preview_semaphore is None:
+                _ffmpeg_preview_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PREVIEW)
     return _ffmpeg_preview_semaphore
 
 
