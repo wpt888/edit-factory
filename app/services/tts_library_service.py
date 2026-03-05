@@ -237,5 +237,9 @@ class TTSLibraryService:
             logger.info(f"TTS Library: saved pipeline asset {asset_id}")
             return asset_id
         except Exception as e:
+            err_str = str(e).lower()
+            if "duplicate" in err_str or "unique" in err_str or "23505" in err_str:
+                logger.info(f"TTS Library: asset already exists (unique constraint), skipping: {text[:40]}...")
+                return None
             logger.warning(f"TTS Library: failed to insert asset: {e}")
             return None

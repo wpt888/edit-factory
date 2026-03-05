@@ -7,6 +7,7 @@ import logging
 import subprocess
 import json
 import tempfile
+import threading
 from pathlib import Path
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
@@ -23,6 +24,11 @@ try:
 except ImportError:
     logger.warning("PyTorch not installed. Voice detection will not be available.")
     torch = None
+
+# Module-level model cache to avoid reloading on each VoiceDetector instantiation
+_cached_model = None
+_cached_utils = None
+_model_cache_lock = threading.Lock()
 
 
 @dataclass
@@ -71,34 +77,49 @@ class VoiceDetector:
             self._load_model()
 
     def _load_model(self):
-        """Încarcă modelul Silero VAD."""
-        try:
-            self.model, self.utils = torch.hub.load(
-                repo_or_dir='snakers4/silero-vad',
-                model='silero_vad',
-                force_reload=False,
-                trust_repo=True,
-                verbose=False
-            )
-            logger.info("Silero VAD model loaded successfully")
-        except (OSError, ConnectionError, TimeoutError) as e:
-            logger.warning(f"Network unavailable for Silero VAD download, trying cached: {e}")
+        """Încarcă modelul Silero VAD (uses module-level cache)."""
+        global _cached_model, _cached_utils
+        with _model_cache_lock:
+            if _cached_model is not None:
+                self.model = _cached_model
+                self.utils = _cached_utils
+                logger.info("Silero VAD model reused from cache")
+                return
             try:
-                self.model, self.utils = torch.hub.load(
+                model, utils = torch.hub.load(
                     repo_or_dir='snakers4/silero-vad',
                     model='silero_vad',
                     force_reload=False,
                     trust_repo=True,
-                    verbose=False,
-                    source='local'
+                    verbose=False
                 )
-                logger.info("Silero VAD model loaded from cache")
-            except Exception as e2:
-                logger.error(f"Failed to load Silero VAD model (no cache available): {e2}")
+                _cached_model = model
+                _cached_utils = utils
+                self.model = model
+                self.utils = utils
+                logger.info("Silero VAD model loaded successfully")
+            except (OSError, ConnectionError, TimeoutError) as e:
+                logger.warning(f"Network unavailable for Silero VAD download, trying cached: {e}")
+                try:
+                    model, utils = torch.hub.load(
+                        repo_or_dir='snakers4/silero-vad',
+                        model='silero_vad',
+                        force_reload=False,
+                        trust_repo=True,
+                        verbose=False,
+                        source='local'
+                    )
+                    _cached_model = model
+                    _cached_utils = utils
+                    self.model = model
+                    self.utils = utils
+                    logger.info("Silero VAD model loaded from cache")
+                except Exception as e2:
+                    logger.error(f"Failed to load Silero VAD model (no cache available): {e2}")
+                    self.model = None
+            except Exception as e:
+                logger.error(f"Failed to load Silero VAD model: {e}")
                 self.model = None
-        except Exception as e:
-            logger.error(f"Failed to load Silero VAD model: {e}")
-            self.model = None
 
     def _extract_audio(self, video_path: Path, output_path: Path) -> bool:
         """

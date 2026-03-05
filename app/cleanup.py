@@ -102,7 +102,11 @@ def cleanup_temp_files(days: int, dry_run: bool) -> int:
 
 def cleanup_output_files(days: int, dry_run: bool) -> int:
     """Remove files from the output/ directory older than *days* days."""
-    output_dir = _PROJECT_ROOT / "output"
+    try:
+        from app.config import get_settings
+        output_dir = get_settings().output_dir
+    except Exception:
+        output_dir = _PROJECT_ROOT / "output"
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     count = _delete_old_files(output_dir, cutoff, dry_run)
     logger.info(

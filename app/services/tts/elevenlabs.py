@@ -446,7 +446,10 @@ class ElevenLabsTTSService(TTSService):
             response_data = response.json()
 
             # Decode base64 audio and save to file
-            audio_bytes = base64.b64decode(response_data["audio_base64"])
+            audio_b64 = response_data.get("audio_base64")
+            if not audio_b64:
+                raise Exception("ElevenLabs API response missing audio_base64 field")
+            audio_bytes = base64.b64decode(audio_b64)
             with open(output_path, "wb") as f:
                 f.write(audio_bytes)
 

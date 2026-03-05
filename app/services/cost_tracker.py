@@ -325,7 +325,8 @@ class CostTracker:
             try:
                 query = self._supabase.table("api_costs")\
                     .select("*")\
-                    .order("created_at", desc=True)
+                    .order("created_at", desc=True)\
+                    .limit(1000)
                 if profile_id:
                     query = query.eq("profile_id", profile_id)
                 result = query.execute()

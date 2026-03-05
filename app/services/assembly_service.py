@@ -742,6 +742,10 @@ class AssemblyService:
                 if seg_group:
                     current_product_group = seg_group
             else:
+                logger.warning(
+                    "No segment matched for SRT entry %d: %s",
+                    idx, srt_text[:80],
+                )
                 match = MatchResult(
                     srt_index=idx,
                     srt_text=srt_text,

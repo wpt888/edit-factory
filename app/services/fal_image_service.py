@@ -93,22 +93,16 @@ def get_fal_generator() -> FalImageGenerator:
     """Get singleton FAL image generator instance."""
     global _fal_instance
 
-    if _fal_instance is not None:
-        instance, created_at = _fal_instance
-        if (time.time() - created_at) < _FAL_CACHE_TTL:
-            return instance
-
-    settings = get_settings()
-    if not settings.fal_api_key:
-        raise ValueError("FAL_API_KEY not configured")
-
     with _fal_lock:
-        # Double-check after acquiring lock
         if _fal_instance is not None:
             instance, created_at = _fal_instance
             if (time.time() - created_at) < _FAL_CACHE_TTL:
                 return instance
             instance.close()
+
+        settings = get_settings()
+        if not settings.fal_api_key:
+            raise ValueError("FAL_API_KEY not configured")
 
         gen = FalImageGenerator(api_key=settings.fal_api_key)
         _fal_instance = (gen, time.time())

@@ -226,12 +226,16 @@ def calculate_adaptive_font_size(
         elif max_line_length >= max_chars_limit:
             return min_font_size, max_line_length
         else:
-            # Linear interpolation
-            font_size = base_font_size - (
-                (base_font_size - min_font_size) *
-                (max_line_length - max_chars_threshold) /
-                (max_chars_limit - max_chars_threshold)
-            )
+            # Linear interpolation (guard against ZeroDivisionError)
+            denom = max_chars_limit - max_chars_threshold
+            if denom == 0:
+                font_size = min_font_size
+            else:
+                font_size = base_font_size - (
+                    (base_font_size - min_font_size) *
+                    (max_line_length - max_chars_threshold) /
+                    denom
+                )
             return int(font_size), max_line_length
 
     except Exception as e:

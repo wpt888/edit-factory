@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from functools import lru_cache
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -248,7 +248,10 @@ class SupabaseFileStorage(FileStorage):
             return False
 
 
-@lru_cache(maxsize=1)
+_file_storage_instance: Optional[FileStorage] = None
+_file_storage_lock = threading.Lock()
+
+
 def get_file_storage() -> FileStorage:
     """Singleton factory — returns backend based on FILE_STORAGE_BACKEND setting.
 
@@ -257,16 +260,26 @@ def get_file_storage() -> FileStorage:
         SupabaseFileStorage if backend is 'supabase'.
         Falls back to LocalFileStorage for unknown values.
     """
-    from app.config import get_settings
-    settings = get_settings()
-    backend = settings.file_storage_backend.lower()
+    global _file_storage_instance
+    if _file_storage_instance is None:
+        with _file_storage_lock:
+            if _file_storage_instance is None:
+                from app.config import get_settings
+                settings = get_settings()
+                backend = settings.file_storage_backend.lower()
 
-    if backend == "supabase":
-        logger.info("FileStorage: using Supabase Storage backend")
-        return SupabaseFileStorage()
+                if backend == "supabase":
+                    logger.info("FileStorage: using Supabase Storage backend")
+                    _file_storage_instance = SupabaseFileStorage()
+                else:
+                    if backend != "local":
+                        logger.warning(f"FileStorage: unknown backend '{backend}', falling back to local")
+                    logger.info("FileStorage: using local filesystem backend")
+                    _file_storage_instance = LocalFileStorage()
+    return _file_storage_instance
 
-    if backend != "local":
-        logger.warning(f"FileStorage: unknown backend '{backend}', falling back to local")
 
-    logger.info("FileStorage: using local filesystem backend")
-    return LocalFileStorage()
+def reset_file_storage() -> None:
+    """Reset the singleton (useful for testing/reloading)."""
+    global _file_storage_instance
+    _file_storage_instance = None

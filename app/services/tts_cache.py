@@ -17,10 +17,17 @@ logger = logging.getLogger(__name__)
 
 MAX_CACHE_ENTRIES = 5000
 
+# Lock to serialize eviction
+_eviction_lock = _threading.Lock()
+
 # In-memory hit/miss counters (reset on server restart)
 _stats_lock = _threading.Lock()
 _hit_count = 0
 _miss_count = 0
+
+# Pending set: keys currently being generated (prevents duplicate in-flight requests)
+_pending_lock = _threading.Lock()
+_pending_keys: set = set()
 
 def _get_cache_root() -> Path:
     from app.config import get_settings
@@ -31,6 +38,30 @@ def _cache_key(key_data: dict) -> str:
     """Generate SHA-256 hash from key data dict."""
     raw = json.dumps(key_data, sort_keys=True)
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def is_generation_pending(key_data: dict) -> bool:
+    """Check if a TTS generation is already in-flight for this key."""
+    h = _cache_key(key_data)
+    with _pending_lock:
+        return h in _pending_keys
+
+
+def mark_generation_pending(key_data: dict) -> bool:
+    """Mark a key as in-flight. Returns False if already pending (caller should skip)."""
+    h = _cache_key(key_data)
+    with _pending_lock:
+        if h in _pending_keys:
+            return False
+        _pending_keys.add(h)
+        return True
+
+
+def unmark_generation_pending(key_data: dict) -> None:
+    """Remove a key from the pending set after generation completes or fails."""
+    h = _cache_key(key_data)
+    with _pending_lock:
+        _pending_keys.discard(h)
 
 
 def cache_lookup(key_data: dict, provider_dir: str, output_path: Path) -> Optional[dict]:
@@ -80,17 +111,18 @@ def cache_lookup(key_data: dict, provider_dir: str, output_path: Path) -> Option
 
 def _evict_if_needed(cache_dir: Path) -> None:
     """Remove least-recently-accessed cache entries if cache exceeds max size."""
-    try:
-        cache_files = sorted(cache_dir.glob("*.mp3"), key=lambda f: f.stat().st_atime)
-        if len(cache_files) > MAX_CACHE_ENTRIES:
-            for f in cache_files[:len(cache_files) - MAX_CACHE_ENTRIES]:
-                f.unlink(missing_ok=True)
-                meta = f.with_suffix('.meta.json')
-                meta.unlink(missing_ok=True)
-                srt = f.with_suffix('.srt')
-                srt.unlink(missing_ok=True)
-    except Exception as e:
-        logger.warning(f"Cache eviction error: {e}")
+    with _eviction_lock:
+        try:
+            cache_files = sorted(cache_dir.glob("*.mp3"), key=lambda f: f.stat().st_atime)
+            if len(cache_files) > MAX_CACHE_ENTRIES:
+                for f in cache_files[:len(cache_files) - MAX_CACHE_ENTRIES]:
+                    f.unlink(missing_ok=True)
+                    meta = f.with_suffix('.meta.json')
+                    meta.unlink(missing_ok=True)
+                    srt = f.with_suffix('.srt')
+                    srt.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning(f"Cache eviction error: {e}")
 
 
 def cache_store(key_data: dict, provider_dir: str, audio_path: Path, metadata: dict) -> None:

@@ -12,12 +12,19 @@ APP_VERSION = get_version()
 
 def _get_app_base_dir() -> Path:
     """Returns %APPDATA%\\EditFactory in desktop mode, project root in dev."""
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
     if os.getenv("DESKTOP_MODE", "").lower() in ("true", "1", "yes"):
         appdata = os.getenv("APPDATA")
         if appdata:
             base = Path(appdata) / "EditFactory"
-            base.mkdir(parents=True, exist_ok=True)
+            try:
+                base.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                _logger.warning(f"Could not create base dir {base}: {e}")
             return base
+        else:
+            _logger.warning("DESKTOP_MODE is set but APPDATA env var is missing — falling back to project root")
     # Dev / WSL / CI: use project root (existing behaviour)
     return Path(__file__).parent.parent
 
@@ -113,8 +120,14 @@ class Settings(BaseSettings):
                 try:
                     from pydantic_settings.env_settings import DotEnvSettingsSource
                 except ImportError:
-                    from pydantic_settings.main import DotEnvSettingsSource
-            sources.append(DotEnvSettingsSource(settings_cls, env_file=appdata_env))
+                    try:
+                        from pydantic_settings.main import DotEnvSettingsSource
+                    except ImportError:
+                        import logging as _log
+                        _log.getLogger(__name__).warning("DotEnvSettingsSource not found — .env files will not be loaded")
+                        DotEnvSettingsSource = None
+            if DotEnvSettingsSource is not None:
+                sources.append(DotEnvSettingsSource(settings_cls, env_file=appdata_env))
         # Always include project .env as lowest-priority fallback
         project_env = Path(__file__).parent.parent / ".env"
         if project_env.exists():
@@ -124,8 +137,12 @@ class Settings(BaseSettings):
                 try:
                     from pydantic_settings.env_settings import DotEnvSettingsSource
                 except ImportError:
-                    from pydantic_settings.main import DotEnvSettingsSource
-            sources.append(DotEnvSettingsSource(settings_cls, env_file=project_env))
+                    try:
+                        from pydantic_settings.main import DotEnvSettingsSource
+                    except ImportError:
+                        DotEnvSettingsSource = None
+            if DotEnvSettingsSource is not None:
+                sources.append(DotEnvSettingsSource(settings_cls, env_file=project_env))
         return tuple(sources)
 
     def ensure_dirs(self):

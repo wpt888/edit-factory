@@ -52,7 +52,10 @@ class LicenseService:
                 data={"license_key": license_key, "instance_name": instance_name},
                 headers={"Accept": "application/json"},
             )
-        body = resp.json()
+        try:
+            body = resp.json()
+        except Exception:
+            return {"success": False, "error": f"Invalid response from license server (HTTP {resp.status_code})"}
         if not body.get("activated"):
             return {"success": False, "error": body.get("error", "Activation failed")}
 
@@ -96,7 +99,10 @@ class LicenseService:
                     },
                     headers={"Accept": "application/json"},
                 )
-            body = resp.json()
+            try:
+                body = resp.json()
+            except Exception:
+                raise httpx.HTTPError(f"Invalid JSON response (HTTP {resp.status_code})")
             if body.get("valid"):
                 data["last_validated_at"] = datetime.now(timezone.utc).isoformat()
                 data["status"] = body["license_key"]["status"]

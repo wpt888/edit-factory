@@ -109,7 +109,11 @@ class SilenceRemover:
             ]
             result = safe_ffmpeg_run(cmd, 30, "audio duration")
             if result.returncode == 0:
-                return float(result.stdout.strip())
+                try:
+                    return float(result.stdout.strip())
+                except (ValueError, TypeError):
+                    logger.warning(f"Could not parse audio duration: {result.stdout.strip()!r}")
+                    return 0.0
         except Exception as e:
             logger.warning(f"Could not get audio duration: {e}")
         return 0.0

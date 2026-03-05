@@ -32,6 +32,14 @@ def apply_logo_overlay(
     base = Image.open(base_path).convert("RGBA")
     logo = Image.open(logo_path).convert("RGBA")
 
+    # Guard: reject logos larger than the base image (after scaling)
+    scaled_w = max(1, int(logo.width * scale))
+    scaled_h = max(1, int(logo.height * scale))
+    if scaled_w > base.width or scaled_h > base.height:
+        raise ValueError(
+            f"Logo ({scaled_w}x{scaled_h}) exceeds base image ({base.width}x{base.height})"
+        )
+
     # Resize logo by scale factor
     if scale != 1.0:
         new_w = max(1, int(logo.width * scale))

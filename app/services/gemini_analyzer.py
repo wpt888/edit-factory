@@ -211,6 +211,7 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
                 }
             })
 
+        response_text = ""
         try:
             response = self._call_gemini_api(self.model_name, contents)
 

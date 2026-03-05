@@ -79,7 +79,10 @@ async def _download_one(
     Returns:
         Tuple of (external_id, local_file_path).
     """
-    external_id = product["external_id"]
+    external_id = product.get("external_id")
+    if not external_id:
+        logger.warning("Product missing external_id — skipping image fetch")
+        return (None, None)
     dest = cache_dir / f"{external_id}.jpg"
 
     # Cache hit — skip download
