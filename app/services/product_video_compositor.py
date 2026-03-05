@@ -692,7 +692,7 @@ def benchmark_zoompan(image_path: Path, duration_s: int = 30) -> dict:
             "-pix_fmt", "yuv420p",
             str(bench_simple),
         ]
-        subprocess.run(simple_cmd, capture_output=True, text=True, check=True, timeout=600)
+        safe_ffmpeg_run(simple_cmd, 600, "benchmark simple_scale")
         results["simple_scale_s"] = time.perf_counter() - start
         logger.info("Benchmark: simple_scale=%.1fs", results["simple_scale_s"])
 
@@ -714,7 +714,7 @@ def benchmark_zoompan(image_path: Path, duration_s: int = 30) -> dict:
             "-pix_fmt", "yuv420p",
             str(bench_zoompan),
         ]
-        subprocess.run(zoompan_cmd, capture_output=True, text=True, check=True, timeout=600)
+        safe_ffmpeg_run(zoompan_cmd, 600, "benchmark zoompan")
         results["zoompan_s"] = time.perf_counter() - start
         logger.info("Benchmark: zoompan=%.1fs", results["zoompan_s"])
 

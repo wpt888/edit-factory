@@ -36,7 +36,7 @@ class SegmentTransform:
             pan_y=int(data.get("pan_y", 0)),
             flip_h=bool(data.get("flip_h", False)),
             flip_v=bool(data.get("flip_v", False)),
-            opacity=float(data.get("opacity", 1.0)),
+            opacity=max(0.0, min(1.0, float(data.get("opacity", 1.0)))),
         )
 
     def is_identity(self) -> bool:

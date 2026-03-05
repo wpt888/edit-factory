@@ -32,10 +32,10 @@ def get_tts_service(
     """
     settings = get_settings()
 
+    provider = provider.lower()
+
     # Profile-scoped output directory
     output_dir = settings.output_dir / "tts" / profile_id / provider
-
-    provider = provider.lower()
 
     if provider == "elevenlabs":
         from .elevenlabs import ElevenLabsTTSService

@@ -41,6 +41,10 @@ export function handleApiError(error: unknown, context?: string): void {
       toast.error("Request timed out. Try again.");
       return;
     }
+    if (error.status === 0) {
+      toast.error("Network error. Check your connection.");
+      return;
+    }
     if (error.status >= 500) {
       toast.error("Server error. Try again later.");
       return;

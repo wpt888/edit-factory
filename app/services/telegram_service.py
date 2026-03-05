@@ -128,7 +128,12 @@ def get_telegram_sender(profile_id: str) -> TelegramSender:
     with _telegram_lock:
         if len(_telegram_instances) >= _MAX_TELEGRAM_INSTANCES:
             oldest_key = next(iter(_telegram_instances))
-            _telegram_instances.pop(oldest_key, None)
+            evicted = _telegram_instances.pop(oldest_key, None)
+            if evicted:
+                try:
+                    evicted[0].close()
+                except Exception:
+                    pass
         _telegram_instances[profile_id] = (sender, time.time())
 
     return sender

@@ -329,7 +329,9 @@ def generate_srt_from_timestamps(
     input_word_count = len(words)
     srt_word_count = sum(len(entry.split("\n")[2].split()) for entry in srt_entries if len(entry.split("\n")) > 2)
     if input_word_count != srt_word_count:
-        logger.error(f"SRT word count mismatch: input={input_word_count} words, SRT output={srt_word_count} words (delta={input_word_count - srt_word_count})")
+        delta = input_word_count - srt_word_count
+        level = logging.WARNING if abs(delta) <= 2 else logging.ERROR
+        logger.log(level, f"SRT word count mismatch: input={input_word_count} words, SRT output={srt_word_count} words (delta={delta})")
     else:
         logger.info(f"SRT word count validated: {input_word_count} words match")
 
