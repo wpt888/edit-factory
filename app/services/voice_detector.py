@@ -114,6 +114,24 @@ class VoiceDetector:
                     self.model = model
                     self.utils = utils
                     logger.info("Silero VAD model loaded from cache")
+                except TypeError:
+                    # PyTorch 2.1+ removed source parameter
+                    try:
+                        model, utils = torch.hub.load(
+                            repo_or_dir='snakers4/silero-vad',
+                            model='silero_vad',
+                            force_reload=False,
+                            trust_repo=True,
+                            verbose=False
+                        )
+                        _cached_model = model
+                        _cached_utils = utils
+                        self.model = model
+                        self.utils = utils
+                        logger.info("Silero VAD model loaded (without source param)")
+                    except Exception as e3:
+                        logger.error(f"Failed to load Silero VAD model: {e3}")
+                        self.model = None
                 except Exception as e2:
                     logger.error(f"Failed to load Silero VAD model (no cache available): {e2}")
                     self.model = None
@@ -189,15 +207,17 @@ class VoiceDetector:
 
             # Dacă nu e WAV, convertim mai întâi via FFmpeg
             if audio_path.suffix.lower() not in ['.wav', '.wave']:
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                    tmp_wav = Path(tmp.name)
+                tmp_wav = None
                 try:
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                        tmp_wav = Path(tmp.name)
                     if not self._convert_to_wav(audio_path, tmp_wav):
                         return None
                     audio_path = tmp_wav
                     sample_rate, audio = wavfile.read(str(audio_path))
                 finally:
-                    tmp_wav.unlink(missing_ok=True)
+                    if tmp_wav is not None:
+                        tmp_wav.unlink(missing_ok=True)
             else:
                 sample_rate, audio = wavfile.read(str(audio_path))
 

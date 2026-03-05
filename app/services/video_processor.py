@@ -627,8 +627,8 @@ class VideoEditor:
     def _check_nvenc_available(self) -> bool:
         """Verifica disponibilitatea NVENC."""
         try:
-            result = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True, timeout=5)
-            return "h264_nvenc" in result.stdout
+            result = safe_ffmpeg_run(["ffmpeg", "-encoders"], timeout=5, operation="check nvenc")
+            return "h264_nvenc" in (result.stdout or "")
         except Exception:
             return False
 
@@ -984,6 +984,8 @@ class VideoEditor:
                 "-map", "0:v", "-map", "1:a",
                 "-c:v", self.video_codec,
                 "-preset", self.video_preset,
+                "-crf", str(self.video_quality),
+                "-pix_fmt", "yuv420p",
                 "-c:a", "aac",
                 str(output_video)
             ])
@@ -1065,6 +1067,10 @@ class VideoEditor:
         # Convertim culorile
         def hex_to_ass(hex_color):
             hex_color = hex_color.lstrip('#')
+            if len(hex_color) == 3:
+                hex_color = ''.join(c * 2 for c in hex_color)
+            if len(hex_color) < 6:
+                return "&H00FFFFFF"  # fallback to white
             r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
             return f"&H00{b:02X}{g:02X}{r:02X}"
 

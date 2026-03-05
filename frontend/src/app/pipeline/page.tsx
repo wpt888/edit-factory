@@ -340,6 +340,7 @@ function PipelinePage() {
   const [regeneratingAllIndex, setRegeneratingAllIndex] = useState<number | null>(null);
   const [playingTtsVariant, setPlayingTtsVariant] = useState<number | null>(null);
   const [srtPreviewOpen, setSrtPreviewOpen] = useState<Record<number, boolean>>({});
+  const isMountedRef = useRef(true);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
   const scriptAbortRef = useRef<AbortController | null>(null);
@@ -433,6 +434,7 @@ function PipelinePage() {
 
   // Keep pipelineIdRef in sync for use in closures/timeouts
   useEffect(() => { pipelineIdRef.current = pipelineId; }, [pipelineId]);
+  useEffect(() => { return () => { isMountedRef.current = false; }; }, []);
 
   // Format helpers
   const formatDuration = (seconds: number): string => {
@@ -882,10 +884,11 @@ function PipelinePage() {
         provider,
       }, { timeout: 300_000, signal: abortController.signal }); // 5 min — AI script generation is slow
 
-      if (abortController.signal.aborted) return;
+      if (abortController.signal.aborted || !isMountedRef.current) return;
 
       // apiPost throws on non-OK responses — no need for res.ok check (FE-01)
       const data = await res.json();
+      if (!isMountedRef.current) return;
       setPipelineId(data.pipeline_id);
       setScripts((data.scripts || []).map(formatScript));
       setTotalSegmentDuration(data.total_segment_duration || 0);
@@ -905,7 +908,7 @@ function PipelinePage() {
         setError("Network error. Please check if the backend is running.");
       }
     } finally {
-      if (!abortController.signal.aborted) {
+      if (!abortController.signal.aborted && isMountedRef.current) {
         setIsGenerating(false);
       }
     }
@@ -951,10 +954,11 @@ function PipelinePage() {
             ultra_rapid_intro: ultraRapidIntro,
           }, { timeout: 300_000, signal: abortController.signal }); // 5 min — TTS generation + SRT can be slow
 
-          if (abortController.signal.aborted) { setPreviewingIndex(null); return; }
+          if (abortController.signal.aborted || !isMountedRef.current) { setPreviewingIndex(null); return; }
 
           // apiPost throws on non-OK responses — no need for res.ok check (FE-01)
           const data = await res.json();
+          if (!isMountedRef.current) return;
           newPreviews[i] = data;
           setPreviews(prev => ({ ...prev, [i]: data }));
         } catch (err) {
@@ -1091,6 +1095,7 @@ function PipelinePage() {
       // apiPost throws on non-2xx, so if we reach here it succeeded.
       // data.variants does not exist on PipelineRenderResponse — initialStatuses
       // already set above serve as placeholder until polling fills in real data.
+      if (!isMountedRef.current) return;
       setStep(4);
     } catch (err) {
       handleApiError(err, "Error generating variants");
@@ -1186,11 +1191,12 @@ function PipelinePage() {
     setHistoryScriptsLoading(true);
     setHistorySelectedScripts(new Set());
     try {
-      const res = await apiGet(`/pipeline/status/${id}`);
+      const res = await apiGet(`/pipeline/scripts/${id}`);
       const data = await res.json();
-      setHistoryScripts(data.scripts || []);
+      const scriptsArr = data.scripts || data || [];
+      setHistoryScripts(scriptsArr);
       // Select all by default
-      setHistorySelectedScripts(new Set((data.scripts || []).map((_: string, i: number) => i)));
+      setHistorySelectedScripts(new Set(scriptsArr.map((_: string, i: number) => i)));
       // Store preview info for audio indicators
       if (data.preview_info) {
         setHistoryPreviewInfo(data.preview_info);
@@ -1788,10 +1794,11 @@ function PipelinePage() {
           min_segment_duration: minSegmentDuration,
         }, { timeout: 300_000, signal: abortController.signal });
 
-        if (abortController.signal.aborted) break;
+        if (abortController.signal.aborted || !isMountedRef.current) break;
 
         // apiPost throws on non-OK responses (FE-01)
         const data = await res.json();
+        if (!isMountedRef.current) break;
         setTtsResults(prev => ({
           ...prev,
           [i]: {
@@ -1883,6 +1890,7 @@ function PipelinePage() {
     if (!pipelineId) return;
 
     if (playingTtsVariant === variantIndex) {
+      ttsPlayAbortRef.current?.abort();
       ttsAudioRef.current?.pause();
       setPlayingTtsVariant(null);
       return;
@@ -3134,7 +3142,7 @@ function PipelinePage() {
                         size="sm"
                         className="border-green-400 text-green-700 hover:bg-green-100 dark:text-green-300 dark:hover:bg-green-900"
                         onClick={handlePreviewAll}
-                        disabled={isGenerating || previewingIndex !== null || sourceVideos.length === 0 || selectedSourceIds.size === 0}
+                        disabled={isGenerating || previewingIndex !== null || isRendering || sourceVideos.length === 0 || selectedSourceIds.size === 0}
                       >
                         <ArrowRight className="h-3.5 w-3.5 mr-1" />
                         {previewingIndex !== null ? "Generating preview..." : "Continue to Preview"}
@@ -3152,7 +3160,7 @@ function PipelinePage() {
               return (
                 <Button
                   onClick={handlePreviewAll}
-                  disabled={isGenerating || previewingIndex !== null || sourceVideos.length === 0 || selectedSourceIds.size === 0}
+                  disabled={isGenerating || previewingIndex !== null || isRendering || sourceVideos.length === 0 || selectedSourceIds.size === 0}
                   className="w-full"
                   size="lg"
                 >
@@ -3449,12 +3457,16 @@ function PipelinePage() {
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-muted-foreground">Progress</span>
-                        <span className="font-semibold">{Math.round(status.progress)}%</span>
+                        <span className="font-semibold">
+                          {status.progress >= 100 && status.status === "processing"
+                            ? "Finalizing..."
+                            : `${Math.round(status.progress)}%`}
+                        </span>
                       </div>
                       <div className="w-full bg-secondary rounded-full h-2">
                         <div
                           className="bg-primary h-2 rounded-full transition-all"
-                          style={{ width: `${status.progress}%` }}
+                          style={{ width: `${status.progress >= 100 && status.status === "processing" ? 99 : status.progress}%` }}
                         />
                       </div>
                     </div>
@@ -3527,7 +3539,10 @@ function PipelinePage() {
                                 await apiPost(`/pipeline/sync-to-library/${pipelineId}`);
                                 const res = await apiGet(`/pipeline/status/${pipelineId}`);
                                 const data = await res.json();
-                                if (data?.variants) setVariantStatuses(data.variants);
+                                if (data?.variants) {
+                                  const renderedVariants = (data.variants || []).filter((v: any) => v.status !== "not_started");
+                                  setVariantStatuses(renderedVariants);
+                                }
                               } catch {
                                 // ignore — user can retry
                               }

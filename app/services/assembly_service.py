@@ -1071,6 +1071,13 @@ class AssemblyService:
                 sub_entries = timeline[i:last_merged_idx + 1]
                 recent_paths = set(recent_reps[-DIVERSITY_WINDOW:])
 
+                # BUG-5 fix: Filter out zero-duration entries so they are never picked as representative
+                sub_entries = [e for e in sub_entries if e.timeline_duration > 0.001]
+                if not sub_entries:
+                    # All entries are zero-duration — skip this group entirely
+                    i = last_merged_idx + 1
+                    continue
+
                 diverse_candidates = [
                     e for e in sub_entries
                     if e.source_video_path not in recent_paths
@@ -1413,7 +1420,7 @@ class AssemblyService:
         with open(concat_file, 'w', encoding='utf-8') as f:
             for seg_file in segment_files:
                 # Escape single quotes for FFmpeg
-                escaped = str(seg_file).replace("'", "'\\''")
+                escaped = str(seg_file).replace("\\", "\\\\").replace("'", "\\'")
                 f.write(f"file '{escaped}'\n")
 
         # Concatenate all clips
@@ -1840,6 +1847,17 @@ class AssemblyService:
             safe_preset_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', preset_data['name'])
             final_output_path = output_dir / f"assembly_{uuid.uuid4().hex[:8]}_{safe_preset_name}.mp4"
 
+            # BUG-2 fix: Inject shadow/glow/adaptive params into subtitle_settings
+            if subtitle_settings is None:
+                subtitle_settings = {}
+            if shadow_depth > 0:
+                subtitle_settings["shadowDepth"] = shadow_depth
+            if enable_glow:
+                subtitle_settings["enableGlow"] = True
+                subtitle_settings["glowBlur"] = glow_blur
+            if adaptive_sizing:
+                subtitle_settings["adaptiveSizing"] = True
+
             await _render_with_preset(
                 video_path=assembled_video_path,
                 audio_path=audio_path,
@@ -1976,6 +1994,11 @@ class AssemblyService:
         cleaned_text = strip_product_group_tags(script_text)
 
         # Step 1: Generate TTS with timestamps (or reuse existing)
+        # BUG-4 fix: Verify reuse_audio_path exists before using it
+        if reuse_audio_path and reuse_audio_duration and not Path(reuse_audio_path).exists():
+            logger.warning(f"reuse_audio_path does not exist, forcing TTS regeneration: {reuse_audio_path}")
+            reuse_audio_path = None
+            reuse_audio_duration = None
         if reuse_audio_path and reuse_audio_duration:
             logger.info("Preview Step 1/4: Reusing existing TTS audio from Step 2")
             audio_path = Path(reuse_audio_path)

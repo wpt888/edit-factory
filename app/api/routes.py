@@ -1042,6 +1042,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
     job["status"] = JobStatus.PROCESSING
     job["updated_at"] = datetime.now(timezone.utc).isoformat()
     job["progress"] = "Initializing TTS..."
+    audio_path = None
 
     try:
         tts = get_elevenlabs_tts()
@@ -1124,12 +1125,6 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
                     "status": "failed"
                 })
 
-        # Cleanup temp audio
-        try:
-            audio_path.unlink()
-        except Exception:
-            pass
-
         job["status"] = JobStatus.COMPLETED
         job["result"] = {
             "status": "success",
@@ -1142,7 +1137,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         # Progress message with silence info
         success_count = job['result']['successful']
         total_count = job['result']['total']
-        if silence_stats and "original_duration" in silence_stats:
+        if silence_stats and "original_duration" in silence_stats and "new_duration" in silence_stats:
             saved = silence_stats["original_duration"] - silence_stats["new_duration"]
             job["progress"] = f"Completed: {success_count}/{total_count} videos, saved {saved:.1f}s of silence"
         else:
@@ -1153,6 +1148,13 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         job["status"] = JobStatus.FAILED
         job["error"] = str(e)
         job["progress"] = f"Failed: {e}"
+    finally:
+        # Clean up temp audio file
+        if audio_path:
+            try:
+                Path(audio_path).unlink(missing_ok=True)
+            except Exception:
+                pass
 
     job["updated_at"] = datetime.now(timezone.utc).isoformat()
     # Persist final job state to storage

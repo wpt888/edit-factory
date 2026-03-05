@@ -267,8 +267,8 @@ class SilenceRemover:
 
                 cmd = [
                     "ffmpeg", "-y", "-threads", "4",
-                    "-i", str(audio_path),
                     "-ss", str(start),
+                    "-i", str(audio_path),
                     "-t", str(end - start),
                     "-c:a", "pcm_s16le",  # WAV pentru concatenare precisă
                     str(segment_file)

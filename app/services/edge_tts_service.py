@@ -281,7 +281,10 @@ class EdgeTTSService:
             f.write(sanitize_srt_full("\n".join(srt_content)))
 
         logger.info(f"Generated audio + SRT: {audio_path}, {srt_path}")
-        return {"audio": audio_path, "srt": srt_path}
+        result = {"audio": audio_path, "srt": srt_path}
+        if not srt_content:
+            result["srt_empty"] = True
+        return result
 
     def generate_with_subtitles_sync(
         self,

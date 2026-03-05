@@ -229,21 +229,25 @@ function LibrarieContent() {
     fetchAllClips(nextCursor, filterTag);
   }, [hasMore, nextCursor, filterTag, fetchAllClips]);
 
+  // Keep a stable ref to fetchNextPage so the IntersectionObserver callback never goes stale
+  const fetchNextPageRef = useRef(fetchNextPage);
+  useEffect(() => { fetchNextPageRef.current = fetchNextPage; }, [fetchNextPage]);
+
   // IntersectionObserver — trigger fetchNextPage when sentinel enters viewport
   useEffect(() => {
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting) {
-          fetchNextPage();
+        if (entries[0]?.isIntersecting) {
+          fetchNextPageRef.current();
         }
       },
       { threshold: 0.1 }
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [fetchNextPage]);
+  }, []); // stable - created once
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -1349,7 +1353,12 @@ function LibrarieContent() {
             )}
             {!hasMore && clips.length > 0 && (
               <div className="flex items-center justify-center py-6">
-                <p className="text-sm text-muted-foreground">All clips loaded ({clips.length} total)</p>
+                <p className="text-sm text-muted-foreground">
+                  {filterTag
+                    ? `${filteredClips.length} clips match filter (${clips.length} total loaded)`
+                    : `All clips loaded (${clips.length} total)`
+                  }
+                </p>
               </div>
             )}
             <div ref={sentinelRef} className="h-4" aria-hidden="true" />

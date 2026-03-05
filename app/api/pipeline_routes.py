@@ -134,11 +134,13 @@ def _evict_stale_render_locks():
 
 
 _eviction_lock = threading.Lock()
+_pipelines_lock = threading.Lock()  # Guards mutations to _pipelines dict during eviction
 
 def _evict_old_pipelines():
     """Remove oldest entries if store exceeds max size.
     PIP-09: Also cleans up associated render locks under _render_locks_meta_lock.
-    Thread-safe: uses _eviction_lock to prevent concurrent eviction races.
+    Thread-safe: uses _eviction_lock to prevent concurrent eviction races,
+    and _pipelines_lock to guard _pipelines dict mutations.
     """
     if len(_pipelines) <= _MAX_PIPELINE_ENTRIES:
         return
@@ -146,16 +148,17 @@ def _evict_old_pipelines():
         # Re-check under lock
         if len(_pipelines) <= _MAX_PIPELINE_ENTRIES:
             return
-        to_remove = sorted(_pipelines.keys(),
-            key=lambda k: _pipelines[k].get("created_at", "")
-        )[:len(_pipelines) - _MAX_PIPELINE_ENTRIES]
-        logger.info(f"Evicting {len(to_remove)} old pipelines (cache size: {len(_pipelines)})")
-        with _render_locks_meta_lock:
-            for key in to_remove:
-                _pipelines.pop(key, None)
-                _render_locks.pop(key, None)
-                _render_locks_timestamps.pop(key, None)
-                _pipeline_state_locks.pop(key, None)
+        with _pipelines_lock:
+            to_remove = sorted(_pipelines.keys(),
+                key=lambda k: _pipelines[k].get("created_at", "")
+            )[:len(_pipelines) - _MAX_PIPELINE_ENTRIES]
+            logger.info(f"Evicting {len(to_remove)} old pipelines (cache size: {len(_pipelines)})")
+            with _render_locks_meta_lock:
+                for key in to_remove:
+                    _pipelines.pop(key, None)
+                    _render_locks.pop(key, None)
+                    _render_locks_timestamps.pop(key, None)
+                    _pipeline_state_locks.pop(key, None)
 
 
 # ============== DB PERSISTENCE HELPERS ==============
@@ -172,6 +175,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
         tts_previews_json = {str(k): v for k, v in pipeline_dict.get("tts_previews", {}).items()}
         # PIP-14: Include preview render paths in serialization
         preview_renders_json = {str(k): v for k, v in pipeline_dict.get("preview_renders", {}).items()}
+        segment_usage_json = {str(k): v for k, v in pipeline_dict.get("segment_usage", {}).items()}
 
         row = {
             "id": pipeline_id,
@@ -186,6 +190,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
             "render_jobs": render_jobs_json,
             "tts_previews": tts_previews_json,
             "preview_renders": preview_renders_json,
+            "segment_usage": segment_usage_json,
             "source_video_ids": pipeline_dict.get("source_video_ids", []),
         }
         supabase.table("editai_pipelines").upsert(row).execute()
@@ -266,6 +271,15 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                 logger.warning(f"Skipping invalid preview_renders key: {k}")
                 continue
 
+        # Load segment_usage from DB
+        segment_usage = {}
+        for k, v in (row.get("segment_usage") or {}).items():
+            try:
+                segment_usage[str(k)] = v
+            except (ValueError, TypeError):
+                logger.warning(f"Skipping invalid segment_usage key: {k}")
+                continue
+
         pipeline = {
             "pipeline_id": pipeline_id,
             "profile_id": row["profile_id"],
@@ -279,6 +293,7 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "render_jobs": render_jobs,
             "tts_previews": tts_previews,
             "preview_renders": preview_renders,
+            "segment_usage": segment_usage,
             "source_video_ids": row.get("source_video_ids") or [],
             "created_at": row.get("created_at", ""),
         }
@@ -771,15 +786,29 @@ async def update_pipeline_scripts(
     for k in orphan_keys:
         tts_previews.pop(k, None)
 
+    # Clean up orphan segment_usage entries for removed script indices
+    segment_usage = pipeline.get("segment_usage", {})
+    orphan_seg_keys = []
+    for k in list(segment_usage.keys()):
+        try:
+            if int(str(k)) >= new_count:
+                orphan_seg_keys.append(k)
+        except (ValueError, TypeError):
+            orphan_seg_keys.append(k)
+    for k in orphan_seg_keys:
+        segment_usage.pop(k, None)
+
     # Persist to DB — convert int keys to strings for JSONB compatibility
     try:
         supabase = get_supabase()
         if supabase:
             tts_previews_json = {str(k): v for k, v in pipeline.get("tts_previews", {}).items()}
+            segment_usage_json = {str(k): v for k, v in pipeline.get("segment_usage", {}).items()}
             supabase.table("editai_pipelines").update({
                 "scripts": request.scripts,
                 "variant_count": len(request.scripts),
                 "tts_previews": tts_previews_json,
+                "segment_usage": segment_usage_json,
             }).eq("id", pipeline_id).execute()
     except Exception as e:
         logger.warning(f"Failed to update scripts for pipeline {pipeline_id} in DB: {e}")
@@ -1566,6 +1595,9 @@ async def render_variants(
         "glowBlur": render_request.glow_blur,
         "adaptiveSizing": render_request.adaptive_sizing
     }
+
+    # Clear any previous cancellation flag so re-renders work
+    clear_pipeline_cancelled(pipeline_id)
 
     # Lock to guard concurrent writes to pipeline["render_jobs"]
     # PIP-02: Use meta lock to guard creation of new entries in _render_locks
@@ -2589,7 +2621,7 @@ async def render_preview(
         # Lock held but no processing state — force acquire
         preview_lock.acquire()
 
-    # Initialize render state (we hold the lock)
+    # Initialize render state (we hold the lock — released inside background task)
     pipeline["preview_renders"][variant_index] = {
         "status": "processing",
         "progress": 0,
@@ -2598,7 +2630,6 @@ async def render_preview(
         "matches_fingerprint": matches_fingerprint,
         "error": None,
     }
-    preview_lock.release()
 
     script_text = pipeline["scripts"][variant_index]
     reuse_srt_content = tts_data.get("srt_content")
@@ -2654,6 +2685,8 @@ async def render_preview(
             render_state["error"] = str(e)
             render_state["current_step"] = "Failed"
             logger.error(f"Preview render failed for pipeline {pipeline_id} variant {variant_index}: {e}")
+        finally:
+            preview_lock.release()
 
     background_tasks.add_task(_do_preview_render)
 

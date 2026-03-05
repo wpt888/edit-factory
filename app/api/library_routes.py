@@ -56,6 +56,25 @@ from app.services.ffmpeg_semaphore import (
 # Keep legacy name for backwards compat with product_generate_routes import
 _ffmpeg_render_semaphore = None  # DEPRECATED — use acquire_render_slot() instead
 
+# ============== FFmpeg EXTRA FLAGS ALLOWLIST ==============
+SAFE_FFMPEG_FLAGS = {"-movflags", "+faststart", "-max_muxing_queue_size", "-brand", "-fflags"}
+
+
+def _validate_extra_flags(flags_str: str) -> list:
+    """Validate extra FFmpeg flags against an allowlist to prevent command injection."""
+    tokens = shlex.split(flags_str)
+    validated = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token in SAFE_FFMPEG_FLAGS or token.startswith("+"):
+            validated.append(token)
+        elif token.startswith("-") and token not in SAFE_FFMPEG_FLAGS:
+            # Skip unknown flag and its value
+            i += 1  # skip value
+        i += 1
+    return validated
+
 
 def _evict_old_cancelled():
     """Evict oldest entries when _cancelled_projects exceeds limit. Caller must hold _cancelled_lock."""
@@ -1426,7 +1445,8 @@ async def _generate_from_segments_task(
                             logger.error(f"FFmpeg extract error: {result.stderr}")
                             continue
 
-                        f.write(f"file '{segment_output}'\n")
+                        escaped_path = str(segment_output).replace("\\", "\\\\").replace("'", "\\'")
+                        f.write(f"file '{escaped_path}'\n")
 
                 # Concatenăm segmentele
                 concat_cmd = [
@@ -2499,18 +2519,29 @@ async def _render_final_clip_task(
 
             try:
                 # Initialize TTS service with user-selected model (profile_id enables multi-account failover)
+                tts_voice_id = content_data.get("tts_voice_id") or content_data.get("voice_id")
+                voice_settings = content_data.get("voice_settings", {})
                 tts_service = ElevenLabsTTSService(
                     output_dir=temp_dir,
                     model_id=elevenlabs_model,
+                    voice_id=tts_voice_id,
                     profile_id=profile_id
                 )
+
+                # Build voice_settings kwargs for TTS call
+                _tts_kwargs = {}
+                if voice_settings:
+                    for _vs_key in ("stability", "similarity_boost", "style", "speed", "use_speaker_boost"):
+                        if _vs_key in voice_settings:
+                            _tts_kwargs[_vs_key] = voice_settings[_vs_key]
 
                 # Generate with timestamps for downstream subtitle sync
                 tts_result, tts_timestamps = await tts_service.generate_audio_with_timestamps(
                     text=content_data["tts_text"],
-                    voice_id=tts_service._voice_id,
+                    voice_id=tts_voice_id or tts_service._voice_id,
                     output_path=audio_path,
-                    model_id=elevenlabs_model
+                    model_id=elevenlabs_model,
+                    **_tts_kwargs
                 )
                 audio_path = tts_result.audio_path
                 logger.info(f"TTS with timestamps generated for clip {clip_id}: {tts_result.duration_seconds:.1f}s, model={elevenlabs_model}")
@@ -2583,7 +2614,8 @@ async def _render_final_clip_task(
             try:
                 from app.services.tts_library_service import get_tts_library_service
                 from app.services.tts_subtitle_generator import generate_srt_from_timestamps as _gen_srt
-                _srt_for_lib = _gen_srt(tts_timestamps) if tts_timestamps else None
+                _max_wpf = content_data.get("max_words_per_phrase", content_data.get("words_per_subtitle", 2)) if content_data else 7
+                _srt_for_lib = _gen_srt(tts_timestamps, max_words_per_phrase=_max_wpf) if tts_timestamps else None
                 tts_lib = get_tts_library_service()
                 tts_lib.save_from_pipeline(
                     profile_id=profile_id,
@@ -2684,7 +2716,8 @@ async def _render_final_clip_task(
                 if cached_srt:
                     auto_srt = cached_srt
                 else:
-                    auto_srt = generate_srt_from_timestamps(tts_timestamps)
+                    _render_max_wpf = content_data.get("max_words_per_phrase", content_data.get("words_per_subtitle", 2))
+                    auto_srt = generate_srt_from_timestamps(tts_timestamps, max_words_per_phrase=_render_max_wpf)
                     if auto_srt:
                         srt_cache_store(_srt_cache_key, auto_srt)
 
@@ -3630,10 +3663,10 @@ async def _render_with_preset(
             "-shortest"
         ])
 
-    # Extra flags for social media compatibility
+    # Extra flags for social media compatibility (validated against allowlist)
     extra_flags = preset.get("extra_flags", "-movflags +faststart")
     if extra_flags:
-        cmd.extend(shlex.split(extra_flags))
+        cmd.extend(_validate_extra_flags(extra_flags))
 
     # Output
     cmd.append(str(output_path))
