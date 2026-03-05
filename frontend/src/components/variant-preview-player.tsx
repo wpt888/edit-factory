@@ -118,6 +118,7 @@ export function VariantPreviewPlayer({
         }
 
         // Start polling for status using setTimeout chain to prevent overlapping polls (FE-02)
+        if (cancelledRef.current) return; // Bug #133: check before starting poll
         cancelledRef.current = false;
         const pollStatus = async () => {
           if (cancelledRef.current) return;
@@ -159,6 +160,9 @@ export function VariantPreviewPlayer({
     return () => {
       stopPolling();
     };
+    // Bug #62: pipelineId and variantIndex are stable for the lifetime of the dialog;
+    // other props (matches, sourceVideoIds, subtitleSettings) are captured at fire-time
+    // and don't need to trigger re-renders. open is the only meaningful trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 

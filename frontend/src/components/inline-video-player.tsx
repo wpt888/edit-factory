@@ -24,6 +24,7 @@ export function InlineVideoPlayer({ open, onOpenChange, videoUrl, title, videoRe
     if (!open && videoRef.current) {
       videoRef.current.pause();
     }
+  // Bug #170: videoRef is intentionally omitted — it's a stable ref that doesn't change
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (

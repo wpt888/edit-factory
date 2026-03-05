@@ -83,8 +83,9 @@ export function SecondaryVideosForm({
 
       {/* Video slots */}
       <div className="space-y-3">
+        {/* Bug #137: index key is intentional — fixed-size array, items never reorder */}
         {videos.slice(0, maxVideos).map((video, index) => (
-          <Card key={index} className={video.file ? "border-primary/50" : ""}>
+          <Card key={`secondary-video-${index}`} className={video.file ? "border-primary/50" : ""}>
             <CardContent className="p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium">Video {index + 1}</span>

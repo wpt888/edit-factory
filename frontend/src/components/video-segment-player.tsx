@@ -160,12 +160,12 @@ export function VideoSegmentPlayer({
     videoRef.current.currentTime = Math.max(0, Math.min(time, duration));
   }, [duration]);
 
-  // Frame navigation
+  // Frame navigation (Bug #63: use videoRef.currentTime to avoid deps on state)
   const frameStep = useCallback((direction: number) => {
     if (!videoRef.current) return;
     const step = direction / fps;
-    seekTo(currentTime + step);
-  }, [currentTime, seekTo, fps]);
+    seekTo(videoRef.current.currentTime + step);
+  }, [seekTo, fps]);
 
   // Fullscreen toggle
   const toggleFullscreen = useCallback(() => {
@@ -175,7 +175,7 @@ export function VideoSegmentPlayer({
       containerRef.current.requestFullscreen().then(() => {
         setIsFullscreen(true);
       }).catch((err) => {
-        handleApiError(err, "Error activating fullscreen");
+        console.error("Fullscreen error:", err); // Bug #168: not an API error
       });
     } else {
       document.exitFullscreen().then(() => {

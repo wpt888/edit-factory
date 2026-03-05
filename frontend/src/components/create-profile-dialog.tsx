@@ -11,7 +11,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useProfile } from "@/contexts/profile-context";
 import { apiPost, handleApiError } from "@/lib/api";
 import { toast } from "sonner";
@@ -39,6 +39,11 @@ export function CreateProfileDialog({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Bug #136: reset form state when dialog closes
+  useEffect(() => {
+    if (!open) { setName(""); setDescription(""); }
+  }, [open]);
 
   const handleCreate = async () => {
     // Validate name length

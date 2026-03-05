@@ -33,6 +33,10 @@ export function LogoDragOverlay({
   const dragOffset = useRef({ x: 0, y: 0 });
   const [displaySize, setDisplaySize] = useState({ width: 0, height: 0 });
 
+  // Bug #169: sync state when parent provides new initial values
+  useEffect(() => { setPosition({ x: initialX, y: initialY }); }, [initialX, initialY]);
+  useEffect(() => { setScale(initialScale); }, [initialScale]);
+
   // Track container display dimensions for coordinate mapping
   useEffect(() => {
     if (!containerRef.current) return;

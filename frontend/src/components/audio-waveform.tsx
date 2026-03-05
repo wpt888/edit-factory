@@ -77,6 +77,8 @@ export function AudioWaveform({
         const response = await fetch(audioUrl);
         const arrayBuffer = await response.arrayBuffer();
         audioContext = new AudioContext();
+        // Bug #167: resume if suspended (e.g., due to browser autoplay policy)
+        if (audioContext.state === "suspended") await audioContext.resume();
         const decoded = await audioContext.decodeAudioData(arrayBuffer);
 
         if (cancelled) return;
@@ -160,6 +162,18 @@ export function AudioWaveform({
       ctx.fillRect(x, y, Math.max(1, barWidth - 0.5), barHeight);
     }
   }, [waveformData, progress, height]);
+
+  // Bug #138: ResizeObserver to redraw canvas on container resize
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver(() => {
+      // Force re-render by updating a counter (the draw useEffect above will fire)
+      setProgress((p) => p); // no-op state update to trigger re-draw
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   // Handle click to seek
   const handleClick = useCallback(

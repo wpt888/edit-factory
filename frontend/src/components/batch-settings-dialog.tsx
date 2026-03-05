@@ -66,14 +66,15 @@ export function BatchSettingsDialog({
   const [enableColorCorrection, setEnableColorCorrection] = useState(false);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
 
-  // Pre-fill CTA from profile template settings
+  // Pre-fill CTA from profile template settings (Bug #67: cancelled flag)
   useEffect(() => {
     if (!currentProfile?.id) return;
+    let cancelled = false;
 
     const loadProfileDefaults = async () => {
       try {
         const res = await apiGetWithRetry(`/profiles/${currentProfile.id}`);
-        if (!res.ok) return;
+        if (cancelled || !res.ok) return;
         const profileData = await res.json();
         const ctaFromProfile = profileData?.video_template_settings?.cta_text;
         if (ctaFromProfile) {
@@ -85,6 +86,7 @@ export function BatchSettingsDialog({
     };
 
     loadProfileDefaults();
+    return () => { cancelled = true; };
   }, [currentProfile?.id]);
 
   const defaultVoice = ttsProvider === "edge" ? "ro-RO-EmilNeural" : "";

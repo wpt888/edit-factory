@@ -332,16 +332,19 @@ export function TimelineEditor({
   // Video segment_end_time enforcement via rAF (60fps instead of timeupdate's ~4Hz).
   // This prevents the ~250ms overshoot that timeupdate allows past segment boundaries.
   const segmentEnforceRafRef = useRef<number | null>(null);
+  const segmentEnforceTimeoutRef = useRef<number | null>(null); // Bug #134
 
   useEffect(() => {
     if (!isPreviewActive) return;
 
     const enforceLoop = () => {
       // When paused, use a slow setTimeout poll instead of tight rAF to save CPU.
+      // Bug #134: Use separate timeout ref to avoid overwriting rAF ref
       if (!isPreviewPlayingRef.current) {
-        segmentEnforceRafRef.current = window.setTimeout(() => {
+        segmentEnforceTimeoutRef.current = window.setTimeout(() => {
+          segmentEnforceTimeoutRef.current = null;
           segmentEnforceRafRef.current = requestAnimationFrame(enforceLoop);
-        }, 100) as unknown as number;
+        }, 100);
         return;
       }
       // Skip enforcement during seek grace period — async seek hasn't
@@ -364,9 +367,13 @@ export function TimelineEditor({
 
     return () => {
       if (segmentEnforceRafRef.current != null) {
-        clearTimeout(segmentEnforceRafRef.current);
         cancelAnimationFrame(segmentEnforceRafRef.current);
         segmentEnforceRafRef.current = null;
+      }
+      // Bug #134: clear separate timeout ref
+      if (segmentEnforceTimeoutRef.current != null) {
+        clearTimeout(segmentEnforceTimeoutRef.current);
+        segmentEnforceTimeoutRef.current = null;
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

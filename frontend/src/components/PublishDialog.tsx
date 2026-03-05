@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -131,22 +131,25 @@ export function PublishDialog({
     setScheduleDate("");
     setSelectedIds(new Set());
 
+    let cancelled = false; // Bug #66: cancelled flag
     const fetchIntegrations = async () => {
       setLoadingIntegrations(true);
       try {
         const res = await apiGet("/postiz/integrations");
+        if (cancelled) return;
         const data = await res.json();
         setIntegrations(data);
-        // Auto-select all integrations
         setSelectedIds(new Set(data.map((i: Integration) => i.id)));
       } catch {
+        if (cancelled) return;
         setIntegrations([]);
         toast.error("Could not load Postiz platforms");
       } finally {
-        setLoadingIntegrations(false);
+        if (!cancelled) setLoadingIntegrations(false);
       }
     };
     fetchIntegrations();
+    return () => { cancelled = true; };
   }, [open]);
 
   // Cleanup poll on unmount
@@ -264,9 +267,18 @@ export function PublishDialog({
       }
     } catch (err) {
       setDialogState("error");
-      setErrorMessage(err instanceof Error ? err.message : "Error publishing");
+      // Bug #116: use ApiError.detail if available
+      if (err && typeof err === "object" && "detail" in err && (err as { detail: string }).detail) {
+        setErrorMessage((err as { detail: string }).detail);
+      } else {
+        setErrorMessage(err instanceof Error ? err.message : "Error publishing");
+      }
     }
   };
+
+  // Bug #171: memoize min date so it doesn't recalculate on every render
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const minScheduleDate = useMemo(() => new Date().toISOString().slice(0, 16), [open]);
 
   const handleRetry = () => {
     setDialogState("form");
@@ -419,7 +431,7 @@ export function PublishDialog({
                   value={scheduleDate}
                   onChange={(e) => setScheduleDate(e.target.value)}
                   className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  min={new Date().toISOString().slice(0, 16)}
+                  min={minScheduleDate}
                 />
               )}
             </div>

@@ -33,6 +33,10 @@ export function SimpleSegmentPopup({
   const [notes, setNotes] = useState(initialNotes);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Bug #135: sync state when props change (e.g., editing a different segment)
+  useEffect(() => { setKeywords(initialKeywords); }, [initialKeywords]);
+  useEffect(() => { setNotes(initialNotes); }, [initialNotes]);
+
   // Focus input on mount
   useEffect(() => {
     const timer = setTimeout(() => inputRef.current?.focus(), 100);
