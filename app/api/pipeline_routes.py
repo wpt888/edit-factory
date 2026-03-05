@@ -57,6 +57,21 @@ _RENDER_LOCK_TTL = 3600  # 1 hour
 _preview_locks: Dict[str, threading.Lock] = {}
 _preview_locks_meta_lock = threading.Lock()
 
+# Per-pipeline state locks — protects mutations to pipeline["previews"],
+# pipeline["tts_previews"], pipeline["segment_usage"], pipeline["preview_renders"]
+# from concurrent preview/TTS/render tasks racing on the same pipeline dict.
+_pipeline_state_locks: Dict[str, threading.Lock] = {}
+_pipeline_state_locks_meta: threading.Lock = threading.Lock()
+
+
+def _get_pipeline_state_lock(pipeline_id: str) -> threading.Lock:
+    """Get or create a lock for pipeline state mutations."""
+    if pipeline_id not in _pipeline_state_locks:
+        with _pipeline_state_locks_meta:
+            if pipeline_id not in _pipeline_state_locks:
+                _pipeline_state_locks[pipeline_id] = threading.Lock()
+    return _pipeline_state_locks[pipeline_id]
+
 # Cancel infrastructure for pipeline renders
 import time as _time_mod
 
@@ -119,11 +134,19 @@ def _evict_stale_render_locks():
             logger.debug(f"Evicted {evicted} stale render lock(s)")
 
 
+_eviction_lock = threading.Lock()
+
 def _evict_old_pipelines():
     """Remove oldest entries if store exceeds max size.
     PIP-09: Also cleans up associated render locks under _render_locks_meta_lock.
+    Thread-safe: uses _eviction_lock to prevent concurrent eviction races.
     """
-    if len(_pipelines) > _MAX_PIPELINE_ENTRIES:
+    if len(_pipelines) <= _MAX_PIPELINE_ENTRIES:
+        return
+    with _eviction_lock:
+        # Re-check under lock
+        if len(_pipelines) <= _MAX_PIPELINE_ENTRIES:
+            return
         to_remove = sorted(_pipelines.keys(),
             key=lambda k: _pipelines[k].get("created_at", "")
         )[:len(_pipelines) - _MAX_PIPELINE_ENTRIES]
@@ -133,6 +156,7 @@ def _evict_old_pipelines():
                 _pipelines.pop(key, None)
                 _render_locks.pop(key, None)
                 _render_locks_timestamps.pop(key, None)
+                _pipeline_state_locks.pop(key, None)
 
 
 # ============== DB PERSISTENCE HELPERS ==============
@@ -789,6 +813,9 @@ async def import_pipeline(
         "keyword_count": 0,
         "previews": {},
         "render_jobs": {},
+        "tts_previews": {},
+        "preview_renders": {},
+        "source_video_ids": [],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "profile_id": profile.profile_id
     }
@@ -1050,22 +1077,24 @@ async def adopt_library_tts(
     audio_duration = asset.get("audio_duration", 0.0)
     script_text = pipeline["scripts"][variant_index]
 
-    # Store into pipeline tts_previews with library flag
-    if "tts_previews" not in pipeline:
-        pipeline["tts_previews"] = {}
+    # Store into pipeline tts_previews with library flag (protected by state lock)
+    state_lock = _get_pipeline_state_lock(pipeline_id)
+    with state_lock:
+        if "tts_previews" not in pipeline:
+            pipeline["tts_previews"] = {}
 
-    pipeline["tts_previews"][variant_index] = {
-        "audio_path": audio_path,
-        "audio_duration": audio_duration,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "script_hash": _stable_hash(script_text),
-        "voice_settings": None,  # Not applicable for library audio
-        "library_asset_id": request.asset_id,
-        "srt_content": asset.get("srt_content"),
-        "tts_timestamps": asset.get("tts_timestamps"),
-    }
+        pipeline["tts_previews"][variant_index] = {
+            "audio_path": audio_path,
+            "audio_duration": audio_duration,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "script_hash": _stable_hash(script_text),
+            "voice_settings": None,  # Not applicable for library audio
+            "library_asset_id": request.asset_id,
+            "srt_content": asset.get("srt_content"),
+            "tts_timestamps": asset.get("tts_timestamps"),
+        }
 
-    # Persist to DB
+    # Persist to DB (outside lock)
     _db_save_pipeline(pipeline_id, pipeline)
 
     logger.info(
@@ -1157,24 +1186,26 @@ async def generate_variant_tts(
             else:
                 srt_word_count = 0
 
-        # Store TTS preview result (include voice_settings for reuse invalidation)
+        # Store TTS preview result (protected by state lock)
         # Use cleaned_text hash so tag changes don't invalidate audio cache
-        if "tts_previews" not in pipeline:
-            pipeline["tts_previews"] = {}
+        state_lock = _get_pipeline_state_lock(pipeline_id)
+        with state_lock:
+            if "tts_previews" not in pipeline:
+                pipeline["tts_previews"] = {}
 
-        pipeline["tts_previews"][variant_index] = {
-            "audio_path": str(audio_path),
-            "audio_duration": audio_duration,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "script_hash": _stable_hash(cleaned_text),
-            "voice_settings": request.voice_settings,
-            "words_per_subtitle": request.words_per_subtitle,
-            "srt_content": srt_content,
-            "script_word_count": script_word_count,
-            "srt_word_count": srt_word_count,
-        }
+            pipeline["tts_previews"][variant_index] = {
+                "audio_path": str(audio_path),
+                "audio_duration": audio_duration,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "script_hash": _stable_hash(cleaned_text),
+                "voice_settings": request.voice_settings,
+                "words_per_subtitle": request.words_per_subtitle,
+                "srt_content": srt_content,
+                "script_word_count": script_word_count,
+                "srt_word_count": srt_word_count,
+            }
 
-        # Persist to DB
+        # Persist to DB (outside lock)
         _db_save_pipeline(pipeline_id, pipeline)
 
         return PipelineTtsResponse(
@@ -1353,32 +1384,36 @@ async def preview_variant(
             m["segment_id"] for m in preview_data.get("matches", [])
             if m.get("segment_id")
         })
-        pipeline.setdefault("segment_usage", {})[str(variant_index)] = used_segment_ids
 
-        # Store preview result in pipeline state
-        pipeline["previews"][variant_index] = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "elevenlabs_model": elevenlabs_model,
-            "preview_data": preview_data
-        }
+        # Protect all pipeline dict mutations with per-pipeline state lock
+        state_lock = _get_pipeline_state_lock(pipeline_id)
+        with state_lock:
+            pipeline.setdefault("segment_usage", {})[str(variant_index)] = used_segment_ids
 
-        # Persist SRT content into tts_previews so Step 3 render can reuse it
-        # without calling ElevenLabs a second time just to get subtitle timestamps.
-        if "tts_previews" not in pipeline:
-            pipeline["tts_previews"] = {}
-        if variant_index not in pipeline["tts_previews"]:
-            pipeline["tts_previews"][variant_index] = {}
-        pipeline["tts_previews"][variant_index]["srt_content"] = preview_data.get("srt_content", "")
-        pipeline["tts_previews"][variant_index]["words_per_subtitle"] = words_per_subtitle
-        # Also persist audio info from preview_data if tts_previews was empty
-        # (covers the case where Step 2 standalone TTS was skipped entirely)
-        if not pipeline["tts_previews"][variant_index].get("audio_path"):
-            pipeline["tts_previews"][variant_index]["audio_path"] = preview_data.get("audio_path", "")
-            pipeline["tts_previews"][variant_index]["audio_duration"] = preview_data.get("audio_duration", 0.0)
-            pipeline["tts_previews"][variant_index]["script_hash"] = _stable_hash(cleaned_text)
-            pipeline["tts_previews"][variant_index]["timestamp"] = datetime.now(timezone.utc).isoformat()
+            # Store preview result in pipeline state
+            pipeline["previews"][variant_index] = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "elevenlabs_model": elevenlabs_model,
+                "preview_data": preview_data
+            }
 
-        # Persist to DB
+            # Persist SRT content into tts_previews so Step 3 render can reuse it
+            # without calling ElevenLabs a second time just to get subtitle timestamps.
+            if "tts_previews" not in pipeline:
+                pipeline["tts_previews"] = {}
+            if variant_index not in pipeline["tts_previews"]:
+                pipeline["tts_previews"][variant_index] = {}
+            pipeline["tts_previews"][variant_index]["srt_content"] = preview_data.get("srt_content", "")
+            pipeline["tts_previews"][variant_index]["words_per_subtitle"] = words_per_subtitle
+            # Also persist audio info from preview_data if tts_previews was empty
+            # (covers the case where Step 2 standalone TTS was skipped entirely)
+            if not pipeline["tts_previews"][variant_index].get("audio_path"):
+                pipeline["tts_previews"][variant_index]["audio_path"] = preview_data.get("audio_path", "")
+                pipeline["tts_previews"][variant_index]["audio_duration"] = preview_data.get("audio_duration", 0.0)
+                pipeline["tts_previews"][variant_index]["script_hash"] = _stable_hash(cleaned_text)
+                pipeline["tts_previews"][variant_index]["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+        # Persist to DB (outside lock — DB I/O should not hold the state lock)
         _db_save_pipeline(pipeline_id, pipeline)
 
         # Convert matches to MatchPreview models
@@ -2590,6 +2625,11 @@ async def render_preview(
                 render_state["progress"] = 100
                 render_state["current_step"] = "Preview ready"
                 render_state["preview_video_path"] = str(preview_path)
+                render_state["preview_limitations"] = [
+                    "Audio volume may differ from export (loudness normalization disabled)",
+                    "Video filters (denoise, sharpen, color) disabled for speed",
+                    "Resolution is 540x960 (export will be 1080x1920)",
+                ]
                 logger.info(f"Preview render completed: {preview_path}")
 
         except asyncio.TimeoutError:

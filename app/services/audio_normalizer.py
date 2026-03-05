@@ -92,7 +92,7 @@ async def measure_loudness(
         # Extract JSON from stderr — search for the loudnorm-specific JSON
         # by looking for the "input_i" key which is unique to loudnorm output
         stderr = result.stderr
-        match = re.search(r'\{[^{}]*"input_i"[^{}]*\}', stderr)
+        match = re.search(r'\{[^{}]*"input_i"[^{}]*\}', stderr, re.DOTALL)
         if not match:
             logger.error("No loudnorm JSON found in FFmpeg output")
             logger.debug(f"FFmpeg stderr: {stderr[-500:]}")

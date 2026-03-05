@@ -1211,11 +1211,10 @@ class AssemblyService:
         # Target output dimensions (portrait)
         target_w, target_h = 1080, 1920
 
-        # Extract each segment clip in parallel (up to 3 concurrent FFmpeg processes)
+        # Extract each segment clip in parallel, throttled by the global prep semaphore
+        # to prevent spawning more FFmpeg processes than the system can handle.
         from app.services.segment_transforms import SegmentTransform
-
-        max_parallel = min(3, len(timeline))
-        semaphore = asyncio.Semaphore(max_parallel)
+        from app.services.ffmpeg_semaphore import acquire_prep_slot
         # Pre-allocate ordered results list (None = failed)
         results: List[Optional[Path]] = [None] * len(timeline)
 
@@ -1252,7 +1251,7 @@ class AssemblyService:
 
             segment_raw = None  # VID-14: track for cleanup
             try:
-                async with semaphore:
+                async with acquire_prep_slot():
                     cmd = ["ffmpeg", "-y"]
 
                     if use_loop:
@@ -1324,7 +1323,7 @@ class AssemblyService:
                     except Exception:
                         pass
 
-        logger.info(f"Extracting {len(timeline)} segments in parallel (max {max_parallel} concurrent)")
+        logger.info(f"Extracting {len(timeline)} segments in parallel (throttled by global prep semaphore)")
         await asyncio.gather(*(extract_segment(i, entry) for i, entry in enumerate(timeline)))
 
         # Apply PiP overlays to extracted segments (before collecting into segment_files)
@@ -1884,22 +1883,29 @@ class AssemblyService:
         min_segment_duration: float = 3.0,
         on_progress=None,
         max_words_per_phrase: int = 2,
+        voice_settings: Optional[dict] = None,
+        avoid_segment_ids: Optional[set] = None,
+        ultra_rapid_intro: bool = False,
     ) -> Path:
         """
         Fast preview render using assemble_and_render() with preview-mode settings.
 
         Uses 540x960, ultrafast encoding, CRF 32, no loudnorm, no filters, no PiP,
-        no interstitials, no ultra_rapid_intro. Produces a real MP4 that matches
-        the final render's segment order exactly.
+        no interstitials. Produces a real MP4 that matches the final render's
+        segment order exactly (including ultra_rapid_intro if enabled).
 
         Returns:
             Path to the preview MP4 file.
         """
         # Build a lightweight 540x960 preset
+        # subtitle_ref_width/height ensure subtitle positioning matches the final
+        # 1080x1920 render even though the preview is encoded at half resolution
         preview_preset = {
             "name": "Preview",
             "width": 540,
             "height": 960,
+            "subtitle_ref_width": 1080,
+            "subtitle_ref_height": 1920,
             "fps": 30,
             "video_codec": "libx264",
             "audio_codec": "aac",
@@ -1920,11 +1926,13 @@ class AssemblyService:
             on_progress=on_progress,
             max_words_per_phrase=max_words_per_phrase,
             min_segment_duration=min_segment_duration,
-            # Preview-specific: disable expensive features
+            voice_settings=voice_settings,
+            avoid_segment_ids=avoid_segment_ids,
+            # Preview-specific: disable expensive features but keep segment order consistent
             enable_denoise=False,
             enable_sharpen=False,
             enable_color=False,
-            ultra_rapid_intro=False,
+            ultra_rapid_intro=ultra_rapid_intro,
             interstitial_slides=None,
             pip_overlays=None,
             variant_index=variant_index,

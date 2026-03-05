@@ -54,7 +54,8 @@ def get_processor(profile_id: Optional[str] = "default") -> VideoProcessorServic
     return VideoProcessorService(
         input_dir=settings.input_dir,
         output_dir=settings.output_dir,
-        temp_dir=temp_dir
+        temp_dir=temp_dir,
+        profile_id=profile_id
     )
 
 
@@ -515,14 +516,24 @@ async def process_job(job_id: str):
     job["status"] = JobStatus.PROCESSING
     job["updated_at"] = datetime.now(timezone.utc).isoformat()
     job["progress"] = "Starting..."
+    # Persist PROCESSING status immediately so polling clients see correct state
+    get_job_storage().update_job(job_id, {
+        "status": job["status"],
+        "progress": job["progress"],
+        "updated_at": job["updated_at"]
+    })
 
     def update_progress(step: str, status: str):
         job["progress"] = f"{step}: {status}"
         job["updated_at"] = datetime.now(timezone.utc).isoformat()
-        get_job_storage().update_job(job_id, {"progress": job["progress"], "updated_at": job["updated_at"]})
+        get_job_storage().update_job(job_id, {
+            "status": job["status"],
+            "progress": job["progress"],
+            "updated_at": job["updated_at"]
+        })
 
     try:
-        processor = get_processor()
+        processor = get_processor(profile_id=job.get("profile_id", "default"))
         video_path = Path(job["video_path"])
 
         # Voice muting e acum integrat în process_video pentru mute selectiv per segment
@@ -552,12 +563,16 @@ async def process_job(job_id: str):
             job["status"] = JobStatus.FAILED
             job["error"] = result.get("error", "Unknown error")
             job["progress"] = "Failed"
+            # Clean up input files even on failure to prevent disk leaks
+            _cleanup_input_files(job)
 
     except Exception as e:
-        logger.error(f"Job {job_id} failed: {e}")
+        logger.error(f"Job {job_id} failed: {e}", exc_info=True)
         job["status"] = JobStatus.FAILED
         job["error"] = str(e)
         job["progress"] = f"Failed: {e}"
+        # Clean up input files even on exception to prevent disk leaks
+        _cleanup_input_files(job)
 
     job["updated_at"] = datetime.now(timezone.utc).isoformat()
     # Persist final job state to storage

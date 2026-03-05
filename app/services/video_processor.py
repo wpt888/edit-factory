@@ -125,21 +125,25 @@ class VideoAnalyzer:
         self.cap = cv2.VideoCapture(str(self.video_path))
         if not self.cap.isOpened():
             raise ValueError(f"Cannot open video file: {video_path}")
-        self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30
-        self.frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self.duration = self.frame_count / self.fps if self.fps > 0 else 0
-        self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        try:
+            self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30
+            self.frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            self.duration = self.frame_count / self.fps if self.fps > 0 else 0
+            self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        # Detectam rotatia video-ului (important pentru telefoane!)
-        self.rotation = self._detect_rotation()
-        if self.rotation in [90, 270]:
-            self.width, self.height = self.height, self.width
-            logger.info(f"Video rotated {self.rotation}°, swapped dimensions")
+            # Detectam rotatia video-ului (important pentru telefoane!)
+            self.rotation = self._detect_rotation()
+            if self.rotation in [90, 270]:
+                self.width, self.height = self.height, self.width
+                logger.info(f"Video rotated {self.rotation}°, swapped dimensions")
 
-        logger.info(f"Video loaded: {self.video_path.name}")
-        logger.info(f"  Duration: {self.duration:.2f}s ({self.duration/60:.1f} min), FPS: {self.fps:.2f}")
-        logger.info(f"  Resolution: {self.width}x{self.height}, Frames: {self.frame_count}")
+            logger.info(f"Video loaded: {self.video_path.name}")
+            logger.info(f"  Duration: {self.duration:.2f}s ({self.duration/60:.1f} min), FPS: {self.fps:.2f}")
+            logger.info(f"  Resolution: {self.width}x{self.height}, Frames: {self.frame_count}")
+        except Exception:
+            self.cap.release()
+            raise
 
     def _detect_rotation(self) -> int:
         """Detecteaza rotatia video-ului din metadate folosind ffprobe."""
@@ -502,7 +506,8 @@ class VideoAnalyzer:
 
     def close(self):
         """Elibereaza resursele."""
-        self.cap.release()
+        if hasattr(self, 'cap') and self.cap is not None:
+            self.cap.release()
 
 
 class VideoEditor:
@@ -1206,10 +1211,11 @@ class VideoEditor:
 class VideoProcessorService:
     """Serviciul principal de procesare video."""
 
-    def __init__(self, input_dir: Path, output_dir: Path, temp_dir: Path):
+    def __init__(self, input_dir: Path, output_dir: Path, temp_dir: Path, profile_id: Optional[str] = None):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.temp_dir = Path(temp_dir)
+        self.profile_id = profile_id
 
         self.input_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1219,8 +1225,7 @@ class VideoProcessorService:
 
     def analyze_video(self, video_path: Path, target_duration: float = 20.0) -> dict:
         """Analizeaza un video si returneaza segmentele recomandate."""
-        analyzer = VideoAnalyzer(video_path)
-        try:
+        with VideoAnalyzer(video_path) as analyzer:
             video_info = analyzer.get_video_info()
             segments = analyzer.select_best_segments(target_duration)
             return {
@@ -1229,8 +1234,6 @@ class VideoProcessorService:
                 "segments": [s.to_dict() for s in segments],
                 "total_selected_duration": sum(s.duration for s in segments)
             }
-        finally:
-            analyzer.close()
 
     def analyze_video_with_gemini(
         self,
@@ -1260,7 +1263,7 @@ class VideoProcessorService:
 
         try:
             # Inițializăm analizatorul Gemini
-            gemini = GeminiVideoAnalyzer()
+            gemini = GeminiVideoAnalyzer(profile_id=self.profile_id)
 
             # Obținem info despre video folosind VideoAnalyzer clasic
             with VideoAnalyzer(video_path) as classic_analyzer:
@@ -1498,7 +1501,11 @@ class VideoProcessorService:
             return []
 
         selected = []
+        # Seed from all previously used segments to enable cross-variant dedup
         used_in_this_variant = set()
+        for prev_idx, prev_set in used_segments_by_variant.items():
+            if prev_idx != variant_index:
+                used_in_this_variant.update(prev_set)
         total_duration = 0.0
 
         # Gasim durata totala a videoclipului din segmente
@@ -1645,8 +1652,7 @@ class VideoProcessorService:
         try:
             # Analiza video
             report_progress("Analyzing video")
-            analyzer = VideoAnalyzer(video_path)
-            try:
+            with VideoAnalyzer(video_path) as analyzer:
                 video_info = analyzer.get_video_info()
 
                 # Folosim Gemini AI pentru selecție inteligentă dacă avem context
@@ -1654,7 +1660,7 @@ class VideoProcessorService:
                     report_progress("AI Analysis with Gemini")
                     logger.info(f"Using Gemini AI for context-based frame selection: {context_text[:100]}...")
                     try:
-                        gemini_analyzer = GeminiVideoAnalyzer()
+                        gemini_analyzer = GeminiVideoAnalyzer(profile_id=self.profile_id)
                         ai_segments = gemini_analyzer.get_best_segments(
                             video_path=video_path,
                             target_duration=target_duration * variant_count * 2,
@@ -1695,8 +1701,6 @@ class VideoProcessorService:
                         similarity_threshold=10,
                         progress_callback=progress_callback
                     )
-            finally:
-                analyzer.close()
 
             results["video_info"] = video_info
             results["segments"] = [s.to_dict() for s in all_segments]

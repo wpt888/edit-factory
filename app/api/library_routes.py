@@ -6,6 +6,7 @@ import asyncio
 import time as _time_mod
 import uuid
 import shutil
+import shlex
 import subprocess
 import json
 import mimetypes
@@ -1395,14 +1396,20 @@ async def _generate_from_segments_task(
                             noise_filter = "afftdn=nr=25:nf=-20:tn=1"
                             audio_filter_args = ["-af", noise_filter]
 
+                        # Build audio args: if we have audio filters, keep audio and re-encode;
+                        # otherwise just copy audio as-is with AAC codec
+                        if audio_filter_args:
+                            audio_codec_args = [*audio_filter_args, "-c:a", "aac"]
+                        else:
+                            audio_codec_args = ["-c:a", "aac"]
+
                         extract_cmd = [
                             "ffmpeg", "-y", "-threads", "4",
                             "-ss", str(seg["start_time"]),
                             "-i", seg["file_path"],
                             "-t", str(seg["duration"]),
                             *get_prep_codec_params(include_audio=False),
-                            *audio_filter_args,  # Filtrul audio pentru mute (dacă există)
-                            "-c:a", "aac",
+                            *audio_codec_args,
                             "-avoid_negative_ts", "make_zero",
                             str(segment_output)
                         ]
@@ -1788,7 +1795,7 @@ async def update_clip(
         if result.data:
             clip = result.data[0]
             if request.is_selected is not None:
-                _update_project_counts(clip["project_id"], profile.profile_id)
+                await _update_project_counts(clip["project_id"], profile.profile_id)
             return {"status": "updated", "clip": clip}
         raise HTTPException(status_code=404, detail="Clip not found")
     except HTTPException:
@@ -1818,7 +1825,7 @@ async def toggle_clip_selection(
         if result.data:
             clip = result.data[0]
             # Actualizăm contorul în proiect
-            _update_project_counts(clip["project_id"], profile.profile_id)
+            await _update_project_counts(clip["project_id"], profile.profile_id)
             return {"status": "updated", "clip_id": clip_id, "is_selected": selected}
         raise HTTPException(status_code=404, detail="Clip not found")
     except HTTPException:
@@ -1853,7 +1860,7 @@ async def bulk_select_clips(
 
         # Actualizăm contoarele
         for project_id in project_ids:
-            _update_project_counts(project_id, profile.profile_id)
+            await _update_project_counts(project_id, profile.profile_id)
 
         return {"status": "updated", "count": len(clip_ids), "is_selected": selected}
     except Exception as e:
@@ -2418,8 +2425,10 @@ async def _render_final_clip_task(
 
     # Acquire project lock to prevent concurrent operations on same project
     lock = get_project_lock(project_id) if project_id else None
+    lock_acquired = False
     if lock:
         acquired = await asyncio.to_thread(lock.acquire, True, 300)
+        lock_acquired = acquired
         if not acquired:
             logger.warning(f"Could not acquire lock for project {project_id} within timeout")
             try:
@@ -2442,6 +2451,7 @@ async def _render_final_clip_task(
 
     # Initialize temp file paths for cleanup in finally block
     audio_path = None
+    original_audio_path = None  # Pre-trim TTS file, cleaned up separately
     srt_path = None
     adjusted_video_path = None
     tts_timestamps = None
@@ -2754,7 +2764,7 @@ async def _render_final_clip_task(
             logger.warning(f"Failed to insert export record for clip {clip_id}: {e}")
 
         # Actualizăm contorul din proiect
-        _update_project_counts(clip_data["project_id"], profile_id)
+        await _update_project_counts(clip_data["project_id"], profile_id)
 
         logger.info(f"Rendered final clip {clip_id} -> {output_path}")
 
@@ -2773,6 +2783,10 @@ async def _render_final_clip_task(
             if audio_path and Path(audio_path).exists():
                 Path(audio_path).unlink()
                 logger.debug(f"Cleaned up temp audio: {audio_path}")
+            # Clean up original (pre-trim) TTS file if it differs from audio_path
+            if original_audio_path and original_audio_path != audio_path and Path(original_audio_path).exists():
+                Path(original_audio_path).unlink(missing_ok=True)
+                logger.debug(f"Cleaned up original TTS audio: {original_audio_path}")
             if srt_path and Path(srt_path).exists():
                 Path(srt_path).unlink()
                 logger.debug(f"Cleaned up temp srt: {srt_path}")
@@ -2789,8 +2803,8 @@ async def _render_final_clip_task(
             except Exception as e:
                 logger.warning(f"Failed to cleanup partial output: {e}")
 
-        # Always release and cleanup the lock
-        if lock:
+        # Always release and cleanup the lock (only if it was actually acquired)
+        if lock and lock_acquired:
             lock.release()
             if project_id:
                 cleanup_project_lock(project_id)
@@ -2864,13 +2878,25 @@ async def _start_render_for_clip(clip_id: str, preset_name: str, profile_id: str
         preset = supabase.table("editai_export_presets").select("*").eq("name", preset_name).single().execute()
 
         if clip.data and preset.data:
+            # Extract filter/subtitle settings from stored clip content
+            clip_content = content.data[0] if content.data else None
+            sub_settings = clip_content.get("subtitle_settings", {}) if clip_content and isinstance(clip_content.get("subtitle_settings"), dict) else {}
+
             await _render_final_clip_task(
                 clip_id=clip_id,
                 project_id=clip.data["project_id"],
                 profile_id=clip.data["profile_id"],
                 clip_data=clip.data,
-                content_data=content.data[0] if content.data else None,
-                preset_data=preset.data
+                content_data=clip_content,
+                preset_data=preset.data,
+                # Apply stored filter/subtitle settings from clip content
+                enable_denoise=sub_settings.get("enableDenoise", False),
+                enable_sharpen=sub_settings.get("enableSharpen", False),
+                enable_color=sub_settings.get("enableColor", False),
+                shadow_depth=sub_settings.get("shadowDepth", 0),
+                enable_glow=sub_settings.get("enableGlow", False),
+                glow_blur=sub_settings.get("glowBlur", 0),
+                adaptive_sizing=sub_settings.get("adaptiveSizing", False),
             )
     except Exception as e:
         logger.error(f"Error in bulk render for {clip_id}: {e}")
@@ -2961,8 +2987,8 @@ def _delete_clip_files(clip: dict):
                 logger.warning(f"Failed to delete {clip[key]}: {e}")
 
 
-def _update_project_counts(project_id: str, profile_id: Optional[str] = None):
-    """Actualizează contoarele de clipuri în proiect."""
+def _update_project_counts_sync(project_id: str, profile_id: Optional[str] = None):
+    """Actualizează contoarele de clipuri în proiect (sync — run via asyncio.to_thread)."""
     supabase = get_supabase()
     if not supabase:
         return
@@ -3000,6 +3026,11 @@ def _update_project_counts(project_id: str, profile_id: Optional[str] = None):
         update_query.execute()
     except Exception as e:
         logger.warning(f"Failed to update project counts: {e}")
+
+
+async def _update_project_counts(project_id: str, profile_id: Optional[str] = None):
+    """Async wrapper — offloads sync Supabase calls to threadpool to avoid blocking event loop."""
+    await asyncio.to_thread(_update_project_counts_sync, project_id, profile_id)
 
 
 # ============== VIDEO SYNC HELPERS (Script-First Workflow) ==============
@@ -3083,10 +3114,14 @@ def _extend_video_with_segments(
     project_id: str,
     output_path: Path,
     supabase,
-    profile_id: Optional[str] = "default"
+    profile_id: Optional[str] = None
 ) -> bool:
     """
     Extinde video-ul cu segmente adiționale din proiect pentru a atinge durata țintă.
+
+    NOTE: This sync function runs multiple safe_ffmpeg_run calls internally.
+    The caller MUST wrap it in acquire_prep_slot() to gate all FFmpeg processes
+    as a single logical operation.
 
     Algoritm:
     1. Obține segmentele disponibile din proiect
@@ -3434,8 +3469,8 @@ async def _render_with_preset(
         subtitles_filter = build_subtitle_filter(
             srt_path=srt_path,
             subtitle_settings=subtitle_settings,
-            video_width=preset.get('width', 1080),
-            video_height=preset.get('height', 1920)
+            video_width=preset.get('subtitle_ref_width', preset.get('width', 1080)),
+            video_height=preset.get('subtitle_ref_height', preset.get('height', 1920))
         )
         filters.append(subtitles_filter)
         logger.info(f"Added subtitle filter with enhancement settings")
@@ -3452,10 +3487,19 @@ async def _render_with_preset(
         # Get encoding preset to check if normalization is enabled
         preset_name = preset.get("name", "Generic")
         platform_map = {
+            # Display names (from UI)
             "TikTok": "tiktok",
             "Instagram Reels": "reels",
             "YouTube Shorts": "youtube_shorts",
-            "Generic": "generic"
+            "Generic": "generic",
+            "Preview": "generic",
+            # DB preset names (lowercase from editai_presets table)
+            "tiktok": "tiktok",
+            "instagram_reels": "reels",
+            "youtube_shorts": "youtube_shorts",
+            "facebook_reels": "generic",
+            "instagram_story": "generic",
+            "generic": "generic",
         }
         platform_key = platform_map.get(preset_name, "generic")
         encoding_preset = get_preset(platform_key)
@@ -3575,24 +3619,14 @@ async def _render_with_preset(
     # Extra flags for social media compatibility
     extra_flags = preset.get("extra_flags", "-movflags +faststart")
     if extra_flags:
-        cmd.extend(extra_flags.split())
+        cmd.extend(shlex.split(extra_flags))
 
     # Output
     cmd.append(str(output_path))
 
     logger.info(f"Rendering with command: {' '.join(cmd)}")
 
-    def _run_render():
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        try:
-            stdout, stderr = proc.communicate(timeout=1200)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.communicate()  # Reap zombie process
-            raise RuntimeError("FFmpeg render timed out after 20 minutes")
-        return subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout, stderr=stderr)
-
-    result = await asyncio.to_thread(_run_render)
+    result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 1200, "final render")
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg render failed: {result.stderr}")
 

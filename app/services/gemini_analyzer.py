@@ -44,7 +44,8 @@ class GeminiVideoAnalyzer:
         api_key: Optional[str] = None,
         model_name: Optional[str] = None,
         frame_interval: float = 2.0,
-        max_frames_per_batch: int = 30
+        max_frames_per_batch: int = 30,
+        profile_id: Optional[str] = None
     ):
         """
         Args:
@@ -52,11 +53,13 @@ class GeminiVideoAnalyzer:
             model_name: Modelul Gemini (sau din GEMINI_MODEL env var)
             frame_interval: Interval între frames în secunde
             max_frames_per_batch: Câte frames într-un singur request
+            profile_id: Profile ID for cost tracking
         """
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.model_name = model_name or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         self.frame_interval = frame_interval
         self.max_frames_per_batch = max_frames_per_batch
+        self._profile_id = profile_id
 
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY is required")
@@ -240,7 +243,10 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
             return segments
 
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Gemini response as JSON: {e}")
+            time_range = f"{frames[0][0]:.1f}s-{frames[-1][0]:.1f}s" if frames else "unknown"
+            logger.error(f"Failed to parse Gemini response as JSON for batch {time_range}: {e}")
+            if response_text:
+                logger.debug(f"Raw Gemini response (first 500 chars): {response_text[:500]}")
             return []
         except Exception as e:
             logger.error(f"Gemini API error: {e}")
@@ -278,6 +284,8 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
 
         # Procesăm în batch-uri
         all_segments = []
+        # Approximate video duration from last frame timestamp
+        video_duration = frames[-1][0] + self.frame_interval if frames else 0.0
 
         for i in range(0, len(frames), self.max_frames_per_batch):
             batch = frames[i:i + self.max_frames_per_batch]
@@ -291,7 +299,6 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
             # within the batch's local time range and adjust if needed.
             if i > 0 and batch_segments:
                 batch_start_time = batch[0][0]  # First frame timestamp in this batch
-                batch_end_time = batch[-1][0] + self.frame_interval
                 max_seg_time = max(s.end_time for s in batch_segments)
 
                 # If all segment times are below the batch's first frame timestamp,
@@ -300,6 +307,13 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
                     for seg in batch_segments:
                         seg.start_time += batch_start_time
                         seg.end_time += batch_start_time
+
+            # Clamp all segment times to valid video bounds
+            for seg in batch_segments:
+                seg.start_time = max(0.0, seg.start_time)
+                seg.end_time = min(seg.end_time, video_duration)
+                if seg.end_time <= seg.start_time:
+                    seg.end_time = seg.start_time + self.frame_interval
 
             all_segments.extend(batch_segments)
 
