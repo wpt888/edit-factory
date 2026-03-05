@@ -97,6 +97,14 @@ export function useBatchPolling(options: UseBatchPollingOptions): UseBatchPollin
         }
 
         const status: BatchStatus = await response.json();
+        // Validate shape before using
+        if (!status || typeof status.status !== "string" || typeof status.total !== "number") {
+          console.warn("[useBatchPolling] Unexpected batch status shape:", status);
+          if (!isCancelledRef.current) {
+            pollingRef.current = setTimeout(() => poll(batchId), interval);
+          }
+          return;
+        }
         setBatchStatus(status);
 
         if (status.status === "completed") {

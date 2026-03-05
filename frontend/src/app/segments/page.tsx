@@ -754,12 +754,7 @@ export default function SegmentsPage() {
     }
   }, []);
 
-  // Fetch associations when segments list changes
-  useEffect(() => {
-    const ids = segments.map(s => s.id);
-    if (ids.length > 0) fetchAssociations(ids);
-  }, [segments, fetchAssociations]);
-
+  // Fetch associations when allSegments changes (covers both filtered and full lists)
   useEffect(() => {
     const ids = allSegments.map(s => s.id);
     if (ids.length > 0) fetchAssociations(ids);

@@ -351,9 +351,13 @@ export default function TTSLibraryPage() {
   }
 
   async function copySrt(content: string) {
-    await navigator.clipboard.writeText(content); // Bug #162
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      console.warn("Clipboard API not available (insecure context?)");
+    }
   }
 
   const statusBadge = (status: string) => {

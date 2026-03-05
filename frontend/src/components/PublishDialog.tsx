@@ -152,12 +152,19 @@ export function PublishDialog({
     return () => { cancelled = true; };
   }, [open]);
 
-  // Cleanup poll on unmount
+  // Cleanup poll on unmount or when dialog closes
   useEffect(() => {
+    if (!open && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
     };
-  }, []);
+  }, [open]);
 
   const toggleIntegration = (id: string) => {
     setSelectedIds((prev) => {

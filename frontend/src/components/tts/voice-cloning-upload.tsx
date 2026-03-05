@@ -32,7 +32,8 @@ export function VoiceCloningUpload({ onVoiceCloned }: VoiceCloningUploadProps) {
 
     // Validate audio duration client-side
     const audio = new Audio()
-    audio.src = URL.createObjectURL(file)
+    const objectUrl = URL.createObjectURL(file)
+    audio.src = objectUrl
 
     audio.addEventListener("loadedmetadata", () => {
       const audioDuration = audio.duration
@@ -46,7 +47,13 @@ export function VoiceCloningUpload({ onVoiceCloned }: VoiceCloningUploadProps) {
         setError(null)
       }
 
-      URL.revokeObjectURL(audio.src)
+      URL.revokeObjectURL(objectUrl)
+    })
+
+    audio.addEventListener("error", () => {
+      URL.revokeObjectURL(objectUrl)
+      setError("Could not read audio file. Try a different format.")
+      setSelectedFile(null)
     })
   }
 
@@ -86,11 +93,12 @@ export function VoiceCloningUpload({ onVoiceCloned }: VoiceCloningUploadProps) {
         body: formData,
       })
 
-      const data = await response.json()
-
       if (!response.ok) {
-        throw new Error(data.detail || "Failed to clone voice")
+        const errData = await response.json().catch(() => ({}))
+        throw new Error(errData.detail || "Failed to clone voice")
       }
+
+      const data = await response.json()
 
       setSuccess(`Voice "${data.voice_name}" cloned successfully! Voice ID: ${data.voice_id}`)
       setVoiceName("")

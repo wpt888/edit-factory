@@ -609,7 +609,7 @@ export function VideoSegmentPlayer({
       voiceFetchedRef.current.delete(sourceVideoId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceVideoId]);
+  }, [sourceVideoId, profileId]);
 
   // Fetch voice detection data when enabled
   useEffect(() => {

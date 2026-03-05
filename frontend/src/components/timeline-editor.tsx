@@ -319,12 +319,22 @@ export function TimelineEditor({
       }
     };
 
+    const onError = () => {
+      console.warn("[timeline-editor] Audio error during preview");
+      setIsPreviewPlaying(false);
+      isPreviewPlayingRef.current = false;
+      stopPreviewRafLoop();
+    };
+
     audio.addEventListener("loadedmetadata", onLoadedMetadata);
     audio.addEventListener("ended", onEnded);
+    audio.addEventListener("error", onError);
 
     return () => {
       audio.removeEventListener("loadedmetadata", onLoadedMetadata);
       audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("error", onError);
+      audio.onerror = null;
       stopPreviewRafLoop();
     };
   }, [isPreviewActive, stopPreviewRafLoop]);
@@ -819,6 +829,7 @@ export function TimelineEditor({
     return () => {
       video.removeEventListener("loadeddata", handleLoaded);
       if (enforcementRaf != null) cancelAnimationFrame(enforcementRaf);
+      video.pause();
     };
   }, [viewMode, selectedBlockIndex, matches, profileId]);
 

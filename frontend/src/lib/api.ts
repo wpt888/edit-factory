@@ -44,8 +44,19 @@ export async function apiFetch(
   const base = API_URL.replace(/\/+$/, "");
   const url = endpoint.startsWith("http") ? endpoint : `${base}${endpoint}`;
 
-  // Use caller-provided signal if given, otherwise create a timeout signal
-  const signal = existingSignal ?? AbortSignal.timeout(timeout);
+  // Use caller-provided signal if given, otherwise create a manual timeout via AbortController
+  // (manual approach has broader browser compatibility than AbortSignal.timeout)
+  let controller: AbortController | null = null;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let signal: AbortSignal;
+
+  if (existingSignal) {
+    signal = existingSignal;
+  } else {
+    controller = new AbortController();
+    timeoutId = setTimeout(() => controller!.abort(), timeout);
+    signal = controller.signal;
+  }
 
   let response: Response;
   try {
@@ -64,6 +75,8 @@ export async function apiFetch(
       throw new ApiError(0, fetchErr.message || "Network error", true);
     }
     throw fetchErr;
+  } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId);
   }
 
   if (!response.ok) {

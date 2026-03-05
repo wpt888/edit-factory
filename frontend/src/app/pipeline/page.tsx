@@ -216,6 +216,9 @@ export default function PipelinePageWrapper() {
 
 function PipelinePage() {
   const { currentProfile } = useProfile();
+  // Ref to avoid stale closure in debounced setTimeout callbacks
+  const currentProfileIdRef = useRef(currentProfile?.id);
+  currentProfileIdRef.current = currentProfile?.id;
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -247,6 +250,7 @@ function PipelinePage() {
   const [aiRulesSaved, setAiRulesSaved] = useState(false);
   const [aiRulesDirty, setAiRulesDirty] = useState(false);
   const aiInstructionsSaveTimer = useRef<NodeJS.Timeout | null>(null);
+  const aiRulesSavedResetTimer = useRef<NodeJS.Timeout | null>(null);
 
   // Step 2: Scripts
   const [pipelineId, setPipelineId] = useState<string | null>(null);
@@ -547,7 +551,8 @@ function PipelinePage() {
       setAiRulesDirty(false);
       setAiRulesSaved(true);
       if (collapse) setAiRulesExpanded(false);
-      setTimeout(() => setAiRulesSaved(false), 2000);
+      if (aiRulesSavedResetTimer.current) clearTimeout(aiRulesSavedResetTimer.current);
+      aiRulesSavedResetTimer.current = setTimeout(() => setAiRulesSaved(false), 2000);
     } catch {
       setAiRulesSaved(false);
       setAiRulesDirty(true);
@@ -643,13 +648,18 @@ function PipelinePage() {
       setProductGroups([]);
       return;
     }
+    const abortController = new AbortController();
     const ids = Array.from(selectedSourceIds).join(",");
-    apiGet(`/segments/product-groups-bulk?source_video_ids=${encodeURIComponent(ids)}`)
+    apiGet(`/segments/product-groups-bulk?source_video_ids=${encodeURIComponent(ids)}`, { signal: abortController.signal })
       .then(async (res) => {
+        if (abortController.signal.aborted) return;
         const data = await res.json();
         setProductGroups(data);
       })
-      .catch(() => setProductGroups([]));
+      .catch(() => {
+        if (!abortController.signal.aborted) setProductGroups([]);
+      });
+    return () => { abortController.abort(); };
   }, [selectedSourceIds]);
 
   // Insert a [GroupLabel] tag at cursor position in a script textarea
@@ -1562,6 +1572,7 @@ function PipelinePage() {
       }
       // Clear all timer refs and null them out (Bug #49, #55)
       if (aiInstructionsSaveTimer.current) { clearTimeout(aiInstructionsSaveTimer.current); aiInstructionsSaveTimer.current = null; }
+      if (aiRulesSavedResetTimer.current) { clearTimeout(aiRulesSavedResetTimer.current); aiRulesSavedResetTimer.current = null; }
       if (sourceSelectionTimer.current) { clearTimeout(sourceSelectionTimer.current); sourceSelectionTimer.current = null; }
       if (ttsLibraryCheckTimer.current) { clearTimeout(ttsLibraryCheckTimer.current); ttsLibraryCheckTimer.current = null; }
       if (scriptSaveTimer.current) { clearTimeout(scriptSaveTimer.current); scriptSaveTimer.current = null; }
@@ -1651,11 +1662,13 @@ function PipelinePage() {
     if (!currentProfile) return;
     if (voiceSettingsSaveTimer.current) clearTimeout(voiceSettingsSaveTimer.current);
     voiceSettingsSaveTimer.current = setTimeout(async () => {
+      const profileId = currentProfileIdRef.current;
+      if (!profileId) return;
       try {
-        const res = await apiGetWithRetry(`/profiles/${currentProfile.id}`);
+        const res = await apiGetWithRetry(`/profiles/${profileId}`);
         const profileData = await res.json();
         const existingTts = profileData.tts_settings || {};
-        await apiPatch(`/profiles/${currentProfile.id}`, {
+        await apiPatch(`/profiles/${profileId}`, {
           tts_settings: {
             ...existingTts,
             voice_stability: voiceStability,

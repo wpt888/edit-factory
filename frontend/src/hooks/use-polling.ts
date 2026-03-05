@@ -132,6 +132,7 @@ export function usePolling<T>(options: UsePollingOptions<T>): UsePollingReturn<T
       stopPolling();
     }
     return () => {
+      isCancelledRef.current = true;
       clearPolling();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

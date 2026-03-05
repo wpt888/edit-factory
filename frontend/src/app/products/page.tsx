@@ -323,14 +323,16 @@ export default function ProductsPage() {
           );
         }
         syncTimeoutRef.current = setTimeout(async () => {
-          const refreshRes = await apiGetWithRetry("/feeds");
-          if (refreshRes.ok) {
+          try {
+            const refreshRes = await apiGetWithRetry("/feeds");
             const data = await refreshRes.json();
             setFeeds(data);
             const updated = data.find((f: Feed) => f.id === feedId);
             if (updated && selectedFeedId === feedId) {
               setSelectedFeed(updated);
             }
+          } catch {
+            // Silent — sync status will refresh on next manual action
           }
         }, 3000);
       } else {

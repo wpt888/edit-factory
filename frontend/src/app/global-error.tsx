@@ -13,7 +13,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
   }, [error]);
 
   return (
-    <html lang="ro" className="dark">
+    <html lang="en" className="dark">
       <body className="bg-background text-foreground min-h-screen flex items-center justify-center p-4">
         <div className="max-w-lg w-full text-center space-y-6">
           <div className="flex justify-center">

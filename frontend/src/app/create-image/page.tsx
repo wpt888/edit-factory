@@ -396,23 +396,27 @@ export default function CreateImagePage() {
   const handleSaveTemplate = async () => {
     if (!templateName.trim() || !templatePrompt.trim()) return;
 
-    if (editingTemplate) {
-      await apiPut(`/image-gen/templates/${editingTemplate.id}`, {
-        name: templateName,
-        prompt_template: templatePrompt,
-      });
-    } else {
-      await apiPost("/image-gen/templates", {
-        name: templateName,
-        prompt_template: templatePrompt,
-      });
-    }
+    try {
+      if (editingTemplate) {
+        await apiPut(`/image-gen/templates/${editingTemplate.id}`, {
+          name: templateName,
+          prompt_template: templatePrompt,
+        });
+      } else {
+        await apiPost("/image-gen/templates", {
+          name: templateName,
+          prompt_template: templatePrompt,
+        });
+      }
 
-    setShowTemplateForm(false);
-    setEditingTemplate(null);
-    setTemplateName("");
-    setTemplatePrompt("");
-    await fetchTemplates();
+      setShowTemplateForm(false);
+      setEditingTemplate(null);
+      setTemplateName("");
+      setTemplatePrompt("");
+      await fetchTemplates();
+    } catch (err) {
+      toast.error("Failed to save template");
+    }
   };
 
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null); // Bug #124

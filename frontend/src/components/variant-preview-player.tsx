@@ -119,7 +119,6 @@ export function VariantPreviewPlayer({
 
         // Start polling for status using setTimeout chain to prevent overlapping polls (FE-02)
         if (cancelledRef.current) return; // Bug #133: check before starting poll
-        cancelledRef.current = false;
         const pollStatus = async () => {
           if (cancelledRef.current) return;
           try {

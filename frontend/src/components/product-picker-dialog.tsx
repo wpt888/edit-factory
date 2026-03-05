@@ -180,32 +180,42 @@ export function ProductPickerDialog({
   }, [open, fetchFilterOptions]);
 
   // ---- Fetch products ----
-  const fetchProducts = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({
-        page: String(page),
-        page_size: "20",
-        ...(debouncedSearch && { search: debouncedSearch }),
-        ...(brand !== "all" && { brand }),
-        ...(category !== "all" && { category }),
-      });
-      const res = await apiGet(`/catalog/products?${params}`);
-      const data = await res.json();
-      setProducts(data.products ?? []);
-      setPagination(data.pagination ?? { page: 1, page_size: 20, total: 0, total_pages: 1 });
-    } catch {
-      toast.error("Failed to load catalog products");
-    } finally {
-      setLoading(false);
-    }
-  }, [debouncedSearch, brand, category, page]);
+  const fetchAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (open) {
-      fetchProducts();
-    }
-  }, [open, fetchProducts]);
+    if (!open) return;
+
+    // Abort previous request
+    if (fetchAbortRef.current) fetchAbortRef.current.abort();
+    const abortController = new AbortController();
+    fetchAbortRef.current = abortController;
+
+    setLoading(true);
+    (async () => {
+      try {
+        const params = new URLSearchParams({
+          page: String(page),
+          page_size: "20",
+          ...(debouncedSearch && { search: debouncedSearch }),
+          ...(brand !== "all" && { brand }),
+          ...(category !== "all" && { category }),
+        });
+        const res = await apiGet(`/catalog/products?${params}`, { signal: abortController.signal });
+        if (abortController.signal.aborted) return;
+        const data = await res.json();
+        setProducts(data.products ?? []);
+        setPagination(data.pagination ?? { page: 1, page_size: 20, total: 0, total_pages: 1 });
+      } catch {
+        if (!abortController.signal.aborted) {
+          toast.error("Failed to load catalog products");
+        }
+      } finally {
+        if (!abortController.signal.aborted) setLoading(false);
+      }
+    })();
+
+    return () => { abortController.abort(); };
+  }, [open, debouncedSearch, brand, category, page]);
 
   // ---- Handle product selection ----
   const handleSelectProduct = async (product: CatalogProduct) => {

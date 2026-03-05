@@ -80,9 +80,12 @@ export function LogoDragOverlay({
     [position]
   );
 
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent) => {
-      if (!dragging || !containerRef.current) return;
+  // Use window-level mousemove/mouseup so dragging doesn't break when cursor leaves the element
+  useEffect(() => {
+    if (!dragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
       const newX = Math.max(0, e.clientX - rect.left - dragOffset.current.x);
       const newY = Math.max(0, e.clientY - rect.top - dragOffset.current.y);
@@ -96,16 +99,30 @@ export function LogoDragOverlay({
       const clampedY = Math.min(newY, Math.max(0, maxY));
 
       setPosition({ x: clampedX, y: clampedY });
-    },
-    [dragging]
-  );
+    };
 
-  const handleMouseUp = useCallback(() => {
-    if (!dragging) return;
-    setDragging(false);
-    const real = toReal(position.x, position.y);
-    onPositionChange(real.x, real.y, scale);
-  }, [dragging, position, scale, toReal, onPositionChange]);
+    const handleMouseUp = () => {
+      setDragging(false);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [dragging]);
+
+  // Notify parent when dragging ends
+  useEffect(() => {
+    if (!dragging && position.x !== initialX && position.y !== initialY) {
+      const real = toReal(position.x, position.y);
+      onPositionChange(real.x, real.y, scale);
+    }
+    // Only fire when dragging transitions to false
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragging]);
 
   const handleScaleChange = useCallback(
     (value: number[]) => {
@@ -125,9 +142,6 @@ export function LogoDragOverlay({
       <div
         ref={containerRef}
         className="relative w-full overflow-hidden rounded-lg border border-border cursor-crosshair select-none"
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
       >
         {/* Base image */}
         <img

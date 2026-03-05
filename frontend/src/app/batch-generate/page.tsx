@@ -214,7 +214,7 @@ function BatchGenerateContent() {
           icon={<Layers className="h-6 w-6" />}
           title="No batch generation"
           description="Select products and configure a batch generation."
-          action={{ label: "Back to Products", onClick: () => { window.location.href = "/products"; } }}
+          action={{ label: "Back to Products", onClick: () => { router.push("/products"); } }}
         />
       </div>
     );

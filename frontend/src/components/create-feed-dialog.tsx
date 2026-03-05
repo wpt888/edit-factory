@@ -12,7 +12,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { apiPost, handleApiError } from "@/lib/api";
 import { toast } from "sonner";
 import {
@@ -50,6 +50,15 @@ export function CreateFeedDialog({
   const [name, setName] = useState("");
   const [feedUrl, setFeedUrl] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Reset form state when dialog closes
+  useEffect(() => {
+    if (!open) {
+      setName("");
+      setFeedUrl("");
+      setLoading(false);
+    }
+  }, [open]);
 
   const handleCreate = async () => {
     const trimmedName = name.trim();

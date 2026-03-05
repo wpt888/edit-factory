@@ -76,11 +76,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }, [supabase, router]);
 
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    return () => { isMountedRef.current = false; };
+  }, []);
+
   useEffect(() => {
     // Initial session check
     const initAuth = async () => {
       try {
         const { data, error } = await supabase.auth.getSession();
+        if (!isMountedRef.current) return;
         if (error) {
           console.error("Error getting session:", error);
         } else {
@@ -90,7 +96,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       } catch (error) {
         console.error("Error in initAuth:", error);
       } finally {
-        setLoading(false);
+        if (isMountedRef.current) setLoading(false);
       }
     };
 
@@ -100,6 +106,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+      if (!isMountedRef.current) return;
       // Skip INITIAL_SESSION — already handled by initAuth above (Bug #42)
       if (event === "INITIAL_SESSION") return;
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 
 /**
@@ -23,6 +23,23 @@ export function useLocalStorageConfig<T>(
     } catch { return defaultValue; }
   });
   const [hydrated] = useState(() => typeof window !== "undefined");
+
+  // Reinitialize state when the key parameter changes
+  const prevKeyRef = useRef(key);
+  useEffect(() => {
+    if (prevKeyRef.current === key) return;
+    prevKeyRef.current = key;
+    if (typeof window === "undefined") {
+      setValue(defaultValue);
+      return;
+    }
+    try {
+      const stored = localStorage.getItem(key);
+      setValue(stored ? (JSON.parse(stored) as T) : defaultValue);
+    } catch {
+      setValue(defaultValue);
+    }
+  }, [key, defaultValue]);
 
   // Sync to localStorage when value changes (only after hydration to avoid
   // overwriting stored values with defaults on first render)

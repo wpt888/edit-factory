@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -80,7 +80,7 @@ function LibrarieContent() {
 
   // State
   const [clips, setClips] = useState<ClipWithProject[]>([]);
-  const [filteredClips, setFilteredClips] = useState<ClipWithProject[]>([]);
+  // filteredClips is derived via useMemo below (no useState needed)
   const [loading, setLoading] = useState(true);
 
   // Filters from URL
@@ -288,8 +288,8 @@ function LibrarieContent() {
   }, [selectedClipIds, clips, playingClip, confirmDialog.open]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
-  // Apply filters
-  useEffect(() => {
+  // Apply filters (derived via useMemo — no extra state/effect needed)
+  const filteredClips = useMemo(() => {
     let result = [...clips];
 
     // Search filter
@@ -326,7 +326,7 @@ function LibrarieContent() {
       result = result.filter((clip) => (clip.tags || []).includes(filterTag));
     }
 
-    setFilteredClips(result);
+    return result;
   }, [clips, searchQuery, filterSubtitles, filterVoiceover, filterPostiz, filterTag]);
 
   // Fetch Postiz connection status

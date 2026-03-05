@@ -110,7 +110,7 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
   const calculateETA = useCallback((currentProgress: number, elapsed: number) => {
     // Guard against near-zero division (Bug #113)
     if (currentProgress <= 15 || elapsed < 5) {
-      return "Calculez...";
+      return "Calculating...";
     }
 
     const progressDone = currentProgress - 10; // Subtract initial 10%
@@ -217,7 +217,14 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
     eventSource.addEventListener("progress", (e: MessageEvent) => {
       if (isCancelledRef.current) return;
       sseReconnectCountRef.current = 0;
-      const data = JSON.parse(e.data);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let data: any;
+      try {
+        data = JSON.parse(e.data);
+      } catch (parseErr) {
+        console.warn("[useJobPolling] Failed to parse SSE progress data:", parseErr);
+        return;
+      }
       const job: Job = {
         job_id: data.job_id,
         status: data.status,
@@ -238,7 +245,14 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
 
     eventSource.addEventListener("completed", (e: MessageEvent) => {
       if (isCancelledRef.current) return;
-      const data = JSON.parse(e.data);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let data: any;
+      try {
+        data = JSON.parse(e.data);
+      } catch (parseErr) {
+        console.warn("[useJobPolling] Failed to parse SSE completed data:", parseErr);
+        return;
+      }
       setProgress(100);
       setStatusText("completed");
       onCompleteRef.current?.(data.result);
@@ -247,7 +261,14 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
 
     eventSource.addEventListener("failed", (e: MessageEvent) => {
       if (isCancelledRef.current) return;
-      const data = JSON.parse(e.data);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let data: any;
+      try {
+        data = JSON.parse(e.data);
+      } catch (parseErr) {
+        console.warn("[useJobPolling] Failed to parse SSE failed data:", parseErr);
+        return;
+      }
       onErrorRef.current?.(data.error || "Job failed");
       cleanup();
     });
@@ -280,7 +301,7 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
       setProgress(10);
       setStatusText("pending");
       setElapsedTime(0);
-      setEstimatedRemaining("Calculez...");
+      setEstimatedRemaining("Calculating...");
       startTimeRef.current = Date.now();
 
       // Clear any existing elapsed timer before creating new one

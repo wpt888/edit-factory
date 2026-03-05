@@ -59,31 +59,37 @@ export function ImagePickerDialog({
   const [saving, setSaving] = useState(false);
 
   // ---- Fetch images on open ----
-  const fetchImages = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await apiGet(`/catalog/products/${catalogProductId}/images`);
-      const data = await res.json();
-      setImages(data.images ?? []);
-    } catch {
-      toast.error("Failed to load product images");
-      setImages([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [catalogProductId]);
-
   useEffect(() => {
-    if (open) {
-      // Initialize selected URLs from prop
-      setSelectedUrls(new Set(currentSelectedUrls));
-      fetchImages();
-    } else {
+    if (!open) {
       // Reset on close
       setImages([]);
       setSelectedUrls(new Set());
+      return;
     }
-  }, [open, currentSelectedUrls, fetchImages]);
+
+    // Initialize selected URLs from prop
+    setSelectedUrls(new Set(currentSelectedUrls));
+
+    let cancelled = false;
+    setLoading(true);
+
+    (async () => {
+      try {
+        const res = await apiGet(`/catalog/products/${catalogProductId}/images`);
+        if (cancelled) return;
+        const data = await res.json();
+        setImages(data.images ?? []);
+      } catch {
+        if (cancelled) return;
+        toast.error("Failed to load product images");
+        setImages([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [open, catalogProductId, currentSelectedUrls]);
 
   // ---- Toggle image selection ----
   const toggleImage = (url: string) => {

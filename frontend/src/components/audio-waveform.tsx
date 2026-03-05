@@ -68,13 +68,14 @@ export function AudioWaveform({
       return;
     }
 
+    const abortController = new AbortController();
     let cancelled = false;
     setLoading(true);
 
     (async () => {
       let audioContext: AudioContext | null = null;
       try {
-        const response = await fetch(audioUrl);
+        const response = await fetch(audioUrl, { signal: abortController.signal });
         const arrayBuffer = await response.arrayBuffer();
         audioContext = new AudioContext();
         // Bug #167: resume if suspended (e.g., due to browser autoplay policy)
@@ -87,14 +88,17 @@ export function AudioWaveform({
         waveformCacheSet(audioUrl, bars);
         setWaveformData(bars);
       } catch {
-        // silent — waveform just won't show
+        // silent — waveform just won't show (includes AbortError)
       } finally {
         audioContext?.close().catch(() => {});
         if (!cancelled) setLoading(false);
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      abortController.abort();
+    };
   }, [audioUrl, downsample]);
 
   // Track playback progress

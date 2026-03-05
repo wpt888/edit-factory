@@ -107,7 +107,7 @@ export default function UsagePage() {
   const [testingGemini, setTestingGemini] = useState(false);
   const [budget, setBudget] = useState<number>(() => { // Bug #163: lazy init from localStorage
     if (typeof window === "undefined") return 50;
-    const stored = localStorage.getItem("ef_usage_budget");
+    const stored = localStorage.getItem("editai_budget");
     if (stored) { const n = parseFloat(stored); if (!isNaN(n) && n > 0) return n; }
     return 50;
   });

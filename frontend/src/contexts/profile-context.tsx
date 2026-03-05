@@ -71,36 +71,34 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const refreshProfiles = useCallback(async () => {
     try {
       const res = await apiGetWithRetry("/profiles/");
+      // apiGetWithRetry throws on non-2xx, so res is always ok here
+      const fetchedProfiles: Profile[] = await res.json();
+      setProfilesState(fetchedProfiles);
+      localStorage.setItem(STORAGE_KEYS.PROFILES, JSON.stringify(fetchedProfiles));
 
-      if (res.ok) {
-        const fetchedProfiles: Profile[] = await res.json();
-        setProfilesState(fetchedProfiles);
-        localStorage.setItem(STORAGE_KEYS.PROFILES, JSON.stringify(fetchedProfiles));
+      // Auto-select profile if none currently selected (read from ref to avoid stale closure)
+      if (!currentProfileRef.current) {
+        const storedId = localStorage.getItem(STORAGE_KEYS.PROFILE_ID);
+        let profileToSelect: Profile | null = null;
 
-        // Auto-select profile if none currently selected (read from ref to avoid stale closure)
-        if (!currentProfileRef.current) {
-          const storedId = localStorage.getItem(STORAGE_KEYS.PROFILE_ID);
-          let profileToSelect: Profile | null = null;
+        // Try to restore last-used profile
+        if (storedId) {
+          profileToSelect = fetchedProfiles.find((p) => p.id === storedId) || null;
+        }
 
-          // Try to restore last-used profile
-          if (storedId) {
-            profileToSelect = fetchedProfiles.find((p) => p.id === storedId) || null;
-          }
+        // Fall back to default profile
+        if (!profileToSelect) {
+          profileToSelect = fetchedProfiles.find((p) => p.is_default) || null;
+        }
 
-          // Fall back to default profile
-          if (!profileToSelect) {
-            profileToSelect = fetchedProfiles.find((p) => p.is_default) || null;
-          }
+        // Fall back to first available profile
+        if (!profileToSelect && fetchedProfiles.length > 0) {
+          profileToSelect = fetchedProfiles[0];
+        }
 
-          // Fall back to first available profile
-          if (!profileToSelect && fetchedProfiles.length > 0) {
-            profileToSelect = fetchedProfiles[0];
-          }
-
-          if (profileToSelect) {
-            setCurrentProfileState(profileToSelect);
-            localStorage.setItem(STORAGE_KEYS.PROFILE_ID, profileToSelect.id);
-          }
+        if (profileToSelect) {
+          setCurrentProfileState(profileToSelect);
+          localStorage.setItem(STORAGE_KEYS.PROFILE_ID, profileToSelect.id);
         }
       }
     } catch (error) {
@@ -113,6 +111,11 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
    * Initialize profiles on mount
    * Strategy: Hydrate from localStorage first (instant UI), then fetch from API (fresh data)
    */
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    return () => { isMountedRef.current = false; };
+  }, []);
+
   useEffect(() => {
     async function initialize() {
       let hasCachedData = false;
@@ -130,11 +133,13 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
               typeof p === "object" && p !== null && "id" in p && "name" in p
             )) {
               const validProfiles = parsed as Profile[];
+              if (!isMountedRef.current) return;
               setProfilesState(validProfiles);
 
               if (storedProfileId) {
                 const profile = validProfiles.find((p) => p.id === storedProfileId);
                 if (profile) {
+                  if (!isMountedRef.current) return;
                   setCurrentProfileState(profile);
                   hasCachedData = true;
                 }
@@ -155,11 +160,13 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
       // Phase 2: If cache exists, unblock immediately and refresh in background
       if (hasCachedData) {
+        if (!isMountedRef.current) return;
         setIsLoading(false);
         refreshProfiles(); // no await — background refresh
       } else {
         // No cache — must wait for API before unblocking
         await refreshProfiles();
+        if (!isMountedRef.current) return;
         setIsLoading(false);
       }
     }

@@ -134,7 +134,7 @@ export function VariantTriage({
                 {variant.thumbnail ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={`${apiBaseUrl}/files/${encodeURIComponent(variant.thumbnail)}`}
+                    src={`${apiBaseUrl}/files/${encodeURI(variant.thumbnail)}`}
                     alt={`Varianta ${variant.variant_index}`}
                     className="w-full h-full object-cover"
                   />
