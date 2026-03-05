@@ -7,6 +7,7 @@ Endpoints for Script-to-Video Assembly pipeline:
 - Status polling (get job progress)
 """
 import logging
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,7 @@ router = APIRouter(prefix="/assembly", tags=["assembly"])
 
 # Job storage (in-memory, same pattern as library_routes _generation_progress)
 _assembly_jobs = {}
+_assembly_jobs_lock = threading.Lock()
 _MAX_MEMORY_ENTRIES = 1000
 
 
@@ -321,15 +323,16 @@ async def render_assembly(
     }
 
     # Initialize job status (with eviction)
-    _evict_old_entries(_assembly_jobs)
-    _assembly_jobs[job_id] = {
-        "status": "processing",
-        "progress": 0,
-        "current_step": "Initializing assembly",
-        "final_video_path": None,
-        "error": None,
-        "started_at": datetime.now(timezone.utc).isoformat()
-    }
+    with _assembly_jobs_lock:
+        _evict_old_entries(_assembly_jobs)
+        _assembly_jobs[job_id] = {
+            "status": "processing",
+            "progress": 0,
+            "current_step": "Initializing assembly",
+            "final_video_path": None,
+            "error": None,
+            "started_at": datetime.now(timezone.utc).isoformat()
+        }
 
     # Persist to DB
     _db_create_assembly_job(job_id, profile.profile_id, _assembly_jobs[job_id])
@@ -353,8 +356,9 @@ async def render_assembly(
             logger.info(f"[Profile {profile.profile_id}] Background assembly job {job_id} started")
 
             # Update progress
-            _assembly_jobs[job_id]["current_step"] = "Generating TTS audio"
-            _assembly_jobs[job_id]["progress"] = 10
+            with _assembly_jobs_lock:
+                _assembly_jobs[job_id]["current_step"] = "Generating TTS audio"
+                _assembly_jobs[job_id]["progress"] = 10
             get_job_storage().update_job(job_id, {
                 "status": "processing",
                 "progress": "Generating TTS audio",
@@ -388,11 +392,12 @@ async def render_assembly(
             )
 
             # Success
-            _assembly_jobs[job_id]["status"] = "completed"
-            _assembly_jobs[job_id]["progress"] = 100
-            _assembly_jobs[job_id]["current_step"] = "Assembly complete"
-            _assembly_jobs[job_id]["final_video_path"] = str(final_video_path)
-            _assembly_jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            with _assembly_jobs_lock:
+                _assembly_jobs[job_id]["status"] = "completed"
+                _assembly_jobs[job_id]["progress"] = 100
+                _assembly_jobs[job_id]["current_step"] = "Assembly complete"
+                _assembly_jobs[job_id]["final_video_path"] = str(final_video_path)
+                _assembly_jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
             get_job_storage().update_job(job_id, {
                 "status": "completed",
                 "progress": "Assembly complete",
@@ -408,11 +413,12 @@ async def render_assembly(
 
         except Exception as e:
             logger.error(f"[Profile {profile.profile_id}] Assembly job {job_id} failed: {e}")
-            _assembly_jobs[job_id]["status"] = "failed"
-            _assembly_jobs[job_id]["progress"] = 0
-            _assembly_jobs[job_id]["current_step"] = "Assembly failed"
-            _assembly_jobs[job_id]["error"] = str(e)
-            _assembly_jobs[job_id]["failed_at"] = datetime.now(timezone.utc).isoformat()
+            with _assembly_jobs_lock:
+                _assembly_jobs[job_id]["status"] = "failed"
+                _assembly_jobs[job_id]["progress"] = 0
+                _assembly_jobs[job_id]["current_step"] = "Assembly failed"
+                _assembly_jobs[job_id]["error"] = str(e)
+                _assembly_jobs[job_id]["failed_at"] = datetime.now(timezone.utc).isoformat()
             get_job_storage().update_job(job_id, {
                 "status": "failed",
                 "progress": "Assembly failed",

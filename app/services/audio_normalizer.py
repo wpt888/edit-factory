@@ -89,6 +89,11 @@ async def measure_loudness(
         # Execute FFmpeg and capture stderr (where loudnorm outputs JSON)
         result = await asyncio.to_thread(safe_ffmpeg_run, cmd, timeout_seconds, "loudness measurement")
 
+        if result.returncode != 0:
+            logger.error(f"FFmpeg loudness measurement failed (exit code {result.returncode})")
+            logger.debug(f"FFmpeg stderr: {result.stderr[-500:] if result.stderr else ''}")
+            return None
+
         # Extract JSON from stderr — search for the loudnorm-specific JSON
         # by looking for the "input_i" key which is unique to loudnorm output
         stderr = result.stderr

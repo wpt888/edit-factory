@@ -43,7 +43,9 @@ async def list_catalog_products(
     query = query.eq("is_active", True)
 
     if search:
-        query = query.or_(f"title.ilike.%{search}%,sku.ilike.%{search}%")
+        # Escape PostgREST special characters in user input
+        safe_search = search.replace("%", "\\%").replace("_", "\\_").replace("*", "\\*")
+        query = query.or_(f"title.ilike.%{safe_search}%,sku.ilike.%{safe_search}%")
     if brand:
         query = query.eq("brand", brand)
     if category:
@@ -55,7 +57,11 @@ async def list_catalog_products(
     offset = (page - 1) * page_size
     query = query.order("title").range(offset, offset + page_size - 1)
 
-    result = query.execute()
+    try:
+        result = query.execute()
+    except Exception as e:
+        logger.error(f"Catalog query failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to query catalog")
 
     total = result.count if result.count is not None else 0
     total_pages = max(1, (total + page_size - 1) // page_size)
@@ -172,11 +178,15 @@ async def get_catalog_product(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    result = supabase.table(TABLE)\
-        .select("*")\
-        .eq("id", product_id)\
-        .maybe_single()\
-        .execute()
+    try:
+        result = supabase.table(TABLE)\
+            .select("*")\
+            .eq("id", product_id)\
+            .maybe_single()\
+            .execute()
+    except Exception as e:
+        logger.error(f"Failed to fetch catalog product {product_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch product")
 
     if not result.data:
         raise HTTPException(status_code=404, detail="Product not found in catalog")

@@ -114,8 +114,11 @@ def _write_env_keys(base_dir: Path, payload: dict) -> None:
 
     if changed:
         new_lines = [f"{k}={v}" for k, v in existing_env.items()]
-        env_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-        logger.info("API keys written to AppData .env")
+        try:
+            env_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+            logger.info("API keys written to AppData .env")
+        except OSError as e:
+            logger.error(f"Failed to write .env file: {e}")
 
 
 @router.get("/settings")
@@ -141,7 +144,11 @@ async def mark_first_run_complete():
     config_file = settings.base_dir / "config.json"
     existing = _read_config(config_file)
     existing["first_run_complete"] = True
-    config_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    try:
+        config_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    except OSError as e:
+        logger.error(f"Failed to write config.json: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save configuration")
     get_settings.cache_clear()
     get_settings()
     logger.info("Setup wizard completed — first_run_complete written to config.json")

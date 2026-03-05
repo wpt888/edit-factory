@@ -245,10 +245,12 @@ def upsert_products(supabase, products: list[dict], feed_id: str) -> None:
         # Inject feed_id into every row
         rows = [{**p, "feed_id": feed_id} for p in batch]
         try:
-            supabase.table("products").upsert(
+            upsert_result = supabase.table("products").upsert(
                 rows,
                 on_conflict="feed_id,external_id",
             ).execute()
+            if hasattr(upsert_result, 'data') and upsert_result.data is None:
+                logger.warning("Upsert returned no data for batch starting at %d", start)
             inserted += len(batch)
             logger.info(
                 "Upserted products %d-%d / %d for feed %s",

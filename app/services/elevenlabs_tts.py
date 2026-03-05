@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from app.services.ffmpeg_semaphore import safe_ffmpeg_run
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +191,7 @@ class ElevenLabsTTS:
                 "-of", "json",
                 str(video_path)
             ]
-            result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+            result = safe_ffmpeg_run(probe_cmd, timeout=30, operation="ffprobe-audio-check")
             if result.returncode == 0:
                 import json
                 data = json.loads(result.stdout)

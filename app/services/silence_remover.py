@@ -445,7 +445,7 @@ class SilenceRemover:
                 new_duration=original_duration,
                 removed_duration=0,
                 segments_kept=1,
-                segments_map=[(0.0, original_duration)]
+                segments_map=None
             )
 
         new_duration = self._get_audio_duration(output_path)

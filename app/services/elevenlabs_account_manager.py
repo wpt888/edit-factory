@@ -20,10 +20,16 @@ from app.config import get_settings
 def _get_fernet():
     """Get Fernet instance using ELEVENLABS_ENCRYPTION_KEY or derive from SUPABASE_KEY."""
     settings = get_settings()
+    logger = logging.getLogger(__name__)
     key = getattr(settings, 'elevenlabs_encryption_key', None)
     if not key:
         # Derive a key from SUPABASE_KEY as fallback
         base_key = settings.supabase_key or "edit-factory-default-key"
+        if base_key == "edit-factory-default-key":
+            logger.warning(
+                "Using default encryption key for ElevenLabs account manager. "
+                "Set ELEVENLABS_ENCRYPTION_KEY env var for production use."
+            )
         derived = hashlib.sha256(base_key.encode()).digest()
         key = base64.urlsafe_b64encode(derived)
     else:

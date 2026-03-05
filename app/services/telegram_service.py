@@ -144,6 +144,17 @@ def reset_telegram_sender(profile_id: Optional[str] = None):
     global _telegram_instances
     with _telegram_lock:
         if profile_id:
-            _telegram_instances.pop(profile_id, None)
+            evicted = _telegram_instances.pop(profile_id, None)
+            if evicted:
+                try:
+                    evicted[0].close()
+                except Exception:
+                    pass
         else:
+            old_instances = _telegram_instances
             _telegram_instances = {}
+            for _, (sender, _ts) in old_instances.items():
+                try:
+                    sender.close()
+                except Exception:
+                    pass

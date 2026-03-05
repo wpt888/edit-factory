@@ -557,14 +557,13 @@ async def _generate_product_video_task(
             # Attempt re-download from image_link
             image_link = product.get("image_link")
             if image_link:
-                from app.services.image_fetcher import _download_one, CONCURRENT_DOWNLOADS
-                import asyncio as _asyncio
+                from app.services.image_fetcher import _download_one, CONCURRENT_DOWNLOADS, _get_download_semaphore
 
                 feed_id = product.get("feed_id", "unknown")
                 cache_dir = settings.base_dir / "images" / feed_id
                 cache_dir.mkdir(parents=True, exist_ok=True)
 
-                semaphore = _asyncio.Semaphore(CONCURRENT_DOWNLOADS)
+                semaphore = _get_download_semaphore()
                 _, local_path_str = await _download_one(product, cache_dir, semaphore)
                 candidate = Path(local_path_str)
                 if candidate.exists():
@@ -824,7 +823,7 @@ async def _generate_product_video_task(
             "updated_at": now,
         }).execute()
 
-        project_id = project_insert.data[0]["id"] if project_insert.data else None
+        project_id = project_insert.data[0].get("id") if project_insert.data else None
         if not project_id:
             raise ValueError("Failed to insert editai_projects row — no id returned")
 

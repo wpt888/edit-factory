@@ -113,24 +113,16 @@ class CostTracker:
             },
         }
 
-        delays = [1, 2, 4]  # DB-09: 3-attempt retry with 1s, 2s, 4s backoff
-        last_error = None
-        for attempt in range(3):
-            try:
-                result = self._supabase.table("api_costs").insert(data).execute()
-                if profile_id:
-                    logger.info(f"[Profile {profile_id}] Cost saved: {entry.service} - ${entry.cost_usd}")
-                else:
-                    logger.info(f"Cost saved to Supabase: {entry.service} - ${entry.cost_usd}")
-                return True
-            except Exception as e:
-                last_error = e
-                if attempt < 2:
-                    logger.warning(f"Failed to save to Supabase (attempt {attempt + 1}/3): {e}, retrying in {delays[attempt]}s")
-                    time.sleep(delays[attempt])
-
-        logger.error(f"Failed to save to Supabase after 3 attempts: {last_error}")
-        return False
+        try:
+            self._supabase.table("api_costs").insert(data).execute()
+            if profile_id:
+                logger.info(f"[Profile {profile_id}] Cost saved: {entry.service} - ${entry.cost_usd}")
+            else:
+                logger.info(f"Cost saved to Supabase: {entry.service} - ${entry.cost_usd}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save cost to Supabase: {e}")
+            return False
 
     def log_elevenlabs_tts(
         self,

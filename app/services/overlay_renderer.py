@@ -174,6 +174,8 @@ def _build_zoompan_filter_overlay(
 
 def _run_ffmpeg(cmd: list) -> subprocess.CompletedProcess:
     """Run an FFmpeg command synchronously, capturing output."""
+    # Operate on a copy to avoid mutating the caller's list
+    cmd = list(cmd)
     # Inject thread limit to prevent CPU saturation
     if "-threads" not in cmd:
         cmd.insert(1, "4")

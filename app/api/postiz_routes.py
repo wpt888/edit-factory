@@ -357,7 +357,11 @@ async def bulk_upload_to_postiz(
 
         except Exception as e:
             logger.error(f"Failed to upload clip {clip_id} to Postiz: {e}")
-            failed.append({"clip_id": clip_id, "error": str(e)})
+            # Sanitize error message to avoid leaking internal paths
+            safe_error = str(e)
+            if "/" in safe_error or "\\" in safe_error:
+                safe_error = "Upload failed — check server logs for details"
+            failed.append({"clip_id": clip_id, "error": safe_error})
 
     return {
         "status": "completed",

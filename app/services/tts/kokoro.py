@@ -157,6 +157,9 @@ class KokoroTTSService(TTSService):
 
         logger.info(f"Generating audio with Kokoro (voice={voice_id}, text length={len(text)})")
 
+        # TODO: kokoro.generate() API is unverified — the kokoro library may use
+        # a different API (e.g. KPipeline). Verify against the actual kokoro package
+        # version before using in production. This is a stub implementation.
         # Generate audio using kokoro library
         # Run in thread pool to avoid blocking event loop
         def _generate():

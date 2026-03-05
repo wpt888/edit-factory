@@ -23,7 +23,7 @@ def kill_processes_on_port(port: int) -> int:
     killed = 0
     try:
         for conn in psutil.net_connections(kind='inet'):
-            if conn.laddr.port == port and conn.pid:
+            if conn.laddr.port == port and conn.pid and conn.status == psutil.CONN_LISTEN:
                 try:
                     proc = psutil.Process(conn.pid)
                     # Kill children first (uvicorn workers, node children)

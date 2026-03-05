@@ -102,7 +102,7 @@ class LicenseService:
             try:
                 body = resp.json()
             except Exception:
-                raise httpx.HTTPError(f"Invalid JSON response (HTTP {resp.status_code})")
+                raise ValueError(f"Invalid JSON response (HTTP {resp.status_code})")
             if body.get("valid"):
                 data["last_validated_at"] = datetime.now(timezone.utc).isoformat()
                 data["status"] = body["license_key"]["status"]

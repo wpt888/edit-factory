@@ -120,63 +120,6 @@ def _recover_stuck_jobs_sync():
         logger.warning(f"Failed to recover stuck jobs: {e}")
 
 
-async def _recover_stuck_projects():
-    """Recover projects stuck in 'generating' status (e.g. from server crash)."""
-    try:
-        from app.db import get_supabase
-        supabase = get_supabase()
-        if not supabase:
-            return
-        result = supabase.table("editai_projects").select("id").eq("status", "generating").execute()
-        if result.data:
-            for proj in result.data:
-                supabase.table("editai_projects").update({
-                    "status": "failed",
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }).eq("id", proj["id"]).execute()
-            logger.info(f"Recovered {len(result.data)} stuck projects (generating -> failed)")
-    except Exception as e:
-        logger.warning(f"Failed to recover stuck projects: {e}")
-
-
-async def _recover_stuck_clips():
-    """Recover clips stuck in 'processing' final_status (e.g. from server crash)."""
-    try:
-        from app.db import get_supabase
-        supabase = get_supabase()
-        if not supabase:
-            return
-        result = supabase.table("editai_clips").select("id").eq("final_status", "processing").execute()
-        if result.data:
-            for clip in result.data:
-                supabase.table("editai_clips").update({
-                    "final_status": "failed",
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }).eq("id", clip["id"]).execute()
-            logger.info(f"Recovered {len(result.data)} stuck clips (processing -> failed)")
-    except Exception as e:
-        logger.warning(f"Failed to recover stuck clips: {e}")
-
-
-async def _recover_stuck_jobs():
-    """Recover jobs stuck in 'processing' status (e.g. from server crash)."""
-    try:
-        from app.db import get_supabase
-        supabase = get_supabase()
-        if not supabase:
-            return
-        result = supabase.table("jobs").select("id").eq("status", "processing").execute()
-        if result.data:
-            for job in result.data:
-                supabase.table("jobs").update({
-                    "status": "failed",
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }).eq("id", job["id"]).execute()
-            logger.info(f"Recovered {len(result.data)} stuck jobs (processing -> failed)")
-    except Exception as e:
-        logger.warning(f"Failed to recover stuck jobs: {e}")
-
-
 async def _cleanup_expired_trash():
     """Permanently delete clips that have been in trash for more than 30 days."""
     try:
@@ -245,8 +188,8 @@ async def lifespan(app: FastAPI):
     init_semaphores()
 
     settings.ensure_dirs()
-    if settings.auth_disabled and not settings.debug:
-        logger.critical("⚠️ AUTH_DISABLED=true in non-debug mode! This is a security risk.")
+    if settings.auth_disabled and not settings.debug and not getattr(settings, 'desktop_mode', False):
+        raise RuntimeError("AUTH_DISABLED=true is not allowed in non-debug mode")
     if settings.desktop_mode:
         logger.info("Desktop mode active — auth bypassed, config from %s", settings.base_dir)
     logger.info("Edit Factory started")

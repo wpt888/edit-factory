@@ -6,6 +6,7 @@ Generates images via FAL AI, applies logo overlays, sends to Telegram/Postiz.
 import uuid
 import logging
 import shutil
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -23,6 +24,7 @@ router = APIRouter(prefix="/image-gen", tags=["AI Image Generation"])
 
 # ============== In-memory generation progress ==============
 _generation_progress: dict[str, dict] = {}
+_progress_lock = threading.Lock()
 
 GENERATED_IMAGES_DIR = Path("output/generated_images")
 LOGOS_DIR = Path("output/logos")
@@ -78,7 +80,8 @@ def _generate_image_task(
     supabase = get_supabase()
 
     try:
-        _generation_progress[image_id] = {"status": "generating", "progress": 0}
+        with _progress_lock:
+            _generation_progress[image_id] = {"status": "generating", "progress": 0}
 
         # Update DB status
         if supabase:
@@ -100,15 +103,17 @@ def _generate_image_task(
         if not image_url:
             raise RuntimeError("FAL image has no URL")
 
-        _generation_progress[image_id] = {"status": "downloading", "progress": 50}
+        with _progress_lock:
+            _generation_progress[image_id] = {"status": "downloading", "progress": 50}
 
         # Download to local
-        dest_dir = GENERATED_IMAGES_DIR / profile_id
+        dest_dir = get_settings().output_dir / "generated_images" / profile_id
         dest_dir.mkdir(parents=True, exist_ok=True)
         local_path = str(dest_dir / f"{image_id}.png")
         fal.download_image(image_url, local_path)
 
-        _generation_progress[image_id] = {"status": "completed", "progress": 100}
+        with _progress_lock:
+            _generation_progress[image_id] = {"status": "completed", "progress": 100}
 
         # Track cost
         try:
@@ -141,7 +146,8 @@ def _generate_image_task(
 
     except Exception as e:
         logger.error(f"Image generation failed for {image_id}: {e}")
-        _generation_progress[image_id] = {"status": "failed", "progress": 0, "error": str(e)}
+        with _progress_lock:
+            _generation_progress[image_id] = {"status": "failed", "progress": 0, "error": str(e)}
         if supabase:
             try:
                 supabase.table("generated_images").update({
@@ -199,14 +205,18 @@ async def generate_image(
 
     # Create DB record
     image_id = str(uuid.uuid4())
-    supabase.table("generated_images").insert({
-        "id": image_id,
-        "profile_id": ctx.profile_id,
-        "product_id": req.product_id,
-        "prompt": final_prompt,
-        "template_name": template_name,
-        "status": "pending",
-    }).execute()
+    try:
+        supabase.table("generated_images").insert({
+            "id": image_id,
+            "profile_id": ctx.profile_id,
+            "product_id": req.product_id,
+            "prompt": final_prompt,
+            "template_name": template_name,
+            "status": "pending",
+        }).execute()
+    except Exception as e:
+        logger.error(f"Failed to create image generation record: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create generation record")
 
     # Start background generation
     background_tasks.add_task(
@@ -229,21 +239,24 @@ async def get_generation_status(
 ):
     """Poll generation status."""
     # Check in-memory first (faster)
-    if image_id in _generation_progress:
-        progress = _generation_progress[image_id]
-        if progress["status"] in ("completed", "failed"):
-            # Clean up after client reads final status
-            cached = dict(progress)
-            del _generation_progress[image_id]
-            # Fetch DB record for full data
-            supabase = get_supabase()
-            if supabase:
-                row = supabase.table("generated_images")\
-                    .select("*").eq("id", image_id).limit(1).execute()
-                if row.data:
-                    return row.data[0]
-            return cached
-        return progress
+    with _progress_lock:
+        progress = _generation_progress.get(image_id)
+        if progress is not None:
+            if progress["status"] in ("completed", "failed"):
+                # Clean up after client reads final status
+                cached = dict(progress)
+                del _generation_progress[image_id]
+            else:
+                return dict(progress)
+    if progress is not None and progress["status"] in ("completed", "failed"):
+        # Fetch DB record for full data
+        supabase = get_supabase()
+        if supabase:
+            row = supabase.table("generated_images")\
+                .select("*").eq("id", image_id).limit(1).execute()
+            if row.data:
+                return row.data[0]
+        return cached
 
     # Fallback to DB
     supabase = get_supabase()
@@ -308,30 +321,50 @@ async def apply_logo(
     if not logo_path or not Path(logo_path).exists():
         raise HTTPException(status_code=400, detail="No logo uploaded for this profile")
 
-    # Apply overlay
-    from app.services.logo_overlay_service import apply_logo_overlay
+    # Validate paths are within expected directories
+    settings = get_settings()
+    try:
+        resolved_base = Path(base_path).resolve()
+        resolved_logo = Path(logo_path).resolve()
+        if not resolved_base.is_relative_to(settings.output_dir.resolve()):
+            raise HTTPException(status_code=403, detail="Access denied")
+        if not resolved_logo.is_relative_to(settings.output_dir.resolve()):
+            raise HTTPException(status_code=403, detail="Access denied")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail="Invalid path")
 
-    output_dir = GENERATED_IMAGES_DIR / ctx.profile_id
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = str(output_dir / f"{image_id}_logo.png")
+    try:
+        # Apply overlay
+        from app.services.logo_overlay_service import apply_logo_overlay
 
-    apply_logo_overlay(
-        base_path=base_path,
-        logo_path=logo_path,
-        output_path=output_path,
-        x=req.x,
-        y=req.y,
-        scale=req.scale,
-    )
+        output_dir = settings.output_dir / "generated_images" / ctx.profile_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = str(output_dir / f"{image_id}_logo.png")
 
-    # Update DB
-    supabase.table("generated_images").update({
-        "final_image_path": output_path,
-        "logo_config": {"x": req.x, "y": req.y, "scale": req.scale, "logo_path": logo_path},
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", image_id).execute()
+        apply_logo_overlay(
+            base_path=base_path,
+            logo_path=logo_path,
+            output_path=output_path,
+            x=req.x,
+            y=req.y,
+            scale=req.scale,
+        )
 
-    return {"final_image_path": output_path, "logo_config": {"x": req.x, "y": req.y, "scale": req.scale}}
+        # Update DB
+        supabase.table("generated_images").update({
+            "final_image_path": output_path,
+            "logo_config": {"x": req.x, "y": req.y, "scale": req.scale},
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", image_id).execute()
+
+        return {"final_image_path": output_path, "logo_config": {"x": req.x, "y": req.y, "scale": req.scale}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Logo overlay failed for image {image_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to apply logo overlay")
 
 
 @router.post("/logo/upload")
@@ -343,7 +376,8 @@ async def upload_logo(
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
 
-    logo_dir = LOGOS_DIR / ctx.profile_id
+    settings = get_settings()
+    logo_dir = settings.output_dir / "logos" / ctx.profile_id
     logo_dir.mkdir(parents=True, exist_ok=True)
 
     # Determine extension from content type

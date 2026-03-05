@@ -24,6 +24,16 @@ logger = logging.getLogger(__name__)
 # Concurrency cap — don't overwhelm CDNs or the local event loop
 CONCURRENT_DOWNLOADS = 5
 
+# Module-level singleton semaphore (lazy init)
+_download_semaphore: asyncio.Semaphore | None = None
+
+def _get_download_semaphore() -> asyncio.Semaphore:
+    """Get or create module-level download semaphore."""
+    global _download_semaphore
+    if _download_semaphore is None:
+        _download_semaphore = asyncio.Semaphore(CONCURRENT_DOWNLOADS)
+    return _download_semaphore
+
 # Aggressive timeouts — skip slow CDNs rather than hang the pipeline
 DOWNLOAD_TIMEOUT = httpx.Timeout(10.0, connect=3.0)
 

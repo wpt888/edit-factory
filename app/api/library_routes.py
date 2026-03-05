@@ -1895,7 +1895,10 @@ async def remove_clip_audio(
         if clip_project_id and is_project_locked(clip_project_id):
             raise HTTPException(status_code=409, detail="Project is currently being processed")
 
-        video_path = Path(clip.get("final_video_path") or clip.get("raw_video_path"))
+        path_str = clip.get("final_video_path") or clip.get("raw_video_path")
+        if not path_str:
+            raise HTTPException(status_code=404, detail="No video path available")
+        video_path = Path(path_str)
 
         if not video_path.exists():
             raise HTTPException(status_code=404, detail=f"Video file not found: {video_path}")

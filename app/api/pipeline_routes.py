@@ -293,11 +293,17 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
         return None
 
 
+_pipeline_load_lock = threading.Lock()
+
 def _get_pipeline_or_load(pipeline_id: str) -> Optional[dict]:
     """Get pipeline from in-memory cache, falling back to DB load."""
     if pipeline_id in _pipelines:
         return _pipelines[pipeline_id]
-    return _db_load_pipeline(pipeline_id)
+    with _pipeline_load_lock:
+        # Double-check after acquiring lock
+        if pipeline_id in _pipelines:
+            return _pipelines[pipeline_id]
+        return _db_load_pipeline(pipeline_id)
 
 
 def _compute_segment_duration(profile_id: str) -> float:
@@ -1560,10 +1566,6 @@ async def render_variants(
         "adaptiveSizing": render_request.adaptive_sizing
     }
 
-    # Store source_video_ids in pipeline state for reference
-    if render_request.source_video_ids:
-        pipeline["source_video_ids"] = render_request.source_video_ids
-
     # Lock to guard concurrent writes to pipeline["render_jobs"]
     # PIP-02: Use meta lock to guard creation of new entries in _render_locks
     pipeline_id_str = str(pipeline_id)
@@ -1580,6 +1582,9 @@ async def render_variants(
     state_lock = _get_pipeline_state_lock(pipeline_id)
     variant_indices_to_render = []
     with state_lock:
+        # Store source_video_ids in pipeline state for reference
+        if render_request.source_video_ids:
+            pipeline["source_video_ids"] = render_request.source_video_ids
         for variant_index in render_request.variant_indices:
             existing_job = pipeline["render_jobs"].get(variant_index)
             if existing_job and existing_job.get("status") == "processing":

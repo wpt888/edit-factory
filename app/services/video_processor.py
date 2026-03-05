@@ -157,7 +157,7 @@ class VideoAnalyzer:
                 "-of", "json",
                 str(self.video_path)
             ]
-            result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+            result = safe_ffmpeg_run(probe_cmd, timeout=10, operation="ffprobe-rotation")
             if result.returncode != 0:
                 return 0
 
@@ -537,6 +537,9 @@ class VideoEditor:
         # VID-15: Encoding preset reference (can override video_quality)
         self._encoding_preset = None
 
+        # Voice detector (lazy loading)
+        self._voice_detector = None
+
         # Track intermediate files for cleanup
         self._intermediate_files: List[Path] = []
 
@@ -546,9 +549,6 @@ class VideoEditor:
             self._encoding_preset = preset
             self.video_quality = str(preset.crf)
             logger.info(f"Applied encoding preset CRF: {preset.crf}")
-
-        # Voice detector (lazy loading)
-        self._voice_detector = None
 
     def _get_voice_detector(self):
         """Lazy load voice detector."""
@@ -657,21 +657,7 @@ class VideoEditor:
 
         logger.debug(f"FFmpeg command ({operation}): {' '.join(cmd)}")
 
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        try:
-            stdout, stderr = proc.communicate(timeout=600)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            try:
-                proc.communicate(timeout=10)  # Reap zombie process
-            except subprocess.TimeoutExpired:
-                pass  # Process is stuck, OS will clean up
-            raise RuntimeError(f"FFmpeg {operation} timed out after 10 minutes")
-
-        # Build a CompletedProcess-compatible object for downstream code
-        result = subprocess.CompletedProcess(
-            args=cmd, returncode=proc.returncode, stdout=stdout, stderr=stderr
-        )
+        result = safe_ffmpeg_run(cmd, timeout=600, operation=operation)
 
         if result.returncode != 0:
             # Parse FFmpeg stderr for useful info
@@ -960,7 +946,7 @@ class VideoEditor:
         ]
         # VID-01: Initialize audio_duration as None; only use -t when we have a valid duration
         audio_duration = None
-        result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+        result = safe_ffmpeg_run(probe_cmd, timeout=30, operation="ffprobe-audio-duration")
         try:
             if result.returncode != 0:
                 raise ValueError(f"ffprobe failed with code {result.returncode}")

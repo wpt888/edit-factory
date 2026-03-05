@@ -157,7 +157,7 @@ def _get_video_info(video_path: Path) -> dict:
             "-of", "json",
             str(video_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = safe_ffmpeg_run(cmd, timeout=300, operation="ffprobe-video-info")
         if result.returncode != 0:
             return {}
 
@@ -195,9 +195,9 @@ def _generate_thumbnail(video_path: Path, output_path: Path, timestamp: float = 
             "-vf", "scale=320:-1",
             str(output_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, timeout=300)
+        result = safe_ffmpeg_run(cmd, timeout=300, operation="ffmpeg-thumbnail")
         return result.returncode == 0
-    except subprocess.TimeoutExpired:
+    except RuntimeError:
         logger.error(f"Thumbnail generation timed out for {video_path}")
         return False
     except Exception as e:
@@ -221,9 +221,9 @@ def _extract_segment_video(
             *get_prep_codec_params(),
             str(output_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, timeout=300)
+        result = safe_ffmpeg_run(cmd, timeout=300, operation="ffmpeg-segment-extract")
         return result.returncode == 0
-    except subprocess.TimeoutExpired:
+    except RuntimeError:
         logger.error(f"Segment extraction timed out for {source_path}")
         return False
     except Exception as e:
@@ -332,14 +332,14 @@ def _process_source_video_background(
                     *get_prep_codec_params(),
                     str(mp4_path)
                 ]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                result = safe_ffmpeg_run(cmd, timeout=600, operation="ffmpeg-transcode")
                 if result.returncode == 0:
                     current_path.unlink()
                     current_path = mp4_path
                     logger.info(f"[BG] Transcode successful: {mp4_path.name}")
                 else:
                     logger.error(f"[BG] Transcode failed: {result.stderr}")
-            except subprocess.TimeoutExpired:
+            except RuntimeError:
                 logger.error(f"[BG] Transcode timed out for {current_path.name}")
                 if mp4_path.exists():
                     mp4_path.unlink(missing_ok=True)
@@ -665,12 +665,21 @@ def _extract_waveform(video_path: str, num_samples: int = 800, duration: float =
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=120)
-        if result.returncode != 0:
-            logger.error(f"FFmpeg waveform extraction failed: {result.stderr[:500]}")
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            raw_bytes, _stderr = proc.communicate(timeout=120)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            logger.error("FFmpeg waveform extraction timed out")
             return []
-
-        raw = result.stdout
+        if proc.returncode != 0:
+            logger.error(f"FFmpeg waveform extraction failed: {_stderr[:500] if _stderr else b''}")
+            return []
+        raw = raw_bytes
         if not raw:
             return []
 
@@ -705,9 +714,6 @@ def _extract_waveform(video_path: str, num_samples: int = 800, duration: float =
 
         return waveform
 
-    except subprocess.TimeoutExpired:
-        logger.error("FFmpeg waveform extraction timed out")
-        return []
     except Exception as e:
         logger.error(f"Waveform extraction error: {e}")
         return []
@@ -1880,17 +1886,19 @@ async def serve_segment_file(file_path: str):
     try:
         full_path = full_path.resolve()
         allowed_dirs = [
-            settings.base_dir / "segments",
-            settings.base_dir / "source_videos"
+            (settings.base_dir / "segments").resolve(),
+            (settings.base_dir / "source_videos").resolve()
         ]
 
         is_allowed = any(
-            os.path.normcase(str(full_path)).startswith(os.path.normcase(str(d.resolve())))
+            full_path.is_relative_to(d)
             for d in allowed_dirs
         )
 
         if not is_allowed:
             raise HTTPException(status_code=403, detail="Access denied")
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=403, detail="Invalid path")
 

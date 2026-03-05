@@ -483,7 +483,7 @@ class AssemblyService:
             grp = _resolve_group(group)
             ids = group_seg_ids.get(grp)
             if not ids:
-                return segments_data[0] if segments_data else None
+                return None
 
             n = len(ids)
             min_reuse_distance = max(2, n)

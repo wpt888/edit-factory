@@ -93,12 +93,13 @@ def get_fal_generator() -> FalImageGenerator:
     """Get singleton FAL image generator instance."""
     global _fal_instance
 
+    old_instance = None
     with _fal_lock:
         if _fal_instance is not None:
             instance, created_at = _fal_instance
             if (time.time() - created_at) < _FAL_CACHE_TTL:
                 return instance
-            instance.close()
+            old_instance = instance
 
         settings = get_settings()
         if not settings.fal_api_key:
@@ -106,4 +107,12 @@ def get_fal_generator() -> FalImageGenerator:
 
         gen = FalImageGenerator(api_key=settings.fal_api_key)
         _fal_instance = (gen, time.time())
-        return gen
+
+    # Close expired client outside the lock to avoid blocking
+    if old_instance is not None:
+        try:
+            old_instance.close()
+        except Exception:
+            pass
+
+    return gen

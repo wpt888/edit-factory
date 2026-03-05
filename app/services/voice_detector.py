@@ -220,6 +220,9 @@ class VoiceDetector:
             if len(audio.shape) > 1:
                 audio = audio.mean(axis=1)
 
+            if not SILERO_AVAILABLE:
+                logger.error("Cannot convert audio: PyTorch not available")
+                return None
             return torch.from_numpy(audio.astype(np.float32))
         except Exception as e:
             logger.error(f"Failed to read audio: {e}")

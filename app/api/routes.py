@@ -22,6 +22,7 @@ from app.api.validators import (
 )
 from app.rate_limit import limiter
 from app.utils import sanitize_filename as _sanitize_filename
+from app.services.ffmpeg_semaphore import safe_ffmpeg_run
 from app.models import (
     JobStatus, JobResponse, HealthResponse, VideoInfo, VideoSegment
 )
@@ -331,7 +332,7 @@ async def get_video_info(request: Request, video: UploadFile = File(...)):
             str(temp_video)
         ]
 
-        result = await asyncio.to_thread(subprocess.run, probe_cmd, capture_output=True, text=True, timeout=30)
+        result = await asyncio.to_thread(safe_ffmpeg_run, probe_cmd, 30, "ffprobe-analyze")
 
         if result.returncode != 0:
             raise HTTPException(status_code=400, detail="Could not analyze video")
@@ -672,7 +673,7 @@ async def stream_job_progress(job_id: str, request: Request):
             heartbeat_counter += 1
             if heartbeat_counter >= 15:
                 heartbeat_counter = 0
-                yield f"event: heartbeat\ndata: {json.dumps({'ts': int(asyncio.get_event_loop().time())})}\n\n"
+                yield f"event: heartbeat\ndata: {json.dumps({'ts': int(asyncio.get_running_loop().time())})}\n\n"
 
             await asyncio.sleep(1)
 
@@ -1169,15 +1170,12 @@ async def serve_file(file_path: str, download: bool = False, profile: ProfileCon
         full_path = settings.output_dir / decoded_path
 
     # Verify the file is within allowed directories
-    # Use os.path.normcase for Windows case-insensitive comparison
     try:
         full_path = full_path.resolve()
-        output_dir = settings.output_dir.resolve()
-        # Normalize paths for Windows (lowercase, consistent separators)
-        full_path_normalized = os.path.normcase(str(full_path))
-        output_dir_normalized = os.path.normcase(str(output_dir))
-        if not full_path_normalized.startswith(output_dir_normalized):
+        if not full_path.is_relative_to(settings.output_dir.resolve()):
             raise HTTPException(status_code=403, detail="Access denied")
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=403, detail="Invalid path")
 

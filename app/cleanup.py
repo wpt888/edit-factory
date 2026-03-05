@@ -151,8 +151,10 @@ def cleanup_old_jobs(days: int, dry_run: bool) -> int:
             except Exception as exc:
                 logger.warning("Could not query jobs for dry-run", extra={"error": str(exc)})
         else:
-            # In-memory fallback
-            for job_id, job in list(storage._memory_store.items()):
+            # In-memory fallback — snapshot under lock to avoid concurrent modification
+            with storage._update_lock:
+                snapshot = list(storage._memory_store.items())
+            for job_id, job in snapshot:
                 if job.get("status") in terminal_statuses:
                     created_str = job.get("created_at", "")
                     try:
@@ -177,7 +179,9 @@ def cleanup_old_jobs(days: int, dry_run: bool) -> int:
         # In-memory fallback: manually remove old failed/completed jobs
         terminal_statuses = {"failed", "completed", "cancelled"}
         to_delete = []
-        for job_id, job in list(storage._memory_store.items()):
+        with storage._update_lock:
+            snapshot = list(storage._memory_store.items())
+        for job_id, job in snapshot:
             if job.get("status") in terminal_statuses:
                 created_str = job.get("created_at", "")
                 try:
@@ -186,8 +190,9 @@ def cleanup_old_jobs(days: int, dry_run: bool) -> int:
                         to_delete.append(job_id)
                 except ValueError:
                     pass
-        for job_id in to_delete:
-            del storage._memory_store[job_id]
+        with storage._update_lock:
+            for job_id in to_delete:
+                storage._memory_store.pop(job_id, None)
         count = len(to_delete)
         logger.info("Removed in-memory jobs", extra={"count": count})
 

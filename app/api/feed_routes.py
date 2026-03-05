@@ -140,11 +140,15 @@ async def create_feed(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    result = supabase.table("product_feeds").insert({
-        "profile_id": profile.profile_id,
-        "name": body.name,
-        "feed_url": body.feed_url,
-    }).execute()
+    try:
+        result = supabase.table("product_feeds").insert({
+            "profile_id": profile.profile_id,
+            "name": body.name,
+            "feed_url": body.feed_url,
+        }).execute()
+    except Exception as e:
+        logger.error(f"Failed to create feed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create feed")
 
     if not result.data:
         raise HTTPException(status_code=500, detail="Failed to create feed")
@@ -161,11 +165,15 @@ async def list_feeds(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    result = supabase.table("product_feeds")\
-        .select("*")\
-        .eq("profile_id", profile.profile_id)\
-        .order("created_at", desc=True)\
-        .execute()
+    try:
+        result = supabase.table("product_feeds")\
+            .select("*")\
+            .eq("profile_id", profile.profile_id)\
+            .order("created_at", desc=True)\
+            .execute()
+    except Exception as e:
+        logger.error(f"Failed to list feeds: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list feeds")
 
     return result.data or []
 
@@ -180,12 +188,16 @@ async def get_feed(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    result = supabase.table("product_feeds")\
-        .select("*")\
-        .eq("id", feed_id)\
-        .eq("profile_id", profile.profile_id)\
-        .limit(1)\
-        .execute()
+    try:
+        result = supabase.table("product_feeds")\
+            .select("*")\
+            .eq("id", feed_id)\
+            .eq("profile_id", profile.profile_id)\
+            .limit(1)\
+            .execute()
+    except Exception as e:
+        logger.error(f"Failed to fetch feed {feed_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch feed")
 
     if not result.data:
         raise HTTPException(status_code=404, detail="Feed not found")
@@ -204,12 +216,16 @@ async def delete_feed(
         raise HTTPException(status_code=503, detail="Database unavailable")
 
     # Verify ownership before deleting
-    existing = supabase.table("product_feeds")\
-        .select("id")\
-        .eq("id", feed_id)\
-        .eq("profile_id", profile.profile_id)\
-        .limit(1)\
-        .execute()
+    try:
+        existing = supabase.table("product_feeds")\
+            .select("id")\
+            .eq("id", feed_id)\
+            .eq("profile_id", profile.profile_id)\
+            .limit(1)\
+            .execute()
+    except Exception as e:
+        logger.error(f"Failed to verify feed {feed_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to verify feed ownership")
 
     if not existing.data:
         raise HTTPException(status_code=404, detail="Feed not found")
@@ -260,11 +276,15 @@ async def sync_feed(
     if feed.get("sync_status") == "syncing":
         raise HTTPException(status_code=409, detail="Feed sync already in progress")
 
-    # Set status to syncing immediately
-    supabase.table("product_feeds").update({
-        "sync_status": "syncing",
-        "sync_error": None,
-    }).eq("id", feed_id).execute()
+    # Set status to syncing immediately (optimistic concurrency)
+    try:
+        supabase.table("product_feeds").update({
+            "sync_status": "syncing",
+            "sync_error": None,
+        }).eq("id", feed_id).eq("sync_status", feed.get("sync_status", "idle")).execute()
+    except Exception as e:
+        logger.warning(f"Failed to set feed {feed_id} to syncing: {e}")
+        raise HTTPException(status_code=409, detail="Feed sync status changed concurrently")
 
     # Enqueue background task
     background_tasks.add_task(_sync_feed_task, feed_id, feed["feed_url"], profile.profile_id)
