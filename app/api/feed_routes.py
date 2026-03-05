@@ -120,7 +120,7 @@ async def _sync_feed_task(feed_id: str, feed_url: str, profile_id: str) -> None:
         try:
             supabase.table("product_feeds").update({
                 "sync_status": "error",
-                "sync_error": str(exc),
+                "sync_error": "Feed sync failed",
             }).eq("id", feed_id).eq("profile_id", profile_id).execute()
         except Exception as update_exc:
             logger.error("[Feed %s] Failed to set error status: %s", feed_id, update_exc)

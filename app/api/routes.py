@@ -437,8 +437,13 @@ async def create_job(
 
     # Salvam fisierele
     video_path = settings.input_dir / f"{job_id}_{_sanitize_filename(video.filename)}"
-    with open(video_path, "wb") as f:
-        shutil.copyfileobj(video.file, f)
+    try:
+        with open(video_path, "wb") as f:
+            shutil.copyfileobj(video.file, f)
+    except OSError:
+        if video_path.exists():
+            video_path.unlink()
+        raise HTTPException(status_code=500, detail="Failed to save uploaded video")
 
     audio_path = None
     if audio:
@@ -1115,7 +1120,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
                 logger.error(f"Failed to add TTS to {video_path}: {e}")
                 results.append({
                     "original": str(video_path),
-                    "error": str(e),
+                    "error": "Processing failed",
                     "status": "failed"
                 })
 

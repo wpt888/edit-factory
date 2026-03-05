@@ -309,7 +309,7 @@ async def get_profile_context(
 
         if not result.data:
             raise HTTPException(
-                status_code=503,
+                status_code=422,
                 detail="Account misconfigured: no default profile exists. Please contact support or re-run account setup."
             )
 

@@ -17,5 +17,5 @@ def sanitize_filename(filename: str) -> str:
         ext = p.suffix  # e.g. ".mp4"
         stem = p.stem
         max_stem = 100 - len(ext)
-        safe_name = stem[:max_stem] + ext if max_stem > 0 else safe_name[:100]
+        safe_name = (stem[:max_stem] + ext)[:100] if max_stem > 0 else safe_name[:100]
     return safe_name or "unnamed"

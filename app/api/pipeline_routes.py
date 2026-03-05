@@ -1798,10 +1798,7 @@ async def render_variants(
             render_avoid_ids = set()
             for other_idx, used_set in pipeline.get("segment_usage", {}).items():
                 if str(other_idx) != str(vid):
-                    if isinstance(used_set, list):
-                        render_avoid_ids.update(used_set)
-                    else:
-                        render_avoid_ids.update(used_set)
+                    render_avoid_ids.update(used_set if isinstance(used_set, list) else list(used_set))
 
             # Check for cancellation before heavy render
             if is_pipeline_cancelled(pipeline_id):

@@ -20,10 +20,15 @@ def setup_logging(level=logging.INFO):
     handler.setFormatter(formatter)
 
     root = logging.getLogger()
-    root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level)
 
     # Quieten noisy third-party loggers
     for noisy in ["httpcore", "httpx", "urllib3", "multipart"]:
         logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    # Clear pre-existing handlers after uvicorn loggers are set up
+    for name in ["uvicorn", "uvicorn.error", "uvicorn.access"]:
+        uv_logger = logging.getLogger(name)
+        uv_logger.handlers.clear()
+        uv_logger.addHandler(handler)

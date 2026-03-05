@@ -136,14 +136,14 @@ async def generate_product_video(
         product_result = supabase.table("v_catalog_products")\
             .select("id, title")\
             .eq("id", product_id)\
-            .maybe_single()\
+            .limit(1)\
             .execute()
     else:
         product_result = supabase.table("products")\
             .select("id, title, feed_id, product_feeds!inner(profile_id)")\
             .eq("id", product_id)\
             .eq("product_feeds.profile_id", profile.profile_id)\
-            .maybe_single()\
+            .limit(1)\
             .execute()
 
     if not product_result.data:

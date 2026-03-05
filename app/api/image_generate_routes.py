@@ -26,9 +26,6 @@ router = APIRouter(prefix="/image-gen", tags=["AI Image Generation"])
 _generation_progress: dict[str, dict] = {}
 _progress_lock = threading.Lock()
 
-GENERATED_IMAGES_DIR = Path("output/generated_images")
-LOGOS_DIR = Path("output/logos")
-
 
 # ============== Pydantic models ==============
 
@@ -373,8 +370,9 @@ async def upload_logo(
     ctx: ProfileContext = Depends(get_profile_context),
 ):
     """Upload profile logo image."""
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File must be an image")
+    allowed_image_types = {"image/png", "image/jpeg", "image/webp", "image/svg+xml", "image/gif"}
+    if not file.content_type or file.content_type not in allowed_image_types:
+        raise HTTPException(status_code=400, detail="File must be an image (png, jpeg, webp, svg, gif)")
 
     settings = get_settings()
     logo_dir = settings.output_dir / "logos" / ctx.profile_id

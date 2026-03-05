@@ -18,7 +18,7 @@ def get_version() -> str:
     try:
         result = subprocess.run(
             ["git", "describe", "--tags", "--always"],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, timeout=5  # timeout only applies when git is available
         )
         if result.returncode == 0:
             tag = result.stdout.strip()

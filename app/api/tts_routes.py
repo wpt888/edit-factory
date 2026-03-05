@@ -251,7 +251,7 @@ async def _generate_tts_background(
         job_storage.update_job(
             job_id=job_id,
             status="failed",
-            progress=f"Failed: {str(e)}"
+            progress="Failed"
         )
 
 

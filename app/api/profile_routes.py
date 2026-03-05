@@ -405,14 +405,14 @@ async def set_default_profile(
 
         now = datetime.now(timezone.utc).isoformat()
 
-        # Unset default on all user's profiles except the target (single UPDATE to reduce race window)
+        # Two-step update: race window exists between these calls if concurrent requests
+        # target different profiles. A DB-level constraint or transaction would eliminate this.
         supabase.table("profiles")\
             .update({"is_default": False, "updated_at": now})\
             .eq("user_id", current_user.id)\
             .neq("id", profile_id)\
             .execute()
 
-        # Set this profile as default
         result = supabase.table("profiles")\
             .update({"is_default": True, "updated_at": now})\
             .eq("id", profile_id)\

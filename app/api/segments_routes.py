@@ -525,6 +525,7 @@ async def get_source_video(
         .select("*")\
         .eq("id", video_id)\
         .eq("profile_id", profile.profile_id)\
+        .limit(1)\
         .execute()
 
     if not result.data:

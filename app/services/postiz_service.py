@@ -405,7 +405,7 @@ def get_postiz_publisher(profile_id: str) -> PostizPublisher:
                 logger.debug(f"[Profile {profile_id}] Postiz cache expired, recreating")
                 del _postiz_instances[profile_id]
 
-    # Load profile's Postiz settings from database (outside lock — DB call is slow)
+    # Load profile's Postiz settings from database
     supabase = get_supabase()
     api_url = None
     api_key = None
@@ -436,9 +436,14 @@ def get_postiz_publisher(profile_id: str) -> PostizPublisher:
             "Configurează Postiz în Settings."
         )
 
-    # Create and cache instance with timestamp
+    # Create and cache instance with timestamp (re-acquire lock to prevent race)
     publisher = PostizPublisher(api_url=api_url, api_key=api_key)
     with _postiz_lock:
+        # Re-check cache: another thread may have populated it while we queried DB
+        if profile_id in _postiz_instances:
+            instance, created_at = _postiz_instances[profile_id]
+            if (time.time() - created_at) < _POSTIZ_CACHE_TTL:
+                return instance
         # Evict oldest entry if cache is full
         if len(_postiz_instances) >= _MAX_POSTIZ_INSTANCES:
             oldest_key = next(iter(_postiz_instances))

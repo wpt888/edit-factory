@@ -417,12 +417,12 @@ async def render_assembly(
                 _assembly_jobs[job_id]["status"] = "failed"
                 _assembly_jobs[job_id]["progress"] = 0
                 _assembly_jobs[job_id]["current_step"] = "Assembly failed"
-                _assembly_jobs[job_id]["error"] = str(e)
+                _assembly_jobs[job_id]["error"] = "Assembly failed"
                 _assembly_jobs[job_id]["failed_at"] = datetime.now(timezone.utc).isoformat()
             get_job_storage().update_job(job_id, {
                 "status": "failed",
                 "progress": "Assembly failed",
-                "error": str(e),
+                "error": "Assembly failed",
             })
 
             # Persist to DB

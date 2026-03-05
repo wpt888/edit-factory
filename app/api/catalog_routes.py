@@ -157,10 +157,11 @@ async def get_product_images(
         product_result = supabase.table(TABLE)\
             .select("image_link")\
             .eq("id", product_id)\
-            .maybe_single()\
+            .limit(1)\
             .execute()
-        if product_result.data and product_result.data.get("image_link"):
-            return {"product_id": product_id, "images": [product_result.data["image_link"]]}
+        row = product_result.data[0] if product_result.data else None
+        if row and row.get("image_link"):
+            return {"product_id": product_id, "images": [row["image_link"]]}
     except Exception as exc:
         logger.warning("Fallback image fetch failed for %s: %s", product_id, exc)
 

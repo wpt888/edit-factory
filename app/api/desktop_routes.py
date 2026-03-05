@@ -238,7 +238,11 @@ async def save_desktop_settings(body: DesktopSettingsUpdate):
     existing = _read_config(config_file)
     # Only update non-None values from the request
     existing.update({k: v for k, v in body.model_dump(exclude_none=True).items()})
-    config_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    try:
+        config_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    except OSError as e:
+        logger.error(f"Failed to write config file: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save settings")
 
     # Write API keys to AppData .env so pydantic-settings picks them up
     _write_env_keys(settings.base_dir, body.model_dump(exclude_none=True))
