@@ -488,11 +488,25 @@ class SilenceRemover:
                     logger.warning(f"VAD method failed, falling back to FFmpeg: {e}")
 
         # Fallback to FFmpeg
-        return self.remove_silence_ffmpeg(
-            audio_path,
-            output_path,
-            min_silence_duration=self.min_silence_duration
-        )
+        try:
+            return self.remove_silence_ffmpeg(
+                audio_path,
+                output_path,
+                min_silence_duration=self.min_silence_duration
+            )
+        except (RuntimeError, Exception) as e:
+            logger.error(f"FFmpeg silence removal failed: {e}")
+            import shutil
+            shutil.copy(audio_path, output_path)
+            original_duration = self._get_audio_duration(audio_path)
+            return SilenceRemovalResult(
+                output_path=output_path,
+                original_duration=original_duration,
+                new_duration=original_duration,
+                removed_duration=0,
+                segments_kept=1,
+                segments_map=None
+            )
 
 
 def remove_silence_from_tts(

@@ -237,7 +237,7 @@ _PRODUCT_GROUP_COLORS = [
 ]
 
 
-async def _assign_product_group(
+def _assign_product_group(
     supabase, video_id: str, profile_id: str,
     seg_start: float, seg_end: float
 ) -> Optional[str]:
@@ -274,7 +274,7 @@ async def _assign_product_group(
     return best_label
 
 
-async def _reassign_all_segments(supabase, video_id: str, profile_id: str):
+def _reassign_all_segments(supabase, video_id: str, profile_id: str):
     """Reassign all segments for a video to their matching product groups."""
     segments = supabase.table("editai_segments")\
         .select("id, start_time, end_time, keywords, product_group")\
@@ -283,7 +283,7 @@ async def _reassign_all_segments(supabase, video_id: str, profile_id: str):
         .execute()
 
     for seg in segments.data:
-        new_label = await _assign_product_group(
+        new_label = _assign_product_group(
             supabase, video_id, profile_id,
             seg["start_time"], seg["end_time"]
         )
@@ -665,21 +665,11 @@ def _extract_waveform(video_path: str, num_samples: int = 800, duration: float =
     ]
 
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        try:
-            raw_bytes, _stderr = proc.communicate(timeout=120)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            try:
-                proc.communicate(timeout=10)
-            except subprocess.TimeoutExpired:
-                pass
-            logger.error("FFmpeg waveform extraction timed out")
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        if result.returncode != 0:
+            logger.error(f"FFmpeg waveform extraction failed: {result.stderr[:500] if result.stderr else b''}")
             return []
-        if proc.returncode != 0:
-            logger.error(f"FFmpeg waveform extraction failed: {_stderr[:500] if _stderr else b''}")
-            return []
-        raw = raw_bytes
+        raw = result.stdout
         if not raw:
             return []
 
@@ -714,6 +704,9 @@ def _extract_waveform(video_path: str, num_samples: int = 800, duration: float =
 
         return waveform
 
+    except subprocess.TimeoutExpired:
+        logger.error("FFmpeg waveform extraction timed out")
+        return []
     except Exception as e:
         logger.error(f"Waveform extraction error: {e}")
         return []
@@ -858,7 +851,7 @@ async def create_segment(
         }).execute()
 
         # Auto-assign product group if groups exist
-        assigned_group = await _assign_product_group(supabase, video_id, profile.profile_id, segment.start_time, segment.end_time)
+        assigned_group = await asyncio.to_thread(_assign_product_group, supabase, video_id, profile.profile_id, segment.start_time, segment.end_time)
         product_group_label = assigned_group or segment.product_group
 
         # If assigned, store in DB and add label as keyword
@@ -1142,7 +1135,8 @@ async def update_segment(
     # Re-check product group assignment if times changed
     if update.start_time is not None or update.end_time is not None:
         updated = result.data[0]
-        new_label = await _assign_product_group(
+        new_label = await asyncio.to_thread(
+            _assign_product_group,
             supabase, updated["source_video_id"], profile.profile_id,
             updated["start_time"], updated["end_time"]
         )
@@ -1443,7 +1437,7 @@ async def create_product_group(
     }).execute()
 
     # Reassign all segments for this video
-    await _reassign_all_segments(supabase, video_id, profile.profile_id)
+    await asyncio.to_thread(_reassign_all_segments, supabase, video_id, profile.profile_id)
 
     # Count segments in this group
     seg_count = supabase.table("editai_segments")\
@@ -1569,7 +1563,7 @@ async def update_product_group(
 
     # If time range changed, reassign
     if update.start_time is not None or update.end_time is not None:
-        await _reassign_all_segments(supabase, old["source_video_id"], profile.profile_id)
+        await asyncio.to_thread(_reassign_all_segments, supabase, old["source_video_id"], profile.profile_id)
 
     g = result.data[0]
     seg_count = supabase.table("editai_segments")\
@@ -1635,7 +1629,7 @@ async def delete_product_group(
         .execute()
 
     # Reassign remaining segments (might match other groups)
-    await _reassign_all_segments(supabase, g["source_video_id"], profile.profile_id)
+    await asyncio.to_thread(_reassign_all_segments, supabase, g["source_video_id"], profile.profile_id)
 
     return {"status": "deleted", "id": group_id}
 
@@ -1659,7 +1653,7 @@ async def reassign_product_groups(
     if not video.data:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    await _reassign_all_segments(supabase, video_id, profile.profile_id)
+    await asyncio.to_thread(_reassign_all_segments, supabase, video_id, profile.profile_id)
 
     return {"status": "reassigned", "video_id": video_id}
 

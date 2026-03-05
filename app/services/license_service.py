@@ -59,15 +59,23 @@ class LicenseService:
         if not body.get("activated"):
             return {"success": False, "error": body.get("error", "Activation failed")}
 
+        instance = body.get("instance", {})
+        instance_id = instance.get("id")
+        if not instance_id:
+            return {"success": False, "error": "Invalid license activation response — missing instance ID"}
+
+        license_key_info = body.get("license_key", {})
+        status = license_key_info.get("status", "unknown")
+
         now = datetime.now(timezone.utc).isoformat()
         self._write({
             "license_key": license_key,
-            "instance_id": body["instance"]["id"],
+            "instance_id": instance_id,
             "activated_at": now,
             "last_validated_at": now,
-            "status": body["license_key"]["status"],
+            "status": status,
         })
-        return {"success": True, "instance_id": body["instance"]["id"]}
+        return {"success": True, "instance_id": instance_id}
 
     async def validate(self) -> dict:
         """
@@ -105,7 +113,7 @@ class LicenseService:
                 raise ValueError(f"Invalid JSON response (HTTP {resp.status_code})")
             if body.get("valid"):
                 data["last_validated_at"] = datetime.now(timezone.utc).isoformat()
-                data["status"] = body["license_key"]["status"]
+                data["status"] = body.get("license_key", {}).get("status", "unknown")
                 self._write(data)
                 return {"valid": True, "grace_period": False, "error": None}
             else:

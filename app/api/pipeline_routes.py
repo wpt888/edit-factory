@@ -1073,6 +1073,7 @@ async def adopt_library_tts(
             .limit(1)\
             .execute()
     except Exception as e:
+        logger.error(f"Failed to fetch TTS asset: {e}")
         raise HTTPException(status_code=404, detail="TTS asset not found in library")
 
     if not result.data:

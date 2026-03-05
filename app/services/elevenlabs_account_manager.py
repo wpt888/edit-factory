@@ -265,14 +265,16 @@ class ElevenLabsAccountManager:
         """Fetch .env key subscription info with 5-minute cache."""
         import time
         now = time.time()
-        if self._env_sub_cache and (now - self._env_sub_cache_at) < self._ENV_SUB_CACHE_TTL:
-            return self._env_sub_cache
+        with self._cache_lock:
+            if self._env_sub_cache and (now - self._env_sub_cache_at) < self._ENV_SUB_CACHE_TTL:
+                return self._env_sub_cache
 
         try:
             sub_info = self.check_subscription(api_key)
             sub_info["checked_at"] = datetime.now(timezone.utc).isoformat()
-            self._env_sub_cache = sub_info
-            self._env_sub_cache_at = now
+            with self._cache_lock:
+                self._env_sub_cache = sub_info
+                self._env_sub_cache_at = time.time()
             return sub_info
         except Exception as e:
             logger.warning(f"Failed to fetch .env subscription info: {e}")

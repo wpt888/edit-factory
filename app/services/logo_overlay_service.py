@@ -29,8 +29,12 @@ def apply_logo_overlay(
     Returns:
         output_path on success.
     """
-    base = Image.open(base_path).convert("RGBA")
-    logo = Image.open(logo_path).convert("RGBA")
+    try:
+        base = Image.open(base_path).convert("RGBA")
+        logo = Image.open(logo_path).convert("RGBA")
+    except (OSError, Exception) as e:
+        logger.error(f"Failed to open image for logo overlay: {e}")
+        raise ValueError(f"Invalid image file: {e}")
 
     # Guard: reject logos larger than the base image (after scaling)
     scaled_w = max(1, int(logo.width * scale))
