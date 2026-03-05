@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -112,6 +112,8 @@ export default function UsagePage() {
     return 50;
   });
   const [showAllEntries, setShowAllEntries] = useState(false);
+  const isMountedRef = useRef(true);
+  useEffect(() => { return () => { isMountedRef.current = false; }; }, []);
 
   const fetchGeminiStatus = useCallback(async () => {
     setTestingGemini(true);
@@ -154,7 +156,9 @@ export default function UsagePage() {
   const fetchAllEntries = async () => {
     try {
       const res = await apiGetWithRetry("/costs/all");
+      if (!isMountedRef.current) return;
       const data = await res.json();
+      if (!isMountedRef.current) return;
       setAllEntries(data.entries || []);
       setShowAllEntries(true);
     } catch (error) {

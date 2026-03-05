@@ -118,8 +118,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         if (pathnameRef.current !== "/login" && pathnameRef.current !== "/signup") {
           router.push("/login");
         }
-      } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
-        // Refresh the page to update server components
+      } else if (event === "SIGNED_IN") {
         router.refresh();
       }
     });

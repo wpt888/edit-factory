@@ -106,6 +106,9 @@ export function AudioWaveform({
   useEffect(() => {
     if (!isPlaying || !audioElement) {
       cancelAnimationFrame(animFrameRef.current);
+      if (audioElement && audioElement.duration > 0) {
+        setProgress(audioElement.currentTime / audioElement.duration);
+      }
       return;
     }
 

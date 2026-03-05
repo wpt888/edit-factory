@@ -120,7 +120,7 @@ export function VariantTriage({
       <div className={`grid ${gridColsClass} gap-4`}>
         {variants.map((variant) => (
           <Card
-            key={variant.variant_index}
+            key={`${variant.variant_index}-${variant.variant_name}`}
             className={`cursor-pointer transition-all hover:shadow-md ${
               variant.selected
                 ? "ring-2 ring-primary bg-primary/5"

@@ -77,7 +77,7 @@ const settingsGroup = {
 };
 
 function isGroupActive(items: { href: string }[], pathname: string) {
-  return items.some((item) => pathname === item.href);
+  return items.some((item) => pathname.startsWith(item.href));
 }
 
 export function NavBar() {

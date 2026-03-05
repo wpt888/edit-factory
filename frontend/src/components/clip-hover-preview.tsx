@@ -41,8 +41,7 @@ export function ClipHoverPreview({ thumbnailPath, videoPath, clipId, alt, childr
   useEffect(() => {
     if (showVideo && videoRef.current) {
       videoRef.current.play().catch(() => {});
-    }
-    if (!showVideo && videoRef.current) {
+    } else if (!showVideo && videoRef.current) {
       videoRef.current.pause();
       videoRef.current.currentTime = 0;
     }

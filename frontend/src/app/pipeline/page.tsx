@@ -1492,6 +1492,7 @@ function PipelinePage() {
       // FE-09: Refresh history sidebar so the imported pipeline appears
       fetchHistory();
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       handleApiError(err, "Failed to import scripts");
     } finally {
       setHistoryImporting(false);

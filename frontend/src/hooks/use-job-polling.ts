@@ -209,7 +209,7 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
 
   const startSSE = useCallback((jobId: string) => {
     const apiBase =
-      process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+      (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1").replace(/\/+$/, "");
     const url = `${apiBase}/jobs/${jobId}/stream`;
     const eventSource = new EventSource(url);
     eventSourceRef.current = eventSource;

@@ -42,7 +42,7 @@ export function VariantPreviewPlayer({
   const [currentStep, setCurrentStep] = useState("");
   const [matchesFingerprint, setMatchesFingerprint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelledRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -53,9 +53,9 @@ export function VariantPreviewPlayer({
   // Stop polling on unmount or close
   const stopPolling = useCallback(() => {
     cancelledRef.current = true;
-    if (pollRef.current) {
-      clearTimeout(pollRef.current);
-      pollRef.current = null;
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
     }
   }, []);
 
@@ -148,10 +148,10 @@ export function VariantPreviewPlayer({
           }
           // Re-schedule only if not cancelled
           if (!cancelledRef.current) {
-            pollRef.current = setTimeout(pollStatus, 2000);
+            pollTimeoutRef.current = setTimeout(pollStatus, 2000);
           }
         };
-        pollRef.current = setTimeout(pollStatus, 2000);
+        pollTimeoutRef.current = setTimeout(pollStatus, 2000);
       } catch (err: unknown) {
         setStatus("failed");
         setError(err instanceof Error ? err.message : "Failed to start preview render");

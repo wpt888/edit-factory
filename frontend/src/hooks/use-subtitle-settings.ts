@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   SubtitleSettings,
   DEFAULT_SUBTITLE_SETTINGS
@@ -27,6 +27,27 @@ export function useSubtitleSettings(storageKey?: string) {
     return { ...DEFAULT_SUBTITLE_SETTINGS };
   });
 
+  // Reload settings from localStorage when fullKey changes
+  const prevFullKeyRef = useRef(fullKey);
+  useEffect(() => {
+    if (prevFullKeyRef.current === fullKey) return;
+    prevFullKeyRef.current = fullKey;
+    if (typeof window === "undefined" || !fullKey) {
+      setSettings({ ...DEFAULT_SUBTITLE_SETTINGS });
+      return;
+    }
+    try {
+      const stored = localStorage.getItem(fullKey);
+      if (stored) {
+        setSettings({ ...DEFAULT_SUBTITLE_SETTINGS, ...JSON.parse(stored) });
+      } else {
+        setSettings({ ...DEFAULT_SUBTITLE_SETTINGS });
+      }
+    } catch {
+      setSettings({ ...DEFAULT_SUBTITLE_SETTINGS });
+    }
+  }, [fullKey]);
+
   // Persist to localStorage when settings change
   useEffect(() => {
     if (typeof window === "undefined" || !fullKey) return;
@@ -34,7 +55,11 @@ export function useSubtitleSettings(storageKey?: string) {
     try {
       localStorage.setItem(fullKey, JSON.stringify(settings));
     } catch (error) {
-      handleApiError(error, "Settings error");
+      if (error instanceof DOMException && error.name === "QuotaExceededError") {
+        console.warn("Storage full — could not save subtitle settings for key:", fullKey);
+      } else {
+        handleApiError(error, "Settings error");
+      }
     }
   }, [settings, fullKey]);
 

@@ -12,7 +12,7 @@
 
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { apiPost, handleApiError } from "@/lib/api";
 import { toast } from "sonner";
 import {
@@ -60,11 +60,24 @@ export function CreateFeedDialog({
     }
   }, [open]);
 
+  const abortControllerRef = React.useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      abortControllerRef.current?.abort();
+    }
+  }, [open]);
+
   const handleCreate = async () => {
     const trimmedName = name.trim();
     const trimmedFeedUrl = feedUrl.trim();
 
-    // Validation
     if (trimmedName.length < 2) {
       toast.error("Feed name must be at least 2 characters");
       return;
@@ -75,6 +88,10 @@ export function CreateFeedDialog({
       return;
     }
 
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setLoading(true);
 
     try {
@@ -83,6 +100,7 @@ export function CreateFeedDialog({
         feed_url: trimmedFeedUrl,
       });
 
+      if (controller.signal.aborted) return;
       const data = await response.json();
       toast.success("Feed created successfully");
       onCreated(data);
@@ -90,9 +108,10 @@ export function CreateFeedDialog({
       setName("");
       setFeedUrl("");
     } catch (error) {
+      if (controller.signal.aborted) return;
       handleApiError(error, "Error creating feed");
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   };
 

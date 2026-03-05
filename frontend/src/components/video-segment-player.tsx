@@ -835,7 +835,7 @@ export function VideoSegmentPlayer({
             const pos = (i / Math.min(10, Math.ceil(visibleDuration / 5))) * 100;
             return (
               <span
-                key={i}
+                key={time.toFixed(2)}
                 className="absolute"
                 style={{ left: `${pos}%`, transform: 'translateX(-50%)' }}
               >

@@ -751,7 +751,7 @@ export function TimelineEditor({
   const handleInsertSlide = (afterMatchIndex: number) => {
     if (!onInterstitialSlidesChange) return;
     const newSlide: InterstitialSlide = {
-      id: Math.random().toString(36).slice(2, 10),
+      id: crypto.randomUUID(),
       afterMatchIndex,
       imageUrl: "",
       duration: 2.0,

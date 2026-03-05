@@ -92,8 +92,12 @@ function SetupPageContent() {
     if (!isEditMode) return
 
     apiGet("/desktop/settings")
-      .then((res) => res.json())
-      .then((data: { supabase_url?: string; supabase_key?: string; gemini_api_key?: string; elevenlabs_api_key?: string; crash_reporting_enabled?: boolean }) => {
+      .then((res) => {
+        if (!res.ok) return;
+        return res.json();
+      })
+      .then((data: { supabase_url?: string; supabase_key?: string; gemini_api_key?: string; elevenlabs_api_key?: string; crash_reporting_enabled?: boolean } | undefined) => {
+        if (!data) return;
         // Supabase URL is returned unredacted
         if (data.supabase_url) setSupabaseUrl(data.supabase_url)
         // Set hints for redacted keys (e.g., "***1234")

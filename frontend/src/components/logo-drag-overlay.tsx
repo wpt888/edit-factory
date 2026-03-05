@@ -95,12 +95,11 @@ export function LogoDragOverlay({
     if (!dragging) return;
 
     const handleMouseMove = (e: MouseEvent) => {
-      if (!containerRef.current) return;
+      if (!containerRef.current || !dragging) return;
       const rect = containerRef.current.getBoundingClientRect();
       const newX = Math.max(0, e.clientX - rect.left - dragOffset.current.x);
       const newY = Math.max(0, e.clientY - rect.top - dragOffset.current.y);
 
-      // Clamp to container bounds
       const logoEl = logoRef.current;
       const maxX = logoEl ? rect.width - logoEl.offsetWidth : rect.width;
       const maxY = logoEl ? rect.height - logoEl.offsetHeight : rect.height;

@@ -137,7 +137,7 @@ export function usePolling<T>(options: UsePollingOptions<T>): UsePollingReturn<T
       clearPolling();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, endpoint]);
+  }, [enabled, endpoint, interval]);
 
   // Cleanup on unmount
   useEffect(() => {

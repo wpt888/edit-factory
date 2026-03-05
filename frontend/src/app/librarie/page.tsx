@@ -604,8 +604,7 @@ function LibrarieContent() {
     } catch {
       toast.error("Download error");
     } finally {
-      // Always revoke blob URL to prevent memory leak (Bug #117)
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      if (blobUrl) setTimeout(() => URL.revokeObjectURL(blobUrl!), 1000);
     }
   };
 

@@ -30,14 +30,12 @@ export function EditorLayout({
   // Keyboard shortcuts for panel collapse
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if typing in an input
       if (
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement
       ) {
         return;
       }
-      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
 
       if (e.key === "[" && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();

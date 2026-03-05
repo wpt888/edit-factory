@@ -76,6 +76,17 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       setProfilesState(fetchedProfiles);
       localStorage.setItem(STORAGE_KEYS.PROFILES, JSON.stringify(fetchedProfiles));
 
+      // Reset current profile if it no longer exists in the fetched list
+      if (currentProfileRef.current && !fetchedProfiles.some((p) => p.id === currentProfileRef.current!.id)) {
+        const fallback = fetchedProfiles[0] || null;
+        setCurrentProfileState(fallback);
+        if (fallback) {
+          localStorage.setItem(STORAGE_KEYS.PROFILE_ID, fallback.id);
+        } else {
+          localStorage.removeItem(STORAGE_KEYS.PROFILE_ID);
+        }
+      }
+
       // Auto-select profile if none currently selected (read from ref to avoid stale closure)
       if (!currentProfileRef.current) {
         const storedId = localStorage.getItem(STORAGE_KEYS.PROFILE_ID);

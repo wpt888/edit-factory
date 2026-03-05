@@ -63,7 +63,7 @@ function getProgressValue(job: ProductJobStatus): number {
       return 0;
     case "processing": {
       const parsed = parseInt(job.progress);
-      return isNaN(parsed) ? 10 : parsed;
+      return isNaN(parsed) ? 0 : parsed;
     }
     case "completed":
       return 100;

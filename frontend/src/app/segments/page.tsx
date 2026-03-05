@@ -375,23 +375,30 @@ export default function SegmentsPage() {
     }
   }, []);
 
+  // Refs for keyboard handler to avoid re-registering listener on every callback change
+  const handleDeleteSegmentRef = useRef(handleDeleteSegment);
+  handleDeleteSegmentRef.current = handleDeleteSegment;
+  const handleUndoRef = useRef(handleUndo);
+  handleUndoRef.current = handleUndo;
+  const selectedSegmentRef = useRef(selectedSegment);
+  selectedSegmentRef.current = selectedSegment;
+
   // Keyboard shortcuts: Delete selected segment, Ctrl+Z undo, Escape deselect
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Skip when typing in form elements
       if (
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement ||
         e.target instanceof HTMLSelectElement
       ) return;
 
-      if ((e.key === "Delete" || e.key === "Backspace") && selectedSegment) {
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedSegmentRef.current) {
         e.preventDefault();
-        handleDeleteSegment(selectedSegment.id);
+        handleDeleteSegmentRef.current(selectedSegmentRef.current.id);
         setSelectedSegment(null);
       } else if (e.key === "z" && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
         e.preventDefault();
-        handleUndo();
+        handleUndoRef.current();
       } else if (e.key === "Escape") {
         e.preventDefault();
         setSelectedSegment(null);
@@ -400,7 +407,7 @@ export default function SegmentsPage() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedSegment, handleDeleteSegment, handleUndo]);
+  }, []);
 
   // Load segments and product groups when video selected
   useEffect(() => {

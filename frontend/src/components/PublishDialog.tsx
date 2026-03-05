@@ -178,8 +178,7 @@ export function PublishDialog({
     });
   };
 
-  // Get character warnings for selected platforms
-  const getCharWarnings = () => {
+  const charWarningsMemo = useMemo(() => {
     const warnings: { platform: string; limit: number }[] = [];
     for (const id of selectedIds) {
       const integration = integrations.find((i) => i.id === id);
@@ -193,10 +192,9 @@ export function PublishDialog({
       }
     }
     return warnings;
-  };
+  }, [selectedIds, integrations, caption]);
 
-  // Get the smallest char limit among selected platforms
-  const getMinCharLimit = () => {
+  const minCharLimit = useMemo(() => {
     let min = Infinity;
     for (const id of selectedIds) {
       const integration = integrations.find((i) => i.id === id);
@@ -205,7 +203,7 @@ export function PublishDialog({
       if (limit < min) min = limit;
     }
     return min === Infinity ? 5000 : min;
-  };
+  }, [selectedIds, integrations]);
 
   // Poll progress
   const startPolling = useCallback((jobId: string) => {
@@ -289,7 +287,7 @@ export function PublishDialog({
     }
   };
 
-  // Bug #171: memoize min date so it doesn't recalculate on every render
+  // Bug #171: memoize min date so it only recalculates when the dialog opens
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const minScheduleDate = useMemo(() => new Date().toISOString().slice(0, 16), [open]);
 
@@ -305,8 +303,8 @@ export function PublishDialog({
     onOpenChange(false);
   };
 
-  const charWarnings = getCharWarnings();
-  const minLimit = getMinCharLimit();
+  const charWarnings = charWarningsMemo;
+  const minLimit = minCharLimit;
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>

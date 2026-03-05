@@ -11,7 +11,7 @@
 
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useProfile } from "@/contexts/profile-context";
 import { apiPost, handleApiError } from "@/lib/api";
 import { toast } from "sonner";
@@ -39,6 +39,12 @@ export function CreateProfileDialog({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
 
   // Bug #136: reset form state when dialog closes
   useEffect(() => {
@@ -67,19 +73,20 @@ export function CreateProfileDialog({
         description: description.trim() || undefined,
       });
 
+      if (!isMountedRef.current) return;
       toast.success("Profile created successfully");
 
-      // Refresh the profile list in context
       await refreshProfiles();
 
-      // Close dialog and reset form
+      if (!isMountedRef.current) return;
       onOpenChange(false);
       setName("");
       setDescription("");
     } catch (error) {
+      if (!isMountedRef.current) return;
       handleApiError(error, "Error creating profile");
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) setLoading(false);
     }
   };
 

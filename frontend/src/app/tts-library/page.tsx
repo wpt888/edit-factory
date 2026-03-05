@@ -214,8 +214,8 @@ export default function TTSLibraryPage() {
     }
 
     const audio = new Audio(BASE_URL + asset.mp3_url);
-    audio.onended = () => setPlayingId(null);
-    audio.onerror = () => setPlayingId(null);
+    audio.onended = () => { if (audioRef.current === audio) setPlayingId(null); };
+    audio.onerror = () => { if (audioRef.current === audio) setPlayingId(null); };
     audio.play().catch(() => setPlayingId(null)); // Bug #58
     audioRef.current = audio;
     setPlayingId(asset.id);

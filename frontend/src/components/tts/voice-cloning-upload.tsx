@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useRef, useEffect } from "react"
+import { useProfile } from "@/contexts/profile-context"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -14,6 +15,7 @@ interface VoiceCloningUploadProps {
 }
 
 export function VoiceCloningUpload({ onVoiceCloned }: VoiceCloningUploadProps) {
+  const { currentProfile } = useProfile()
   const [voiceName, setVoiceName] = useState("")
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -93,10 +95,7 @@ export function VoiceCloningUpload({ onVoiceCloned }: VoiceCloningUploadProps) {
       formData.append("audio_file", selectedFile)
       formData.append("voice_name", voiceName.trim())
 
-      // Get profile ID from localStorage
-      const profileId = typeof window !== "undefined"
-        ? localStorage.getItem("editai_current_profile_id")
-        : null
+      const profileId = currentProfile?.id ?? null
 
       const headers: HeadersInit = {}
       if (profileId) {

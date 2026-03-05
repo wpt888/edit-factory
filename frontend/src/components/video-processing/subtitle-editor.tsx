@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -28,8 +28,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
-  DialogClose,
 } from "@/components/ui/dialog";
 import { Type } from "lucide-react";
 import {
@@ -298,65 +296,89 @@ export function SubtitleEditor({
               )}
             </div>
 
-            {subtitleLines.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                <p>Upload an SRT file to edit subtitles</p>
-                <p className="text-sm mt-1">or let AI generate them automatically</p>
-              </div>
-            ) : (
-              <ScrollArea className="h-[300px] border rounded-lg">
-                <div className="p-4 space-y-2">
-                  {subtitleLines.map((line) => (
-                    <div
-                      key={line.id}
-                      className="p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors"
-                    >
-                      <div className="flex justify-between items-start gap-2 mb-2">
-                        <Badge variant="outline" className="text-xs">
-                          #{line.id}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground">
-                          {line.start} → {line.end}
-                        </span>
-                      </div>
-                      <Dialog>
-                        <DialogTrigger asChild>
-                          <button
-                            className="w-full text-left text-sm hover:text-primary transition-colors"
-                          >
-                            {line.text}
-                          </button>
-                        </DialogTrigger>
-                        <DialogContent>
-                          <DialogHeader>
-                            <DialogTitle>Edit Subtitle #{line.id}</DialogTitle>
-                            <DialogDescription>
-                              {line.start} → {line.end}
-                            </DialogDescription>
-                          </DialogHeader>
-                          <Textarea
-                            value={line.text}
-                            onChange={(e) => updateSubtitleLine(line.id, e.target.value)}
-                            className="min-h-[100px]"
-                          />
-                          <DialogFooter>
-                            <DialogClose asChild>
-                              <Button variant="outline">
-                                Close
-                              </Button>
-                            </DialogClose>
-                          </DialogFooter>
-                        </DialogContent>
-                      </Dialog>
-                    </div>
-                  ))}
-                </div>
-              </ScrollArea>
-            )}
+            <SubtitleLinesEditor
+              subtitleLines={subtitleLines}
+              onUpdateLine={updateSubtitleLine}
+            />
           </div>
         </>
       )}
     </div>
+  );
+}
+
+function SubtitleLinesEditor({
+  subtitleLines,
+  onUpdateLine,
+}: {
+  subtitleLines: SubtitleLine[];
+  onUpdateLine: (id: number, text: string) => void;
+}) {
+  const [editingLine, setEditingLine] = useState<SubtitleLine | null>(null);
+
+  if (subtitleLines.length === 0) {
+    return (
+      <div className="text-center py-8 text-muted-foreground">
+        <p>Upload an SRT file to edit subtitles</p>
+        <p className="text-sm mt-1">or let AI generate them automatically</p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <ScrollArea className="h-[300px] border rounded-lg">
+        <div className="p-4 space-y-2">
+          {subtitleLines.map((line) => (
+            <div
+              key={line.id}
+              className="p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors"
+            >
+              <div className="flex justify-between items-start gap-2 mb-2">
+                <Badge variant="outline" className="text-xs">
+                  #{line.id}
+                </Badge>
+                <span className="text-xs text-muted-foreground">
+                  {line.start} {"\u2192"} {line.end}
+                </span>
+              </div>
+              <button
+                className="w-full text-left text-sm hover:text-primary transition-colors"
+                onClick={() => setEditingLine(line)}
+              >
+                {line.text}
+              </button>
+            </div>
+          ))}
+        </div>
+      </ScrollArea>
+
+      <Dialog open={editingLine !== null} onOpenChange={(open) => { if (!open) setEditingLine(null); }}>
+        {editingLine && (
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Edit Subtitle #{editingLine.id}</DialogTitle>
+              <DialogDescription>
+                {editingLine.start} {"\u2192"} {editingLine.end}
+              </DialogDescription>
+            </DialogHeader>
+            <Textarea
+              value={editingLine.text}
+              onChange={(e) => {
+                setEditingLine({ ...editingLine, text: e.target.value });
+                onUpdateLine(editingLine.id, e.target.value);
+              }}
+              className="min-h-[100px]"
+            />
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditingLine(null)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        )}
+      </Dialog>
+    </>
   );
 }
 

@@ -64,7 +64,7 @@ export function TTSPanel({
         <p className="text-xs text-muted-foreground">
           {scriptText.length} caractere
           {scriptText.length > 0 && (
-            <> (~{Math.ceil(scriptText.length / 150)} secunde audio)</>
+            <> (~{Math.ceil(scriptText.length / 150)} secunde audio, estimate)</>
           )}
         </p>
       </div>
