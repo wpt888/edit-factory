@@ -165,13 +165,13 @@ async def get_profile(
         result = supabase.table("profiles")\
             .select("*")\
             .eq("id", profile_id)\
-            .single()\
+            .limit(1)\
             .execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        profile = result.data
+        profile = result.data[0]
 
         # Check ownership
         if profile["user_id"] != current_user.id:
@@ -207,13 +207,13 @@ async def update_profile(
         result = supabase.table("profiles")\
             .select("id, user_id")\
             .eq("id", profile_id)\
-            .single()\
+            .limit(1)\
             .execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        if result.data["user_id"] != current_user.id:
+        if result.data[0]["user_id"] != current_user.id:
             logger.warning(f"[Profile {profile_id}] Update denied for user {current_user.id}")
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
@@ -264,13 +264,13 @@ async def patch_profile(
         result = supabase.table("profiles")\
             .select("id, user_id")\
             .eq("id", profile_id)\
-            .single()\
+            .limit(1)\
             .execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        if result.data["user_id"] != current_user.id:
+        if result.data[0]["user_id"] != current_user.id:
             logger.warning(f"[Profile {profile_id}] PATCH denied for user {current_user.id}")
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
@@ -340,13 +340,13 @@ async def delete_profile(
         result = supabase.table("profiles")\
             .select("id, user_id, is_default")\
             .eq("id", profile_id)\
-            .single()\
+            .limit(1)\
             .execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        profile = result.data
+        profile = result.data[0]
 
         if profile["user_id"] != current_user.id:
             logger.warning(f"[Profile {profile_id}] Delete denied for user {current_user.id}")
@@ -393,25 +393,28 @@ async def set_default_profile(
         result = supabase.table("profiles")\
             .select("id, user_id")\
             .eq("id", profile_id)\
-            .single()\
+            .limit(1)\
             .execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        if result.data["user_id"] != current_user.id:
+        if result.data[0]["user_id"] != current_user.id:
             logger.warning(f"[Profile {profile_id}] Set-default denied for user {current_user.id}")
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
-        # Unset default on all user's profiles
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Unset default on all user's profiles except the target (single UPDATE to reduce race window)
         supabase.table("profiles")\
-            .update({"is_default": False, "updated_at": datetime.now(timezone.utc).isoformat()})\
+            .update({"is_default": False, "updated_at": now})\
             .eq("user_id", current_user.id)\
+            .neq("id", profile_id)\
             .execute()
 
         # Set this profile as default
         result = supabase.table("profiles")\
-            .update({"is_default": True, "updated_at": datetime.now(timezone.utc).isoformat()})\
+            .update({"is_default": True, "updated_at": now})\
             .eq("id", profile_id)\
             .execute()
 
@@ -448,17 +451,17 @@ async def get_profile_dashboard(
         profile_result = supabase.table("profiles")\
             .select("user_id, monthly_quota_usd")\
             .eq("id", profile_id)\
-            .single()\
+            .limit(1)\
             .execute()
 
         if not profile_result.data:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        if profile_result.data["user_id"] != current_user.id:
+        if profile_result.data[0]["user_id"] != current_user.id:
             logger.warning(f"[Profile {profile_id}] Dashboard access denied for user {current_user.id}")
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
-        monthly_quota = float(profile_result.data.get("monthly_quota_usd", 0) or 0)
+        monthly_quota = float(profile_result.data[0].get("monthly_quota_usd", 0) or 0)
 
         # Calculate date filter
         now = datetime.now(timezone.utc)
@@ -557,16 +560,16 @@ async def get_subtitle_settings(
         result = supabase.table("profiles")\
             .select("user_id, subtitle_settings")\
             .eq("id", profile_id)\
-            .single()\
+            .limit(1)\
             .execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        if result.data["user_id"] != current_user.id:
+        if result.data[0]["user_id"] != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
-        saved = result.data.get("subtitle_settings")
+        saved = result.data[0].get("subtitle_settings")
         return {**DEFAULT_SUBTITLE_SETTINGS, **(saved or {})}
 
     except HTTPException:
@@ -591,13 +594,13 @@ async def update_subtitle_settings(
         result = supabase.table("profiles")\
             .select("id, user_id")\
             .eq("id", profile_id)\
-            .single()\
+            .limit(1)\
             .execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        if result.data["user_id"] != current_user.id:
+        if result.data[0]["user_id"] != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
         settings_dict = settings.model_dump()
@@ -641,17 +644,17 @@ async def get_ai_instructions(
         result = supabase.table("profiles")\
             .select("user_id, ai_instructions")\
             .eq("id", profile_id)\
-            .single()\
+            .limit(1)\
             .execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Profile not found")
 
         settings = get_settings()
-        if not settings.auth_disabled and result.data["user_id"] != current_user.id:
+        if not settings.auth_disabled and result.data[0]["user_id"] != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
-        return {"ai_instructions": result.data.get("ai_instructions") or ""}
+        return {"ai_instructions": result.data[0].get("ai_instructions") or ""}
 
     except HTTPException:
         raise
@@ -675,14 +678,14 @@ async def update_ai_instructions(
         result = supabase.table("profiles")\
             .select("id, user_id")\
             .eq("id", profile_id)\
-            .single()\
+            .limit(1)\
             .execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Profile not found")
 
         settings = get_settings()
-        if not settings.auth_disabled and result.data["user_id"] != current_user.id:
+        if not settings.auth_disabled and result.data[0]["user_id"] != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
         supabase.table("profiles")\

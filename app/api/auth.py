@@ -213,10 +213,11 @@ def _cache_set_profile(user_id: str, profile_key: str, ctx: "ProfileContext") ->
     """Store ProfileContext in cache with current timestamp. DB-12: Evicts oldest 10% if cache exceeds 1000."""
     with _profile_cache_lock:
         if len(_profile_cache) > 1000:
-            # Evict oldest 10% instead of clearing everything
-            sorted_entries = sorted(_profile_cache.items(), key=lambda item: item[1][1])  # sort by timestamp
-            evict_count = max(1, len(_profile_cache) // 10)
-            for key, _ in sorted_entries[:evict_count]:
+            # Snapshot + sort outside mutation, then evict oldest 10%
+            snapshot = list(_profile_cache.items())
+            snapshot.sort(key=lambda item: item[1][1])
+            evict_count = max(1, len(snapshot) // 10)
+            for key, _ in snapshot[:evict_count]:
                 _profile_cache.pop(key, None)
         _profile_cache[(user_id, profile_key)] = (ctx, _time.monotonic())
 
@@ -295,20 +296,12 @@ async def get_profile_context(
             return cached
 
         # Auto-select default profile
-        try:
-            result = supabase.table("profiles")\
-                .select("id")\
-                .eq("user_id", current_user.id)\
-                .eq("is_default", True)\
-                .single()\
-                .execute()
-        except Exception as e:
-            # .single() raises when 0 or 2+ rows match
-            logger.warning(f"Profile lookup failed for user {current_user.id}: {e}")
-            raise HTTPException(
-                status_code=503,
-                detail="Account misconfigured: no default profile exists. Please contact support or re-run account setup."
-            )
+        result = supabase.table("profiles")\
+            .select("id")\
+            .eq("user_id", current_user.id)\
+            .eq("is_default", True)\
+            .limit(1)\
+            .execute()
 
         if not result.data:
             raise HTTPException(
@@ -316,7 +309,7 @@ async def get_profile_context(
                 detail="Account misconfigured: no default profile exists. Please contact support or re-run account setup."
             )
 
-        profile_id = result.data["id"]
+        profile_id = result.data[0]["id"]
         logger.info(f"[Profile {profile_id}] Auto-selected default for user {current_user.id}")
         ctx = ProfileContext(profile_id=profile_id, user_id=current_user.id)
         _cache_set_profile(current_user.id, "default", ctx)
@@ -331,22 +324,17 @@ async def get_profile_context(
             return cached
 
         # Validate profile exists
-        try:
-            result = supabase.table("profiles")\
-                .select("id, user_id")\
-                .eq("id", profile_id)\
-                .single()\
-                .execute()
-        except Exception as e:
-            # .single() raises when 0 or 2+ rows match
-            logger.warning(f"Profile validation failed for {profile_id}: {e}")
-            raise HTTPException(status_code=404, detail="Profile not found")
+        result = supabase.table("profiles")\
+            .select("id, user_id")\
+            .eq("id", profile_id)\
+            .limit(1)\
+            .execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Profile not found")
 
         # Check ownership
-        if result.data["user_id"] != current_user.id:
+        if result.data[0]["user_id"] != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
         ctx = ProfileContext(profile_id=profile_id, user_id=current_user.id)

@@ -87,10 +87,10 @@ async def validate_upload_size(file: UploadFile, max_bytes: int = MAX_UPLOAD_SIZ
             )
     except HTTPException:
         raise
-    except Exception:
+    except Exception as exc:
         # If we cannot determine size, allow the upload to proceed.
         # The underlying storage write will surface any real issues.
-        pass
+        logger.warning("Could not determine upload file size — skipping validation: %s", exc)
 
 
 async def validate_file_mime_type(

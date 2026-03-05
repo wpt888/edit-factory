@@ -71,6 +71,9 @@ async def check_duplicates(
     if not request.texts:
         return {"matches": {}}
 
+    if len(request.texts) > 500:
+        raise HTTPException(status_code=400, detail="Too many texts (max 500)")
+
     # Fetch all ready assets for the profile
     result = (
         supabase.table("editai_tts_assets")
@@ -188,14 +191,14 @@ async def get_tts_asset(
         .select("*")
         .eq("id", asset_id)
         .eq("profile_id", profile.profile_id)
-        .single()
+        .limit(1)
         .execute()
     )
 
     if not result.data:
         raise HTTPException(status_code=404, detail="TTS asset not found")
 
-    asset = result.data
+    asset = result.data[0]
 
     # Check is_used
     is_used = False
@@ -266,6 +269,7 @@ async def create_tts_asset(
     # Background generation
     async def _generate():
         try:
+            bg_supabase = get_supabase()
             tts_lib = get_tts_library_service()
             result = await tts_lib.generate_asset(
                 text=request.tts_text.strip(),
@@ -273,7 +277,7 @@ async def create_tts_asset(
                 asset_id=asset_id,
                 model=request.tts_model,
             )
-            supabase.table("editai_tts_assets").update({
+            bg_supabase.table("editai_tts_assets").update({
                 "mp3_path": result["mp3_path"],
                 "srt_path": result["srt_path"],
                 "srt_content": result["srt_content"],
@@ -287,11 +291,13 @@ async def create_tts_asset(
             logger.info(f"TTS asset {asset_id} generated successfully")
         except Exception as e:
             logger.error(f"TTS asset {asset_id} generation failed: {e}")
-            supabase.table("editai_tts_assets").update({
-                "status": "failed",
-                "error_message": str(e),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", asset_id).execute()
+            bg_supabase = get_supabase()
+            if bg_supabase:
+                bg_supabase.table("editai_tts_assets").update({
+                    "status": "failed",
+                    "error_message": str(e),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", asset_id).execute()
 
     background_tasks.add_task(_generate)
 
@@ -326,14 +332,14 @@ async def update_tts_asset(
         .select("*")
         .eq("id", asset_id)
         .eq("profile_id", profile.profile_id)
-        .single()
+        .limit(1)
         .execute()
     )
 
     if not result.data:
         raise HTTPException(status_code=404, detail="TTS asset not found")
 
-    asset = result.data
+    asset = result.data[0]
     now = datetime.now(timezone.utc).isoformat()
 
     # Update text and set generating
@@ -406,14 +412,14 @@ async def delete_tts_asset(
         .select("*")
         .eq("id", asset_id)
         .eq("profile_id", profile.profile_id)
-        .single()
+        .limit(1)
         .execute()
     )
 
     if not result.data:
         raise HTTPException(status_code=404, detail="TTS asset not found")
 
-    asset = result.data
+    asset = result.data[0]
 
     # Delete files
     tts_lib = get_tts_library_service()
@@ -483,15 +489,16 @@ async def serve_audio(
         .select("mp3_path, profile_id")
         .eq("id", asset_id)
         .eq("profile_id", profile.profile_id)
-        .single()
+        .limit(1)
         .execute()
     )
 
-    if not result.data or not result.data.get("mp3_path"):
+    row = result.data[0] if result.data else None
+    if not row or not row.get("mp3_path"):
         raise HTTPException(status_code=404, detail="Audio not found")
 
     settings = get_settings()
-    mp3_path = Path(result.data["mp3_path"])
+    mp3_path = Path(row["mp3_path"])
     file_path = mp3_path if mp3_path.is_absolute() else settings.base_dir / mp3_path
 
     if not file_path.exists():
@@ -519,15 +526,16 @@ async def serve_srt(
         .select("srt_path, profile_id")
         .eq("id", asset_id)
         .eq("profile_id", profile.profile_id)
-        .single()
+        .limit(1)
         .execute()
     )
 
-    if not result.data or not result.data.get("srt_path"):
+    row = result.data[0] if result.data else None
+    if not row or not row.get("srt_path"):
         raise HTTPException(status_code=404, detail="SRT not found")
 
     settings = get_settings()
-    srt_path = Path(result.data["srt_path"])
+    srt_path = Path(row["srt_path"])
     file_path = srt_path if srt_path.is_absolute() else settings.base_dir / srt_path
 
     if not file_path.exists():

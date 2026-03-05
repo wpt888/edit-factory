@@ -227,15 +227,17 @@ async def get_gemini_status():
 
     except Exception as e:
         error_str = str(e)
-        result["error"] = error_str
+        logger.warning(f"Gemini connection test failed: {error_str}")
 
-        # Check for common errors
+        # Scrub internal details — only return safe, classified error messages
         if "quota" in error_str.lower():
             result["error"] = "Quota exceeded - check billing"
         elif "invalid" in error_str.lower() and "key" in error_str.lower():
             result["error"] = "Invalid API key"
         elif "billing" in error_str.lower():
             result["error"] = "Billing not enabled"
+        else:
+            result["error"] = "Connection failed — check API key and network"
 
     return result
 

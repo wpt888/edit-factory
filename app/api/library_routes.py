@@ -90,8 +90,8 @@ def _cleanup_stale_locks():
     """Remove lock entries for projects that are not currently being processed.
 
     A lock is considered stale if it can be acquired non-blocking (meaning no
-    task holds it). Called automatically when the dict grows beyond 50 entries
-    to prevent unbounded accumulation.
+    task holds it). Called under _locks_lock to prevent TOCTOU race conditions.
+    Caller must hold _locks_lock.
     """
     stale_keys = []
     for pid, lock in list(_project_locks.items()):
@@ -285,13 +285,13 @@ def verify_project_ownership(supabase, project_id: str, profile_id: str) -> dict
             .select("*")\
             .eq("id", project_id)\
             .eq("profile_id", profile_id)\
-            .single()\
+            .limit(1)\
             .execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        return result.data
+        return result.data[0]
     except HTTPException:
         raise
     except Exception as e:
@@ -386,7 +386,7 @@ async def download_clip_srt(
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Verify ownership
-    clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
+    clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
     if not clip.data:
         raise HTTPException(status_code=404, detail="Clip not found")
 
@@ -414,7 +414,7 @@ async def download_clip_audio(
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Verify ownership
-    clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
+    clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
     if not clip.data:
         raise HTTPException(status_code=404, detail="Clip not found")
 
@@ -519,9 +519,9 @@ async def get_project(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        result = supabase.table("editai_projects").select("*").eq("id", project_id).eq("profile_id", profile.profile_id).single().execute()
+        result = supabase.table("editai_projects").select("*").eq("id", project_id).eq("profile_id", profile.profile_id).limit(1).execute()
         if result.data:
-            proj = result.data
+            proj = result.data[0]
             return ProjectResponse(
                 id=proj["id"],
                 name=proj["name"],
@@ -556,11 +556,11 @@ async def get_project_progress(
     supabase = get_supabase()
     if supabase:
         try:
-            result = supabase.table("editai_projects").select("status").eq("id", project_id).eq("profile_id", profile.profile_id).single().execute()
+            result = supabase.table("editai_projects").select("status").eq("id", project_id).eq("profile_id", profile.profile_id).limit(1).execute()
         except Exception:
             return {"percentage": 0, "current_step": "Proiect negăsit", "estimated_remaining": None}
         if result.data:
-            status = result.data.get("status")
+            status = result.data[0].get("status")
             if status == "generating":
                 return {"percentage": 0, "current_step": "Se inițializează...", "estimated_remaining": None}
             elif status == "ready_for_triage":
@@ -1502,9 +1502,9 @@ async def _generate_from_segments_task(
 
         # Actualizăm proiectul
         if variants_created:
-            # Numărăm TOATE clipurile din proiect (existente + noi)
+            # Re-count AFTER all variants are created (must be fresh to avoid stale values)
             total_clips = supabase.table("editai_clips").select("id", count="exact").eq("project_id", project_id).eq("is_deleted", False).execute()
-            total_count = total_clips.count if total_clips.count else len(variants_created)
+            total_count = total_clips.count if total_clips.count is not None else len(variants_created)
 
             status_result = supabase.table("editai_projects").update({
                 "status": "ready_for_triage",
@@ -1681,7 +1681,7 @@ async def list_all_clips(
             project_data = clip.get("editai_projects", {})
 
             # Check if audio was removed (filename contains _noaudio)
-            video_path = clip.get("final_video_path") or clip["raw_video_path"]
+            video_path = clip.get("final_video_path") or clip.get("raw_video_path", "")
             has_audio = "_noaudio" not in video_path
 
             clips_with_info.append({
@@ -1734,7 +1734,7 @@ async def get_clip(
 
     try:
         # Clip with profile ownership check
-        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
+        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
         if not clip.data:
             raise HTTPException(status_code=404, detail="Clip not found")
 
@@ -1742,7 +1742,7 @@ async def get_clip(
         content = supabase.table("editai_clip_content").select("*").eq("clip_id", clip_id).execute()
 
         return {
-            "clip": clip.data,
+            "clip": clip.data[0],
             "content": content.data[0] if content.data else None
         }
     except HTTPException:
@@ -2147,7 +2147,7 @@ async def update_clip_content(
 
     try:
         # Verificăm că clipul există și aparține profilului
-        clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
+        clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
         if not clip.data:
             raise HTTPException(status_code=404, detail="Clip not found")
 
@@ -2190,11 +2190,11 @@ async def copy_content_from_clip(
 
     try:
         # Verify ownership of both clips
-        dest_clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
+        dest_clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
         if not dest_clip.data:
             raise HTTPException(status_code=404, detail="Destination clip not found")
 
-        src_clip = supabase.table("editai_clips").select("id").eq("id", source_clip_id).eq("profile_id", profile.profile_id).single().execute()
+        src_clip = supabase.table("editai_clips").select("id").eq("id", source_clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
         if not src_clip.data:
             raise HTTPException(status_code=404, detail="Source clip not found")
 
@@ -2319,12 +2319,12 @@ async def render_final_clip(
 
     try:
         # Obținem clipul și conținutul
-        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).single().execute()
+        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
         if not clip.data:
             raise HTTPException(status_code=404, detail="Clip not found")
 
         # Reject immediately if a task is already running for this project (STAB-03)
-        render_project_id = clip.data.get("project_id")
+        render_project_id = clip.data[0].get("project_id")
         if render_project_id and is_project_locked(render_project_id):
             raise HTTPException(
                 status_code=409,
@@ -2334,19 +2334,22 @@ async def render_final_clip(
         content = supabase.table("editai_clip_content").select("*").eq("clip_id", clip_id).execute()
 
         # Obținem preset-ul
-        preset = supabase.table("editai_export_presets").select("*").eq("name", preset_name).single().execute()
+        preset = supabase.table("editai_export_presets").select("*").eq("name", preset_name).limit(1).execute()
         if not preset.data:
             raise HTTPException(status_code=404, detail=f"Preset '{preset_name}' not found")
+
+        clip_row = clip.data[0]
+        preset_row = preset.data[0]
 
         # Lansăm renderul în background (status update moved inside task after lock acquired)
         background_tasks.add_task(
             _render_final_clip_task,
             clip_id=clip_id,
-            project_id=clip.data["project_id"],
+            project_id=clip_row["project_id"],
             profile_id=profile.profile_id,
-            clip_data=clip.data,
+            clip_data=clip_row,
             content_data=content.data[0] if content.data else None,
-            preset_data=preset.data,
+            preset_data=preset_row,
             # Video enhancement filters (Phase 9)
             enable_denoise=enable_denoise_bool,
             denoise_strength=denoise_strength,
@@ -2873,22 +2876,24 @@ async def _start_render_for_clip(clip_id: str, preset_name: str, profile_id: str
         query = supabase.table("editai_clips").select("*").eq("id", clip_id)
         if profile_id:
             query = query.eq("profile_id", profile_id)
-        clip = query.single().execute()
+        clip = query.limit(1).execute()
         content = supabase.table("editai_clip_content").select("*").eq("clip_id", clip_id).execute()
-        preset = supabase.table("editai_export_presets").select("*").eq("name", preset_name).single().execute()
+        preset = supabase.table("editai_export_presets").select("*").eq("name", preset_name).limit(1).execute()
 
         if clip.data and preset.data:
+            clip_row = clip.data[0]
+            preset_row = preset.data[0]
             # Extract filter/subtitle settings from stored clip content
             clip_content = content.data[0] if content.data else None
             sub_settings = clip_content.get("subtitle_settings", {}) if clip_content and isinstance(clip_content.get("subtitle_settings"), dict) else {}
 
             await _render_final_clip_task(
                 clip_id=clip_id,
-                project_id=clip.data["project_id"],
-                profile_id=clip.data["profile_id"],
-                clip_data=clip.data,
+                project_id=clip_row["project_id"],
+                profile_id=clip_row["profile_id"],
+                clip_data=clip_row,
                 content_data=clip_content,
-                preset_data=preset.data,
+                preset_data=preset_row,
                 # Apply stored filter/subtitle settings from clip content
                 enable_denoise=sub_settings.get("enableDenoise", False),
                 enable_sharpen=sub_settings.get("enableSharpen", False),

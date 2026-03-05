@@ -4,6 +4,7 @@ TTS API Routes - Provider listing, voice listing, generation, and voice cloning.
 import asyncio
 import logging
 import subprocess
+import threading
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -23,6 +24,7 @@ router = APIRouter(prefix="/tts", tags=["tts"])
 
 # Cache for kokoro availability check (5-minute TTL)
 _kokoro_cache: dict = {"available": None, "checked_at": 0.0}
+_kokoro_cache_lock = threading.Lock()
 _KOKORO_CACHE_TTL = 300  # 5 minutes
 
 
@@ -36,8 +38,9 @@ def _check_kokoro_available() -> bool:
     """
     import time
     now = time.monotonic()
-    if _kokoro_cache["available"] is not None and (now - _kokoro_cache["checked_at"]) < _KOKORO_CACHE_TTL:
-        return _kokoro_cache["available"]
+    with _kokoro_cache_lock:
+        if _kokoro_cache["available"] is not None and (now - _kokoro_cache["checked_at"]) < _KOKORO_CACHE_TTL:
+            return _kokoro_cache["available"]
 
     try:
         result = subprocess.run(
@@ -49,8 +52,9 @@ def _check_kokoro_available() -> bool:
     except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError):
         available = False
 
-    _kokoro_cache["available"] = available
-    _kokoro_cache["checked_at"] = now
+    with _kokoro_cache_lock:
+        _kokoro_cache["available"] = available
+        _kokoro_cache["checked_at"] = now
     return available
 
 
@@ -284,10 +288,13 @@ async def generate_tts(
             profile_data = supabase.table("profiles")\
                 .select("monthly_quota_usd")\
                 .eq("id", profile.profile_id)\
-                .single()\
+                .limit(1)\
                 .execute()
 
-            monthly_quota = float(profile_data.data.get("monthly_quota_usd", 0) or 0)
+            if not profile_data.data:
+                monthly_quota = 0.0
+            else:
+                monthly_quota = float(profile_data.data[0].get("monthly_quota_usd", 0) or 0)
 
             if monthly_quota > 0:
                 from app.services.cost_tracker import get_cost_tracker
@@ -391,8 +398,11 @@ async def clone_voice_endpoint(
     temp_dir = settings.base_dir / "temp" / profile.profile_id
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save to temp file (safe extension extraction)
-    ext = Path(audio_file.filename or "sample.wav").suffix or ".wav"
+    # Save to temp file (safe extension extraction with whitelist)
+    ALLOWED_AUDIO_EXTS = {".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac", ".webm"}
+    ext = Path(audio_file.filename or "sample.wav").suffix.lower() or ".wav"
+    if ext not in ALLOWED_AUDIO_EXTS:
+        raise HTTPException(status_code=400, detail=f"Unsupported audio format: {ext}")
     temp_path = temp_dir / f"voice_sample_{uuid.uuid4()}{ext}"
 
     try:
