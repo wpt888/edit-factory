@@ -1213,7 +1213,7 @@ export function TimelineEditor({
                       {/* Thumbnail background */}
                       {firstMatch.thumbnail_path && (
                         <img
-                          src={`${API_URL}/segments/files/${encodeURIComponent(firstMatch.thumbnail_path)}`}
+                          src={`${API_URL}/segments/files/${encodeURIComponent(firstMatch.thumbnail_path.split('/').pop() ?? '')}`}
                           alt=""
                           className="absolute inset-0 w-full h-full object-cover opacity-40"
                           loading="lazy"

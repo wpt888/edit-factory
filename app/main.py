@@ -274,7 +274,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Profile-Id"],
-    expose_headers=["Content-Disposition", "X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"],
+    expose_headers=["Content-Disposition", "Content-Length", "Content-Range", "X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"],
 )
 
 app.add_middleware(SlowAPIMiddleware)

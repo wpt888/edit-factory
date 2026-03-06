@@ -3106,7 +3106,7 @@ function PipelinePage() {
                     {sourceVideos[0].thumbnail_path ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
-                        src={`${API_URL.replace('/api/v1', '')}/thumbnails/${sourceVideos[0].thumbnail_path?.split('/').pop() || 'placeholder.png'}`}
+                        src={`${API_URL}/segments/files/${encodeURIComponent(sourceVideos[0].thumbnail_path?.split('/').pop() || 'placeholder.png')}`}
                         alt=""
                         className="w-10 h-10 rounded object-cover flex-shrink-0"
                         onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
@@ -3169,7 +3169,7 @@ function PipelinePage() {
                         {video.thumbnail_path ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
-                            src={`${API_URL.replace('/api/v1', '')}/thumbnails/${video.thumbnail_path?.split('/').pop() || 'placeholder.png'}`}
+                            src={`${API_URL}/segments/files/${encodeURIComponent(video.thumbnail_path?.split('/').pop() || 'placeholder.png')}`}
                             alt=""
                             className="w-10 h-10 rounded object-cover flex-shrink-0"
                             onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
