@@ -17,6 +17,8 @@ class JobStorage:
     Falls back to in-memory dict if Supabase unavailable (backward compatibility).
     """
 
+    _MAX_MEMORY_JOBS = 500  # Evict oldest when exceeded
+
     def __init__(self):
         self._supabase = None
         self._memory_store: Dict[str, dict] = {}
@@ -50,6 +52,22 @@ class JobStorage:
         except Exception as e:
             logger.error(f"JobStorage: Failed to initialize Supabase: {e}")
             self._supabase = None
+
+    def _evict_oldest_memory_jobs(self):
+        """Evict oldest completed/failed jobs from memory when over limit."""
+        if len(self._memory_store) <= self._MAX_MEMORY_JOBS:
+            return
+        # Sort by created_at, evict oldest terminal jobs first
+        terminal = sorted(
+            [(k, v) for k, v in self._memory_store.items()
+             if v.get("status") in ("completed", "failed", "cancelled")],
+            key=lambda kv: kv[1].get("created_at", "")
+        )
+        to_remove = len(self._memory_store) - self._MAX_MEMORY_JOBS
+        for k, _ in terminal[:to_remove]:
+            self._memory_store.pop(k, None)
+        if to_remove > 0 and terminal:
+            logger.info(f"JobStorage: Evicted {min(to_remove, len(terminal))} old jobs from memory (cap={self._MAX_MEMORY_JOBS})")
 
     def create_job(self, job_data: dict, profile_id: Optional[str] = None) -> dict:
         """
@@ -97,10 +115,12 @@ class JobStorage:
                 logger.error(f"JobStorage: Failed to create job in Supabase: {e}, using memory")
                 # Fallback to memory
                 self._memory_store[job_id] = job_data
+                self._evict_oldest_memory_jobs()
                 return job_data
         else:
             # In-memory storage
             self._memory_store[job_id] = job_data
+            self._evict_oldest_memory_jobs()
             if profile_id:
                 logger.debug(f"[Profile {profile_id}] JobStorage: Created job {job_id} in memory")
             else:
@@ -325,11 +345,13 @@ class JobStorage:
                     query = query.eq("status", status)
                 result = query.order("created_at", desc=True).limit(10).execute()
                 if result.data:
-                    return result.data
+                    return [row.get("data", row) for row in result.data]
             except Exception as e:
                 logger.warning(f"Supabase query by project_id failed: {e}")
         # Fallback: scan in-memory jobs
-        for job_id, job in self._memory_store.items():
+        with self._update_lock:
+            snapshot = list(self._memory_store.items())
+        for job_id, job in snapshot:
             data = job if isinstance(job, dict) else {}
             if data.get("project_id") == project_id:
                 if status is None or data.get("status") == status:

@@ -2,9 +2,11 @@
 Edge TTS Service - Text-to-Speech GRATUIT folosind Microsoft Edge.
 Calitate excelentă, multe voci, fără costuri.
 """
+import atexit
 import asyncio
 import concurrent.futures
 import logging
+import threading
 from pathlib import Path
 from typing import List, Dict, Optional
 from dataclasses import dataclass
@@ -15,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Module-level singleton executor to avoid creating multiple ThreadPoolExecutors
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+atexit.register(_executor.shutdown, wait=False)
 
 
 @dataclass
@@ -69,8 +72,8 @@ class EdgeTTSService:
 
     # Class-level cache shared across all instances
     _voices_cache: Optional[List[Voice]] = None
-    _voices_cache_lock: Optional[asyncio.Lock] = None
-    _voices_cache_init_lock = asyncio.Lock()
+    _voices_cache_async_lock: Optional[asyncio.Lock] = None
+    _voices_cache_init_lock = threading.Lock()
 
     def __init__(self, output_dir: Optional[Path] = None):
         """
@@ -90,12 +93,13 @@ class EdgeTTSService:
         Returns:
             Lista de voci disponibile
         """
+        # BUG-ET-01: Use asyncio.Lock for proper async double-checked locking
         if EdgeTTSService._voices_cache is None:
-            if EdgeTTSService._voices_cache_lock is None:
-                async with EdgeTTSService._voices_cache_init_lock:
-                    if EdgeTTSService._voices_cache_lock is None:
-                        EdgeTTSService._voices_cache_lock = asyncio.Lock()
-            async with EdgeTTSService._voices_cache_lock:
+            if EdgeTTSService._voices_cache_async_lock is None:
+                with EdgeTTSService._voices_cache_init_lock:
+                    if EdgeTTSService._voices_cache_async_lock is None:
+                        EdgeTTSService._voices_cache_async_lock = asyncio.Lock()
+            async with EdgeTTSService._voices_cache_async_lock:
                 if EdgeTTSService._voices_cache is None:
                     voices_list = await edge_tts.list_voices()
                     EdgeTTSService._voices_cache = [
@@ -148,6 +152,9 @@ class EdgeTTSService:
         Returns:
             Calea către fișierul audio generat
         """
+        if not text.strip():
+            raise ValueError("Empty text")
+
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -167,6 +174,7 @@ class EdgeTTSService:
             except Exception as e:
                 if attempt < 2:
                     logger.warning(f"Edge TTS attempt {attempt + 1} failed: {e}, retrying...")
+                    output_path.unlink(missing_ok=True)
                     await asyncio.sleep(1)
                 else:
                     raise RuntimeError(f"Edge TTS error: {e}") from e
@@ -301,6 +309,10 @@ class EdgeTTSService:
                 text, audio_path, srt_path, voice, rate
             ))
             return future.result(timeout=120)
+        except (concurrent.futures.TimeoutError, TimeoutError) as e:
+            # BUG-ET-02: Catch timeout errors explicitly
+            logger.error(f"TTS subtitle generation timed out: {e}")
+            raise RuntimeError(f"TTS subtitle generation timed out after 120s") from e
         except RuntimeError:
             return asyncio.run(self.generate_with_subtitles(
                 text, audio_path, srt_path, voice, rate
@@ -353,7 +365,22 @@ class EdgeTTSService:
         for i, (text, voice) in enumerate(zip(texts, voices)):
             audio_path = output_dir / f"{base_name}_{i+1}.mp3"
 
-            await self.generate_audio(text, audio_path, voice)
+            try:
+                await self.generate_audio(text, audio_path, voice)
+            except Exception as e:
+                # BUG-ET-03: Cleanup generated files on partial variant failure
+                logger.error(f"Variant {i+1} generation failed: {e}")
+                for prev_result in results:
+                    prev_path = Path(prev_result["audio_path"])
+                    if prev_path.exists():
+                        try:
+                            prev_path.unlink()
+                            logger.debug(f"Cleaned up partial file: {prev_path}")
+                        except OSError:
+                            pass
+                raise RuntimeError(
+                    f"Variant {i+1}/{len(texts)} failed (voice={voice}): {e}"
+                ) from e
 
             results.append({
                 "variant_index": i + 1,
@@ -400,6 +427,7 @@ def get_voice_for_language(language: str, gender: str = "male") -> str:
         return POPULAR_VOICES[key]
 
     # Fallback pentru engleză US
+    logger.warning(f"Unknown voice key: {key}, falling back to en_us default")
     if gender == "male":
         return POPULAR_VOICES["en_us_male"]
     return POPULAR_VOICES["en_us_female"]

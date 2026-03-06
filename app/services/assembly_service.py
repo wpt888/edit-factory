@@ -111,6 +111,9 @@ def build_word_to_group_map(text: str) -> List[Optional[str]]:
             continue
 
         # Find end of word (up to whitespace or tag)
+        # NOTE: This whitespace-based split works for Latin/Cyrillic scripts but
+        # will not correctly tokenise CJK, Arabic, Thai, or other scripts that
+        # lack inter-word spaces.  A proper solution would use ICU/regex \b.
         word_end = pos
         while word_end < len(text) and not text[word_end].isspace() and text[word_end] != '[':
             word_end += 1
@@ -201,6 +204,7 @@ class AssemblyService:
     def __init__(self):
         self.settings = get_settings()
         self.settings.ensure_dirs()
+        self._cleanup_timers: Dict[str, threading.Timer] = {}  # temp_dir -> timer for cancellation
 
     async def _get_audio_duration(self, audio_path: Path) -> float:
         """Get audio duration in seconds using ffprobe."""
@@ -225,7 +229,7 @@ class AssemblyService:
 
     def _parse_srt(self, content: str) -> List[dict]:
         """Parse SRT content into list of entries with timestamps."""
-        content = content.replace('\r\n', '\n')
+        content = content.replace('\r\n', '\n').replace('\r', '')
         entries = []
         blocks = content.strip().split("\n\n")
 
@@ -240,6 +244,10 @@ class AssemblyService:
                     end_time = self._srt_time_to_seconds(end_str.strip())
                     # Handle 2-line blocks (index + timestamp, no text)
                     text = " ".join(lines[2:]) if len(lines) >= 3 else ""
+
+                    # Skip entries with empty or whitespace-only text
+                    if not text.strip():
+                        continue
 
                     entries.append({
                         "start_time": start_time,
@@ -295,12 +303,14 @@ class AssemblyService:
 
         logger.info(f"Generating TTS for script ({len(script_text)} chars) with model {elevenlabs_model}")
 
+        ALLOWED_VOICE_KEYS = {"stability", "similarity_boost", "style", "use_speaker_boost", "speed"}
+        safe_settings = {k: v for k, v in (voice_settings or {}).items() if k in ALLOWED_VOICE_KEYS}
         tts_result, timestamps = await tts_service.generate_audio_with_timestamps(
             text=script_text,
             voice_id=voice_id,
             output_path=raw_audio_path,
             model_id=elevenlabs_model,
-            **(voice_settings or {})
+            **safe_settings
         )
 
         # Apply silence removal (same params as _render_final_clip_task)
@@ -313,7 +323,8 @@ class AssemblyService:
             target_pause_duration=0.1  # Shorten pauses instead of removing (consistent with library render)
         )
 
-        removal_result = silence_remover.remove_silence(
+        removal_result = await asyncio.to_thread(
+            silence_remover.remove_silence,
             audio_path=raw_audio_path,
             output_path=trimmed_audio_path
         )
@@ -338,6 +349,9 @@ class AssemblyService:
             f"TTS generation complete: {audio_duration:.2f}s "
             f"(removed {removal_result.removed_duration:.2f}s silence)"
         )
+
+        # Clean up raw audio now that trimmed version is ready
+        raw_audio_path.unlink(missing_ok=True)
 
         return (trimmed_audio_path, audio_duration, timestamps)
 
@@ -640,6 +654,7 @@ class AssemblyService:
                         if current_product_group and seg_group == current_product_group:
                             confidence += 0.2
 
+                        confidence = min(confidence, 1.0)
                         candidates.append((segment, keyword, confidence))
 
             chosen_segment = None
@@ -988,7 +1003,7 @@ class AssemblyService:
                         timeline[-1] = TimelineEntry(
                             source_video_path=last_entry.source_video_path,
                             start_time=last_entry.start_time,
-                            end_time=last_entry.end_time,
+                            end_time=last_entry.start_time + last_entry.timeline_duration + gap,
                             timeline_start=last_entry.timeline_start,
                             timeline_duration=last_entry.timeline_duration + gap,
                             transforms=last_entry.transforms,
@@ -998,7 +1013,7 @@ class AssemblyService:
                     timeline[-1] = TimelineEntry(
                         source_video_path=last_entry.source_video_path,
                         start_time=last_entry.start_time,
-                        end_time=last_entry.end_time,
+                        end_time=last_entry.start_time + last_entry.timeline_duration + gap,
                         timeline_start=last_entry.timeline_start,
                         timeline_duration=last_entry.timeline_duration + gap,
                         transforms=last_entry.transforms,
@@ -1189,6 +1204,20 @@ class AssemblyService:
             if dedup_swaps:
                 logger.info(f"Post-merge dedup: swapped {dedup_swaps} consecutive duplicates")
 
+            # Recalculate timeline_start cumulatively to avoid gaps after merging
+            cumulative = 0.0
+            for idx_m in range(len(merged)):
+                if merged[idx_m].timeline_start != cumulative:
+                    merged[idx_m] = TimelineEntry(
+                        source_video_path=merged[idx_m].source_video_path,
+                        start_time=merged[idx_m].start_time,
+                        end_time=merged[idx_m].end_time,
+                        timeline_start=cumulative,
+                        timeline_duration=merged[idx_m].timeline_duration,
+                        transforms=merged[idx_m].transforms,
+                    )
+                cumulative += merged[idx_m].timeline_duration
+
             timeline = merged
 
         total_duration = sum(e.timeline_duration for e in timeline)
@@ -1227,6 +1256,7 @@ class AssemblyService:
         from app.services.segment_transforms import SegmentTransform
         from app.services.ffmpeg_semaphore import acquire_prep_slot
         # Pre-allocate ordered results list (None = failed)
+        # Thread-safe: asyncio.gather runs coroutines on single thread
         results: List[Optional[Path]] = [None] * len(timeline)
 
         async def extract_segment(i: int, entry: TimelineEntry):
@@ -1256,6 +1286,11 @@ class AssemblyService:
 
             if not entry.source_video_path:
                 logger.error(f"Timeline entry {i} has no source_video_path, skipping")
+                return
+
+            if not Path(entry.source_video_path).exists():
+                logger.error(f"Source video missing: {entry.source_video_path}")
+                results[i] = None
                 return
 
             logger.debug(f"Extracting segment {i}: {entry.source_video_path} [{entry.start_time:.2f}s - {entry.end_time:.2f}s]")
@@ -1291,7 +1326,7 @@ class AssemblyService:
                         # Loop the extracted segment (contains only segment content)
                         loop_count = math.ceil(needed_duration / segment_duration)
                         cmd.extend([
-                            "-stream_loop", str(loop_count),
+                            "-stream_loop", str(loop_count - 1),
                             "-i", str(segment_raw),
                             "-t", str(needed_duration),
                             "-vf", ",".join(transform_filters),
@@ -1363,8 +1398,8 @@ class AssemblyService:
                             except Exception as e:
                                 logger.warning(f"PiP overlay failed for segment {i} (segment_id={seg_id}): {e}")
 
-        # Collect successful segments in order
-        segment_files = [f for f in results if f is not None]
+        # Collect successful segments in order (preserves original timeline ordering)
+        segment_files = [f for i, f in enumerate(results) if f is not None]
         failed_count = len(results) - len(segment_files)
 
         if failed_count == len(results):
@@ -1419,8 +1454,10 @@ class AssemblyService:
         concat_file = temp_dir / "concat_list.txt"
         with open(concat_file, 'w', encoding='utf-8') as f:
             for seg_file in segment_files:
+                # Normalise to forward slashes so FFmpeg concat works on Windows
+                posix_path = str(seg_file).replace("\\", "/")
                 # Escape single quotes for FFmpeg
-                escaped = str(seg_file).replace("\\", "\\\\").replace("'", "\\'")
+                escaped = posix_path.replace("'", "\\'")
                 f.write(f"file '{escaped}'\n")
 
         # Concatenate all clips
@@ -1659,6 +1696,7 @@ class AssemblyService:
                     missing_result = supabase.table("editai_segments")\
                         .select("id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, editai_source_videos(file_path)")\
                         .in_("id", missing_seg_ids)\
+                        .eq("profile_id", profile_id)\
                         .execute()
                     added = 0
                     for seg in (missing_result.data or []):
@@ -1772,8 +1810,6 @@ class AssemblyService:
                     f"Step 5/7: Keeping all {len(match_results)} entries "
                     f"(no merge group collapse — each entry keeps its own segment)"
                 )
-                # No duration overrides — each entry uses its natural SRT timing
-                duration_overrides = None
                 # Log render entries for debugging
                 for c_idx, c_match in enumerate(match_results):
                     seg_id_short = (c_match.segment_id or "NONE")[:8]
@@ -1886,6 +1922,11 @@ class AssemblyService:
         finally:
             try:
                 import shutil
+                if reuse_audio_path and str(Path(reuse_audio_path).resolve()).startswith(str(temp_dir.resolve())):
+                    safe_audio_dir = self.settings.base_dir / "temp" / profile_id / "reused_audio"
+                    safe_audio_dir.mkdir(parents=True, exist_ok=True)
+                    safe_dest = safe_audio_dir / Path(reuse_audio_path).name
+                    shutil.copy2(reuse_audio_path, safe_dest)
                 shutil.rmtree(temp_dir, ignore_errors=True)
             except Exception:
                 pass
@@ -1908,6 +1949,8 @@ class AssemblyService:
         voice_settings: Optional[dict] = None,
         avoid_segment_ids: Optional[set] = None,
         ultra_rapid_intro: bool = False,
+        voice_id: Optional[str] = None,
+        elevenlabs_model: str = "eleven_flash_v2_5",
     ) -> Path:
         """
         Fast preview render using assemble_and_render() with preview-mode settings.
@@ -1950,6 +1993,8 @@ class AssemblyService:
             min_segment_duration=min_segment_duration,
             voice_settings=voice_settings,
             avoid_segment_ids=avoid_segment_ids,
+            voice_id=voice_id,
+            elevenlabs_model=elevenlabs_model,
             # Preview-specific: disable expensive features but keep segment order consistent
             enable_denoise=False,
             enable_sharpen=False,
@@ -2191,21 +2236,30 @@ class AssemblyService:
             for seg in segments_data
         ]
 
-        # Schedule cleanup of temp TTS directory after 30 minutes
-        temp_dir = audio_path.parent
-        def _cleanup_temp():
-            import shutil
-            try:
-                if temp_dir.exists():
-                    shutil.rmtree(str(temp_dir), ignore_errors=True)
-                    logger.debug(f"Cleaned up preview temp dir: {temp_dir}")
-            except Exception:
-                pass
-        # 2 hours — preview temp files needed until render completes
-        # VID-18: daemon thread runs independently; local ref prevents premature GC
-        _cleanup_timer = threading.Timer(7200, _cleanup_temp)
-        _cleanup_timer.daemon = True
-        _cleanup_timer.start()
+        # Schedule cleanup of temp TTS directory after 2 hours.
+        # Only schedule when audio was freshly generated — if reuse_audio_path was
+        # provided, audio_path.parent points to the library directory and must NOT
+        # be deleted.
+        if not reuse_audio_path:
+            temp_dir = audio_path.parent
+            def _cleanup_temp():
+                import shutil
+                try:
+                    if temp_dir.exists():
+                        shutil.rmtree(str(temp_dir), ignore_errors=True)
+                        logger.debug(f"Cleaned up preview temp dir: {temp_dir}")
+                except Exception:
+                    pass
+            # 2 hours — preview temp files needed until render completes
+            # VID-18: daemon thread runs independently; local ref prevents premature GC
+            # Cancel any existing cleanup timer for this temp_dir before scheduling
+            existing_timer = self._cleanup_timers.pop(str(temp_dir), None)
+            if existing_timer is not None:
+                existing_timer.cancel()
+            _cleanup_timer = threading.Timer(7200, _cleanup_temp)
+            _cleanup_timer.daemon = True
+            _cleanup_timer.start()
+            self._cleanup_timers[str(temp_dir)] = _cleanup_timer
 
         return {
             "audio_path": str(audio_path),

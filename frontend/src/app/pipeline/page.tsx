@@ -230,6 +230,8 @@ function PipelinePage() {
     return n >= 1 && n <= 4 ? n : 1;
   });
 
+  // BUG-FE-33: searchParams in deps ensures URL stays in sync; stale closure risk is
+  // mitigated because searchParams is read synchronously within the callback.
   const setStep = useCallback((n: number) => {
     setStepRaw(n);
     const params = new URLSearchParams(searchParams.toString());
@@ -278,8 +280,8 @@ function PipelinePage() {
   const [minSegmentDuration, setMinSegmentDuration] = useState(3.0);
   const [ultraRapidIntro, setUltraRapidIntro] = useState(true);
   const [voiceSettingsLoaded, setVoiceSettingsLoaded] = useState(false);
-  // Ref to avoid stale closures in debounced save timeout (Bug #87)
-  const voiceSettingsValuesRef = useRef({ voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro });
+  // BUG-FE-25: Initialize as empty to avoid stale defaults; the sync useEffect below populates it
+  const voiceSettingsValuesRef = useRef<Record<string, unknown>>({});
 
   // Step 4: Render
   const [selectedVariants, setSelectedVariants] = useState<Set<number>>(new Set());
@@ -432,9 +434,11 @@ function PipelinePage() {
     return interstitialSlidesChangeHandlers.current[index];
   }, []);
 
-  // Keep pipelineIdRef in sync for use in closures/timeouts
-  useEffect(() => { pipelineIdRef.current = pipelineId; }, [pipelineId]);
-  useEffect(() => { return () => { isMountedRef.current = false; }; }, []);
+  // BUG-FE-24: Merged two cleanup useEffects — keep pipelineIdRef in sync + mark unmount
+  useEffect(() => {
+    pipelineIdRef.current = pipelineId;
+    return () => { isMountedRef.current = false; };
+  }, [pipelineId]);
 
   // Format helpers
   const formatDuration = (seconds: number): string => {
@@ -457,8 +461,13 @@ function PipelinePage() {
     // If already has multiple lines (3+), assume it's formatted
     const lines = text.trim().split('\n').filter(l => l.trim());
     if (lines.length >= 3) return text;
-    // Split by sentence-ending punctuation followed by space
-    const sentences = text.trim().split(/(?<=[.!?])\s+/);
+    // FE-22: Split by sentence-ending punctuation followed by space (Safari-safe, no lookbehind)
+    const sentences = text.trim().split(/([.!?])\s+/).reduce<string[]>((acc, part, i, arr) => {
+      if (i % 2 === 0) {
+        acc.push(i + 1 < arr.length ? part + arr[i + 1] : part);
+      }
+      return acc;
+    }, []);
     return sentences.map(s => s.trim()).filter(Boolean).join('\n');
   };
 
@@ -556,7 +565,7 @@ function PipelinePage() {
       setAiRulesSaved(true);
       if (collapse) setAiRulesExpanded(false);
       if (aiRulesSavedResetTimer.current) clearTimeout(aiRulesSavedResetTimer.current);
-      aiRulesSavedResetTimer.current = setTimeout(() => setAiRulesSaved(false), 2000);
+      aiRulesSavedResetTimer.current = setTimeout(() => { if (isMountedRef.current) setAiRulesSaved(false); }, 2000);
     } catch {
       setAiRulesSaved(false);
       setAiRulesDirty(true);
@@ -614,6 +623,7 @@ function PipelinePage() {
 
   // Source videos: select all
   const handleSelectAllSources = () => {
+    if (sourceSelectionTimer.current) clearTimeout(sourceSelectionTimer.current);
     const allIds = new Set(sourceVideos.map(v => v.id));
     setSelectedSourceIds(allIds);
     if (pipelineId) {
@@ -625,6 +635,7 @@ function PipelinePage() {
 
   // Source videos: deselect all
   const handleDeselectAllSources = () => {
+    if (sourceSelectionTimer.current) clearTimeout(sourceSelectionTimer.current);
     setSelectedSourceIds(new Set());
     if (pipelineId) {
       apiPut(`/pipeline/${pipelineId}/source-selection`, {
@@ -644,7 +655,11 @@ function PipelinePage() {
       const allIds = new Set(sourceVideos.map(v => v.id));
       setSelectedSourceIds(allIds);
     }
-  }, [step, sourceVideos, selectedSourceIds.size, sourceVideosLoading]);
+  // BUG-FE-26: Use the Set reference instead of .size to track actual identity changes
+  }, [step, sourceVideos, selectedSourceIds, sourceVideosLoading]);
+
+  // FE-14: Derive a stable string key from the Set to avoid extra API calls on every render
+  const selectedSourceIdsKey = useMemo(() => [...selectedSourceIds].sort().join(","), [selectedSourceIds]);
 
   // Fetch product groups when source video selection changes
   useEffect(() => {
@@ -653,7 +668,7 @@ function PipelinePage() {
       return;
     }
     const abortController = new AbortController();
-    const ids = Array.from(selectedSourceIds).join(",");
+    const ids = selectedSourceIdsKey;
     apiGet(`/segments/product-groups-bulk?source_video_ids=${encodeURIComponent(ids)}`, { signal: abortController.signal })
       .then(async (res) => {
         if (abortController.signal.aborted) return;
@@ -664,7 +679,7 @@ function PipelinePage() {
         if (!abortController.signal.aborted) setProductGroups([]);
       });
     return () => { abortController.abort(); };
-  }, [selectedSourceIds]);
+  }, [selectedSourceIdsKey]);
 
   // Insert a [GroupLabel] tag at cursor position in a script textarea
   const insertGroupTag = (scriptIndex: number, groupLabel: string) => {
@@ -679,7 +694,12 @@ function PipelinePage() {
       newScripts[scriptIndex] = scripts[scriptIndex] + "\n" + tag;
     }
     setScripts(newScripts);
-    if (pipelineId) saveScriptsToBackend(pipelineId, newScripts);
+    // BUG-FE-30: Warn user if no pipeline exists yet instead of silently skipping save
+    if (pipelineId) {
+      saveScriptsToBackend(pipelineId, newScripts);
+    } else {
+      toast.error("Create a pipeline first before inserting tags");
+    }
   };
 
   // Detect [GroupLabel] tags in a script
@@ -760,6 +780,8 @@ function PipelinePage() {
 
   // Strip HTML tags and decode entities to plain text
   const stripHtml = (html: string): string => {
+    // BUG-FE-34: Guard against SSR where DOMParser is unavailable
+    if (typeof window === "undefined") return html;
     const doc = new DOMParser().parseFromString(html, "text/html");
     return doc.body.textContent?.trim() || "";
   };
@@ -789,7 +811,7 @@ function PipelinePage() {
     () => variantStatuses.filter(v => v.status === "completed").map(v => v.variant_index).join(","),
     [variantStatuses]
   );
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally depend on derived completedFingerprint
+  // BUG-FE-27: completedFingerprint is a valid dep here; no suppression needed
   const videoCacheBust = useMemo(() => Date.now(), [completedFingerprint]);
 
   const { startPolling: startRenderPolling, stopPolling: stopRenderPolling } = usePolling<{
@@ -861,6 +883,8 @@ function PipelinePage() {
 
   // Step 1: Generate scripts
   const handleGenerate = async () => {
+    // BUG-FE-28: Guard against double-click while already generating
+    if (isGenerating) return;
     if (!idea.trim()) return;
 
     scriptAbortRef.current?.abort();
@@ -893,7 +917,7 @@ function PipelinePage() {
       setScripts((data.scripts || []).map(formatScript));
       setTotalSegmentDuration(data.total_segment_duration || 0);
       setStep(2);
-      // FE-09: Refresh history sidebar so the new pipeline appears
+      if (!isMountedRef.current) return;
       fetchHistory();
     } catch (err) {
       if (abortController.signal.aborted) return;
@@ -964,8 +988,12 @@ function PipelinePage() {
         } catch (err) {
           if (abortController.signal.aborted) { setPreviewingIndex(null); return; }
           handleApiError(err, "Error previewing variants");
-          // Clear partial previews on failure (Bug #56)
-          setPreviews({});
+          // M11: Only clear the failed variant's preview, not all previews
+          setPreviews(prev => {
+            const updated = { ...prev };
+            delete updated[i];
+            return updated;
+          });
           setPreviewingIndex(null);
           if (err instanceof ApiError) {
             if (err.isTimeout) {
@@ -992,7 +1020,7 @@ function PipelinePage() {
 
       setStep(3);
     } finally {
-      setPreviewingIndex(null);
+      if (isMountedRef.current) setPreviewingIndex(null);
     }
   };
 
@@ -1011,9 +1039,6 @@ function PipelinePage() {
       progress: 0,
       current_step: "Initializing render...",
     }));
-
-    setIsRendering(true);
-    setVariantStatuses(initialStatuses);
 
     // Collect match overrides from timeline editor for each selected variant
     const matchOverrides: Record<number, MatchPreview[]> = {};
@@ -1096,6 +1121,8 @@ function PipelinePage() {
       // data.variants does not exist on PipelineRenderResponse — initialStatuses
       // already set above serve as placeholder until polling fills in real data.
       if (!isMountedRef.current) return;
+      setIsRendering(true);
+      setVariantStatuses(initialStatuses);
       setStep(4);
     } catch (err) {
       handleApiError(err, "Error generating variants");
@@ -1135,6 +1162,8 @@ function PipelinePage() {
 
   // Reset all state
   const resetPipeline = () => {
+    // M10: Stop render polling before resetting state
+    stopRenderPolling();
     setStep(1);
     initialSourceSelectionDone.current = false;
     setIdea("");
@@ -1249,7 +1278,7 @@ function PipelinePage() {
     setHistorySelectedScripts(new Set());
     setHistoryPreviewInfo({});
     setHistoryTtsInfo({});
-  }, [currentProfile?.id]);
+  }, [currentProfile?.id, fetchHistory]);
 
   // Fetch source videos on mount
   useEffect(() => {
@@ -1327,7 +1356,9 @@ function PipelinePage() {
     if (subtitleSaveTimer.current) clearTimeout(subtitleSaveTimer.current);
     subtitleSaveTimer.current = setTimeout(async () => {
       try {
-        await apiPut(`/profiles/${currentProfile.id}/subtitle-settings`, newSettings);
+        const profileId = currentProfileIdRef.current;
+        if (!profileId) return;
+        await apiPut(`/profiles/${profileId}/subtitle-settings`, newSettings);
       } catch {
         // Silent — settings still work locally
       }
@@ -1339,7 +1370,9 @@ function PipelinePage() {
     if (scriptSaveTimer.current) clearTimeout(scriptSaveTimer.current);
     scriptSaveTimer.current = setTimeout(async () => {
       try {
-        await apiPut(`/pipeline/${pId}/scripts`, { scripts: updatedScripts });
+        const currentPid = pipelineIdRef.current;
+        if (!currentPid) return;
+        await apiPut(`/pipeline/${currentPid}/scripts`, { scripts: updatedScripts });
       } catch {
         // Silent — scripts still work locally, will retry on next edit
       }
@@ -1403,6 +1436,27 @@ function PipelinePage() {
     }
   };
 
+  // FE-13: Shared helper to restore TTS results from history info maps
+  const buildRestoredTts = (
+    ttsInfo: Record<string, { has_audio: boolean; audio_duration: number }>,
+    previewInfo: Record<string, { has_audio: boolean; audio_duration: number; has_srt?: boolean }>,
+  ): Record<number, { audio_duration: number; generating: boolean; stale: boolean }> => {
+    const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
+    Object.entries(ttsInfo).forEach(([key, info]) => {
+      if (info.has_audio) {
+        restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
+      }
+    });
+    if (Object.keys(restoredTts).length === 0) {
+      Object.entries(previewInfo).forEach(([key, info]) => {
+        if (info.has_audio) {
+          restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
+        }
+      });
+    }
+    return restoredTts;
+  };
+
   // History sidebar: import selected scripts
   const handleHistoryImport = async () => {
     const selected = historyScripts.filter((_, i) => historySelectedScripts.has(i));
@@ -1414,21 +1468,7 @@ function PipelinePage() {
       setPipelineId(pid);
       setScripts(historyScripts.map(formatScript));
       // Carry over TTS results: prefer tts_info (Step 2) over preview_info (Step 3)
-      const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
-      Object.entries(historyTtsInfo).forEach(([key, info]) => {
-        if (info.has_audio) {
-          restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
-        }
-      });
-      // Fall back to preview_info if no tts_info available
-      if (Object.keys(restoredTts).length === 0) {
-        Object.entries(historyPreviewInfo).forEach(([key, info]) => {
-          if (info.has_audio) {
-            restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
-          }
-        });
-      }
-      setTtsResults(restoredTts);
+      setTtsResults(buildRestoredTts(historyTtsInfo, historyPreviewInfo));
       setSelectedHistoryId(null);
       setHistoryScripts([]);
       setHistorySelectedScripts(new Set());
@@ -1447,6 +1487,7 @@ function PipelinePage() {
       if (allHavePreviews && historyScripts.length > 0) {
         apiGet(`/pipeline/${pid}/restore-previews`)
           .then(async (previewRes) => {
+            if (!isMountedRef.current) return;
             const previewData = await previewRes.json();
             if (previewData.previews && Object.keys(previewData.previews).length > 0) {
               const restoredPreviews: Record<number, PreviewData> = {};
@@ -1505,29 +1546,30 @@ function PipelinePage() {
     }
   };
 
+  // FE-23: Consolidated audio cleanup helper — stops playback, revokes blob, resets refs
+  const stopCurrentAudio = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (pendingBlobUrl.current) {
+      URL.revokeObjectURL(pendingBlobUrl.current);
+      pendingBlobUrl.current = null;
+    }
+    setPlayingAudio(null);
+  };
+
   // Audio preview: play/pause toggle
   const handlePlayAudio = (pipelineId: string, variantIndex: number) => {
     const audioKey = `${pipelineId}-${variantIndex}`;
 
     if (playingAudio === audioKey) {
-      // Pause current audio
-      audioRef.current?.pause();
-      setPlayingAudio(null);
+      stopCurrentAudio();
       return;
     }
 
-    // Stop previous audio if playing
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-
+    stopCurrentAudio();
     setPlayingAudio(audioKey);
-    // Revoke any pending blob URL before creating a new one to prevent memory leaks
-    if (pendingBlobUrl.current) {
-      URL.revokeObjectURL(pendingBlobUrl.current);
-      pendingBlobUrl.current = null;
-    }
     audioPlayAbortRef.current?.abort();
     const controller = new AbortController();
     audioPlayAbortRef.current = controller;
@@ -1556,7 +1598,7 @@ function PipelinePage() {
       .catch((err) => {
         if (controller.signal.aborted) return;
         console.warn("Audio playback failed:", err);
-        setPlayingAudio(null);
+        stopCurrentAudio();
       });
   };
 
@@ -1623,27 +1665,31 @@ function PipelinePage() {
 
   // Load voice settings from localStorage after hydration
   useEffect(() => {
-    const stability = localStorage.getItem("ef_voice_stability");
-    const similarity = localStorage.getItem("ef_voice_similarity");
-    const style = localStorage.getItem("ef_voice_style");
-    const speed = localStorage.getItem("ef_voice_speed");
-    const boost = localStorage.getItem("ef_voice_speaker_boost");
-    const wps = localStorage.getItem("ef_words_per_subtitle");
-    const hasVoiceValues = stability !== null || similarity !== null || style !== null || speed !== null || boost !== null;
-    if (stability !== null) setVoiceStability(parseFloat(stability));
-    if (similarity !== null) setVoiceSimilarity(parseFloat(similarity));
-    if (style !== null) setVoiceStyle(parseFloat(style));
-    if (speed !== null) setVoiceSpeed(parseFloat(speed));
-    if (boost !== null) setVoiceSpeakerBoost(boost === "true");
-    if (wps !== null) setWordsPerSubtitle(parseInt(wps, 10));
-    const msd = localStorage.getItem("ef_min_segment_duration");
-    if (msd !== null) setMinSegmentDuration(parseFloat(msd));
-    const uri = localStorage.getItem("ef_ultra_rapid_intro");
-    if (uri !== null) setUltraRapidIntro(uri === "true");
+    try {
+      const stability = localStorage.getItem("ef_voice_stability");
+      const similarity = localStorage.getItem("ef_voice_similarity");
+      const style = localStorage.getItem("ef_voice_style");
+      const speed = localStorage.getItem("ef_voice_speed");
+      const boost = localStorage.getItem("ef_voice_speaker_boost");
+      const wps = localStorage.getItem("ef_words_per_subtitle");
+      const hasVoiceValues = stability !== null || similarity !== null || style !== null || speed !== null || boost !== null;
+      if (stability !== null) setVoiceStability(parseFloat(stability));
+      if (similarity !== null) setVoiceSimilarity(parseFloat(similarity));
+      if (style !== null) setVoiceStyle(parseFloat(style));
+      if (speed !== null) setVoiceSpeed(parseFloat(speed));
+      if (boost !== null) setVoiceSpeakerBoost(boost === "true");
+      if (wps !== null) setWordsPerSubtitle(parseInt(wps, 10));
+      const msd = localStorage.getItem("ef_min_segment_duration");
+      if (msd !== null) setMinSegmentDuration(parseFloat(msd));
+      const uri = localStorage.getItem("ef_ultra_rapid_intro");
+      if (uri !== null) setUltraRapidIntro(uri === "true");
+      // If no voice values were stored, hydration won't trigger a re-render,
+      // so pre-mark as hydrated to avoid skipping the first real user change
+      if (!hasVoiceValues) voiceSettingsHydrated.current = true;
+    } catch {
+      // FE-16: SecurityError or QuotaExceededError — use defaults
+    }
     setVoiceSettingsLoaded(true);
-    // If no voice values were stored, hydration won't trigger a re-render,
-    // so pre-mark as hydrated to avoid skipping the first real user change
-    if (!hasVoiceValues) voiceSettingsHydrated.current = true;
   }, []);
 
   // Keep voice settings ref in sync for debounced save (Bug #87)
@@ -1674,10 +1720,12 @@ function PipelinePage() {
   useEffect(() => {
     if (!voiceSettingsLoaded || !voiceSettingsHydrated.current) return;
     if (!currentProfile) return;
+    const savedProfileId = currentProfileIdRef.current;
     if (voiceSettingsSaveTimer.current) clearTimeout(voiceSettingsSaveTimer.current);
     voiceSettingsSaveTimer.current = setTimeout(async () => {
       const profileId = currentProfileIdRef.current;
       if (!profileId) return;
+      if (currentProfileIdRef.current !== savedProfileId) return;
       // Read from ref to avoid stale closure values (Bug #87)
       const vs = voiceSettingsValuesRef.current;
       try {
@@ -1728,6 +1776,7 @@ function PipelinePage() {
         },
         words_per_subtitle: wordsPerSubtitle,
         min_segment_duration: minSegmentDuration,
+        ultra_rapid_intro: ultraRapidIntro,
       }, { timeout: 300_000 });
 
       // apiPost throws on non-OK responses (FE-01)
@@ -1792,6 +1841,7 @@ function PipelinePage() {
           },
           words_per_subtitle: wordsPerSubtitle,
           min_segment_duration: minSegmentDuration,
+          ultra_rapid_intro: ultraRapidIntro,
         }, { timeout: 300_000, signal: abortController.signal });
 
         if (abortController.signal.aborted || !isMountedRef.current) break;
@@ -1855,6 +1905,8 @@ function PipelinePage() {
   // Per-script TTS: adopt library audio instead of generating
   const handleUseLibraryTts = async (variantIndex: number) => {
     if (!pipelineId) return;
+    // FE-19: Prevent race between TTS generation and library adoption
+    if (ttsResults[variantIndex]?.generating || regeneratingAll) return;
     const match = libraryMatches[variantIndex];
     if (!match) return;
 
@@ -1971,6 +2023,9 @@ function PipelinePage() {
     }
   }, []);
 
+  // FE-20: Track previous segment IDs to avoid redundant association fetches
+  const prevAssocSegIdsRef = useRef<string>("");
+
   // Trigger association fetch when previews arrive
   useEffect(() => {
     const segIds = new Set<string>();
@@ -1979,8 +2034,12 @@ function PipelinePage() {
         if (match.segment_id) segIds.add(match.segment_id);
       }
     }
-    const ids = Array.from(segIds);
-    if (ids.length > 0) fetchAssociations(ids);
+    const ids = Array.from(segIds).sort();
+    const idsKey = ids.join(",");
+    if (ids.length > 0 && idsKey !== prevAssocSegIdsRef.current) {
+      prevAssocSegIdsRef.current = idsKey;
+      fetchAssociations(ids);
+    }
   }, [previews, fetchAssociations]);
 
   // Association handler callbacks
@@ -2033,16 +2092,18 @@ function PipelinePage() {
                         : "bg-secondary text-muted-foreground"
                     }`}
                     onClick={() => {
+                      // BUG-FE-31: Step navigation rules:
+                      // 1. Backward navigation: always allowed (click any completed step)
                       if (step > s.num) {
                         setStep(s.num);
                         setPreviewError(null);
                       }
-                      // Allow forward nav to Step 3 from Step 2 when previews exist
+                      // 2. Forward to Step 3: only from Step 2 when previews have been generated
                       if (s.num === 3 && step === 2 && Object.keys(previews).length > 0) {
                         setStep(3);
                         setPreviewError(null);
                       }
-                      // Allow forward nav to Step 4 from Step 3 when render was started
+                      // 3. Forward to Step 4: only from Step 3 when rendering has been initiated
                       if (s.num === 4 && step === 3 && variantStatuses.length > 0) {
                         setStep(4);
                         setPreviewError(null);
@@ -2773,6 +2834,25 @@ function PipelinePage() {
                                   }
                                   return next;
                                 });
+                                // Remap srtPreviewOpen: remove deleted index, shift higher indices down
+                                setSrtPreviewOpen(prev => {
+                                  const next: typeof prev = {};
+                                  for (const [k, v] of Object.entries(prev)) {
+                                    const ki = Number(k);
+                                    if (ki < index) next[ki] = v;
+                                    else if (ki > index) next[ki - 1] = v;
+                                  }
+                                  return next;
+                                });
+                                // Remap selectedVariants: remove deleted index, shift higher indices down
+                                setSelectedVariants(prev => {
+                                  const next = new Set<number>();
+                                  for (const ki of prev) {
+                                    if (ki < index) next.add(ki);
+                                    else if (ki > index) next.add(ki - 1);
+                                  }
+                                  return next;
+                                });
                               }}
                             >
                               <X className="h-4 w-4" />
@@ -3015,7 +3095,7 @@ function PipelinePage() {
                     {sourceVideos[0].thumbnail_path ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
-                        src={`${API_URL.replace('/api/v1', '')}/thumbnails/${sourceVideos[0].thumbnail_path.split('/').pop()}`}
+                        src={`${API_URL.replace('/api/v1', '')}/thumbnails/${sourceVideos[0].thumbnail_path?.split('/').pop() || 'placeholder.png'}`}
                         alt=""
                         className="w-10 h-10 rounded object-cover flex-shrink-0"
                         onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
@@ -3078,7 +3158,7 @@ function PipelinePage() {
                         {video.thumbnail_path ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
-                            src={`${API_URL.replace('/api/v1', '')}/thumbnails/${video.thumbnail_path.split('/').pop()}`}
+                            src={`${API_URL.replace('/api/v1', '')}/thumbnails/${video.thumbnail_path?.split('/').pop() || 'placeholder.png'}`}
                             alt=""
                             className="w-10 h-10 rounded object-cover flex-shrink-0"
                             onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
@@ -3164,6 +3244,7 @@ function PipelinePage() {
                   className="w-full"
                   size="lg"
                 >
+                  {/* BUG-FE-35: Counter is safe — previewingIndex is only non-null during batched generation when scripts.length > 0 */}
                   {previewingIndex !== null ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -3281,7 +3362,7 @@ function PipelinePage() {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8"
-                            onClick={() => handlePlayAudio(pipelineId!, index)}
+                            onClick={() => pipelineId && handlePlayAudio(pipelineId, index)}
                             title={playingAudio === `${pipelineId}-${index}` ? "Stop audio" : "Play voiceover"}
                           >
                             {playingAudio === `${pipelineId}-${index}` ? (
@@ -3410,6 +3491,7 @@ function PipelinePage() {
                       variant: "destructive",
                       onConfirm: () => {
                         setConfirmDialog((prev) => ({ ...prev, open: false }));
+                        handleCancelRender();
                         resetPipeline();
                       },
                     });
@@ -3427,8 +3509,8 @@ function PipelinePage() {
             {variantStatuses.length === 0 ? (
               <EmptyState
                 icon={<Workflow className="h-6 w-6" />}
-                title="Niciun pipeline"
-                description="Configureaza un pipeline pentru a genera video-uri."
+                title="No pipeline"
+                description="Configure a pipeline to generate videos."
               />
             ) : null}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -3517,7 +3599,7 @@ function PipelinePage() {
                             onClick={() => setPublishVariant(status)}
                           >
                             <Share2 className="h-4 w-4 mr-2" />
-                            Publica pe Social Media
+                            Publish to Social Media
                           </Button>
                         )}
                       </div>
@@ -3535,12 +3617,14 @@ function PipelinePage() {
                             size="sm"
                             className="p-0 h-auto text-yellow-700 dark:text-yellow-400 underline ml-1"
                             onClick={async () => {
+                              // BUG-FE-32: Guard against null pipelineId
+                              if (!pipelineId) return;
                               try {
                                 await apiPost(`/pipeline/sync-to-library/${pipelineId}`);
                                 const res = await apiGet(`/pipeline/status/${pipelineId}`);
                                 const data = await res.json();
                                 if (data?.variants) {
-                                  const renderedVariants = (data.variants || []).filter((v: any) => v.status !== "not_started");
+                                  const renderedVariants = (data.variants || []).filter((v: VariantStatus) => v.status !== "not_started");
                                   setVariantStatuses(renderedVariants);
                                 }
                               } catch {
@@ -3548,7 +3632,7 @@ function PipelinePage() {
                               }
                             }}
                           >
-                            Retry salvare
+                            Retry save
                           </Button>
                         </AlertDescription>
                       </Alert>
@@ -3661,7 +3745,7 @@ function PipelinePage() {
                             {item.variant_count} scripts
                           </span>
                           <span className="text-xs text-muted-foreground">
-                            {new Date(item.created_at).toLocaleDateString()}
+                            {new Date(item.created_at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
                           </span>
                         </div>
                       </div>
@@ -3730,20 +3814,7 @@ function PipelinePage() {
                                     setPipelineId(selectedHistoryId);
                                     setScripts(historyScripts.map(formatScript));
                                     // Carry over TTS results: prefer tts_info (Step 2) over preview_info (Step 3)
-                                    const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
-                                    Object.entries(historyTtsInfo).forEach(([key, info]) => {
-                                      if (info.has_audio) {
-                                        restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
-                                      }
-                                    });
-                                    if (Object.keys(restoredTts).length === 0) {
-                                      Object.entries(historyPreviewInfo).forEach(([key, info]) => {
-                                        if (info.has_audio) {
-                                          restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
-                                        }
-                                      });
-                                    }
-                                    setTtsResults(restoredTts);
+                                    setTtsResults(buildRestoredTts(historyTtsInfo, historyPreviewInfo));
                                     // Restore source video selection so product groups load
                                     setSelectedSourceIds(new Set());
                                     restoreSourceSelection(selectedHistoryId);

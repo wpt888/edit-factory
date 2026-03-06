@@ -29,6 +29,7 @@ except ImportError:
 _cached_model = None
 _cached_utils = None
 _model_cache_lock = threading.Lock()
+_model_load_attempted = False  # M7: Track if load was already attempted (prevents retries on failure)
 
 
 @dataclass
@@ -78,13 +79,18 @@ class VoiceDetector:
 
     def _load_model(self):
         """Încarcă modelul Silero VAD (uses module-level cache)."""
-        global _cached_model, _cached_utils
+        global _cached_model, _cached_utils, _model_load_attempted
         with _model_cache_lock:
             if _cached_model is not None:
                 self.model = _cached_model
                 self.utils = _cached_utils
                 logger.info("Silero VAD model reused from cache")
                 return
+            # M7: Don't retry if a previous load already failed
+            if _model_load_attempted:
+                logger.debug("Silero VAD model load already attempted and failed, skipping retry")
+                return
+            _model_load_attempted = True
             try:
                 model, utils = torch.hub.load(
                     repo_or_dir='snakers4/silero-vad',

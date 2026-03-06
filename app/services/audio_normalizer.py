@@ -145,6 +145,34 @@ async def measure_loudness(
         return None
 
 
+def measure_loudness_sync(
+    audio_path: Path,
+    target_lufs: float = -14.0,
+    target_tp: float = -1.5,
+    target_lra: float = 7.0,
+    timeout_seconds: int = 300
+) -> Optional[LoudnormMeasurement]:
+    """Synchronous wrapper around measure_loudness for use from sync/threaded contexts."""
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        # Already inside an event loop — run in a new thread with its own loop
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(
+                asyncio.run,
+                measure_loudness(audio_path, target_lufs, target_tp, target_lra, timeout_seconds)
+            ).result(timeout=timeout_seconds + 10)
+    else:
+        return asyncio.run(
+            measure_loudness(audio_path, target_lufs, target_tp, target_lra, timeout_seconds)
+        )
+
+
 def build_loudnorm_filter(
     measurement: LoudnormMeasurement,
     target_lufs: float = -14.0,

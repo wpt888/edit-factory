@@ -63,6 +63,9 @@ export function VariantPreviewPlayer({
   useEffect(() => {
     if (!open || matches.length === 0) return;
 
+    // M12: Reset cancelledRef when dialog reopens so polling works
+    cancelledRef.current = false;
+
     const startRender = async () => {
       setStatus("processing");
       setProgress(0);

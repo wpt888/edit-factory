@@ -194,8 +194,12 @@ async def lifespan(app: FastAPI):
     settings.ensure_dirs()
     if settings.auth_disabled and not settings.debug and not getattr(settings, 'desktop_mode', False):
         raise RuntimeError("AUTH_DISABLED=true is not allowed in non-debug mode")
+    if not settings.auth_disabled and not settings.supabase_jwt_secret:
+        logger.error("SUPABASE_JWT_SECRET is empty — JWT auth will reject all tokens. Set the secret or AUTH_DISABLED=true for development.")
     if settings.desktop_mode:
         logger.info("Desktop mode active — auth bypassed, config from %s", settings.base_dir)
+        if not settings.debug:
+            logger.warning("desktop_mode=True in non-debug mode — auth is bypassed in production!")
     logger.info("Edit Factory started")
     logger.info(f"  Input dir: {settings.input_dir.absolute()}")
     logger.info(f"  Output dir: {settings.output_dir.absolute()}")
@@ -207,9 +211,14 @@ async def lifespan(app: FastAPI):
     # Mark stale JobStorage jobs (processing >10 min) as failed for crash recovery
     try:
         from app.services.job_storage import get_job_storage
-        cleaned = get_job_storage().cleanup_stale_jobs(max_age_minutes=10)
+        storage = get_job_storage()
+        cleaned = storage.cleanup_stale_jobs(max_age_minutes=10)
         if cleaned:
             logger.info(f"Startup: marked {cleaned} stale jobs as failed via JobStorage")
+        # H7: Also purge old completed/failed jobs to prevent unbounded growth
+        purged = storage.cleanup_old_jobs(days=7)
+        if purged:
+            logger.info(f"Startup: purged {purged} old jobs (>7 days) via JobStorage")
     except Exception as e:
         logger.warning(f"Startup job cleanup (JobStorage) failed: {e}")
     # Cleanup stale output files on startup

@@ -728,59 +728,67 @@ async def generate_raw_clips(
     # Verificăm că proiectul există și aparține profilului
     project_data = verify_project_ownership(supabase, project_id, profile.profile_id)
 
-    # Reject immediately if a task is already running for this project (STAB-03)
-    if is_project_locked(project_id):
+    # Acquire lock non-blocking to eliminate TOCTOU race (STAB-03 + C4)
+    lock = get_project_lock(project_id)
+    if not lock.acquire(blocking=False):
         raise HTTPException(
             status_code=409,
             detail="Project is currently being processed. Wait for the current job to finish before starting a new one."
         )
 
     # Determine video source: uploaded file or local path
-    if video and video.filename:
-        # Reject oversized uploads before reading the file into memory (STAB-05)
-        await validate_upload_size(video)
-        # Validate actual MIME type via magic-number inspection (blocks disguised malicious files)
-        await validate_file_mime_type(video, ALLOWED_VIDEO_MIMES, "video")
+    # Lock is already held — release it if anything fails before dispatching the background task.
+    try:
+        if video and video.filename:
+            # Reject oversized uploads before reading the file into memory (STAB-05)
+            await validate_upload_size(video)
+            # Validate actual MIME type via magic-number inspection (blocks disguised malicious files)
+            await validate_file_mime_type(video, ALLOWED_VIDEO_MIMES, "video")
 
-        # User uploaded a file
-        job_id = uuid.uuid4().hex[:12]
-        video_filename = f"{job_id}_{_sanitize_filename(video.filename)}"
-        final_video_path = settings.input_dir / video_filename
+            # User uploaded a file
+            job_id = uuid.uuid4().hex[:12]
+            video_filename = f"{job_id}_{_sanitize_filename(video.filename)}"
+            final_video_path = settings.input_dir / video_filename
 
-        try:
-            with open(final_video_path, "wb") as f:
-                shutil.copyfileobj(video.file, f)
-        except OSError as e:
-            if final_video_path.exists():
-                final_video_path.unlink(missing_ok=True)
-            logger.error(f"Failed to write uploaded file: {e}")
-            raise HTTPException(status_code=507, detail="Failed to save uploaded file")
-    elif video_path:
-        # User provided local path (for testing)
-        local_path = Path(video_path)
-        if not local_path.exists():
-            raise HTTPException(status_code=400, detail=f"Video file not found: {video_path}")
-        final_video_path = local_path
-    else:
-        raise HTTPException(status_code=400, detail="Must provide either video file or video_path")
+            try:
+                with open(final_video_path, "wb") as f:
+                    shutil.copyfileobj(video.file, f)
+            except OSError as e:
+                if final_video_path.exists():
+                    final_video_path.unlink(missing_ok=True)
+                logger.error(f"Failed to write uploaded file: {e}")
+                raise HTTPException(status_code=507, detail="Failed to save uploaded file")
+        elif video_path:
+            # User provided local path (for testing)
+            local_path = Path(video_path)
+            if not local_path.exists():
+                raise HTTPException(status_code=400, detail=f"Video file not found: {video_path}")
+            final_video_path = local_path
+        else:
+            raise HTTPException(status_code=400, detail="Must provide either video file or video_path")
 
-    # Obținem info despre video
-    video_info = _get_video_info(final_video_path)
+        # Obținem info despre video
+        video_info = _get_video_info(final_video_path)
 
-    # Limitări
-    variant_count = max(1, min(10, variant_count))
+        # Limitări
+        variant_count = max(1, min(10, variant_count))
 
-    # Lansăm generarea în background
-    background_tasks.add_task(
-        _generate_raw_clips_task,
-        project_id=project_id,
-        profile_id=profile.profile_id,
-        video_path=str(final_video_path),
-        video_info=video_info,
-        variant_count=variant_count,
-        target_duration=project_data["target_duration"],
-        context_text=project_data.get("context_text")
-    )
+        # Lansăm generarea în background (lock ownership transferred to task)
+        background_tasks.add_task(
+            _generate_raw_clips_task,
+            project_id=project_id,
+            profile_id=profile.profile_id,
+            video_path=str(final_video_path),
+            video_info=video_info,
+            variant_count=variant_count,
+            target_duration=project_data["target_duration"],
+            context_text=project_data.get("context_text"),
+            held_lock=lock
+        )
+    except Exception:
+        # Release lock if background task was never dispatched
+        lock.release()
+        raise
 
     return {
         "status": "generating",
@@ -797,7 +805,8 @@ async def _generate_raw_clips_task(
     variant_count: int,
     target_duration: int,
     context_text: Optional[str],
-    profile_id: Optional[str] = None  # DB-08: default None instead of "default"
+    profile_id: Optional[str] = None,  # DB-08: default None instead of "default"
+    held_lock: Optional[threading.Lock] = None  # C4: lock pre-acquired by endpoint
 ):
     """Task pentru generarea clipurilor raw în background."""
     from app.services.video_processor import VideoProcessorService
@@ -805,6 +814,8 @@ async def _generate_raw_clips_task(
     # DB-08: Guard against missing profile_id
     if not profile_id:
         logger.error(f"Cannot generate raw clips for project {project_id}: profile_id is required")
+        if held_lock:
+            held_lock.release()
         return
 
     logger.info(f"[Profile {profile_id}] Starting raw clip generation for project {project_id}")
@@ -812,15 +823,20 @@ async def _generate_raw_clips_task(
     supabase = get_supabase()
     if not supabase:
         logger.error(f"[Profile {profile_id}] Supabase not available for raw clips generation")
+        if held_lock:
+            held_lock.release()
         return
 
     settings = get_settings()
 
-    # Acquire project lock to prevent concurrent operations
-    lock = get_project_lock(project_id)
-    if not lock.acquire(blocking=False):
-        logger.warning(f"Project {project_id} is already being processed, skipping")
-        return
+    # Use pre-acquired lock from endpoint (C4), or acquire here for backward compat
+    if held_lock:
+        lock = held_lock
+    else:
+        lock = get_project_lock(project_id)
+        if not lock.acquire(blocking=False):
+            logger.warning(f"Project {project_id} is already being processed, skipping")
+            return
 
     try:
         # Update project status now that we hold the lock
@@ -930,6 +946,15 @@ async def _generate_raw_clips_task(
         except Exception as db_err:
             logger.error(f"Failed to update project {project_id} status to failed: {db_err}")
     finally:
+        # C6: Clean up uploaded input file on failure to avoid orphaned files
+        try:
+            input_file = Path(video_path)
+            if input_file.exists() and str(settings.input_dir) in str(input_file.parent):
+                input_file.unlink(missing_ok=True)
+                logger.debug(f"Cleaned up input video: {video_path}")
+        except Exception as cleanup_err:
+            logger.warning(f"Failed to cleanup input video {video_path}: {cleanup_err}")
+
         # Always release and cleanup the lock
         lock.release()
         cleanup_project_lock(project_id)
@@ -2455,31 +2480,40 @@ async def _render_final_clip_task(
 
     settings = get_settings()
 
-    # Acquire project lock to prevent concurrent operations on same project
+    # C5: Hold project lock only for the brief DB status update, not the entire render.
+    # This prevents starving the threadpool when multiple clips render concurrently.
     lock = get_project_lock(project_id) if project_id else None
-    lock_acquired = False
     if lock:
-        acquired = await asyncio.to_thread(lock.acquire, True, 300)
-        lock_acquired = acquired
-        if not acquired:
-            logger.warning(f"Could not acquire lock for project {project_id} within timeout")
+        acquired = lock.acquire(blocking=False)
+        if acquired:
             try:
                 supabase.table("editai_clips").update({
-                    "final_status": "failed",
+                    "final_status": "processing",
                     "updated_at": datetime.now(timezone.utc).isoformat()
                 }).eq("id", clip_id).eq("profile_id", profile_id).execute()
             except Exception as e:
-                logger.error(f"Failed to mark clip {clip_id} as failed after lock timeout: {e}")
-            return
-
-    # Set clip status to processing now that we hold the lock
-    try:
-        supabase.table("editai_clips").update({
-            "final_status": "processing",
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", clip_id).eq("profile_id", profile_id).execute()
-    except Exception as e:
-        logger.error(f"Failed to update clip status to processing: {e}")
+                logger.error(f"Failed to update clip status to processing: {e}")
+            finally:
+                lock.release()
+        else:
+            # Lock held — update status without lock (best-effort)
+            logger.debug(f"Project lock held for {project_id}, updating status without lock")
+            try:
+                supabase.table("editai_clips").update({
+                    "final_status": "processing",
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+            except Exception as e:
+                logger.error(f"Failed to update clip status to processing: {e}")
+    else:
+        # No project_id — just update status
+        try:
+            supabase.table("editai_clips").update({
+                "final_status": "processing",
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+        except Exception as e:
+            logger.error(f"Failed to update clip status to processing: {e}")
 
     # Initialize temp file paths for cleanup in finally block
     audio_path = None
@@ -2848,12 +2882,10 @@ async def _render_final_clip_task(
             except Exception as e:
                 logger.warning(f"Failed to cleanup partial output: {e}")
 
-        # Always release and cleanup the lock (only if it was actually acquired)
-        if lock and lock_acquired:
-            lock.release()
-            if project_id:
-                cleanup_project_lock(project_id)
-            logger.debug(f"Released and cleaned up render lock for project {project_id}")
+        # C5: Lock is no longer held during render — no release needed here.
+        # Cleanup stale lock entries if project has no active tasks.
+        if project_id:
+            cleanup_project_lock(project_id)
 
 
 class BulkRenderRequest(BaseModel):

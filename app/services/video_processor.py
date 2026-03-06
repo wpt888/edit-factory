@@ -66,6 +66,7 @@ class VideoSegment:
     blur_score: float = 1.0       # Sharpness: 1.0 = sharp, 0.0 = blurry (Laplacian variance normalized)
     contrast_score: float = 0.5   # Contrast level: 0-1 (std dev normalized)
     visual_hashes: Optional[List[np.ndarray]] = None
+    gemini_estimated: bool = False  # True when scores are estimated from Gemini, not computed from frames
 
     @property
     def duration(self) -> float:
@@ -108,7 +109,8 @@ class VideoSegment:
             "variance_score": round(self.variance_score, 4),
             "blur_score": round(self.blur_score, 4),
             "contrast_score": round(self.contrast_score, 4),
-            "combined_score": round(self.combined_score, 4)
+            "combined_score": round(self.combined_score, 4),
+            "gemini_estimated": self.gemini_estimated
         }
 
 
@@ -143,7 +145,7 @@ class VideoAnalyzer:
             logger.info(f"Video loaded: {self.video_path.name}")
             logger.info(f"  Duration: {self.duration:.2f}s ({self.duration/60:.1f} min), FPS: {self.fps:.2f}")
             logger.info(f"  Resolution: {self.width}x{self.height}, Frames: {self.frame_count}")
-        except Exception:
+        except BaseException:
             self.cap.release()
             raise
 
@@ -181,7 +183,13 @@ class VideoAnalyzer:
     def _read_frame_at(self, frame_idx: int) -> Optional[np.ndarray]:
         """Citeste un frame specific (thread-safe via lock)."""
         with self._cap_lock:
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            if self.cap is None:
+                return None
+            success = self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            if not success:
+                # M9: Seek failed — log and return None instead of reading wrong frame
+                logger.warning(f"Failed to seek to frame {frame_idx}")
+                return None
             ret, frame = self.cap.read()
             return frame if ret else None
 
@@ -395,7 +403,7 @@ class VideoAnalyzer:
             current_time += step
             analyzed_count += 1
 
-            if progress_callback and analyzed_count % 10 == 0:
+            if progress_callback and analyzed_count % max(1, total_segments // 10) == 0:
                 progress = int((analyzed_count / total_segments) * 100)
                 progress_callback("Analyzing video", f"{progress}% complete")
 
@@ -435,6 +443,8 @@ class VideoAnalyzer:
 
         # Distribuție temporală uniformă - zone buckets + round-robin
         video_duration = max(seg.end_time for seg in all_segments) if all_segments else 0
+        if video_duration <= 0:
+            return []
         num_zones = 5
         zone_buckets = [[] for _ in range(num_zones)]
 
@@ -511,6 +521,7 @@ class VideoAnalyzer:
         """Elibereaza resursele."""
         if hasattr(self, 'cap') and self.cap is not None:
             self.cap.release()
+            self.cap = None  # M8: Help GC by clearing reference
 
 
 class VideoEditor:
@@ -614,9 +625,6 @@ class VideoEditor:
             logger.error("Voice muting failed, using original")
             shutil.copy(video_path, output_path)
             return output_path, []
-
-        # Track for cleanup
-        self._track_intermediate(output_path)
 
         # Return info about what was muted
         segments_info = [seg.to_dict() for seg in voice_segments]
@@ -806,7 +814,7 @@ class VideoEditor:
                         logger.info(f"Segment {i+1}: Muting {len(overlapping_mutes)} voice portions")
 
                 # Funcție helper pentru a construi comanda
-                def build_cmd(use_gpu_encoding: bool):
+                def build_cmd(use_gpu_encoding: bool, seg=seg, audio_filter=audio_filter):
                     if use_gpu_encoding:
                         cmd = [
                             "ffmpeg", "-y",
@@ -1126,13 +1134,15 @@ class VideoEditor:
         # Subtitles filter ruleaza pe CPU, deci trebuie sa decodam pe CPU si sa encodam cu GPU
         # NU folosim -hwaccel cuda aici pentru ca filtrul subtitles nu suporta GPU
         if self.use_gpu:
+            # Subtitles filter runs on CPU, so we cannot use hwaccel for decoding.
+            # Fall back to CPU codec (libx264) to avoid NVENC without hwaccel mismatch.
             cmd = [
                 "ffmpeg", "-y",
                 "-i", str(video_path),
                 "-vf", f"subtitles='{srt_path_escaped}':force_style='{subtitle_style}'",
-                "-c:v", self.video_codec,
-                "-preset", self.video_preset,
-                "-cq", self.video_quality,
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "20",
                 "-c:a", "copy",
                 str(output_video)
             ]
@@ -1304,9 +1314,10 @@ class VideoProcessorService:
                 start_time=gs.start_time,
                 end_time=gs.end_time,
                 motion_score=motion_score,
-                variance_score=motion_score * 0.8,  # Estimăm
-                avg_brightness=0.5,  # Default
-                visual_hashes=None
+                variance_score=motion_score * 0.8,  # Estimated from Gemini score
+                avg_brightness=0.5,  # Default — no frame analysis
+                visual_hashes=None,
+                gemini_estimated=True
             )
             video_segments.append(vs)
 
@@ -1416,6 +1427,7 @@ class VideoProcessorService:
                     video_path, selected_segments, variant_name,
                     source_rotation=source_rotation
                 )
+                self.editor._track_intermediate(segments_video)
                 current_video = segments_video
 
                 # Add audio
@@ -1505,6 +1517,8 @@ class VideoProcessorService:
 
         # Gasim durata totala a videoclipului din segmente
         video_duration = max(seg.end_time for seg in all_segments)
+        if video_duration <= 0:
+            return []
 
         # Impartim videoclipul in ZONE - fiecare varianta are zona ei de start
         zone_duration = video_duration / max(variant_count, 1)
@@ -1548,7 +1562,7 @@ class VideoProcessorService:
         num_zones = 5  # Impartim in 5 zone pentru diversitate
         zone_buckets = [[] for _ in range(num_zones)]
         for i, seg in all_with_idx:
-            bucket_idx = min(int((seg.start_time / video_duration) * num_zones), num_zones - 1)
+            bucket_idx = min(int((seg.start_time / video_duration) * num_zones), num_zones - 1) if video_duration > 0 else 0
             zone_buckets[bucket_idx].append((i, seg))
 
         # Sortam fiecare bucket dupa scor
@@ -1713,9 +1727,13 @@ class VideoProcessorService:
             if mute_source_voice:
                 report_progress("Detecting voice in source video")
                 try:
-                    from .voice_detector import VoiceDetector
-                    detector = VoiceDetector(threshold=0.5, min_speech_duration=0.25)
-                    voice_segments = detector.detect_voice(video_path)
+                    if not Path(video_path).exists():
+                        logger.warning(f"Video file not found for voice detection: {video_path}")
+                        voice_segments = []
+                    else:
+                        from .voice_detector import VoiceDetector
+                        detector = VoiceDetector(threshold=0.5, min_speech_duration=0.25)
+                        voice_segments = detector.detect_voice(video_path)
 
                     if voice_segments:
                         total_voice = sum(v.duration for v in voice_segments)
@@ -1764,6 +1782,7 @@ class VideoProcessorService:
                     voice_segments=voice_segments,  # Mute selectiv doar în porțiunile cu voce
                     source_rotation=source_rotation  # Corectează orientarea pentru vertical
                 )
+                self.editor._track_intermediate(segments_video)
                 current_video = segments_video
 
                 # Add audio (only if generate_audio is True)
@@ -1982,21 +2001,22 @@ class VideoProcessorService:
 
                 # Adăugăm subtitrări
                 srt_path = self.temp_dir / f"{variant_name}_subs.srt"
-                with open(srt_path, 'w', encoding='utf-8') as f:
-                    f.write(_sanitize_srt_full(srt_content))
+                try:
+                    with open(srt_path, 'w', encoding='utf-8') as f:
+                        f.write(_sanitize_srt_full(srt_content))
 
-                report_progress(f"Adding subtitles to variant {variant_idx + 1}")
-                current_video = self.editor.add_subtitles(
-                    current_video,
-                    srt_path,
-                    variant_name,
-                    subtitle_settings,
-                    video_width=main_video_info["width"],
-                    video_height=main_video_info["height"]
-                )
-
-                # Cleanup temp SRT
-                srt_path.unlink(missing_ok=True)
+                    report_progress(f"Adding subtitles to variant {variant_idx + 1}")
+                    current_video = self.editor.add_subtitles(
+                        current_video,
+                        srt_path,
+                        variant_name,
+                        subtitle_settings,
+                        video_width=main_video_info["width"],
+                        video_height=main_video_info["height"]
+                    )
+                finally:
+                    # Cleanup temp SRT even on exception
+                    srt_path.unlink(missing_ok=True)
 
                 results["variants"].append({
                     "variant_index": variant_idx + 1,
@@ -2084,7 +2104,7 @@ class VideoProcessorService:
                     if current_time <= t < current_time + main_seg.duration:
                         keyword_to_insert = kw
                         # Eliminăm acest timestamp să nu-l folosim din nou
-                        keyword_times[kw] = [x for x in times if x != t]
+                        times.remove(t)
                         break
                 if keyword_to_insert:
                     break
@@ -2144,77 +2164,85 @@ class VideoProcessorService:
             for kw in sv.get('keywords', []):
                 keyword_to_path[kw] = Path(sv['path'])
 
-        for i, item in enumerate(timeline):
-            temp_file = self.temp_dir / f"timeline_{variant_name}_{i:03d}.mp4"
+        try:
+            for i, item in enumerate(timeline):
+                temp_file = self.temp_dir / f"timeline_{variant_name}_{i:03d}.mp4"
 
-            if item['source'] == 'main':
-                video_path = main_video_path
-            else:
-                kw = item.get('keyword', '')
-                video_path = keyword_to_path.get(kw, main_video_path)
+                if item['source'] == 'main':
+                    video_path = main_video_path
+                else:
+                    kw = item.get('keyword', '')
+                    video_path = keyword_to_path.get(kw, main_video_path)
 
-            seg = item['segment']
+                seg = item['segment']
 
-            if self.editor.use_gpu:
-                cmd = [
-                    "ffmpeg", "-y", "-threads", "4",
-                    "-hwaccel", "cuda",
-                    "-hwaccel_output_format", "cuda",
-                    "-i", str(video_path),
-                    "-ss", str(seg.start_time),
-                    "-t", str(item['duration']),
-                    "-c:v", self.editor.video_codec,
-                    "-preset", self.editor.video_preset,
-                    "-cq", self.editor.video_quality,
-                    # Keyframe interval (2 sec at 30fps)
-                    "-g", "60",
-                    # -bf omitted for GPU — some NVENC GPUs don't support B-frames (VID-05)
-                    # Audio
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-ar", "48000", "-ac", "2",
-                    # Pixel format
-                    "-pix_fmt", "yuv420p",
-                    str(temp_file)
-                ]
-            else:
-                cmd = [
-                    "ffmpeg", "-y", "-threads", "4",
-                    "-i", str(video_path),
-                    "-ss", str(seg.start_time),
-                    "-t", str(item['duration']),
-                    "-c:v", self.editor.video_codec,
-                    "-profile:v", "high",
-                    "-level:v", "4.0",
-                    "-preset", self.editor.video_preset,
-                    "-crf", self.editor.video_quality,
-                    # Keyframe interval (2 sec at 30fps)
-                    "-g", "60",
-                    "-keyint_min", "60",
-                    "-sc_threshold", "0",
-                    "-bf", "2",
-                    # Audio
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-ar", "48000", "-ac", "2",
-                    # Pixel format
-                    "-pix_fmt", "yuv420p",
-                    "-sar", "1:1",
-                    str(temp_file)
-                ]
+                if self.editor.use_gpu:
+                    cmd = [
+                        "ffmpeg", "-y", "-threads", "4",
+                        "-hwaccel", "cuda",
+                        "-hwaccel_output_format", "cuda",
+                        "-ss", str(seg.start_time),
+                        "-i", str(video_path),
+                        "-t", str(item['duration']),
+                        "-c:v", self.editor.video_codec,
+                        "-preset", self.editor.video_preset,
+                        "-cq", self.editor.video_quality,
+                        # Keyframe interval (2 sec at 30fps)
+                        "-g", "60",
+                        # -bf omitted for GPU — some NVENC GPUs don't support B-frames (VID-05)
+                        # Audio
+                        "-c:a", "aac", "-b:a", "128k",
+                        "-ar", "48000", "-ac", "2",
+                        # Pixel format
+                        "-pix_fmt", "yuv420p",
+                        str(temp_file)
+                    ]
+                else:
+                    cmd = [
+                        "ffmpeg", "-y", "-threads", "4",
+                        "-ss", str(seg.start_time),
+                        "-i", str(video_path),
+                        "-t", str(item['duration']),
+                        "-c:v", self.editor.video_codec,
+                        "-profile:v", "high",
+                        "-level:v", "4.0",
+                        "-preset", self.editor.video_preset,
+                        "-crf", self.editor.video_quality,
+                        # Keyframe interval (2 sec at 30fps)
+                        "-g", "60",
+                        "-keyint_min", "60",
+                        "-sc_threshold", "0",
+                        "-bf", "2",
+                        # Audio
+                        "-c:a", "aac", "-b:a", "128k",
+                        "-ar", "48000", "-ac", "2",
+                        # Pixel format
+                        "-pix_fmt", "yuv420p",
+                        "-sar", "1:1",
+                        str(temp_file)
+                    ]
 
-            # VID-04: Use safe_ffmpeg_run instead of raw subprocess.run
-            result = safe_ffmpeg_run(cmd, timeout=120, operation=f"extract timeline item {i+1}/{len(timeline)}")
-            if result.returncode == 0:
-                segment_files.append(temp_file)
-                self.editor._track_intermediate(temp_file)
-                logger.info(f"Extracted timeline item {i+1}/{len(timeline)}: {item['source']} at {seg.start_time:.1f}s")
-            else:
-                # Parse error for better logging
-                stderr = result.stderr or ""
-                error_lines = [line for line in stderr.split('\n') if 'error' in line.lower()]
-                error_msg = error_lines[0] if error_lines else stderr[-300:]
-                logger.error(f"FFmpeg failed for timeline item {i+1}/{len(timeline)}: {error_msg}")
-                logger.debug(f"Full FFmpeg stderr: {stderr}")
-                raise RuntimeError(f"FFmpeg failed for timeline item {i+1}: {error_msg}")
+                # VID-04: Use safe_ffmpeg_run instead of raw subprocess.run
+                result = safe_ffmpeg_run(cmd, timeout=120, operation=f"extract timeline item {i+1}/{len(timeline)}")
+                if result.returncode == 0:
+                    segment_files.append(temp_file)
+                    logger.info(f"Extracted timeline item {i+1}/{len(timeline)}: {item['source']} at {seg.start_time:.1f}s")
+                else:
+                    # Parse error for better logging
+                    stderr = result.stderr or ""
+                    error_lines = [line for line in stderr.split('\n') if 'error' in line.lower()]
+                    error_msg = error_lines[0] if error_lines else stderr[-300:]
+                    logger.error(f"FFmpeg failed for timeline item {i+1}/{len(timeline)}: {error_msg}")
+                    logger.debug(f"Full FFmpeg stderr: {stderr}")
+                    raise RuntimeError(f"FFmpeg failed for timeline item {i+1}: {error_msg}")
+        except Exception:
+            # H10: Clean up orphaned temp segment files on failure
+            for sf in segment_files:
+                try:
+                    Path(sf).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
 
         # Concatenăm toate segmentele
         if not segment_files:

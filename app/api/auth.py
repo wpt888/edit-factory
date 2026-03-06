@@ -173,7 +173,9 @@ async def get_optional_user(
     """
     try:
         return await get_current_user(credentials, authorization)
-    except HTTPException:
+    except HTTPException as exc:
+        if exc.status_code >= 500:
+            raise
         return None
 
 

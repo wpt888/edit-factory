@@ -502,7 +502,7 @@ async def create_job(
         "result": None,
         "error": None
     }
-    get_job_storage().create_job(job)
+    get_job_storage().create_job(job, profile_id=profile.profile_id)
 
     # Lansam procesarea in background
     background_tasks.add_task(process_job, job_id)
@@ -843,7 +843,7 @@ async def generate_tts(
         "result": None,
         "error": None
     }
-    get_job_storage().create_job(job)
+    get_job_storage().create_job(job, profile_id=profile.profile_id)
 
     background_tasks.add_task(process_tts_generate_job, job_id)
 
@@ -1018,7 +1018,7 @@ async def add_tts_to_videos(
         "result": None,
         "error": None
     }
-    get_job_storage().create_job(job)
+    get_job_storage().create_job(job, profile_id=profile.profile_id)
 
     # Process in background
     background_tasks.add_task(process_tts_job, job_id, profile.profile_id)

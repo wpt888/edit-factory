@@ -323,6 +323,20 @@ class ElevenLabsTTS:
         """
         output_path = Path(output_path)
 
+        # C7: Cache check at trimmed level to avoid temp dir + silence processing overhead
+        from app.services.tts_cache import cache_lookup
+        trimmed_cache_key = {
+            "text": text, "voice_id": self.voice_id, "model_id": self.model_id,
+            "provider": "legacy_trimmed",
+            "remove_silence": remove_silence,
+            "min_silence_duration": min_silence_duration,
+            "silence_padding": silence_padding,
+        }
+        cached = cache_lookup(trimmed_cache_key, "legacy_trimmed", output_path)
+        if cached:
+            logger.info(f"Using cached trimmed TTS audio (cost: $0.00)")
+            return output_path, {"silence_removed": remove_silence, "cached": True}
+
         with tempfile.TemporaryDirectory() as temp_dir:
             tmp_path = Path(temp_dir)
 
@@ -341,6 +355,8 @@ class ElevenLabsTTS:
                 # Just copy to output
                 import shutil
                 shutil.copy(raw_audio, output_path)
+                from app.services.tts_cache import cache_store
+                cache_store(trimmed_cache_key, "legacy_trimmed", output_path, {})
                 return output_path, {"silence_removed": False}
 
             # Remove silence
@@ -359,12 +375,15 @@ class ElevenLabsTTS:
                     f"(saved {result.compression_ratio*100:.1f}%)"
                 )
 
+                from app.services.tts_cache import cache_store
+                cache_store(trimmed_cache_key, "legacy_trimmed", output_path, {})
                 return output_path, result.to_dict()
 
             except Exception as e:
                 logger.warning(f"Silence removal failed, using raw audio: {e}")
                 import shutil
                 shutil.copy(raw_audio, output_path)
+                # Don't cache failed silence removal — next attempt may succeed
                 return output_path, {"silence_removed": False, "error": str(e)}
 
     async def process_video_with_tts(

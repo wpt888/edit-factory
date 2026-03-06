@@ -3,6 +3,7 @@ AI Script Generator Service
 Generates TTS-safe scripts using Gemini or Claude AI with segment keyword awareness.
 """
 import re
+import time
 import logging
 import threading
 from typing import List, Optional, Dict
@@ -68,6 +69,9 @@ class ScriptGenerator:
             keywords: Available segment keywords from library
             variant_count: Number of script variants to generate (1-10)
             provider: "gemini" or "claude"
+            product_groups: Optional dict mapping group labels to keyword lists
+            ai_instructions: Optional creator rules/guidelines for the AI
+            target_duration: Optional target duration in seconds for word count estimation
 
         Returns:
             List of clean, TTS-safe script texts
@@ -98,35 +102,47 @@ class ScriptGenerator:
         # Build prompt
         prompt = self._build_prompt(idea, context, keywords, variant_count, product_groups, ai_instructions, target_duration)
 
-        # Generate with selected provider
-        try:
-            if provider == "gemini":
-                raw_response = self._generate_with_gemini(prompt)
-            else:  # claude
-                raw_response = self._generate_with_claude(prompt)
+        # Generate with selected provider (1 retry for 429/5xx errors)
+        last_error = None
+        for attempt in range(2):
+            try:
+                if provider == "gemini":
+                    raw_response = self._generate_with_gemini(prompt)
+                else:  # claude
+                    raw_response = self._generate_with_claude(prompt, variant_count)
 
-            # Parse and sanitize scripts
-            scripts = self._parse_scripts(raw_response, variant_count)
+                # Parse and sanitize scripts
+                scripts = self._parse_scripts(raw_response, variant_count)
 
-            # Sanitize for TTS
-            clean_scripts = [self._sanitize_for_tts(script) for script in scripts]
+                # Sanitize for TTS
+                clean_scripts = [self._sanitize_for_tts(script) for script in scripts]
 
-            logger.info(f"Successfully generated {len(clean_scripts)} scripts")
+                logger.info(f"Successfully generated {len(clean_scripts)} scripts")
 
-            # SCR-12: Fail explicitly if no valid scripts were produced
-            if not clean_scripts:
-                raise ValueError("No valid scripts generated — AI response could not be parsed into scripts")
+                # SCR-12: Fail explicitly if no valid scripts were produced
+                if not clean_scripts:
+                    raise ValueError("No valid scripts generated — AI response could not be parsed into scripts")
 
-            if len(clean_scripts) < variant_count:
-                logger.warning(
-                    f"Generated fewer scripts than requested: {len(clean_scripts)}/{variant_count}"
-                )
+                if len(clean_scripts) < variant_count:
+                    logger.warning(
+                        f"Generated fewer scripts than requested: {len(clean_scripts)}/{variant_count}"
+                    )
 
-            return clean_scripts
+                return clean_scripts
 
-        except Exception as e:
-            logger.error(f"Script generation failed with {provider}: {e}")
-            raise
+            except Exception as e:
+                last_error = e
+                status = getattr(e, 'status_code', None) or getattr(e, 'code', None)
+                is_retryable = (status == 429 or (isinstance(status, int) and 500 <= status < 600))
+                if attempt == 0 and is_retryable:
+                    logger.warning(f"Script generation attempt {attempt + 1} failed (status={status}): {e}, retrying in 2s...")
+                    time.sleep(2)
+                    continue
+                logger.error(f"Script generation failed with {provider}: {e}")
+                raise
+
+        # Should not reach here, but just in case
+        raise last_error  # type: ignore[misc]
 
     def _build_prompt(
         self,
@@ -136,16 +152,24 @@ class ScriptGenerator:
         variant_count: int,
         product_groups: Optional[Dict[str, List[str]]] = None,
         ai_instructions: str = "",
-        target_duration: Optional[float] = None
+        target_duration: Optional[float] = None,
+        words_per_sec: float = 2.3
     ) -> str:
         """Build AI prompt for script generation."""
-        keyword_list = ", ".join(keywords) if keywords else "none available"
+        _strip_ctrl = lambda s: ''.join(c for c in s if c.isprintable() or c == '\n')
+        idea = _strip_ctrl(idea[:500])
+        context = _strip_ctrl((context or "")[:1000])
+        ai_instructions = _strip_ctrl((ai_instructions or "")[:2000])
+        # BUG-SG-09: Cap keywords and groups to avoid prompt bloat
+        keyword_list = ", ".join(keywords[:100]) if keywords else "none available"
 
         # Build product groups section if available
         product_groups_section = ""
         if product_groups:
             groups_text = []
-            for group_label, group_keywords in product_groups.items():
+            # Limit to 20 groups to keep prompt manageable
+            limited_groups = dict(list(product_groups.items())[:20])
+            for group_label, group_keywords in limited_groups.items():
                 groups_text.append(f"  - {group_label}: {', '.join(group_keywords)}")
             product_groups_section = f"\n**Product Groups (video segments organized by product):**\n" + "\n".join(groups_text) + "\n"
 
@@ -156,7 +180,6 @@ class ScriptGenerator:
 
         # Compute dynamic word target based on available footage duration
         if target_duration and target_duration > 0:
-            words_per_sec = 2.3
             # Target 80-95% of available duration to leave breathing room
             min_duration = target_duration * 0.80
             max_duration = target_duration * 0.95
@@ -213,13 +236,13 @@ Begin generation now:"""
             if self._gemini_client is None:
                 self._gemini_client = genai.Client(
                     api_key=self.gemini_api_key,
-                    # timeout is in milliseconds for the Gemini HTTP client (120_000ms = 120s)
-                    http_options={"timeout": 120_000},
+                    http_options={"timeout": 120},
                 )
+            client = self._gemini_client
 
         logger.info(f"Calling Gemini API with model {self.gemini_model}")
 
-        response = self._gemini_client.models.generate_content(
+        response = client.models.generate_content(
             model=self.gemini_model,
             contents=prompt
         )
@@ -237,9 +260,12 @@ Begin generation now:"""
                     f"Gemini response blocked by safety filter (finish_reason={finish_reason})"
                 )
 
-        return response.text
+        text = response.text
+        if not text:
+            raise RuntimeError("Gemini returned empty response")
+        return text
 
-    def _generate_with_claude(self, prompt: str) -> str:
+    def _generate_with_claude(self, prompt: str, variant_count: int = 3) -> str:
         """Generate content using Anthropic Claude API."""
         with self._client_lock:
             if self._anthropic_client is None:
@@ -247,12 +273,13 @@ Begin generation now:"""
                     api_key=self.anthropic_api_key,
                     timeout=120.0,
                 )
+            client = self._anthropic_client
 
         logger.info("Calling Anthropic Claude API")
 
-        response = self._anthropic_client.messages.create(
+        response = client.messages.create(
             model=self.anthropic_model,
-            max_tokens=4096,
+            max_tokens=min(8192, 1024 + variant_count * 800),
             messages=[{
                 "role": "user",
                 "content": prompt
@@ -264,6 +291,9 @@ Begin generation now:"""
             raise RuntimeError("Claude returned empty response")
         if response.content[0].type != "text":
             raise RuntimeError(f"Unexpected content type: {response.content[0].type}")
+
+        if response.stop_reason == "max_tokens":
+            logger.warning(f"Claude response was truncated (max_tokens reached for {variant_count} variants)")
 
         return response.content[0].text
 
@@ -278,8 +308,15 @@ Begin generation now:"""
         Returns:
             List of individual script texts
         """
-        # Split by primary delimiter
-        scripts = raw_response.split("---SCRIPT---")
+        # Split by primary delimiter (line-anchored to avoid matching inside text)
+        scripts = re.split(r'(?m)^---SCRIPT---$', raw_response)
+
+        # BUG-SG-11: Skip preamble — first element from split is often an AI
+        # intro like "Here are the scripts:" rather than actual script content.
+        if len(scripts) > 1 and scripts[0].strip():
+            first = scripts[0].strip()
+            if len(first) < 20 or not re.search(r'[.!?]', first):
+                scripts = scripts[1:]
 
         # SCR-07: Fallback delimiter — if primary delimiter yields only 1 chunk,
         # try numbered format like "Script 1:", "Script 2:", etc.
@@ -295,13 +332,9 @@ Begin generation now:"""
         for script in scripts:
             script = script.strip()
             if script:
-                # Remove any markdown formatting that might have slipped through
-                script = re.sub(r'\*\*([^*]+)\*\*', r'\1', script)  # Bold
-                script = re.sub(r'\*([^*]+)\*', r'\1', script)      # Italic
-                script = re.sub(r'_([^_]+)_', r'\1', script)        # Italic underscore
-                script = re.sub(r'#+ ', '', script)                 # Headers
-
-                # Ensure each sentence is on its own line for readability
+                # BUG-SG-08: Markdown removal moved to _sanitize_for_tts to avoid
+                # duplicate logic. _format_sentences runs here first, then
+                # _sanitize_for_tts preserves the sentence-per-line formatting.
                 script = self._format_sentences(script)
                 cleaned.append(script)
 
@@ -319,7 +352,7 @@ Begin generation now:"""
 
         # Otherwise, split by sentence-ending punctuation and put each on its own line
         # Split on . ! ? followed by a space and uppercase letter (or end of string)
-        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', text.strip())
         return '\n\n'.join(s.strip() for s in sentences if s.strip())
 
     def _sanitize_for_tts(self, text: str) -> str:
@@ -363,9 +396,18 @@ Begin generation now:"""
             r'voice\s+over|narrator|transition|fade|cut|intro|outro'
         )
         text = re.sub(rf'\[\s*(?:{_stage_directions})\s*\]', '', text, flags=re.IGNORECASE)
-        # Remove single-word stage directions in parentheses — e.g. (whisper), (loudly)
-        # but preserve multi-word parenthetical phrases that are legitimate speech.
-        text = re.sub(r'\((\w+)\)', '', text)  # (whisper), (loudly) — single-word only
+        # Also catch common short bracket directions like [pause], [beat], etc.
+        _short_bracket = r'pause|beat|silence|music|laughs?|sigh|gasp|clap'
+        text = re.sub(rf'\[\s*(?:{_short_bracket})\s*\]', '', text, flags=re.IGNORECASE)
+        # Remove only known stage directions in parentheses — e.g. (whisper), (loudly),
+        # (dramatic pause).  Preserve single-word parentheticals that may be acronyms
+        # like (NATO), (USD), (CEO).
+        _paren_stage_directions = (
+            r'pause|beat|silence|whisper|softly|loudly|music|laughs?|sigh|gasp|clap|'
+            r'cheer|applause|dramatic\s+pause|soft\s+voice|voice\s+over|narrator|'
+            r'transition|fade|cut|intro|outro'
+        )
+        text = re.sub(rf'\(\s*(?:{_paren_stage_directions})\s*\)', '', text, flags=re.IGNORECASE)
 
         # Remove hashtags
         text = re.sub(r'#\w+', '', text)
@@ -408,6 +450,17 @@ def get_script_generator() -> ScriptGenerator:
             if _script_generator is None:
                 from app.config import get_settings
                 settings = get_settings()
+
+                # BUG-SG-10: Validate that at least one API key is present
+                # before persisting the singleton
+                gemini_key = settings.gemini_api_key or ""
+                anthropic_key = settings.anthropic_api_key or ""
+                if not gemini_key.strip() and not anthropic_key.strip():
+                    raise ValueError(
+                        "ScriptGenerator requires at least one API key "
+                        "(gemini_api_key or anthropic_api_key). "
+                        "Check your .env configuration."
+                    )
 
                 _script_generator = ScriptGenerator(
                     gemini_api_key=settings.gemini_api_key,
