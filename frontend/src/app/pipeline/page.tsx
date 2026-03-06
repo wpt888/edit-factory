@@ -434,11 +434,19 @@ function PipelinePage() {
     return interstitialSlidesChangeHandlers.current[index];
   }, []);
 
-  // BUG-FE-24: Merged two cleanup useEffects — keep pipelineIdRef in sync + mark unmount
+  // Keep pipelineIdRef in sync with state
   useEffect(() => {
     pipelineIdRef.current = pipelineId;
-    return () => { isMountedRef.current = false; };
   }, [pipelineId]);
+
+  // Mark component as unmounted — must be a separate effect with [] deps
+  // so the cleanup only runs on actual unmount, not on every pipelineId change.
+  // BUG-FE-24 originally merged these, but that caused isMountedRef to become
+  // false whenever pipelineId changed, breaking all subsequent async operations.
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
 
   // Format helpers
   const formatDuration = (seconds: number): string => {
@@ -946,7 +954,10 @@ function PipelinePage() {
 
   // Step 2: Preview all matches
   const handlePreviewAll = async () => {
-    if (!pipelineId) return;
+    if (!pipelineId) {
+      setPreviewError("No pipeline ID. Please generate or load scripts first.");
+      return;
+    }
 
     // Cancel any in-flight preview requests from a previous run
     previewAbortRef.current?.abort();
