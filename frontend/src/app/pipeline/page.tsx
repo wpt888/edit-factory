@@ -72,6 +72,8 @@ import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { SubtitleSettings, DEFAULT_SUBTITLE_SETTINGS } from "@/types/video-processing";
 import { TimelineEditor, SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
 import { VariantPreviewPlayer } from "@/components/variant-preview-player";
+import { SimplePipeline } from "@/components/simple-mode-pipeline";
+import type { PipelineMode } from "@/types/pipeline-presets";
 import { BatchUploadQueue } from "@/components/batch-upload-queue";
 
 // TypeScript interfaces
@@ -222,6 +224,21 @@ function PipelinePage() {
   // Ref to avoid stale closure in debounced setTimeout callbacks
   const currentProfileIdRef = useRef(currentProfile?.id);
   currentProfileIdRef.current = currentProfile?.id;
+
+  // Simple / Advanced mode toggle (persisted to localStorage)
+  const [pipelineMode, setPipelineMode] = useState<PipelineMode>(() => {
+    if (typeof window !== "undefined") {
+      return (localStorage.getItem("ef_pipeline_mode") as PipelineMode) || "simple";
+    }
+    return "simple";
+  });
+  const handleModeChange = useCallback((mode: PipelineMode) => {
+    setPipelineMode(mode);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ef_pipeline_mode", mode);
+    }
+  }, []);
+
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -2130,15 +2147,57 @@ function PipelinePage() {
           <div>
             <h1 className="text-3xl font-bold flex items-center gap-2">
               <Film className="h-8 w-8 text-primary" />
-              Multi-Variant Pipeline
+              {pipelineMode === "simple" ? "Video Creator" : "Multi-Variant Pipeline"}
             </h1>
             <p className="text-muted-foreground mt-2">
-              End-to-end workflow: generate scripts → preview matches → batch render
+              {pipelineMode === "simple"
+                ? "Upload, choose a style, and download your videos"
+                : "End-to-end workflow: generate scripts \u2192 preview matches \u2192 batch render"}
             </p>
+          </div>
+          {/* Mode toggle */}
+          <div className="flex items-center gap-1 bg-muted p-1 rounded-lg">
+            <Button
+              variant={pipelineMode === "simple" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => handleModeChange("simple")}
+              className="text-xs"
+            >
+              Simple
+            </Button>
+            <Button
+              variant={pipelineMode === "advanced" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => handleModeChange("advanced")}
+              className="text-xs"
+            >
+              Advanced
+            </Button>
           </div>
         </div>
 
-        {/* Step indicator */}
+        {/* Simple Mode */}
+        {pipelineMode === "simple" && (
+          <div className="space-y-6">
+            <SimplePipeline onSwitchToAdvanced={() => handleModeChange("advanced")} />
+
+            {/* Advanced Settings teaser */}
+            <div className="border rounded-lg p-4">
+              <button
+                className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-full text-left"
+                onClick={() => handleModeChange("advanced")}
+              >
+                <ChevronRight className="h-4 w-4" />
+                <span>Advanced Settings</span>
+                <span className="text-xs ml-auto">Switch to Advanced mode for full control over all parameters</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Advanced Mode — existing 4-step pipeline */}
+        {pipelineMode === "advanced" && (
+        <>{/* Step indicator */}
         <div className="mb-8">
           <div className="flex items-center justify-between">
             {[
@@ -3957,6 +4016,8 @@ function PipelinePage() {
           </div>
 
         </div>{/* end flex container */}
+        </>
+        )}
       </div>
 
       {/* Product Picker Dialog */}
@@ -4006,6 +4067,7 @@ function PipelinePage() {
         onConfirm={confirmDialog.onConfirm}
         loading={confirmDialog.loading}
       />
+
     </div>
   );
 }
