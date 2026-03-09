@@ -14,17 +14,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class KeywordMatch:
-    """Un match de keyword găsit în SRT."""
+    """A keyword match found in SRT."""
     keyword: str
-    matched_text: str  # Textul exact care a făcut match
+    matched_text: str  # The exact text that matched
     start_time: float  # Secunde
     end_time: float    # Secunde
-    confidence: float  # 0-1, cât de bun e match-ul
+    confidence: float  # 0-1, how good the match is
 
 
 def parse_srt_timestamp(timestamp: str) -> float:
-    """Convertește timestamp SRT (00:00:05,200) în secunde."""
-    # Format: HH:MM:SS,mmm sau HH:MM:SS.mmm
+    """Convert SRT timestamp (00:00:05,200) to seconds."""
+    # Format: HH:MM:SS,mmm or HH:MM:SS.mmm
     timestamp = timestamp.replace(',', '.')
     parts = timestamp.split(':')
 
@@ -40,14 +40,14 @@ def parse_srt_timestamp(timestamp: str) -> float:
 
 def parse_srt(srt_content: str) -> List[Dict]:
     """
-    Parsează conținutul SRT și returnează lista de subtitrări.
+    Parse SRT content and return list of subtitles.
 
     Returns:
         List of {id, start_time, end_time, text}
     """
     subtitles = []
 
-    # Normalizăm line endings
+    # Normalize line endings
     content = srt_content.replace('\r\n', '\n').replace('\r', '\n')
     blocks = content.strip().split('\n\n')
 
@@ -88,11 +88,11 @@ def parse_srt(srt_content: str) -> List[Dict]:
 
 
 def normalize_word(word: str) -> str:
-    """Normalizează un cuvânt pentru comparație."""
-    # Lowercase, remove diacritics aproximativ
+    """Normalize a word for comparison."""
+    # Lowercase, approximate diacritics removal
     word = word.lower().strip()
 
-    # Înlocuim diacritice românești
+    # Replace Romanian diacritics
     replacements = {
         'ă': 'a', 'â': 'a', 'î': 'i', 'ș': 's', 'ț': 't',
         'Ă': 'a', 'Â': 'a', 'Î': 'i', 'Ș': 's', 'Ț': 't'
@@ -100,7 +100,7 @@ def normalize_word(word: str) -> str:
     for old, new in replacements.items():
         word = word.replace(old, new)
 
-    # Eliminăm punctuația
+    # Remove punctuation
     word = re.sub(r'[^\w\s]', '', word)
 
     return word
@@ -108,13 +108,13 @@ def normalize_word(word: str) -> str:
 
 def fuzzy_match(word: str, keyword: str, threshold: float = 0.7) -> float:
     """
-    Verifică dacă un cuvânt face match cu keyword-ul.
-    Returnează scorul de similaritate (0-1).
+    Check if a word matches the keyword.
+    Returns similarity score (0-1).
 
-    Suportă:
-    - Match exact
-    - Match cu prefix (decant -> decantul, decanturi)
-    - Fuzzy matching pentru typos
+    Supports:
+    - Exact match
+    - Prefix match (decant -> decantul, decanturi)
+    - Fuzzy matching for typos
     """
     word_norm = normalize_word(word)
     keyword_norm = normalize_word(keyword)
@@ -123,15 +123,15 @@ def fuzzy_match(word: str, keyword: str, threshold: float = 0.7) -> float:
     if word_norm == keyword_norm:
         return 1.0
 
-    # Match cu prefix - cuvântul începe cu keyword
+    # Prefix match - word starts with keyword
     if word_norm.startswith(keyword_norm):
         return 0.95
 
-    # Match cu sufix - keyword e conținut în cuvânt
+    # Suffix match - keyword is contained in word
     if keyword_norm in word_norm:
         return 0.9
 
-    # Fuzzy matching pentru cuvinte similare
+    # Fuzzy matching for similar words
     ratio = SequenceMatcher(None, word_norm, keyword_norm).ratio()
 
     return ratio if ratio >= threshold else 0.0
@@ -143,15 +143,15 @@ def find_keyword_timestamps(
     min_confidence: float = 0.7
 ) -> List[KeywordMatch]:
     """
-    Găsește toate aparițiile keywords în SRT.
+    Find all keyword occurrences in SRT.
 
     Args:
-        srt_content: Conținutul fișierului SRT
-        keywords: Lista de cuvinte cheie de căutat
-        min_confidence: Scorul minim pentru match (0-1)
+        srt_content: SRT file content
+        keywords: List of keywords to search for
+        min_confidence: Minimum match score (0-1)
 
     Returns:
-        Lista de KeywordMatch sortată după start_time
+        List of KeywordMatch sorted by start_time
     """
     subtitles = parse_srt(srt_content)
     matches = []
@@ -219,10 +219,10 @@ def find_keyword_timestamps(
                     matches.append(match)
                     logger.debug(f"Keyword match (fuzzy): '{keyword}' -> '{word}' at {sub['start_time']:.2f}s (confidence: {confidence:.2f})")
 
-    # Sortăm după timp
+    # Sort by time
     matches.sort(key=lambda m: m.start_time)
 
-    # Eliminăm duplicate apropiate (același keyword în interval de 1 secundă)
+    # Remove nearby duplicates (same keyword within 1 second interval)
     filtered = []
     for match in matches:
         is_duplicate = False
@@ -243,19 +243,19 @@ def get_keyword_segments(
     segment_duration: float = 2.0
 ) -> List[Dict]:
     """
-    Convertește keyword matches în segmente de timp pentru video secundar.
+    Convert keyword matches to time segments for secondary video.
 
     Args:
-        keyword_matches: Lista de matches din find_keyword_timestamps
-        segment_duration: Cât timp să dureze segmentul video secundar
+        keyword_matches: List of matches from find_keyword_timestamps
+        segment_duration: How long the secondary video segment should last
 
     Returns:
-        Lista de segmente: [{start_time, end_time, keyword}]
+        List of segments: [{start_time, end_time, keyword}]
     """
     segments = []
 
     for match in keyword_matches:
-        # Centram segmentul în jurul keyword-ului
+        # Center segment around the keyword
         center = (match.start_time + match.end_time) / 2
         start = max(0, center - segment_duration / 2)
         end = center + segment_duration / 2
@@ -264,7 +264,7 @@ def get_keyword_segments(
             'start_time': start,
             'end_time': end,
             'keyword': match.keyword,
-            'source': 'secondary'  # Marker că vine din video secundar
+            'source': 'secondary'  # Marker indicating it comes from secondary video
         })
 
     return segments

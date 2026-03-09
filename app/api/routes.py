@@ -319,7 +319,7 @@ async def get_video_info(request: Request, video: UploadFile = File(...)):
         with open(temp_video, "wb") as f:
             shutil.copyfileobj(video.file, f)
 
-        # Folosim ffprobe pentru informatii rapide (inclusiv rotation din side_data)
+        # Use ffprobe for quick info (including rotation from side_data)
         probe_cmd = [
             "ffprobe", "-v", "error",
             "-select_streams", "v:0",
@@ -343,7 +343,7 @@ async def get_video_info(request: Request, video: UploadFile = File(...)):
         width = stream.get("width", 1920)
         height = stream.get("height", 1080)
 
-        # Verificam rotatia din side_data sau tags
+        # Check rotation from side_data or tags
         rotation = 0
         side_data_list = stream.get("side_data_list", [])
         for side_data in side_data_list:
@@ -351,12 +351,12 @@ async def get_video_info(request: Request, video: UploadFile = File(...)):
                 rotation = abs(int(side_data.get("rotation", 0)))
                 break
 
-        # Sau din tags
+        # Or from tags
         if rotation == 0:
             tags = stream.get("tags", {})
             rotation = abs(int(tags.get("rotate", 0)))
 
-        # Daca rotation e 90 sau 270, inversam width/height
+        # If rotation is 90 or 270, swap width/height
         if rotation in [90, 270]:
             width, height = height, width
             logger.info(f"Video rotated {rotation}°, swapped dimensions to {width}x{height}")
@@ -364,7 +364,7 @@ async def get_video_info(request: Request, video: UploadFile = File(...)):
         # Parse duration
         duration = float(format_info.get("duration", stream.get("duration", 0)))
 
-        # Parse frame rate (poate fi "30/1" sau "29.97")
+        # Parse frame rate (can be "30/1" or "29.97")
         fps_str = stream.get("r_frame_rate", "30/1")
         if "/" in fps_str:
             num, den = fps_str.split("/")
@@ -432,7 +432,7 @@ async def create_job(
     # Validate actual MIME type via magic-number inspection (blocks disguised malicious files)
     await validate_file_mime_type(video, ALLOWED_VIDEO_MIMES, "video")
 
-    # Salvam fisierele
+    # Save uploaded files
     video_path = settings.input_dir / f"{job_id}_{_sanitize_filename(video.filename)}"
     try:
         with open(video_path, "wb") as f:
@@ -457,7 +457,7 @@ async def create_job(
         with open(srt_path, "wb") as f:
             shutil.copyfileobj(srt.file, f)
 
-    # Parse subtitle settings din JSON
+    # Parse subtitle settings from JSON
     parsed_subtitle_settings = None
     if subtitle_settings:
         try:
@@ -468,7 +468,7 @@ async def create_job(
                 detail="Invalid JSON in subtitle_settings"
             )
 
-    # Limitam variant_count la 1-10
+    # Clamp variant_count to 1-10
     variant_count = max(1, min(10, variant_count))
 
     # Parse generate_audio string to boolean
@@ -477,7 +477,7 @@ async def create_job(
     # Parse mute_source_voice string to boolean
     mute_source_voice_bool = mute_source_voice.lower() in ("true", "1", "yes", "on")
 
-    # Cream job-ul
+    # Create the job
     job = {
         "job_id": job_id,
         "profile_id": profile.profile_id,
@@ -501,7 +501,7 @@ async def create_job(
     }
     get_job_storage().create_job(job, profile_id=profile.profile_id)
 
-    # Lansam procesarea in background
+    # Launch processing in background
     background_tasks.add_task(process_job, job_id)
 
     return JobResponse(
@@ -541,7 +541,7 @@ async def process_job(job_id: str):
         processor = get_processor(profile_id=job.get("profile_id", "default"))
         video_path = Path(job["video_path"])
 
-        # Voice muting e acum integrat în process_video pentru mute selectiv per segment
+        # Voice muting is now integrated in process_video for selective per-segment muting
         result = await asyncio.to_thread(
             processor.process_video,
             video_path=video_path,
@@ -554,7 +554,7 @@ async def process_job(job_id: str):
             progress_callback=update_progress,
             context_text=job.get("context_text"),
             generate_audio=job.get("generate_audio", True),
-            mute_source_voice=job.get("mute_source_voice", False)  # Mute selectiv în segmente
+            mute_source_voice=job.get("mute_source_voice", False)  # Selective mute in segments
         )
 
         if result["status"] == "success":
@@ -571,7 +571,7 @@ async def process_job(job_id: str):
             job["result"] = result
             job["progress"] = "Completed successfully"
 
-            # Stergem fisierele din input dupa procesare reusita
+            # Delete input files after successful processing
             _cleanup_input_files(job)
         else:
             job["status"] = JobStatus.FAILED

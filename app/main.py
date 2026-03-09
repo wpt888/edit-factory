@@ -274,10 +274,10 @@ async def lifespan(app: FastAPI):
     close_repository()
 
 
-# Cream aplicatia
+# Create the application
 app = FastAPI(
     title="Edit Factory",
-    description="Video processing API pentru reels si short-form content",
+    description="Video processing API for reels and short-form content",
     version=APP_VERSION,
     lifespan=lifespan
 )
@@ -298,8 +298,8 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
-# CORS - configurat din environment variables
-# În producție: ALLOWED_ORIGINS=https://editai.obsid.ro
+# CORS - configured from environment variables
+# In production: ALLOWED_ORIGINS=https://editai.obsid.ro
 # NOTE: CORS must be added BEFORE SlowAPI so it wraps as the outermost middleware,
 # ensuring CORS headers are present even on 429 rate-limit responses.
 allowed_origins = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()]
@@ -359,7 +359,7 @@ if settings.desktop_mode:
     from app.api.desktop_routes import router as desktop_router
     app.include_router(desktop_router, prefix="/api/v1", tags=["Desktop"])
 
-# Static files pentru frontend
+# Static files for frontend
 static_path = Path(__file__).parent.parent / "static"
 if static_path.exists():
     app.mount("/static", StaticFiles(directory=str(static_path)), name="static")

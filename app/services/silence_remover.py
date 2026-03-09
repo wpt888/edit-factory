@@ -1,7 +1,7 @@
 """
 Silence Remover Service
-Elimină pauzele lungi din audio (TTS) păstrând cuvintele intacte.
-Folosește Silero VAD pentru detecție precisă a vorbirii.
+Removes long pauses from audio (TTS) while keeping words intact.
+Uses Silero VAD for precise speech detection.
 """
 import logging
 import subprocess
@@ -25,7 +25,7 @@ except ImportError:
 
 @dataclass
 class SilenceRemovalResult:
-    """Rezultatul operației de silence removal."""
+    """Result of silence removal operation."""
     output_path: Path
     original_duration: float
     new_duration: float
@@ -35,7 +35,7 @@ class SilenceRemovalResult:
 
     @property
     def compression_ratio(self) -> float:
-        """Cât de mult am comprimat audio-ul (0-1)."""
+        """How much the audio was compressed (0-1)."""
         if self.original_duration == 0:
             return 0
         return 1 - (self.new_duration / self.original_duration)
@@ -54,24 +54,24 @@ class SilenceRemovalResult:
 
 class SilenceRemover:
     """
-    Elimină pauzele din audio folosind VAD (Voice Activity Detection).
+    Removes pauses from audio using VAD (Voice Activity Detection).
 
-    Funcționează în 3 pași:
-    1. Detectează segmentele cu voce (folosind Silero VAD)
-    2. Adaugă padding mic (50-100ms) în jurul fiecărui segment pentru tranziții naturale
-    3. Concatenează doar segmentele cu voce
+    Works in 3 steps:
+    1. Detect voice segments (using Silero VAD)
+    2. Add small padding (50-100ms) around each segment for natural transitions
+    3. Concatenate only voice segments
 
-    Parametri importanți:
-    - min_silence_duration: Pauze mai scurte de atât NU sunt eliminate (păstrează ritmul natural)
-    - padding: Câte secunde să păstreze înainte și după fiecare cuvânt
+    Key parameters:
+    - min_silence_duration: Pauses shorter than this are NOT removed (preserves natural rhythm)
+    - padding: How many seconds to keep before and after each word
     """
 
     def __init__(
         self,
-        min_silence_duration: float = 0.3,  # Pauze < 300ms rămân (ritm natural)
-        padding: float = 0.08,  # 80ms padding pentru tranziții line
-        speech_threshold: float = 0.5,  # Threshold pentru VAD
-        min_speech_duration: float = 0.1,  # Segmente mai scurte de 100ms sunt ignorate
+        min_silence_duration: float = 0.3,  # Pauses < 300ms stay (natural rhythm)
+        padding: float = 0.08,  # 80ms padding for smooth transitions
+        speech_threshold: float = 0.5,  # Threshold for VAD
+        min_speech_duration: float = 0.1,  # Segments shorter than 100ms are ignored
         target_pause_duration: Optional[float] = None  # If set, shorten long pauses to this instead of removing
     ):
         self.min_silence_duration = min_silence_duration
@@ -99,7 +99,7 @@ class SilenceRemover:
         return self._detector
 
     def _get_audio_duration(self, audio_path: Path) -> float:
-        """Obține durata audio-ului în secunde."""
+        """Get audio duration in seconds."""
         try:
             cmd = [
                 "ffprobe", "-v", "error",
@@ -123,13 +123,13 @@ class SilenceRemover:
         segments: List[VoiceSegment]
     ) -> List[Tuple[float, float]]:
         """
-        Combină segmente apropiate și adaugă padding.
-        Elimină doar pauzele mai lungi de min_silence_duration.
+        Merge nearby segments and add padding.
+        Only removes pauses longer than min_silence_duration.
         """
         if not segments:
             return []
 
-        # Sortăm după start time
+        # Sort by start time
         sorted_segs = sorted(segments, key=lambda s: s.start_time)
 
         merged = []
@@ -140,19 +140,19 @@ class SilenceRemover:
             seg_start = max(0.0, seg.start_time - self.padding)
             seg_end = seg.end_time + self.padding
 
-            # Calculăm gap-ul între segmente
+            # Calculate gap between segments
             gap = seg_start - current_end
 
             if gap <= self.min_silence_duration:
-                # Gap prea mic - extindem segmentul curent (păstrăm pauza naturală)
+                # Gap too small - extend current segment (keep natural pause)
                 current_end = seg_end
             else:
-                # Gap suficient de mare - salvăm segmentul curent și începem unul nou
+                # Gap large enough - save current segment and start a new one
                 merged.append((current_start, current_end))
                 current_start = seg_start
                 current_end = seg_end
 
-        # Adăugăm ultimul segment
+        # Add the last segment
         merged.append((current_start, current_end))
 
         return merged
@@ -205,7 +205,7 @@ class SilenceRemover:
         output_path: Path
     ) -> SilenceRemovalResult:
         """
-        Elimină silence folosind VAD (metoda precisă).
+        Remove silence using VAD (precise method).
         """
         audio_path = Path(audio_path)
         output_path = Path(output_path)
@@ -213,18 +213,18 @@ class SilenceRemover:
 
         original_duration = self._get_audio_duration(audio_path)
 
-        # Detectăm voce
+        # Detect voice
         detector = self._get_detector()
         if detector is None:
             raise RuntimeError("VoiceDetector not available")
 
-        # Pentru audio, trebuie să-l convertim temporar la format video
-        # sau să folosim direct detectarea pe audio
-        # Silero VAD funcționează direct pe audio, nu necesită video
+        # For audio, we need to temporarily convert to video format
+        # or use audio detection directly
+        # Silero VAD works directly on audio, no video needed
 
         logger.info(f"Detecting speech in: {audio_path.name}")
 
-        # Detectăm voce direct din audio
+        # Detect voice directly from audio
         voice_segments = self._detect_voice_in_audio(audio_path, detector)
 
         if not voice_segments:
@@ -239,7 +239,7 @@ class SilenceRemover:
                 segments_kept=0
             )
 
-        # Combinăm segmente apropiate
+        # Merge nearby segments
         merged_segments = self._merge_close_segments(voice_segments)
 
         logger.info(f"Found {len(voice_segments)} speech segments, merged to {len(merged_segments)}")
@@ -250,13 +250,13 @@ class SilenceRemover:
         if self.target_pause_duration is not None:
             logger.info(f"Pause shortening: {len(merged_segments)} speech regions → {len(output_regions)} output regions (target pause: {self.target_pause_duration}s)")
 
-        # Extragem și concatenăm segmentele
+        # Extract and concatenate segments
         with tempfile.TemporaryDirectory() as temp_dir:
             tmp_path = Path(temp_dir)
             segment_files = []
 
             for i, (start, end) in enumerate(output_regions):
-                # Asigurăm că nu depășim durata originală
+                # Ensure we don't exceed original duration
                 start = max(0, start)
                 end = min(end, original_duration)
 
@@ -270,7 +270,7 @@ class SilenceRemover:
                     "-ss", str(start),
                     "-i", str(audio_path),
                     "-t", str(end - start),
-                    "-c:a", "pcm_s16le",  # WAV pentru concatenare precisă
+                    "-c:a", "pcm_s16le",  # WAV for precise concatenation
                     str(segment_file)
                 ]
 
@@ -291,7 +291,7 @@ class SilenceRemover:
                     segments_kept=0
                 )
 
-            # Creăm fișier de concat
+            # Create concat file
             concat_file = tmp_path / "concat.txt"
             with open(concat_file, 'w', encoding='utf-8') as f:
                 for seg_file in segment_files:
@@ -299,7 +299,7 @@ class SilenceRemover:
                     escaped = str(seg_file).replace("'", "'\\''")
                     f.write(f"file '{escaped}'\n")
 
-            # Concatenăm și convertim la format final
+            # Concatenate and convert to final format
             output_ext = output_path.suffix.lower()
             if output_ext == '.mp3':
                 audio_codec = ["-c:a", "libmp3lame", "-b:a", "192k"]
@@ -342,8 +342,8 @@ class SilenceRemover:
         detector: VoiceDetector
     ) -> List[VoiceSegment]:
         """
-        Detectează voce direct în fișier audio (nu video).
-        Silero VAD funcționează pe orice audio, nu doar din video.
+        Detect voice directly in audio file (not video).
+        Silero VAD works on any audio, not just from video.
         """
         import torch
 
@@ -358,7 +358,7 @@ class SilenceRemover:
 
             logger.info(f"Audio loaded: {len(audio) / detector._sample_rate:.2f}s")
 
-            # Detectăm voce
+            # Detect voice
             (get_speech_timestamps, _, read_audio, *_) = detector.utils
 
             speech_timestamps = get_speech_timestamps(
@@ -371,7 +371,7 @@ class SilenceRemover:
                 return_seconds=True
             )
 
-            # Convertim la VoiceSegment
+            # Convert to VoiceSegment
             voice_segments = []
             for ts in speech_timestamps:
                 seg = VoiceSegment(
@@ -396,10 +396,10 @@ class SilenceRemover:
         min_silence_duration: float = 0.3
     ) -> SilenceRemovalResult:
         """
-        Elimină silence folosind FFmpeg silenceremove (metoda simplă).
-        Fallback dacă VAD nu e disponibil.
+        Remove silence using FFmpeg silenceremove (simple method).
+        Fallback if VAD is not available.
 
-        Această metodă e mai puțin precisă dar funcționează fără PyTorch.
+        This method is less precise but works without PyTorch.
         """
         audio_path = Path(audio_path)
         output_path = Path(output_path)
@@ -408,7 +408,7 @@ class SilenceRemover:
         original_duration = self._get_audio_duration(audio_path)
 
         # FFmpeg silenceremove filter
-        # Elimină silence de la început și sfârșit, și comprimă pauzele interioare
+        # Remove silence from start and end, and compress internal pauses
         filter_complex = (
             f"silenceremove="
             f"start_periods=1:"
@@ -458,7 +458,7 @@ class SilenceRemover:
             original_duration=original_duration,
             new_duration=new_duration,
             removed_duration=removed_duration,
-            segments_kept=1,  # FFmpeg nu ne dă numărul de segmente
+            segments_kept=1,  # FFmpeg doesn't give us the segment count
             segments_map=[(0.0, new_duration)]
         )
 
@@ -469,15 +469,15 @@ class SilenceRemover:
         use_vad: bool = True
     ) -> SilenceRemovalResult:
         """
-        Metodă principală: elimină silence folosind cea mai bună metodă disponibilă.
+        Main method: remove silence using the best available method.
 
         Args:
-            audio_path: Calea către audio original
-            output_path: Calea pentru output
-            use_vad: Dacă True, folosește VAD (mai precis). Dacă False, FFmpeg.
+            audio_path: Path to original audio
+            output_path: Path for output
+            use_vad: If True, use VAD (more precise). If False, FFmpeg.
 
         Returns:
-            SilenceRemovalResult cu statistici despre operație
+            SilenceRemovalResult with operation statistics
         """
         if use_vad and VAD_AVAILABLE:
             detector = self._get_detector()
@@ -517,13 +517,13 @@ def remove_silence_from_tts(
     target_pause_duration: Optional[float] = None
 ) -> SilenceRemovalResult:
     """
-    Funcție helper: elimină silence dintr-un fișier TTS.
+    Helper function: remove silence from a TTS file.
 
     Args:
-        audio_path: Calea către audio TTS
-        output_path: Calea pentru output (default: audio_path cu suffix _trimmed)
-        min_silence_duration: Pauze mai scurte nu sunt eliminate (păstrează ritmul)
-        padding: Câte secunde să păstreze în jurul cuvintelor
+        audio_path: Path to TTS audio
+        output_path: Path for output (default: audio_path with _trimmed suffix)
+        min_silence_duration: Shorter pauses are not removed (preserves rhythm)
+        padding: How many seconds to keep around words
         target_pause_duration: If set, shorten long pauses to this duration instead of removing
 
     Returns:

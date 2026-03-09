@@ -1,7 +1,7 @@
 """
 Voice Activity Detection (VAD) Service
-Detectează segmentele cu voce umană în audio pentru a le putea muta/elimina.
-Folosește Silero VAD - model gratuit, rapid și precis.
+Detects human voice segments in audio for muting/removal.
+Uses Silero VAD - free, fast, and accurate model.
 """
 import logging
 import subprocess
@@ -34,9 +34,9 @@ _model_load_attempted = False  # M7: Track if load was already attempted (preven
 
 @dataclass
 class VoiceSegment:
-    """Segment de audio care conține voce."""
-    start_time: float  # secunde
-    end_time: float    # secunde
+    """Audio segment containing voice."""
+    start_time: float  # seconds
+    end_time: float    # seconds
     confidence: float  # 0-1
 
     @property
@@ -54,9 +54,9 @@ class VoiceSegment:
 
 class VoiceDetector:
     """
-    Detectează segmente cu voce umană folosind Silero VAD.
+    Detects human voice segments using Silero VAD.
 
-    Utilizare:
+    Usage:
         detector = VoiceDetector()
         voice_segments = detector.detect_voice(video_path)
         # voice_segments = [(0.5, 2.3), (5.1, 8.4), ...]
@@ -65,20 +65,20 @@ class VoiceDetector:
     def __init__(self, threshold: float = 0.5, min_speech_duration: float = 0.25):
         """
         Args:
-            threshold: Pragul de detecție (0-1). Mai mare = mai strict.
-            min_speech_duration: Durata minimă pentru a considera un segment ca voce (secunde)
+            threshold: Detection threshold (0-1). Higher = stricter.
+            min_speech_duration: Minimum duration to consider a segment as voice (seconds)
         """
         self.threshold = threshold
         self.min_speech_duration = min_speech_duration
         self.model = None
         self.utils = None
-        self._sample_rate = 16000  # Silero VAD necesită 16kHz
+        self._sample_rate = 16000  # Silero VAD requires 16kHz
 
         if SILERO_AVAILABLE:
             self._load_model()
 
     def _load_model(self):
-        """Încarcă modelul Silero VAD (uses module-level cache)."""
+        """Load Silero VAD model (uses module-level cache)."""
         global _cached_model, _cached_utils, _model_load_attempted
         with _model_cache_lock:
             if _cached_model is not None:
@@ -147,7 +147,7 @@ class VoiceDetector:
 
     def _extract_audio(self, video_path: Path, output_path: Path) -> bool:
         """
-        Extrage audio din video în format WAV 16kHz mono.
+        Extract audio from video in WAV 16kHz mono format.
         """
         cmd = [
             "ffmpeg", "-y", "-threads", "4",
@@ -166,7 +166,7 @@ class VoiceDetector:
         return True
 
     def _convert_to_wav(self, audio_path: Path, output_path: Path) -> bool:
-        """Convertește orice format audio la WAV 16kHz mono."""
+        """Convert any audio format to WAV 16kHz mono."""
         cmd = [
             "ffmpeg", "-y", "-threads", "4",
             "-i", str(audio_path),
@@ -183,12 +183,12 @@ class VoiceDetector:
         return True
 
     def _read_audio(self, audio_path: Path) -> Optional[torch.Tensor]:
-        """Citește fișierul audio ca tensor."""
+        """Read the audio file as tensor."""
         try:
             import torchaudio
             waveform, sample_rate = torchaudio.load(str(audio_path))
 
-            # Resample dacă e necesar
+            # Resample if needed
             if sample_rate != self._sample_rate:
                 resampler = torchaudio.transforms.Resample(sample_rate, self._sample_rate)
                 waveform = resampler(waveform)
@@ -211,7 +211,7 @@ class VoiceDetector:
 
             audio_path = Path(audio_path)
 
-            # Dacă nu e WAV, convertim mai întâi via FFmpeg
+            # If not WAV, convert first via FFmpeg
             if audio_path.suffix.lower() not in ['.wav', '.wave']:
                 tmp_wav = None
                 try:
@@ -233,7 +233,7 @@ class VoiceDetector:
             elif audio.dtype == np.int32:
                 audio = audio.astype(np.float32) / 2147483648.0
 
-            # Resample dacă e necesar (rare — _extract_audio already produces 16kHz)
+            # Resample if needed (rare — _extract_audio already produces 16kHz)
             if sample_rate != self._sample_rate:
                 import scipy.signal
                 # Use polyphase FIR filter for better phase preservation
@@ -256,13 +256,13 @@ class VoiceDetector:
 
     def detect_voice(self, video_path: Path) -> List[VoiceSegment]:
         """
-        Detectează segmentele cu voce în video.
+        Detect voice segments in video.
 
         Args:
-            video_path: Calea către fișierul video
+            video_path: Path to the video file
 
         Returns:
-            Lista de VoiceSegment cu timestamp-urile unde există voce
+            List of VoiceSegment with timestamps where voice exists
         """
         if not SILERO_AVAILABLE or self.model is None:
             logger.warning("Silero VAD not available, returning empty list")
@@ -272,7 +272,7 @@ class VoiceDetector:
         if not video_path.exists():
             raise FileNotFoundError(f"Video not found: {video_path}")
 
-        # Extragem audio într-un fișier temporar
+        # Extract audio into a temporary file
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp_audio = Path(tmp.name)
 
@@ -288,7 +288,7 @@ class VoiceDetector:
 
             logger.info(f"Audio loaded: {len(audio) / self._sample_rate:.2f}s")
 
-            # Detectăm voce folosind Silero VAD
+            # Detect voice folosind Silero VAD
             (get_speech_timestamps, _, read_audio, *_) = self.utils
 
             speech_timestamps = get_speech_timestamps(
@@ -297,11 +297,11 @@ class VoiceDetector:
                 threshold=self.threshold,
                 sampling_rate=self._sample_rate,
                 min_speech_duration_ms=int(self.min_speech_duration * 1000),
-                min_silence_duration_ms=100,  # Pauze minime între segmente
+                min_silence_duration_ms=100,  # Minimum pauses between segments
                 return_seconds=True
             )
 
-            # Convertim la VoiceSegment
+            # Convert to VoiceSegment
             # Silero get_speech_timestamps returns only start/end, no per-segment
             # probability. All returned segments passed the threshold, so confidence
             # represents the minimum guaranteed probability (actual is >= threshold).
@@ -330,15 +330,15 @@ class VoiceDetector:
         padding: float = 0.1
     ) -> List[Tuple[float, float]]:
         """
-        Convertește segmentele de voce în intervale de mute.
-        Adaugă padding pentru tranziții mai line.
+        Convert voice segments to mute intervals.
+        Adds padding for smoother transitions.
 
         Args:
-            voice_segments: Lista de segmente cu voce
-            padding: Secunde de padding înainte și după fiecare segment
+            voice_segments: List of voice segments
+            padding: Seconds of padding before and after each segment
 
         Returns:
-            Lista de tuple (start, end) pentru intervalele de mute
+            List of (start, end) tuples for mute intervals
         """
         mute_intervals = []
 
@@ -363,17 +363,17 @@ def mute_voice_segments(
     keep_percentage: float = 0.0
 ) -> bool:
     """
-    Aplică mute pe segmentele cu voce din video folosind FFmpeg.
+    Apply mute to voice segments in video using FFmpeg.
 
     Args:
-        video_path: Calea către video original
-        output_path: Calea pentru video output
-        voice_segments: Lista de segmente cu voce de mutat
-        fade_duration: Durata fade in/out pentru tranziții line (secunde)
-        keep_percentage: Cât din volumul original să păstreze (0-1). 0 = mute complet.
+        video_path: Path to original video
+        output_path: Path for output video
+        voice_segments: List of voice segments to mute
+        fade_duration: Fade in/out duration for smooth transitions (seconds)
+        keep_percentage: How much of original volume to keep (0-1). 0 = complete mute.
 
     Returns:
-        True dacă operația a reușit
+        True if operation succeeded
     """
     if not voice_segments:
         # No voice segments, just copy
@@ -381,17 +381,17 @@ def mute_voice_segments(
         shutil.copy(video_path, output_path)
         return True
 
-    # Construim filtrul audio pentru FFmpeg
-    # Sintaxa corectă: volume=LEVEL:enable='CONDITION'
-    # Folosim + pentru a combina multiple condiții (OR în FFmpeg)
+    # Build audio filter for FFmpeg
+    # Correct syntax: volume=LEVEL:enable='CONDITION'
+    # Use + to combine multiple conditions (OR in FFmpeg)
     vol = keep_percentage if keep_percentage > 0 else 0
 
-    # Construim condițiile combinate
+    # Build combined conditions
     conditions = []
     for seg in voice_segments:
         conditions.append(f"between(t,{seg.start_time:.3f},{seg.end_time:.3f})")
 
-    # Un singur filtru volume cu toate condițiile
+    # Single volume filter with all conditions
     combined_condition = "+".join(conditions)
     audio_filter = f"volume={vol}:enable='{combined_condition}'"
 
@@ -399,7 +399,7 @@ def mute_voice_segments(
         "ffmpeg", "-y", "-threads", "4",
         "-i", str(video_path),
         "-af", audio_filter,
-        "-c:v", "copy",  # Nu re-encodăm video
+        "-c:v", "copy",  # Don't re-encode video
         "-c:a", "aac",
         "-b:a", "128k",
         str(output_path)
@@ -423,12 +423,12 @@ def remove_voice_keep_effects(
     detector: Optional[VoiceDetector] = None
 ) -> Tuple[bool, List[VoiceSegment]]:
     """
-    Funcție helper: detectează și mută automat vocile din video.
+    Helper function: automatically detect and mute voices in video.
 
     Args:
-        video_path: Calea către video
-        output_path: Calea pentru output
-        detector: VoiceDetector opțional (se creează unul nou dacă nu e furnizat)
+        video_path: Path to video
+        output_path: Path for output
+        detector: Optional VoiceDetector (creates new one if not provided)
 
     Returns:
         Tuple (success, voice_segments)
@@ -436,7 +436,7 @@ def remove_voice_keep_effects(
     if detector is None:
         detector = VoiceDetector()
 
-    # Detectăm voce
+    # Detect voice
     voice_segments = detector.detect_voice(video_path)
 
     if not voice_segments:
@@ -445,7 +445,7 @@ def remove_voice_keep_effects(
         shutil.copy(video_path, output_path)
         return True, []
 
-    # Aplicăm mute
+    # Apply mute
     success = mute_voice_segments(video_path, output_path, voice_segments)
 
     return success, voice_segments

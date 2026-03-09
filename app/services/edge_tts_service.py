@@ -1,6 +1,6 @@
 """
-Edge TTS Service - Text-to-Speech GRATUIT folosind Microsoft Edge.
-Calitate excelentă, multe voci, fără costuri.
+Edge TTS Service - FREE Text-to-Speech using Microsoft Edge.
+Excellent quality, many voices, no cost.
 """
 import atexit
 import asyncio
@@ -22,7 +22,7 @@ atexit.register(_executor.shutdown, wait=False)
 
 @dataclass
 class Voice:
-    """Informații despre o voce disponibilă."""
+    """Information about an available voice."""
     name: str
     short_name: str
     gender: str
@@ -30,35 +30,35 @@ class Voice:
     locale: str
 
 
-# Voci populare pre-definite pentru acces rapid
+# Popular pre-defined voices for quick access
 POPULAR_VOICES = {
-    # Română
+    # Romanian
     "ro_male": "ro-RO-EmilNeural",
     "ro_female": "ro-RO-AlinaNeural",
 
-    # Engleză US
+    # English US
     "en_us_male": "en-US-GuyNeural",
     "en_us_female": "en-US-JennyNeural",
     "en_us_male_2": "en-US-ChristopherNeural",
     "en_us_female_2": "en-US-AriaNeural",
 
-    # Engleză UK
+    # English UK
     "en_uk_male": "en-GB-RyanNeural",
     "en_uk_female": "en-GB-SoniaNeural",
 
-    # Spaniolă
+    # Spanish
     "es_male": "es-ES-AlvaroNeural",
     "es_female": "es-ES-ElviraNeural",
 
-    # Franceză
+    # French
     "fr_male": "fr-FR-HenriNeural",
     "fr_female": "fr-FR-DeniseNeural",
 
-    # Germană
+    # German
     "de_male": "de-DE-ConradNeural",
     "de_female": "de-DE-KatjaNeural",
 
-    # Italiană
+    # Italian
     "it_male": "it-IT-DiegoNeural",
     "it_female": "it-IT-ElsaNeural",
 }
@@ -66,8 +66,8 @@ POPULAR_VOICES = {
 
 class EdgeTTSService:
     """
-    Serviciu Text-to-Speech folosind Microsoft Edge TTS.
-    100% GRATUIT, calitate excelentă.
+    Text-to-Speech service using Microsoft Edge TTS.
+    100% FREE, excellent quality.
     """
 
     # Class-level cache shared across all instances
@@ -119,7 +119,7 @@ class EdgeTTSService:
         return EdgeTTSService._voices_cache
 
     def list_voices_sync(self, language: Optional[str] = None) -> List[Voice]:
-        """Versiune sincronă pentru list_voices."""
+        """Synchronous version of list_voices."""
         try:
             asyncio.get_running_loop()
             # We're inside an async context - run in a separate thread to avoid deadlock
@@ -191,7 +191,7 @@ class EdgeTTSService:
         volume: str = "+0%",
         pitch: str = "+0Hz"
     ) -> Path:
-        """Versiune sincronă pentru generate_audio."""
+        """Synchronous version of generate_audio."""
         try:
             asyncio.get_running_loop()
             # We're inside an async context - run in a separate thread to avoid deadlock
@@ -251,7 +251,7 @@ class EdgeTTSService:
                         audio_file.write(chunk["data"])
 
                     elif chunk["type"] == "WordBoundary":
-                        # Construim SRT din word boundaries
+                        # Build SRT from word boundaries
                         offset = chunk.get("offset")
                         duration = chunk.get("duration")
                         if offset is None or duration is None:
@@ -284,7 +284,7 @@ class EdgeTTSService:
         if not audio_path.exists() or audio_path.stat().st_size == 0:
             raise RuntimeError("Edge TTS produced empty output")
 
-        # Salvăm SRT
+        # Save SRT
         with open(srt_path, "w", encoding="utf-8") as f:
             f.write(sanitize_srt_full("\n".join(srt_content)))
 
@@ -302,7 +302,7 @@ class EdgeTTSService:
         voice: str = "ro-RO-EmilNeural",
         rate: str = "+0%"
     ) -> Dict[str, Path]:
-        """Versiune sincronă pentru generate_with_subtitles."""
+        """Synchronous version of generate_with_subtitles."""
         try:
             asyncio.get_running_loop()
             future = _executor.submit(asyncio.run, self.generate_with_subtitles(
@@ -319,7 +319,7 @@ class EdgeTTSService:
             ))
 
     def _ms_to_srt_time(self, ms: float) -> str:
-        """Convertește milisecunde în format SRT (HH:MM:SS,mmm)."""
+        """Convert milliseconds to SRT format (HH:MM:SS,mmm)."""
         hours = int(ms // 3600000)
         ms = ms % 3600000
         minutes = int(ms // 60000)
@@ -351,14 +351,14 @@ class EdgeTTSService:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Dacă nu avem voci specificate, folosim voci diferite
+        # If no voices specified, use different voices
         if voices is None:
             available_voices = list(POPULAR_VOICES.values())
             voices = available_voices[:len(texts)]
 
-        # Asigurăm că avem suficiente voci
+        # Ensure we have enough voices
         while len(voices) < len(texts):
-            voices.append(voices[0])  # Repetăm prima voce
+            voices.append(voices[0])  # Repeat first voice
 
         results = []
 
@@ -398,7 +398,7 @@ class EdgeTTSService:
         voices: Optional[List[str]] = None,
         base_name: str = "variant"
     ) -> List[Dict]:
-        """Versiune sincronă pentru generate_variants."""
+        """Synchronous version of generate_variants."""
         try:
             asyncio.get_running_loop()
             future = _executor.submit(asyncio.run, self.generate_variants(
@@ -426,7 +426,7 @@ def get_voice_for_language(language: str, gender: str = "male") -> str:
     if key in POPULAR_VOICES:
         return POPULAR_VOICES[key]
 
-    # Fallback pentru engleză US
+    # Fallback to English US
     logger.warning(f"Unknown voice key: {key}, falling back to en_us default")
     if gender == "male":
         return POPULAR_VOICES["en_us_male"]
@@ -438,13 +438,13 @@ if __name__ == "__main__":
     async def test():
         tts = EdgeTTSService(Path("./test_output"))
 
-        # Listăm vocile românești
+        # List Romanian voices
         print("Voci românești:")
         voices = await tts.list_voices("ro")
         for v in voices:
             print(f"  - {v.short_name} ({v.gender})")
 
-        # Generăm un test
+        # Generate a test
         print("\nGenerăm audio test...")
         await tts.generate_audio(
             text="Bună ziua! Acesta este un test pentru Edge TTS. Funcționează perfect!",

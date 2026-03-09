@@ -19,10 +19,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AnalyzedSegment:
-    """Un segment analizat din video."""
+    """An analyzed segment from video."""
     start_time: float
     end_time: float
-    score: float  # 0-100, cât de bun e segmentul pentru reels
+    score: float  # 0-100, how good the segment is for reels
     description: str
     highlights: List[str]  # Ce face segmentul interesant
     tags: List[str]  # Categorii: "product_demo", "talking_head", "action", etc.
@@ -30,13 +30,13 @@ class AnalyzedSegment:
 
 class GeminiVideoAnalyzer:
     """
-    Analizează videoclipuri folosind Gemini pentru a găsi cele mai bune momente.
+    Analyze videos using Gemini to find the best moments.
 
     Workflow:
-    1. Extrage frames la interval regulat (default: 1 frame / 2 secunde)
-    2. Trimite batch-uri de frames la Gemini
-    3. Primește analiza și scoruri pentru fiecare segment
-    4. Returnează segmentele sortate după scor
+    1. Extract frames at regular intervals (default: 1 frame / 2 seconds)
+    2. Send batches of frames to Gemini
+    3. Receive analysis and scores for each segment
+    4. Return segments sorted by score
     """
 
     def __init__(
@@ -114,7 +114,7 @@ class GeminiVideoAnalyzer:
                 if not ret:
                     continue
 
-                # Resize pentru a reduce dimensiunea (max 720p width)
+                # Resize to reduce size (max 720p width)
                 height, width = frame.shape[:2]
                 if width > 720:
                     scale = 720 / width
@@ -132,7 +132,7 @@ class GeminiVideoAnalyzer:
             cap.release()
 
     def _create_analysis_prompt(self, context: Optional[str] = None) -> str:
-        """Creează promptul pentru Gemini."""
+        """Create the prompt for Gemini."""
         base_prompt = """Analizează aceste frames dintr-un video și identifică cele mai bune momente pentru reels/short-form content.
 
 Pentru fiecare grup de 2-3 frames consecutive (care reprezintă un segment de ~4-6 secunde), evaluează:
@@ -187,31 +187,31 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
         context: Optional[str] = None
     ) -> List[AnalyzedSegment]:
         """
-        Analizează un batch de frames cu Gemini.
+        Analyze a batch of frames with Gemini.
 
         Args:
-            frames: Lista de (timestamp, frame_bytes)
-            context: Context opțional despre video
+            frames: List of (timestamp, frame_bytes)
+            context: Optional context about video
 
         Returns:
-            Lista de AnalyzedSegment
+            List of AnalyzedSegment
         """
         if not frames:
             return []
 
-        # Pregătim conținutul pentru Gemini
+        # Prepare content for Gemini
         contents = []
 
-        # Adăugăm promptul
+        # Add the prompt
         prompt = self._create_analysis_prompt(context)
         contents.append(prompt)
 
-        # Adăugăm fiecare frame cu timestamp
+        # Add each frame with timestamp
         for i, (timestamp, frame_bytes) in enumerate(frames):
-            # Adăugăm text cu timestamp
+            # Add text with timestamp
             contents.append(f"\n[Frame {i} - {timestamp:.1f}s]")
 
-            # Adăugăm imaginea
+            # Add the image
             contents.append({
                 "inline_data": {
                     "mime_type": "image/jpeg",
@@ -223,10 +223,10 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
         try:
             response = self._call_gemini_api(self.model_name, contents)
 
-            # Parsăm răspunsul JSON
+            # Parse the JSON response
             response_text = response.text
 
-            # Extragem JSON-ul din răspuns
+            # Extract JSON from response
             json_start = response_text.find('{')
             json_end = response_text.rfind('}') + 1
 
@@ -268,15 +268,15 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
         min_score: float = 0
     ) -> List[AnalyzedSegment]:
         """
-        Analizează un video complet și returnează segmentele.
+        Analyze a complete video and return segments.
 
         Args:
-            video_path: Calea către video
-            context: Context opțional (ex: "tutorial de gătit", "review produs")
-            min_score: Scorul minim pentru a include un segment
+            video_path: Path to video
+            context: Optional context (e.g., "cooking tutorial", "product review")
+            min_score: Minimum score to include a segment
 
         Returns:
-            Lista de AnalyzedSegment sortată după scor (descrescător)
+            List of AnalyzedSegment sorted by score (descending)
         """
         video_path = Path(video_path)
         if not video_path.exists():
@@ -284,14 +284,14 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
 
         logger.info(f"Analyzing video: {video_path}")
 
-        # Extragem frames
+        # Extract frames
         frames = self.extract_frames(video_path)
 
         if not frames:
             logger.warning("No frames extracted from video")
             return []
 
-        # Procesăm în batch-uri
+        # Process in batches
         all_segments = []
         # Approximate video duration from last frame timestamp
         video_duration = frames[-1][0] + self.frame_interval if frames else 0.0
@@ -326,11 +326,11 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
 
             all_segments.extend(batch_segments)
 
-        # Filtrăm după scor minim
+        # Filter by minimum score
         if min_score > 0:
             all_segments = [s for s in all_segments if s.score >= min_score]
 
-        # Sortăm după scor (descrescător)
+        # Sort by score (descending)
         all_segments.sort(key=lambda s: s.score, reverse=True)
 
         logger.info(f"Video analysis complete: {len(all_segments)} segments")
@@ -360,29 +360,29 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
         context: Optional[str] = None
     ) -> List[AnalyzedSegment]:
         """
-        Găsește cele mai bune segmente pentru a crea un reel de durata specificată.
+        Find the best segments to create a reel of specified duration.
 
         Args:
-            video_path: Calea către video
-            target_duration: Durata țintă pentru reel în secunde
-            min_score: Scorul minim acceptat
-            context: Context opțional
+            video_path: Path to video
+            target_duration: Target duration for reel in seconds
+            min_score: Minimum accepted score
+            context: Optional context
 
         Returns:
-            Lista de segmente care împreună formează ~target_duration
+            List of segments that together form ~target_duration
         """
         all_segments = self.analyze_video(video_path, context, min_score)
 
         if not all_segments:
             return []
 
-        # Selectăm segmente până atingem durata țintă
+        # Select segments until we reach target duration
         selected = []
         total_duration = 0
         used_times = set()
 
         for seg in all_segments:
-            # Verificăm să nu se suprapună cu segmente deja selectate
+            # Check they don't overlap with already selected segments
             seg_range = set(range(int(seg.start_time), int(seg.end_time) + 1))
             if seg_range & used_times:
                 continue
@@ -398,12 +398,12 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
             if total_duration >= target_duration:
                 break
 
-        # Sortăm cronologic pentru editare
+        # Sort chronologically for editing
         selected.sort(key=lambda s: s.start_time)
 
         logger.info(f"Selected {len(selected)} segments, total duration: {total_duration:.1f}s")
         return selected
 
     def segments_to_dict(self, segments: List[AnalyzedSegment]) -> List[Dict]:
-        """Convertește segmentele în format dict pentru JSON/API."""
+        """Convert segments to dict format for JSON/API."""
         return [asdict(seg) for seg in segments]

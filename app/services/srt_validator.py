@@ -167,7 +167,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SRTEntry:
-    """O intrare SRT validată."""
+    """A validated SRT entry."""
     index: int
     start_time: str
     end_time: str
@@ -175,17 +175,17 @@ class SRTEntry:
 
 
 class SRTValidationError(Exception):
-    """Eroare de validare SRT."""
+    """SRT validation error."""
     pass
 
 
 class SRTValidator:
-    """Validează și repară fișiere SRT."""
+    """Validate and repair SRT files."""
 
-    # Regex pentru timestamp SRT: HH:MM:SS,mmm
+    # Regex for SRT timestamp: HH:MM:SS,mmm
     TIMESTAMP_PATTERN = re.compile(r'^(\d{2}):(\d{2}):(\d{2}),(\d{3})$')
 
-    # Regex pentru linie arrow: start --> end
+    # Regex for arrow line: start --> end
     ARROW_PATTERN = re.compile(r'^(.+?)\s+-->\s+(.+?)$')
 
     def __init__(self):
@@ -199,7 +199,7 @@ class SRTValidator:
             timestamp: String format "HH:MM:SS,mmm"
 
         Returns:
-            True dacă valid
+            True if valid
         """
         match = self.TIMESTAMP_PATTERN.match(timestamp.strip())
         if not match:
@@ -207,7 +207,7 @@ class SRTValidator:
 
         hours, minutes, seconds, milliseconds = match.groups()
 
-        # Verificăm limitele
+        # Check limits
         if int(minutes) >= 60:
             return False
         if int(seconds) >= 60:
@@ -234,10 +234,10 @@ class SRTValidator:
 
     def validate_content(self, srt_content: str) -> Tuple[bool, List[str]]:
         """
-        Validează conținutul SRT.
+        Validate SRT content.
 
         Args:
-            srt_content: Conținut SRT ca string
+            srt_content: SRT content as string
 
         Returns:
             Tuple (is_valid, error_messages)
@@ -329,16 +329,16 @@ class SRTValidator:
 
     def parse_entries(self, srt_content: str) -> List[SRTEntry]:
         """
-        Parse SRT content în listă de entries.
+        Parse SRT content into list of entries.
 
         Args:
-            srt_content: Conținut SRT
+            srt_content: SRT content
 
         Returns:
-            Lista de SRTEntry
+            List of SRTEntry
 
         Raises:
-            SRTValidationError: Dacă conținutul e invalid
+            SRTValidationError: If content is invalid
         """
         is_valid, errors = self.validate_content(srt_content)
         if not is_valid:
@@ -398,13 +398,13 @@ class SRTValidator:
 
     def fix_common_issues(self, srt_content: str) -> str:
         """
-        Încearcă să repare probleme comune în SRT.
+        Try to fix common issues in SRT.
 
         Args:
-            srt_content: Conținut SRT original
+            srt_content: Original SRT content
 
         Returns:
-            Conținut SRT reparat
+            Fixed SRT content
         """
         if not srt_content:
             return srt_content
@@ -424,10 +424,10 @@ class SRTValidator:
 
     def validate_and_fix(self, srt_content: str) -> Tuple[bool, str, List[str]]:
         """
-        Validează și repară SRT dacă e posibil.
+        Validate and fix SRT if possible.
 
         Args:
-            srt_content: Conținut SRT original
+            srt_content: Original SRT content
 
         Returns:
             Tuple (is_valid, fixed_content, errors)
@@ -458,10 +458,10 @@ def get_srt_validator() -> SRTValidator:
 
 def validate_srt(srt_content: str) -> Tuple[bool, List[str]]:
     """
-    Helper: Validează conținut SRT.
+    Helper: Validate SRT content.
 
     Args:
-        srt_content: Conținut SRT
+        srt_content: SRT content
 
     Returns:
         Tuple (is_valid, error_messages)
@@ -472,10 +472,10 @@ def validate_srt(srt_content: str) -> Tuple[bool, List[str]]:
 
 def validate_srt_file(srt_path: str) -> Tuple[bool, List[str]]:
     """
-    Helper: Validează fișier SRT.
+    Helper: Validate SRT file.
 
     Args:
-        srt_path: Calea către fișierul SRT
+        srt_path: Path to SRT file
 
     Returns:
         Tuple (is_valid, error_messages)

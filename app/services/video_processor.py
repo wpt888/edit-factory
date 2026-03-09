@@ -15,11 +15,11 @@ import cv2
 import numpy as np
 from scipy.fftpack import dct
 
-# IMPORTANT: Încărcăm .env ÎNAINTE de a verifica GEMINI_API_KEY
+# IMPORTANT: Load .env BEFORE checking GEMINI_API_KEY
 from dotenv import load_dotenv
 load_dotenv()
 
-# Import GeminiAnalyzer (optional - funcționează și fără dacă nu ai API key)
+# Import GeminiAnalyzer (optional - works without API key too)
 try:
     from .gemini_analyzer import GeminiVideoAnalyzer, AnalyzedSegment
     _gemini_key = os.getenv("GEMINI_API_KEY", "")
@@ -87,7 +87,7 @@ class VideoSegment:
     start_time: float
     end_time: float
     motion_score: float       # Cat de multa miscare e in segment (0-1)
-    variance_score: float     # Cat de variate sunt frame-urile (0-1)
+    variance_score: float     # How varied the frames are (0-1)
     avg_brightness: float     # Luminozitate medie (0-1)
     blur_score: float = 1.0       # Sharpness: 1.0 = sharp, 0.0 = blurry (Laplacian variance normalized)
     contrast_score: float = 0.5   # Contrast level: 0-1 (std dev normalized)
@@ -162,7 +162,7 @@ class VideoAnalyzer:
             self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-            # Detectam rotatia video-ului (important pentru telefoane!)
+            # Detect video rotation (important for phones!)
             self.rotation = self._detect_rotation()
             if self.rotation in [90, 270]:
                 self.width, self.height = self.height, self.width
@@ -309,7 +309,7 @@ class VideoAnalyzer:
             frames_gray.append(gray)
 
             if prev_gray is not None:
-                # Calculam diferenta intre frame-uri consecutive
+                # Calculate difference between consecutive frames
                 diff = cv2.absdiff(prev_gray, gray)
                 motion = np.mean(diff) / 255.0
                 motion_scores.append(motion)
@@ -319,10 +319,10 @@ class VideoAnalyzer:
         # Motion score mediu
         motion_score = np.mean(motion_scores) if motion_scores else 0.0
 
-        # Variance score - cat de diferite sunt frame-urile intre ele
+        # Variance score - how different frames are from each other
         variance_score = 0.0
         if len(frames_gray) >= 3:
-            # Comparam primul frame cu ultimul si cu cel din mijloc
+            # Compare first frame with last and middle frame
             first = frames_gray[0]
             mid = frames_gray[len(frames_gray) // 2]
             last = frames_gray[-1]
@@ -342,7 +342,7 @@ class VideoAnalyzer:
         self,
         segment_duration: float = 3.0,
         overlap: float = 0.5,
-        min_motion_threshold: float = 0.008,  # Threshold pentru "dead zone"
+        min_motion_threshold: float = 0.008,  # Threshold for "dead zone"
         progress_callback: Optional[callable] = None
     ) -> List[VideoSegment]:
         """
@@ -373,10 +373,10 @@ class VideoAnalyzer:
             start_frame = int(start_time * self.fps)
             end_frame = int(end_time * self.fps)
 
-            # Calculam scorurile
+            # Calculate scores
             motion_score, variance_score, blur_score, contrast_score = self._calculate_motion_for_interval(start_frame, end_frame)
 
-            # Calculam hash-uri pentru mid-point (single-point sufficient for duplicate detection)
+            # Calculate hashes for mid-point (single-point sufficient for duplicate detection)
             # VID-13: Brightness sampled at 3 positions for representative average
             visual_hashes = []
             brightness_samples = []
@@ -397,9 +397,9 @@ class VideoAnalyzer:
             avg_brightness = np.mean(brightness_samples) if brightness_samples else 0.5
             min_brightness = min(brightness_samples) if brightness_samples else 0.5
 
-            # FILTRAM: dead zones (mișcare mică) și black frames (luminozitate mică)
+            # FILTER: dead zones (low motion) and black frames (low brightness)
             # Brightness < 0.05 = aproape negru (12.75/255)
-            # Brightness < 0.10 = foarte întunecat
+            # Brightness < 0.10 = very dark
             MIN_BRIGHTNESS_THRESHOLD = 0.08  # ~20/255
             MIN_BLUR_THRESHOLD = 0.2  # Reject very blurry segments (Laplacian variance < 100)
 
@@ -433,7 +433,7 @@ class VideoAnalyzer:
                 progress = int((analyzed_count / total_segments) * 100)
                 progress_callback("Analyzing video", f"{progress}% complete")
 
-        # Sortam dupa scor combinat
+        # Sort by combined score
         segments.sort(key=lambda s: s.combined_score, reverse=True)
 
         logger.info(f"Analysis complete: {len(segments)} valid segments (filtered {total_segments - len(segments)} dead zones)")
@@ -443,7 +443,7 @@ class VideoAnalyzer:
         self,
         target_duration: float,
         min_segment: float = 1.5,
-        max_segment: float = 3.0,  # Max 3 secunde pentru dinamism
+        max_segment: float = 3.0,  # Max 3 seconds for dynamism
         similarity_threshold: int = 8,  # VID-12: tightened from 12 for single-sample phash mode
         min_motion: float = 0.008,
         progress_callback: Optional[callable] = None
@@ -452,7 +452,7 @@ class VideoAnalyzer:
         Selecteaza cele mai bune segmente pentru durata tinta.
         Segmentele sunt scurte (max 3s) pentru un clip dinamic.
         """
-        # Segmente scurte pentru dinamism - max 3 secunde
+        # Short segments for dynamism - max 3 seconds
         segment_duration = min(max_segment, max(min_segment, target_duration / 8))
 
         all_segments = self.analyze_full_video(
@@ -467,7 +467,7 @@ class VideoAnalyzer:
         skipped_duplicates = 0
         skipped_overlap = 0
 
-        # Distribuție temporală uniformă - zone buckets + round-robin
+        # Uniform temporal distribution - zone buckets + round-robin
         video_duration = max(seg.end_time for seg in all_segments) if all_segments else 0
         if video_duration <= 0:
             return []
@@ -492,7 +492,7 @@ class VideoAnalyzer:
                     segment = bucket[bucket_indices[zone_idx]]
                     bucket_indices[zone_idx] += 1
 
-                    # Verificam overlap temporal
+                    # Check temporal overlap
                     has_overlap = any(
                         not (segment.end_time <= sel.start_time or segment.start_time >= sel.end_time)
                         for sel in selected
@@ -501,7 +501,7 @@ class VideoAnalyzer:
                         skipped_overlap += 1
                         continue
 
-                    # Verificam similaritate vizuala
+                    # Check visual similarity
                     is_duplicate = False
                     for sel in selected:
                         if segment.is_visually_similar(sel, threshold=similarity_threshold):
@@ -514,9 +514,9 @@ class VideoAnalyzer:
                     selected.append(segment)
                     total_duration += segment.duration
                     segments_added = True
-                    break  # Trecem la următorul bucket
+                    break  # Move to next bucket
 
-        # Sortam cronologic
+        # Sort chronologically
         selected.sort(key=lambda s: s.start_time)
 
         logger.info(f"Selected {len(selected)} segments, duration: {total_duration:.1f}s")
@@ -533,7 +533,7 @@ class VideoAnalyzer:
             "width": self.width,
             "height": self.height,
             "frame_count": self.frame_count,
-            "rotation": getattr(self, 'rotation', 0)  # Rotația pentru corecție output
+            "rotation": getattr(self, 'rotation', 0)  # Rotation for output correction
         }
 
     def __enter__(self):
@@ -622,7 +622,7 @@ class VideoEditor:
         video_path = Path(video_path)
         output_path = self.output_dir / f"{output_name}_voice_muted.mp4"
 
-        # Detectăm voce
+        # Detect voice
         detector = self._get_voice_detector()
         if detector is None:
             logger.warning("Voice detector not available, copying original")
@@ -637,7 +637,7 @@ class VideoEditor:
             shutil.copy(video_path, output_path)
             return output_path, []
 
-        # Aplicăm mute
+        # Apply mute
         logger.info(f"Muting {len(voice_segments)} voice segments")
         success = mute_voice_segments(
             video_path=video_path,
@@ -749,16 +749,16 @@ class VideoEditor:
         overlapping = []
 
         for vs in voice_segments:
-            # Verificăm suprapunerea
+            # Check for overlap
             voice_start = vs.start_time if hasattr(vs, 'start_time') else vs['start']
             voice_end = vs.end_time if hasattr(vs, 'end_time') else vs['end']
 
-            # Calculăm intersecția
+            # Calculate the intersection
             overlap_start = max(segment_start, voice_start)
             overlap_end = min(segment_end, voice_end)
 
             if overlap_start < overlap_end:
-                # Există suprapunere - convertim la timp relativ
+                # Overlap exists - convert to relative time
                 relative_start = overlap_start - segment_start
                 relative_end = overlap_end - segment_start
                 overlapping.append((relative_start, relative_end))
@@ -779,15 +779,15 @@ class VideoEditor:
         if not mute_intervals:
             return None
 
-        # Construim condițiile combinate cu + (OR în FFmpeg expressions)
+        # Build combined conditions with + (OR in FFmpeg expressions)
         conditions = []
         for start, end in mute_intervals:
             conditions.append(f"between(t,{start:.3f},{end:.3f})")
 
-        # Un singur filtru volume cu toate condițiile combinate
-        # Sintaxa corectă: volume=LEVEL:enable='CONDITION'
-        # NOTĂ: FFmpeg NECESITĂ ghilimele în jurul expresiei enable!
-        # subprocess.run cu listă de argumente pasează string-ul direct, fără shell interpretation
+        # Single volume filter with all combined conditions
+        # Correct syntax: volume=LEVEL:enable='CONDITION'
+        # NOTE: FFmpeg REQUIRES quotes around the enable expression!
+        # subprocess.run with argument list passes the string directly, without shell interpretation
         combined_condition = "+".join(conditions)
         return f"volume=0:enable='{combined_condition}'"
 
@@ -813,7 +813,7 @@ class VideoEditor:
         video_path = Path(video_path)
         segment_files = []
 
-        # Construim filtrul video pentru rotație (pentru format vertical/reels)
+        # Build video filter for rotation (for vertical/reels format)
         # FFmpeg transpose values: 1=90°CW, 2=90°CCW, 3=90°CW+vflip
         video_filter = None
         if source_rotation == 90:
@@ -827,19 +827,19 @@ class VideoEditor:
             for i, seg in enumerate(segments):
                 temp_file = self.temp_dir / f"segment_{output_name}_{i:03d}.mp4"
 
-                # Verificăm dacă acest segment are voce care trebuie mutată
+                # Check if this segment has voice that needs muting
                 audio_filter = None
                 if voice_segments:
-                    # Găsim vocile care se suprapun cu acest segment
+                    # Find voices overlapping with this segment
                     overlapping_mutes = self._get_overlapping_voice_mutes(
                         seg.start_time, seg.end_time, voice_segments
                     )
                     if overlapping_mutes:
-                        # Construim filtrul de volum pentru mute selectiv
+                        # Build volume filter for selective muting
                         audio_filter = self._build_mute_filter(overlapping_mutes)
                         logger.info(f"Segment {i+1}: Muting {len(overlapping_mutes)} voice portions")
 
-                # Funcție helper pentru a construi comanda
+                # Helper function to build the command
                 def build_cmd(use_gpu_encoding: bool, seg=seg, audio_filter=audio_filter):
                     if use_gpu_encoding:
                         cmd = [
@@ -851,7 +851,7 @@ class VideoEditor:
                             "-t", str(seg.duration),
                             "-avoid_negative_ts", "make_zero",
                         ]
-                        # Pentru GPU: trebuie să descărcăm din CUDA înainte de filtru video
+                        # For GPU: must download from CUDA before video filter
                         if video_filter:
                             cmd.extend(["-vf", f"hwdownload,format=nv12,{video_filter},hwupload_cuda"])
                         if audio_filter:
@@ -903,13 +903,13 @@ class VideoEditor:
                         ])
                     return cmd
 
-                # Încearcă GPU, fallback pe CPU dacă eșuează
+                # Try GPU, fallback to CPU on failure
                 try:
                     cmd = build_cmd(self.use_gpu)
                     self._run_ffmpeg(cmd, f"extract segment {i+1}/{len(segments)}")
                 except RuntimeError as e:
                     error_lower = str(e).lower()
-                    # Fallback pe CPU pentru erori NVENC sau filtergraph (combinația GPU + audio filter poate cauza probleme)
+                    # Fallback to CPU for NVENC or filtergraph errors (GPU + audio filter combination can cause issues)
                     gpu_error_indicators = ["filtergraph", "cuda", "nvenc", "gpu", "device", "hwaccel", "out of memory", "cuvid", "filter not found"]
                     if self.use_gpu and any(indicator in error_lower for indicator in gpu_error_indicators):
                         logger.warning(f"GPU encoding failed for segment {i+1}, falling back to CPU: {str(e)[:100]}")
@@ -971,7 +971,7 @@ class VideoEditor:
         """Adauga audio la video."""
         output_video = self.output_dir / f"{output_name}_with_audio.mp4"
 
-        # Obtinem durata audio
+        # Get audio duration
         probe_cmd = [
             "ffprobe", "-v", "error",
             "-show_entries", "format=duration",
@@ -1061,27 +1061,27 @@ class VideoEditor:
             settings.update(subtitle_settings)
 
         # FONT SIZE - NU MAI SCALAM!
-        # Cu PlayResX/PlayResY setate la rezolutia video-ului, fontul este interpretat
+        # With PlayResX/PlayResY set to video resolution, font is interpreted
         # direct in pixeli la rezolutia respectiva.
         # Frontend preview calculeaza: (fontSize / videoHeight) * 600px
-        # Deci fontSize=48 in video 1920px = 48/1920 = 2.5% din inaltime
-        # In preview 600px: (48/1920)*600 = 15px = 2.5% din 600px ✓
-        # Folosim direct valoarea din frontend fara scalare!
+        # So fontSize=48 in 1920px video = 48/1920 = 2.5% of height
+        # In 600px preview: (48/1920)*600 = 15px = 2.5% of 600px
+        # Use the frontend value directly without scaling!
         font_size = int(settings["fontSize"])
-        # Limitam intre 16 si 200 pentru siguranta
+        # Clamp between 16 and 200 for safety
         font_size = max(16, min(200, font_size))
 
-        # Outline width - folosim direct, fara scalare
+        # Outline width - use directly, no scaling
         outline_width = max(1, int(settings["outlineWidth"]))
         outline_width = min(outline_width, 10)  # Max 10px
 
         # MarginV scalat bazat pe positionY
         # positionY: 0=sus, 100=jos
-        # IMPORTANT: Folosim PlayResX/PlayResY pentru videouri portrait
+        # IMPORTANT: Use PlayResX/PlayResY for portrait videos
         position_y = settings.get("positionY", 85)
 
-        # Alignment: 2 = bottom-center (standard pentru subtitrari)
-        # Pentru pozitii foarte sus folosim alignment=8 (top-center)
+        # Alignment: 2 = bottom-center (standard for subtitles)
+        # For very high positions use alignment=8 (top-center)
         if position_y <= 20:
             alignment = 8  # top-center
             # MarginV = distanta de la marginea de sus
@@ -1089,16 +1089,16 @@ class VideoEditor:
         else:
             alignment = 2  # bottom-center
             # MarginV = distanta de la marginea de jos
-            # position_y=85 -> marginV = 15% din inaltime
+            # position_y=85 -> marginV = 15% of height
             margin_v = int((100 - position_y) / 100 * video_height)
 
-        # Asiguram un minim pentru margin
+        # Ensure a minimum for margin
         margin_v = max(50, margin_v)
 
         logger.info(f"Subtitle: fontSize={font_size}px, outline={outline_width}px (video: {video_width}x{video_height})")
         logger.info(f"Position Y: {position_y}% -> Alignment: {alignment}, MarginV: {margin_v}px")
 
-        # Convertim culorile
+        # Convert colors
         def hex_to_ass(hex_color):
             hex_color = hex_color.lstrip('#')
             if len(hex_color) == 3:
@@ -1111,7 +1111,7 @@ class VideoEditor:
         primary_color = hex_to_ass(settings["textColor"])
         outline_color = hex_to_ass(settings["outlineColor"])
 
-        # Extragem font family name (fara CSS variables)
+        # Extract font family name (without CSS variables)
         font_family = settings['fontFamily']
         # Remove CSS variable prefix if present
         if 'var(--' in font_family:
@@ -1123,8 +1123,8 @@ class VideoEditor:
                     font_family = part.strip("'\"")
                     break
 
-        # PlayResX/PlayResY sunt esentiale pentru pozitionarea corecta pe videouri portrait
-        # Fara ele, ASS/libass presupune o rezolutie 4:3 si calculeaza gresit pozitia
+        # PlayResX/PlayResY are essential for correct positioning on portrait videos
+        # Without them, ASS/libass assumes 4:3 resolution and miscalculates position
         subtitle_style = (
             f"PlayResX={video_width},"
             f"PlayResY={video_height},"
@@ -1139,11 +1139,11 @@ class VideoEditor:
             f"Bold=1"
         )
 
-        # Escaping corect pentru ffmpeg subtitles filter pe Windows
-        # 1. Convertim backslash la forward slash
+        # Correct escaping for ffmpeg subtitles filter on Windows
+        # 1. Convert backslash to forward slash
         # 2. Escape-uim : cu \:
-        # 3. Escape-uim ' cu '\'' (inchidem quote, adaugam escaped quote, redeschidem)
-        # 4. Escape-uim [ si ] care sunt speciale in ffmpeg filters
+        # 3. Escape ' with '\'' (close quote, add escaped quote, reopen)
+        # 4. Escape [ and ] which are special in ffmpeg filters
         # VID-02: Drive-letter-aware colon escaping (matches subtitle_styler.py pattern)
         srt_path_escaped = str(srt_path)
         srt_path_escaped = srt_path_escaped.replace('\\', '/')
@@ -1156,9 +1156,9 @@ class VideoEditor:
         srt_path_escaped = srt_path_escaped.replace('[', '\\[')
         srt_path_escaped = srt_path_escaped.replace(']', '\\]')
 
-        # IMPORTANT: Pentru subtitles filter, NU putem folosi hwaccel cu filtru pe CPU
+        # IMPORTANT: For subtitles filter, we CANNOT use hwaccel with CPU filter
         # Subtitles filter ruleaza pe CPU, deci trebuie sa decodam pe CPU si sa encodam cu GPU
-        # NU folosim -hwaccel cuda aici pentru ca filtrul subtitles nu suporta GPU
+        # Do NOT use -hwaccel cuda here because subtitles filter does not support GPU
         if self.use_gpu:
             # Subtitles filter runs on CPU, so we cannot use hwaccel for decoding.
             # Fall back to CPU codec (libx264) to avoid NVENC without hwaccel mismatch.
@@ -1204,7 +1204,7 @@ class VideoEditor:
         if not segment_files:
             raise ValueError("No segment files to concatenate")
 
-        # Creăm fișierul de concat
+        # Create the concat file
         concat_file = self.temp_dir / f"concat_{output_name}.txt"
         with open(concat_file, 'w', encoding='utf-8') as f:
             for seg_file in segment_files:
@@ -1293,14 +1293,14 @@ class VideoProcessorService:
         logger.info(f"Starting Gemini analysis for: {video_path.name}")
 
         try:
-            # Inițializăm analizatorul Gemini
+            # Initialize the Gemini analyzer
             gemini = GeminiVideoAnalyzer(profile_id=self.profile_id)
 
-            # Obținem info despre video folosind VideoAnalyzer clasic
+            # Get video info folosind VideoAnalyzer clasic
             with VideoAnalyzer(video_path) as classic_analyzer:
                 video_info = classic_analyzer.get_video_info()
 
-            # Analizăm cu Gemini
+            # Analyze with Gemini
             gemini_segments = gemini.get_best_segments(
                 video_path=video_path,
                 target_duration=target_duration,
@@ -1308,7 +1308,7 @@ class VideoProcessorService:
                 context=context
             )
 
-            # Convertim la VideoSegment pentru compatibilitate
+            # Convert to VideoSegment for compatibility
             video_segments = self._gemini_to_video_segments(gemini_segments)
 
             return {
@@ -1332,8 +1332,8 @@ class VideoProcessorService:
         video_segments = []
 
         for gs in gemini_segments:
-            # Convertim scorul Gemini (0-100) la motion_score (0-1)
-            # Score-ul Gemini devine motion_score pentru compatibilitate
+            # Convert Gemini score (0-100) to motion_score (0-1)
+            # Gemini score becomes motion_score for compatibility
             motion_score = gs.score / 100.0
 
             vs = VideoSegment(
@@ -1389,12 +1389,12 @@ class VideoProcessorService:
         try:
             video_path = Path(video_path)
 
-            # Analiză video
+            # Video analysis
             if use_gemini and GEMINI_AVAILABLE:
                 report_progress("Analyzing video with AI (Gemini)")
                 analysis = self.analyze_video_with_gemini(
                     video_path,
-                    target_duration * variant_count * 1.5,  # Mai mult pentru variante
+                    target_duration * variant_count * 1.5,  # More for variants
                     context=context,
                     min_score=50
                 )
@@ -1407,11 +1407,11 @@ class VideoProcessorService:
             results["video_info"] = analysis["video_info"]
             report_progress("Video analysis completed", "completed")
 
-            # Verificăm segmentele
+            # Verify segments
             if not analysis.get("segments"):
                 raise ValueError("Nu s-au găsit segmente valide în video")
 
-            # Convertim segmentele din dict în VideoSegment
+            # Convert segments from dict to VideoSegment
             all_segments = []
             for seg_dict in analysis["segments"]:
                 vs = VideoSegment(
@@ -1426,14 +1426,14 @@ class VideoProcessorService:
 
             logger.info(f"Working with {len(all_segments)} segments for {variant_count} variants")
 
-            # Procesăm fiecare variantă
+            # Process each variant
             used_segments_by_variant: Dict[int, set] = {}
 
             for variant_idx in range(variant_count):
                 variant_name = f"{output_name}_v{variant_idx + 1}" if variant_count > 1 else output_name
                 report_progress(f"Processing variant {variant_idx + 1}/{variant_count}")
 
-                # Selectăm segmente pentru această variantă
+                # Select segments for this variant
                 selected_segments = self._select_variant_segments(
                     all_segments=all_segments,
                     variant_index=variant_idx,
@@ -1446,7 +1446,7 @@ class VideoProcessorService:
                     logger.warning(f"Variant {variant_idx + 1}: No segments, skipping")
                     continue
 
-                # Extract segments (cu rotație pentru format vertical)
+                # Extract segments (with rotation for vertical format)
                 report_progress(f"Extracting segments for variant {variant_idx + 1}")
                 source_rotation = analysis.get("video_info", {}).get("rotation", 0)
                 segments_video = self.editor.extract_segments(
@@ -1486,13 +1486,13 @@ class VideoProcessorService:
             report_progress("Cleaning up intermediate files")
             self.editor.cleanup_intermediates()
 
-            # Colectam fisierele finale INAINTE de cleanup
+            # Collect final files BEFORE cleanup
             final_videos = set()
             for var in results["variants"]:
                 if var.get("final_video"):
                     final_videos.add(Path(var["final_video"]).name)
 
-            # Stergem doar fisierele intermediare, NU cele finale
+            # Delete only intermediate files, NOT final ones
             for f in self.output_dir.glob(f"{output_name}*"):
                 if f.name not in final_videos:
                     try:
@@ -1541,7 +1541,7 @@ class VideoProcessorService:
                 used_in_this_variant.update(prev_set)
         total_duration = 0.0
 
-        # Gasim durata totala a videoclipului din segmente
+        # Find total video duration from segments
         video_duration = max(seg.end_time for seg in all_segments)
         if video_duration <= 0:
             return []
@@ -1553,25 +1553,25 @@ class VideoProcessorService:
 
         logger.info(f"Variant {variant_index + 1}: Zone {zone_start:.1f}s - {zone_end:.1f}s (video: {video_duration:.1f}s)")
 
-        # PASUL 1: Prima scena TREBUIE sa fie din ZONA acestei variante
+        # STEP 1: First scene MUST be from this variant's ZONE
         zone_segments = []
         for i, seg in enumerate(all_segments):
             # Segmentul trebuie sa inceapa in zona acestei variante
             if zone_start <= seg.start_time < zone_end:
                 zone_segments.append((i, seg))
 
-        # Sortam segmentele din zona dupa scor
+        # Sort zone segments by score
         zone_segments.sort(key=lambda x: x[1].combined_score, reverse=True)
 
         if zone_segments:
-            # Luam cel mai bun segment din zona
+            # Take the best segment from the zone
             idx, first_seg = zone_segments[0]
             selected.append(first_seg)
             used_in_this_variant.add(idx)
             total_duration += first_seg.duration
             logger.info(f"Variant {variant_index + 1}: First scene at {first_seg.start_time:.1f}s (zone start)")
         else:
-            # Fallback: daca zona nu are segmente, luam primul disponibil
+            # Fallback: if zone has no segments, take the first available
             logger.warning(f"Variant {variant_index + 1}: No segments in zone, using fallback")
             for i, seg in enumerate(all_segments):
                 if i not in used_in_this_variant:
@@ -1580,22 +1580,22 @@ class VideoProcessorService:
                     total_duration += seg.duration
                     break
 
-        # PASUL 2: Restul segmentelor - luam din INTREG videoclipul dar prioritizam diversitatea
-        # Sortam toate segmentele dupa pozitie temporala pentru distributie uniforma
+        # STEP 2: Remaining segments - take from ENTIRE video but prioritize diversity
+        # Sort all segments by temporal position for uniform distribution
         all_with_idx = [(i, seg) for i, seg in enumerate(all_segments)]
 
-        # Amestecam segmentele pentru diversitate - luam alternativ din diferite zone
-        num_zones = 5  # Impartim in 5 zone pentru diversitate
+        # Mix segments for diversity - take alternately from different zones
+        num_zones = 5  # Split into 5 zones for diversity
         zone_buckets = [[] for _ in range(num_zones)]
         for i, seg in all_with_idx:
             bucket_idx = min(int((seg.start_time / video_duration) * num_zones), num_zones - 1) if video_duration > 0 else 0
             zone_buckets[bucket_idx].append((i, seg))
 
-        # Sortam fiecare bucket dupa scor
+        # Sort each bucket by score
         for bucket in zone_buckets:
             bucket.sort(key=lambda x: x[1].combined_score, reverse=True)
 
-        # Luam segmente alternativ din fiecare bucket (round-robin)
+        # Take segments alternately from each bucket (round-robin)
         bucket_indices = [0] * num_zones
         segments_added = True
 
@@ -1615,7 +1615,7 @@ class VideoProcessorService:
                     if idx in used_in_this_variant:
                         continue
 
-                    # Verificam overlap temporal cu segmentele deja selectate
+                    # Check temporal overlap cu segmentele deja selectate
                     has_overlap = False
                     for sel in selected:
                         if not (seg.end_time <= sel.start_time or seg.start_time >= sel.end_time):
@@ -1625,7 +1625,7 @@ class VideoProcessorService:
                     if has_overlap:
                         continue
 
-                    # Verificam similaritate vizuala
+                    # Check visual similarity
                     is_similar = False
                     for sel in selected:
                         if seg.is_visually_similar(sel, threshold=12):
@@ -1635,9 +1635,9 @@ class VideoProcessorService:
                     if is_similar:
                         continue
 
-                    # VERIFICAM TRANZITIE DINAMICA
-                    # Segmentul trebuie sa aiba motion score decent pentru tranzitii dinamice
-                    if seg.motion_score < 0.015:  # Threshold pentru dinamism
+                    # CHECK DYNAMIC TRANSITION
+                    # Segment must have decent motion score for dynamic transitions
+                    if seg.motion_score < 0.015:  # Threshold for dynamism
                         continue  # Skip segmente statice/plictisitoare
 
                     selected.append(seg)
@@ -1648,7 +1648,7 @@ class VideoProcessorService:
 
         used_segments_by_variant[variant_index] = used_in_this_variant
 
-        # Sortam cronologic pentru export
+        # Sort chronologically for export
         selected.sort(key=lambda s: s.start_time)
 
         zone_count = len(set(int(s.start_time / zone_duration) for s in selected)) if zone_duration > 0 else 0
@@ -1690,7 +1690,7 @@ class VideoProcessorService:
             with VideoAnalyzer(video_path) as analyzer:
                 video_info = analyzer.get_video_info()
 
-                # Folosim Gemini AI pentru selecție inteligentă dacă avem context
+                # Use Gemini AI for intelligent selection if we have context
                 if context_text and GEMINI_AVAILABLE:
                     report_progress("AI Analysis with Gemini")
                     logger.info(f"Using Gemini AI for context-based frame selection: {context_text[:100]}...")
@@ -1702,7 +1702,7 @@ class VideoProcessorService:
                             min_score=50,
                             context=context_text
                         )
-                        # Convertim AnalyzedSegment în VideoSegment
+                        # Convert AnalyzedSegment to VideoSegment
                         all_segments = []
                         for ai_seg in ai_segments:
                             seg = VideoSegment(
@@ -1718,7 +1718,7 @@ class VideoProcessorService:
                     except Exception as e:
                         logger.warning(f"Gemini analysis failed, falling back to motion analysis: {e}")
                         report_progress("Motion Analysis (fallback)")
-                        # Fallback la analiza clasică
+                        # Fallback to classic analysis
                         required_duration = target_duration * variant_count * 2
                         all_segments = analyzer.select_best_segments(
                             required_duration,
@@ -1727,7 +1727,7 @@ class VideoProcessorService:
                             progress_callback=progress_callback
                         )
                 else:
-                    # Analizam tot video-ul cu metoda clasică (motion-based)
+                    # Analyze entire video with classic method (motion-based)
                     report_progress("Motion Analysis")
                     required_duration = target_duration * variant_count * 2
                     all_segments = analyzer.select_best_segments(
@@ -1744,11 +1744,11 @@ class VideoProcessorService:
 
             logger.info(f"Found {len(all_segments)} segments for {variant_count} variants")
 
-            # Verificam daca avem suficiente segmente
+            # Check if we have enough segments
             if not all_segments:
                 raise ValueError("Nu s-au gasit segmente valide in video. Video-ul poate fi prea static sau prea scurt.")
 
-            # VOICE DETECTION: Detectăm vocile ÎNAINTE de procesare (dacă e activat)
+            # VOICE DETECTION: Detect voices BEFORE processing (if enabled)
             voice_segments = None
             if mute_source_voice:
                 report_progress("Detecting voice in source video")
@@ -1793,20 +1793,20 @@ class VideoProcessorService:
                     used_segments_by_variant=used_segments_by_variant
                 )
 
-                # Verificam daca am selectat segmente pentru aceasta varianta
+                # Check if we selected segments for this variant
                 if not selected_segments:
                     logger.warning(f"Variant {variant_idx + 1}: No segments available, skipping")
                     continue
 
-                # Extract segments (cu mute selectiv + rotație pentru format vertical)
+                # Extract segments (with selective mute + rotation for vertical format)
                 report_progress(f"Extracting segments for variant {variant_idx + 1}")
                 source_rotation = video_info.get("rotation", 0)
                 segments_video = self.editor.extract_segments(
                     video_path,
                     selected_segments,
                     variant_name,
-                    voice_segments=voice_segments,  # Mute selectiv doar în porțiunile cu voce
-                    source_rotation=source_rotation  # Corectează orientarea pentru vertical
+                    voice_segments=voice_segments,  # Selective mute only in voice portions
+                    source_rotation=source_rotation  # Correct orientation for vertical
                 )
                 self.editor._track_intermediate(segments_video)
                 current_video = segments_video
@@ -1843,13 +1843,13 @@ class VideoProcessorService:
             report_progress("Cleaning up intermediate files")
             self.editor.cleanup_intermediates()
 
-            # Colectam fisierele finale INAINTE de cleanup
+            # Collect final files BEFORE cleanup
             final_videos = set()
             for var in results["variants"]:
                 if var.get("final_video"):
                     final_videos.add(Path(var["final_video"]).name)
 
-            # Stergem doar fisierele intermediare, NU cele finale
+            # Delete only intermediate files, NOT final ones
             for f in self.output_dir.glob(f"{output_name}*"):
                 if f.name not in final_videos:
                     try:
@@ -1914,7 +1914,7 @@ class VideoProcessorService:
             logger.info(f"Step: {step} - {status}")
 
         try:
-            # PASUL 1: Analizăm videoclipul principal
+            # STEP 1: Analyze the main video
             report_progress("Analyzing main video")
             with VideoAnalyzer(main_video_path) as main_analyzer:
                 main_video_info = main_analyzer.get_video_info()
@@ -1929,7 +1929,7 @@ class VideoProcessorService:
             results["main_video_info"] = main_video_info
             report_progress("Analyzing main video", "completed")
 
-            # PASUL 2: Găsim keywords în SRT
+            # STEP 2: Find keywords in SRT
             report_progress("Finding keywords in SRT")
             all_keywords = []
             for sv in secondary_videos:
@@ -1945,7 +1945,7 @@ class VideoProcessorService:
             ]
             report_progress("Finding keywords in SRT", "completed")
 
-            # PASUL 3: Analizăm videoclipurile secundare
+            # STEP 3: Analyze secondary videos
             report_progress("Analyzing secondary videos")
             secondary_analyzers = {}
             secondary_segments_by_keyword = {}
@@ -1959,12 +1959,12 @@ class VideoProcessorService:
                     continue
 
                 with VideoAnalyzer(sv_path) as analyzer:
-                    # IMPORTANT: Analizăm segmente cu durata EXACT cât e setat secondary_segment_duration
-                    # Astfel ne asigurăm că întreaga durată extrasă este dinamică, nu doar începutul
+                    # IMPORTANT: Analyze segments with duration EXACTLY matching secondary_segment_duration
+                    # This ensures the entire extracted duration is dynamic, not just the beginning
                     segments = analyzer.select_best_segments(
-                        target_duration,  # Suficiente segmente pentru toate variantele
-                        min_segment=secondary_segment_duration,  # Minim durata setată
-                        max_segment=secondary_segment_duration,  # Maxim tot durata setată
+                        target_duration,  # Enough segments for all variants
+                        min_segment=secondary_segment_duration,  # Minimum set duration
+                        max_segment=secondary_segment_duration,  # Maximum also set duration
                         min_motion=0.008
                     )
 
@@ -1978,14 +1978,14 @@ class VideoProcessorService:
 
             report_progress("Analyzing secondary videos", "completed")
 
-            # PASUL 4: Procesăm fiecare variantă
+            # STEP 4: Process each variant
             used_segments_by_variant: Dict[int, set] = {}
 
             for variant_idx in range(variant_count):
                 variant_name = f"{output_name}_v{variant_idx + 1}" if variant_count > 1 else output_name
                 report_progress(f"Processing variant {variant_idx + 1}/{variant_count}")
 
-                # Selectăm segmente din videoclipul principal
+                # Select segments from main video
                 selected_main = self._select_variant_segments(
                     all_segments=main_segments,
                     variant_index=variant_idx,
@@ -1998,8 +1998,8 @@ class VideoProcessorService:
                     logger.warning(f"Variant {variant_idx + 1}: No main segments, skipping")
                     continue
 
-                # CONSTRUIM TIMELINE-UL COMBINAT
-                # Intercalăm segmente secundare la momentele keywords
+                # BUILD COMBINED TIMELINE
+                # Interleave secondary segments at keyword moments
                 timeline = self._build_keyword_timeline(
                     main_segments=selected_main,
                     keyword_segments=keyword_segments,
@@ -2011,7 +2011,7 @@ class VideoProcessorService:
 
                 logger.info(f"Variant {variant_idx + 1}: Timeline has {len(timeline)} items")
 
-                # Extragem și concatenăm conform timeline-ului
+                # Extract and concatenate according to timeline
                 report_progress(f"Extracting segments for variant {variant_idx + 1}")
                 current_video = self._extract_timeline(
                     timeline=timeline,
@@ -2020,12 +2020,12 @@ class VideoProcessorService:
                     variant_name=variant_name
                 )
 
-                # Adăugăm audio
+                # Add audio
                 if audio_path and audio_path.exists():
                     report_progress(f"Adding audio to variant {variant_idx + 1}")
                     current_video = self.editor.add_audio(current_video, audio_path, variant_name)
 
-                # Adăugăm subtitrări
+                # Add subtitles
                 srt_path = self.temp_dir / f"{variant_name}_subs.srt"
                 try:
                     with open(srt_path, 'w', encoding='utf-8') as f:
@@ -2057,13 +2057,13 @@ class VideoProcessorService:
             report_progress("Cleaning up intermediate files")
             self.editor.cleanup_intermediates()
 
-            # Colectam fisierele finale INAINTE de cleanup
+            # Collect final files BEFORE cleanup
             final_videos = set()
             for var in results["variants"]:
                 if var.get("final_video"):
                     final_videos.add(Path(var["final_video"]).name)
 
-            # Stergem doar fisierele intermediare, NU cele finale
+            # Delete only intermediate files, NOT final ones
             for f in self.output_dir.glob(f"{output_name}*"):
                 if f.name not in final_videos:
                     try:
@@ -2107,41 +2107,41 @@ class VideoProcessorService:
         main_idx = 0
         used_secondary = {kw: set() for kw in secondary_segments_by_keyword}
 
-        # Calculăm când apar keywords în audio (relativ la durata target)
+        # Calculate when keywords appear in audio (relative to target duration)
         keyword_times = {}
         for ks in keyword_segments:
             kw = ks['keyword']
             t = ks['start_time']
-            if t <= target_duration:  # Doar keywords care încap în durata țintă
+            if t <= target_duration:  # Only keywords that fit in target duration
                 if kw not in keyword_times:
                     keyword_times[kw] = []
                 keyword_times[kw].append(t)
 
-        # Sortăm main segments cronologic (deja ar trebui să fie)
+        # Sort main segments chronologically (should already be)
         main_segments = sorted(main_segments, key=lambda s: s.start_time)
 
         while current_time < target_duration and main_idx < len(main_segments):
             main_seg = main_segments[main_idx]
 
-            # Verificăm dacă e un keyword în acest interval
+            # Check if there's a keyword in this interval
             keyword_to_insert = None
             for kw, times in keyword_times.items():
                 for t in times:
                     if current_time <= t < current_time + main_seg.duration:
                         keyword_to_insert = kw
-                        # Eliminăm acest timestamp să nu-l folosim din nou
+                        # Remove this timestamp so we don't reuse it
                         times.remove(t)
                         break
                 if keyword_to_insert:
                     break
 
             if keyword_to_insert and keyword_to_insert in secondary_segments_by_keyword:
-                # Inserăm segment din video secundar
+                # Insert segment from secondary video
                 secondary_segs = secondary_segments_by_keyword[keyword_to_insert]
                 available = [i for i, s in enumerate(secondary_segs) if i not in used_secondary[keyword_to_insert]]
 
                 if available:
-                    # Luăm un segment diferit pentru fiecare variantă
+                    # Take a different segment for each variant
                     sec_idx = available[variant_idx % len(available)]
                     sec_seg = secondary_segs[sec_idx]
                     used_secondary[keyword_to_insert].add(sec_idx)
@@ -2155,7 +2155,7 @@ class VideoProcessorService:
                     })
                     current_time += min(sec_seg.duration, secondary_segment_duration)
 
-            # Adăugăm segmentul principal
+            # Add the main segment
             remaining = target_duration - current_time
             if remaining <= 0:
                 break
@@ -2184,7 +2184,7 @@ class VideoProcessorService:
         """
         segment_files = []
 
-        # Mapăm keywords la video paths
+        # Map keywords to video paths
         keyword_to_path = {}
         for sv in secondary_videos:
             for kw in sv.get('keywords', []):
@@ -2270,7 +2270,7 @@ class VideoProcessorService:
                     pass
             raise
 
-        # Concatenăm toate segmentele
+        # Concatenate all segments
         if not segment_files:
             raise ValueError("No segments extracted from timeline")
 
