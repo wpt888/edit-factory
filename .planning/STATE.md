@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 65-01-PLAN.md
-last_updated: "2026-03-09T03:39:52.310Z"
-last_activity: 2026-03-09 — 65-01 SQLiteRepository implementation + factory wiring
+stopped_at: Completed 66-01-PLAN.md
+last_updated: "2026-03-09T03:59:54.063Z"
+last_activity: 2026-03-09 — 66-02 Core route migration to repository methods
 progress:
   total_phases: 10
-  completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
+  completed_phases: 3
+  total_plans: 6
+  completed_plans: 6
 ---
 
 # Project State
@@ -20,19 +20,19 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale.
-**Current focus:** v12 Desktop Product MVP — Phase 65 (complete)
+**Current focus:** v12 Desktop Product MVP — Phase 66 (in progress)
 
 ## Current Position
 
-Phase: 65 — SQLite Local Database (COMPLETE)
-Plan: 01 of 1 complete
-Status: Phase 65 complete, ready for Phase 66
-Last activity: 2026-03-09 — 65-01 SQLiteRepository implementation + factory wiring
+Phase: 66 — Local File Storage & Offline Mode
+Plan: 02 of 3 complete
+Status: Core route migration done, continuing phase 66
+Last activity: 2026-03-09 — 66-02 Core route migration to repository methods
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 117 (across v2-v12)
+- Total plans completed: 119 (across v2-v12)
 - Total phases completed: 65
 - Total milestones shipped: 11
 
@@ -50,7 +50,8 @@ Last activity: 2026-03-09 — 65-01 SQLiteRepository implementation + factory wi
 | v9 Assembly Fix + Overlays | 4 (43-46) | 6 | Shipped 2026-02-28 |
 | v10 Desktop Launcher | 8 (47-54) | 18 | Shipped 2026-03-01 |
 | v11 Production Polish | 9 (55-63) | 22 | Shipped 2026-03-03 |
-| v12 Desktop Product MVP | 2/10 (64-73) | 4/23 | In progress |
+| v12 Desktop Product MVP | 2/10 (64-73) | 6/23 | In progress |
+| Phase 66 P01 | 5min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,9 @@ Recent decisions affecting v12:
 - v12-65: Column-aware timestamp defaults via _get_table_columns() cache
 - v12-65: _TABLE_MAP dict for Supabase-to-SQLite table name translation
 - v12-65: LEFT JOIN for project_segments and associations to replicate PostgREST nested joins
+- v12-66: Migrated only 7 core routes (not all 30+) to keep change scope manageable per plan
+- v12-66: verify_project_ownership uses internal repo.get_project() instead of passed supabase param
+- [Phase 66]: MediaManager works alongside existing input_dir/output_dir for backward compat
 
 ### Pending Todos
 
@@ -94,10 +98,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T03:35:00.000Z
-Stopped at: Completed 65-01-PLAN.md
+Last session: 2026-03-09T03:59:43.799Z
+Stopped at: Completed 66-01-PLAN.md
 Resume file: None
-Next action: Phase 65 complete. Plan next phase (66).
+Next action: Continue Phase 66 plan 03.
 
 ---
-*Last updated: 2026-03-09 after 65-01 completion*
+*Last updated: 2026-03-09 after 66-02 completion*

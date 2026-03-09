@@ -11,8 +11,8 @@ Requirements for Desktop Product MVP. Each maps to roadmap phases.
 
 - [x] **DATA-01**: User's projects, clips, and settings are stored in a local SQLite database on their PC (not Supabase cloud)
 - [x] **DATA-02**: Backend services use a data abstraction layer that can swap between SQLite and Supabase without changing business logic
-- [ ] **DATA-03**: User can create, edit, and delete projects while completely offline
-- [ ] **DATA-04**: All video files (input, output, thumbnails) are stored on the user's local filesystem with no cloud dependency
+- [x] **DATA-03**: User can create, edit, and delete projects while completely offline
+- [x] **DATA-04**: All video files (input, output, thumbnails) are stored on the user's local filesystem with no cloud dependency
 - [x] **DATA-05**: Cost tracking and TTS cache data persist locally in SQLite
 - [x] **DATA-06**: Existing Supabase migrations are translated to SQLite schema (all editai_* tables)
 
@@ -96,8 +96,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | DATA-01 | 65 | Complete |
 | DATA-02 | 64 | Complete |
-| DATA-03 | 66 | Pending |
-| DATA-04 | 66 | Pending |
+| DATA-03 | 66 | Complete |
+| DATA-04 | 66 | Complete |
 | DATA-05 | 65 | Complete |
 | DATA-06 | 64 | Complete |
 | AUTH-01 | 67 | Pending |

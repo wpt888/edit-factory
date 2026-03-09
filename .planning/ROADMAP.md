@@ -162,7 +162,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 
 - [x] **Phase 64: Data Abstraction Layer** - Repository pattern abstracting database access; SQLite schema from Supabase migrations (3 plans) (completed 2026-03-09)
 - [x] **Phase 65: SQLite Local Database** - SQLite backend implementation for projects, clips, settings, cost tracking, TTS cache (1 plan) (completed 2026-03-09)
-- [ ] **Phase 66: Local File Storage & Offline Mode** - Local filesystem for all video assets; offline project CRUD without internet (2 plans)
+- [x] **Phase 66: Local File Storage & Offline Mode** - Local filesystem for all video assets; offline project CRUD without internet (2 plans) (completed 2026-03-09)
 - [ ] **Phase 67: Auth Flow Fixes** - JWT token injection in frontend API calls, logout button, password reset, route protection middleware (3 plans)
 - [ ] **Phase 68: License Key Validation Polish** - Lemon Squeezy periodic revalidation with offline grace period (1 plan)
 - [ ] **Phase 69: Direct API Integration** - ElevenLabs and Gemini calls from desktop; encrypted local API key storage; graceful fallback without keys (3 plans)
@@ -327,7 +327,7 @@ Plans:
 | 55-63 | v11 | 22/22 | Complete | 2026-03-03 |
 | 64. Data Abstraction Layer | 3/3 | Complete    | 2026-03-09 | - |
 | 65. SQLite Local Database | v12 | Complete    | 2026-03-09 | - |
-| 66. Local File Storage & Offline | v12 | 0/2 | Not started | - |
+| 66. Local File Storage & Offline | 2/2 | Complete   | 2026-03-09 | - |
 | 67. Auth Flow Fixes | v12 | 0/3 | Not started | - |
 | 68. License Key Validation Polish | v12 | 0/1 | Not started | - |
 | 69. Direct API Integration | v12 | 0/3 | Not started | - |
