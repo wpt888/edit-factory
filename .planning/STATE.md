@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 69-03-PLAN.md
-last_updated: "2026-03-09T06:10:34.741Z"
-last_activity: 2026-03-09 — Completed 69-03 (Graceful API Fallback)
+status: executing
+stopped_at: Completed 70-01-PLAN.md
+last_updated: "2026-03-09T06:27:07.418Z"
+last_activity: 2026-03-09 — Completed 70-01 (Style Presets & Types)
 progress:
   total_phases: 10
   completed_phases: 6
-  total_plans: 14
-  completed_plans: 14
+  total_plans: 17
+  completed_plans: 15
 ---
 
 # Project State
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale.
-**Current focus:** v12 Desktop Product MVP — Phase 69 (in progress)
+**Current focus:** v12 Desktop Product MVP — Phase 70 (planning)
 
 ## Current Position
 
-Phase: 69 — Direct API Integration
-Plan: 3 of 3 (completed)
-Status: Phase Complete
-Last activity: 2026-03-09 — Completed 69-03 (Graceful API Fallback)
+Phase: 70 — UX Simplification — Pipeline & Batch
+Plan: 1 of 3
+Status: In Progress
+Last activity: 2026-03-09 — Completed 70-01 (Style Presets & Types)
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Last activity: 2026-03-09 — Completed 69-03 (Graceful API Fallback)
 | Phase 69 P01 | 5min | 2 tasks | 2 files |
 | Phase 69 P03 | 6min | 2 tasks | 4 files |
 | Phase 69 P02 | 3min | 2 tasks | 3 files |
+| Phase 70 P01 | 2min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -104,6 +105,7 @@ Recent decisions affecting v12:
 - [Phase 69]: Edge TTS fallback is INFO-level (not WARNING) since fallback is expected behavior
 - [Phase 69]: Frontend fallback toasts deduplicated per session via module-level Set
 - [Phase 69]: Lazy import of key_vault inside try/except to avoid circular deps at module load
+- [Phase 70]: Public preset endpoint (no auth) since presets are static config
 
 ### Pending Todos
 
@@ -120,8 +122,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T06:06:06Z
-Stopped at: Completed 69-03-PLAN.md
+Last session: 2026-03-09T06:27:07.391Z
+Stopped at: Completed 70-01-PLAN.md
 Resume file: None
 Next action: Phase 69 complete — advance to next phase
 

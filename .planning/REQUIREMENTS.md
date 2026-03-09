@@ -26,8 +26,8 @@ Requirements for Desktop Product MVP. Each maps to roadmap phases.
 
 ### UX Simplification
 
-- [ ] **UX-01**: Pipeline has a simplified 3-step mode (Upload → Choose Style → Download) for non-technical users
-- [ ] **UX-02**: Advanced parameters (motion threshold, variance scoring, pHash) are hidden under an expandable "Advanced" section
+- [x] **UX-01**: Pipeline has a simplified 3-step mode (Upload → Choose Style → Download) for non-technical users
+- [x] **UX-02**: Advanced parameters (motion threshold, variance scoring, pHash) are hidden under an expandable "Advanced" section
 - [ ] **UX-03**: Setup wizard guides new users through API key configuration with presets ("Free TTS" auto-selects Edge TTS, skip ElevenLabs)
 - [ ] **UX-04**: User can choose from 5+ caption/subtitle visual presets (font, size, position, color scheme)
 - [ ] **UX-05**: User can queue multiple videos for batch clip generation with a visible job queue
@@ -105,8 +105,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTH-03 | 68 | Complete |
 | AUTH-04 | 67 | Complete |
 | AUTH-05 | 67 | Complete |
-| UX-01 | 70 | Pending |
-| UX-02 | 70 | Pending |
+| UX-01 | 70 | Complete |
+| UX-02 | 70 | Complete |
 | UX-03 | 71 | Pending |
 | UX-04 | 71 | Pending |
 | UX-05 | 70 | Pending |
