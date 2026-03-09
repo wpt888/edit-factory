@@ -105,10 +105,10 @@ class ElevenLabsAccountManager:
         self._env_sub_cache: Optional[dict] = None
         self._env_sub_cache_at: float = 0
 
-    def _get_supabase(self):
-        """Get Supabase client."""
-        from app.db import get_supabase
-        return get_supabase()
+    def _get_repo(self):
+        """Get repository instance."""
+        from app.repositories.factory import get_repository
+        return get_repository()
 
     def _invalidate_cache(self, profile_id: str):
         """Invalidate cache for a profile."""
@@ -215,16 +215,17 @@ class ElevenLabsAccountManager:
 
     def record_error(self, profile_id: str, api_key: str, error_msg: str):
         """Record an error against the account that owns this API key."""
-        supabase = self._get_supabase()
-        if not supabase:
+        repo = self._get_repo()
+        if not repo:
             return
 
         try:
+            from app.repositories.models import QueryFilters
             # Find account by decrypting keys (can't use .eq on encrypted column)
-            result = supabase.table("elevenlabs_accounts")\
-                .select("id, api_key_encrypted")\
-                .eq("profile_id", profile_id)\
-                .execute()
+            result = repo.list_elevenlabs_accounts(
+                profile_id,
+                filters=QueryFilters(select="id, api_key_encrypted"),
+            )
 
             account_id = None
             for row in (result.data or []):
@@ -233,10 +234,10 @@ class ElevenLabsAccountManager:
                     break
 
             if account_id:
-                supabase.table("elevenlabs_accounts").update({
+                repo.update_elevenlabs_account(account_id, {
                     "last_error": error_msg,
                     "last_checked_at": datetime.now(timezone.utc).isoformat(),
-                }).eq("id", account_id).execute()
+                })
 
                 logger.info(f"Recorded error on account {account_id}: {error_msg[:80]}")
         except Exception as e:
@@ -245,17 +246,17 @@ class ElevenLabsAccountManager:
     # ==================== CRUD ====================
 
     def _fetch_accounts_from_db(self, profile_id: str) -> List[dict]:
-        """Fetch accounts from Supabase."""
-        supabase = self._get_supabase()
-        if not supabase:
+        """Fetch accounts from repository."""
+        repo = self._get_repo()
+        if not repo:
             return []
 
         try:
-            result = supabase.table("elevenlabs_accounts")\
-                .select("*")\
-                .eq("profile_id", profile_id)\
-                .order("sort_order")\
-                .execute()
+            from app.repositories.models import QueryFilters
+            result = repo.list_elevenlabs_accounts(
+                profile_id,
+                filters=QueryFilters(order_by="sort_order", order_desc=False),
+            )
             return result.data or []
         except Exception as e:
             logger.error(f"Failed to fetch accounts: {e}")
@@ -330,15 +331,17 @@ class ElevenLabsAccountManager:
         Raises:
             ValueError: If limit reached or key invalid
         """
-        supabase = self._get_supabase()
-        if not supabase:
+        repo = self._get_repo()
+        if not repo:
             raise ValueError("Database not available")
 
+        from app.repositories.models import QueryFilters
+
         # Check limit
-        existing = supabase.table("elevenlabs_accounts")\
-            .select("id")\
-            .eq("profile_id", profile_id)\
-            .execute()
+        existing = repo.list_elevenlabs_accounts(
+            profile_id,
+            filters=QueryFilters(select="id"),
+        )
 
         if existing.data and len(existing.data) >= self.MAX_ACCOUNTS_PER_PROFILE:
             raise ValueError(f"Maximum {self.MAX_ACCOUNTS_PER_PROFILE} accounts per profile")
@@ -362,12 +365,7 @@ class ElevenLabsAccountManager:
             "sort_order": sort_order,
         }
 
-        result = supabase.table("elevenlabs_accounts").insert(row).execute()
-
-        if not result.data:
-            raise ValueError("Failed to create account")
-
-        account = result.data[0]
+        account = repo.create_elevenlabs_account(row)
 
         self._invalidate_cache(profile_id)
 
@@ -388,8 +386,8 @@ class ElevenLabsAccountManager:
         Returns:
             Updated account (masked)
         """
-        supabase = self._get_supabase()
-        if not supabase:
+        repo = self._get_repo()
+        if not repo:
             raise ValueError("Database not available")
 
         allowed = {}
@@ -401,11 +399,12 @@ class ElevenLabsAccountManager:
         if not allowed:
             raise ValueError("No valid fields to update")
 
-        result = supabase.table("elevenlabs_accounts")\
-            .update(allowed)\
-            .eq("id", account_id)\
-            .eq("profile_id", profile_id)\
-            .execute()
+        from app.repositories.models import QueryFilters
+        result = repo.table_query(
+            "editai_elevenlabs_accounts", "update",
+            data=allowed,
+            filters=QueryFilters(eq={"id": account_id, "profile_id": profile_id}),
+        )
 
         if not result.data:
             raise ValueError("Account not found")
@@ -418,16 +417,20 @@ class ElevenLabsAccountManager:
 
     def delete_account(self, profile_id: str, account_id: str):
         """Delete an account. Reassigns primary if needed."""
-        supabase = self._get_supabase()
-        if not supabase:
+        repo = self._get_repo()
+        if not repo:
             raise ValueError("Database not available")
 
+        from app.repositories.models import QueryFilters
+
         # Check if this is the primary
-        target = supabase.table("elevenlabs_accounts")\
-            .select("id, is_primary")\
-            .eq("id", account_id)\
-            .eq("profile_id", profile_id)\
-            .execute()
+        target = repo.table_query(
+            "editai_elevenlabs_accounts", "select",
+            filters=QueryFilters(
+                select="id, is_primary",
+                eq={"id": account_id, "profile_id": profile_id},
+            ),
+        )
 
         if not target.data:
             raise ValueError("Account not found")
@@ -435,39 +438,34 @@ class ElevenLabsAccountManager:
         was_primary = target.data[0].get("is_primary", False)
 
         # Delete
-        supabase.table("elevenlabs_accounts")\
-            .delete()\
-            .eq("id", account_id)\
-            .eq("profile_id", profile_id)\
-            .execute()
+        repo.table_query(
+            "editai_elevenlabs_accounts", "delete",
+            filters=QueryFilters(eq={"id": account_id, "profile_id": profile_id}),
+        )
 
         # Reassign primary if we deleted the primary
         if was_primary:
-            remaining = supabase.table("elevenlabs_accounts")\
-                .select("id")\
-                .eq("profile_id", profile_id)\
-                .order("sort_order")\
-                .limit(1)\
-                .execute()
+            remaining = repo.list_elevenlabs_accounts(
+                profile_id,
+                filters=QueryFilters(select="id", order_by="sort_order", order_desc=False, limit=1),
+            )
 
             if remaining.data:
-                supabase.table("elevenlabs_accounts")\
-                    .update({"is_primary": True})\
-                    .eq("id", remaining.data[0]["id"])\
-                    .execute()
+                repo.update_elevenlabs_account(remaining.data[0]["id"], {"is_primary": True})
 
         self._invalidate_cache(profile_id)
 
     def clear_all_primary(self, profile_id: str):
         """Unset all DB accounts as primary for a profile (makes .env the default)."""
-        supabase = self._get_supabase()
-        if not supabase:
+        repo = self._get_repo()
+        if not repo:
             return
-        supabase.table("elevenlabs_accounts")\
-            .update({"is_primary": False})\
-            .eq("profile_id", profile_id)\
-            .eq("is_primary", True)\
-            .execute()
+        from app.repositories.models import QueryFilters
+        repo.table_query(
+            "editai_elevenlabs_accounts", "update",
+            data={"is_primary": False},
+            filters=QueryFilters(eq={"profile_id": profile_id, "is_primary": True}),
+        )
         self._invalidate_cache(profile_id)
 
     def set_primary(self, profile_id: str, account_id: str) -> dict:
@@ -477,23 +475,25 @@ class ElevenLabsAccountManager:
         Returns:
             Updated account (masked)
         """
-        supabase = self._get_supabase()
-        if not supabase:
+        repo = self._get_repo()
+        if not repo:
             raise ValueError("Database not available")
 
+        from app.repositories.models import QueryFilters
+
         # Unset current primary
-        supabase.table("elevenlabs_accounts")\
-            .update({"is_primary": False})\
-            .eq("profile_id", profile_id)\
-            .eq("is_primary", True)\
-            .execute()
+        repo.table_query(
+            "editai_elevenlabs_accounts", "update",
+            data={"is_primary": False},
+            filters=QueryFilters(eq={"profile_id": profile_id, "is_primary": True}),
+        )
 
         # Set new primary
-        result = supabase.table("elevenlabs_accounts")\
-            .update({"is_primary": True})\
-            .eq("id", account_id)\
-            .eq("profile_id", profile_id)\
-            .execute()
+        result = repo.table_query(
+            "editai_elevenlabs_accounts", "update",
+            data={"is_primary": True},
+            filters=QueryFilters(eq={"id": account_id, "profile_id": profile_id}),
+        )
 
         if not result.data:
             raise ValueError("Account not found")
@@ -511,16 +511,20 @@ class ElevenLabsAccountManager:
         Returns:
             Updated account (masked)
         """
-        supabase = self._get_supabase()
-        if not supabase:
+        repo = self._get_repo()
+        if not repo:
             raise ValueError("Database not available")
 
+        from app.repositories.models import QueryFilters
+
         # Get the API key
-        account = supabase.table("elevenlabs_accounts")\
-            .select("api_key_encrypted")\
-            .eq("id", account_id)\
-            .eq("profile_id", profile_id)\
-            .execute()
+        account = repo.table_query(
+            "editai_elevenlabs_accounts", "select",
+            filters=QueryFilters(
+                select="api_key_encrypted",
+                eq={"id": account_id, "profile_id": profile_id},
+            ),
+        )
 
         if not account.data:
             raise ValueError("Account not found")
@@ -529,13 +533,17 @@ class ElevenLabsAccountManager:
         sub_info = self.check_subscription(api_key)
 
         # Update DB
-        result = supabase.table("elevenlabs_accounts").update({
-            "character_limit": sub_info.get("character_limit"),
-            "characters_used": sub_info.get("character_count"),
-            "tier": sub_info.get("tier"),
-            "last_checked_at": datetime.now(timezone.utc).isoformat(),
-            "last_error": None,
-        }).eq("id", account_id).eq("profile_id", profile_id).execute()
+        result = repo.table_query(
+            "editai_elevenlabs_accounts", "update",
+            data={
+                "character_limit": sub_info.get("character_limit"),
+                "characters_used": sub_info.get("character_count"),
+                "tier": sub_info.get("tier"),
+                "last_checked_at": datetime.now(timezone.utc).isoformat(),
+                "last_error": None,
+            },
+            filters=QueryFilters(eq={"id": account_id, "profile_id": profile_id}),
+        )
 
         if not result.data:
             raise ValueError("Failed to update subscription info")

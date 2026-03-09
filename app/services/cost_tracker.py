@@ -40,22 +40,22 @@ class CostTracker:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.log_file = self.log_dir / "cost_log.json"
         self._ensure_log_file()
-        self._supabase = None
+        self._repo = None
         self._log_lock = threading.Lock()
         self._init_supabase()
 
     def _init_supabase(self):
-        """Initialize Supabase client."""
+        """Initialize repository client."""
         try:
-            from app.db import get_supabase
-            self._supabase = get_supabase()
-            if self._supabase:
-                logger.info("Supabase client initialized for cost tracking")
+            from app.repositories.factory import get_repository
+            self._repo = get_repository()
+            if self._repo:
+                logger.info("Repository initialized for cost tracking")
             else:
-                logger.warning("Supabase credentials not found, using local storage only")
+                logger.warning("Repository not available, using local storage only")
         except Exception as e:
-            logger.error(f"Failed to initialize Supabase: {e}")
-            self._supabase = None
+            logger.error(f"Failed to initialize repository: {e}")
+            self._repo = None
 
     def _ensure_log_file(self):
         """Create log file if it doesn't exist."""
@@ -95,11 +95,9 @@ class CostTracker:
                 pass
 
     def _save_to_supabase(self, entry: CostEntry, profile_id: Optional[str] = None) -> bool:
-        """Save entry to Supabase with retry and exponential backoff (DB-09)."""
-        if not self._supabase:
+        """Save entry to repository (DB-09)."""
+        if not self._repo:
             return False
-
-        import time
 
         data = {
             "service": entry.service,
@@ -114,14 +112,14 @@ class CostTracker:
         }
 
         try:
-            self._supabase.table("api_costs").insert(data).execute()
+            self._repo.log_cost(data)
             if profile_id:
                 logger.info(f"[Profile {profile_id}] Cost saved: {entry.service} - ${entry.cost_usd}")
             else:
-                logger.info(f"Cost saved to Supabase: {entry.service} - ${entry.cost_usd}")
+                logger.info(f"Cost saved to repository: {entry.service} - ${entry.cost_usd}")
             return True
         except Exception as e:
-            logger.error(f"Failed to save cost to Supabase: {e}")
+            logger.error(f"Failed to save cost to repository: {e}")
             return False
 
     def log_elevenlabs_tts(
@@ -209,32 +207,31 @@ class CostTracker:
             self._save_log(data)
 
     def get_summary(self, profile_id: Optional[str] = None) -> Dict:
-        """Get cost summary from Supabase or local."""
-        # Try Supabase first
-        if self._supabase:
+        """Get cost summary from repository or local."""
+        # Try repository first
+        if self._repo:
             try:
                 return self._get_summary_from_supabase(profile_id=profile_id)
             except Exception as e:
-                logger.warning(f"Failed to get summary from Supabase: {e}, falling back to local")
+                logger.warning(f"Failed to get summary from repository: {e}, falling back to local")
 
         return self._get_summary_from_local(profile_id=profile_id)
 
     def _get_summary_from_supabase(self, profile_id: Optional[str] = None) -> Dict:
-        """Get summary from Supabase.
+        """Get summary from repository.
 
-        DB-10: Ideally this would use an RPC call like:
-            supabase.rpc('aggregate_costs', {'p_profile_id': profile_id})
-        backed by: SELECT service, SUM(cost) as total FROM api_costs GROUP BY service
-        For now, we use .select("service, cost") with server-side column filtering
-        to minimize data transfer, and aggregate client-side.
+        DB-10: Ideally this would use an RPC call.
+        For now, we select needed columns and aggregate client-side.
         """
+        from app.repositories.models import QueryFilters
+
         today = datetime.now(timezone.utc).date().isoformat()
 
         # Get totals - filter by profile if provided (DB-10: select only needed columns)
-        query = self._supabase.table("api_costs").select("service, cost")
+        filters = QueryFilters(select="service, cost")
         if profile_id:
-            query = query.eq("profile_id", profile_id)
-        all_costs = query.execute()
+            filters.eq["profile_id"] = profile_id
+        all_costs = self._repo.table_query("api_costs", "select", filters=filters)
 
         totals = {"elevenlabs": 0, "gemini": 0}
         for row in all_costs.data:
@@ -243,12 +240,13 @@ class CostTracker:
                 totals[service] += float(row["cost"] or 0)
 
         # Get today's costs
-        today_query = self._supabase.table("api_costs")\
-            .select("service, cost")\
-            .gte("created_at", f"{today}T00:00:00")
+        today_filters = QueryFilters(
+            select="service, cost",
+            gte={"created_at": f"{today}T00:00:00"},
+        )
         if profile_id:
-            today_query = today_query.eq("profile_id", profile_id)
-        today_costs = today_query.execute()
+            today_filters.eq["profile_id"] = profile_id
+        today_costs = self._repo.table_query("api_costs", "select", filters=today_filters)
 
         today_totals = {"elevenlabs": 0, "gemini": 0}
         for row in today_costs.data:
@@ -257,19 +255,18 @@ class CostTracker:
                 today_totals[service] += float(row["cost"] or 0)
 
         # Get last 10 entries
-        last_query = self._supabase.table("api_costs")\
-            .select("*")\
-            .order("created_at", desc=True)\
-            .limit(10)
+        last_filters = QueryFilters(
+            order_by="created_at", order_desc=True, limit=10,
+        )
         if profile_id:
-            last_query = last_query.eq("profile_id", profile_id)
-        last_entries = last_query.execute()
+            last_filters.eq["profile_id"] = profile_id
+        last_entries = self._repo.table_query("api_costs", "select", filters=last_filters)
 
         # Count total entries
-        count_query = self._supabase.table("api_costs").select("id", count="exact")
+        count_filters = QueryFilters(select="id")
         if profile_id:
-            count_query = count_query.eq("profile_id", profile_id)
-        count_result = count_query.execute()
+            count_filters.eq["profile_id"] = profile_id
+        count_result = self._repo.table_query("api_costs", "select", filters=count_filters)
 
         return {
             "source": "supabase",
@@ -313,18 +310,18 @@ class CostTracker:
 
     def get_all_entries(self, profile_id: Optional[str] = None) -> List[Dict]:
         """Get all cost entries, optionally filtered by profile."""
-        if self._supabase:
+        if self._repo:
             try:
-                query = self._supabase.table("api_costs")\
-                    .select("*")\
-                    .order("created_at", desc=True)\
-                    .limit(1000)
+                from app.repositories.models import QueryFilters
+                filters = QueryFilters(
+                    order_by="created_at", order_desc=True, limit=1000,
+                )
                 if profile_id:
-                    query = query.eq("profile_id", profile_id)
-                result = query.execute()
+                    filters.eq["profile_id"] = profile_id
+                result = self._repo.table_query("api_costs", "select", filters=filters)
                 return result.data
             except Exception as e:
-                logger.warning(f"Failed to get entries from Supabase: {e}")
+                logger.warning(f"Failed to get entries from repository: {e}")
 
         data = self._load_log()
         entries = data.get("entries", [])
@@ -347,18 +344,20 @@ class CostTracker:
         now = datetime.now(timezone.utc)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        if self._supabase:
+        if self._repo:
             try:
-                result = self._supabase.table("api_costs")\
-                    .select("cost")\
-                    .eq("profile_id", profile_id)\
-                    .gte("created_at", month_start.isoformat())\
-                    .execute()
+                from app.repositories.models import QueryFilters
+                filters = QueryFilters(
+                    select="cost",
+                    eq={"profile_id": profile_id},
+                    gte={"created_at": month_start.isoformat()},
+                )
+                result = self._repo.table_query("api_costs", "select", filters=filters)
 
                 total = sum(float(row.get("cost", 0) or 0) for row in result.data)
                 return round(total, 4)
             except Exception as e:
-                logger.warning(f"Failed to get monthly costs from Supabase: {e}")
+                logger.warning(f"Failed to get monthly costs from repository: {e}")
 
         # Fallback to local log
         data = self._load_log()
@@ -411,9 +410,9 @@ def get_cost_tracker() -> CostTracker:
                 settings = get_settings()
                 _tracker = CostTracker(settings.logs_dir)
     # DB-21: Protect re-initialization with lock to prevent concurrent _init_supabase calls
-    elif _tracker._supabase is None:
+    elif _tracker._repo is None:
         with _tracker_lock:
-            if _tracker._supabase is None:
+            if _tracker._repo is None:
                 _tracker._init_supabase()
     return _tracker
 

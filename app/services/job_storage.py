@@ -20,7 +20,7 @@ class JobStorage:
     _MAX_MEMORY_JOBS = 500  # Evict oldest when exceeded
 
     def __init__(self):
-        self._supabase = None
+        self._repo = None
         self._memory_store: Dict[str, dict] = {}
         self._update_lock = threading.Lock()
         self._cancelled_jobs: Dict[str, float] = {}  # job_id -> monotonic timestamp
@@ -30,7 +30,7 @@ class JobStorage:
 
     @property
     def supabase(self):
-        return self._supabase
+        return self._repo
 
     @property
     def update_lock(self):
@@ -41,17 +41,17 @@ class JobStorage:
         return self._memory_store
 
     def _init_supabase(self):
-        """Initialize Supabase client."""
+        """Initialize repository client."""
         try:
-            from app.db import get_supabase
-            self._supabase = get_supabase()
-            if self._supabase:
-                logger.info("JobStorage: Supabase initialized")
+            from app.repositories.factory import get_repository
+            self._repo = get_repository()
+            if self._repo:
+                logger.info("JobStorage: Repository initialized")
             else:
-                logger.warning("JobStorage: Supabase credentials missing, using in-memory fallback")
+                logger.warning("JobStorage: Repository not available, using in-memory fallback")
         except Exception as e:
-            logger.error(f"JobStorage: Failed to initialize Supabase: {e}")
-            self._supabase = None
+            logger.error(f"JobStorage: Failed to initialize repository: {e}")
+            self._repo = None
 
     def _evict_oldest_memory_jobs(self):
         """Evict oldest completed/failed jobs from memory when over limit."""
@@ -92,27 +92,26 @@ class JobStorage:
         if profile_id:
             job_data["profile_id"] = profile_id
 
-        if self._supabase:
+        if self._repo:
             try:
-                # Insert into Supabase
-                result = self._supabase.table("jobs").insert({
+                self._repo.create_job({
                     "id": job_id,
                     "job_type": job_data.get("job_type", "video_processing"),
                     "status": job_data.get("status", "pending"),
                     "progress": job_data.get("progress", "Queued"),
-                    "profile_id": profile_id,  # Add profile_id for multi-tenant tracking
-                    "data": job_data,  # Store full job data as JSON
+                    "profile_id": profile_id,
+                    "data": job_data,
                     "created_at": job_data["created_at"],
                     "updated_at": job_data["updated_at"]
-                }).execute()
+                })
 
                 if profile_id:
-                    logger.info(f"[Profile {profile_id}] JobStorage: Created job {job_id} in Supabase")
+                    logger.info(f"[Profile {profile_id}] JobStorage: Created job {job_id}")
                 else:
-                    logger.info(f"JobStorage: Created job {job_id} in Supabase (no profile)")
+                    logger.info(f"JobStorage: Created job {job_id} (no profile)")
                 return job_data
             except Exception as e:
-                logger.error(f"JobStorage: Failed to create job in Supabase: {e}, using memory")
+                logger.error(f"JobStorage: Failed to create job: {e}, using memory")
                 # Fallback to memory
                 self._memory_store[job_id] = job_data
                 self._evict_oldest_memory_jobs()
@@ -137,13 +136,12 @@ class JobStorage:
         Returns:
             Job data or None if not found
         """
-        if self._supabase:
+        if self._repo:
             try:
-                result = self._supabase.table("jobs").select("*").eq("id", job_id).limit(1).execute()
-                if not result.data:
+                row = self._repo.get_job(job_id)
+                if not row:
                     return None
                 # DB-02: Normalize return format — merge top-level fields into data dict
-                row = result.data[0]
                 job_data = row.get("data", {})
                 # Merge top-level DB fields so callers always see a consistent shape
                 for key in ("id", "status", "progress", "profile_id", "created_at", "updated_at"):
@@ -202,7 +200,7 @@ class JobStorage:
                 self._memory_store[job_id] = job.copy()
 
         # Supabase I/O outside lock to avoid holding lock during network calls
-        if self._supabase:
+        if self._repo:
             try:
                 # Build update data
                 update_data = {
@@ -215,15 +213,15 @@ class JobStorage:
                 if profile_id:
                     update_data["profile_id"] = profile_id
 
-                # Update in Supabase
-                self._supabase.table("jobs").update(update_data).eq("id", job_id).execute()
+                # Update in repository
+                self._repo.update_job(job_id, update_data)
 
                 if profile_id:
-                    logger.debug(f"[Profile {profile_id}] JobStorage: Updated job {job_id} in Supabase")
+                    logger.debug(f"[Profile {profile_id}] JobStorage: Updated job {job_id}")
                 else:
-                    logger.debug(f"JobStorage: Updated job {job_id} in Supabase")
+                    logger.debug(f"JobStorage: Updated job {job_id}")
             except Exception as e:
-                logger.error(f"JobStorage: Failed to update job in Supabase: {e}, memory copy preserved")
+                logger.error(f"JobStorage: Failed to update job: {e}, memory copy preserved")
 
         return job
 
@@ -239,19 +237,19 @@ class JobStorage:
         Returns:
             List of job data dicts
         """
-        if self._supabase:
+        if self._repo:
             try:
-                query = self._supabase.table("jobs").select("*").order("created_at", desc=True).limit(limit)
+                from app.repositories.models import QueryFilters
+                filters = QueryFilters(
+                    order_by="created_at", order_desc=True, limit=limit,
+                )
                 if status:
-                    query = query.eq("status", status)
-                if profile_id:
-                    query = query.eq("profile_id", profile_id)
-
-                result = query.execute()
+                    filters.eq["status"] = status
+                result = self._repo.list_jobs(limit=limit, profile_id=profile_id, filters=filters)
                 # Extract job data from JSONB
                 return [row.get("data", {}) for row in result.data]
             except Exception as e:
-                logger.warning(f"JobStorage: Failed to list jobs from Supabase: {e}, using memory")
+                logger.warning(f"JobStorage: Failed to list jobs: {e}, using memory")
 
         # Fallback to memory
         jobs = list(self._memory_store.values())
@@ -274,17 +272,13 @@ class JobStorage:
         Returns:
             True if deleted, False if not found
         """
-        if self._supabase:
+        if self._repo:
             try:
-                # DB-16: Check result.data before returning True
-                result = self._supabase.table("jobs").delete().eq("id", job_id).execute()
-                if not result.data:
-                    logger.warning(f"JobStorage: Delete returned no data for job {job_id}")
-                    return False
-                logger.info(f"JobStorage: Deleted job {job_id} from Supabase")
+                self._repo.delete_job(job_id)
+                logger.info(f"JobStorage: Deleted job {job_id}")
                 return True
             except Exception as e:
-                logger.error(f"JobStorage: Failed to delete job from Supabase: {e}")
+                logger.error(f"JobStorage: Failed to delete job: {e}")
 
         # Fallback to memory
         if job_id in self._memory_store:
@@ -337,17 +331,20 @@ class JobStorage:
         Avoids O(N) scan of list_jobs by querying directly by project_id.
         """
         results = []
-        # Try Supabase first
-        if self._supabase:
+        # Try repository first
+        if self._repo:
             try:
-                query = self._supabase.table("jobs").select("*").eq("data->>project_id", project_id)
+                from app.repositories.models import QueryFilters
+                filters = QueryFilters(
+                    order_by="created_at", order_desc=True, limit=10,
+                )
                 if status:
-                    query = query.eq("status", status)
-                result = query.order("created_at", desc=True).limit(10).execute()
+                    filters.eq["status"] = status
+                result = self._repo.list_jobs_by_project(project_id, filters=filters)
                 if result.data:
                     return [row.get("data", row) for row in result.data]
             except Exception as e:
-                logger.warning(f"Supabase query by project_id failed: {e}")
+                logger.warning(f"Repository query by project_id failed: {e}")
         # Fallback: scan in-memory jobs
         with self._update_lock:
             snapshot = list(self._memory_store.items())
@@ -371,18 +368,27 @@ class JobStorage:
         # DB-05: Update status columns without overwriting the data JSONB blob.
         # The data column contains project_id, profile_id, input_path, etc. that
         # must be preserved for post-mortem debugging.
-        if self._supabase:
+        if self._repo:
             try:
-                result = self._supabase.table("jobs").update({
-                    "status": "failed",
-                    "progress": "Server restarted — job did not complete",
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }).eq("status", "processing").lt("updated_at", cutoff_iso).execute()
+                from app.repositories.models import QueryFilters
+                stale_filters = QueryFilters(
+                    eq={"status": "processing"},
+                    lt={"updated_at": cutoff_iso},
+                )
+                result = self._repo.table_query(
+                    "editai_jobs", "update",
+                    data={
+                        "status": "failed",
+                        "progress": "Server restarted — job did not complete",
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    },
+                    filters=stale_filters,
+                )
                 if result.data:
                     cleaned = len(result.data)
                     logger.info(f"Cleaned up {cleaned} stale processing jobs (bulk UPDATE)")
             except Exception as e:
-                logger.warning(f"Supabase stale job cleanup failed: {e}")
+                logger.warning(f"Repository stale job cleanup failed: {e}")
 
         # DB-14: Also clean in-memory jobs and sync to Supabase
         # Keep snapshot AND mutation inside the lock to prevent races
@@ -398,19 +404,19 @@ class JobStorage:
                         job["updated_at"] = datetime.now(timezone.utc).isoformat()
                         cleaned += 1
                         # Collect Supabase sync data (do I/O outside lock)
-                        if self._supabase:
+                        if self._repo:
                             supabase_updates.append((job_id, {
                                 "status": "failed",
                                 "progress": job["progress"],
                                 "data": dict(job),
                                 "updated_at": job["updated_at"]
                             }))
-        # Sync stale in-memory job status to Supabase (outside lock)
+        # Sync stale in-memory job status to repository (outside lock)
         for job_id, update_data in supabase_updates:
             try:
-                self._supabase.table("jobs").update(update_data).eq("id", job_id).execute()
+                self._repo.update_job(job_id, update_data)
             except Exception as e:
-                logger.warning(f"Failed to sync stale in-memory job {job_id} to Supabase: {e}")
+                logger.warning(f"Failed to sync stale in-memory job {job_id} to repository: {e}")
 
         return cleaned
 
@@ -429,14 +435,19 @@ class JobStorage:
         count = 0
 
         # DB-15: Do Supabase cleanup first, then in-memory cleanup
-        if self._supabase:
+        if self._repo:
             try:
-                result = self._supabase.table("jobs").delete().in_("status", ["failed", "completed", "cancelled"]).lt("created_at", cutoff).execute()
+                from app.repositories.models import QueryFilters
+                cleanup_filters = QueryFilters(
+                    in_={"status": ["failed", "completed", "cancelled"]},
+                    lt={"created_at": cutoff},
+                )
+                result = self._repo.table_query("editai_jobs", "delete", filters=cleanup_filters)
                 db_count = len(result.data) if result.data else 0
-                logger.info(f"JobStorage: Cleaned up {db_count} old jobs from Supabase (older than {days} days)")
+                logger.info(f"JobStorage: Cleaned up {db_count} old jobs (older than {days} days)")
                 count += db_count
             except Exception as e:
-                logger.error(f"JobStorage: Failed to cleanup old jobs from Supabase: {e}")
+                logger.error(f"JobStorage: Failed to cleanup old jobs: {e}")
 
         # Clean up in-memory store — snapshot under lock
         with self._update_lock:

@@ -12,7 +12,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.db import get_supabase
+from app.repositories.factory import get_repository
 
 logger = logging.getLogger(__name__)
 
@@ -372,6 +372,72 @@ class PostizPublisher:
                 "platforms": platforms,
             }
 
+    async def delete_post(self, post_id: str, profile_id: Optional[str] = None) -> str:
+        """
+        Delete a post from Postiz.
+
+        Args:
+            post_id: The Postiz post ID to delete
+            profile_id: Optional profile context (unused, for interface consistency)
+
+        Returns:
+            The deleted post_id
+
+        Raises:
+            ValueError: If the post was not found (404)
+            Exception: On other API errors
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.delete(
+                f"{self.api_url}/posts/{post_id}",
+                headers=self.headers,
+            )
+
+            if response.status_code == 404:
+                raise ValueError(f"Post not found: {post_id}")
+
+            if response.status_code not in (200, 204):
+                logger.error(f"Failed to delete post {post_id}: {response.status_code} - {response.text}")
+                raise Exception(f"Failed to delete post: {response.status_code}")
+
+            logger.info(f"Successfully deleted post {post_id}")
+            return post_id
+
+    async def get_posts(self, start_date: datetime, end_date: datetime) -> List[dict]:
+        """
+        Fetch all posts from Postiz within a date range.
+
+        Args:
+            start_date: Start of range (UTC datetime)
+            end_date: End of range (UTC datetime)
+
+        Returns:
+            List of post dicts with keys: id, content, publishDate, releaseURL, state, integration
+        """
+        try:
+            params = {
+                "startDate": start_date.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                "endDate": end_date.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            }
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{self.api_url}/posts",
+                    headers=self.headers,
+                    params=params,
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                # Normalize response - can be a list or dict with posts key
+                if isinstance(data, list):
+                    return data
+                elif isinstance(data, dict):
+                    return data.get("posts", data.get("data", []))
+                return []
+        except Exception as e:
+            logger.error(f"Failed to fetch posts from Postiz: {e}")
+            return []
+
 
 # Profile-aware factory pattern with instance caching + TTL
 _postiz_instances: Dict[str, Tuple[PostizPublisher, float]] = {}  # profile_id -> (instance, created_at)
@@ -406,20 +472,16 @@ def get_postiz_publisher(profile_id: str) -> PostizPublisher:
                 del _postiz_instances[profile_id]
 
     # Load profile's Postiz settings from database
-    supabase = get_supabase()
+    repo = get_repository()
     api_url = None
     api_key = None
 
-    if supabase:
+    if repo:
         try:
-            result = supabase.table("profiles")\
-                .select("tts_settings")\
-                .eq("id", profile_id)\
-                .limit(1)\
-                .execute()
+            profile = repo.get_profile(profile_id)
 
-            if result.data:
-                tts_settings = result.data[0].get("tts_settings") or {}
+            if profile:
+                tts_settings = profile.get("tts_settings") or {}
                 postiz_config = tts_settings.get("postiz") or {}
                 api_url = postiz_config.get("api_url")
                 api_key = postiz_config.get("api_key")
@@ -431,10 +493,18 @@ def get_postiz_publisher(profile_id: str) -> PostizPublisher:
             logger.warning(f"[Profile {profile_id}] Failed to load Postiz config: {e}")
 
     if not api_url or not api_key:
-        raise ValueError(
-            f"Profile {profile_id} has no Postiz credentials configured. "
-            "Configurează Postiz în Settings."
-        )
+        # Fallback: use global env vars
+        from app.config import get_settings
+        settings = get_settings()
+        api_url = getattr(settings, "postiz_api_url", None)
+        api_key = getattr(settings, "postiz_api_key", None)
+        if api_url and api_key:
+            logger.info(f"[Profile {profile_id}] Using global Postiz config from env vars")
+        else:
+            raise ValueError(
+                f"Profile {profile_id} has no Postiz credentials configured. "
+                "Configurează Postiz în Settings."
+            )
 
     # Create and cache instance with timestamp (re-acquire lock to prevent race)
     publisher = PostizPublisher(api_url=api_url, api_key=api_key)
@@ -494,17 +564,13 @@ def is_postiz_configured(profile_id: Optional[str] = None) -> bool:
                     return True
 
         # Check profile's tts_settings.postiz
-        supabase = get_supabase()
-        if supabase:
+        repo = get_repository()
+        if repo:
             try:
-                result = supabase.table("profiles")\
-                    .select("tts_settings")\
-                    .eq("id", profile_id)\
-                    .limit(1)\
-                    .execute()
+                profile = repo.get_profile(profile_id)
 
-                if result.data:
-                    tts_settings = result.data[0].get("tts_settings") or {}
+                if profile:
+                    tts_settings = profile.get("tts_settings") or {}
                     postiz_config = tts_settings.get("postiz") or {}
                     api_url = postiz_config.get("api_url")
                     api_key = postiz_config.get("api_key")
@@ -512,5 +578,11 @@ def is_postiz_configured(profile_id: Optional[str] = None) -> bool:
                         return True
             except Exception:
                 pass
+
+    # Fallback: check global env vars
+    from app.config import get_settings
+    settings = get_settings()
+    if getattr(settings, "postiz_api_url", None) and getattr(settings, "postiz_api_key", None):
+        return True
 
     return False

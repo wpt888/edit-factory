@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Dict
 
 from app.config import get_settings
+from app.utils import normalize_path
 from app.services.ffmpeg_semaphore import safe_ffmpeg_run, get_prep_codec_params
 
 TARGET_FPS = 30  # All segments normalized to this frame rate before concat
@@ -38,7 +39,7 @@ from app.services.srt_validator import sanitize_srt_full
 
 logger = logging.getLogger(__name__)
 
-from app.db import get_supabase
+from app.repositories.factory import get_repository
 
 
 @dataclass
@@ -1537,9 +1538,9 @@ class AssemblyService:
         # Import render function at call time to avoid circular imports
         from app.api.library_routes import _render_with_preset
 
-        supabase = get_supabase()
-        if not supabase:
-            raise RuntimeError("Supabase not available")
+        repo = get_repository()
+        if not repo:
+            raise RuntimeError("Repository not available")
 
         # Create temp directory
         temp_dir = self.settings.base_dir / "temp" / profile_id / f"assembly_{uuid.uuid4().hex[:8]}"
@@ -1641,13 +1642,14 @@ class AssemblyService:
             _report("Fetching segments from library", 40)
             if source_video_ids:
                 logger.info(f"Filtering to {len(source_video_ids)} source video(s)")
-            segments_query = supabase.table("editai_segments")\
-                .select("id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, editai_source_videos(file_path)")\
-                .eq("profile_id", profile_id)\
-                .order("id")
+            from app.repositories.models import QueryFilters
+            seg_filters = QueryFilters(
+                select="id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, editai_source_videos(file_path)",
+                order_by="id", order_desc=False,
+            )
             if source_video_ids:
-                segments_query = segments_query.in_("source_video_id", source_video_ids)
-            segments_result = segments_query.execute()
+                seg_filters.in_["source_video_id"] = source_video_ids
+            segments_result = repo.list_segments(profile_id, filters=seg_filters)
 
             if not segments_result.data:
                 raise RuntimeError("No segments found in library. Please create segments first.")
@@ -1655,7 +1657,7 @@ class AssemblyService:
             # Build segments data with source video paths
             segments_data = []
             for seg in segments_result.data:
-                source_video_path = (seg.get("editai_source_videos") or {}).get("file_path")
+                source_video_path = normalize_path((seg.get("editai_source_videos") or {}).get("file_path", ""))
                 if source_video_path:
                     segments_data.append({
                         "id": seg["id"],
@@ -1693,11 +1695,12 @@ class AssemblyService:
                         f"Fetching {len(missing_seg_ids)} override segments missing from "
                         f"filtered query: {missing_seg_ids[:5]}..."
                     )
-                    missing_result = supabase.table("editai_segments")\
-                        .select("id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, editai_source_videos(file_path)")\
-                        .in_("id", missing_seg_ids)\
-                        .eq("profile_id", profile_id)\
-                        .execute()
+                    missing_filters = QueryFilters(
+                        select="id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, editai_source_videos(file_path)",
+                        in_={"id": missing_seg_ids},
+                        eq={"profile_id": profile_id},
+                    )
+                    missing_result = repo.table_query("editai_segments", "select", filters=missing_filters)
                     added = 0
                     for seg in (missing_result.data or []):
                         sv_path = (seg.get("editai_source_videos") or {}).get("file_path")
@@ -1732,10 +1735,13 @@ class AssemblyService:
                         f"Fetching file paths for {len(missing_sv_ids)} source videos "
                         f"referenced by overrides but not in segments_data"
                     )
-                    sv_result = supabase.table("editai_source_videos")\
-                        .select("id, file_path")\
-                        .in_("id", missing_sv_ids)\
-                        .execute()
+                    sv_result = repo.table_query(
+                        "editai_source_videos", "select",
+                        filters=QueryFilters(
+                            select="id, file_path",
+                            in_={"id": missing_sv_ids},
+                        ),
+                    )
                     # Store as synthetic segment entries so build_timeline can find sv_path
                     for sv in (sv_result.data or []):
                         if sv.get("file_path"):
@@ -1800,16 +1806,64 @@ class AssemblyService:
                 # Extract duration overrides (parallel list, None where not overridden)
                 duration_overrides = [m.get("duration_override") for m in match_overrides]
 
-                # ── Skip merge group collapse ─────────────────────────────
-                # Each SRT entry keeps its own segment from the round-robin.
-                # This ensures maximum visual diversity — short segments (0.5s)
-                # are acceptable, but repeating/looping the same segment is not.
-                # The round-robin already guarantees consecutive entries have
-                # different segments, so no collapse is needed.
-                logger.info(
-                    f"Step 5/7: Keeping all {len(match_results)} entries "
-                    f"(no merge group collapse — each entry keeps its own segment)"
-                )
+                # ── Collapse entries by merge_group ───────────────────────
+                # The frontend sends one entry per SRT phrase (e.g. 28 entries
+                # of ~0.3-0.5s each).  Entries that share the same merge_group
+                # must be collapsed into a single MatchResult so that
+                # build_timeline sees properly-sized segments (≥ min_segment_duration)
+                # instead of producing rapid cuts for the entire video.
+                _pre_collapse = len(match_results)
+                _original_matches = match_results  # keep ref before overwrite
+                has_groups = any(m.get("merge_group") is not None for m in match_overrides)
+                if has_groups:
+                    # Group match_results indices by merge_group
+                    grouped: dict[int, list[int]] = {}  # group -> [indices]
+                    group_order: list[int] = []
+                    for i_m in range(len(match_results)):
+                        g = match_overrides[i_m].get("merge_group", i_m)
+                        if g not in grouped:
+                            grouped[g] = []
+                            group_order.append(g)
+                        grouped[g].append(i_m)
+
+                    collapsed: list[MatchResult] = []
+                    collapsed_dur_overrides: list = []
+                    for g in group_order:
+                        indices = grouped[g]
+                        entries = [_original_matches[i] for i in indices]
+                        # Representative: first entry (preserves user's segment choice)
+                        rep = entries[0]
+                        collapsed.append(MatchResult(
+                            srt_index=rep.srt_index,
+                            srt_text=" ".join(e.srt_text for e in entries if e.srt_text),
+                            srt_start=entries[0].srt_start,
+                            srt_end=entries[-1].srt_end,
+                            segment_id=rep.segment_id,
+                            segment_keywords=rep.segment_keywords,
+                            matched_keyword=rep.matched_keyword,
+                            confidence=rep.confidence,
+                            is_auto_filled=rep.is_auto_filled,
+                            product_group=rep.product_group,
+                            source_video_id=rep.source_video_id,
+                            segment_start_time=rep.segment_start_time,
+                            segment_end_time=rep.segment_end_time,
+                            thumbnail_path=rep.thumbnail_path,
+                        ))
+                        # Use duration override from first entry in group
+                        group_dur_ov = match_overrides[indices[0]].get("duration_override")
+                        collapsed_dur_overrides.append(group_dur_ov)
+
+                    match_results = collapsed
+                    duration_overrides = collapsed_dur_overrides
+                    logger.info(
+                        f"Step 5/7: Collapsed {_pre_collapse} entries → {len(match_results)} "
+                        f"groups via merge_group metadata"
+                    )
+                else:
+                    logger.info(
+                        f"Step 5/7: Keeping all {len(match_results)} entries "
+                        f"(no merge_group metadata — legacy path)"
+                    )
                 # Log render entries for debugging
                 for c_idx, c_match in enumerate(match_results):
                     seg_id_short = (c_match.segment_id or "NONE")[:8]
@@ -1833,23 +1887,20 @@ class AssemblyService:
             # Step 6: Build timeline
             logger.info("Step 6/7: Building video timeline")
             _report("Building video timeline", 60)
-            # When match_overrides are provided, the user has already approved the preview.
-            # Ultra-rapid intro is disabled (preview doesn't show it).
-            # Merge grouping is also disabled because the collapse pass above (lines 1469-1504)
-            # already reduced N entries to M groups using merge_group metadata.  Running
-            # build_timeline's merge pass again would re-merge the already-collapsed entries,
-            # picking a "representative" whose start_time/end_time covers only a fraction of
-            # the timeline_duration — triggering FFmpeg looping and producing repeated frames.
-            effective_intro = False if match_overrides else ultra_rapid_intro
-            effective_min_seg = 0.0 if match_overrides else min_segment_duration
+            # When match_overrides are provided, the collapse pass above already
+            # reduced N entries to M groups using merge_group metadata.
+            # The collapsed entries are already ≥ min_segment_duration each,
+            # so the merge pass in build_timeline won't change them further.
+            # Ultra-rapid intro is passed through so it appears in the render
+            # just as it did in the preview.
             timeline = self.build_timeline(
                 match_results=match_results,
                 segments_data=segments_data,
                 audio_duration=audio_duration,
                 duration_overrides=duration_overrides,
                 variant_index=variant_index,
-                min_segment_duration=effective_min_seg,
-                ultra_rapid_intro=effective_intro
+                min_segment_duration=min_segment_duration,
+                ultra_rapid_intro=ultra_rapid_intro
             )
 
             # Log final render timeline for debugging
@@ -1948,9 +1999,10 @@ class AssemblyService:
         max_words_per_phrase: int = 2,
         voice_settings: Optional[dict] = None,
         avoid_segment_ids: Optional[set] = None,
-        ultra_rapid_intro: bool = False,
+        ultra_rapid_intro: bool = True,
         voice_id: Optional[str] = None,
         elevenlabs_model: str = "eleven_flash_v2_5",
+        interstitial_slides: Optional[List[dict]] = None,
     ) -> Path:
         """
         Fast preview render using assemble_and_render() with preview-mode settings.
@@ -2000,7 +2052,7 @@ class AssemblyService:
             enable_sharpen=False,
             enable_color=False,
             ultra_rapid_intro=ultra_rapid_intro,
-            interstitial_slides=None,
+            interstitial_slides=interstitial_slides,
             pip_overlays=None,
             variant_index=variant_index,
             _preview_mode=True,
@@ -2031,9 +2083,9 @@ class AssemblyService:
         Returns:
             Dict with {audio_path, audio_duration, srt_content, matches, timeline, unmatched_count, total_phrases}
         """
-        supabase = get_supabase()
-        if not supabase:
-            raise RuntimeError("Supabase not available")
+        repo = get_repository()
+        if not repo:
+            raise RuntimeError("Repository not available")
 
         # Strip [ProductGroup] tags before TTS (tags must not be spoken)
         cleaned_text = strip_product_group_tags(script_text)
@@ -2105,13 +2157,14 @@ class AssemblyService:
         logger.info("Preview Step 3/4: Fetching segments from library")
         if source_video_ids:
             logger.info(f"Filtering to {len(source_video_ids)} source video(s)")
-        segments_query = supabase.table("editai_segments")\
-            .select("id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, editai_source_videos(file_path)")\
-            .eq("profile_id", profile_id)\
-            .order("id")
+        from app.repositories.models import QueryFilters
+        preview_seg_filters = QueryFilters(
+            select="id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, editai_source_videos(file_path)",
+            order_by="id", order_desc=False,
+        )
         if source_video_ids:
-            segments_query = segments_query.in_("source_video_id", source_video_ids)
-        segments_result = segments_query.execute()
+            preview_seg_filters.in_["source_video_id"] = source_video_ids
+        segments_result = repo.list_segments(profile_id, filters=preview_seg_filters)
 
         if not segments_result.data:
             raise RuntimeError("No segments found in library. Please create segments first.")

@@ -172,26 +172,26 @@ class TTSLibraryService:
         Copy TTS output from pipeline/render into the persistent library.
         Deduplicates on (profile_id, text, model). Returns asset_id or None if skipped/failed.
         """
-        # Lazy import supabase
+        # Lazy import repository
         try:
-            from app.db import get_supabase
-            supabase = get_supabase()
-            if not supabase:
+            from app.repositories.factory import get_repository
+            repo = get_repository()
+            if not repo:
                 return None
         except Exception as e:
-            logger.warning(f"TTS Library save_from_pipeline: no supabase: {e}")
+            logger.warning(f"TTS Library save_from_pipeline: no repository: {e}")
             return None
 
         # Check for existing duplicate
         try:
-            existing = (
-                supabase.table("editai_tts_assets")
-                .select("id")
-                .eq("profile_id", profile_id)
-                .eq("tts_text", text.strip())
-                .eq("tts_model", model)
-                .limit(1)
-                .execute()
+            from app.repositories.models import QueryFilters
+            existing = repo.list_tts_assets(
+                profile_id,
+                filters=QueryFilters(
+                    select="id",
+                    eq={"tts_text": text.strip(), "tts_model": model},
+                    limit=1,
+                ),
             )
             if existing.data:
                 logger.info(f"TTS Library: dedup hit, skipping save for text={text[:40]}...")
@@ -219,7 +219,7 @@ class TTSLibraryService:
 
         # Insert into DB
         try:
-            supabase.table("editai_tts_assets").insert({
+            repo.create_tts_asset({
                 "id": asset_id,
                 "profile_id": profile_id,
                 "tts_text": text.strip(),
@@ -233,7 +233,7 @@ class TTSLibraryService:
                 "char_count": len(text),
                 "tts_timestamps": timestamps,
                 "status": "ready",
-            }).execute()
+            })
             logger.info(f"TTS Library: saved pipeline asset {asset_id}")
             return asset_id
         except Exception as e:

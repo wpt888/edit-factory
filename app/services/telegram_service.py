@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 
 import httpx
 
-from app.db import get_supabase
+from app.repositories.factory import get_repository
 
 logger = logging.getLogger(__name__)
 
@@ -99,21 +99,15 @@ def get_telegram_sender(profile_id: str) -> TelegramSender:
             del _telegram_instances[profile_id]
 
     # Load credentials from profile's tts_settings.telegram
-    supabase = get_supabase()
+    repo = get_repository()
     bot_token = None
     chat_id = None
 
-    if supabase:
+    if repo:
         try:
-            result = (
-                supabase.table("profiles")
-                .select("tts_settings")
-                .eq("id", profile_id)
-                .limit(1)
-                .execute()
-            )
-            if result.data:
-                tts_settings = result.data[0].get("tts_settings") or {}
+            profile = repo.get_profile(profile_id)
+            if profile:
+                tts_settings = profile.get("tts_settings") or {}
                 telegram_config = tts_settings.get("telegram") or {}
                 bot_token = telegram_config.get("bot_token")
                 chat_id = telegram_config.get("chat_id")
