@@ -1934,16 +1934,14 @@ class AssemblyService:
             safe_preset_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', preset_data['name'])
             final_output_path = output_dir / f"assembly_{uuid.uuid4().hex[:8]}_{safe_preset_name}.mp4"
 
-            # BUG-2 fix: Inject shadow/glow/adaptive params into subtitle_settings
+            # BUG-2 fix: Always sync shadow/glow/adaptive into subtitle_settings
+            # (write both True and False to prevent stale values from DB)
             if subtitle_settings is None:
                 subtitle_settings = {}
-            if shadow_depth > 0:
-                subtitle_settings["shadowDepth"] = shadow_depth
-            if enable_glow:
-                subtitle_settings["enableGlow"] = True
-                subtitle_settings["glowBlur"] = glow_blur
-            if adaptive_sizing:
-                subtitle_settings["adaptiveSizing"] = True
+            subtitle_settings["shadowDepth"] = shadow_depth
+            subtitle_settings["enableGlow"] = enable_glow
+            subtitle_settings["glowBlur"] = glow_blur if enable_glow else 0
+            subtitle_settings["adaptiveSizing"] = adaptive_sizing
 
             await _render_with_preset(
                 video_path=assembled_video_path,

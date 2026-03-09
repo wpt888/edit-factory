@@ -42,6 +42,7 @@ class SubtitleSettingsUpdate(BaseModel):
     enableGlow: bool = False
     glowBlur: int = 0
     adaptiveSizing: bool = False
+    opacity: int = 100
 
 class ProfileSettingsUpdate(BaseModel):
     """Model for PATCH endpoint - supports partial updates including tts_settings and video_template_settings."""
@@ -489,6 +490,7 @@ DEFAULT_SUBTITLE_SETTINGS = {
     "enableGlow": False,
     "glowBlur": 0,
     "adaptiveSizing": False,
+    "opacity": 100,
 }
 
 

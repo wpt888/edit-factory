@@ -61,12 +61,11 @@ class SubtitleStyleConfig:
 
     def to_force_style_string(self) -> str:
         """Generate FFmpeg force_style parameter string."""
-        # Apply opacity to PrimaryColour alpha channel
+        # Always apply opacity to PrimaryColour alpha channel
         # ASS alpha: 00=opaque, FF=transparent
         primary = self.primary_color
-        if self.opacity < 100 and primary.startswith("&H"):
+        if primary.startswith("&H"):
             ass_alpha = int((100 - self.opacity) / 100 * 255)
-            # Replace existing alpha byte (positions 2-4 after &H)
             primary = f"&H{ass_alpha:02X}{primary[4:]}"
 
         style_parts = [
@@ -127,19 +126,25 @@ class SubtitleStyleConfig:
         def hex_to_ass(hex_color: str) -> str:
             try:
                 hex_color = hex_color.lstrip('#')
-                # VID-09: Normalize to 8 hex digits — handle both #RRGGBB and #RRGGBBAA
                 if len(hex_color) == 6:
-                    hex_color = hex_color + "00"  # Add alpha=00 (fully opaque in ASS)
-                elif len(hex_color) != 8:
-                    return "&H00FFFFFF"  # Unsupported length, fallback to white
-                r = int(hex_color[0:2], 16)
-                g = int(hex_color[2:4], 16)
-                b = int(hex_color[4:6], 16)
-                a = int(hex_color[6:8], 16)
-                # ASS color format: &HAABBGGRR (AA=alpha where 00=opaque, FF=transparent)
-                return f"&H{a:02X}{b:02X}{g:02X}{r:02X}"
+                    # 6-char hex (#RRGGBB) → fully opaque (ASS alpha 00)
+                    r = int(hex_color[0:2], 16)
+                    g = int(hex_color[2:4], 16)
+                    b = int(hex_color[4:6], 16)
+                    return f"&H00{b:02X}{g:02X}{r:02X}"
+                elif len(hex_color) == 8:
+                    # 8-char hex (#RRGGBBAA) — CSS alpha convention (00=transparent, FF=opaque)
+                    r = int(hex_color[0:2], 16)
+                    g = int(hex_color[2:4], 16)
+                    b = int(hex_color[4:6], 16)
+                    css_alpha = int(hex_color[6:8], 16)
+                    # Invert: CSS (FF=opaque) → ASS (00=opaque)
+                    ass_alpha = 255 - css_alpha
+                    return f"&H{ass_alpha:02X}{b:02X}{g:02X}{r:02X}"
+                else:
+                    return "&H00FFFFFF"
             except (ValueError, IndexError):
-                return "&H00FFFFFF"  # Fallback to white
+                return "&H00FFFFFF"
 
         # Extract font family
         font_family = settings.get('fontFamily', 'Montserrat')
