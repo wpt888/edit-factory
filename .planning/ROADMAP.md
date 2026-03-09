@@ -183,6 +183,10 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
   3. All editai_* Supabase tables have equivalent SQLite CREATE TABLE statements in a migrations file — column types are mapped (JSONB to TEXT, timestamptz to TEXT ISO8601)
   4. Running the SQLite migration script creates all tables without errors — `sqlite3 test.db < migrations.sql` succeeds
 **Plans**: 3 plans
+Plans:
+- [ ] 64-01-PLAN.md — DataRepository interface + SQLite schema from migrations
+- [ ] 64-02-PLAN.md — SupabaseRepository implementation + repository factory
+- [ ] 64-03-PLAN.md — Migrate all routes and services to repository pattern
 
 ### Phase 65: SQLite Local Database
 **Goal**: The desktop app stores all project, clip, and settings data in a local SQLite database file on the user's PC — no Supabase dependency for data storage, with cost tracking and TTS cache also persisted locally
@@ -217,6 +221,10 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
   4. Navigating to /library or /pipeline without being logged in redirects to /login within 1 second — the protected page content never flashes
   5. Next.js middleware checks auth state on every navigation — no protected route is accessible by manually typing the URL while logged out
 **Plans**: 3 plans
+Plans:
+- [ ] 64-01-PLAN.md — DataRepository interface + SQLite schema from migrations
+- [ ] 64-02-PLAN.md — SupabaseRepository implementation + repository factory
+- [ ] 64-03-PLAN.md — Migrate all routes and services to repository pattern
 
 ### Phase 68: License Key Validation Polish
 **Goal**: The Lemon Squeezy license key validation runs at first launch and periodically thereafter, with an offline grace period so the app remains usable when the user temporarily loses internet
@@ -239,6 +247,10 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
   4. With no ElevenLabs key configured, TTS falls back to Edge TTS (free) — the user sees a toast indicating the fallback
   5. With no Gemini key configured, video analysis falls back to local motion/variance scoring only — no error is shown, clips are still generated
 **Plans**: 3 plans
+Plans:
+- [ ] 64-01-PLAN.md — DataRepository interface + SQLite schema from migrations
+- [ ] 64-02-PLAN.md — SupabaseRepository implementation + repository factory
+- [ ] 64-03-PLAN.md — Migrate all routes and services to repository pattern
 
 ### Phase 70: UX Simplification — Pipeline & Batch
 **Goal**: Non-technical users can produce videos in 3 clicks (Upload, Choose Style, Download) without seeing technical parameters, while power users retain access to all controls — and multiple videos can be queued for batch processing with visible progress
@@ -250,6 +262,10 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
   3. An "Advanced" collapsible section exists on the pipeline page — expanding it reveals motion threshold, variance scoring, pHash distance, and all other technical parameters
   4. Users can drag multiple videos into an upload queue — the queue shows each video's status (waiting, processing, done, failed) and processes them sequentially
 **Plans**: 3 plans
+Plans:
+- [ ] 64-01-PLAN.md — DataRepository interface + SQLite schema from migrations
+- [ ] 64-02-PLAN.md — SupabaseRepository implementation + repository factory
+- [ ] 64-03-PLAN.md — Migrate all routes and services to repository pattern
 
 ### Phase 71: UX Simplification — Onboarding & Presets
 **Goal**: New users are guided through API key setup with smart presets that minimize configuration, and users can choose from multiple caption/subtitle visual styles without manually tweaking font parameters
@@ -284,6 +300,10 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
   5. The app icon (.ico/.icns), splash screen, and window title bar all show the product brand — no Electron default icon appears
   6. Running `npx electron-builder --config` shows a macOS target (dmg/pkg) configured alongside the Windows NSIS target — even if not built on CI yet
 **Plans**: 3 plans
+Plans:
+- [ ] 64-01-PLAN.md — DataRepository interface + SQLite schema from migrations
+- [ ] 64-02-PLAN.md — SupabaseRepository implementation + repository factory
+- [ ] 64-03-PLAN.md — Migrate all routes and services to repository pattern
 
 ## Progress
 
