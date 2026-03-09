@@ -268,13 +268,13 @@ function waitForServices() {
 
 // ---------- SHELL-03: System tray ----------
 function createTray() {
-  // Use icon if it exists, otherwise Electron will show a default
+  // Use brand icon — warn if missing (run generate-icon.js to create)
   const iconExists = fs.existsSync(ICON_PATH);
   if (!iconExists) {
-    console.warn('[launcher] Tray icon not found at:', ICON_PATH);
+    console.error('[launcher] WARN: icon.ico not found at:', ICON_PATH, '— run: node electron/build/generate-icon.js');
   }
 
-  tray = new Tray(iconExists ? ICON_PATH : path.join(__dirname, '..', 'build', 'icon.png'));
+  tray = new Tray(ICON_PATH);
   tray.setToolTip('Edit Factory — Starting...');
 
   const contextMenu = Menu.buildFromTemplate([
@@ -315,6 +315,7 @@ function createWindow() {
     height: 900,
     show: false,  // Hidden until services are ready
     title: 'Edit Factory',
+    icon: ICON_PATH,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
