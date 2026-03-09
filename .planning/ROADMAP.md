@@ -197,7 +197,9 @@ Plans:
   2. Listing projects returns data from SQLite when `DATA_BACKEND=sqlite` — no Supabase calls appear in the server logs
   3. Cost tracking entries (ElevenLabs usage, Gemini calls) are written to the local SQLite `api_costs` table — viewable in the usage page
   4. TTS audio cache metadata is stored in SQLite — cache hits/misses work identically to the Supabase-backed version
-**Plans**: 2 plans
+**Plans**: 1 plan
+Plans:
+- [ ] 65-01-PLAN.md — SQLiteRepository implementation + factory wiring
 
 ### Phase 66: Local File Storage & Offline Mode
 **Goal**: All video files (uploads, renders, thumbnails) are stored on the user's local filesystem with explicit paths, and the user can create, edit, and delete projects while completely offline — no internet connection required for local processing workflows
@@ -321,7 +323,7 @@ Plans:
 | 47-54 | v10 | 18/18 | Complete | 2026-03-01 |
 | 55-63 | v11 | 22/22 | Complete | 2026-03-03 |
 | 64. Data Abstraction Layer | 3/3 | Complete    | 2026-03-09 | - |
-| 65. SQLite Local Database | v12 | 0/2 | Not started | - |
+| 65. SQLite Local Database | v12 | 0/1 | Not started | - |
 | 66. Local File Storage & Offline | v12 | 0/2 | Not started | - |
 | 67. Auth Flow Fixes | v12 | 0/3 | Not started | - |
 | 68. License Key Validation Polish | v12 | 0/1 | Not started | - |
