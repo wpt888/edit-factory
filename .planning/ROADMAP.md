@@ -427,7 +427,7 @@ Plans:
 | 76. v12 Gap Closure Round 2 | 1/1 | Complete    | 2026-03-09 | - |
 | 77. SQLite Desktop Activation | 0/1 | Complete    | 2026-03-09 | - |
 | 78. macOS Build Assets | 1/1 | Complete    | 2026-03-09 | - |
-| 79. v12 Tech Debt Cleanup | 1/1 | Complete   | 2026-03-09 | - |
+| 79. v12 Tech Debt Cleanup | 1/1 | Complete    | 2026-03-09 | - |
 
 ---
 *Last updated: 2026-03-09 after gap closure phases 77-79 added*
