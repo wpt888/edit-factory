@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import { Loader2, Film, AlertCircle, CheckCircle2 } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -53,8 +54,11 @@ export default function LoginPage() {
         return;
       }
 
-      // Redirect to library on success (Bug #165: router.refresh() after push is redundant)
-      router.push("/librarie");
+      // Redirect to intended destination or library (Bug #165: router.refresh() after push is redundant)
+      const next = searchParams.get("next");
+      // Validate: must start with / and not // (prevent open redirect)
+      const destination = next && next.startsWith("/") && !next.startsWith("//") ? next : "/librarie";
+      router.push(destination);
     } catch {
       setError("An error occurred. Please try again.");
     } finally {
