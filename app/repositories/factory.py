@@ -20,7 +20,6 @@ def get_repository() -> DataRepository:
     config setting.  Thread-safe via double-checked locking.
 
     Raises:
-        NotImplementedError: If data_backend is "sqlite" (not yet built).
         ValueError: If data_backend is an unknown value.
     """
     global _repository
@@ -35,9 +34,9 @@ def get_repository() -> DataRepository:
 
                     _repository = SupabaseRepository()
                 elif settings.data_backend == "sqlite":
-                    raise NotImplementedError(
-                        "SQLite backend not yet implemented — see Phase 65"
-                    )
+                    from app.repositories.sqlite_repo import SQLiteRepository
+
+                    _repository = SQLiteRepository()
                 else:
                     raise ValueError(
                         f"Unknown data_backend: {settings.data_backend}"

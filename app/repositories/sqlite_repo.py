@@ -126,14 +126,24 @@ class SQLiteRepository(DataRepository):
         row = cur.fetchone()
         return self._row_to_dict(row) if row else None
 
+    def _get_table_columns(self, table: str) -> set:
+        """Return the set of column names for a table (cached)."""
+        if not hasattr(self, "_col_cache"):
+            self._col_cache: Dict[str, set] = {}
+        if table not in self._col_cache:
+            cur = self._conn.execute(f'PRAGMA table_info("{table}")')
+            self._col_cache[table] = {row[1] for row in cur.fetchall()}
+        return self._col_cache[table]
+
     def _insert(self, table: str, data: Dict[str, Any]) -> Dict[str, Any]:
         table = self._t(table)
         if "id" not in data:
             data["id"] = str(uuid.uuid4())
         now = self._now()
-        if "created_at" not in data:
+        columns = self._get_table_columns(table)
+        if "created_at" not in data and "created_at" in columns:
             data["created_at"] = now
-        if "updated_at" not in data:
+        if "updated_at" not in data and "updated_at" in columns:
             data["updated_at"] = now
         data = self._serialize_json_fields(data)
         cols = list(data.keys())
@@ -163,7 +173,8 @@ class SQLiteRepository(DataRepository):
         self, table: str, id_col: str, id_val: str, data: Dict[str, Any]
     ) -> Dict[str, Any]:
         table = self._t(table)
-        if "updated_at" not in data:
+        columns = self._get_table_columns(table)
+        if "updated_at" not in data and "updated_at" in columns:
             data["updated_at"] = self._now()
         data = self._serialize_json_fields(data)
         set_clause = ", ".join(f'"{c}" = ?' for c in data.keys())
@@ -383,10 +394,6 @@ class SQLiteRepository(DataRepository):
         table = self._t("editai_projects")
         where_parts: List[str] = ['"profile_id" = ?']
         params: List[Any] = [profile_id]
-
-        # Default: exclude soft-deleted
-        if not filters or "deleted_at" not in filters.is_:
-            where_parts.append('"deleted_at" IS NULL')
 
         self._apply_filters(where_parts, params, filters)
 
@@ -1460,14 +1467,15 @@ class SQLiteRepository(DataRepository):
             return QueryResult(data=[], count=0)
         table = self._t("editai_schedule_items")
         now = self._now()
+        columns = self._get_table_columns(table)
         result_rows = []
         with self._write_lock:
             for item in items:
                 if "id" not in item:
                     item["id"] = str(uuid.uuid4())
-                if "created_at" not in item:
+                if "created_at" not in item and "created_at" in columns:
                     item["created_at"] = now
-                if "updated_at" not in item:
+                if "updated_at" not in item and "updated_at" in columns:
                     item["updated_at"] = now
                 item = self._serialize_json_fields(item)
                 cols = list(item.keys())
@@ -1791,7 +1799,8 @@ class SQLiteRepository(DataRepository):
             where_parts = []
             params = []
             self._apply_filters(where_parts, params, filters)
-            if "updated_at" not in data:
+            columns = self._get_table_columns(table)
+            if "updated_at" not in data and "updated_at" in columns:
                 data["updated_at"] = self._now()
             data = self._serialize_json_fields(data)
             set_clause = ", ".join(f'"{c}" = ?' for c in data.keys())
@@ -1842,9 +1851,10 @@ class SQLiteRepository(DataRepository):
         if "id" not in data:
             data["id"] = str(uuid.uuid4())
         now = self._now()
-        if "created_at" not in data:
+        columns = self._get_table_columns(table)
+        if "created_at" not in data and "created_at" in columns:
             data["created_at"] = now
-        if "updated_at" not in data:
+        if "updated_at" not in data and "updated_at" in columns:
             data["updated_at"] = now
         data = self._serialize_json_fields(data)
         cols = list(data.keys())
@@ -1866,9 +1876,10 @@ class SQLiteRepository(DataRepository):
         if "id" not in data:
             data["id"] = str(uuid.uuid4())
         now = self._now()
-        if "created_at" not in data:
+        columns = self._get_table_columns(table)
+        if "created_at" not in data and "created_at" in columns:
             data["created_at"] = now
-        if "updated_at" not in data:
+        if "updated_at" not in data and "updated_at" in columns:
             data["updated_at"] = now
         data = self._serialize_json_fields(data)
         cols = list(data.keys())
