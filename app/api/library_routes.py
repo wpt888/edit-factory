@@ -626,15 +626,15 @@ async def get_project_progress(
         try:
             result = supabase.table("editai_projects").select("status").eq("id", project_id).eq("profile_id", profile.profile_id).limit(1).execute()
         except Exception:
-            return {"percentage": 0, "current_step": "Proiect negăsit", "estimated_remaining": None}
+            return {"percentage": 0, "current_step": "Project not found", "estimated_remaining": None}
         if result.data:
             status = result.data[0].get("status")
             if status == "generating":
-                return {"percentage": 0, "current_step": "Se inițializează...", "estimated_remaining": None}
+                return {"percentage": 0, "current_step": "Initializing...", "estimated_remaining": None}
             elif status == "ready_for_triage":
-                return {"percentage": 100, "current_step": "Complet", "estimated_remaining": 0}
+                return {"percentage": 100, "current_step": "Complete", "estimated_remaining": 0}
             elif status == "failed":
-                return {"percentage": 100, "current_step": "Eșuat", "estimated_remaining": 0}
+                return {"percentage": 100, "current_step": "Failed", "estimated_remaining": 0}
 
     raise HTTPException(status_code=404, detail="Progress not found")
 
