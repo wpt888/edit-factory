@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 70-02-PLAN.md
-last_updated: "2026-03-09T06:40:22.813Z"
-last_activity: 2026-03-09 — Completed 70-03 (Batch Upload Queue)
+status: planning
+stopped_at: Completed 71-02-PLAN.md
+last_updated: "2026-03-09T06:59:55.966Z"
+last_activity: 2026-03-09 — Starting Phase 71 planning
 progress:
   total_phases: 10
   completed_phases: 7
-  total_plans: 17
-  completed_plans: 17
+  total_plans: 19
+  completed_plans: 18
 ---
 
 # Project State
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale.
-**Current focus:** v12 Desktop Product MVP — Phase 70 (planning)
+**Current focus:** v12 Desktop Product MVP — Phase 71 (planning)
 
 ## Current Position
 
-Phase: 70 — UX Simplification — Pipeline & Batch
-Plan: 3 of 3
-Status: In Progress
-Last activity: 2026-03-09 — Completed 70-03 (Batch Upload Queue)
+Phase: 71 — UX Simplification — Onboarding & Presets
+Plan: 0 of 2
+Status: Planning
+Last activity: 2026-03-09 — Starting Phase 71 planning
 
 ## Performance Metrics
 
@@ -63,6 +63,7 @@ Last activity: 2026-03-09 — Completed 70-03 (Batch Upload Queue)
 | Phase 70 P01 | 2min | 2 tasks | 3 files |
 | Phase 70 P03 | 2min | 2 tasks | 2 files |
 | Phase 70 P02 | 5min | 3 tasks | 2 files |
+| Phase 71 P02 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -110,6 +111,7 @@ Recent decisions affecting v12:
 - [Phase 70]: Public preset endpoint (no auth) since presets are static config
 - [Phase 70]: Batch queue available to all users in Step 1 (no pipelineMode gate exists)
 - [Phase 70]: SimplePipeline manages own API calls independently from advanced pipeline state
+- [Phase 71]: Full CSS var() font-family values in presets to match FONT_OPTIONS exactly
 
 ### Pending Todos
 
@@ -126,8 +128,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T06:37:35.565Z
-Stopped at: Completed 70-02-PLAN.md
+Last session: 2026-03-09T06:59:55.933Z
+Stopped at: Completed 71-02-PLAN.md
 Resume file: None
 Next action: Phase 69 complete — advance to next phase
 
