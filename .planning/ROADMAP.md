@@ -156,7 +156,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 
 </details>
 
-### 🚧 v12 Desktop Product MVP (Phases 64-73)
+### v12 Desktop Product MVP (Phases 64-73)
 
 **Milestone Goal:** Transform Edit Factory into a sellable local-first desktop product — replace Supabase with SQLite for local data, make all API calls (ElevenLabs, Gemini) go directly from the user's PC, simplify UX for non-technical content creators, fix auth flow, polish Electron packaging, and prepare for commercial launch via Lemon Squeezy licensing.
 
@@ -297,6 +297,8 @@ Plans:
   2. The window title, sidebar header, login page, setup wizard, and about dialog all show the same product name
   3. Searching the frontend codebase for common Romanian words ("proiect", "sterge", "adauga", "incarcare", "eroare") returns zero matches — all strings are in English
 **Plans**: 1 plan
+Plans:
+- [ ] 72-01-PLAN.md — Unify brand name to "Edit Factory" + replace Romanian text with English
 
 ### Phase 73: Electron Polish
 **Goal**: The Electron app is release-ready — publish config points to real GitHub repo, portable Node.js is bundled, installer is under 500 MB, auto-updater works from GitHub Releases, app has consistent branding, and macOS build target is configured
