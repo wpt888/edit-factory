@@ -27,6 +27,7 @@ import {
   CollapsibleTrigger,
   CollapsibleContent,
 } from "@/components/ui/collapsible";
+import { useAuth } from "@/components/auth-provider";
 import {
   Clapperboard,
   Film,
@@ -40,6 +41,8 @@ import {
   ChevronDown,
   Music,
   ImageIcon,
+  CalendarClock,
+  LogOut,
 } from "lucide-react";
 
 const navGroups = [
@@ -56,6 +59,7 @@ const navGroups = [
     items: [
       { label: "Clips", href: "/librarie", icon: Film, desc: "Browse all clips" },
       { label: "TTS", href: "/tts-library", icon: Music, desc: "Text-to-speech assets" },
+      { label: "Schedule", href: "/schedule", icon: CalendarClock, desc: "Smart schedule publishing" },
     ],
   },
   {
@@ -82,6 +86,7 @@ function isGroupActive(items: { href: string }[], pathname: string) {
 
 export function NavBar() {
   const { currentProfile, isLoading } = useProfile();
+  const { user, signOut } = useAuth();
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = React.useState(false);
 
@@ -173,6 +178,13 @@ export function NavBar() {
               {currentProfile?.name || "No Profile"}
             </Badge>
 
+            {user && (
+              <Button variant="ghost" size="icon" onClick={signOut} title="Sign out">
+                <LogOut className="size-4" />
+                <span className="sr-only">Sign out</span>
+              </Button>
+            )}
+
             {/* Mobile hamburger */}
             <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
               <SheetTrigger asChild>
@@ -194,6 +206,15 @@ export function NavBar() {
                       onNavigate={() => setMobileOpen(false)}
                     />
                   ))}
+                  {user && (
+                    <button
+                      onClick={() => { signOut(); setMobileOpen(false); }}
+                      className="flex items-center gap-2.5 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent transition-colors w-full mt-4 border-t pt-4"
+                    >
+                      <LogOut className="size-4" />
+                      Sign Out
+                    </button>
+                  )}
                 </nav>
               </SheetContent>
             </Sheet>
