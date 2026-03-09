@@ -60,8 +60,10 @@ import {
 import { usePolling } from "@/hooks";
 import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
+import { checkFallbacks } from "@/lib/api-fallback";
 import { EmptyState } from "@/components/empty-state";
 import { PublishDialog } from "@/components/PublishDialog";
+import { PipelineSchedule } from "@/components/PipelineSchedule";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ProductPickerDialog } from "@/components/product-picker-dialog";
 import { ImagePickerDialog } from "@/components/image-picker-dialog";
@@ -352,6 +354,8 @@ function PipelinePage() {
 
   // TTS Library duplicate detection
   const [libraryMatches, setLibraryMatches] = useState<Record<number, { asset_id: string; audio_duration: number }>>({});
+  const ttsResultsRef = useRef(ttsResults);
+  ttsResultsRef.current = ttsResults;
 
   // Script auto-save timer
   const scriptSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1040,6 +1044,15 @@ function PipelinePage() {
     if (!pipelineId || selectedVariants.size === 0) return;
     setPreviewError(null);
 
+    // Stop all active audio/video playback before transitioning to render step
+    stopCurrentAudio();
+    if (ttsAudioRef.current) {
+      ttsAudioRef.current.pause();
+      ttsAudioRef.current = null;
+    }
+    // Close preview dialog so its video stops
+    setPreviewVariant(null);
+
     // Build initial variant statuses from selected variants BEFORE the API call.
     // The render response returns rendering_variants (indices) and total_variants,
     // NOT a `variants` field — so we must populate this from request data to avoid
@@ -1392,11 +1405,14 @@ function PipelinePage() {
 
   // Check TTS library for duplicate texts when scripts load
   // Debounced 1.5s so rapid edits don't flood the API
+  // Auto-adopts library audio for all matches that don't already have TTS
   useEffect(() => {
     if (step !== 2 || scripts.length === 0) {
       setLibraryMatches({});
       return;
     }
+
+    let cancelled = false;
 
     const checkDuplicates = async () => {
       try {
@@ -1407,6 +1423,43 @@ function PipelinePage() {
           parsed[parseInt(key)] = val as { asset_id: string; audio_duration: number };
         }
         setLibraryMatches(parsed);
+
+        // Auto-adopt library audio for all matches without existing TTS
+        if (!cancelled && pipelineId && Object.keys(parsed).length > 0) {
+          const indicesToLoad = Object.keys(parsed)
+            .map(Number)
+            .filter(idx => !ttsResultsRef.current[idx]);
+
+          for (const idx of indicesToLoad) {
+            if (cancelled) break;
+            const match = parsed[idx];
+            if (!match) continue;
+
+            setTtsResults(prev => ({
+              ...prev,
+              [idx]: { audio_duration: 0, generating: true, stale: false }
+            }));
+
+            try {
+              const adoptRes = await apiPost(`/pipeline/tts-from-library/${pipelineId}/${idx}`, {
+                asset_id: match.asset_id,
+              });
+              const adoptData = await adoptRes.json();
+              if (cancelled) break;
+              setTtsResults(prev => ({
+                ...prev,
+                [idx]: { audio_duration: adoptData.audio_duration, generating: false, stale: false }
+              }));
+            } catch {
+              if (cancelled) break;
+              setTtsResults(prev => {
+                const next = { ...prev };
+                delete next[idx];
+                return next;
+              });
+            }
+          }
+        }
       } catch (err) {
         console.warn("TTS library duplicate check failed:", err);
       }
@@ -1416,9 +1469,10 @@ function PipelinePage() {
     ttsLibraryCheckTimer.current = setTimeout(checkDuplicates, 1500);
 
     return () => {
+      cancelled = true;
       if (ttsLibraryCheckTimer.current) clearTimeout(ttsLibraryCheckTimer.current);
     };
-  }, [step, scripts]);
+  }, [step, scripts, pipelineId]);
 
   // Save selected voice as default in profile
   const handleSetDefaultVoice = async () => {
@@ -1792,6 +1846,7 @@ function PipelinePage() {
 
       // apiPost throws on non-OK responses (FE-01)
       const data = await res.json();
+      checkFallbacks(data);
       setTtsResults(prev => ({
         ...prev,
         [variantIndex]: {
@@ -1859,6 +1914,7 @@ function PipelinePage() {
 
         // apiPost throws on non-OK responses (FE-01)
         const data = await res.json();
+        checkFallbacks(data);
         if (!isMountedRef.current) break;
         setTtsResults(prev => ({
           ...prev,
@@ -3456,6 +3512,8 @@ function PipelinePage() {
                 sourceVideoIds={Array.from(selectedSourceIds)}
                 minSegmentDuration={minSegmentDuration}
                 wordsPerSubtitle={wordsPerSubtitle}
+                ultraRapidIntro={ultraRapidIntro}
+                interstitialSlides={interstitialSlides[previewVariant]}
               />
             )}
 
@@ -3660,6 +3718,18 @@ function PipelinePage() {
                 </Card>
               ))}
             </div>
+
+            {/* Schedule & Publish section - always show calendar, schedule form only when clips exist */}
+            <PipelineSchedule
+              completedClips={variantStatuses
+                .filter(v => v.status === "completed" && v.clip_id)
+                .map(v => ({
+                  clip_id: v.clip_id!,
+                  variant_index: v.variant_index,
+                  final_video_path: v.final_video_path || "",
+                  thumbnail_path: v.thumbnail_path,
+                }))}
+            />
           </div>
         )}
 
