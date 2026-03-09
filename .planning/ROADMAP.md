@@ -211,6 +211,9 @@ Plans:
   3. With WiFi/ethernet disabled, the user can create a new project, upload a video, and generate clips using local-only processing (Edge TTS + motion scoring) — no network error appears
   4. Deleting a project also removes its associated local media files — no orphaned files remain
 **Plans**: 2 plans
+Plans:
+- [ ] 66-01-PLAN.md — Structured local media directory + project cleanup
+- [ ] 66-02-PLAN.md — Offline project CRUD via repository methods
 
 ### Phase 67: Auth Flow Fixes
 **Goal**: The authentication flow works end-to-end — the frontend injects JWT tokens into every API call, users can log out and reset their password, and unauthenticated users are redirected to the login page
