@@ -732,8 +732,7 @@ async def generate_raw_clips(
     - video_path: local path to video file (for testing)
     """
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     settings = get_settings()
@@ -835,9 +834,8 @@ async def _generate_raw_clips_task(
     logger.info(f"[Profile {profile_id}] Starting raw clip generation for project {project_id}")
 
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        logger.error(f"[Profile {profile_id}] Supabase not available for raw clips generation")
+    if not repo:
+        logger.error(f"[Profile {profile_id}] Repository not available for raw clips generation")
         if held_lock:
             held_lock.release()
         return
@@ -856,14 +854,13 @@ async def _generate_raw_clips_task(
     try:
         # Update project status now that we hold the lock
         try:
-            supabase.table("editai_projects").update({
+            repo.update_project(project_id, {
                 "source_video_path": video_path,
                 "source_video_duration": video_info.get("duration", 0),
                 "source_video_width": video_info.get("width", 1080),
                 "source_video_height": video_info.get("height", 1920),
-                "status": "generating",
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", project_id).eq("profile_id", profile_id).execute()
+                "status": "generating"
+            })
         except Exception as e:
             logger.error(f"Failed to update project status to generating: {e}")
 
@@ -913,7 +910,7 @@ async def _generate_raw_clips_task(
 
                 # Inserăm în DB
                 try:
-                    supabase.table("editai_clips").insert({
+                    repo.create_clip({
                         "project_id": project_id,
                         "profile_id": profile_id,
                         "variant_index": variant["variant_index"],
@@ -924,40 +921,27 @@ async def _generate_raw_clips_task(
                         "is_selected": False,
                         "is_deleted": False,
                         "final_status": "pending"
-                    }).execute()
+                    })
                 except Exception as clip_err:
                     logger.error(f"Failed to insert clip {variant['variant_index']}: {clip_err}")
                     continue  # Continue with next clip instead of aborting
 
             # Actualizăm proiectul
-            status_result = supabase.table("editai_projects").update({
+            repo.update_project(project_id, {
                 "status": "ready_for_triage",
-                "variants_count": len(variants),
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", project_id).eq("profile_id", profile_id).execute()
-            if not status_result.data:
-                logger.warning(f"Status update returned no data for project {project_id}")
+                "variants_count": len(variants)
+            })
 
             logger.info(f"Generated {len(variants)} raw clips for project {project_id}")
         else:
             # Eroare
-            status_result = supabase.table("editai_projects").update({
-                "status": "failed",
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", project_id).eq("profile_id", profile_id).execute()
-            if not status_result.data:
-                logger.warning(f"Status update returned no data for project {project_id}")
+            repo.update_project(project_id, {"status": "failed"})
             logger.error(f"Failed to generate clips for project {project_id}: {result.get('error')}")
 
     except Exception as e:
         logger.error(f"Error generating raw clips for {project_id}: {e}")
         try:
-            status_result = supabase.table("editai_projects").update({
-                "status": "failed",
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", project_id).eq("profile_id", profile_id).execute()
-            if not status_result.data:
-                logger.warning(f"Status update returned no data for project {project_id}")
+            repo.update_project(project_id, {"status": "failed"})
         except Exception as db_err:
             logger.error(f"Failed to update project {project_id} status to failed: {db_err}")
     finally:
