@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Added phases 77-79 to ROADMAP.md
-last_updated: "2026-03-09T10:31:28.719Z"
-last_activity: 2026-03-09 — Added tech debt closure phases 77-79 from v12 audit
+stopped_at: Completed 78-01-PLAN.md
+last_updated: "2026-03-09T10:42:20.988Z"
+last_activity: 2026-03-09 — Phase 77 completed, advancing to Phase 78
 progress:
   total_phases: 16
-  completed_phases: 14
-  total_plans: 27
-  completed_plans: 27
+  completed_phases: 15
+  total_plans: 28
+  completed_plans: 28
 ---
 
 # Project State
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 
 ## Current Position
 
-Phase: 77 — SQLite Desktop Activation
-Plan: 0 of 1
-Status: Pending (needs planning)
-Last activity: 2026-03-09 — Added tech debt closure phases 77-79 from v12 audit
+Phase: 78 — macOS Build Assets
+Plan: 1 of 1
+Status: Complete
+Last activity: 2026-03-09 — Phase 78 completed (macOS ICNS icon generation)
 
 ## Performance Metrics
 
@@ -70,6 +70,7 @@ Last activity: 2026-03-09 — Added tech debt closure phases 77-79 from v12 audi
 | Phase 73 P02 | 2min | 2 tasks | 4 files |
 | Phase 73 P03 | 3min | 2 tasks | 3 files |
 | Phase 74 P01 | 1min | 2 tasks | 3 files |
+| Phase 78 P01 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -128,6 +129,7 @@ Recent decisions affecting v12:
 - [Phase 76]: Lazy imports of _reset_elevenlabs_tts/reset_script_generator inside save_desktop_settings to avoid circular deps
 - [Phase 76]: any() guard on api_key_fields so singleton resets only fire when a key was actually submitted
 - [Phase 77]: Bulk-select uses per-clip repo loop since repository has no in_() bulk operator
+- [Phase 78]: Embedded PNG format for all ICNS entries (modern macOS standard)
 
 ### Pending Todos
 
@@ -144,8 +146,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T10:00:00Z
-Stopped at: Added phases 77-79 to ROADMAP.md
+Last session: 2026-03-09T10:42:20.943Z
+Stopped at: Completed 78-01-PLAN.md
 Resume file: None
 Next action: Plan Phase 77 (SQLite Desktop Activation)
 

@@ -174,7 +174,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 - [x] **Phase 75: Batch Endpoint Fix** - Fix BatchUploadQueue calling non-existent /generate-raw endpoint (1 plan) (completed 2026-03-09)
 - [x] **Phase 76: v12 Gap Closure Round 2** - Remove backend Romanian strings + refresh service singletons after API key save (1 plan) (completed 2026-03-09)
 - [x] **Phase 77: SQLite Desktop Activation** - Set DATA_BACKEND=sqlite in Electron spawn + migrate critical routes from get_client() (1 plan) (completed 2026-03-09)
-- [ ] **Phase 78: macOS Build Assets** - Generate missing icon.icns for macOS dmg build (1 plan)
+- [x] **Phase 78: macOS Build Assets** - Generate missing icon.icns for macOS dmg build (1 plan) (completed 2026-03-09)
 - [ ] **Phase 79: v12 Tech Debt Cleanup** - VERIFICATION.md for Phase 75 + Romanian comment cleanup + remove orphaned endpoint (1 plan)
 
 ## v12 Phase Details
@@ -426,7 +426,7 @@ Plans:
 | 75. Batch Endpoint Fix | 1/1 | Complete    | 2026-03-09 | - |
 | 76. v12 Gap Closure Round 2 | 1/1 | Complete    | 2026-03-09 | - |
 | 77. SQLite Desktop Activation | 0/1 | Complete    | 2026-03-09 | - |
-| 78. macOS Build Assets | 0/1 | Pending | - | - |
+| 78. macOS Build Assets | 1/1 | Complete   | 2026-03-09 | - |
 | 79. v12 Tech Debt Cleanup | 0/1 | Pending | - | - |
 
 ---
