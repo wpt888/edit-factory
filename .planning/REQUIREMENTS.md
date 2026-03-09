@@ -1,67 +1,63 @@
 # Requirements: Edit Factory
 
-**Defined:** 2026-03-02
+**Defined:** 2026-03-09
 **Core Value:** Automated video production from any input — get social-media-ready videos with AI voiceover, synced subtitles, and matched visuals, ready to publish at scale.
 
-## v11 Requirements
+## v12 Requirements
 
-Requirements for Production Polish & Platform Hardening. Each maps to roadmap phases.
+Requirements for Desktop Product MVP. Each maps to roadmap phases.
 
-### Security
+### Data Layer
 
-- [x] **SEC-01**: User data is isolated via Supabase RLS on all editai_* tables (re-enable RLS, backend uses service_role key)
-- [x] **SEC-02**: Heavy API endpoints have per-route rate limits (uploads: 10/min, renders: 5/min, TTS: 20/min)
-- [x] **SEC-03**: File uploads are validated by MIME type server-side (python-magic, not just Content-Type header)
-- [x] **SEC-04**: Script and context text is sanitized before reaching FFmpeg subtitle rendering
+- [ ] **DATA-01**: User's projects, clips, and settings are stored in a local SQLite database on their PC (not Supabase cloud)
+- [ ] **DATA-02**: Backend services use a data abstraction layer that can swap between SQLite and Supabase without changing business logic
+- [ ] **DATA-03**: User can create, edit, and delete projects while completely offline
+- [ ] **DATA-04**: All video files (input, output, thumbnails) are stored on the user's local filesystem with no cloud dependency
+- [ ] **DATA-05**: Cost tracking and TTS cache data persist locally in SQLite
+- [ ] **DATA-06**: Existing Supabase migrations are translated to SQLite schema (all editai_* tables)
 
-### Testing
+### Auth & Licensing
 
-- [x] **TEST-01**: Backend services have pytest unit tests with >80% coverage on critical paths (video_processor, assembly_service, job_storage, cost_tracker)
-- [x] **TEST-02**: API endpoints have integration tests with mock data and response structure assertions
-- [x] **TEST-03**: Playwright E2E tests verify actual user workflows with API assertions (not just screenshots)
+- [ ] **AUTH-01**: Frontend sends JWT token to backend via Authorization header on every API call
+- [ ] **AUTH-02**: User can log out from the app via a visible logout button in the UI
+- [ ] **AUTH-03**: Lemon Squeezy license key is validated at first launch and periodically (with offline grace period)
+- [ ] **AUTH-04**: User can reset password via email link from the login page
+- [ ] **AUTH-05**: Unauthenticated users cannot access protected routes (Next.js middleware enforces redirect to login)
 
-### DevOps
+### UX Simplification
 
-- [x] **DEVOPS-01**: GitHub Actions CI pipeline runs lint, type-check, and tests on every push and PR
-- [x] **DEVOPS-02**: All Python dependencies are pinned to exact versions in requirements.txt
-- [x] **DEVOPS-03**: Application version is auto-derived from git tags (not hardcoded "1.0.0" in main.py)
+- [ ] **UX-01**: Pipeline has a simplified 3-step mode (Upload → Choose Style → Download) for non-technical users
+- [ ] **UX-02**: Advanced parameters (motion threshold, variance scoring, pHash) are hidden under an expandable "Advanced" section
+- [ ] **UX-03**: Setup wizard guides new users through API key configuration with presets ("Free TTS" auto-selects Edge TTS, skip ElevenLabs)
+- [ ] **UX-04**: User can choose from 5+ caption/subtitle visual presets (font, size, position, color scheme)
+- [ ] **UX-05**: User can queue multiple videos for batch clip generation with a visible job queue
+- [ ] **UX-06**: Brand name is consistent throughout the entire app (single name, no "EditAI" vs "Edit Factory" mix)
+- [ ] **UX-07**: No hardcoded Romanian text remains in the app (all defaults in English)
 
-### Monitoring
+### Electron Polish
 
-- [x] **MON-01**: Sentry DSN is configured and crash reporting sends real error events in production
-- [x] **MON-02**: /health endpoint checks Supabase database connectivity alongside FFmpeg and Redis
-- [x] **MON-03**: Failed renders automatically clean up partial output files
-- [x] **MON-04**: Output directory has automatic TTL-based cleanup for orphaned intermediate files
+- [ ] **ELEC-01**: electron-updater publish config has real owner/repo values (not PLACEHOLDER)
+- [ ] **ELEC-02**: Portable Node.js is included in the build pipeline with documented setup
+- [ ] **ELEC-03**: Installer size is under 500 MB (optimized PyTorch/Whisper bundling strategy)
+- [ ] **ELEC-04**: Auto-updater downloads and installs updates from GitHub Releases
+- [ ] **ELEC-05**: App has a consistent icon, splash screen, and window title matching the product brand
+- [ ] **ELEC-06**: macOS build target is configured in electron-builder (in addition to Windows NSIS)
 
-### UX
+### Direct API Integration
 
-- [x] **UX-01**: User can preview clips inline via embedded HTML5 video player in library page (no new tab)
-- [x] **UX-02**: Destructive actions (delete, remove-audio, bulk-delete) use Shadcn/UI AlertDialog instead of window.confirm()
-- [x] **UX-03**: User can recover deleted clips via soft-delete with 30-day trash retention
-- [x] **UX-04**: UI text language is consistent — all Romanian or all English with i18n framework
-- [x] **UX-05**: Vestigial marketing pages (statsai, preturi, functionalitati, cum-functioneaza, contact, testimoniale) are removed from routing
-- [x] **UX-06**: User can upload video files via drag-and-drop onto the upload area
-- [x] **UX-07**: User can use keyboard shortcuts for common operations (Delete to remove, Escape to close, Space to play/pause)
-- [x] **UX-08**: User can hover over clip thumbnails to see animated video preview (autoplay on hover)
-- [x] **UX-09**: User can tag clips and organize them into custom categories/folders
-
-### Performance
-
-- [x] **PERF-01**: Library clips endpoint supports cursor-based pagination (50 clips per page with infinite scroll)
-- [x] **PERF-02**: Job progress updates use Server-Sent Events (SSE) instead of HTTP polling
-- [x] **PERF-03**: Profile context is cached with 60-second TTL to reduce per-request Supabase queries
-- [x] **PERF-04**: TTS cache exposes hit/miss metrics and has configurable maximum size with LRU eviction
-
-### Architecture
-
-- [x] **ARCH-01**: Background jobs use Redis-backed durable queue with retry logic (replaces BackgroundTasks)
-- [x] **ARCH-02**: Pipeline and assembly state persists to Supabase database (not in-memory dicts)
-- [x] **ARCH-03**: Assembly jobs use the same JobStorage pattern as video processing jobs
-- [x] **ARCH-04**: File storage supports cloud backend (S3 or Supabase Storage) alongside local filesystem
+- [ ] **API-01**: ElevenLabs TTS calls go directly from the desktop app (not proxied through FastAPI backend)
+- [ ] **API-02**: Gemini AI analysis calls go directly from the desktop app
+- [ ] **API-03**: User configures their own API keys in the setup wizard, stored locally (encrypted)
+- [ ] **API-04**: App works without any API keys configured (falls back to Edge TTS free + local motion scoring only)
 
 ## Future Requirements
 
-Deferred beyond v11. Tracked but not in current roadmap.
+Deferred beyond v12. Tracked but not in current roadmap.
+
+### Monetization
+- **PAY-01**: Stripe/Lemon Squeezy checkout integration for subscription billing
+- **PAY-02**: Subscription tiers with feature gating (free vs paid)
+- **PAY-03**: Landing page with pricing, features, and CTA
 
 ### Collaboration
 - **COLLAB-01**: Multiple users can share access to the same project
@@ -83,12 +79,14 @@ Deferred beyond v11. Tracked but not in current roadmap.
 
 | Feature | Reason |
 |---------|--------|
-| Frontend component tests (Jest/Vitest) | Playwright E2E covers UI; unit tests focus on backend logic |
-| Docker secrets management | Single-user app, .env is sufficient |
-| nginx/TLS reverse proxy | Desktop app serves locally; cloud deploy TBD |
-| Database migration runner | Supabase manages migrations via dashboard; manual is acceptable |
-| Clip version history | Low usage frequency; soft-delete provides recovery |
-| Real-time collaboration | Single user, two profiles |
+| Tauri migration | Electron works, migration is optional optimization for later |
+| Hardware ID / DRM | Simple license key sufficient, piracy protection not worth the complexity |
+| Server-side video processing | Desktop app uses local CPU/GPU — no cloud rendering |
+| Real-time collaboration | Single user per desktop install |
+| Mobile app | Desktop-first product |
+| Cloud sync between devices | Local-first philosophy, sync deferred to future |
+| Custom TTS voice training | External service feature, not in scope |
+| Social media direct publishing | Postiz integration already exists, direct API auth too complex for MVP |
 
 ## Traceability
 
@@ -96,43 +94,40 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SEC-01 | Phase 55 | Complete |
-| SEC-02 | Phase 55 | Complete |
-| SEC-03 | Phase 55 | Complete |
-| SEC-04 | Phase 55 | Complete |
-| TEST-01 | Phase 56 | Complete |
-| TEST-02 | Phase 56 | Complete |
-| TEST-03 | Phase 56 | Complete |
-| DEVOPS-01 | Phase 57 | Complete |
-| DEVOPS-02 | Phase 57 | Complete |
-| DEVOPS-03 | Phase 57 | Complete |
-| MON-01 | Phase 60 | Complete |
-| MON-02 | Phase 60 | Complete |
-| MON-03 | Phase 60 | Complete |
-| MON-04 | Phase 60 | Complete |
-| UX-01 | Phase 61 | Complete |
-| UX-02 | Phase 61 | Complete |
-| UX-03 | Phase 61 + 63 | Complete |
-| UX-04 | Phase 62 + 63 | Complete |
-| UX-05 | Phase 62 | Complete |
-| UX-06 | Phase 61 + 63 | Complete |
-| UX-07 | Phase 61 | Complete |
-| UX-08 | Phase 61 + 63 | Complete |
-| UX-09 | Phase 62 | Complete |
-| PERF-01 | Phase 59 | Complete |
-| PERF-02 | Phase 59 | Complete |
-| PERF-03 | Phase 59 | Complete |
-| PERF-04 | Phase 59 | Complete |
-| ARCH-01 | Phase 58 | Complete |
-| ARCH-02 | Phase 58 | Complete |
-| ARCH-03 | Phase 58 | Complete |
-| ARCH-04 | Phase 58 | Complete |
+| DATA-01 | TBD | Pending |
+| DATA-02 | TBD | Pending |
+| DATA-03 | TBD | Pending |
+| DATA-04 | TBD | Pending |
+| DATA-05 | TBD | Pending |
+| DATA-06 | TBD | Pending |
+| AUTH-01 | TBD | Pending |
+| AUTH-02 | TBD | Pending |
+| AUTH-03 | TBD | Pending |
+| AUTH-04 | TBD | Pending |
+| AUTH-05 | TBD | Pending |
+| UX-01 | TBD | Pending |
+| UX-02 | TBD | Pending |
+| UX-03 | TBD | Pending |
+| UX-04 | TBD | Pending |
+| UX-05 | TBD | Pending |
+| UX-06 | TBD | Pending |
+| UX-07 | TBD | Pending |
+| ELEC-01 | TBD | Pending |
+| ELEC-02 | TBD | Pending |
+| ELEC-03 | TBD | Pending |
+| ELEC-04 | TBD | Pending |
+| ELEC-05 | TBD | Pending |
+| ELEC-06 | TBD | Pending |
+| API-01 | TBD | Pending |
+| API-02 | TBD | Pending |
+| API-03 | TBD | Pending |
+| API-04 | TBD | Pending |
 
 **Coverage:**
-- v11 requirements: 31 total
-- Mapped to phases: 31
-- Unmapped: 0
+- v12 requirements: 28 total
+- Mapped to phases: 0
+- Unmapped: 28
 
 ---
-*Requirements defined: 2026-03-02*
-*Last updated: 2026-03-02 after v11 roadmap creation — all 31 requirements mapped*
+*Requirements defined: 2026-03-09*
+*Last updated: 2026-03-09 after initial definition*
