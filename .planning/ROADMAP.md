@@ -332,7 +332,7 @@ Plans:
 | 66. Local File Storage & Offline | 3/3 | Complete    | 2026-03-09 | - |
 | 67. Auth Flow Fixes | 3/3 | Complete    | 2026-03-09 | - |
 | 68. License Key Validation Polish | 1/1 | Complete    | 2026-03-09 | - |
-| 69. Direct API Integration | 3/3 | Complete   | 2026-03-09 | - |
+| 69. Direct API Integration | 3/3 | Complete    | 2026-03-09 | - |
 | 70. UX — Pipeline & Batch | v12 | 0/3 | Not started | - |
 | 71. UX — Onboarding & Presets | v12 | 0/2 | Not started | - |
 | 72. Brand & Language Cleanup | v12 | 0/1 | Not started | - |
