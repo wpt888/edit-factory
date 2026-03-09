@@ -255,10 +255,9 @@ Plans:
   4. With no ElevenLabs key configured, TTS falls back to Edge TTS (free) — the user sees a toast indicating the fallback
   5. With no Gemini key configured, video analysis falls back to local motion/variance scoring only — no error is shown, clips are still generated
 **Plans**: 3 plans
-Plans:
-- [ ] 64-01-PLAN.md — DataRepository interface + SQLite schema from migrations
-- [ ] 64-02-PLAN.md — SupabaseRepository implementation + repository factory
-- [ ] 64-03-PLAN.md — Migrate all routes and services to repository pattern
+- [ ] 69-01-PLAN.md — Encrypted API key vault (KeyVault service + desktop settings wiring)
+- [ ] 69-02-PLAN.md — ElevenLabs and Gemini services read keys from vault
+- [ ] 69-03-PLAN.md — Graceful fallback (Edge TTS + local scoring) with toast notifications
 
 ### Phase 70: UX Simplification — Pipeline & Batch
 **Goal**: Non-technical users can produce videos in 3 clicks (Upload, Choose Style, Download) without seeing technical parameters, while power users retain access to all controls — and multiple videos can be queued for batch processing with visible progress
