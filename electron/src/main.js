@@ -88,6 +88,7 @@ function startBackend() {
       env: {
         ...process.env,
         DESKTOP_MODE: 'true',
+        DATA_BACKEND: 'sqlite',
         ...(isDev ? {} : { RESOURCES_PATH: process.resourcesPath }),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
