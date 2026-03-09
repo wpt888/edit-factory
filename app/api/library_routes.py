@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.config import get_settings
 from app.services.file_storage import get_file_storage
+from app.services.media_manager import get_media_manager
 from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import (
     validate_upload_size, validate_tts_text_length,
@@ -298,20 +299,16 @@ class ExportPresetResponse(BaseModel):
 
 # ============== HELPER FUNCTIONS ==============
 
-def verify_project_ownership(supabase, project_id: str, profile_id: str) -> dict:
+def verify_project_ownership(project_id: str, profile_id: str) -> dict:
     """Verify project exists and belongs to profile. Returns project or raises 404."""
     try:
-        result = supabase.table("editai_projects")\
-            .select("*")\
-            .eq("id", project_id)\
-            .eq("profile_id", profile_id)\
-            .limit(1)\
-            .execute()
+        repo = get_repository()
+        proj = repo.get_project(project_id)
 
-        if not result.data:
+        if not proj or proj.get("profile_id") != profile_id:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        return result.data[0]
+        return proj
     except HTTPException:
         raise
     except Exception as e:
@@ -344,7 +341,7 @@ async def serve_file(
         else:
             full_path = settings.output_dir / file_path
 
-    allowed_dirs = [settings.output_dir, settings.input_dir, settings.base_dir / "temp"]
+    allowed_dirs = [settings.output_dir, settings.input_dir, settings.base_dir / "temp", settings.media_dir]
 
     try:
         resolved_path = full_path.resolve()
@@ -473,36 +470,32 @@ async def create_project(
 ):
     """Creează un proiect nou."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        result = supabase.table("editai_projects").insert({
+        proj = repo.create_project({
             "name": project.name,
             "description": project.description,
             "target_duration": project.target_duration,
             "context_text": project.context_text,
             "status": "draft",
             "profile_id": profile.profile_id
-        }).execute()
+        })
 
-        if result.data:
-            proj = result.data[0]
-            logger.info(f"[Profile {profile.profile_id}] Created project: {proj['id']}")
-            return ProjectResponse(
-                id=proj["id"],
-                name=proj["name"],
-                description=proj.get("description"),
-                status=proj["status"],
-                target_duration=proj["target_duration"],
-                context_text=proj.get("context_text"),
-                variants_count=proj.get("variants_count", 0),
-                selected_count=proj.get("selected_count", 0),
-                exported_count=proj.get("exported_count", 0),
-                created_at=proj["created_at"]
-            )
-        raise HTTPException(status_code=500, detail="Failed to create project")
+        logger.info(f"[Profile {profile.profile_id}] Created project: {proj['id']}")
+        return ProjectResponse(
+            id=proj["id"],
+            name=proj["name"],
+            description=proj.get("description"),
+            status=proj["status"],
+            target_duration=proj["target_duration"],
+            context_text=proj.get("context_text"),
+            variants_count=proj.get("variants_count", 0),
+            selected_count=proj.get("selected_count", 0),
+            exported_count=proj.get("exported_count", 0),
+            created_at=proj["created_at"]
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating project: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -517,17 +510,21 @@ async def list_projects(
 ):
     """Listează toate proiectele."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        query = supabase.table("editai_projects").select("*", count="exact").eq("profile_id", profile.profile_id).order("created_at", desc=True)
+        eq_filters = {}
         if status:
-            query = query.eq("status", status)
-        query = query.limit(limit).offset(offset)
-        result = query.execute()
-        total = result.count if result.count is not None else len(result.data or [])
+            eq_filters["status"] = status
+        filters = QueryFilters(
+            eq=eq_filters if eq_filters else None,
+            order_by="created_at",
+            order_desc=True,
+            limit=limit,
+            offset=offset,
+            count=True,
+        )
+        result = repo.list_projects(profile.profile_id, filters)
+        total = result.count if result.count is not None else len(result.data)
         return {"projects": result.data, "total": total, "limit": limit, "offset": offset}
     except Exception as e:
         logger.error(f"Error listing projects: {e}")
@@ -541,27 +538,24 @@ async def get_project(
 ):
     """Obține detaliile unui proiect."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        result = supabase.table("editai_projects").select("*").eq("id", project_id).eq("profile_id", profile.profile_id).limit(1).execute()
-        if result.data:
-            proj = result.data[0]
-            return ProjectResponse(
-                id=proj["id"],
-                name=proj["name"],
-                description=proj.get("description"),
-                status=proj["status"],
-                target_duration=proj["target_duration"],
-                context_text=proj.get("context_text"),
-                variants_count=proj.get("variants_count", 0),
-                selected_count=proj.get("selected_count", 0),
-                exported_count=proj.get("exported_count", 0),
-                created_at=proj["created_at"]
-            )
-        raise HTTPException(status_code=404, detail="Project not found")
+        proj = repo.get_project(project_id)
+        if not proj or proj.get("profile_id") != profile.profile_id:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        return ProjectResponse(
+            id=proj["id"],
+            name=proj["name"],
+            description=proj.get("description"),
+            status=proj["status"],
+            target_duration=proj["target_duration"],
+            context_text=proj.get("context_text"),
+            variants_count=proj.get("variants_count", 0),
+            selected_count=proj.get("selected_count", 0),
+            exported_count=proj.get("exported_count", 0),
+            created_at=proj["created_at"]
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -607,13 +601,15 @@ async def update_project(
 ):
     """Actualizează un proiect."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     # DB-20: Check if project is currently locked by a background task
     if is_project_locked(project_id):
         raise HTTPException(status_code=409, detail="Project is currently being processed")
+
+    # Verify ownership first
+    proj = repo.get_project(project_id)
+    if not proj or proj.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=404, detail="Project not found")
 
     allowed_fields = ["name", "description", "target_duration", "context_text"]
     filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
@@ -633,10 +629,8 @@ async def update_project(
     filtered_updates["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     try:
-        result = supabase.table("editai_projects").update(filtered_updates).eq("id", project_id).eq("profile_id", profile.profile_id).execute()
-        if result.data:
-            return {"status": "updated", "project": result.data[0]}
-        raise HTTPException(status_code=404, detail="Project not found")
+        updated = repo.update_project(project_id, filtered_updates)
+        return {"status": "updated", "project": updated}
     except HTTPException:
         raise
     except Exception as e:
@@ -655,7 +649,7 @@ async def cancel_generation(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    verify_project_ownership(supabase, project_id, profile.profile_id)
+    verify_project_ownership(project_id, profile.profile_id)
     mark_project_cancelled(project_id)
     clear_generation_progress(project_id)
     # Clean up any stale lock entry so get_project_lock() starts fresh on next run
@@ -679,26 +673,35 @@ async def delete_project(
 ):
     """Șterge un proiect și toate clipurile asociate."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Verify ownership first
+    proj = repo.get_project(project_id)
+    if not proj or proj.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=404, detail="Project not found")
 
     try:
-        # Ștergem mai întâi clipurile (CASCADE ar trebui să facă asta automat)
-        # Dar ștergem și fișierele fizice
-        clips = supabase.table("editai_clips").select("*").eq("project_id", project_id).eq("profile_id", profile.profile_id).execute()
-        for clip in clips.data or []:
+        # Delete clip files from disk
+        clips_result = repo.list_clips(project_id)
+        for clip in clips_result.data:
             _delete_clip_files(clip)
 
         # Delete orphaned clip_content rows before project deletion
-        if clips.data:
-            clip_ids = [c["id"] for c in clips.data]
-            supabase.table("editai_clip_content").delete().in_("clip_id", clip_ids).execute()
+        if clips_result.data:
+            clip_ids = [c["id"] for c in clips_result.data]
+            repo.delete_clip_content_by_clip_ids(clip_ids)
+            repo.delete_clips_by_ids(clip_ids)
 
-        # Ștergem proiectul
-        result = supabase.table("editai_projects").delete().eq("id", project_id).eq("profile_id", profile.profile_id).execute()
-        if not result.data:
-            raise HTTPException(status_code=404, detail="Project not found")
+        # Clean up project media directory (new structured media files)
+        try:
+            media_manager = get_media_manager()
+            deleted_count = media_manager.delete_project_media(project_id)
+            if deleted_count > 0:
+                logger.info(f"Cleaned up {deleted_count} media files for project {project_id}")
+        except Exception as e:
+            logger.warning(f"Failed to clean up media directory for project {project_id}: {e}")
+
+        # Delete the project
+        repo.delete_project(project_id)
         return {"status": "deleted", "project_id": project_id}
     except HTTPException:
         raise
@@ -737,7 +740,7 @@ async def generate_raw_clips(
     settings.ensure_dirs()
 
     # Verificăm că proiectul există și aparține profilului
-    project_data = verify_project_ownership(supabase, project_id, profile.profile_id)
+    project_data = verify_project_ownership(project_id, profile.profile_id)
 
     # Acquire lock non-blocking to eliminate TOCTOU race (STAB-03 + C4)
     lock = get_project_lock(project_id)
@@ -756,10 +759,10 @@ async def generate_raw_clips(
             # Validate actual MIME type via magic-number inspection (blocks disguised malicious files)
             await validate_file_mime_type(video, ALLOWED_VIDEO_MIMES, "video")
 
-            # User uploaded a file
+            # User uploaded a file — store under project-scoped media directory
             job_id = uuid.uuid4().hex[:12]
-            video_filename = f"{job_id}_{_sanitize_filename(video.filename)}"
-            final_video_path = settings.input_dir / video_filename
+            media_manager = get_media_manager()
+            final_video_path = media_manager.upload_path(project_id, job_id, video.filename)
 
             try:
                 with open(final_video_path, "wb") as f:
@@ -906,7 +909,7 @@ async def _generate_raw_clips_task(
                 duration = await asyncio.to_thread(_get_video_duration, video_file)
 
                 # Generăm thumbnail
-                thumbnail_path = await asyncio.to_thread(_generate_thumbnail, video_file)
+                thumbnail_path = await asyncio.to_thread(_generate_thumbnail, video_file, project_id)
 
                 # Inserăm în DB
                 try:
@@ -961,7 +964,7 @@ async def _generate_raw_clips_task(
         # C6: Clean up uploaded input file on failure to avoid orphaned files
         try:
             input_file = Path(video_path)
-            if input_file.exists() and str(settings.input_dir) in str(input_file.parent):
+            if input_file.exists() and (str(settings.input_dir) in str(input_file.parent) or str(settings.media_dir) in str(input_file.parent)):
                 input_file.unlink(missing_ok=True)
                 logger.debug(f"Cleaned up input video: {video_path}")
         except Exception as cleanup_err:
@@ -1011,7 +1014,7 @@ async def generate_from_segments(
     settings.ensure_dirs()
 
     # Verificăm că proiectul există și aparține profilului
-    project_data = verify_project_ownership(supabase, project_id, profile.profile_id)
+    project_data = verify_project_ownership(project_id, profile.profile_id)
 
     # Reject immediately if a task is already running for this project (STAB-03)
     if is_project_locked(project_id):
@@ -1511,7 +1514,7 @@ async def _generate_from_segments_task(
                 actual_duration = await asyncio.to_thread(_get_video_duration, output_path)
 
                 # Generăm thumbnail
-                thumbnail_path = await asyncio.to_thread(_generate_thumbnail, output_path)
+                thumbnail_path = await asyncio.to_thread(_generate_thumbnail, output_path, project_id)
 
                 # Salvăm în DB
                 try:
@@ -1637,19 +1640,23 @@ async def list_project_clips(
 ):
     """Listează toate clipurile unui proiect (pentru galerie/triaj)."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     # Verify project ownership
-    verify_project_ownership(supabase, project_id, profile.profile_id)
+    verify_project_ownership(project_id, profile.profile_id)
 
     try:
-        query = supabase.table("editai_clips").select("*").eq("project_id", project_id).eq("profile_id", profile.profile_id)
+        eq_filters = {"profile_id": profile.profile_id}
         if not include_deleted:
-            query = query.eq("is_deleted", False)
-        result = query.order("variant_index").execute()
+            eq_filters["is_deleted"] = False
+        filters = QueryFilters(
+            eq=eq_filters,
+            order_by="variant_index",
+            order_desc=False,
+        )
+        result = repo.list_clips(project_id, filters)
         return {"clips": result.data}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error listing clips: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -2565,7 +2572,8 @@ async def _render_final_clip_task(
         if not raw_video_path.exists():
             raise FileNotFoundError(f"Raw video not found: {raw_video_path}")
 
-        # Directorul pentru output
+        # Directorul pentru output — use project-scoped media dir for new renders
+        media_manager = get_media_manager()
         output_dir = settings.output_dir / "finals"
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2698,9 +2706,7 @@ async def _render_final_clip_task(
             # Persist TTS audio to permanent location for later download
             tts_persist_failed = False
             try:
-                tts_persist_dir = settings.output_dir / "tts" / profile_id
-                tts_persist_dir.mkdir(parents=True, exist_ok=True)
-                tts_persist_path = tts_persist_dir / f"clip_{clip_id}.mp3"
+                tts_persist_path = media_manager.tts_path(project_id, clip_id)
                 shutil.copy2(str(audio_path), str(tts_persist_path))
                 # DB-17: Use upsert with on_conflict to prevent duplicate key errors
                 supabase.table("editai_clip_content").upsert({
@@ -2823,10 +2829,10 @@ async def _render_final_clip_task(
             logger.info(f"Applied default subtitle styling for auto-generated SRT")
 
         # 4. Randăm cu FFmpeg folosind preset-ul (limited by global concurrency semaphore)
-        output_path = output_dir / f"final_{clip_id}_{preset_data['name']}.mp4"
+        output_path = media_manager.render_path(project_id, clip_id, preset_data['name'])
 
         # Pre-render disk space check
-        check_disk_space(output_dir)
+        check_disk_space(output_path.parent)
 
         async with await acquire_render_slot():
             await _render_with_preset(
@@ -3059,14 +3065,18 @@ def _get_video_duration(video_path: Path) -> float:
     return 0.0
 
 
-def _generate_thumbnail(video_path: Path) -> Optional[Path]:
+def _generate_thumbnail(video_path: Path, project_id: Optional[str] = None) -> Optional[Path]:
     """Generează thumbnail pentru un video."""
     try:
         settings = get_settings()
-        thumb_dir = settings.output_dir / "thumbnails"
-        thumb_dir.mkdir(parents=True, exist_ok=True)
-
-        thumb_path = thumb_dir / f"{video_path.stem}_thumb.jpg"
+        if project_id:
+            media_manager = get_media_manager()
+            thumb_path = media_manager.thumbnail_path(project_id, video_path.stem)
+        else:
+            # Backward compat: use legacy output_dir path
+            thumb_dir = settings.output_dir / "thumbnails"
+            thumb_dir.mkdir(parents=True, exist_ok=True)
+            thumb_path = thumb_dir / f"{video_path.stem}_thumb.jpg"
 
         # Get video duration to pick a safe seek time (avoid -ss 1 for clips under 1s)
         duration = _get_video_duration(video_path)
