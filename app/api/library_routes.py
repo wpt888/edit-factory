@@ -34,7 +34,7 @@ from app.services.video_filters import VideoFilters, DenoiseConfig, SharpenConfi
 from app.services.subtitle_styler import build_subtitle_filter
 from app.services.tts_subtitle_generator import generate_srt_from_timestamps
 from app.services.srt_validator import sanitize_srt_text, sanitize_srt_full
-from app.utils import sanitize_filename as _sanitize_filename
+from app.utils import sanitize_filename as _sanitize_filename, normalize_path
 
 import logging
 
@@ -332,6 +332,7 @@ async def serve_file(
     Remote keys are retrieved locally before serving.
     """
     settings = get_settings()
+    file_path = normalize_path(file_path)
     full_path = Path(file_path)
     if not full_path.is_absolute():
         # Handle paths that start with "output/" - strip the prefix since output_dir already ends with /output
@@ -384,11 +385,15 @@ async def serve_file(
         raise HTTPException(status_code=400, detail="Not a file")
 
     media_type, _ = mimetypes.guess_type(str(resolved_path))
+    # FIX: Use proper caching for video files to enable smooth seeking/playback.
+    # "no-cache" forced the browser to re-fetch on every seek, causing stuttering.
+    is_video = media_type and media_type.startswith("video/")
+    cache_header = "public, max-age=300" if is_video else "no-cache, must-revalidate"
     return FileResponse(
         path=str(resolved_path),
         media_type=media_type or "application/octet-stream",
         filename=resolved_path.name if download else None,
-        headers={"Cache-Control": "no-cache, must-revalidate"}
+        headers={"Cache-Control": cache_header}
     )
 
 

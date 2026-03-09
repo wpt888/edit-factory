@@ -136,7 +136,7 @@ def _recover_stuck_jobs_sync():
         if not repo:
             return
         result = repo.table_query(
-            "editai_jobs", "select",
+            "jobs", "select",
             filters=QueryFilters(select="id", eq={"status": "processing"}),
         )
         if result.data:

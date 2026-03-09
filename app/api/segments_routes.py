@@ -1956,6 +1956,8 @@ async def serve_segment_file(file_path: str):
     if '..' in decoded_path:
         raise HTTPException(status_code=403, detail="Invalid path")
 
+    # Convert WSL paths to Windows paths if needed
+    decoded_path = normalize_path(decoded_path)
     full_path = Path(decoded_path)
 
     if not full_path.is_absolute():

@@ -401,7 +401,7 @@ class ElevenLabsAccountManager:
 
         from app.repositories.models import QueryFilters
         result = repo.table_query(
-            "editai_elevenlabs_accounts", "update",
+            "elevenlabs_accounts", "update",
             data=allowed,
             filters=QueryFilters(eq={"id": account_id, "profile_id": profile_id}),
         )
@@ -425,7 +425,7 @@ class ElevenLabsAccountManager:
 
         # Check if this is the primary
         target = repo.table_query(
-            "editai_elevenlabs_accounts", "select",
+            "elevenlabs_accounts", "select",
             filters=QueryFilters(
                 select="id, is_primary",
                 eq={"id": account_id, "profile_id": profile_id},
@@ -439,7 +439,7 @@ class ElevenLabsAccountManager:
 
         # Delete
         repo.table_query(
-            "editai_elevenlabs_accounts", "delete",
+            "elevenlabs_accounts", "delete",
             filters=QueryFilters(eq={"id": account_id, "profile_id": profile_id}),
         )
 
@@ -462,7 +462,7 @@ class ElevenLabsAccountManager:
             return
         from app.repositories.models import QueryFilters
         repo.table_query(
-            "editai_elevenlabs_accounts", "update",
+            "elevenlabs_accounts", "update",
             data={"is_primary": False},
             filters=QueryFilters(eq={"profile_id": profile_id, "is_primary": True}),
         )
@@ -483,14 +483,14 @@ class ElevenLabsAccountManager:
 
         # Unset current primary
         repo.table_query(
-            "editai_elevenlabs_accounts", "update",
+            "elevenlabs_accounts", "update",
             data={"is_primary": False},
             filters=QueryFilters(eq={"profile_id": profile_id, "is_primary": True}),
         )
 
         # Set new primary
         result = repo.table_query(
-            "editai_elevenlabs_accounts", "update",
+            "elevenlabs_accounts", "update",
             data={"is_primary": True},
             filters=QueryFilters(eq={"id": account_id, "profile_id": profile_id}),
         )
@@ -519,7 +519,7 @@ class ElevenLabsAccountManager:
 
         # Get the API key
         account = repo.table_query(
-            "editai_elevenlabs_accounts", "select",
+            "elevenlabs_accounts", "select",
             filters=QueryFilters(
                 select="api_key_encrypted",
                 eq={"id": account_id, "profile_id": profile_id},
@@ -534,7 +534,7 @@ class ElevenLabsAccountManager:
 
         # Update DB
         result = repo.table_query(
-            "editai_elevenlabs_accounts", "update",
+            "elevenlabs_accounts", "update",
             data={
                 "character_limit": sub_info.get("character_limit"),
                 "characters_used": sub_info.get("character_count"),

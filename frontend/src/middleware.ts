@@ -11,6 +11,11 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
+  // Auth disabled in development — allow all requests through
+  if (process.env.NEXT_PUBLIC_AUTH_DISABLED === "true") {
+    return NextResponse.next()
+  }
+
   // Create Supabase client with cookie access for middleware context
   let response = NextResponse.next({ request })
 

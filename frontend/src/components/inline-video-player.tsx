@@ -1,6 +1,7 @@
 "use client";
 
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { Button } from "@/components/ui/button";
 import { X } from "lucide-react";
 import { useEffect, useRef, RefObject } from "react";
@@ -30,6 +31,7 @@ export function InlineVideoPlayer({ open, onOpenChange, videoUrl, title, videoRe
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[400px] p-0 overflow-hidden bg-black border-none [&>button]:hidden">
+        <VisuallyHidden><DialogTitle>{title || "Video player"}</DialogTitle></VisuallyHidden>
         <div className="relative">
           <Button
             variant="ghost"

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, memo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -27,7 +27,7 @@ interface VariantPreviewPlayerProps {
   interstitialSlides?: InterstitialSlide[];
 }
 
-export function VariantPreviewPlayer({
+export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   open,
   onOpenChange,
   matches,
@@ -47,6 +47,7 @@ export function VariantPreviewPlayer({
   const [matchesFingerprint, setMatchesFingerprint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [limitations, setLimitations] = useState<string[]>([]);
+  const [videoReady, setVideoReady] = useState(false);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelledRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -106,6 +107,7 @@ export function VariantPreviewPlayer({
               segment_end_time: m.segment_end_time,
               merge_group: m.merge_group,
               merge_group_duration: m.merge_group_duration,
+              duration_override: m.duration_override,
             })),
             source_video_ids: sourceVideoIds,
             min_segment_duration: minSegmentDuration,
@@ -144,8 +146,16 @@ export function VariantPreviewPlayer({
 
         // Start polling for status using setTimeout chain to prevent overlapping polls (FE-02)
         if (cancelledRef.current) return; // Bug #133: check before starting poll
+        let pollAttempts = 0;
+        const MAX_POLL_ATTEMPTS = 90; // 3 minutes at 2s interval
         const pollStatus = async () => {
           if (cancelledRef.current) return;
+          pollAttempts++;
+          if (pollAttempts > MAX_POLL_ATTEMPTS) {
+            setStatus("failed");
+            setError("Preview render timed out. Please try again.");
+            return;
+          }
           try {
             const statusResp = await apiGet(
               `/pipeline/preview-status/${pipelineId}/${variantIndex}`
@@ -201,12 +211,13 @@ export function VariantPreviewPlayer({
           videoRef.current.removeAttribute("src");
           videoRef.current.load();
         }
-        setStatus("idle");
+        setStatus("processing");
         setProgress(0);
         setCurrentStep("");
         setError(null);
         setMatchesFingerprint(null);
         setLimitations([]);
+        setVideoReady(false);
       }
       onOpenChange(newOpen);
     },
@@ -214,8 +225,8 @@ export function VariantPreviewPlayer({
   );
 
   const previewVideoUrl =
-    status === "completed"
-      ? `${API_URL}/pipeline/preview-video/${pipelineId}/${variantIndex}`
+    status === "completed" && matchesFingerprint
+      ? `${API_URL}/pipeline/preview-video/${pipelineId}/${variantIndex}?fp=${encodeURIComponent(matchesFingerprint)}`
       : null;
 
   return (
@@ -268,26 +279,31 @@ export function VariantPreviewPlayer({
             </div>
           )}
 
-          {/* Video player */}
+          {/* Video player — wait for canplay before showing to avoid frame block */}
           {status === "completed" && previewVideoUrl && (
-            <video
-              ref={videoRef}
-              key={matchesFingerprint}
-              src={previewVideoUrl}
-              controls
-              autoPlay
-              muted
-              playsInline
-              className="w-full h-full object-contain"
-            />
+            <>
+              {!videoReady && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                  <p className="text-xs text-muted-foreground">Buffering video...</p>
+                </div>
+              )}
+              <video
+                ref={videoRef}
+                key={matchesFingerprint}
+                src={previewVideoUrl}
+                controls
+                playsInline
+                preload="auto"
+                className={`w-full h-full object-contain transition-opacity duration-200 ${videoReady ? "opacity-100" : "opacity-0"}`}
+                onCanPlay={() => {
+                  setVideoReady(true);
+                  videoRef.current?.play().catch(() => {});
+                }}
+              />
+            </>
           )}
 
-          {/* Idle state */}
-          {status === "idle" && (
-            <div className="flex items-center justify-center text-muted-foreground text-sm">
-              Preparing preview...
-            </div>
-          )}
         </div>
 
         {/* Preview limitations */}
@@ -302,4 +318,4 @@ export function VariantPreviewPlayer({
       </DialogContent>
     </Dialog>
   );
-}
+});

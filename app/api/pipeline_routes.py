@@ -11,6 +11,7 @@ This is the glue layer connecting script generation and assembly into a single w
 """
 import asyncio
 import hashlib
+import json as _json
 import logging
 import subprocess
 import threading
@@ -2715,11 +2716,12 @@ async def render_preview(
     if not audio_path_str or not Path(audio_path_str).exists():
         raise HTTPException(status_code=400, detail="TTS audio file missing from disk. Re-run Preview All.")
 
-    # Compute fingerprint from segment IDs + preview-affecting params
-    seg_ids = [str(m.get("segment_id", "none")) for m in render_request.match_overrides]
-    fp_parts = seg_ids + [
+    # Compute fingerprint from segment IDs (ordered) + merge groups + preview-affecting params.
+    # Include index to ensure different orderings produce different fingerprints.
+    seg_parts = [f"{i}:{m.get('segment_id', 'none')}:{m.get('merge_group', '')}" for i, m in enumerate(render_request.match_overrides)]
+    fp_parts = seg_parts + [
         f"uri={render_request.ultra_rapid_intro}",
-        f"isl={len(render_request.interstitial_slides) if render_request.interstitial_slides else 0}",
+        f"isl={hashlib.md5(_json.dumps([{'url': s.get('imageUrl',''), 'dur': s.get('duration',0), 'anim': s.get('animation',''), 'after': s.get('afterMatchIndex',0)} for s in (render_request.interstitial_slides or [])], sort_keys=True).encode()).hexdigest()[:8]}",
     ]
     matches_fingerprint = hashlib.md5("|".join(fp_parts).encode()).hexdigest()[:12]
 
@@ -2819,6 +2821,7 @@ async def render_preview(
                         "Audio volume may differ from export (loudness normalization disabled)",
                         "Video filters (denoise, sharpen, color) disabled for speed",
                         "Resolution is 540x960 (export will be 1080x1920)",
+                        "Product image overlays (PiP) are not shown in preview",
                     ]
                 logger.info(f"Preview render completed: {preview_path}")
 
@@ -2899,46 +2902,6 @@ async def get_preview_video(
     video_path = Path(video_path_str)
     if not video_path_str or not video_path.exists():
         raise HTTPException(status_code=404, detail="Preview video file not found")
-
-    file_size = video_path.stat().st_size
-    range_header = request.headers.get("range")
-
-    if range_header:
-        # Parse Range: bytes=start-end
-        import re as _range_re
-        m = _range_re.match(r"bytes=(\d+)-(\d*)", range_header)
-        if not m:
-            raise HTTPException(status_code=416, detail="Invalid Range header")
-        start = int(m.group(1))
-        end = int(m.group(2)) if m.group(2) else file_size - 1
-        end = min(end, file_size - 1)
-        if start >= file_size:
-            raise HTTPException(status_code=416, detail="Range not satisfiable")
-        content_length = end - start + 1
-
-        def iter_range():
-            with open(video_path, "rb") as f:
-                f.seek(start)
-                remaining = content_length
-                while remaining > 0:
-                    chunk = f.read(min(65536, remaining))
-                    if not chunk:
-                        break
-                    remaining -= len(chunk)
-                    yield chunk
-
-        from starlette.responses import StreamingResponse
-        return StreamingResponse(
-            iter_range(),
-            status_code=206,
-            media_type="video/mp4",
-            headers={
-                "Content-Range": f"bytes {start}-{end}/{file_size}",
-                "Content-Length": str(content_length),
-                "Accept-Ranges": "bytes",
-                "Cache-Control": "public, max-age=300",
-            },
-        )
 
     return FileResponse(
         path=video_path_str,

@@ -240,8 +240,12 @@ async def acquire_preview_slot(timeout: float = SEMAPHORE_ACQUIRE_TIMEOUT):
 def get_preview_codec_params(use_gpu: bool = False) -> list[str]:
     """Return fast, low-quality codec params for preview renders (540x960, ultrafast)."""
     if use_gpu:
-        return ["-c:v", "h264_nvenc", "-preset", "p1", "-cq", "40"]
-    return ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "32"]
+        return ["-c:v", "h264_nvenc", "-preset", "p1", "-cq", "40",
+                "-profile:v", "baseline", "-level", "3.1",
+                "-g", "60"]
+    return ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
+            "-profile:v", "baseline", "-level", "3.1",
+            "-g", "60", "-keyint_min", "60"]
 
 
 def get_prep_codec_params(

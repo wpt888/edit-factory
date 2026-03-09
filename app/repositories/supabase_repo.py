@@ -392,13 +392,13 @@ class SupabaseRepository(DataRepository):
     # ──────────────────────────────────────────────
 
     def create_job(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        return self._insert("editai_jobs", data)
+        return self._insert("jobs", data)
 
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
-        return self._get_one("editai_jobs", "id", job_id)
+        return self._get_one("jobs", "id", job_id)
 
     def update_job(self, job_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        return self._update("editai_jobs", "id", job_id, data)
+        return self._update("jobs", "id", job_id, data)
 
     def list_jobs(
         self,
@@ -408,7 +408,7 @@ class SupabaseRepository(DataRepository):
     ) -> QueryResult:
         sb = get_supabase()
         select_cols = filters.select if filters and filters.select else "*"
-        query = sb.table("editai_jobs").select(select_cols)
+        query = sb.table("jobs").select(select_cols)
         if profile_id:
             query = query.eq("profile_id", profile_id)
         query = self._apply_filters(query, filters)
@@ -421,12 +421,12 @@ class SupabaseRepository(DataRepository):
         return QueryResult(data=data, count=len(data))
 
     def delete_job(self, job_id: str) -> None:
-        self._delete("editai_jobs", "id", job_id)
+        self._delete("jobs", "id", job_id)
 
     def cleanup_old_jobs(self, cutoff_date: datetime) -> int:
         sb = get_supabase()
         cutoff_str = cutoff_date.isoformat()
-        result = sb.table("editai_jobs").delete().lt("created_at", cutoff_str).execute()
+        result = sb.table("jobs").delete().lt("created_at", cutoff_str).execute()
         deleted = result.data or []
         return len(deleted)
 
@@ -436,7 +436,7 @@ class SupabaseRepository(DataRepository):
         sb = get_supabase()
         select_cols = filters.select if filters and filters.select else "*"
         # Supabase JSONB arrow operator for data->>project_id
-        query = sb.table("editai_jobs").select(select_cols).eq("data->>project_id", project_id)
+        query = sb.table("jobs").select(select_cols).eq("data->>project_id", project_id)
         query = self._apply_filters(query, filters)
         if not filters or not filters.order_by:
             query = query.order("created_at", desc=True)
@@ -469,27 +469,27 @@ class SupabaseRepository(DataRepository):
     # ──────────────────────────────────────────────
 
     def get_profile(self, profile_id: str) -> Optional[Dict[str, Any]]:
-        return self._get_one("editai_profiles", "id", profile_id)
+        return self._get_one("profiles", "id", profile_id)
 
     def list_profiles(self, user_id: str) -> QueryResult:
         sb = get_supabase()
-        result = sb.table("editai_profiles").select("*").eq("user_id", user_id).execute()
+        result = sb.table("profiles").select("*").eq("user_id", user_id).execute()
         data = result.data or []
         return QueryResult(data=data, count=len(data))
 
     def create_profile(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        return self._insert("editai_profiles", data)
+        return self._insert("profiles", data)
 
     def update_profile(self, profile_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        return self._update("editai_profiles", "id", profile_id, data)
+        return self._update("profiles", "id", profile_id, data)
 
     def delete_profile(self, profile_id: str) -> None:
-        self._delete("editai_profiles", "id", profile_id)
+        self._delete("profiles", "id", profile_id)
 
     def get_default_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
         sb = get_supabase()
         result = (
-            sb.table("editai_profiles")
+            sb.table("profiles")
             .select("*")
             .eq("user_id", user_id)
             .eq("is_default", True)
@@ -537,7 +537,7 @@ class SupabaseRepository(DataRepository):
     ) -> QueryResult:
         sb = get_supabase()
         select_cols = filters.select if filters and filters.select else "*"
-        query = sb.table("editai_elevenlabs_accounts").select(select_cols).eq("profile_id", profile_id)
+        query = sb.table("elevenlabs_accounts").select(select_cols).eq("profile_id", profile_id)
         query = self._apply_filters(query, filters)
         if not filters or not filters.order_by:
             query = query.order("created_at", desc=True)
@@ -546,16 +546,16 @@ class SupabaseRepository(DataRepository):
         return QueryResult(data=data, count=len(data))
 
     def get_elevenlabs_account(self, account_id: str) -> Optional[Dict[str, Any]]:
-        return self._get_one("editai_elevenlabs_accounts", "id", account_id)
+        return self._get_one("elevenlabs_accounts", "id", account_id)
 
     def create_elevenlabs_account(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        return self._insert("editai_elevenlabs_accounts", data)
+        return self._insert("elevenlabs_accounts", data)
 
     def update_elevenlabs_account(self, account_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        return self._update("editai_elevenlabs_accounts", "id", account_id, data)
+        return self._update("elevenlabs_accounts", "id", account_id, data)
 
     def delete_elevenlabs_account(self, account_id: str) -> None:
-        self._delete("editai_elevenlabs_accounts", "id", account_id)
+        self._delete("elevenlabs_accounts", "id", account_id)
 
     # ──────────────────────────────────────────────
     # 16. Products & Feeds

@@ -239,6 +239,11 @@ function PipelinePage() {
     }
   }, []);
 
+  // Stable callback for VariantPreviewPlayer close
+  const handlePreviewPlayerClose = useCallback((open: boolean) => {
+    if (!open) setPreviewVariant(null);
+  }, []);
+
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -424,6 +429,9 @@ function PipelinePage() {
   const [subtitleSettingsLoaded, setSubtitleSettingsLoaded] = useState(false);
   const subtitleSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceSettingsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Stable empty slides constant to avoid new array reference on every render
+  const EMPTY_SLIDES: InterstitialSlide[] = useMemo(() => [], []);
 
   // Stable per-index callback refs for TimelineEditor props
   const matchesChangeHandlers = useRef<Record<number, (matches: MatchPreview[]) => void>>({});
@@ -692,6 +700,12 @@ function PipelinePage() {
   // FE-14: Derive a stable string key from the Set to avoid extra API calls on every render
   const selectedSourceIdsKey = useMemo(() => [...selectedSourceIds].sort().join(","), [selectedSourceIds]);
 
+  // FE-14: Memoize the array form of selectedSourceIds to avoid new array on every render
+  const selectedSourceIdsArray = useMemo(
+    () => Array.from(selectedSourceIds),
+    [selectedSourceIdsKey]
+  );
+
   // Fetch product groups when source video selection changes
   useEffect(() => {
     if (selectedSourceIds.size === 0) {
@@ -836,13 +850,25 @@ function PipelinePage() {
     [pipelineId]
   );
 
-  // FE-15: Memoize cache-bust timestamp so it only changes when variant completion status changes,
-  // not on every render. This prevents unnecessary video re-fetches in the Step 4 render results.
+  // FE-15: Per-variant cache-bust timestamps stored in a ref so completing variant N
+  // does NOT cause variant M's video to reload and interrupt playback.
+  const videoCacheBustRef = useRef<Record<number, number>>({});
   const completedFingerprint = useMemo(
     () => variantStatuses.filter(v => v.status === "completed").map(v => v.variant_index).join(","),
     [variantStatuses]
   );
-  // BUG-FE-27: completedFingerprint is a valid dep here; no suppression needed
+  useMemo(() => {
+    variantStatuses.filter(v => v.status === "completed").forEach(v => {
+      if (!videoCacheBustRef.current[v.variant_index]) {
+        videoCacheBustRef.current[v.variant_index] = Date.now();
+      }
+    });
+    return null;
+  }, [completedFingerprint]); // eslint-disable-line react-hooks/exhaustive-deps
+  const getVideoCacheBust = useCallback((variantIndex: number) => {
+    return videoCacheBustRef.current[variantIndex] || Date.now();
+  }, []);
+  // Legacy single value for download links
   const videoCacheBust = useMemo(() => Date.now(), [completedFingerprint]);
 
   const { startPolling: startRenderPolling, stopPolling: stopRenderPolling } = usePolling<{
@@ -1061,6 +1087,19 @@ function PipelinePage() {
   // Step 3: Render selected variants
   const handleRender = async () => {
     if (!pipelineId || selectedVariants.size === 0) return;
+
+    // Warn if any selected variant has no preview (match_overrides will be missing)
+    const unpreviewedVariants = Array.from(selectedVariants).filter(
+      idx => !previews[idx]?.matches || previews[idx].matches.length === 0
+    );
+    if (unpreviewedVariants.length > 0) {
+      const proceed = window.confirm(
+        `Variant(s) ${unpreviewedVariants.join(", ")} have not been previewed. ` +
+        `The render may produce different segment cuts than expected. Continue anyway?`
+      );
+      if (!proceed) return;
+    }
+
     setPreviewError(null);
 
     // Stop all active audio/video playback before transitioning to render step
@@ -3563,13 +3602,13 @@ function PipelinePage() {
                       <TimelineEditor
                         matches={preview.matches}
                         audioDuration={preview.audio_duration}
-                        sourceVideoIds={Array.from(selectedSourceIds)}
+                        sourceVideoIds={selectedSourceIdsArray}
                         availableSegments={availableSegments}
                         profileId={currentProfile?.id}
                         pipelineId={pipelineId ?? undefined}
                         variantIndex={index}
                         subtitleSettings={subtitleSettings}
-                        interstitialSlides={interstitialSlides[index] ?? []}
+                        interstitialSlides={interstitialSlides[index] ?? EMPTY_SLIDES}
                         onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(index)}
                         onMatchesChange={getMatchesChangeHandler(index)}
                       />
@@ -3583,13 +3622,13 @@ function PipelinePage() {
             {previewVariant !== null && pipelineId && currentProfile && (
               <VariantPreviewPlayer
                 open={true}
-                onOpenChange={(open) => { if (!open) setPreviewVariant(null); }}
+                onOpenChange={handlePreviewPlayerClose}
                 matches={previews[previewVariant]?.matches ?? []}
                 pipelineId={pipelineId}
                 variantIndex={previewVariant}
                 profileId={currentProfile.id}
                 subtitleSettings={subtitleSettings}
-                sourceVideoIds={Array.from(selectedSourceIds)}
+                sourceVideoIds={selectedSourceIdsArray}
                 minSegmentDuration={minSegmentDuration}
                 wordsPerSubtitle={wordsPerSubtitle}
                 ultraRapidIntro={ultraRapidIntro}
@@ -3716,6 +3755,7 @@ function PipelinePage() {
                     {status.status === "completed" && status.final_video_path && (
                       <div className="space-y-3">
                         <video
+                          key={`video-${status.variant_index}-${getVideoCacheBust(status.variant_index)}`}
                           controls
                           className="w-full rounded-md bg-black max-h-64 object-contain"
                           poster={
@@ -3723,14 +3763,9 @@ function PipelinePage() {
                               ? `${API_URL}/library/files/${encodeURIComponent(status.thumbnail_path)}`
                               : undefined
                           }
-                          preload="none"
-                        >
-                          <source
-                            src={`${API_URL}/library/files/${encodeURIComponent(status.final_video_path)}?v=${videoCacheBust}`}
-                            type="video/mp4"
-                          />
-                          Your browser does not support HTML5 video.
-                        </video>
+                          preload="auto"
+                          src={`${API_URL}/library/files/${encodeURIComponent(status.final_video_path)}?v=${getVideoCacheBust(status.variant_index)}`}
+                        />
                         <Button variant="outline" className="w-full" asChild>
                           <a
                             href={`${API_URL}/library/files/${encodeURIComponent(

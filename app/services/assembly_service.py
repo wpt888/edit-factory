@@ -1831,8 +1831,8 @@ class AssemblyService:
                     for g in group_order:
                         indices = grouped[g]
                         entries = [_original_matches[i] for i in indices]
-                        # Representative: first entry (preserves user's segment choice)
-                        rep = entries[0]
+                        # Representative: longest entry (matches build_timeline strategy)
+                        rep = max(entries, key=lambda e: e.srt_end - e.srt_start)
                         collapsed.append(MatchResult(
                             srt_index=rep.srt_index,
                             srt_text=" ".join(e.srt_text for e in entries if e.srt_text),
@@ -2028,6 +2028,7 @@ class AssemblyService:
             "audio_codec": "aac",
             "video_bitrate": "1M",
             "audio_bitrate": "128k",
+            "extra_flags": "-movflags +faststart",
         }
 
         return await self.assemble_and_render(

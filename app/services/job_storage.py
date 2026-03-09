@@ -376,7 +376,7 @@ class JobStorage:
                     lt={"updated_at": cutoff_iso},
                 )
                 result = self._repo.table_query(
-                    "editai_jobs", "update",
+                    "jobs", "update",
                     data={
                         "status": "failed",
                         "progress": "Server restarted — job did not complete",

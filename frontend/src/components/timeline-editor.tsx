@@ -190,7 +190,11 @@ export function TimelineEditor({
     for (const key of Object.keys(previewVideoRefs.current)) {
       if (!validIds.has(key)) {
         const vid = previewVideoRefs.current[key];
-        if (vid) vid.pause();
+        if (vid) {
+          vid.pause();
+          vid.removeAttribute("src");
+          vid.load();
+        }
         delete previewVideoRefs.current[key];
       }
     }
@@ -556,7 +560,10 @@ export function TimelineEditor({
           if (vid.readyState >= 2 && Math.abs(vid.currentTime - targetTime) < 0.05) {
             startVideoAndAudio();
           } else {
+            let started = false;
             const onReady = () => {
+              if (started) return;
+              started = true;
               vid.removeEventListener("seeked", onReady);
               vid.removeEventListener("canplay", onReady);
               startVideoAndAudio();
@@ -698,6 +705,26 @@ export function TimelineEditor({
     }
     return availableSegments.filter(seg => nearbySegmentIds.has(seg.id)).length;
   }, [availableSegments, assigningIndex, matches]);
+
+  // Memoize timeline group computation to avoid recalculating on every render
+  const timelineGroups = useMemo(() => {
+    const groups: { groupId: number; groupDuration: number; matchIndices: number[] }[] = [];
+    let currentGroup: typeof groups[0] | null = null;
+    matches.forEach((match, idx) => {
+      const mg = match.merge_group;
+      if (mg !== undefined && currentGroup && currentGroup.groupId === mg) {
+        currentGroup.matchIndices.push(idx);
+      } else {
+        currentGroup = {
+          groupId: mg ?? idx,
+          groupDuration: match.merge_group_duration ?? (match.srt_end - match.srt_start),
+          matchIndices: [idx],
+        };
+        groups.push(currentGroup);
+      }
+    });
+    return groups;
+  }, [matches]);
 
   // --- Dialog handlers ---
 
@@ -1158,22 +1185,7 @@ export function TimelineEditor({
           <div className="overflow-x-auto rounded-md border bg-muted/30 p-2">
             <div className="flex items-stretch gap-0.5" style={{ minWidth: "100%" }}>
               {(() => {
-                // Group consecutive matches by merge_group
-                const groups: { groupId: number; groupDuration: number; matchIndices: number[] }[] = [];
-                let currentGroup: typeof groups[0] | null = null;
-                matches.forEach((match, idx) => {
-                  const mg = match.merge_group;
-                  if (mg !== undefined && currentGroup && currentGroup.groupId === mg) {
-                    currentGroup.matchIndices.push(idx);
-                  } else {
-                    currentGroup = {
-                      groupId: mg ?? idx,
-                      groupDuration: match.merge_group_duration ?? (match.srt_end - match.srt_start),
-                      matchIndices: [idx],
-                    };
-                    groups.push(currentGroup);
-                  }
-                });
+                const groups = timelineGroups;
 
                 const elements: React.ReactNode[] = [];
 
