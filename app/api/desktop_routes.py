@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.config import get_settings, APP_VERSION
+from app.services.key_vault import get_key_vault
 from app.services.license_service import LicenseService
 
 logger = logging.getLogger(__name__)
@@ -136,15 +137,20 @@ def _write_env_keys(base_dir: Path, payload: dict) -> None:
 
 @router.get("/settings")
 async def get_desktop_settings():
-    """Read config.json and return redacted view (API keys show last-4-char hints only)."""
+    """Read settings: API key hints from encrypted vault, other settings from config.json."""
     settings = get_settings()
     config_file = settings.base_dir / "config.json"
     config = _read_config(config_file)
+    vault = get_key_vault()
+
+    # For supabase_url, show full value (not a secret) — try vault first, then config fallback
+    supabase_url = vault.get_key("supabase_url") or config.get("supabase_url", "")
+
     return {
-        "gemini_api_key": _hint(config.get("gemini_api_key", "")),
-        "elevenlabs_api_key": _hint(config.get("elevenlabs_api_key", "")),
-        "supabase_url": config.get("supabase_url", ""),
-        "supabase_key": _hint(config.get("supabase_key", "")),
+        "gemini_api_key": vault.get_key_hint("gemini_api_key") or _hint(config.get("gemini_api_key", "")),
+        "elevenlabs_api_key": vault.get_key_hint("elevenlabs_api_key") or _hint(config.get("elevenlabs_api_key", "")),
+        "supabase_url": supabase_url,
+        "supabase_key": vault.get_key_hint("supabase_key") or _hint(config.get("supabase_key", "")),
         "first_run_complete": config.get("first_run_complete", False),
         "crash_reporting_enabled": config.get("crash_reporting_enabled", False),
     }
@@ -245,19 +251,31 @@ class DesktopSettingsUpdate(BaseModel):
 
 @router.post("/settings")
 async def save_desktop_settings(body: DesktopSettingsUpdate):
-    """Write settings to config.json and AppData .env. Merges with existing values."""
+    """Save settings: API keys go to encrypted vault, other settings to config.json."""
     settings = get_settings()
     config_file = settings.base_dir / "config.json"
     existing = _read_config(config_file)
-    # Only update non-None values from the request
-    existing.update({k: v for k, v in body.model_dump(exclude_none=True).items()})
-    try:
-        config_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
-    except OSError as e:
-        logger.error(f"Failed to write config file: {e}")
-        raise HTTPException(status_code=500, detail="Failed to save settings")
+    payload = body.model_dump(exclude_none=True)
 
-    # Write API keys to AppData .env so pydantic-settings picks them up
+    # API key fields go to the encrypted vault, NOT to config.json
+    vault = get_key_vault()
+    api_key_fields = {"gemini_api_key", "elevenlabs_api_key", "supabase_url", "supabase_key"}
+    for key_name in api_key_fields:
+        value = payload.pop(key_name, None)
+        if value:
+            vault.store_key(key_name, value)
+
+    # Non-key settings (first_run_complete, crash_reporting_enabled) go to config.json
+    if payload:
+        existing.update(payload)
+        try:
+            config_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+        except OSError as e:
+            logger.error(f"Failed to write config file: {e}")
+            raise HTTPException(status_code=500, detail="Failed to save settings")
+
+    # Still write API keys to AppData .env so pydantic-settings picks them up
+    # (bridge until Plan 02 switches services to read from vault directly)
     _write_env_keys(settings.base_dir, body.model_dump(exclude_none=True))
 
     # Clear settings cache so next request sees fresh values
