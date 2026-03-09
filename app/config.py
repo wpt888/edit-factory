@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     input_dir: Path = _BASE_DIR / "input"
     output_dir: Path = _BASE_DIR / "output"
     logs_dir: Path = _BASE_DIR / "logs"
+    media_dir: Path = _BASE_DIR / "media"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
@@ -153,6 +154,7 @@ class Settings(BaseSettings):
         self.input_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
+        self.media_dir.mkdir(parents=True, exist_ok=True)
         if self.desktop_mode:
             # Ensure AppData subdirectories for desktop mode
             (self.base_dir / "cache" / "tts").mkdir(parents=True, exist_ok=True)
