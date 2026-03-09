@@ -18,7 +18,7 @@ Requirements for Desktop Product MVP. Each maps to roadmap phases.
 
 ### Auth & Licensing
 
-- [ ] **AUTH-01**: Frontend sends JWT token to backend via Authorization header on every API call
+- [x] **AUTH-01**: Frontend sends JWT token to backend via Authorization header on every API call
 - [ ] **AUTH-02**: User can log out from the app via a visible logout button in the UI
 - [ ] **AUTH-03**: Lemon Squeezy license key is validated at first launch and periodically (with offline grace period)
 - [ ] **AUTH-04**: User can reset password via email link from the login page
@@ -100,7 +100,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DATA-04 | 66 | Complete |
 | DATA-05 | 65 | Complete |
 | DATA-06 | 64 | Complete |
-| AUTH-01 | 67 | Pending |
+| AUTH-01 | 67 | Complete |
 | AUTH-02 | 67 | Pending |
 | AUTH-03 | 68 | Pending |
 | AUTH-04 | 67 | Pending |

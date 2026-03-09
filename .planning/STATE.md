@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 66-03-PLAN.md
-last_updated: "2026-03-09T04:16:03.605Z"
-last_activity: 2026-03-09 — 66-03 Generate raw clips migration to repository methods
+status: executing
+stopped_at: Completed 67-01-PLAN.md
+last_updated: "2026-03-09T04:41:35.265Z"
+last_activity: 2026-03-09 — Completed 67-01 (JWT Token Injection)
 progress:
   total_phases: 10
   completed_phases: 3
-  total_plans: 7
-  completed_plans: 7
+  total_plans: 10
+  completed_plans: 8
 ---
 
 # Project State
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale.
-**Current focus:** v12 Desktop Product MVP — Phase 66 (in progress)
+**Current focus:** v12 Desktop Product MVP — Phase 67 (planning)
 
 ## Current Position
 
-Phase: 66 — Local File Storage & Offline Mode
-Plan: 03 of 3 complete (phase complete)
-Status: Phase 66 complete - all plans executed
-Last activity: 2026-03-09 — 66-03 Generate raw clips migration to repository methods
+Phase: 67 — Auth Flow Fixes
+Plan: 1 of 3 (in progress)
+Status: Executing phase 67
+Last activity: 2026-03-09 — Completed 67-01 (JWT Token Injection)
 
 ## Performance Metrics
 
@@ -50,9 +50,10 @@ Last activity: 2026-03-09 — 66-03 Generate raw clips migration to repository m
 | v9 Assembly Fix + Overlays | 4 (43-46) | 6 | Shipped 2026-02-28 |
 | v10 Desktop Launcher | 8 (47-54) | 18 | Shipped 2026-03-01 |
 | v11 Production Polish | 9 (55-63) | 22 | Shipped 2026-03-03 |
-| v12 Desktop Product MVP | 2/10 (64-73) | 6/23 | In progress |
+| v12 Desktop Product MVP | 3/10 (64-73) | 7/23 | In progress |
 | Phase 66 P01 | 5min | 2 tasks | 3 files |
 | Phase 66 P03 | 5min | 2 tasks | 1 files |
+| Phase 67 P01 | 1min | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -85,6 +86,7 @@ Recent decisions affecting v12:
 - [Phase 66]: MediaManager works alongside existing input_dir/output_dir for backward compat
 - [Phase 66]: Removed updated_at from repo calls since repository layer handles timestamps automatically
 - [Phase 66]: Removed PostgREST status_result.data checks since repo raises exceptions on failure
+- [Phase 67]: Use createClient() directly in apiFetch instead of React context for JWT injection
 
 ### Pending Todos
 
@@ -101,10 +103,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T04:11:25.941Z
-Stopped at: Completed 66-03-PLAN.md
+Last session: 2026-03-09T04:41:35.241Z
+Stopped at: Completed 67-01-PLAN.md
 Resume file: None
-Next action: Continue Phase 66 plan 03.
+Next action: Execute 67-02-PLAN.md
 
 ---
 *Last updated: 2026-03-09 after 66-02 completion*
