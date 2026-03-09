@@ -283,7 +283,10 @@ Plans:
   2. The setup wizard validates API keys inline (green checkmark on success, red error on failure) before allowing the user to proceed
   3. The subtitle/caption settings show 5+ visual presets (e.g., "Bold White", "Neon Glow", "Minimal", "Karaoke", "Shadow Pop") as clickable thumbnails
   4. Selecting a caption preset applies font, size, position, color, and effect settings — the user does not need to configure individual parameters
-**Plans**: 3 plans
+**Plans**: 2 plans
+Plans:
+- [ ] 71-01-PLAN.md — Setup wizard Free TTS preset + inline API key validation
+- [ ] 71-02-PLAN.md — Caption/subtitle visual presets (6 clickable thumbnails)
 
 ### Phase 72: Brand & Language Cleanup
 **Goal**: The product name is consistent everywhere in the app (single name, no "EditAI" vs "Edit Factory" confusion), and no hardcoded Romanian text remains in any user-facing string
