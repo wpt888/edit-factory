@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 73-03-PLAN.md
-last_updated: "2026-03-09T07:44:48.463Z"
-last_activity: 2026-03-09 — Completed 71-01 (Free TTS Preset & Setup Validation)
+status: Complete
+stopped_at: Completed 74-01-PLAN.md
+last_updated: "2026-03-09T08:17:58.185Z"
+last_activity: 2026-03-09 — Completed 74-01 (Gap Closure)
 progress:
   total_phases: 11
-  completed_phases: 10
+  completed_phases: 11
   total_plans: 24
-  completed_plans: 23
+  completed_plans: 24
 ---
 
 # Project State
@@ -25,14 +25,14 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 74 — v12 Gap Closure
-Plan: 0 of 1
-Status: Planning
-Last activity: 2026-03-09 — Gap closure phase created from audit
+Plan: 1 of 1
+Status: Complete
+Last activity: 2026-03-09 — Completed 74-01 (Gap Closure: download route + Romanian text)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 121 (across v2-v12)
+- Total plans completed: 122 (across v2-v12)
 - Total phases completed: 65
 - Total milestones shipped: 11
 
@@ -69,6 +69,7 @@ Last activity: 2026-03-09 — Gap closure phase created from audit
 | Phase 73 P01 | 2min | 2 tasks | 2 files |
 | Phase 73 P02 | 2min | 2 tasks | 4 files |
 | Phase 73 P03 | 3min | 2 tasks | 3 files |
+| Phase 74 P01 | 1min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -123,6 +124,7 @@ Recent decisions affecting v12:
 - [Phase 73]: macOS dmg target with drag-to-Applications layout for standard macOS UX
 - [Phase 73]: Moved torch/torchaudio from base requirements to requirements-ml.txt for installer size reduction
 - [Phase 73]: Pure Node.js ICO generation with BITMAPINFOHEADER — no native image dependencies
+- [Phase 74]: Anchor element with download attribute instead of window.open for reliable browser download
 
 ### Pending Todos
 
@@ -139,8 +141,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T07:42:13.744Z
-Stopped at: Completed 73-03-PLAN.md
+Last session: 2026-03-09T08:17:58.150Z
+Stopped at: Completed 74-01-PLAN.md
 Resume file: None
 Next action: Phase 69 complete — advance to next phase
 
