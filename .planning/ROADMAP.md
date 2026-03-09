@@ -249,8 +249,8 @@ Plans:
 **Depends on**: Phase 64
 **Requirements**: API-01, API-02, API-03, API-04
 **Success Criteria** (what must be TRUE):
-  1. A TTS request with `DATA_BACKEND=sqlite` calls ElevenLabs directly from the Next.js frontend or Electron main process — the FastAPI backend is not involved in the API call
-  2. A Gemini analysis request goes directly to the Gemini API from the desktop — no proxy through the backend
+  1. A TTS request with `DATA_BACKEND=sqlite` uses the user's own ElevenLabs API key from the encrypted vault — no remote server proxy, the local FastAPI backend calls ElevenLabs directly from the user's machine
+  2. A Gemini analysis request uses the user's own Gemini API key from the encrypted vault — no remote server proxy, the local backend calls Gemini directly from the user's machine
   3. API keys entered in the setup wizard are stored in an encrypted file on disk (not plaintext .env) — reading the file without the decryption key shows ciphertext
   4. With no ElevenLabs key configured, TTS falls back to Edge TTS (free) — the user sees a toast indicating the fallback
   5. With no Gemini key configured, video analysis falls back to local motion/variance scoring only — no error is shown, clips are still generated
