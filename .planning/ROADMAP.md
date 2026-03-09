@@ -169,7 +169,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 - [x] **Phase 70: UX Simplification — Pipeline & Batch** - 3-step simplified pipeline mode, collapsible advanced settings, batch job queue UI (3 plans) (completed 2026-03-09)
 - [x] **Phase 71: UX Simplification — Onboarding & Presets** - Setup wizard with API key guidance and presets; 5+ caption/subtitle visual presets (2 plans) (completed 2026-03-09)
 - [x] **Phase 72: Brand & Language Cleanup** - Consistent product name throughout app; remove all hardcoded Romanian text (1 plan) (completed 2026-03-09)
-- [ ] **Phase 73: Electron Polish** - Real publish config, portable Node.js, installer optimization, auto-updater, branding assets, macOS target (3 plans)
+- [x] **Phase 73: Electron Polish** - Real publish config, portable Node.js, installer optimization, auto-updater, branding assets, macOS target (3 plans) (completed 2026-03-09)
 
 ## v12 Phase Details
 
@@ -341,7 +341,7 @@ Plans:
 | 70. UX — Pipeline & Batch | 3/3 | Complete    | 2026-03-09 | - |
 | 71. UX — Onboarding & Presets | 2/2 | Complete    | 2026-03-09 | - |
 | 72. Brand & Language Cleanup | 1/1 | Complete    | 2026-03-09 | - |
-| 73. Electron Polish | 2/3 | In Progress|  | - |
+| 73. Electron Polish | 3/3 | Complete   | 2026-03-09 | - |
 
 ---
 *Last updated: 2026-03-09 after phase 73 planning*

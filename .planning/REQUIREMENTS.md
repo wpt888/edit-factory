@@ -39,8 +39,8 @@ Requirements for Desktop Product MVP. Each maps to roadmap phases.
 - [x] **ELEC-01**: electron-updater publish config has real owner/repo values (not PLACEHOLDER)
 - [x] **ELEC-02**: Portable Node.js is included in the build pipeline with documented setup
 - [x] **ELEC-03**: Installer size is under 500 MB (optimized PyTorch/Whisper bundling strategy)
-- [ ] **ELEC-04**: Auto-updater downloads and installs updates from GitHub Releases
-- [ ] **ELEC-05**: App has a consistent icon, splash screen, and window title matching the product brand
+- [x] **ELEC-04**: Auto-updater downloads and installs updates from GitHub Releases
+- [x] **ELEC-05**: App has a consistent icon, splash screen, and window title matching the product brand
 - [x] **ELEC-06**: macOS build target is configured in electron-builder (in addition to Windows NSIS)
 
 ### Direct API Integration
@@ -115,8 +115,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ELEC-01 | 73 | Complete |
 | ELEC-02 | 73 | Complete |
 | ELEC-03 | 73 | Complete |
-| ELEC-04 | 73 | Pending |
-| ELEC-05 | 73 | Pending |
+| ELEC-04 | 73 | Complete |
+| ELEC-05 | 73 | Complete |
 | ELEC-06 | 73 | Complete |
 | API-01 | 69 | Complete |
 | API-02 | 69 | Complete |
