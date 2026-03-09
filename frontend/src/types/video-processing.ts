@@ -215,6 +215,171 @@ export const DEFAULT_SEGMENT_TRANSFORM: SegmentTransform = {
   opacity: 1.0,
 };
 
+// Caption preset types and configurations (Phase 71 - UX-04)
+export interface CaptionPreset {
+  id: string;
+  name: string;
+  description: string;
+  settings: SubtitleSettings;
+  previewStyle: {
+    backgroundColor: string;
+    textSample: string;
+  };
+}
+
+export const CAPTION_PRESETS: CaptionPreset[] = [
+  {
+    id: "bold-white",
+    name: "Bold White",
+    description: "Large white text, thick black outline. Clean and readable.",
+    settings: {
+      fontSize: 52,
+      fontFamily: "var(--font-montserrat), Montserrat, sans-serif",
+      textColor: "#FFFFFF",
+      outlineColor: "#000000",
+      outlineWidth: 4,
+      positionY: 85,
+      position: "bottom",
+      marginV: 30,
+      shadowDepth: 0,
+      shadowColor: "#000000",
+      borderStyle: 1,
+      enableGlow: false,
+      glowBlur: 0,
+      adaptiveSizing: false,
+    },
+    previewStyle: {
+      backgroundColor: "#1a1a2e",
+      textSample: "Sample Text",
+    },
+  },
+  {
+    id: "neon-glow",
+    name: "Neon Glow",
+    description: "Cyan text with glow effect. Eye-catching for night/club content.",
+    settings: {
+      fontSize: 44,
+      fontFamily: "var(--font-bebas-neue), 'Bebas Neue', sans-serif",
+      textColor: "#00FFFF",
+      outlineColor: "#0066FF",
+      outlineWidth: 2,
+      positionY: 80,
+      position: "bottom",
+      marginV: 30,
+      shadowDepth: 0,
+      shadowColor: "#000000",
+      borderStyle: 1,
+      enableGlow: true,
+      glowBlur: 6,
+      adaptiveSizing: false,
+    },
+    previewStyle: {
+      backgroundColor: "#0a0a1a",
+      textSample: "Sample Text",
+    },
+  },
+  {
+    id: "minimal",
+    name: "Minimal",
+    description: "Small, subtle white text. Unobtrusive, video stays the focus.",
+    settings: {
+      fontSize: 36,
+      fontFamily: "var(--font-inter), Inter, sans-serif",
+      textColor: "#FFFFFF",
+      outlineColor: "#000000",
+      outlineWidth: 1,
+      positionY: 90,
+      position: "bottom",
+      marginV: 30,
+      shadowDepth: 0,
+      shadowColor: "#000000",
+      borderStyle: 1,
+      enableGlow: false,
+      glowBlur: 0,
+      adaptiveSizing: false,
+    },
+    previewStyle: {
+      backgroundColor: "#2d2d3a",
+      textSample: "Sample Text",
+    },
+  },
+  {
+    id: "karaoke",
+    name: "Karaoke",
+    description: "Yellow text with strong black outline. Classic karaoke/lyric style.",
+    settings: {
+      fontSize: 48,
+      fontFamily: "var(--font-anton), Anton, sans-serif",
+      textColor: "#FFFF00",
+      outlineColor: "#000000",
+      outlineWidth: 3,
+      positionY: 88,
+      position: "bottom",
+      marginV: 30,
+      shadowDepth: 2,
+      shadowColor: "#000000",
+      borderStyle: 1,
+      enableGlow: false,
+      glowBlur: 0,
+      adaptiveSizing: false,
+    },
+    previewStyle: {
+      backgroundColor: "#1a0a2e",
+      textSample: "Sample Text",
+    },
+  },
+  {
+    id: "shadow-pop",
+    name: "Shadow Pop",
+    description: "White text with heavy drop shadow. Works on any background.",
+    settings: {
+      fontSize: 46,
+      fontFamily: "var(--font-poppins), Poppins, sans-serif",
+      textColor: "#FFFFFF",
+      outlineColor: "#333333",
+      outlineWidth: 2,
+      positionY: 82,
+      position: "bottom",
+      marginV: 30,
+      shadowDepth: 4,
+      shadowColor: "#000000",
+      borderStyle: 1,
+      enableGlow: false,
+      glowBlur: 0,
+      adaptiveSizing: false,
+    },
+    previewStyle: {
+      backgroundColor: "#1e1e2e",
+      textSample: "Sample Text",
+    },
+  },
+  {
+    id: "warm-retro",
+    name: "Warm Retro",
+    description: "Warm cream text with orange outline, slight glow. Vintage feel.",
+    settings: {
+      fontSize: 44,
+      fontFamily: "var(--font-oswald), Oswald, sans-serif",
+      textColor: "#FFF5E1",
+      outlineColor: "#CC6600",
+      outlineWidth: 2,
+      positionY: 85,
+      position: "bottom",
+      marginV: 30,
+      shadowDepth: 0,
+      shadowColor: "#000000",
+      borderStyle: 1,
+      enableGlow: true,
+      glowBlur: 3,
+      adaptiveSizing: false,
+    },
+    previewStyle: {
+      backgroundColor: "#2e1a0a",
+      textSample: "Sample Text",
+    },
+  },
+];
+
 export const ELEVENLABS_MODELS: ElevenLabsModelOption[] = [
   {
     id: "eleven_flash_v2_5",
