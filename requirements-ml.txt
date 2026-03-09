@@ -1,0 +1,14 @@
+# Optional ML dependencies — NOT bundled in installer
+# Install manually for advanced features: pip install -r requirements-ml.txt
+
+# Audio Transcription (standalone CAPTIONS_AENEAS only)
+openai-whisper==20250625
+
+# PyTorch (required for VAD, voice cloning, Coqui TTS)
+# For NVIDIA GPU support:
+# pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+torch==2.9.1
+torchaudio==2.9.1
+
+# TTS - Coqui XTTS (voice cloning, requires PyTorch)
+# TTS installed separately with --no-deps due to numpy pin conflict

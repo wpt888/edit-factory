@@ -16,8 +16,8 @@ redis==7.1.0
 
 # Video Processing
 scenedetect[opencv]==0.6.7.1
-opencv-python-headless==4.12.0.88
-numpy>=1.24.0,<2.0.0
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
 scipy==1.13.1
 
 # Google Gemini AI
@@ -26,18 +26,14 @@ google-genai==1.56.0
 # Anthropic Claude AI
 anthropic==0.79.0
 
-# Audio Transcription (SRT generation)
-openai-whisper==20250625
-
 # TTS & External APIs
 httpx==0.28.1
 aiofiles==25.1.0
 edge-tts==7.2.7
 
-# TTS - Coqui XTTS (voice cloning, 17 languages)
-# Note: PyTorch is a transitive dependency. For NVIDIA GPU support, install PyTorch with CUDA:
-# pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-TTS==0.22.0
+# Optional ML dependencies (PyTorch, Whisper, Coqui TTS) — see requirements-ml.txt
+# These are NOT bundled in the desktop installer to keep it under 500 MB.
+# Install for advanced features: pip install -r requirements-ml.txt
 librosa==0.11.0
 pydub==0.25.0
 
@@ -49,13 +45,8 @@ pydub==0.25.0
 kokoro==0.9.4
 soundfile==0.13.1
 
-# Voice Activity Detection (VAD) - pentru detectarea și mutarea vocilor din video
-# Silero VAD necesită PyTorch
-torch==2.9.1
-torchaudio==2.9.1
-
-# Voice Cloning (optional - requires GPU for best performance)
-# Comentat pentru că torch e deja inclus mai sus
+# Voice Activity Detection (VAD) and Voice Cloning require PyTorch
+# These are lazy-imported with graceful fallback — see requirements-ml.txt
 
 # Supabase
 supabase==2.27.0

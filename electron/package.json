@@ -58,7 +58,7 @@
       {
         "from": "../venv",
         "to": "venv",
-        "filter": ["**/*", "!**/__pycache__/**", "!**/*.pyc"]
+        "filter": ["**/*", "!**/__pycache__/**", "!**/*.pyc", "!**/torch/**", "!**/torchaudio/**", "!**/torchvision/**", "!**/nvidia/**", "!**/triton/**", "!**/whisper/**", "!**/TTS/**", "!**/Cython/**"]
       },
       {
         "from": "../frontend/.next/standalone",
