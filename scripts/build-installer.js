@@ -13,6 +13,27 @@
  * Requirements: Windows (or WSL with PowerShell available), Node.js 18+
  */
 
+/**
+ * PORTABLE NODE.JS SETUP
+ * ======================
+ * The installer bundles a portable Node.js runtime for running the Next.js
+ * frontend in production. This is downloaded automatically by Step 2 below.
+ *
+ * Manual setup (if automatic download fails):
+ *   1. Download Node.js 22 LTS (win-x64) from:
+ *      https://nodejs.org/dist/v22.22.0/node-v22.22.0-win-x64.zip
+ *   2. Extract the zip contents
+ *   3. Move the extracted folder to: electron/resources/node/
+ *      (so that electron/resources/node/node.exe exists)
+ *   4. The build script will detect the cached binary and skip download
+ *
+ * The portable Node.js is gitignored (electron/.gitignore) and NOT
+ * committed to the repository. Each developer downloads it once.
+ *
+ * For macOS builds, replace with the darwin-x64 or darwin-arm64 variant:
+ *   https://nodejs.org/dist/v22.22.0/node-v22.22.0-darwin-arm64.tar.gz
+ */
+
 const { execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -192,6 +213,25 @@ function stepRunElectronBuilder() {
 // Main
 // ──────────────────────────────────────────────
 (function main() {
+  if (process.argv.includes('--help')) {
+    console.log('Edit Factory Installer Build Script');
+    console.log('===================================');
+    console.log('Usage: node scripts/build-installer.js [--help]');
+    console.log('');
+    console.log('Steps:');
+    console.log('  1. Builds Next.js frontend (standalone mode)');
+    console.log('  2. Downloads portable Node.js 22 LTS to electron/resources/node/');
+    console.log('  3. Verifies all prerequisites');
+    console.log('  4. Runs electron-builder to produce NSIS installer');
+    console.log('');
+    console.log('Manual Node.js setup:');
+    console.log('  Download: https://nodejs.org/dist/v22.22.0/node-v22.22.0-win-x64.zip');
+    console.log('  Extract to: electron/resources/node/ (so node.exe exists there)');
+    console.log('');
+    console.log('Output: electron/dist/EditFactory-Setup-{version}.exe');
+    process.exit(0);
+  }
+
   console.log('[build] Edit Factory installer build starting...');
   console.log(`[build] Project root: ${PROJECT_ROOT}`);
 
