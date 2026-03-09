@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in_progress
-stopped_at: Gap closure phases 77-79 added to ROADMAP.md
-last_updated: "2026-03-09T10:00:00.000Z"
+status: planning
+stopped_at: Added phases 77-79 to ROADMAP.md
+last_updated: "2026-03-09T10:28:46.810Z"
 last_activity: 2026-03-09 — Added tech debt closure phases 77-79 from v12 audit
 progress:
   total_phases: 16
-  completed_phases: 13
-  total_plans: 26
-  completed_plans: 26
+  completed_phases: 14
+  total_plans: 27
+  completed_plans: 27
 ---
 
 # Project State
@@ -127,6 +127,7 @@ Recent decisions affecting v12:
 - [Phase 74]: Anchor element with download attribute instead of window.open for reliable browser download
 - [Phase 76]: Lazy imports of _reset_elevenlabs_tts/reset_script_generator inside save_desktop_settings to avoid circular deps
 - [Phase 76]: any() guard on api_key_fields so singleton resets only fire when a key was actually submitted
+- [Phase 77]: Bulk-select uses per-clip repo loop since repository has no in_() bulk operator
 
 ### Pending Todos
 
