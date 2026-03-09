@@ -172,6 +172,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 - [x] **Phase 73: Electron Polish** - Real publish config, portable Node.js, installer optimization, auto-updater, branding assets, macOS target (3 plans) (completed 2026-03-09)
 - [x] **Phase 74: v12 Gap Closure** - Fix SimplePipeline download URL + Romanian text remnant (1 plan) (completed 2026-03-09)
 - [x] **Phase 75: Batch Endpoint Fix** - Fix BatchUploadQueue calling non-existent /generate-raw endpoint (1 plan) (completed 2026-03-09)
+- [ ] **Phase 76: v12 Gap Closure Round 2** - Remove backend Romanian strings + refresh service singletons after API key save (1 plan)
 
 ## v12 Phase Details
 
@@ -343,6 +344,18 @@ Plans:
 Plans:
 - [ ] 75-01-PLAN.md — Fix batch endpoint URL in BatchUploadQueue
 
+### Phase 76: v12 Gap Closure Round 2
+**Goal**: Close remaining integration and language gaps — replace Romanian strings in backend progress API with English, and add service singleton refresh after API key save so ElevenLabs/Gemini keys take effect immediately without backend restart
+**Depends on**: Phase 69, Phase 72
+**Requirements**: UX-07, API-01, API-02
+**Gap Closure**: Closes INT-04, INT-05, FLOW-03 from v12-MILESTONE-AUDIT.md
+**Success Criteria** (what must be TRUE):
+  1. Searching `library_routes.py` for Romanian strings ("Proiect negăsit", "Se inițializează", "Eșuat") returns zero matches — all progress API responses are in English
+  2. After saving API keys via desktop settings endpoint, ElevenLabs and Gemini singletons are refreshed — new keys take effect without restarting the backend
+**Plans**: 1 plan
+Plans:
+- [ ] 76-01-PLAN.md — Replace Romanian progress strings + add singleton refresh after key save
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -370,6 +383,7 @@ Plans:
 | 73. Electron Polish | 3/3 | Complete    | 2026-03-09 | - |
 | 74. v12 Gap Closure | 1/1 | Complete    | 2026-03-09 | - |
 | 75. Batch Endpoint Fix | 1/1 | Complete    | 2026-03-09 | - |
+| 76. v12 Gap Closure Round 2 | 0/1 | Pending | - | - |
 
 ---
 *Last updated: 2026-03-09 after phase 73 planning*
