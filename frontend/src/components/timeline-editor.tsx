@@ -31,6 +31,7 @@ import {
   ImageIcon,
   Trash2,
   ChevronDown,
+  Loader2,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import { formatTimeShort as formatTime } from "@/lib/utils";
@@ -128,6 +129,7 @@ export function TimelineEditor({
   // --- Inline continuous preview player state ---
   const [isPreviewActive, setIsPreviewActive] = useState(false);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
+  const [isPreviewBuffering, setIsPreviewBuffering] = useState(false);
   const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
   const [previewDuration, setPreviewDuration] = useState(0);
   const [previewActiveIndex, setPreviewActiveIndex] = useState(0);
@@ -142,6 +144,8 @@ export function TimelineEditor({
   const previewRafIdRef = useRef<number | null>(null);
   const seekGraceTimestampRef = useRef(0);
   const lastReportedTimeRef = useRef(0);
+  const activationIdRef = useRef(0);
+  const activationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep refs in sync (state → ref for use in callbacks)
   // Note: isPreviewPlayingRef is also set synchronously in togglePreviewPlayPause to avoid 1-frame stale reads
@@ -152,6 +156,11 @@ export function TimelineEditor({
   // Cleanup: pause all audio/video and stop rAF on unmount
   useEffect(() => {
     return () => {
+      activationIdRef.current++; // invalidate any pending async activation work
+      if (activationTimeoutRef.current != null) {
+        clearTimeout(activationTimeoutRef.current);
+        activationTimeoutRef.current = null;
+      }
       if (previewRafIdRef.current != null) {
         cancelAnimationFrame(previewRafIdRef.current);
         previewRafIdRef.current = null;
@@ -407,7 +416,6 @@ export function TimelineEditor({
       // Set ref synchronously before starting rAF loop
       isPreviewPlayingRef.current = true;
       setIsPreviewPlaying(true);
-      audio.play().catch(() => {});
       const match = matchesRef.current[previewActiveIndexRef.current];
       if (match?.source_video_id) {
         const vid = previewVideoRefs.current[match.source_video_id];
@@ -422,9 +430,26 @@ export function TimelineEditor({
             previewSegmentEndTimeRef.current = match.segment_end_time ?? undefined;
           }
           seekGraceTimestampRef.current = performance.now();
-          vid.currentTime = match.segment_start_time ?? vid.currentTime;
-          vid.play().catch(() => {});
+          const targetTime = match.segment_start_time ?? vid.currentTime;
+          const alreadyAtTarget = Math.abs(vid.currentTime - targetTime) < 0.05;
+          if (alreadyAtTarget) {
+            vid.play().catch(() => {});
+            audio.play().catch(() => {});
+          } else {
+            // Wait for seek to complete before playing — prevents initial black frame stall
+            const onSeeked = () => {
+              vid.removeEventListener("seeked", onSeeked);
+              vid.play().catch(() => {});
+              audio.play().catch(() => {});
+            };
+            vid.addEventListener("seeked", onSeeked);
+            vid.currentTime = targetTime;
+          }
+        } else {
+          audio.play().catch(() => {});
         }
+      } else {
+        audio.play().catch(() => {});
       }
       startPreviewRafLoop();
     }
@@ -476,6 +501,14 @@ export function TimelineEditor({
   }, [isPreviewActive, syncPreviewVideo]);
 
   const activatePreview = useCallback(() => {
+    // Increment activation ID — any pending async work from previous activations
+    // will check this and bail out if it's stale (prevents audio restarting after Stop).
+    const thisActivation = ++activationIdRef.current;
+    if (activationTimeoutRef.current != null) {
+      clearTimeout(activationTimeoutRef.current);
+      activationTimeoutRef.current = null;
+    }
+
     seekGraceTimestampRef.current = performance.now();
     setIsPreviewActive(true);
     setPreviewActiveIndex(0);
@@ -486,6 +519,7 @@ export function TimelineEditor({
     // Uses requestAnimationFrame to wait for the next render, then checks readyState.
     let attempts = 0;
     const tryStart = () => {
+      if (activationIdRef.current !== thisActivation) return; // stale — user clicked Stop
       const audio = previewAudioRef.current;
       if (!audio) {
         // Audio not mounted yet — retry next frame (React render pending)
@@ -496,16 +530,62 @@ export function TimelineEditor({
       }
 
       const beginPlayback = () => {
+        if (activationIdRef.current !== thisActivation) return; // stale — user clicked Stop
         audio.currentTime = 0;
         isPreviewPlayingRef.current = true;
         setIsPreviewPlaying(true);
         seekGraceTimestampRef.current = performance.now();
-        syncPreviewVideo(0);
-        startPreviewRafLoop();
-        audio.play().catch(() => {
-          isPreviewPlayingRef.current = false;
-          setIsPreviewPlaying(false);
-        });
+
+        // Pre-seek video to first segment BEFORE starting audio — prevents
+        // initial black frame stall where audio plays but video is still seeking.
+        const firstMatch = matchesRef.current[0];
+        const vid = firstMatch?.source_video_id
+          ? previewVideoRefs.current[firstMatch.source_video_id]
+          : null;
+        const startVideoAndAudio = () => {
+          if (activationIdRef.current !== thisActivation) return; // stale — user clicked Stop
+          syncPreviewVideo(0);
+          startPreviewRafLoop();
+          audio.play().catch(() => {
+            isPreviewPlayingRef.current = false;
+            setIsPreviewPlaying(false);
+          });
+        };
+        if (vid && firstMatch.segment_start_time != null) {
+          const targetTime = firstMatch.segment_start_time;
+          if (vid.readyState >= 2 && Math.abs(vid.currentTime - targetTime) < 0.05) {
+            startVideoAndAudio();
+          } else {
+            const onReady = () => {
+              vid.removeEventListener("seeked", onReady);
+              vid.removeEventListener("canplay", onReady);
+              startVideoAndAudio();
+            };
+            vid.addEventListener("seeked", onReady);
+            vid.addEventListener("canplay", onReady);
+            if (vid.readyState >= 2) {
+              vid.currentTime = targetTime;
+            } else {
+              // Video not loaded yet — wait for canplay first, then seek
+              const onFirstLoad = () => {
+                vid.removeEventListener("canplay", onFirstLoad);
+                vid.currentTime = targetTime;
+              };
+              vid.addEventListener("canplay", onFirstLoad);
+            }
+            // Safety timeout: don't block forever if video fails to load
+            activationTimeoutRef.current = setTimeout(() => {
+              activationTimeoutRef.current = null;
+              vid.removeEventListener("seeked", onReady);
+              vid.removeEventListener("canplay", onReady);
+              if (activationIdRef.current !== thisActivation) return; // stale
+              if (!audio.paused) return; // already started
+              startVideoAndAudio();
+            }, 3000);
+          }
+        } else {
+          startVideoAndAudio();
+        }
       };
 
       // FE-12: Handle audio load errors gracefully
@@ -539,6 +619,12 @@ export function TimelineEditor({
   }, [syncPreviewVideo, startPreviewRafLoop]);
 
   const deactivatePreview = useCallback(() => {
+    // Invalidate any pending async work from activatePreview (rAF retries, timeouts, event listeners)
+    activationIdRef.current++;
+    if (activationTimeoutRef.current != null) {
+      clearTimeout(activationTimeoutRef.current);
+      activationTimeoutRef.current = null;
+    }
     stopPreviewRafLoop();
     const audio = previewAudioRef.current;
     if (audio) {
@@ -556,6 +642,7 @@ export function TimelineEditor({
     isPreviewPlayingRef.current = false;
     setIsPreviewActive(false);
     setIsPreviewPlaying(false);
+    setIsPreviewBuffering(false);
     setPreviewCurrentTime(0);
     setPreviewActiveIndex(0);
     previewActiveIndexRef.current = 0;
@@ -946,6 +1033,9 @@ export function TimelineEditor({
                 playsInline
                 preload="auto"
                 className="absolute inset-0 w-full h-full object-cover"
+                onWaiting={() => setIsPreviewBuffering(true)}
+                onPlaying={() => setIsPreviewBuffering(false)}
+                onSeeked={() => setIsPreviewBuffering(false)}
                 style={{
                   display:
                     matches[previewActiveIndex]?.source_video_id === sourceVideoId
@@ -954,6 +1044,13 @@ export function TimelineEditor({
                 }}
               />
             ))}
+
+            {/* Buffering indicator */}
+            {isPreviewBuffering && isPreviewPlaying && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/30 z-10">
+                <Loader2 className="h-6 w-6 animate-spin text-white" />
+              </div>
+            )}
 
             {/* No video fallback */}
             {!matches[previewActiveIndex]?.source_video_id && (
