@@ -20,19 +20,19 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale.
-**Current focus:** v12 Desktop Product MVP — Phase 67 (planning)
+**Current focus:** v12 Desktop Product MVP — Phase 68 (planning)
 
 ## Current Position
 
-Phase: 67 — Auth Flow Fixes
-Plan: 1 of 3 (in progress)
-Status: Executing phase 67
-Last activity: 2026-03-09 — Completed 67-01 (JWT Token Injection)
+Phase: 68 — License Key Validation Polish
+Plan: 1 of 1 (complete)
+Status: Phase 68 complete
+Last activity: 2026-03-09 — Completed 68-01 (License Key Validation Polish)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 120 (across v2-v12)
+- Total plans completed: 121 (across v2-v12)
 - Total phases completed: 65
 - Total milestones shipped: 11
 
@@ -50,12 +50,13 @@ Last activity: 2026-03-09 — Completed 67-01 (JWT Token Injection)
 | v9 Assembly Fix + Overlays | 4 (43-46) | 6 | Shipped 2026-02-28 |
 | v10 Desktop Launcher | 8 (47-54) | 18 | Shipped 2026-03-01 |
 | v11 Production Polish | 9 (55-63) | 22 | Shipped 2026-03-03 |
-| v12 Desktop Product MVP | 3/10 (64-73) | 7/23 | In progress |
+| v12 Desktop Product MVP | 3/10 (64-73) | 8/23 | In progress |
 | Phase 66 P01 | 5min | 2 tasks | 3 files |
 | Phase 66 P03 | 5min | 2 tasks | 1 files |
 | Phase 67 P01 | 1min | 1 tasks | 3 files |
 | Phase 67 P02 | 2min | 2 tasks | 3 files |
 | Phase 67 P03 | 2min | 2 tasks | 3 files |
+| Phase 68 P01 | 2min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,9 @@ Recent decisions affecting v12:
 - [Phase 67]: Use createClient() directly in apiFetch instead of React context for JWT injection
 - [Phase 67]: Forgot password uses toggle mode in same login page rather than separate route
 - [Phase 67]: Inline Supabase client in middleware instead of modifying updateSession helper
+- [Phase 68]: 72-hour grace period (down from 7 days) for tighter license enforcement
+- [Phase 68]: Blocking overlay instead of redirect when license expires to preserve unsaved work
+- [Phase 68]: 30-minute polling interval for license status checks
 
 ### Pending Todos
 
@@ -107,10 +111,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T04:46:08.602Z
-Stopped at: Completed 67-03-PLAN.md
+Last session: 2026-03-09T05:30:26Z
+Stopped at: Completed 68-01-PLAN.md
 Resume file: None
-Next action: Execute 67-02-PLAN.md
+Next action: Plan next phase
 
 ---
 *Last updated: 2026-03-09 after 66-02 completion*
