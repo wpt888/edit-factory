@@ -7,7 +7,9 @@
     "start": "electron .",
     "dev": "electron .",
     "dist": "electron-builder --win",
-    "dist:publish": "electron-builder --win --publish always"
+    "dist:publish": "electron-builder --win --publish always",
+    "dist:mac": "electron-builder --mac",
+    "dist:mac:publish": "electron-builder --mac --publish always"
   },
   "dependencies": {
     "electron-updater": "^6.1.0"
@@ -34,9 +36,20 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "PLACEHOLDER_ORG",
-      "repo": "PLACEHOLDER_REPO",
+      "owner": "obsid-srl",
+      "repo": "edit-factory",
       "releaseType": "draft"
+    },
+    "mac": {
+      "target": ["dmg"],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.video"
+    },
+    "dmg": {
+      "contents": [
+        { "x": 130, "y": 220 },
+        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+      ]
     },
     "directories": {
       "output": "dist"
