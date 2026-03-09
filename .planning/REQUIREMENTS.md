@@ -28,7 +28,7 @@ Requirements for Desktop Product MVP. Each maps to roadmap phases.
 
 - [x] **UX-01**: Pipeline has a simplified 3-step mode (Upload → Choose Style → Download) for non-technical users
 - [x] **UX-02**: Advanced parameters (motion threshold, variance scoring, pHash) are hidden under an expandable "Advanced" section
-- [ ] **UX-03**: Setup wizard guides new users through API key configuration with presets ("Free TTS" auto-selects Edge TTS, skip ElevenLabs)
+- [x] **UX-03**: Setup wizard guides new users through API key configuration with presets ("Free TTS" auto-selects Edge TTS, skip ElevenLabs)
 - [x] **UX-04**: User can choose from 5+ caption/subtitle visual presets (font, size, position, color scheme)
 - [x] **UX-05**: User can queue multiple videos for batch clip generation with a visible job queue
 - [ ] **UX-06**: Brand name is consistent throughout the entire app (single name, no "EditAI" vs "Edit Factory" mix)
@@ -107,7 +107,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTH-05 | 67 | Complete |
 | UX-01 | 70 | Complete |
 | UX-02 | 70 | Complete |
-| UX-03 | 71 | Pending |
+| UX-03 | 71 | Complete |
 | UX-04 | 71 | Complete |
 | UX-05 | 70 | Complete |
 | UX-06 | 72 | Pending |

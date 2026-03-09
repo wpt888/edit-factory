@@ -167,7 +167,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 - [x] **Phase 68: License Key Validation Polish** - Lemon Squeezy periodic revalidation with offline grace period (1 plan) (completed 2026-03-09)
 - [x] **Phase 69: Direct API Integration** - ElevenLabs and Gemini calls from desktop; encrypted local API key storage; graceful fallback without keys (3 plans) (completed 2026-03-09)
 - [x] **Phase 70: UX Simplification — Pipeline & Batch** - 3-step simplified pipeline mode, collapsible advanced settings, batch job queue UI (3 plans) (completed 2026-03-09)
-- [ ] **Phase 71: UX Simplification — Onboarding & Presets** - Setup wizard with API key guidance and presets; 5+ caption/subtitle visual presets (2 plans)
+- [x] **Phase 71: UX Simplification — Onboarding & Presets** - Setup wizard with API key guidance and presets; 5+ caption/subtitle visual presets (2 plans) (completed 2026-03-09)
 - [ ] **Phase 72: Brand & Language Cleanup** - Consistent product name throughout app; remove all hardcoded Romanian text (1 plan)
 - [ ] **Phase 73: Electron Polish** - Real publish config, portable Node.js, installer optimization, auto-updater, branding assets, macOS target (3 plans)
 
@@ -337,7 +337,7 @@ Plans:
 | 68. License Key Validation Polish | 1/1 | Complete    | 2026-03-09 | - |
 | 69. Direct API Integration | 3/3 | Complete    | 2026-03-09 | - |
 | 70. UX — Pipeline & Batch | 3/3 | Complete    | 2026-03-09 | - |
-| 71. UX — Onboarding & Presets | 1/2 | In Progress|  | - |
+| 71. UX — Onboarding & Presets | 2/2 | Complete   | 2026-03-09 | - |
 | 72. Brand & Language Cleanup | v12 | 0/1 | Not started | - |
 | 73. Electron Polish | v12 | 0/3 | Not started | - |
 

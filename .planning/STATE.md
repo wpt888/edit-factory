@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Completed 71-02-PLAN.md
-last_updated: "2026-03-09T06:59:55.966Z"
-last_activity: 2026-03-09 — Starting Phase 71 planning
+status: executing
+stopped_at: Completed 71-01-PLAN.md
+last_updated: "2026-03-09T07:02:44.490Z"
+last_activity: 2026-03-09 — Completed 71-01 (Free TTS Preset & Setup Validation)
 progress:
   total_phases: 10
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 19
-  completed_plans: 18
+  completed_plans: 19
 ---
 
 # Project State
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 71 — UX Simplification — Onboarding & Presets
-Plan: 0 of 2
-Status: Planning
-Last activity: 2026-03-09 — Starting Phase 71 planning
+Plan: 1 of 2
+Status: Executing
+Last activity: 2026-03-09 — Completed 71-01 (Free TTS Preset & Setup Validation)
 
 ## Performance Metrics
 
@@ -64,6 +64,7 @@ Last activity: 2026-03-09 — Starting Phase 71 planning
 | Phase 70 P03 | 2min | 2 tasks | 2 files |
 | Phase 70 P02 | 5min | 3 tasks | 2 files |
 | Phase 71 P02 | 3min | 2 tasks | 2 files |
+| Phase 71 P01 | 7min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -112,6 +113,7 @@ Recent decisions affecting v12:
 - [Phase 70]: Batch queue available to all users in Step 1 (no pipelineMode gate exists)
 - [Phase 70]: SimplePipeline manages own API calls independently from advanced pipeline state
 - [Phase 71]: Full CSS var() font-family values in presets to match FONT_OPTIONS exactly
+- [Phase 71]: Free TTS preset uses clickable card UI with green border when selected
 
 ### Pending Todos
 
@@ -128,8 +130,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T06:59:55.933Z
-Stopped at: Completed 71-02-PLAN.md
+Last session: 2026-03-09T07:02:44.458Z
+Stopped at: Completed 71-01-PLAN.md
 Resume file: None
 Next action: Phase 69 complete — advance to next phase
 
