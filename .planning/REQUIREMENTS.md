@@ -31,8 +31,8 @@ Requirements for Desktop Product MVP. Each maps to roadmap phases.
 - [x] **UX-03**: Setup wizard guides new users through API key configuration with presets ("Free TTS" auto-selects Edge TTS, skip ElevenLabs)
 - [x] **UX-04**: User can choose from 5+ caption/subtitle visual presets (font, size, position, color scheme)
 - [x] **UX-05**: User can queue multiple videos for batch clip generation with a visible job queue
-- [ ] **UX-06**: Brand name is consistent throughout the entire app (single name, no "EditAI" vs "Edit Factory" mix)
-- [ ] **UX-07**: No hardcoded Romanian text remains in the app (all defaults in English)
+- [x] **UX-06**: Brand name is consistent throughout the entire app (single name, no "EditAI" vs "Edit Factory" mix)
+- [x] **UX-07**: No hardcoded Romanian text remains in the app (all defaults in English)
 
 ### Electron Polish
 
@@ -110,8 +110,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UX-03 | 71 | Complete |
 | UX-04 | 71 | Complete |
 | UX-05 | 70 | Complete |
-| UX-06 | 72 | Pending |
-| UX-07 | 72 | Pending |
+| UX-06 | 72 | Complete |
+| UX-07 | 72 | Complete |
 | ELEC-01 | 73 | Pending |
 | ELEC-02 | 73 | Pending |
 | ELEC-03 | 73 | Pending |
