@@ -383,7 +383,7 @@ Plans:
 | 73. Electron Polish | 3/3 | Complete    | 2026-03-09 | - |
 | 74. v12 Gap Closure | 1/1 | Complete    | 2026-03-09 | - |
 | 75. Batch Endpoint Fix | 1/1 | Complete    | 2026-03-09 | - |
-| 76. v12 Gap Closure Round 2 | 1/1 | Complete   | 2026-03-09 | - |
+| 76. v12 Gap Closure Round 2 | 1/1 | Complete    | 2026-03-09 | - |
 
 ---
 *Last updated: 2026-03-09 after phase 73 planning*
