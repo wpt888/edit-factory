@@ -1,3 +1,12 @@
+# Requirements Archive: v12 Desktop Product MVP
+
+**Archived:** 2026-03-09
+**Status:** SHIPPED
+
+For current requirements, see `.planning/REQUIREMENTS.md`.
+
+---
+
 # Requirements: Edit Factory
 
 **Defined:** 2026-03-09

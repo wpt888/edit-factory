@@ -1,4 +1,35 @@
 # Project Milestones: Edit Factory
+## v12 Desktop Product MVP (Shipped: 2026-03-09)
+
+**Delivered:** Local-first desktop product with SQLite data layer replacing Supabase, encrypted API key vault for user-owned ElevenLabs/Gemini keys, simplified 3-step pipeline for non-technical users, Lemon Squeezy license validation with offline grace period, full auth flow (JWT injection, logout, password reset, route protection), Electron polish with macOS target, and complete English-only UI.
+
+**Phases completed:** 64-79 (16 phases, 29 plans)
+
+**Key accomplishments:**
+- Repository pattern abstraction (106 methods) with SQLite + Supabase backends, activated in Electron desktop mode
+- Encrypted API key vault (Fernet + machine-specific derivation) for local-first ElevenLabs/Gemini integration with Edge TTS fallback
+- Simplified 3-step pipeline (Upload → Choose Style → Download) with 5 style presets and batch upload queue
+- Auth flow: JWT token injection, logout button, forgot password, Next.js middleware route protection, Lemon Squeezy periodic revalidation with 72h offline grace
+- Electron polish: real publish config, macOS dmg target, icon generation (ICO + ICNS), slim installer strategy, auto-updater
+- Brand unification ("Edit Factory" everywhere) and complete Romanian→English cleanup across frontend and backend
+- 6 caption visual presets, setup wizard with Free TTS preset and inline API key validation
+
+**Stats:**
+- 16 phases, 29 plans, 102 commits
+- 28/28 v12 requirements satisfied
+- 1 day (2026-03-09)
+
+**Git range:** `feat(64-01)` → `docs(phase-79)`
+
+**Tech debt carried forward:**
+- 60 routes still use get_client() escape hatch (returns None in SQLite mode) — core CRUD migrated, advanced operations (render, segments, tags, trash) still need migration
+- Gemini singleton refresh not called after API key save (requires backend restart)
+- ~12 Romanian docstrings remain in backend Python files (non-user-visible)
+
+**What's next:** TBD — `/gsd:new-milestone`
+
+---
+
 
 ## v10 Desktop Launcher & Distribution (Shipped: 2026-03-01)
 

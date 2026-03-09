@@ -105,24 +105,27 @@ Automated video production from any input — an idea, a product feed, or a coll
 - ✓ Video-audio duration alignment: 0.5s safety margin + 100ms min SRT duration — v9
 - ✓ Interstitial product slides between segments with Ken Burns animation — v9
 - ✓ PiP overlays and interstitial slides rendered via FFmpeg with graceful degradation — v9
+- ✓ Repository pattern abstraction (106 methods) with SQLite + Supabase backends — v12
+- ✓ SQLite local database for projects, clips, settings, cost tracking, TTS cache — v12
+- ✓ Local filesystem media storage with project-scoped directories — v12
+- ✓ Offline project CRUD without internet dependency — v12
+- ✓ JWT token injection in frontend API calls — v12
+- ✓ Logout button, forgot password flow, Next.js middleware route protection — v12
+- ✓ Lemon Squeezy license revalidation with 72h offline grace period — v12
+- ✓ Encrypted API key vault (Fernet + machine-specific derivation) — v12
+- ✓ ElevenLabs/Gemini direct from desktop with Edge TTS fallback — v12
+- ✓ Simplified 3-step pipeline (Upload → Choose Style → Download) with 5 style presets — v12
+- ✓ Batch upload queue with sequential processing — v12
+- ✓ Setup wizard Free TTS preset + inline API key validation — v12
+- ✓ 6 caption visual presets (Bold White, Neon Glow, Minimal, Karaoke, Shadow Pop, Warm Retro) — v12
+- ✓ Brand unification ("Edit Factory" everywhere, no EditAI) — v12
+- ✓ All Romanian text replaced with English (frontend + backend) — v12
+- ✓ Electron: real publish config, macOS dmg target, ICO/ICNS icons, slim installer strategy — v12
+- ✓ SQLite activated in Electron desktop mode (DATA_BACKEND=sqlite) — v12
 
 ### Active
 
-## Current Milestone: v12 Desktop Product MVP
-
-**Goal:** Transform Edit Factory into a sellable local-first desktop product — replace Supabase with SQLite for local data, make all API calls (ElevenLabs, Gemini) go directly from user's PC, simplify UX for non-technical content creators, fix auth flow, polish Electron packaging, and prepare for commercial launch via Lemon Squeezy licensing.
-
-**Target features:**
-- SQLite local database replacing Supabase for all project/clip/settings data
-- Direct API calls from desktop (ElevenLabs, Gemini) — no server proxy
-- Auth via Supabase Auth + Lemon Squeezy license key (server-side only for login)
-- Offline-capable editing (works without internet for local processing)
-- Simplified pipeline UX (3-click workflow, advanced settings hidden)
-- Onboarding wizard for non-technical users (API key setup with presets)
-- Caption/subtitle template presets (5-10 visual styles)
-- Electron polish (fix placeholders, portable Node.js, installer optimization)
-- Brand cleanup (consistent name, no hardcoded Romanian text)
-- Auth fixes (token injection, logout button, password reset flow)
+(No active milestone — use `/gsd:new-milestone` to start next)
 
 ### Out of Scope
 
@@ -151,12 +154,10 @@ Automated video production from any input — an idea, a product feed, or a coll
 - Runs on Windows/WSL development machine
 - Constant iteration — code changes frequently
 - Tech stack: FastAPI backend (Python), Next.js frontend (TypeScript), Supabase DB, FFmpeg
-- ~46K LOC across Python (~27K) + TypeScript (~19K)
-- 9 milestones shipped: v1 (MVP), v2 (Profiles), v3 (Video Quality), v4 (Script-First), v5 (Product Videos), v6 (Production Hardening), v7 (Product Image Overlays, partial), v8 (Pipeline UX Overhaul), v9 (Assembly Pipeline Fix + Overlays)
-- v10 shipped: Desktop Launcher & Distribution (2026-03-01)
-- v11 shipped: Production Polish & Platform Hardening (2026-03-03)
-- v12 milestone active: Desktop Product MVP
-- 46 phases, 96 plans executed across all milestones
+- ~50K LOC across Python (~30K) + TypeScript (~20K)
+- 12 milestones shipped: v1 (MVP), v2 (Profiles), v3 (Video Quality), v4 (Script-First), v5 (Product Videos), v6 (Production Hardening), v7 (Product Image Overlays, partial), v8 (Pipeline UX Overhaul), v9 (Assembly Fix + Overlays), v10 (Desktop Launcher), v11 (Production Polish), v12 (Desktop Product MVP)
+- v12 shipped: Desktop Product MVP (2026-03-09)
+- 79 phases, 152 plans executed across all milestones
 - 13 backend services, 9 frontend pages, 14+ API routers
 - DB migrations: 021 total (007/009/017/021 pending manual application)
 - Nortia.ro feed: ~9,987 products, Google Shopping XML format
@@ -217,6 +218,15 @@ Automated video production from any input — an idea, a product feed, or a coll
 | 0.5s timeline safety margin | Absorbs float accumulation; trimmed by -t flag in render | ✓ Good |
 | overlay_renderer graceful degradation | Returns original path on failure; never crashes render pipeline | ✓ Good |
 | Ken Burns 2x pre-scale for PiP, 4x for interstitials | Matches product_video_compositor pattern; smooth zoompan | ✓ Good |
+| Repository pattern with ABC (106 methods) | Clean data layer abstraction for SQLite/Supabase swap | ✓ Good |
+| Dict[str, Any] for repository data payloads | Matches existing Supabase dict-based patterns | ✓ Good |
+| get_client() escape hatch for complex routes | Prevents needing new methods for every one-off query | ⚠️ Tech debt |
+| Fernet encryption for API key vault | Machine-specific key derivation, backward-compatible migration | ✓ Good |
+| Edge TTS fallback when no ElevenLabs key | Free alternative, transparent to user via toast | ✓ Good |
+| SimplePipeline as separate component | Avoids modifying 3990-line pipeline page | ✓ Good |
+| 72h offline grace period for license | Tight enough for enforcement, generous enough for travel | ✓ Good |
+| DATA_BACKEND=sqlite in Electron spawn | Clean activation, no code changes needed | ✓ Good |
+| macOS dmg + ICO/ICNS icon generation | Pure Node.js, no native image dependencies | ✓ Good |
 
 ---
-*Last updated: 2026-03-09 after v12 milestone start*
+*Last updated: 2026-03-09 after v12 milestone completion*

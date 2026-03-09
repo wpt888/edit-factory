@@ -44,6 +44,55 @@
 
 ---
 
+## Milestone: v12 — Desktop Product MVP
+
+**Shipped:** 2026-03-09
+**Phases:** 16 | **Plans:** 29
+
+### What Was Built
+- Repository pattern abstraction (106 methods) with SQLite + Supabase backends
+- SQLite local database for projects, clips, settings, cost tracking, TTS cache
+- Local filesystem media storage with project-scoped directories and offline CRUD
+- Full auth flow: JWT injection, logout, forgot password, middleware route protection
+- Lemon Squeezy license revalidation with 72h offline grace period
+- Encrypted API key vault (Fernet) for ElevenLabs/Gemini with Edge TTS fallback
+- Simplified 3-step pipeline with 5 style presets and batch upload queue
+- Setup wizard with Free TTS preset, inline API key validation, 6 caption presets
+- Brand unification and complete Romanian→English cleanup
+- Electron polish: real publish config, macOS dmg target, ICO/ICNS generation
+
+### What Worked
+- Autonomous execution of 16 phases and 29 plans in a single session
+- Pre-created plans for phases 67-69 reduced planning overhead
+- Iterative audit-gap-closure cycle (3 rounds: Phase 74, 75, 76) caught increasingly subtle issues
+- Integration checker with sonnet found diacritics in Romanian strings that grep missed
+- Parallel wave execution for independent phases (70-01/02/03, 71-01/02)
+
+### What Was Inefficient
+- 3 rounds of gap closure (74, 75, 76) + 2 additional tech debt phases (77, 78, 79) — 6 extra phases beyond the original 10
+- get_client() escape hatch leaves 60 routes not working in SQLite mode — intentional but limits desktop usability
+- Previous grep passes for Romanian missed Unicode diacritics (ă, ț, ș) — needed exact character search
+- gsd-tools summary-extract returned empty accomplishments for milestone complete
+
+### Patterns Established
+- Repository pattern with ABC interface for database abstraction
+- Encrypted vault with machine-specific key derivation for API key storage
+- Lazy singleton refresh pattern for service hot-reload after config changes
+- SimplePipeline as isolated component to avoid modifying large page files
+
+### Key Lessons
+1. Data layer abstraction is the single largest architectural change — 106 methods across 26 tables. Plan for multiple migration waves.
+2. Unicode diacritics require explicit search — grep for "Romanian" misses strings with ă/ț/ș characters
+3. Audit-gap-closure cycles are valuable but scope grows — original 10 phases became 16 with 3 gap closure rounds
+4. get_client() escape hatch is pragmatic but creates long-tail tech debt — 60 routes still need migration
+
+### Cost Observations
+- Model mix: ~20% opus (orchestration), ~80% sonnet (execution agents)
+- Sessions: 1 (full milestone in single autonomous session)
+- Notable: Largest milestone by phase count (16), all executed in one session
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -58,9 +107,14 @@
 | v7 | 4 | 7 | Partial ship with deferred phases |
 | v8 | 5 | 8 | UX overhaul, timeline editor |
 | v9 | 4 | 6 | Bug fixes + deferred completion, fastest milestone |
+| v10 | 8 | 18 | Desktop launcher, Electron shell |
+| v11 | 9 | 22 | Production polish, security, testing |
+| v12 | 16 | 29 | Largest milestone, data layer abstraction, desktop product |
 
 ### Top Lessons (Verified Across Milestones)
 
-1. Parallel phase execution works well for independent backend changes (v4, v9)
+1. Parallel phase execution works well for independent backend changes (v4, v9, v12)
 2. Deferring phases to future milestones is better than shipping incomplete features (v7 → v9)
-3. Verification reports with concrete line numbers catch integration issues before audit (v8, v9)
+3. Verification reports with concrete line numbers catch integration issues before audit (v8, v9, v12)
+4. Iterative audit-gap-closure cycles catch increasingly subtle issues but add scope (v12: 3 rounds)
+5. Data layer abstractions require multiple migration waves — plan for escape hatches (v12)
