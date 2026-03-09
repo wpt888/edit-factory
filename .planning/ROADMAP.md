@@ -171,6 +171,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 - [x] **Phase 72: Brand & Language Cleanup** - Consistent product name throughout app; remove all hardcoded Romanian text (1 plan) (completed 2026-03-09)
 - [x] **Phase 73: Electron Polish** - Real publish config, portable Node.js, installer optimization, auto-updater, branding assets, macOS target (3 plans) (completed 2026-03-09)
 - [x] **Phase 74: v12 Gap Closure** - Fix SimplePipeline download URL + Romanian text remnant (1 plan) (completed 2026-03-09)
+- [ ] **Phase 75: Batch Endpoint Fix** - Fix BatchUploadQueue calling non-existent /generate-raw endpoint (1 plan)
 
 ## v12 Phase Details
 
@@ -330,6 +331,18 @@ Plans:
 Plans:
 - [ ] 74-01-PLAN.md — Fix SimplePipeline download route + remove Romanian text
 
+### Phase 75: Batch Endpoint Fix
+**Goal**: Fix the BatchUploadQueue component so batch video processing works end-to-end — the queue must call the correct backend endpoint (`/generate` not `/generate-raw`) so queued videos are actually processed
+**Depends on**: Phase 70
+**Requirements**: UX-05
+**Gap Closure**: Closes INT-03, FLOW-02 from v12-MILESTONE-AUDIT.md
+**Success Criteria** (what must be TRUE):
+  1. BatchUploadQueue calls `/api/v1/library/projects/{projectId}/generate` (not `/generate-raw`) — verified by grep
+  2. Queueing multiple videos processes them sequentially without 404 errors — the batch flow completes end-to-end
+**Plans**: 1 plan
+Plans:
+- [ ] 75-01-PLAN.md — Fix batch endpoint URL in BatchUploadQueue
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -356,6 +369,7 @@ Plans:
 | 72. Brand & Language Cleanup | 1/1 | Complete    | 2026-03-09 | - |
 | 73. Electron Polish | 3/3 | Complete    | 2026-03-09 | - |
 | 74. v12 Gap Closure | 1/1 | Complete    | 2026-03-09 | - |
+| 75. Batch Endpoint Fix | 0/1 | Pending    | — | - |
 
 ---
 *Last updated: 2026-03-09 after phase 73 planning*
