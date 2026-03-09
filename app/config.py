@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     # File storage backend: "local" (default) or "supabase"
     file_storage_backend: str = "local"
 
+    # Data storage backend: "supabase" or "sqlite"
+    data_backend: str = "supabase"
+
     # Sentry error reporting (all modes — set SENTRY_DSN env var to enable)
     sentry_dsn: str = ""  # Sentry DSN for error reporting
 
