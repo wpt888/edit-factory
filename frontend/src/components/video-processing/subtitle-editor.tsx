@@ -36,6 +36,8 @@ import {
   FONT_OPTIONS,
   COLOR_PRESETS,
   VideoInfo,
+  CAPTION_PRESETS,
+  CaptionPreset,
 } from "@/types/video-processing";
 
 // Bug #126: stable default to avoid invalidating useMemo on every render
@@ -76,12 +78,22 @@ export function SubtitleEditor({
   className = "",
   compact = false,
 }: SubtitleEditorProps) {
-  // Update a single setting
+  // Track which preset is currently selected (null = manual/custom)
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
+
+  // Update a single setting (manual change clears preset selection)
   const updateSetting = <K extends keyof SubtitleSettings>(
     key: K,
     value: SubtitleSettings[K]
   ) => {
+    setSelectedPresetId(null);
     onSettingsChange({ ...settings, [key]: value });
+  };
+
+  // Apply a preset's settings all at once
+  const applyPreset = (preset: CaptionPreset) => {
+    setSelectedPresetId(preset.id);
+    onSettingsChange({ ...settings, ...preset.settings });
   };
 
   // Update a subtitle line
@@ -123,6 +135,54 @@ export function SubtitleEditor({
 
   return (
     <div className={`space-y-${compact ? "3" : "6"} ${className}`}>
+      {/* Style Presets Section */}
+      <div className="space-y-3">
+        <div>
+          <h3 className="font-semibold text-sm">Style Presets</h3>
+          <p className="text-xs text-muted-foreground">Click a preset to apply</p>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+          {CAPTION_PRESETS.map((preset) => {
+            const isSelected = selectedPresetId === preset.id;
+            const outlineShadow = `-1px -1px 0 ${preset.settings.outlineColor}, 1px -1px 0 ${preset.settings.outlineColor}, -1px 1px 0 ${preset.settings.outlineColor}, 1px 1px 0 ${preset.settings.outlineColor}`;
+            const glowShadow = preset.settings.enableGlow && preset.settings.glowBlur
+              ? `, 0 0 ${preset.settings.glowBlur}px ${preset.settings.outlineColor}`
+              : "";
+            return (
+              <button
+                key={preset.id}
+                onClick={() => applyPreset(preset)}
+                className={`relative h-20 rounded-lg cursor-pointer transition-all hover:opacity-90 overflow-hidden border-2 ${
+                  isSelected
+                    ? "ring-2 ring-primary border-primary"
+                    : "border-border hover:border-muted-foreground/50"
+                }`}
+                style={{ backgroundColor: preset.previewStyle.backgroundColor }}
+                title={preset.description}
+              >
+                <div className="absolute inset-0 flex items-center justify-center px-2">
+                  <span
+                    className="font-bold text-sm leading-tight"
+                    style={{
+                      fontFamily: preset.settings.fontFamily,
+                      color: preset.settings.textColor,
+                      textShadow: outlineShadow + glowShadow,
+                    }}
+                  >
+                    {preset.previewStyle.textSample}
+                  </span>
+                </div>
+                <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-2 py-0.5">
+                  <span className="text-[10px] text-white/80 font-medium">{preset.name}</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <Separator />
+
       {/* Style Settings Section */}
       <div className="space-y-4">
         {!compact && (
@@ -255,12 +315,11 @@ export function SubtitleEditor({
                     fontFamily: settings.fontFamily,
                     fontSize: `${scaledFontSize}px`,
                     color: settings.textColor,
-                    textShadow: `
-                      -${scaledOutline}px -${scaledOutline}px 0 ${settings.outlineColor},
-                      ${scaledOutline}px -${scaledOutline}px 0 ${settings.outlineColor},
-                      -${scaledOutline}px ${scaledOutline}px 0 ${settings.outlineColor},
-                      ${scaledOutline}px ${scaledOutline}px 0 ${settings.outlineColor}
-                    `,
+                    WebkitTextStroke: `${scaledOutline}px ${settings.outlineColor}`,
+                    paintOrder: 'stroke fill',
+                    textShadow: (settings.shadowDepth ?? 0) > 0
+                      ? `0 ${scaledOutline}px ${scaledOutline * 2}px rgba(0,0,0,0.8)`
+                      : '0 1px 3px rgba(0,0,0,0.85)',
                     fontWeight: 700,
                     top: `${settings.positionY}%`,
                     transform: "translateY(-50%)",
@@ -278,6 +337,9 @@ export function SubtitleEditor({
               </p>
               <p className="text-xs text-muted-foreground">
                 Font: {settings.fontSize}px | Outline: {settings.outlineWidth}px | Y: {settings.positionY}%
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Approximate preview — final render uses FFmpeg subtitle engine
               </p>
             </div>
           </div>
