@@ -55,6 +55,14 @@ class GeminiVideoAnalyzer:
             max_frames_per_batch: Câte frames într-un singur request
             profile_id: Profile ID for cost tracking
         """
+        # Key resolution: explicit param > KeyVault > env var
+        if not api_key:
+            try:
+                from app.services.key_vault import get_key_vault
+                vault = get_key_vault()
+                api_key = vault.get_key("gemini_api_key")
+            except Exception:
+                pass
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.model_name = model_name or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         self.frame_interval = frame_interval

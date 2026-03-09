@@ -23,6 +23,12 @@ load_dotenv()
 try:
     from .gemini_analyzer import GeminiVideoAnalyzer, AnalyzedSegment
     _gemini_key = os.getenv("GEMINI_API_KEY", "")
+    if not _gemini_key or len(_gemini_key) <= 10:
+        try:
+            from app.services.key_vault import get_key_vault
+            _gemini_key = get_key_vault().get_key("gemini_api_key") or ""
+        except Exception:
+            pass
     GEMINI_AVAILABLE = bool(_gemini_key and len(_gemini_key) > 10)
     if GEMINI_AVAILABLE:
         logging.getLogger(__name__).info("Gemini AI available for intelligent frame selection")
@@ -30,6 +36,26 @@ except ImportError:
     GEMINI_AVAILABLE = False
     GeminiVideoAnalyzer = None
     AnalyzedSegment = None
+
+
+def refresh_gemini_availability() -> bool:
+    """Re-check Gemini API key availability (e.g. after user saves new keys).
+
+    Updates the module-level GEMINI_AVAILABLE flag and returns the new value.
+    """
+    global GEMINI_AVAILABLE
+    if GeminiVideoAnalyzer is None:
+        GEMINI_AVAILABLE = False
+        return False
+    _key = os.getenv("GEMINI_API_KEY", "")
+    if not _key or len(_key) <= 10:
+        try:
+            from app.services.key_vault import get_key_vault
+            _key = get_key_vault().get_key("gemini_api_key") or ""
+        except Exception:
+            pass
+    GEMINI_AVAILABLE = bool(_key and len(_key) > 10)
+    return GEMINI_AVAILABLE
 
 from app.services.srt_validator import sanitize_srt_full as _sanitize_srt_full
 from app.services.ffmpeg_semaphore import safe_ffmpeg_run
