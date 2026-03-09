@@ -49,7 +49,7 @@ const bebasNeue = Bebas_Neue({
 });
 
 export const metadata: Metadata = {
-  title: "EditAI - Smart Video Editing",
+  title: "Edit Factory - Smart Video Editing",
   description: "AI-powered video analysis and automation platform",
 };
 

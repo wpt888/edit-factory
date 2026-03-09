@@ -97,7 +97,7 @@ export function NavBar() {
           {/* Logo */}
           <Link href="/pipeline" className="flex items-center">
             <span className="text-xl md:text-2xl font-bold text-primary">
-              EditAI
+              Edit Factory
             </span>
           </Link>
 
@@ -195,7 +195,7 @@ export function NavBar() {
               </SheetTrigger>
               <SheetContent side="left" className="w-72 overflow-y-auto">
                 <SheetHeader>
-                  <SheetTitle className="text-left text-primary text-lg">EditAI</SheetTitle>
+                  <SheetTitle className="text-left text-primary text-lg">Edit Factory</SheetTitle>
                 </SheetHeader>
                 <nav className="flex flex-col gap-1 px-2">
                   {[...navGroups, settingsGroup].map((group) => (
