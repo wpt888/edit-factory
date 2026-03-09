@@ -75,6 +75,18 @@ def _get_pipeline_state_lock(pipeline_id: str) -> threading.Lock:
             _pipeline_state_locks[pipeline_id] = threading.Lock()
         return _pipeline_state_locks[pipeline_id]
 
+
+# ---------------------------------------------------------------------------
+# Style Presets endpoint (Simple Mode)
+# ---------------------------------------------------------------------------
+
+@router.get("/presets")
+async def list_presets():
+    """Return available style presets for Simple Mode."""
+    from app.services.pipeline_presets import get_all_presets
+    return {"presets": get_all_presets()}
+
+
 # Cancel infrastructure for pipeline renders
 import time as _time_mod
 
