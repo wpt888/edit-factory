@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 74-01-PLAN.md
-last_updated: "2026-03-09T08:20:04.206Z"
-last_activity: "2026-03-09 — Completed 74-01 (Gap Closure: download route + Romanian text)"
+stopped_at: Completed 76-01-PLAN.md
+last_updated: "2026-03-09T09:52:34Z"
+last_activity: "2026-03-09 — Completed 76-01 (Romanian strings + singleton refresh)"
 progress:
   total_phases: 11
   completed_phases: 11
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 76 — v12 Gap Closure Round 2
-Plan: 0 of 1
-Status: Not started
-Last activity: 2026-03-09 — Created Phase 76 from audit gaps (INT-04, INT-05, FLOW-03)
+Plan: 1 of 1
+Status: Complete
+Last activity: 2026-03-09 — Completed 76-01 (Romanian strings + singleton refresh)
 
 ## Performance Metrics
 
@@ -125,6 +125,8 @@ Recent decisions affecting v12:
 - [Phase 73]: Moved torch/torchaudio from base requirements to requirements-ml.txt for installer size reduction
 - [Phase 73]: Pure Node.js ICO generation with BITMAPINFOHEADER — no native image dependencies
 - [Phase 74]: Anchor element with download attribute instead of window.open for reliable browser download
+- [Phase 76]: Lazy imports of _reset_elevenlabs_tts/reset_script_generator inside save_desktop_settings to avoid circular deps
+- [Phase 76]: any() guard on api_key_fields so singleton resets only fire when a key was actually submitted
 
 ### Pending Todos
 
@@ -141,10 +143,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T08:17:58.150Z
-Stopped at: Completed 74-01-PLAN.md
+Last session: 2026-03-09T09:52:34Z
+Stopped at: Completed 76-01-PLAN.md
 Resume file: None
-Next action: /gsd:plan-phase 76
+Next action: Phase 76 complete — all gap closure items resolved
 
 ---
 *Last updated: 2026-03-09 after 66-02 completion*
