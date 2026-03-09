@@ -162,7 +162,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 
 - [x] **Phase 64: Data Abstraction Layer** - Repository pattern abstracting database access; SQLite schema from Supabase migrations (3 plans) (completed 2026-03-09)
 - [x] **Phase 65: SQLite Local Database** - SQLite backend implementation for projects, clips, settings, cost tracking, TTS cache (1 plan) (completed 2026-03-09)
-- [x] **Phase 66: Local File Storage & Offline Mode** - Local filesystem for all video assets; offline project CRUD without internet (2 plans) (completed 2026-03-09)
+- [ ] **Phase 66: Local File Storage & Offline Mode** - Local filesystem for all video assets; offline project CRUD without internet (3 plans)
 - [ ] **Phase 67: Auth Flow Fixes** - JWT token injection in frontend API calls, logout button, password reset, route protection middleware (3 plans)
 - [ ] **Phase 68: License Key Validation Polish** - Lemon Squeezy periodic revalidation with offline grace period (1 plan)
 - [ ] **Phase 69: Direct API Integration** - ElevenLabs and Gemini calls from desktop; encrypted local API key storage; graceful fallback without keys (3 plans)
@@ -210,10 +210,11 @@ Plans:
   2. Rendered output videos, thumbnails, and intermediate files all live under the local media directory — `ls` shows the files
   3. With WiFi/ethernet disabled, the user can create a new project, upload a video, and generate clips using local-only processing (Edge TTS + motion scoring) — no network error appears
   4. Deleting a project also removes its associated local media files — no orphaned files remain
-**Plans**: 2 plans
+**Plans**: 3 plans
 Plans:
 - [ ] 66-01-PLAN.md — Structured local media directory + project cleanup
 - [ ] 66-02-PLAN.md — Offline project CRUD via repository methods
+- [ ] 66-03-PLAN.md — Gap closure: migrate generate_raw_clips to repository pattern
 
 ### Phase 67: Auth Flow Fixes
 **Goal**: The authentication flow works end-to-end — the frontend injects JWT tokens into every API call, users can log out and reset their password, and unauthenticated users are redirected to the login page
@@ -281,7 +282,7 @@ Plans:
   2. The setup wizard validates API keys inline (green checkmark on success, red error on failure) before allowing the user to proceed
   3. The subtitle/caption settings show 5+ visual presets (e.g., "Bold White", "Neon Glow", "Minimal", "Karaoke", "Shadow Pop") as clickable thumbnails
   4. Selecting a caption preset applies font, size, position, color, and effect settings — the user does not need to configure individual parameters
-**Plans**: 2 plans
+**Plans**: 3 plans
 
 ### Phase 72: Brand & Language Cleanup
 **Goal**: The product name is consistent everywhere in the app (single name, no "EditAI" vs "Edit Factory" confusion), and no hardcoded Romanian text remains in any user-facing string
@@ -327,7 +328,7 @@ Plans:
 | 55-63 | v11 | 22/22 | Complete | 2026-03-03 |
 | 64. Data Abstraction Layer | 3/3 | Complete    | 2026-03-09 | - |
 | 65. SQLite Local Database | v12 | Complete    | 2026-03-09 | - |
-| 66. Local File Storage & Offline | 2/2 | Complete   | 2026-03-09 | - |
+| 66. Local File Storage & Offline | 2/3 | Gap closure | 2026-03-09 | - |
 | 67. Auth Flow Fixes | v12 | 0/3 | Not started | - |
 | 68. License Key Validation Polish | v12 | 0/1 | Not started | - |
 | 69. Direct API Integration | v12 | 0/3 | Not started | - |
