@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 78-01-PLAN.md
-last_updated: "2026-03-09T10:44:41.698Z"
-last_activity: 2026-03-09 — Phase 78 completed (macOS ICNS icon generation)
+stopped_at: Completed 79-01-PLAN.md
+last_updated: "2026-03-09T11:01:00.000Z"
+last_activity: 2026-03-09 — Phase 79 plan 01 completed (tech debt cleanup)
 progress:
   total_phases: 16
   completed_phases: 15
-  total_plans: 28
-  completed_plans: 28
+  total_plans: 29
+  completed_plans: 29
 ---
 
 # Project State
@@ -20,19 +20,19 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale.
-**Current focus:** v12 Desktop Product MVP — Phase 77 (tech debt closure)
+**Current focus:** v12 Desktop Product MVP — Phase 79 (tech debt cleanup)
 
 ## Current Position
 
-Phase: 78 — macOS Build Assets
+Phase: 79 — v12 Tech Debt Cleanup
 Plan: 1 of 1
 Status: Complete
-Last activity: 2026-03-09 — Phase 78 completed (macOS ICNS icon generation)
+Last activity: 2026-03-09 — Phase 79 plan 01 completed (tech debt cleanup)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 122 (across v2-v12)
+- Total plans completed: 123 (across v2-v12)
 - Total phases completed: 65
 - Total milestones shipped: 11
 
@@ -71,6 +71,7 @@ Last activity: 2026-03-09 — Phase 78 completed (macOS ICNS icon generation)
 | Phase 73 P03 | 3min | 2 tasks | 3 files |
 | Phase 74 P01 | 1min | 2 tasks | 3 files |
 | Phase 78 P01 | 2min | 2 tasks | 2 files |
+| Phase 79 P01 | 9min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -130,6 +131,8 @@ Recent decisions affecting v12:
 - [Phase 76]: any() guard on api_key_fields so singleton resets only fire when a key was actually submitted
 - [Phase 77]: Bulk-select uses per-clip repo loop since repository has no in_() bulk operator
 - [Phase 78]: Embedded PNG format for all ICNS entries (modern macOS standard)
+- [Phase 79]: Preserved pipeline_presets.py service while removing orphaned route endpoint
+- [Phase 79]: Translated docstrings alongside comments for complete English-only backend
 
 ### Pending Todos
 
@@ -146,10 +149,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T10:42:20.943Z
-Stopped at: Completed 78-01-PLAN.md
+Last session: 2026-03-09T11:01:00.000Z
+Stopped at: Completed 79-01-PLAN.md
 Resume file: None
-Next action: Plan Phase 77 (SQLite Desktop Activation)
+Next action: Continue Phase 79 or next phase
 
 ---
 *Last updated: 2026-03-09 after 66-02 completion*
