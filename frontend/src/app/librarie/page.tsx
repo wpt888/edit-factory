@@ -39,6 +39,9 @@ import {
   Link,
   Undo2,
   Tag,
+  ImageIcon,
+  Calendar,
+  Send,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, ApiError, handleApiError } from "@/lib/api";
@@ -50,6 +53,20 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { InlineVideoPlayer } from "@/components/inline-video-player";
 import { ClipHoverPreview } from "@/components/clip-hover-preview";
 import { ClipTagEditor } from "@/components/clip-tag-editor";
+
+interface GeneratedImage {
+  id: string;
+  prompt: string;
+  status: string;
+  image_url: string | null;
+  image_local_path: string | null;
+  final_image_path: string | null;
+  logo_config: { x: number; y: number; scale: number } | null;
+  error_message: string | null;
+  template_name: string | null;
+  model?: string;
+  created_at: string;
+}
 
 interface ClipWithProject {
   id: string;
@@ -150,6 +167,19 @@ function LibrarieContent() {
   const [loadingTrash, setLoadingTrash] = useState(false);
   const [restoringClipId, setRestoringClipId] = useState<string | null>(null);
   const [permanentlyDeletingClipId, setPermanentlyDeletingClipId] = useState<string | null>(null);
+
+  // Images tab state
+  const [activeTab, setActiveTab] = useState<"videos" | "images">("videos");
+  const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
+  const [loadingImages, setLoadingImages] = useState(false);
+  const [imagePublishId, setImagePublishId] = useState<string | null>(null);
+  const [imagePublishCaption, setImagePublishCaption] = useState("");
+  const [imagePublishIntegrations, setImagePublishIntegrations] = useState<string[]>([]);
+  const [imagePublishSchedule, setImagePublishSchedule] = useState(false);
+  const [imagePublishDate, setImagePublishDate] = useState("");
+  const [imagePublishing, setImagePublishing] = useState(false);
+  const [availableIntegrations, setAvailableIntegrations] = useState<{ id: string; name: string; type: string; picture?: string }[]>([]);
+  const [deletingImageId, setDeletingImageId] = useState<string | null>(null);
 
   // Confirm dialog state (single shared dialog)
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -669,6 +699,97 @@ function LibrarieContent() {
     }
   };
 
+  // Fetch generated images
+  const fetchImages = useCallback(async () => {
+    setLoadingImages(true);
+    try {
+      const res = await apiGet("/image-gen/history?limit=50");
+      if (res.ok) {
+        const data = await res.json();
+        setGeneratedImages(data.images || []);
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setLoadingImages(false);
+    }
+  }, []);
+
+  // Fetch images when tab switches to "images"
+  useEffect(() => {
+    if (activeTab === "images") {
+      fetchImages();
+    }
+  }, [activeTab, fetchImages]);
+
+  // Fetch integrations for image publish
+  const fetchIntegrations = async () => {
+    try {
+      const res = await apiGet("/postiz/integrations");
+      const data = await res.json();
+      setAvailableIntegrations(data.integrations || []);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // Open image publish panel
+  const openImagePublish = (imageId: string) => {
+    setImagePublishId(imageId);
+    setImagePublishCaption("");
+    setImagePublishIntegrations([]);
+    setImagePublishSchedule(false);
+    setImagePublishDate("");
+    fetchIntegrations();
+  };
+
+  // Toggle integration selection for image publish
+  const toggleImageIntegration = (integrationId: string) => {
+    setImagePublishIntegrations((prev) =>
+      prev.includes(integrationId)
+        ? prev.filter((id) => id !== integrationId)
+        : [...prev, integrationId]
+    );
+  };
+
+  // Publish image
+  const publishImage = async () => {
+    if (!imagePublishId || imagePublishIntegrations.length === 0) {
+      toast.error("Select at least one platform");
+      return;
+    }
+    setImagePublishing(true);
+    try {
+      await apiPost("/image-gen/publish-image", {
+        image_id: imagePublishId,
+        integration_ids: imagePublishIntegrations,
+        caption: imagePublishCaption,
+        schedule: imagePublishSchedule,
+        scheduled_at: imagePublishSchedule ? imagePublishDate : undefined,
+      });
+      toast.success("Image published successfully!");
+      setImagePublishId(null);
+    } catch (error) {
+      handleApiError(error, "Error publishing image");
+    } finally {
+      setImagePublishing(false);
+    }
+  };
+
+  // Delete generated image
+  const deleteImage = async (imageId: string) => {
+    setDeletingImageId(imageId);
+    try {
+      await apiDelete(`/image-gen/${imageId}`);
+      setGeneratedImages((prev) => prev.filter((img) => img.id !== imageId));
+      toast.success("Image deleted!");
+    } catch (error) {
+      handleApiError(error, "Error deleting image");
+    } finally {
+      setDeletingImageId(null);
+    }
+  };
+
   // Restore clip from trash
   const restoreClip = async (clipId: string) => {
     setRestoringClipId(clipId);
@@ -740,29 +861,278 @@ function LibrarieContent() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {/* Library/Trash toggle */}
-            <Button
-              variant={viewMode === "library" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setViewMode("library")}
-            >
-              Library
-            </Button>
-            <Button
-              variant={viewMode === "trash" ? "default" : "outline"}
-              size="sm"
-              onClick={() => { setViewMode("trash"); fetchTrash(); }}
-            >
-              <Trash2 className="h-4 w-4 mr-1" />
-              Trash
-            </Button>
-            <Button onClick={() => viewMode === "library" ? fetchAllClips() : fetchTrash()} variant="outline" size="sm">
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Refresh
-            </Button>
+            {activeTab === "videos" && (
+              <>
+                {/* Library/Trash toggle */}
+                <Button
+                  variant={viewMode === "library" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setViewMode("library")}
+                >
+                  Library
+                </Button>
+                <Button
+                  variant={viewMode === "trash" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => { setViewMode("trash"); fetchTrash(); }}
+                >
+                  <Trash2 className="h-4 w-4 mr-1" />
+                  Trash
+                </Button>
+                <Button onClick={() => viewMode === "library" ? fetchAllClips() : fetchTrash()} variant="outline" size="sm">
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Refresh
+                </Button>
+              </>
+            )}
           </div>
         </div>
 
+        {/* Tab Switcher */}
+        <div className="flex gap-1 p-1 bg-muted rounded-lg w-fit mb-6">
+          <Button
+            variant={activeTab === "videos" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setActiveTab("videos")}
+          >
+            <Film className="size-4 mr-2" /> Video Clips
+          </Button>
+          <Button
+            variant={activeTab === "images" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setActiveTab("images")}
+          >
+            <ImageIcon className="size-4 mr-2" /> Imagini
+          </Button>
+        </div>
+
+        {/* === IMAGES TAB === */}
+        {activeTab === "images" && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-muted-foreground">
+                {generatedImages.length} generated images
+              </p>
+              <Button onClick={fetchImages} variant="outline" size="sm">
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Refresh
+              </Button>
+            </div>
+
+            {loadingImages ? (
+              <div className="flex justify-center py-12">
+                <Loader2 className="size-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : generatedImages.length === 0 ? (
+              <EmptyState
+                icon={<ImageIcon className="h-6 w-6" />}
+                title="No images yet"
+                description="Generated images will appear here. Use the Image Generator to create images."
+              />
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                {generatedImages.map((img) => (
+                  <Card key={img.id} className="overflow-hidden group hover:ring-2 hover:ring-primary/50 transition-all">
+                    {/* Image thumbnail */}
+                    <div className="aspect-square bg-muted relative">
+                      {img.image_url || img.final_image_path || img.image_local_path ? (
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <img
+                          src={img.image_url || `${API_URL}/image-gen/${img.id}/file`}
+                          alt={img.prompt?.slice(0, 60) || "Generated image"}
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center">
+                          <ImageIcon className="h-12 w-12 text-muted-foreground" />
+                        </div>
+                      )}
+
+                      {/* Status badge */}
+                      <Badge
+                        className={`absolute top-2 right-2 text-xs ${
+                          img.status === "completed"
+                            ? "bg-green-500 text-white"
+                            : img.status === "failed"
+                            ? "bg-red-500 text-white"
+                            : img.status === "processing"
+                            ? "bg-blue-500 text-white"
+                            : "bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {img.status === "completed" ? (
+                          <CheckCircle2 className="h-3 w-3 mr-1" />
+                        ) : img.status === "failed" ? (
+                          <XCircle className="h-3 w-3 mr-1" />
+                        ) : img.status === "processing" ? (
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        ) : null}
+                        {img.status}
+                      </Badge>
+
+                      {/* Hover actions */}
+                      <div className="absolute inset-0 bg-background/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                        {img.status === "completed" && (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                window.open(
+                                  img.image_url || `${API_URL}/image-gen/${img.id}/file?download=true`,
+                                  "_blank"
+                                );
+                              }}
+                              title="Download"
+                            >
+                              <Download className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600 disabled:opacity-50"
+                              disabled={!postizStatus?.connected}
+                              onClick={() => openImagePublish(img.id)}
+                              title={postizStatus?.connected ? "Publish to Social Media" : "Postiz not configured"}
+                            >
+                              <Share2 className="h-4 w-4" />
+                            </Button>
+                          </>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          disabled={deletingImageId === img.id}
+                          onClick={() => deleteImage(img.id)}
+                          title="Delete image"
+                        >
+                          {deletingImageId === img.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3 w-3" />
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Info */}
+                    <CardContent className="p-2">
+                      <p className="text-sm font-medium truncate">
+                        {img.template_name || img.model || "Image"}
+                      </p>
+                      <p className="text-xs text-muted-foreground truncate" title={img.prompt}>
+                        {img.prompt?.slice(0, 60) || "No prompt"}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {new Date(img.created_at).toLocaleDateString("ro-RO", {
+                          day: "2-digit",
+                          month: "short",
+                          year: "numeric",
+                        })}
+                      </p>
+
+                      {/* Inline publish panel */}
+                      {imagePublishId === img.id && (
+                        <div className="mt-2 p-2 border rounded-lg space-y-2" onClick={(e) => e.stopPropagation()}>
+                          <p className="text-xs font-medium">Publish Image</p>
+
+                          {/* Platform pills */}
+                          <div className="flex flex-wrap gap-1">
+                            {availableIntegrations.map((integ) => (
+                              <button
+                                key={integ.id}
+                                type="button"
+                                className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border transition-colors ${
+                                  imagePublishIntegrations.includes(integ.id)
+                                    ? "bg-primary text-primary-foreground border-primary"
+                                    : "bg-muted text-muted-foreground border-border hover:bg-accent"
+                                }`}
+                                onClick={() => toggleImageIntegration(integ.id)}
+                              >
+                                {integ.picture && (
+                                  /* eslint-disable-next-line @next/next/no-img-element */
+                                  <img src={integ.picture} alt="" className="h-4 w-4 rounded-full" />
+                                )}
+                                {integ.name}
+                              </button>
+                            ))}
+                            {availableIntegrations.length === 0 && (
+                              <p className="text-xs text-muted-foreground">No integrations found</p>
+                            )}
+                          </div>
+
+                          {/* Caption */}
+                          <Input
+                            placeholder="Caption..."
+                            value={imagePublishCaption}
+                            onChange={(e) => setImagePublishCaption(e.target.value)}
+                            className="h-7 text-xs"
+                          />
+
+                          {/* Schedule toggle */}
+                          <div className="flex items-center gap-2">
+                            <Checkbox
+                              id={`schedule-${img.id}`}
+                              checked={imagePublishSchedule}
+                              onCheckedChange={(checked) => setImagePublishSchedule(!!checked)}
+                            />
+                            <label htmlFor={`schedule-${img.id}`} className="text-xs cursor-pointer flex items-center gap-1">
+                              <Calendar className="h-3 w-3" />
+                              Schedule
+                            </label>
+                          </div>
+                          {imagePublishSchedule && (
+                            <Input
+                              type="datetime-local"
+                              value={imagePublishDate}
+                              onChange={(e) => setImagePublishDate(e.target.value)}
+                              className="h-7 text-xs"
+                            />
+                          )}
+
+                          {/* Action buttons */}
+                          <div className="flex gap-1">
+                            <Button
+                              size="sm"
+                              className="flex-1 text-xs bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
+                              disabled={imagePublishing || imagePublishIntegrations.length === 0}
+                              onClick={publishImage}
+                            >
+                              {imagePublishing ? (
+                                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                              ) : (
+                                <Send className="h-3 w-3 mr-1" />
+                              )}
+                              Publish
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-xs"
+                              onClick={() => setImagePublishId(null)}
+                            >
+                              <X className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Error message */}
+                      {img.error_message && (
+                        <p className="text-xs text-red-500 mt-1 truncate" title={img.error_message}>
+                          {img.error_message}
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* === VIDEO CLIPS TAB === */}
+        {activeTab === "videos" && (<>
         {/* Trash View */}
         {viewMode === "trash" && (
           <div>
@@ -1364,6 +1734,7 @@ function LibrarieContent() {
             <div ref={sentinelRef} className="h-4" aria-hidden="true" />
           </>
         )}
+        </>)}
 
         {/* Publish Dialog */}
         {publishDialogClip && (

@@ -9,7 +9,7 @@ import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Form, Depends
 from fastapi.responses import FileResponse
@@ -19,6 +19,7 @@ from app.config import get_settings
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 from app.api.auth import ProfileContext, get_profile_context
+from app.api.postiz_routes import update_publish_progress, get_publish_progress
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/image-gen", tags=["AI Image Generation"])
@@ -35,6 +36,8 @@ class GenerateRequest(BaseModel):
     template_id: Optional[str] = None
     product_id: Optional[str] = None
     aspect_ratio: str = "1:1"
+    model: str = "nano-banana-pro"  # nano-banana, nano-banana-2, nano-banana-pro
+    resolution: Optional[str] = None  # "0.5K", "1K", "2K", "4K" — only for NanoBanana 2 and Pro
     user_text: Optional[str] = None
 
 
@@ -64,6 +67,23 @@ class TemplateUpdate(BaseModel):
     is_default: Optional[bool] = None
 
 
+class GenerateCaptionRequest(BaseModel):
+    image_id: Optional[str] = None  # if provided, uses the generated image context
+    product_id: Optional[str] = None  # if provided, uses product info
+    tone: str = "professional"  # professional, casual, funny, luxury, urgenta
+    language: str = "ro"  # ro, en
+    include_hashtags: bool = True
+    include_cta: bool = True  # call to action
+    custom_instructions: Optional[str] = None  # user can add specific requirements
+
+
+class PublishImageRequest(BaseModel):
+    image_id: str
+    caption: str
+    integration_ids: List[str]
+    schedule_date: Optional[str] = None
+
+
 # ============== Background task ==============
 
 def _generate_image_task(
@@ -73,6 +93,8 @@ def _generate_image_task(
     profile_id: str,
     product_id: Optional[str],
     template_name: Optional[str],
+    model: str = "nano-banana-pro",
+    resolution: Optional[str] = None,
 ):
     """Background task: generate image via FAL AI, download, update DB."""
     repo = get_repository()
@@ -91,7 +113,13 @@ def _generate_image_task(
         # Generate via FAL
         from app.services.fal_image_service import get_fal_generator
         fal = get_fal_generator()
-        result = fal.generate(prompt=prompt, aspect_ratio=aspect_ratio, num_images=1)
+        result = fal.generate(
+            prompt=prompt,
+            aspect_ratio=aspect_ratio,
+            num_images=1,
+            model=model,
+            resolution=resolution,
+        )
 
         images = result.get("images", [])
         if not images:
@@ -117,16 +145,22 @@ def _generate_image_task(
         try:
             from app.services.cost_tracker import get_cost_tracker
             tracker = get_cost_tracker()
-            from app.services.fal_image_service import FAL_COST_PER_IMAGE
+            from app.services.fal_image_service import get_cost_for_model
             from app.services.cost_tracker import CostEntry
+            cost = get_cost_for_model(model, resolution)
             entry = CostEntry(
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 job_id=image_id,
                 service="fal_ai",
                 operation="image_generation",
                 input_units=1,
-                cost_usd=FAL_COST_PER_IMAGE,
-                details={"profile_id": profile_id, "prompt_preview": prompt[:100]},
+                cost_usd=cost,
+                details={
+                    "profile_id": profile_id,
+                    "model": model,
+                    "resolution": resolution,
+                    "prompt_preview": prompt[:100],
+                },
             )
             tracker._add_entry(entry)
             tracker._save_to_supabase(entry, profile_id=profile_id)
@@ -213,6 +247,7 @@ async def generate_image(
             "product_id": req.product_id,
             "prompt": final_prompt,
             "template_name": template_name,
+            "model": req.model,
             "status": "pending",
         })
     except Exception as e:
@@ -228,9 +263,11 @@ async def generate_image(
         profile_id=ctx.profile_id,
         product_id=req.product_id,
         template_name=template_name,
+        model=req.model,
+        resolution=req.resolution,
     )
 
-    return {"image_id": image_id, "status": "pending"}
+    return {"image_id": image_id, "status": "pending", "model": req.model}
 
 
 @router.get("/{image_id}/status")
@@ -694,3 +731,246 @@ async def delete_template(
         filters=QueryFilters(eq={"id": template_id, "profile_id": ctx.profile_id}))
 
     return {"deleted": True}
+
+
+# ============== Models info endpoint ==============
+
+@router.get("/models")
+async def get_available_models():
+    """Return available image generation models with their capabilities."""
+    from app.services.fal_image_service import MODEL_CONFIGS
+
+    models = []
+    for key, config in MODEL_CONFIGS.items():
+        models.append({
+            "id": key,
+            "display_name": config["display_name"],
+            "fal_model_id": config["fal_model_id"],
+            "aspect_ratios": config["aspect_ratios"],
+            "resolutions": config["resolutions"],
+            "default_resolution": config["default_resolution"],
+            "cost_per_image": config["cost_per_image"],
+        })
+    return {"models": models}
+
+
+# ============== AI Caption Generation ==============
+
+@router.post("/generate-caption")
+async def generate_caption(
+    req: GenerateCaptionRequest,
+    ctx: ProfileContext = Depends(get_profile_context),
+):
+    """Generate AI caption for an image using Gemini."""
+    repo = get_repository()
+
+    # Gather context
+    context_parts = []
+
+    # Product info
+    if req.product_id and repo:
+        try:
+            product = repo.table_query("v_catalog_products_grouped", "select",
+                filters=QueryFilters(
+                    select="title,brand,price,description",
+                    eq={"id": req.product_id},
+                    limit=1,
+                ))
+            if product.data:
+                p = product.data[0]
+                context_parts.append(
+                    f"Product: {p.get('title', '')}\n"
+                    f"Brand: {p.get('brand', '')}\n"
+                    f"Price: {p.get('price', '')}\n"
+                    f"Description: {p.get('description', '')}"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to fetch product info for caption: {e}")
+
+    # Image prompt context
+    if req.image_id and repo:
+        try:
+            img = repo.table_query("generated_images", "select",
+                filters=QueryFilters(
+                    select="prompt,template_name",
+                    eq={"id": req.image_id},
+                    limit=1,
+                ))
+            if img.data:
+                context_parts.append(f"Image prompt used: {img.data[0].get('prompt', '')}")
+                if img.data[0].get("template_name"):
+                    context_parts.append(f"Template: {img.data[0]['template_name']}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch image info for caption: {e}")
+
+    # Build the Gemini prompt
+    lang_map = {"ro": "Romanian", "en": "English"}
+    language_name = lang_map.get(req.language, req.language)
+
+    tone_instructions = {
+        "professional": "Use a professional, polished tone suitable for business social media.",
+        "casual": "Use a relaxed, friendly, conversational tone.",
+        "funny": "Use humor, wit, and playful language to engage the audience.",
+        "luxury": "Use an elegant, aspirational, premium tone that conveys exclusivity.",
+        "urgenta": "Use urgency and scarcity language to drive immediate action (limited time, act now, etc.).",
+    }
+    tone_desc = tone_instructions.get(req.tone, f"Use a {req.tone} tone.")
+
+    prompt_text = f"""Generate a social media caption in {language_name}.
+
+{tone_desc}
+
+"""
+
+    if context_parts:
+        prompt_text += "Context:\n" + "\n\n".join(context_parts) + "\n\n"
+
+    if req.include_hashtags:
+        prompt_text += "Include relevant hashtags (5-10 hashtags).\n"
+    else:
+        prompt_text += "Do NOT include any hashtags.\n"
+
+    if req.include_cta:
+        prompt_text += "Include a clear call to action.\n"
+    else:
+        prompt_text += "Do NOT include a call to action.\n"
+
+    if req.custom_instructions:
+        prompt_text += f"\nAdditional instructions: {req.custom_instructions}\n"
+
+    prompt_text += "\nReturn ONLY the caption text, ready to copy-paste. Do not include any explanations or metadata.\n"
+
+    # Call Gemini
+    try:
+        import google.generativeai as genai
+
+        settings = get_settings()
+        if not settings.gemini_api_key:
+            raise HTTPException(status_code=503, detail="Gemini API key not configured")
+
+        genai.configure(api_key=settings.gemini_api_key)
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        response = model.generate_content(prompt_text)
+        caption = response.text.strip()
+
+        return {"caption": caption, "tone": req.tone, "language": req.language}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Gemini caption generation failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate caption")
+
+
+# ============== Image Publish via Postiz ==============
+
+async def _publish_image_task(
+    job_id: str,
+    image_id: str,
+    profile_id: str,
+    file_path: str,
+    caption: str,
+    integration_ids: List[str],
+    schedule_date: Optional[datetime],
+):
+    """Background task to publish an image via Postiz."""
+    from app.services.postiz_service import get_postiz_publisher
+
+    logger.info(f"[Profile {profile_id}] Publishing image {image_id} (job {job_id})")
+    update_publish_progress(job_id, "Initializing...", 0)
+
+    try:
+        publisher = get_postiz_publisher(profile_id)
+
+        # Get integrations info
+        update_publish_progress(job_id, "Fetching platform info...", 25)
+        integrations = await publisher.get_integrations(profile_id=profile_id)
+        integrations_info = {i.id: i.type for i in integrations}
+
+        # Upload image
+        update_publish_progress(job_id, "Uploading image to Postiz...", 50)
+        media = await publisher.upload_video(
+            video_path=Path(file_path),
+            profile_id=profile_id,
+        )
+
+        # Create post
+        update_publish_progress(job_id, "Creating post...", 75)
+        result = await publisher.create_post(
+            media_id=media.id,
+            media_path=media.path,
+            caption=caption,
+            integration_ids=integration_ids,
+            integrations_info=integrations_info,
+            schedule_date=schedule_date,
+            profile_id=profile_id,
+        )
+
+        if result.success:
+            update_publish_progress(
+                job_id,
+                "Published successfully!" if not schedule_date else f"Scheduled for {schedule_date.strftime('%Y-%m-%d %H:%M')}",
+                100,
+                "completed",
+            )
+        else:
+            update_publish_progress(job_id, f"Failed: {result.error}", 100, "failed")
+
+    except Exception as e:
+        logger.error(f"Image publish job {job_id} failed: {e}")
+        update_publish_progress(job_id, f"Error: {str(e)}", 100, "failed")
+
+
+@router.post("/publish-image")
+async def publish_image(
+    req: PublishImageRequest,
+    background_tasks: BackgroundTasks,
+    ctx: ProfileContext = Depends(get_profile_context),
+):
+    """Publish a generated image to social media via Postiz."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    # Get image record
+    img = repo.table_query("generated_images", "select",
+        filters=QueryFilters(eq={"id": req.image_id, "profile_id": ctx.profile_id}, limit=1))
+    if not img.data:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # Get file path (final with logo preferred, otherwise base image)
+    file_path = img.data[0].get("final_image_path") or img.data[0].get("image_local_path")
+    if not file_path or not Path(file_path).exists():
+        raise HTTPException(status_code=400, detail="Image file not available locally")
+
+    if not req.integration_ids:
+        raise HTTPException(status_code=400, detail="At least one platform must be selected")
+
+    # Create job for tracking
+    job_id = uuid.uuid4().hex[:12]
+
+    # Parse schedule date if provided
+    schedule_dt = None
+    if req.schedule_date:
+        try:
+            schedule_dt = datetime.fromisoformat(req.schedule_date.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid schedule_date format. Use ISO format.")
+
+    # Launch background task
+    background_tasks.add_task(
+        _publish_image_task,
+        job_id=job_id,
+        image_id=req.image_id,
+        profile_id=ctx.profile_id,
+        file_path=file_path,
+        caption=req.caption,
+        integration_ids=req.integration_ids,
+        schedule_date=schedule_dt,
+    )
+
+    return {
+        "status": "processing",
+        "job_id": job_id,
+        "message": f"Publishing image to {len(req.integration_ids)} platform(s)...",
+    }

@@ -1,4 +1,4 @@
-"""FAL AI image generation service using NanoBanana Pro model."""
+"""FAL AI image generation service with multi-model support."""
 
 import logging
 import threading
@@ -12,12 +12,68 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-FAL_API_URL = "https://fal.run/fal-ai/nano-banana-pro"
-FAL_COST_PER_IMAGE = 0.01  # approximate cost per generation
+# ============== Model Configurations ==============
+
+MODEL_CONFIGS = {
+    "nano-banana": {
+        "fal_model_id": "fal-ai/nano-banana",
+        "url": "https://fal.run/fal-ai/nano-banana",
+        "display_name": "NanoBanana",
+        "aspect_ratios": ["21:9", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16"],
+        "resolutions": [],  # Does not support resolution parameter
+        "default_resolution": None,
+        "param_style": "image_size",  # Uses image_size mapped from aspect ratio
+        "cost_per_image": {
+            "default": 0.04,
+        },
+    },
+    "nano-banana-2": {
+        "fal_model_id": "fal-ai/nano-banana-2",
+        "url": "https://fal.run/fal-ai/nano-banana-2",
+        "display_name": "NanoBanana 2",
+        "aspect_ratios": ["auto", "21:9", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16"],
+        "resolutions": ["0.5K", "1K", "2K", "4K"],
+        "default_resolution": "1K",
+        "param_style": "aspect_ratio",  # Uses aspect_ratio string directly + resolution
+        "cost_per_image": {
+            "0.5K": 0.04,
+            "1K": 0.08,
+            "2K": 0.12,
+            "4K": 0.16,
+            "default": 0.08,
+        },
+    },
+    "nano-banana-pro": {
+        "fal_model_id": "fal-ai/nano-banana-pro",
+        "url": "https://fal.run/fal-ai/nano-banana-pro",
+        "display_name": "NanoBanana Pro",
+        "aspect_ratios": ["auto", "21:9", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16"],
+        "resolutions": ["1K", "2K", "4K"],
+        "default_resolution": "1K",
+        "param_style": "aspect_ratio",  # Uses aspect_ratio string directly + resolution
+        "cost_per_image": {
+            "1K": 0.10,
+            "2K": 0.15,
+            "4K": 0.20,
+            "default": 0.10,
+        },
+    },
+}
+
+DEFAULT_MODEL = "nano-banana-pro"
+
+
+def get_cost_for_model(model: str, resolution: Optional[str] = None) -> float:
+    """Get the cost per image for a given model and resolution."""
+    config = MODEL_CONFIGS.get(model, MODEL_CONFIGS[DEFAULT_MODEL])
+    costs = config["cost_per_image"]
+    if resolution and resolution in costs:
+        return costs[resolution]
+    return costs.get("default", 0.10)
 
 
 class FalImageGenerator:
-    """Client for FAL AI image generation."""
+    """Client for FAL AI image generation with multi-model support."""
 
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -34,20 +90,61 @@ class FalImageGenerator:
         prompt: str,
         aspect_ratio: str = "1:1",
         num_images: int = 1,
+        model: str = DEFAULT_MODEL,
+        resolution: Optional[str] = None,
     ) -> dict:
         """Generate image(s) via FAL AI.
 
-        Returns dict with 'images' list containing {url, content_type} items.
+        Args:
+            prompt: The image generation prompt.
+            aspect_ratio: Desired aspect ratio (e.g. "1:1", "9:16").
+            num_images: Number of images to generate.
+            model: Model key from MODEL_CONFIGS.
+            resolution: Resolution for models that support it (e.g. "1K", "2K", "4K").
+
+        Returns:
+            dict with 'images' list containing {url, content_type} items.
         """
+        config = MODEL_CONFIGS.get(model)
+        if not config:
+            logger.warning(f"Unknown model '{model}', falling back to {DEFAULT_MODEL}")
+            config = MODEL_CONFIGS[DEFAULT_MODEL]
+            model = DEFAULT_MODEL
+
+        api_url = config["url"]
+
+        # Build payload based on model's param_style
         payload = {
             "prompt": prompt,
             "num_images": num_images,
-            "image_size": self._aspect_to_size(aspect_ratio),
         }
 
-        logger.info(f"FAL generate: aspect={aspect_ratio}, prompt={prompt[:80]}...")
+        if config["param_style"] == "image_size":
+            # NanoBanana v1: uses image_size mapped from aspect ratio
+            payload["image_size"] = self._aspect_to_size(aspect_ratio)
+        elif config["param_style"] == "aspect_ratio":
+            # NanoBanana 2 & Pro: uses aspect_ratio string directly + resolution
+            payload["aspect_ratio"] = aspect_ratio
 
-        response = self._client.post(FAL_API_URL, json=payload)
+            # Resolve resolution
+            effective_resolution = resolution or config["default_resolution"]
+            if effective_resolution:
+                # Validate resolution is supported by this model
+                if config["resolutions"] and effective_resolution not in config["resolutions"]:
+                    logger.warning(
+                        f"Resolution '{effective_resolution}' not supported by {model}, "
+                        f"using default '{config['default_resolution']}'"
+                    )
+                    effective_resolution = config["default_resolution"]
+                if effective_resolution:
+                    payload["resolution"] = effective_resolution
+
+        logger.info(
+            f"FAL generate: model={model}, aspect={aspect_ratio}, "
+            f"resolution={payload.get('resolution', 'N/A')}, prompt={prompt[:80]}..."
+        )
+
+        response = self._client.post(api_url, json=payload)
         response.raise_for_status()
         data = response.json()
 
@@ -71,13 +168,18 @@ class FalImageGenerator:
 
     @staticmethod
     def _aspect_to_size(aspect_ratio: str) -> str:
-        """Map aspect ratio string to FAL size parameter."""
+        """Map aspect ratio string to FAL image_size parameter (NanoBanana v1 only)."""
         mapping = {
             "1:1": "square",
             "9:16": "portrait_16_9",
             "16:9": "landscape_16_9",
             "4:3": "landscape_4_3",
             "3:4": "portrait_4_3",
+            "3:2": "landscape_4_3",
+            "2:3": "portrait_4_3",
+            "5:4": "square",
+            "4:5": "square",
+            "21:9": "landscape_16_9",
         }
         return mapping.get(aspect_ratio, "square")
 
