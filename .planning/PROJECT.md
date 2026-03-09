@@ -108,19 +108,21 @@ Automated video production from any input — an idea, a product feed, or a coll
 
 ### Active
 
-## Current Milestone: v11 Production Polish & Platform Hardening
+## Current Milestone: v12 Desktop Product MVP
 
-**Goal:** Comprehensive quality upgrade — fix security gaps, add real tests, improve UX with inline previews and modern dialogs, optimize performance with pagination and SSE, and harden architecture with durable job queues and persistent state.
+**Goal:** Transform Edit Factory into a sellable local-first desktop product — replace Supabase with SQLite for local data, make all API calls (ElevenLabs, Gemini) go directly from user's PC, simplify UX for non-technical content creators, fix auth flow, polish Electron packaging, and prepare for commercial launch via Lemon Squeezy licensing.
 
 **Target features:**
-- Re-enable Supabase RLS on all tables, per-route rate limiting, MIME validation
-- Pytest unit/integration tests + Playwright E2E tests with assertions
-- GitHub Actions CI pipeline (lint, type-check, test)
-- Inline video player, Shadcn confirmation dialogs, soft-delete trash, drag-drop upload
-- Cursor-based pagination, SSE job progress, profile caching
-- Redis-backed durable job queue, persistent pipeline/assembly state
-- Sentry integration, auto file cleanup, health checks
-- Consistent UI language, keyboard shortcuts, clip organization
+- SQLite local database replacing Supabase for all project/clip/settings data
+- Direct API calls from desktop (ElevenLabs, Gemini) — no server proxy
+- Auth via Supabase Auth + Lemon Squeezy license key (server-side only for login)
+- Offline-capable editing (works without internet for local processing)
+- Simplified pipeline UX (3-click workflow, advanced settings hidden)
+- Onboarding wizard for non-technical users (API key setup with presets)
+- Caption/subtitle template presets (5-10 visual styles)
+- Electron polish (fix placeholders, portable Node.js, installer optimization)
+- Brand cleanup (consistent name, no hardcoded Romanian text)
+- Auth fixes (token injection, logout button, password reset flow)
 
 ### Out of Scope
 
@@ -131,9 +133,8 @@ Automated video production from any input — an idea, a product feed, or a coll
 - ✓ Crash reporting framework (Sentry, opt-in) — v10
 - ✓ Lemon Squeezy license key validation — v10
 - ✓ Desktop mode flags and %APPDATA% config — v10
-- Desktop app (Electron/Tauri) — unnecessary overhead for single-user workflow
-- Mobile app — web-first, personal use
-- Multi-user collaboration — single user, two store profiles
+- Mobile app — desktop-first product
+- Multi-user collaboration — single user per desktop install
 - AI video upscaling — compute-intensive with artifacts, 1080p is sufficient
 - Real-time preview rendering — complex infrastructure, preview never matches final
 - Video stabilization — compute-heavy, phone footage already stabilized
@@ -153,7 +154,8 @@ Automated video production from any input — an idea, a product feed, or a coll
 - ~46K LOC across Python (~27K) + TypeScript (~19K)
 - 9 milestones shipped: v1 (MVP), v2 (Profiles), v3 (Video Quality), v4 (Script-First), v5 (Product Videos), v6 (Production Hardening), v7 (Product Image Overlays, partial), v8 (Pipeline UX Overhaul), v9 (Assembly Pipeline Fix + Overlays)
 - v10 shipped: Desktop Launcher & Distribution (2026-03-01)
-- v11 milestone active: Production Polish & Platform Hardening
+- v11 shipped: Production Polish & Platform Hardening (2026-03-03)
+- v12 milestone active: Desktop Product MVP
 - 46 phases, 96 plans executed across all milestones
 - 13 backend services, 9 frontend pages, 14+ API routers
 - DB migrations: 021 total (007/009/017/021 pending manual application)
@@ -217,4 +219,4 @@ Automated video production from any input — an idea, a product feed, or a coll
 | Ken Burns 2x pre-scale for PiP, 4x for interstitials | Matches product_video_compositor pattern; smooth zoompan | ✓ Good |
 
 ---
-*Last updated: 2026-03-02 after v11 milestone start*
+*Last updated: 2026-03-09 after v12 milestone start*
