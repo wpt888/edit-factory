@@ -340,7 +340,7 @@ Plans:
 | 69. Direct API Integration | 3/3 | Complete    | 2026-03-09 | - |
 | 70. UX — Pipeline & Batch | 3/3 | Complete    | 2026-03-09 | - |
 | 71. UX — Onboarding & Presets | 2/2 | Complete    | 2026-03-09 | - |
-| 72. Brand & Language Cleanup | 1/1 | Complete   | 2026-03-09 | - |
+| 72. Brand & Language Cleanup | 1/1 | Complete    | 2026-03-09 | - |
 | 73. Electron Polish | v12 | 0/3 | Not started | - |
 
 ---
