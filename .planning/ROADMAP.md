@@ -270,9 +270,9 @@ Plans:
   4. Users can drag multiple videos into an upload queue — the queue shows each video's status (waiting, processing, done, failed) and processes them sequentially
 **Plans**: 3 plans
 Plans:
-- [ ] 64-01-PLAN.md — DataRepository interface + SQLite schema from migrations
-- [ ] 64-02-PLAN.md — SupabaseRepository implementation + repository factory
-- [ ] 64-03-PLAN.md — Migrate all routes and services to repository pattern
+- [ ] 70-01-PLAN.md — Style presets + types + backend endpoint
+- [ ] 70-02-PLAN.md — Simple Mode UI with 3-step flow + mode toggle
+- [ ] 70-03-PLAN.md — Batch upload queue with sequential processing
 
 ### Phase 71: UX Simplification — Onboarding & Presets
 **Goal**: New users are guided through API key setup with smart presets that minimize configuration, and users can choose from multiple caption/subtitle visual styles without manually tweaking font parameters
