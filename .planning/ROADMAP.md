@@ -329,7 +329,7 @@ Plans:
 | 64. Data Abstraction Layer | 3/3 | Complete    | 2026-03-09 | - |
 | 65. SQLite Local Database | v12 | Complete    | 2026-03-09 | - |
 | 66. Local File Storage & Offline | 3/3 | Complete    | 2026-03-09 | - |
-| 67. Auth Flow Fixes | 1/3 | In Progress|  | - |
+| 67. Auth Flow Fixes | 2/3 | In Progress|  | - |
 | 68. License Key Validation Polish | v12 | 0/1 | Not started | - |
 | 69. Direct API Integration | v12 | 0/3 | Not started | - |
 | 70. UX — Pipeline & Batch | v12 | 0/3 | Not started | - |
