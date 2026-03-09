@@ -461,6 +461,52 @@ async def download_clip_audio(
     )
 
 
+@router.get("/clips/{clip_id}/download")
+async def download_clip_video(
+    clip_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Download the final (or raw) video file for a clip."""
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Verify ownership
+    clip_result = supabase.table("editai_clips").select(
+        "id, final_video_path, raw_video_path"
+    ).eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
+    if not clip_result.data:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    clip_row = clip_result.data[0]
+    video_path_str = clip_row.get("final_video_path") or clip_row.get("raw_video_path")
+    if not video_path_str:
+        raise HTTPException(status_code=404, detail="No video file associated with this clip")
+
+    settings = get_settings()
+    file_path = Path(video_path_str)
+    if not file_path.is_absolute():
+        # Try output_dir first, then media_dir
+        candidate = settings.output_dir / file_path
+        if candidate.exists():
+            file_path = candidate
+        elif hasattr(settings, "media_dir") and settings.media_dir:
+            candidate = Path(settings.media_dir) / file_path
+            if candidate.exists():
+                file_path = candidate
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Video file not found on disk")
+
+    return FileResponse(
+        path=str(file_path),
+        media_type="video/mp4",
+        filename=f"clip_{clip_id[:8]}.mp4",
+        headers={"Cache-Control": "no-cache, must-revalidate"}
+    )
+
+
 # ============== PROJECTS ==============
 
 @router.post("/projects", response_model=ProjectResponse)

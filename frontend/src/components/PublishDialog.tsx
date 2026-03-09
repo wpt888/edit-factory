@@ -253,7 +253,7 @@ export function PublishDialog({
 
     setDialogState("publishing");
     setProgressPercent(0);
-    setProgressStep("Se initializeaza...");
+    setProgressStep("Initializing...");
 
     try {
       const body: Record<string, unknown> = {
