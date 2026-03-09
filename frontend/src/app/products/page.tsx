@@ -628,7 +628,7 @@ export default function ProductsPage() {
         {!showProducts ? (
           <EmptyState
             icon={<Package className="h-6 w-6" />}
-            title="Niciun produs"
+            title="No products"
             description="Import products from a feed or add manually."
             action={{ label: "Add Feed", onClick: () => setCreateFeedOpen(true) }}
           />
@@ -639,9 +639,9 @@ export default function ProductsPage() {
         ) : products.length === 0 ? (
           <EmptyState
             icon={<Package className="h-6 w-6" />}
-            title="Niciun produs"
+            title="No products"
             description={activeTab === "catalog"
-              ? "Catalogul nu contine produse care sa corespunda filtrelor."
+              ? "The catalog contains no products matching your filters."
               : "Import products from a feed or add manually."}
           />
         ) : (
@@ -683,7 +683,7 @@ export default function ProductsPage() {
                       variant="secondary"
                       className="absolute bottom-2 right-2 text-xs"
                     >
-                      {product.variant_count} variante
+                      {product.variant_count} variants
                     </Badge>
                   )}
                 </div>

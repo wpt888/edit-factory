@@ -39,7 +39,7 @@ export function TTSPanel({
   disabled = false,
   showAdvanced = true,
   className = "",
-  placeholder = "Scrie textul pentru voice-over aici. Acest text va fi convertit in audio folosind ElevenLabs TTS...",
+  placeholder = "Write the voice-over text here. This text will be converted to audio using ElevenLabs TTS...",
 }: TTSPanelProps) {
   return (
     <div className={`space-y-4 ${className}`}>
@@ -62,9 +62,9 @@ export function TTSPanel({
           disabled={disabled}
         />
         <p className="text-xs text-muted-foreground">
-          {scriptText.length} caractere
+          {scriptText.length} characters
           {scriptText.length > 0 && (
-            <> (~{Math.ceil(scriptText.length / 150)} secunde audio, estimate)</>
+            <> (~{Math.ceil(scriptText.length / 150)} seconds audio, estimate)</>
           )}
         </p>
       </div>
@@ -75,10 +75,10 @@ export function TTSPanel({
           <Volume2 className="h-4 w-4 text-muted-foreground" />
           <div>
             <Label htmlFor="generate-audio" className="cursor-pointer">
-              Genereaza audio automat
+              Generate audio automatically
             </Label>
             <p className="text-xs text-muted-foreground">
-              Voice-over adaugat direct la videoclip
+              Voice-over added directly to video
             </p>
           </div>
         </div>
@@ -97,10 +97,10 @@ export function TTSPanel({
             <VolumeX className="h-4 w-4 text-muted-foreground" />
             <div>
               <Label htmlFor="mute-source" className="cursor-pointer">
-                Elimina vocea din sursa
+                Remove source voice
               </Label>
               <p className="text-xs text-muted-foreground">
-                Detecteaza si mute-uieste vocea originala (VAD)
+                Detect and mute original voice (VAD)
               </p>
             </div>
           </div>

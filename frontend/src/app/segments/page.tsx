@@ -1305,13 +1305,13 @@ export default function SegmentsPage() {
           ) : filteredSegments.length === 0 ? (
             <EmptyState
               icon={<Scissors className="h-6 w-6" />}
-              title="Niciun segment"
+              title="No segments"
               description={
                 viewMode === "current" && !selectedVideo
                   ? "Select a video first."
                   : searchQuery || showFavoritesOnly || selectedKeywordFilter
-                  ? "Niciun segment nu corespunde filtrelor."
-                  : "Segmentele video selectate vor aparea aici."
+                  ? "No segments match your filters."
+                  : "Selected video segments will appear here."
               }
             />
           ) : (

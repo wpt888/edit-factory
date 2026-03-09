@@ -88,8 +88,8 @@ export function VariantTriage({
   if (variants.length === 0) {
     return (
       <div className={`text-center py-8 text-muted-foreground ${className}`}>
-        <p>Nu exista variante generate</p>
-        <p className="text-sm mt-1">Proceseaza un video pentru a genera variante</p>
+        <p>No generated variants</p>
+        <p className="text-sm mt-1">Process a video to generate variants</p>
       </div>
     );
   }
@@ -99,10 +99,10 @@ export function VariantTriage({
       {/* Header with selection controls */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <h3 className="font-semibold">Variante Generate</h3>
-          <Badge variant="secondary">{variants.length} variante</Badge>
+          <h3 className="font-semibold">Generated Variants</h3>
+          <Badge variant="secondary">{variants.length} variants</Badge>
           {selectedCount > 0 && (
-            <Badge variant="default">{selectedCount} selectate</Badge>
+            <Badge variant="default">{selectedCount} selected</Badge>
           )}
         </div>
 
@@ -135,7 +135,7 @@ export function VariantTriage({
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={`${apiBaseUrl}/files/${encodeURI(variant.thumbnail)}`}
-                    alt={`Varianta ${variant.variant_index}`}
+                    alt={`Variant ${variant.variant_index}`}
                     className="w-full h-full object-cover"
                   />
                 ) : (
@@ -181,7 +181,7 @@ export function VariantTriage({
               {/* Variant info */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <Badge variant="outline">Varianta {variant.variant_index}</Badge>
+                  <Badge variant="outline">Variant {variant.variant_index}</Badge>
                 </div>
                 <p className="text-xs text-muted-foreground truncate">
                   {variant.variant_name}
@@ -203,7 +203,7 @@ export function VariantTriage({
             {isAddingTts ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                {ttsStatus || "Se adauga voice-over..."}
+                {ttsStatus || "Adding voice-over..."}
               </>
             ) : (
               <>
