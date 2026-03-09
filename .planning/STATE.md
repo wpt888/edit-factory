@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 68-01-PLAN.md
-last_updated: "2026-03-09T05:33:30.970Z"
-last_activity: 2026-03-09 — Completed 68-01 (License Key Validation Polish)
+status: in-progress
+stopped_at: Completed 69-01-PLAN.md
+last_updated: "2026-03-09T06:01:00.000Z"
+last_activity: 2026-03-09 — Completed 69-01 (Encrypted Key Vault)
 progress:
   total_phases: 10
   completed_phases: 5
-  total_plans: 11
-  completed_plans: 11
+  total_plans: 14
+  completed_plans: 12
 ---
 
 # Project State
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale.
-**Current focus:** v12 Desktop Product MVP — Phase 68 (planning)
+**Current focus:** v12 Desktop Product MVP — Phase 69 (in progress)
 
 ## Current Position
 
-Phase: 68 — License Key Validation Polish
-Plan: 1 of 1 (complete)
-Status: Phase 68 complete
-Last activity: 2026-03-09 — Completed 68-01 (License Key Validation Polish)
+Phase: 69 — Direct API Integration
+Plan: 1 of 3 (in progress)
+Status: In Progress
+Last activity: 2026-03-09 — Completed 69-01 (Encrypted Key Vault)
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Last activity: 2026-03-09 — Completed 68-01 (License Key Validation Polish)
 | Phase 67 P02 | 2min | 2 tasks | 3 files |
 | Phase 67 P03 | 2min | 2 tasks | 3 files |
 | Phase 68 P01 | 2min | 2 tasks | 4 files |
+| Phase 69 P01 | 5min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -95,6 +96,9 @@ Recent decisions affecting v12:
 - [Phase 68]: 72-hour grace period (down from 7 days) for tighter license enforcement
 - [Phase 68]: Blocking overlay instead of redirect when license expires to preserve unsaved work
 - [Phase 68]: 30-minute polling interval for license status checks
+- [Phase 69]: Reuse Fernet derivation pattern from elevenlabs_account_manager.py for KeyVault
+- [Phase 69]: Machine-specific fallback key derivation via hostname + vault_salt.bin
+- [Phase 69]: Backward-compatible migration from plaintext config.json to vault
 
 ### Pending Todos
 
@@ -111,10 +115,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T05:30:26Z
-Stopped at: Completed 68-01-PLAN.md
+Last session: 2026-03-09T06:01:00Z
+Stopped at: Completed 69-01-PLAN.md
 Resume file: None
-Next action: Plan next phase
+Next action: Execute 69-02-PLAN.md
 
 ---
 *Last updated: 2026-03-09 after 66-02 completion*
