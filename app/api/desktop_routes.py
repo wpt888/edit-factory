@@ -153,6 +153,7 @@ async def get_desktop_settings():
         "supabase_key": vault.get_key_hint("supabase_key") or _hint(config.get("supabase_key", "")),
         "first_run_complete": config.get("first_run_complete", False),
         "crash_reporting_enabled": config.get("crash_reporting_enabled", False),
+        "tts_provider": config.get("tts_provider", None),
     }
 
 
@@ -247,6 +248,7 @@ class DesktopSettingsUpdate(BaseModel):
     supabase_key: str | None = None
     first_run_complete: bool | None = None
     crash_reporting_enabled: bool | None = None
+    tts_provider: str | None = None  # "edge" | "elevenlabs"
 
 
 @router.post("/settings")
