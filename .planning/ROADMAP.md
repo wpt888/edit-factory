@@ -241,6 +241,8 @@ Plans:
   2. A valid license key is re-validated against the Lemon Squeezy API every 24 hours — the last validation timestamp is stored locally
   3. If the license check fails due to no internet, the app continues working for up to 72 hours (grace period) — after that, features are locked until re-validation succeeds
 **Plans**: 1 plan
+Plans:
+- [ ] 68-01-PLAN.md — Backend 72h grace period + periodic revalidation + frontend LicenseGuard
 
 ### Phase 69: Direct API Integration
 **Goal**: ElevenLabs TTS and Gemini AI calls go directly from the desktop app to the external APIs using the user's own keys, stored encrypted on disk — and the app works without any API keys by falling back to free alternatives
