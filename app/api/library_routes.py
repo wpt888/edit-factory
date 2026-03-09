@@ -2639,14 +2639,23 @@ async def _render_final_clip_task(
                 from app.services.elevenlabs_tts import get_elevenlabs_tts
                 tts = get_elevenlabs_tts()
                 if tts is None:
-                    raise Exception("ElevenLabs TTS unavailable - API key or voice ID not configured")
-                audio_path, silence_stats = await tts.generate_audio_trimmed(
-                    text=content_data["tts_text"],
-                    output_path=audio_path,
-                    remove_silence=True,
-                    min_silence_duration=0.25,
-                    padding=0.06
-                )
+                    # Fallback to Edge TTS when ElevenLabs is not configured
+                    logger.info("Using Edge TTS fallback — ElevenLabs API key not configured")
+                    from app.services.edge_tts_service import EdgeTTSService
+                    edge_tts_fallback = EdgeTTSService()
+                    await edge_tts_fallback.generate_audio(
+                        text=content_data["tts_text"],
+                        output_path=str(audio_path)
+                    )
+                    silence_stats = None
+                else:
+                    audio_path, silence_stats = await tts.generate_audio_trimmed(
+                        text=content_data["tts_text"],
+                        output_path=audio_path,
+                        remove_silence=True,
+                        min_silence_duration=0.25,
+                        padding=0.06
+                    )
 
             audio_duration = await asyncio.to_thread(_get_audio_duration, audio_path)
 

@@ -558,6 +558,15 @@ async def process_job(job_id: str):
         )
 
         if result["status"] == "success":
+            # Add analysis fallback indicator when Gemini is not available
+            from app.services.video_processor import GEMINI_AVAILABLE
+            if not GEMINI_AVAILABLE:
+                result["analysis_fallback"] = "local_scoring"
+                result["analysis_fallback_reason"] = "No Gemini API key configured"
+                logger.info("Using local motion scoring — Gemini API key not configured")
+            else:
+                result["analysis_fallback"] = None
+
             job["status"] = JobStatus.COMPLETED
             job["result"] = result
             job["progress"] = "Completed successfully"
@@ -866,8 +875,17 @@ async def process_tts_generate_job(job_id: str):
 
     try:
         tts = get_elevenlabs_tts()
+        tts_fallback = None
+        tts_fallback_reason = None
+
         if tts is None:
-            raise Exception("ElevenLabs TTS unavailable - API key or voice ID not configured")
+            # Fallback to Edge TTS when ElevenLabs is not configured
+            logger.info("Using Edge TTS fallback — ElevenLabs API key not configured")
+            from app.services.edge_tts_service import EdgeTTSService
+            edge_tts_service = EdgeTTSService()
+            tts_fallback = "edge_tts"
+            tts_fallback_reason = "No ElevenLabs API key configured"
+
         settings = get_settings()
 
         # Output path
@@ -879,23 +897,32 @@ async def process_tts_generate_job(job_id: str):
             job["progress"] = "Generating TTS and removing silence..."
             job["updated_at"] = datetime.now(timezone.utc)
 
-            audio_path, silence_stats = await tts.generate_audio_trimmed(
-                text=job["text"],
-                output_path=output_path,
-                remove_silence=True,
-                min_silence_duration=job["min_silence_duration"],
-                silence_padding=job["silence_padding"]
-            )
+            if tts_fallback:
+                await edge_tts_service.generate_audio(
+                    text=job["text"],
+                    output_path=str(output_path)
+                )
+                silence_stats = {"enabled": False}
+            else:
+                audio_path, silence_stats = await tts.generate_audio_trimmed(
+                    text=job["text"],
+                    output_path=output_path,
+                    remove_silence=True,
+                    min_silence_duration=job["min_silence_duration"],
+                    silence_padding=job["silence_padding"]
+                )
 
             job["result"] = {
                 "status": "success",
-                "audio_path": str(audio_path),
+                "audio_path": str(output_path),
                 "text_length": len(job["text"]),
-                "silence_removal": silence_stats
+                "silence_removal": silence_stats,
+                "tts_fallback": tts_fallback,
+                "tts_fallback_reason": tts_fallback_reason,
             }
 
             # Calculate time saved
-            if "original_duration" in silence_stats and "new_duration" in silence_stats:
+            if not tts_fallback and "original_duration" in silence_stats and "new_duration" in silence_stats:
                 saved = silence_stats["original_duration"] - silence_stats["new_duration"]
                 job["progress"] = f"Completed - saved {saved:.1f}s of silence"
             else:
@@ -904,13 +931,21 @@ async def process_tts_generate_job(job_id: str):
             job["progress"] = "Generating TTS..."
             job["updated_at"] = datetime.now(timezone.utc)
 
-            await tts.generate_audio(job["text"], output_path)
+            if tts_fallback:
+                await edge_tts_service.generate_audio(
+                    text=job["text"],
+                    output_path=str(output_path)
+                )
+            else:
+                await tts.generate_audio(job["text"], output_path)
 
             job["result"] = {
                 "status": "success",
                 "audio_path": str(output_path),
                 "text_length": len(job["text"]),
-                "silence_removal": {"enabled": False}
+                "silence_removal": {"enabled": False},
+                "tts_fallback": tts_fallback,
+                "tts_fallback_reason": tts_fallback_reason,
             }
             job["progress"] = "Completed"
 
@@ -1043,8 +1078,17 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
 
     try:
         tts = get_elevenlabs_tts()
+        tts_fallback = None
+        tts_fallback_reason = None
+
         if tts is None:
-            raise Exception("ElevenLabs TTS unavailable - API key or voice ID not configured")
+            # Fallback to Edge TTS when ElevenLabs is not configured
+            logger.info("Using Edge TTS fallback — ElevenLabs API key not configured")
+            from app.services.edge_tts_service import EdgeTTSService
+            edge_tts_service = EdgeTTSService()
+            tts_fallback = "edge_tts"
+            tts_fallback_reason = "No ElevenLabs API key configured"
+
         settings = get_settings()
 
         video_paths = job["video_paths"]
@@ -1068,24 +1112,39 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
             job["progress"] = "Generating voice-over and removing silence..."
             job["updated_at"] = datetime.now(timezone.utc)
 
-            audio_path, silence_stats = await tts.generate_audio_trimmed(
-                text=tts_text,
-                output_path=audio_path,
-                remove_silence=True,
-                min_silence_duration=min_silence_duration,
-                silence_padding=silence_padding
-            )
-            logger.info(f"TTS audio generated with silence removal: {audio_path}")
+            if tts_fallback:
+                await edge_tts_service.generate_audio(
+                    text=tts_text,
+                    output_path=str(audio_path)
+                )
+                silence_stats = {"enabled": False}
+                logger.info(f"Edge TTS audio generated (fallback): {audio_path}")
+            else:
+                audio_path, silence_stats = await tts.generate_audio_trimmed(
+                    text=tts_text,
+                    output_path=audio_path,
+                    remove_silence=True,
+                    min_silence_duration=min_silence_duration,
+                    silence_padding=silence_padding
+                )
+                logger.info(f"TTS audio generated with silence removal: {audio_path}")
 
-            if "original_duration" in silence_stats and "new_duration" in silence_stats:
-                saved = silence_stats["original_duration"] - silence_stats["new_duration"]
-                logger.info(f"Silence removed: {saved:.1f}s saved")
+                if "original_duration" in silence_stats and "new_duration" in silence_stats:
+                    saved = silence_stats["original_duration"] - silence_stats["new_duration"]
+                    logger.info(f"Silence removed: {saved:.1f}s saved")
         else:
-            job["progress"] = "Generating voice-over with ElevenLabs..."
+            job["progress"] = "Generating voice-over..."
             job["updated_at"] = datetime.now(timezone.utc)
 
-            await tts.generate_audio(tts_text, audio_path)
-            logger.info(f"TTS audio generated: {audio_path}")
+            if tts_fallback:
+                await edge_tts_service.generate_audio(
+                    text=tts_text,
+                    output_path=str(audio_path)
+                )
+                logger.info(f"Edge TTS audio generated (fallback): {audio_path}")
+            else:
+                await tts.generate_audio(tts_text, audio_path)
+                logger.info(f"TTS audio generated: {audio_path}")
 
         # Add audio to each video
         results = []
@@ -1128,7 +1187,9 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
             "processed_videos": results,
             "total": len(video_paths),
             "successful": len([r for r in results if r["status"] == "success"]),
-            "silence_removal": silence_stats if silence_stats else {"enabled": False}
+            "silence_removal": silence_stats if silence_stats else {"enabled": False},
+            "tts_fallback": tts_fallback,
+            "tts_fallback_reason": tts_fallback_reason,
         }
 
         # Progress message with silence info
