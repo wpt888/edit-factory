@@ -13,7 +13,7 @@
 - ✅ **v9 Assembly Pipeline Fix + Overlays** - Phases 43-46 (shipped 2026-02-28)
 - ✅ **v10 Desktop Launcher & Distribution** - Phases 47-54 (shipped 2026-03-01)
 - ✅ **v11 Production Polish & Platform Hardening** - Phases 55-63 (shipped 2026-03-03)
-- 🚧 **v12 Desktop Product MVP** - Phases 64-73 (in progress)
+- 🚧 **v12 Desktop Product MVP** - Phases 64-74 (in progress)
 
 ## Phases
 
@@ -170,6 +170,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 - [x] **Phase 71: UX Simplification — Onboarding & Presets** - Setup wizard with API key guidance and presets; 5+ caption/subtitle visual presets (2 plans) (completed 2026-03-09)
 - [x] **Phase 72: Brand & Language Cleanup** - Consistent product name throughout app; remove all hardcoded Romanian text (1 plan) (completed 2026-03-09)
 - [x] **Phase 73: Electron Polish** - Real publish config, portable Node.js, installer optimization, auto-updater, branding assets, macOS target (3 plans) (completed 2026-03-09)
+- [ ] **Phase 74: v12 Gap Closure** - Fix SimplePipeline download URL + Romanian text remnant (1 plan)
 
 ## v12 Phase Details
 
@@ -317,6 +318,18 @@ Plans:
 - [ ] 73-02-PLAN.md — Installer size optimization (exclude PyTorch/Whisper from bundle)
 - [ ] 73-03-PLAN.md — Brand icon + auto-updater verification + visual checkpoint
 
+### Phase 74: v12 Gap Closure
+**Goal**: Close integration and flow gaps identified by the v12 milestone audit — fix the SimplePipeline download URL that returns 404 and remove the last Romanian text remnant
+**Depends on**: Phase 70, Phase 72
+**Requirements**: UX-01, UX-07
+**Gap Closure**: Closes INT-01, INT-02, FLOW-01 from v12-MILESTONE-AUDIT.md
+**Success Criteria** (what must be TRUE):
+  1. The SimplePipeline download button triggers a working download — no 404 error, the rendered clip file downloads successfully
+  2. Searching the entire frontend codebase for "Se initializeaza" returns zero matches — no Romanian text remains in any user-facing component
+**Plans**: 1 plan
+Plans:
+- [ ] 74-01-PLAN.md — Fix SimplePipeline download route + remove Romanian text
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -342,6 +355,7 @@ Plans:
 | 71. UX — Onboarding & Presets | 2/2 | Complete    | 2026-03-09 | - |
 | 72. Brand & Language Cleanup | 1/1 | Complete    | 2026-03-09 | - |
 | 73. Electron Polish | 3/3 | Complete    | 2026-03-09 | - |
+| 74. v12 Gap Closure | 0/1 | Pending    | - | - |
 
 ---
 *Last updated: 2026-03-09 after phase 73 planning*
