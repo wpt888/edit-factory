@@ -24,11 +24,6 @@ export function LicenseGuard({ children }: LicenseGuardProps) {
   const [retrying, setRetrying] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Skip license checks entirely in non-desktop mode
-  if (!DESKTOP_MODE) {
-    return <>{children}</>;
-  }
-
   const isPublicRoute = PUBLIC_ROUTES.some(
     (route) => pathname === route || pathname.startsWith(route + "/")
   );
@@ -39,18 +34,15 @@ export function LicenseGuard({ children }: LicenseGuardProps) {
       const data = await resp.json();
 
       if (data.needs_revalidation) {
-        // Trigger full validation in background
         try {
           await apiPost("/desktop/license/validate", undefined, {
             skipAuth: true,
           });
         } catch (valErr) {
           if (valErr instanceof ApiError && valErr.status === 403) {
-            // Validation failed AND grace period exceeded
             setBlocked(true);
             return;
           }
-          // Network error during validation -- grace period handles offline
         }
       }
 
@@ -58,17 +50,14 @@ export function LicenseGuard({ children }: LicenseGuardProps) {
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 404) {
-          // No license activated -- redirect to setup
           router.push("/setup");
           return;
         }
         if (err.status === 403) {
-          // License expired + grace period exceeded
           setBlocked(true);
           return;
         }
       }
-      // Network error -- do nothing, grace period handles offline
     } finally {
       setLicenseChecked(true);
     }
@@ -80,7 +69,6 @@ export function LicenseGuard({ children }: LicenseGuardProps) {
       await apiPost("/desktop/license/validate", undefined, {
         skipAuth: true,
       });
-      // If validation succeeds, re-check status
       try {
         await apiGet("/desktop/license/status", { skipAuth: true });
         setBlocked(false);
@@ -94,9 +82,8 @@ export function LicenseGuard({ children }: LicenseGuardProps) {
     }
   }, []);
 
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   useEffect(() => {
-    if (isPublicRoute) {
+    if (!DESKTOP_MODE || isPublicRoute) {
       setLicenseChecked(true);
       return;
     }
@@ -111,8 +98,8 @@ export function LicenseGuard({ children }: LicenseGuardProps) {
     };
   }, [isPublicRoute, checkLicense]);
 
-  // Public routes bypass license checks
-  if (isPublicRoute) {
+  // Non-desktop mode or public routes bypass license checks
+  if (!DESKTOP_MODE || isPublicRoute) {
     return <>{children}</>;
   }
 

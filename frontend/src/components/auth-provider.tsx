@@ -85,13 +85,26 @@ export function AuthProvider({ children }: AuthProviderProps) {
     // Initial session check
     const initAuth = async () => {
       try {
-        const { data, error } = await supabase.auth.refreshSession();
+        const { data: { session: currentSession } } = await supabase.auth.getSession();
         if (!isMountedRef.current) return;
-        if (error) {
-          console.error("Error getting session:", error);
+
+        if (currentSession) {
+          // Session exists — try to refresh the token
+          const { data, error } = await supabase.auth.refreshSession();
+          if (!isMountedRef.current) return;
+          if (error) {
+            console.error("Error refreshing session:", error);
+            // Stale session — clear it
+            setUser(null);
+            setSession(null);
+          } else {
+            setSession(data.session);
+            setUser(data.session?.user ?? null);
+          }
         } else {
-          setSession(data.session);
-          setUser(data.session?.user ?? null);
+          // No session — nothing to refresh
+          setUser(null);
+          setSession(null);
         }
       } catch (error) {
         console.error("Error in initAuth:", error);

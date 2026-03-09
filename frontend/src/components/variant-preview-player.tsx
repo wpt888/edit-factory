@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
 import { apiPost, apiGet, API_URL } from "@/lib/api";
-import type { MatchPreview } from "@/components/timeline-editor";
+import type { MatchPreview, InterstitialSlide } from "@/components/timeline-editor";
 import type { SubtitleSettings } from "@/types/video-processing";
 
 interface VariantPreviewPlayerProps {
@@ -23,6 +23,8 @@ interface VariantPreviewPlayerProps {
   sourceVideoIds?: string[];
   minSegmentDuration?: number;
   wordsPerSubtitle?: number;
+  ultraRapidIntro?: boolean;
+  interstitialSlides?: InterstitialSlide[];
 }
 
 export function VariantPreviewPlayer({
@@ -36,12 +38,15 @@ export function VariantPreviewPlayer({
   sourceVideoIds,
   minSegmentDuration = 3.0,
   wordsPerSubtitle = 2,
+  ultraRapidIntro = true,
+  interstitialSlides,
 }: VariantPreviewPlayerProps) {
   const [status, setStatus] = useState<string>("idle");
   const [progress, setProgress] = useState(0);
   const [currentStep, setCurrentStep] = useState("");
   const [matchesFingerprint, setMatchesFingerprint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [limitations, setLimitations] = useState<string[]>([]);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelledRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -57,6 +62,17 @@ export function VariantPreviewPlayer({
       clearTimeout(pollTimeoutRef.current);
       pollTimeoutRef.current = null;
     }
+  }, []);
+
+  // Pause video and release media resources on unmount to prevent audio leak
+  useEffect(() => {
+    return () => {
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.removeAttribute("src");
+        videoRef.current.load();
+      }
+    };
   }, []);
 
   // Start preview render when dialog opens
@@ -108,6 +124,8 @@ export function VariantPreviewPlayer({
                 }
               : undefined,
             words_per_subtitle: wordsPerSubtitle,
+            ultra_rapid_intro: ultraRapidIntro,
+            interstitial_slides: interstitialSlides?.filter((s) => s.imageUrl) ?? undefined,
           }
         );
 
@@ -138,6 +156,7 @@ export function VariantPreviewPlayer({
 
             if (statusData.status === "completed") {
               setStatus("completed");
+              if (statusData.preview_limitations) setLimitations(statusData.preview_limitations);
               stopPolling();
               return;
             } else if (statusData.status === "failed") {
@@ -176,11 +195,18 @@ export function VariantPreviewPlayer({
     (newOpen: boolean) => {
       if (!newOpen) {
         stopPolling();
+        // Explicitly pause video to prevent audio leaking after dialog closes
+        if (videoRef.current) {
+          videoRef.current.pause();
+          videoRef.current.removeAttribute("src");
+          videoRef.current.load();
+        }
         setStatus("idle");
         setProgress(0);
         setCurrentStep("");
         setError(null);
         setMatchesFingerprint(null);
+        setLimitations([]);
       }
       onOpenChange(newOpen);
     },
@@ -250,6 +276,7 @@ export function VariantPreviewPlayer({
               src={previewVideoUrl}
               controls
               autoPlay
+              muted
               playsInline
               className="w-full h-full object-contain"
             />
@@ -262,6 +289,16 @@ export function VariantPreviewPlayer({
             </div>
           )}
         </div>
+
+        {/* Preview limitations */}
+        {status === "completed" && limitations.length > 0 && (
+          <div className="text-xs text-muted-foreground space-y-0.5 mt-2">
+            <p className="font-medium">Preview notes:</p>
+            <ul className="list-disc list-inside">
+              {limitations.map((l, i) => <li key={i}>{l}</li>)}
+            </ul>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );
