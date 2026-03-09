@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
-import { CheckCircle, AlertCircle, Loader2, Film, ChevronRight, ChevronLeft, ArrowRight } from "lucide-react"
+import { CheckCircle, AlertCircle, Loader2, Film, ChevronRight, ChevronLeft, ArrowRight, Volume2, ChevronDown } from "lucide-react"
 
 function SetupPageContent() {
   const router = useRouter()
@@ -42,6 +42,7 @@ function SetupPageContent() {
   const [supabaseHint, setSupabaseHint] = useState("")
   const [geminiHint, setGeminiHint] = useState("")
   const [elevenlabsHint, setElevenlabsHint] = useState("")
+  const [useFreeTts, setUseFreeTts] = useState(false)
 
   // Step 3: Crash Reporting
   const [crashReporting, setCrashReporting] = useState(false)
@@ -96,7 +97,7 @@ function SetupPageContent() {
         if (!res.ok) return;
         return res.json();
       })
-      .then((data: { supabase_url?: string; supabase_key?: string; gemini_api_key?: string; elevenlabs_api_key?: string; crash_reporting_enabled?: boolean } | undefined) => {
+      .then((data: { supabase_url?: string; supabase_key?: string; gemini_api_key?: string; elevenlabs_api_key?: string; crash_reporting_enabled?: boolean; tts_provider?: string } | undefined) => {
         if (!data) return;
         // Supabase URL is returned unredacted
         if (data.supabase_url) setSupabaseUrl(data.supabase_url)
@@ -106,6 +107,11 @@ function SetupPageContent() {
         if (data.elevenlabs_api_key) setElevenlabsHint(data.elevenlabs_api_key)
         // Pre-fill crash reporting toggle
         if (data.crash_reporting_enabled) setCrashReporting(data.crash_reporting_enabled)
+        // Pre-fill Free TTS selection
+        if (data.tts_provider === "edge") {
+          setUseFreeTts(true)
+          setElevenlabsStatus("ok")
+        }
         // In edit mode, license is already valid — skip to step 2
         setLicenseValid(true)
         setCurrentStep(2)
@@ -179,6 +185,7 @@ function SetupPageContent() {
       // 1. Write API keys (only non-empty values to avoid overwriting existing)
       const settingsPayload: Record<string, string | boolean> = {
         crash_reporting_enabled: crashReporting,
+        tts_provider: useFreeTts ? "edge" : "elevenlabs",
       }
       if (supabaseUrl.trim()) settingsPayload.supabase_url = supabaseUrl.trim()
       if (supabaseKey.trim()) settingsPayload.supabase_key = supabaseKey.trim()
@@ -315,6 +322,27 @@ function SetupPageContent() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
+              {/* Free TTS Preset */}
+              <div
+                className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
+                  useFreeTts
+                    ? "border-green-500 bg-green-500/10"
+                    : "border-border hover:border-primary/50"
+                }`}
+                onClick={() => {
+                  setUseFreeTts(true)
+                  setElevenlabsKey("")
+                  setElevenlabsStatus("ok")
+                }}
+              >
+                <Volume2 className={`h-5 w-5 flex-shrink-0 ${useFreeTts ? "text-green-500" : "text-muted-foreground"}`} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium">Use Free TTS (Edge TTS)</p>
+                  <p className="text-xs text-muted-foreground">No API key needed — use Microsoft&apos;s free text-to-speech engine</p>
+                </div>
+                {useFreeTts && <CheckCircle className="h-5 w-5 text-green-500 flex-shrink-0" />}
+              </div>
+
               {/* Supabase URL */}
               <div className="space-y-2">
                 <Label htmlFor="supabase-url">
@@ -375,6 +403,7 @@ function SetupPageContent() {
                     type="password"
                     value={geminiKey}
                     onChange={(e) => { setGeminiKey(e.target.value); setGeminiStatus("idle") }}
+                    onBlur={() => { if (geminiKey.trim() && geminiStatus === "idle") testConnection("gemini") }}
                     placeholder={geminiHint ? "Enter new key to update" : "AIza..."}
                     className="flex-1"
                   />
@@ -392,42 +421,66 @@ function SetupPageContent() {
                 </div>
               </div>
 
-              {/* ElevenLabs */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="elevenlabs-key">ElevenLabs API Key <span className="text-xs text-muted-foreground">(optional)</span></Label>
-                  {elevenlabsHint && (
-                    <span className="text-xs text-muted-foreground">Current: {elevenlabsHint}</span>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <Input
-                    id="elevenlabs-key"
-                    type="password"
-                    value={elevenlabsKey}
-                    onChange={(e) => { setElevenlabsKey(e.target.value); setElevenlabsStatus("idle") }}
-                    placeholder={elevenlabsHint ? "Enter new key to update" : "sk_..."}
-                    className="flex-1"
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => testConnection("elevenlabs")}
-                    disabled={elevenlabsStatus === "testing" || !elevenlabsKey.trim()}
+              {/* ElevenLabs — dimmed when Free TTS selected */}
+              {useFreeTts ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm text-green-600">
+                    <CheckCircle className="h-4 w-4" />
+                    <span>Edge TTS selected — no API key needed</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={() => {
+                      setUseFreeTts(false)
+                      setElevenlabsStatus("idle")
+                    }}
                   >
-                    {elevenlabsStatus === "testing" ? <Loader2 className="h-4 w-4 animate-spin" /> :
-                     elevenlabsStatus === "ok" ? <CheckCircle className="h-4 w-4 text-green-500" /> :
-                     elevenlabsStatus === "error" ? <AlertCircle className="h-4 w-4 text-red-500" /> :
-                     "Test"}
-                  </Button>
+                    <ChevronDown className="h-3 w-3" />
+                    Or enter ElevenLabs key instead
+                  </button>
                 </div>
-              </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="elevenlabs-key">ElevenLabs API Key <span className="text-xs text-muted-foreground">(optional)</span></Label>
+                    {elevenlabsHint && (
+                      <span className="text-xs text-muted-foreground">Current: {elevenlabsHint}</span>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <Input
+                      id="elevenlabs-key"
+                      type="password"
+                      value={elevenlabsKey}
+                      onChange={(e) => { setElevenlabsKey(e.target.value); setElevenlabsStatus("idle") }}
+                      onBlur={() => { if (elevenlabsKey.trim() && elevenlabsStatus === "idle") testConnection("elevenlabs") }}
+                      placeholder={elevenlabsHint ? "Enter new key to update" : "sk_..."}
+                      className="flex-1"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => testConnection("elevenlabs")}
+                      disabled={elevenlabsStatus === "testing" || !elevenlabsKey.trim()}
+                    >
+                      {elevenlabsStatus === "testing" ? <Loader2 className="h-4 w-4 animate-spin" /> :
+                       elevenlabsStatus === "ok" ? <CheckCircle className="h-4 w-4 text-green-500" /> :
+                       elevenlabsStatus === "error" ? <AlertCircle className="h-4 w-4 text-red-500" /> :
+                       "Test"}
+                    </Button>
+                  </div>
+                </div>
+              )}
 
               <div className="flex justify-between pt-2">
                 <Button variant="ghost" onClick={() => setCurrentStep(1)} disabled={isEditMode}>
                   <ChevronLeft className="mr-1 h-4 w-4" /> Back
                 </Button>
-                <Button onClick={() => setCurrentStep(3)}>
+                <Button
+                  onClick={() => setCurrentStep(3)}
+                  disabled={supabaseStatus !== "ok" && !supabaseHint}
+                >
                   Next <ChevronRight className="ml-1 h-4 w-4" />
                 </Button>
               </div>
