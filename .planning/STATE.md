@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 73-01-PLAN.md
-last_updated: "2026-03-09T07:38:26.487Z"
+stopped_at: Completed 73-02-PLAN.md
+last_updated: "2026-03-09T07:39:55.720Z"
 last_activity: 2026-03-09 — Completed 71-01 (Free TTS Preset & Setup Validation)
 progress:
   total_phases: 10
   completed_phases: 9
   total_plans: 23
-  completed_plans: 21
+  completed_plans: 22
 ---
 
 # Project State
@@ -67,6 +67,7 @@ Last activity: 2026-03-09 — Completed 71-01 (Free TTS Preset & Setup Validatio
 | Phase 71 P01 | 7min | 2 tasks | 2 files |
 | Phase 72 P01 | 2min | 2 tasks | 9 files |
 | Phase 73 P01 | 2min | 2 tasks | 2 files |
+| Phase 73 P02 | 2min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -119,6 +120,7 @@ Recent decisions affecting v12:
 - [Phase 72]: Preserved editai_ localStorage key prefix to avoid breaking existing user data
 - [Phase 72]: Translated all Romanian strings beyond plan scope for UX-07 completeness
 - [Phase 73]: macOS dmg target with drag-to-Applications layout for standard macOS UX
+- [Phase 73]: Moved torch/torchaudio from base requirements to requirements-ml.txt for installer size reduction
 
 ### Pending Todos
 
@@ -135,8 +137,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T07:38:26.436Z
-Stopped at: Completed 73-01-PLAN.md
+Last session: 2026-03-09T07:39:55.663Z
+Stopped at: Completed 73-02-PLAN.md
 Resume file: None
 Next action: Phase 69 complete — advance to next phase
 
