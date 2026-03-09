@@ -276,6 +276,21 @@ async def save_desktop_settings(body: DesktopSettingsUpdate):
             logger.error(f"Failed to write config file: {e}")
             raise HTTPException(status_code=500, detail="Failed to save settings")
 
+    # Refresh service singletons so new keys take effect without restart
+    if any(body.model_dump(exclude_none=True).get(k) for k in api_key_fields):
+        try:
+            from app.services.elevenlabs_tts import _reset_elevenlabs_tts
+            _reset_elevenlabs_tts()
+            logger.info("ElevenLabs TTS singleton reset after key save")
+        except Exception as e:
+            logger.warning("Failed to reset ElevenLabs singleton: %s", e)
+        try:
+            from app.services.script_generator import reset_script_generator
+            reset_script_generator()
+            logger.info("ScriptGenerator singleton reset after key save")
+        except Exception as e:
+            logger.warning("Failed to reset ScriptGenerator singleton: %s", e)
+
     # Still write API keys to AppData .env so pydantic-settings picks them up
     # (bridge until Plan 02 switches services to read from vault directly)
     _write_env_keys(settings.base_dir, body.model_dump(exclude_none=True))
