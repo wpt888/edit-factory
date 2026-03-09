@@ -313,9 +313,9 @@ Plans:
   6. Running `npx electron-builder --config` shows a macOS target (dmg/pkg) configured alongside the Windows NSIS target — even if not built on CI yet
 **Plans**: 3 plans
 Plans:
-- [ ] 64-01-PLAN.md — DataRepository interface + SQLite schema from migrations
-- [ ] 64-02-PLAN.md — SupabaseRepository implementation + repository factory
-- [ ] 64-03-PLAN.md — Migrate all routes and services to repository pattern
+- [ ] 73-01-PLAN.md — Real publish config + portable Node.js docs + macOS target
+- [ ] 73-02-PLAN.md — Installer size optimization (exclude PyTorch/Whisper from bundle)
+- [ ] 73-03-PLAN.md — Brand icon + auto-updater verification + visual checkpoint
 
 ## Progress
 
@@ -344,4 +344,4 @@ Plans:
 | 73. Electron Polish | v12 | 0/3 | Not started | - |
 
 ---
-*Last updated: 2026-03-09 after v12 roadmap creation*
+*Last updated: 2026-03-09 after phase 73 planning*
