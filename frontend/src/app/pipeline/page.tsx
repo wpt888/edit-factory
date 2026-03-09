@@ -72,6 +72,7 @@ import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { SubtitleSettings, DEFAULT_SUBTITLE_SETTINGS } from "@/types/video-processing";
 import { TimelineEditor, SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
 import { VariantPreviewPlayer } from "@/components/variant-preview-player";
+import { BatchUploadQueue } from "@/components/batch-upload-queue";
 
 // TypeScript interfaces
 export interface MatchPreview {
@@ -251,6 +252,7 @@ function PipelinePage() {
   const [error, setError] = useState<string | null>(null);
   const [aiInstructions, setAiInstructions] = useState("");
   const [aiRulesExpanded, setAiRulesExpanded] = useState(false);
+  const [batchExpanded, setBatchExpanded] = useState(false);
   const [aiRulesSaved, setAiRulesSaved] = useState(false);
   const [aiRulesDirty, setAiRulesDirty] = useState(false);
   const aiInstructionsSaveTimer = useRef<NodeJS.Timeout | null>(null);
@@ -2587,6 +2589,25 @@ function PipelinePage() {
                 )}
               </CardContent>
             </Card>
+
+            {/* Batch Upload Queue (collapsible) */}
+            <div className="mt-6">
+              <Button
+                variant="ghost"
+                onClick={() => setBatchExpanded(!batchExpanded)}
+                className="flex items-center gap-2"
+              >
+                {batchExpanded ? (
+                  <ChevronUp className="h-4 w-4" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" />
+                )}
+                Batch Upload Queue
+              </Button>
+              {batchExpanded && (
+                <BatchUploadQueue variantCount={variantCount} />
+              )}
+            </div>
           </div>
         )}
 
