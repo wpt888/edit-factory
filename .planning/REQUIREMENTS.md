@@ -45,8 +45,8 @@ Requirements for Desktop Product MVP. Each maps to roadmap phases.
 
 ### Direct API Integration
 
-- [ ] **API-01**: ElevenLabs TTS calls use the user's own API key stored locally in the encrypted vault (desktop app runs backend locally — no remote server proxy)
-- [ ] **API-02**: Gemini AI analysis calls use the user's own API key stored locally in the encrypted vault (desktop app runs backend locally — no remote server proxy)
+- [x] **API-01**: ElevenLabs TTS calls use the user's own API key stored locally in the encrypted vault (desktop app runs backend locally — no remote server proxy)
+- [x] **API-02**: Gemini AI analysis calls use the user's own API key stored locally in the encrypted vault (desktop app runs backend locally — no remote server proxy)
 - [x] **API-03**: User configures their own API keys in the setup wizard, stored locally (encrypted)
 - [ ] **API-04**: App works without any API keys configured (falls back to Edge TTS free + local motion scoring only)
 
@@ -118,8 +118,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ELEC-04 | 73 | Pending |
 | ELEC-05 | 73 | Pending |
 | ELEC-06 | 73 | Pending |
-| API-01 | 69 | Pending |
-| API-02 | 69 | Pending |
+| API-01 | 69 | Complete |
+| API-02 | 69 | Complete |
 | API-03 | 69 | Complete |
 | API-04 | 69 | Pending |
 
