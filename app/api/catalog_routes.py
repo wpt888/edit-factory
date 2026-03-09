@@ -13,7 +13,8 @@ Endpoints:
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.auth import ProfileContext, get_profile_context
-from app.db import get_supabase
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
 
 logger = logging.getLogger(__name__)
 
@@ -33,32 +34,37 @@ async def list_catalog_products(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Paginated catalog products with optional filters."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    query = supabase.table(TABLE).select("*", count="exact")
+    eq_filters = {"is_active": True}
+    or_filter = None
 
-    # Only active products
-    query = query.eq("is_active", True)
-
+    if brand:
+        eq_filters["brand"] = brand
+    if category:
+        eq_filters["category"] = category
+    if on_sale:
+        eq_filters["is_on_sale"] = True
     if search:
         # Escape PostgREST special characters in user input
         safe_search = search.replace("%", "\\%").replace("_", "\\_").replace("*", "\\*")
-        query = query.or_(f"title.ilike.%{safe_search}%,sku.ilike.%{safe_search}%")
-    if brand:
-        query = query.eq("brand", brand)
-    if category:
-        query = query.eq("category", category)
-    if on_sale:
-        query = query.eq("is_on_sale", True)
+        or_filter = f"title.ilike.%{safe_search}%,sku.ilike.%{safe_search}%"
 
     # Pagination
     offset = (page - 1) * page_size
-    query = query.order("title").range(offset, offset + page_size - 1)
 
     try:
-        result = query.execute()
+        result = repo.table_query(TABLE, "select",
+            filters=QueryFilters(
+                count="exact",
+                eq=eq_filters,
+                or_=or_filter,
+                order_by="title",
+                range_start=offset,
+                range_end=offset + page_size - 1,
+            ))
     except Exception as e:
         logger.error(f"Catalog query failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to query catalog")
@@ -82,21 +88,22 @@ async def get_catalog_filters(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Return distinct brands and categories for filter dropdowns."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     brands: list[str] = []
     categories: list[str] = []
 
     try:
-        brand_result = supabase.table(TABLE)\
-            .select("brand")\
-            .eq("is_active", True)\
-            .neq("brand", "")\
-            .not_.is_("brand", "null")\
-            .order("brand")\
-            .execute()
+        brand_result = repo.table_query(TABLE, "select",
+            filters=QueryFilters(
+                select="brand",
+                eq={"is_active": True},
+                neq={"brand": ""},
+                not_is={"brand": "null"},
+                order_by="brand",
+            ))
 
         if brand_result.data:
             brands = sorted(set(row["brand"] for row in brand_result.data if row.get("brand")))
@@ -104,13 +111,14 @@ async def get_catalog_filters(
         logger.warning("Failed to fetch catalog brands: %s", exc)
 
     try:
-        cat_result = supabase.table(TABLE)\
-            .select("category")\
-            .eq("is_active", True)\
-            .neq("category", "")\
-            .not_.is_("category", "null")\
-            .order("category")\
-            .execute()
+        cat_result = repo.table_query(TABLE, "select",
+            filters=QueryFilters(
+                select="category",
+                eq={"is_active": True},
+                neq={"category": ""},
+                not_is={"category": "null"},
+                order_by="category",
+            ))
 
         if cat_result.data:
             categories = sorted(set(row["category"] for row in cat_result.data if row.get("category")))
@@ -136,16 +144,16 @@ async def get_product_images(
     Returns:
         {"product_id": "...", "images": ["https://...", ...]}
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Attempt to call the DB function for grouped variant images
     try:
-        result = supabase.rpc(
-            "get_catalog_product_images",
-            {"p_product_id": product_id},
-        ).execute()
+        result = repo.table_query(
+            "get_catalog_product_images", "rpc",
+            data={"p_product_id": product_id},
+        )
         images = [row["image_url"] for row in (result.data or []) if row.get("image_url")]
         if images:
             return {"product_id": product_id, "images": images}
@@ -154,11 +162,12 @@ async def get_product_images(
 
     # Fallback: return the product's own image_link from the grouped view
     try:
-        product_result = supabase.table(TABLE)\
-            .select("image_link")\
-            .eq("id", product_id)\
-            .limit(1)\
-            .execute()
+        product_result = repo.table_query(TABLE, "select",
+            filters=QueryFilters(
+                select="image_link",
+                eq={"id": product_id},
+                limit=1,
+            ))
         row = product_result.data[0] if product_result.data else None
         if row and row.get("image_link"):
             return {"product_id": product_id, "images": [row["image_link"]]}
@@ -175,16 +184,16 @@ async def get_catalog_product(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Fetch a single catalog product by ID."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        result = supabase.table(TABLE)\
-            .select("*")\
-            .eq("id", product_id)\
-            .maybe_single()\
-            .execute()
+        result = repo.table_query(TABLE, "select",
+            filters=QueryFilters(
+                eq={"id": product_id},
+                maybe_single=True,
+            ))
     except Exception as e:
         logger.error(f"Failed to fetch catalog product {product_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch product")
@@ -192,4 +201,4 @@ async def get_catalog_product(
     if not result.data:
         raise HTTPException(status_code=404, detail="Product not found in catalog")
 
-    return result.data
+    return result.data[0]

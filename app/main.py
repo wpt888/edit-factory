@@ -24,7 +24,24 @@ def _setup_ffmpeg_path():
     for candidate in candidates:
         if candidate.exists():
             os.environ['PATH'] = str(candidate) + os.pathsep + os.environ.get('PATH', '')
+            # On WSL, only .exe files exist in the bundled dir. Create symlinks so
+            # subprocess.run(["ffmpeg", ...]) finds them without the .exe extension.
+            _wsl_symlink_exe(candidate)
             break
+
+def _wsl_symlink_exe(bin_dir: Path):
+    """On WSL/Linux, create symlinks from 'ffmpeg' -> 'ffmpeg.exe' etc. if only .exe exist."""
+    import sys
+    if sys.platform == "win32":
+        return
+    for exe in ("ffmpeg", "ffprobe", "ffplay"):
+        exe_path = bin_dir / f"{exe}.exe"
+        link_path = bin_dir / exe
+        if exe_path.exists() and not link_path.exists():
+            try:
+                link_path.symlink_to(exe_path)
+            except OSError:
+                pass
 
 _setup_ffmpeg_path()
 
@@ -55,6 +72,7 @@ from app.api.catalog_routes import router as catalog_router
 from app.api.association_routes import router as association_router
 from app.api.tts_library_routes import router as tts_library_router
 from app.api.image_generate_routes import router as image_generate_router
+from app.api.schedule_routes import router as schedule_router
 
 from app.logging_config import setup_logging
 setup_logging()
@@ -66,17 +84,21 @@ settings = get_settings()
 def _recover_stuck_projects_sync():
     """Synchronous version of stuck project recovery (runs in thread)."""
     try:
-        from app.db import get_supabase
-        supabase = get_supabase()
-        if not supabase:
+        from app.repositories.factory import get_repository
+        from app.repositories.models import QueryFilters
+        repo = get_repository()
+        if not repo:
             return
-        result = supabase.table("editai_projects").select("id").eq("status", "generating").execute()
+        result = repo.table_query(
+            "editai_projects", "select",
+            filters=QueryFilters(select="id", eq={"status": "generating"}),
+        )
         if result.data:
             for proj in result.data:
-                supabase.table("editai_projects").update({
+                repo.update_project(proj["id"], {
                     "status": "failed",
                     "updated_at": datetime.now(timezone.utc).isoformat()
-                }).eq("id", proj["id"]).execute()
+                })
             logger.info(f"Recovered {len(result.data)} stuck projects (generating -> failed)")
     except Exception as e:
         logger.warning(f"Failed to recover stuck projects: {e}")
@@ -85,17 +107,21 @@ def _recover_stuck_projects_sync():
 def _recover_stuck_clips_sync():
     """Synchronous version of stuck clip recovery (runs in thread)."""
     try:
-        from app.db import get_supabase
-        supabase = get_supabase()
-        if not supabase:
+        from app.repositories.factory import get_repository
+        from app.repositories.models import QueryFilters
+        repo = get_repository()
+        if not repo:
             return
-        result = supabase.table("editai_clips").select("id").eq("final_status", "processing").execute()
+        result = repo.table_query(
+            "editai_clips", "select",
+            filters=QueryFilters(select="id", eq={"final_status": "processing"}),
+        )
         if result.data:
             for clip in result.data:
-                supabase.table("editai_clips").update({
+                repo.update_clip(clip["id"], {
                     "final_status": "failed",
                     "updated_at": datetime.now(timezone.utc).isoformat()
-                }).eq("id", clip["id"]).execute()
+                })
             logger.info(f"Recovered {len(result.data)} stuck clips (processing -> failed)")
     except Exception as e:
         logger.warning(f"Failed to recover stuck clips: {e}")
@@ -104,17 +130,21 @@ def _recover_stuck_clips_sync():
 def _recover_stuck_jobs_sync():
     """Synchronous version of stuck job recovery (runs in thread)."""
     try:
-        from app.db import get_supabase
-        supabase = get_supabase()
-        if not supabase:
+        from app.repositories.factory import get_repository
+        from app.repositories.models import QueryFilters
+        repo = get_repository()
+        if not repo:
             return
-        result = supabase.table("jobs").select("id").eq("status", "processing").execute()
+        result = repo.table_query(
+            "editai_jobs", "select",
+            filters=QueryFilters(select="id", eq={"status": "processing"}),
+        )
         if result.data:
             for job in result.data:
-                supabase.table("jobs").update({
+                repo.update_job(job["id"], {
                     "status": "failed",
                     "updated_at": datetime.now(timezone.utc).isoformat()
-                }).eq("id", job["id"]).execute()
+                })
             logger.info(f"Recovered {len(result.data)} stuck jobs (processing -> failed)")
     except Exception as e:
         logger.warning(f"Failed to recover stuck jobs: {e}")
@@ -124,25 +154,29 @@ async def _cleanup_expired_trash():
     """Permanently delete clips that have been in trash for more than 30 days."""
     def _do_cleanup():
         try:
-            from app.db import get_supabase
+            from app.repositories.factory import get_repository
+            from app.repositories.models import QueryFilters
             from app.api.library_routes import _delete_clip_files
             from datetime import timedelta
-            supabase = get_supabase()
-            if not supabase:
+            repo = get_repository()
+            if not repo:
                 return
             cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-            expired = supabase.table("editai_clips")\
-                .select("id, raw_video_path, thumbnail_path, final_video_path")\
-                .eq("is_deleted", True)\
-                .lt("deleted_at", cutoff)\
-                .execute()
+            expired = repo.table_query(
+                "editai_clips", "select",
+                filters=QueryFilters(
+                    select="id, raw_video_path, thumbnail_path, final_video_path",
+                    eq={"is_deleted": True},
+                    lt={"deleted_at": cutoff},
+                ),
+            )
             clips = expired.data or []
             for clip in clips:
                 _delete_clip_files(clip)
             if clips:
                 expired_ids = [c["id"] for c in clips]
-                supabase.table("editai_clips").delete().in_("id", expired_ids).execute()
-                supabase.table("editai_clip_content").delete().in_("clip_id", expired_ids).execute()
+                repo.delete_clips_by_ids(expired_ids)
+                repo.delete_clip_content_by_clip_ids(expired_ids)
                 logger.info(f"Cleaned up {len(clips)} expired trash clips")
         except Exception as e:
             logger.warning(f"Failed to cleanup expired trash: {e}")
@@ -150,25 +184,26 @@ async def _cleanup_expired_trash():
 
 
 async def _cleanup_expired_pipelines():
-    """Delete expired pipeline and assembly job rows from Supabase."""
+    """Delete expired pipeline and assembly job rows."""
     def _do_cleanup():
         try:
-            from app.db import get_supabase
-            supabase = get_supabase()
-            if not supabase:
+            from app.repositories.factory import get_repository
+            from app.repositories.models import QueryFilters
+            repo = get_repository()
+            if not repo:
                 return
             now = datetime.now(timezone.utc).isoformat()
 
-            result1 = supabase.table("editai_pipelines")\
-                .delete()\
-                .lt("expires_at", now)\
-                .execute()
+            result1 = repo.table_query(
+                "editai_pipelines", "delete",
+                filters=QueryFilters(lt={"expires_at": now}),
+            )
             count1 = len(result1.data) if result1.data else 0
 
-            result2 = supabase.table("editai_assembly_jobs")\
-                .delete()\
-                .lt("expires_at", now)\
-                .execute()
+            result2 = repo.table_query(
+                "editai_assembly_jobs", "delete",
+                filters=QueryFilters(lt={"expires_at": now}),
+            )
             count2 = len(result2.data) if result2.data else 0
 
             if count1 or count2:
@@ -235,6 +270,8 @@ async def lifespan(app: FastAPI):
     # Shutdown
     from app.db import close_supabase
     close_supabase()
+    from app.repositories.factory import close_repository
+    close_repository()
 
 
 # Cream aplicatia
@@ -304,6 +341,7 @@ app.include_router(api_router, prefix="/api/v1", tags=["Video Processing"])
 app.include_router(library_router, prefix="/api/v1", tags=["Library & Workflow"])
 app.include_router(segments_router, prefix="/api/v1", tags=["Segments & Manual Selection"])
 app.include_router(postiz_router, prefix="/api/v1", tags=["Postiz Publishing"])
+app.include_router(schedule_router, prefix="/api/v1", tags=["Smart Schedule"])
 app.include_router(profile_router, prefix="/api/v1")
 app.include_router(tts_routes.router, prefix="/api/v1")
 app.include_router(pipeline_router, prefix="/api/v1", tags=["Multi-Variant Pipeline"])

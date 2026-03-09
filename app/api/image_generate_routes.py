@@ -16,7 +16,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.config import get_settings
-from app.db import get_supabase
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
 from app.api.auth import ProfileContext, get_profile_context
 
 logger = logging.getLogger(__name__)
@@ -74,18 +75,18 @@ def _generate_image_task(
     template_name: Optional[str],
 ):
     """Background task: generate image via FAL AI, download, update DB."""
-    supabase = get_supabase()
+    repo = get_repository()
 
     try:
         with _progress_lock:
             _generation_progress[image_id] = {"status": "generating", "progress": 0}
 
         # Update DB status
-        if supabase:
-            supabase.table("generated_images").update({
+        if repo:
+            repo.table_query("generated_images", "update", data={
                 "status": "generating",
                 "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", image_id).execute()
+            }, filters=QueryFilters(eq={"id": image_id}))
 
         # Generate via FAL
         from app.services.fal_image_service import get_fal_generator
@@ -133,25 +134,25 @@ def _generate_image_task(
             logger.warning(f"Cost tracking failed: {e}")
 
         # Update DB with results
-        if supabase:
-            supabase.table("generated_images").update({
+        if repo:
+            repo.table_query("generated_images", "update", data={
                 "status": "completed",
                 "image_url": image_url,
                 "image_local_path": local_path,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", image_id).execute()
+            }, filters=QueryFilters(eq={"id": image_id}))
 
     except Exception as e:
         logger.error(f"Image generation failed for {image_id}: {e}")
         with _progress_lock:
             _generation_progress[image_id] = {"status": "failed", "progress": 0, "error": str(e)}
-        if supabase:
+        if repo:
             try:
-                supabase.table("generated_images").update({
+                repo.table_query("generated_images", "update", data={
                     "status": "failed",
                     "error_message": str(e)[:500],
                     "updated_at": datetime.now(timezone.utc).isoformat(),
-                }).eq("id", image_id).execute()
+                }, filters=QueryFilters(eq={"id": image_id}))
             except Exception:
                 pass
 
@@ -165,8 +166,8 @@ async def generate_image(
     ctx: ProfileContext = Depends(get_profile_context),
 ):
     """Start AI image generation (background task)."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
     # Build final prompt from template + user text
@@ -175,16 +176,19 @@ async def generate_image(
 
     if req.template_id:
         try:
-            tpl = supabase.table("image_prompt_templates")\
-                .select("*").eq("id", req.template_id).limit(1).execute()
+            tpl = repo.table_query("image_prompt_templates", "select",
+                filters=QueryFilters(eq={"id": req.template_id}, limit=1))
             if tpl.data:
                 template_name = tpl.data[0]["name"]
                 final_prompt = tpl.data[0]["prompt_template"]
                 # Substitute placeholders if product provided
                 if req.product_id:
-                    product = supabase.table("v_catalog_products_grouped")\
-                        .select("title,brand,price,description")\
-                        .eq("id", req.product_id).limit(1).execute()
+                    product = repo.table_query("v_catalog_products_grouped", "select",
+                        filters=QueryFilters(
+                            select="title,brand,price,description",
+                            eq={"id": req.product_id},
+                            limit=1,
+                        ))
                     if product.data:
                         p = product.data[0]
                         final_prompt = final_prompt.format(
@@ -203,14 +207,14 @@ async def generate_image(
     # Create DB record
     image_id = str(uuid.uuid4())
     try:
-        supabase.table("generated_images").insert({
+        repo.table_query("generated_images", "insert", data={
             "id": image_id,
             "profile_id": ctx.profile_id,
             "product_id": req.product_id,
             "prompt": final_prompt,
             "template_name": template_name,
             "status": "pending",
-        }).execute()
+        })
     except Exception as e:
         logger.error(f"Failed to create image generation record: {e}")
         raise HTTPException(status_code=500, detail="Failed to create generation record")
@@ -247,19 +251,19 @@ async def get_generation_status(
                 return dict(progress)
     if progress is not None and progress["status"] in ("completed", "failed"):
         # Fetch DB record for full data
-        supabase = get_supabase()
-        if supabase:
-            row = supabase.table("generated_images")\
-                .select("*").eq("id", image_id).limit(1).execute()
+        repo = get_repository()
+        if repo:
+            row = repo.table_query("generated_images", "select",
+                filters=QueryFilters(eq={"id": image_id}, limit=1))
             if row.data:
                 return row.data[0]
         return cached
 
     # Fallback to DB
-    supabase = get_supabase()
-    if supabase:
-        row = supabase.table("generated_images")\
-            .select("*").eq("id", image_id).limit(1).execute()
+    repo = get_repository()
+    if repo:
+        row = repo.table_query("generated_images", "select",
+            filters=QueryFilters(eq={"id": image_id}, limit=1))
         if row.data:
             return row.data[0]
 
@@ -273,16 +277,19 @@ async def get_generation_history(
     offset: int = 0,
 ):
     """List generated images for this profile."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         return {"images": [], "total": 0}
 
-    result = supabase.table("generated_images")\
-        .select("*", count="exact")\
-        .eq("profile_id", ctx.profile_id)\
-        .order("created_at", desc=True)\
-        .range(offset, offset + limit - 1)\
-        .execute()
+    result = repo.table_query("generated_images", "select",
+        filters=QueryFilters(
+            count="exact",
+            eq={"profile_id": ctx.profile_id},
+            order_by="created_at",
+            order_desc=True,
+            range_start=offset,
+            range_end=offset + limit - 1,
+        ))
 
     return {"images": result.data or [], "total": result.count or 0}
 
@@ -296,14 +303,13 @@ async def apply_logo(
     ctx: ProfileContext = Depends(get_profile_context),
 ):
     """Apply logo overlay to a generated image."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
     # Get image record
-    img = supabase.table("generated_images")\
-        .select("*").eq("id", image_id).eq("profile_id", ctx.profile_id)\
-        .limit(1).execute()
+    img = repo.table_query("generated_images", "select",
+        filters=QueryFilters(eq={"id": image_id, "profile_id": ctx.profile_id}, limit=1))
     if not img.data:
         raise HTTPException(status_code=404, detail="Image not found")
 
@@ -312,9 +318,8 @@ async def apply_logo(
         raise HTTPException(status_code=400, detail="Source image not available locally")
 
     # Get profile logo
-    profile = supabase.table("profiles")\
-        .select("logo_path").eq("id", ctx.profile_id).limit(1).execute()
-    logo_path = profile.data[0].get("logo_path") if profile.data else None
+    profile_row = repo.get_profile(ctx.profile_id)
+    logo_path = profile_row.get("logo_path") if profile_row else None
     if not logo_path or not Path(logo_path).exists():
         raise HTTPException(status_code=400, detail="No logo uploaded for this profile")
 
@@ -350,11 +355,11 @@ async def apply_logo(
         )
 
         # Update DB
-        supabase.table("generated_images").update({
+        repo.table_query("generated_images", "update", data={
             "final_image_path": output_path,
             "logo_config": {"x": req.x, "y": req.y, "scale": req.scale},
             "updated_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", image_id).execute()
+        }, filters=QueryFilters(eq={"id": image_id}))
 
         return {"final_image_path": output_path, "logo_config": {"x": req.x, "y": req.y, "scale": req.scale}}
     except HTTPException:
@@ -387,12 +392,12 @@ async def upload_logo(
         shutil.copyfileobj(file.file, f)
 
     # Update profile
-    supabase = get_supabase()
-    if supabase:
-        supabase.table("profiles").update({
+    repo = get_repository()
+    if repo:
+        repo.update_profile(ctx.profile_id, {
             "logo_path": logo_path,
             "updated_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", ctx.profile_id).execute()
+        })
 
     return {"logo_path": logo_path}
 
@@ -400,14 +405,12 @@ async def upload_logo(
 @router.get("/logo")
 async def get_logo_info(ctx: ProfileContext = Depends(get_profile_context)):
     """Get current logo info for profile."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         return {"logo_path": None}
 
-    profile = supabase.table("profiles")\
-        .select("logo_path").eq("id", ctx.profile_id).limit(1).execute()
-
-    logo_path = profile.data[0].get("logo_path") if profile.data else None
+    profile = repo.get_profile(ctx.profile_id)
+    logo_path = profile.get("logo_path") if profile else None
     exists = logo_path and Path(logo_path).exists()
 
     return {"logo_path": logo_path if exists else None, "exists": exists}
@@ -416,14 +419,12 @@ async def get_logo_info(ctx: ProfileContext = Depends(get_profile_context)):
 @router.get("/logo/file")
 async def serve_logo_file(ctx: ProfileContext = Depends(get_profile_context)):
     """Serve the profile logo as an image file (for <img> tags in the frontend)."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    profile = supabase.table("profiles")\
-        .select("logo_path").eq("id", ctx.profile_id).limit(1).execute()
-
-    logo_path = profile.data[0].get("logo_path") if profile.data else None
+    profile = repo.get_profile(ctx.profile_id)
+    logo_path = profile.get("logo_path") if profile else None
     if not logo_path or not Path(logo_path).exists():
         raise HTTPException(status_code=404, detail="No logo uploaded for this profile")
 
@@ -436,14 +437,16 @@ async def serve_image_file(
     ctx: ProfileContext = Depends(get_profile_context),
 ):
     """Serve the final image file (with logo if applied, otherwise base image)."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    img = supabase.table("generated_images")\
-        .select("final_image_path, image_local_path, profile_id")\
-        .eq("id", image_id).eq("profile_id", ctx.profile_id)\
-        .limit(1).execute()
+    img = repo.table_query("generated_images", "select",
+        filters=QueryFilters(
+            select="final_image_path, image_local_path, profile_id",
+            eq={"id": image_id, "profile_id": ctx.profile_id},
+            limit=1,
+        ))
 
     if not img.data:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -458,23 +461,22 @@ async def serve_image_file(
 @router.delete("/logo")
 async def delete_logo(ctx: ProfileContext = Depends(get_profile_context)):
     """Delete profile logo."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    profile = supabase.table("profiles")\
-        .select("logo_path").eq("id", ctx.profile_id).limit(1).execute()
+    profile = repo.get_profile(ctx.profile_id)
 
-    if profile.data and profile.data[0].get("logo_path"):
+    if profile and profile.get("logo_path"):
         try:
-            Path(profile.data[0]["logo_path"]).unlink(missing_ok=True)
+            Path(profile["logo_path"]).unlink(missing_ok=True)
         except Exception:
             pass
 
-    supabase.table("profiles").update({
+    repo.update_profile(ctx.profile_id, {
         "logo_path": None,
         "updated_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", ctx.profile_id).execute()
+    })
 
     return {"deleted": True}
 
@@ -488,13 +490,12 @@ async def send_to_telegram(
     ctx: ProfileContext = Depends(get_profile_context),
 ):
     """Send generated image to Telegram."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    img = supabase.table("generated_images")\
-        .select("*").eq("id", image_id).eq("profile_id", ctx.profile_id)\
-        .limit(1).execute()
+    img = repo.table_query("generated_images", "select",
+        filters=QueryFilters(eq={"id": image_id, "profile_id": ctx.profile_id}, limit=1))
     if not img.data:
         raise HTTPException(status_code=404, detail="Image not found")
 
@@ -536,13 +537,12 @@ async def send_to_postiz(
     ctx: ProfileContext = Depends(get_profile_context),
 ):
     """Send generated image to Postiz (upload then publish to all integrations)."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    img = supabase.table("generated_images")\
-        .select("*").eq("id", image_id).eq("profile_id", ctx.profile_id)\
-        .limit(1).execute()
+    img = repo.table_query("generated_images", "select",
+        filters=QueryFilters(eq={"id": image_id, "profile_id": ctx.profile_id}, limit=1))
     if not img.data:
         raise HTTPException(status_code=404, detail="Image not found")
 
@@ -603,26 +603,27 @@ async def create_template(
     ctx: ProfileContext = Depends(get_profile_context),
 ):
     """Create a prompt template."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
     template_id = str(uuid.uuid4())
-    supabase.table("image_prompt_templates").insert({
+    repo.table_query("image_prompt_templates", "insert", data={
         "id": template_id,
         "profile_id": ctx.profile_id,
         "name": req.name,
         "prompt_template": req.prompt_template,
         "is_default": req.is_default,
-    }).execute()
+    })
 
     # If setting as default, unset others
     if req.is_default:
-        supabase.table("image_prompt_templates")\
-            .update({"is_default": False})\
-            .eq("profile_id", ctx.profile_id)\
-            .neq("id", template_id)\
-            .execute()
+        repo.table_query("image_prompt_templates", "update",
+            data={"is_default": False},
+            filters=QueryFilters(
+                eq={"profile_id": ctx.profile_id},
+                neq={"id": template_id},
+            ))
 
     return {"id": template_id, "name": req.name}
 
@@ -630,15 +631,16 @@ async def create_template(
 @router.get("/templates")
 async def list_templates(ctx: ProfileContext = Depends(get_profile_context)):
     """List prompt templates for this profile."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         return {"templates": []}
 
-    result = supabase.table("image_prompt_templates")\
-        .select("*")\
-        .eq("profile_id", ctx.profile_id)\
-        .order("created_at", desc=True)\
-        .execute()
+    result = repo.table_query("image_prompt_templates", "select",
+        filters=QueryFilters(
+            eq={"profile_id": ctx.profile_id},
+            order_by="created_at",
+            order_desc=True,
+        ))
 
     return {"templates": result.data or []}
 
@@ -650,8 +652,8 @@ async def update_template(
     ctx: ProfileContext = Depends(get_profile_context),
 ):
     """Update a prompt template."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
     updates = {}
@@ -662,17 +664,18 @@ async def update_template(
     if req.is_default is not None:
         updates["is_default"] = req.is_default
         if req.is_default:
-            supabase.table("image_prompt_templates")\
-                .update({"is_default": False})\
-                .eq("profile_id", ctx.profile_id)\
-                .neq("id", template_id)\
-                .execute()
+            repo.table_query("image_prompt_templates", "update",
+                data={"is_default": False},
+                filters=QueryFilters(
+                    eq={"profile_id": ctx.profile_id},
+                    neq={"id": template_id},
+                ))
 
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    supabase.table("image_prompt_templates").update(updates)\
-        .eq("id", template_id).eq("profile_id", ctx.profile_id).execute()
+    repo.table_query("image_prompt_templates", "update", data=updates,
+        filters=QueryFilters(eq={"id": template_id, "profile_id": ctx.profile_id}))
 
     return {"updated": True}
 
@@ -683,14 +686,11 @@ async def delete_template(
     ctx: ProfileContext = Depends(get_profile_context),
 ):
     """Delete a prompt template."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    supabase.table("image_prompt_templates")\
-        .delete()\
-        .eq("id", template_id)\
-        .eq("profile_id", ctx.profile_id)\
-        .execute()
+    repo.table_query("image_prompt_templates", "delete",
+        filters=QueryFilters(eq={"id": template_id, "profile_id": ctx.profile_id}))
 
     return {"deleted": True}

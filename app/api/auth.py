@@ -198,7 +198,7 @@ def require_role(required_role: str):
     return role_checker
 
 
-from app.db import get_supabase as _get_supabase
+from app.repositories.factory import get_repository as _get_repo
 
 
 async def _cache_get_profile(user_id: str, profile_key: str) -> "Optional[ProfileContext]":
@@ -264,18 +264,19 @@ async def get_profile_context(
         # Try to find a real profile in the DB to avoid FK violations
         # NOTE: In dev mode, current_user.id is a hardcoded UUID. We filter by user_id
         # first, falling back to any default profile if the dev user has no rows.
-        supabase = _get_supabase()
-        if supabase:
+        repo = _get_repo()
+        if repo:
             try:
+                from app.repositories.models import QueryFilters
                 # First try scoped to the dev user_id
-                result = supabase.table("profiles").select("id").eq("user_id", current_user.id).eq("is_default", True).limit(1).execute()
+                result = repo.table_query("profiles", "select", filters=QueryFilters(select="id", eq={"user_id": current_user.id, "is_default": True}, limit=1))
                 if not result.data:
-                    result = supabase.table("profiles").select("id").eq("user_id", current_user.id).limit(1).execute()
+                    result = repo.table_query("profiles", "select", filters=QueryFilters(select="id", eq={"user_id": current_user.id}, limit=1))
                 if not result.data:
-                    result = supabase.table("profiles").select("id").eq("is_default", True).limit(1).execute()
+                    result = repo.table_query("profiles", "select", filters=QueryFilters(select="id", eq={"is_default": True}, limit=1))
                 if result.data:
                     profile_id = result.data[0]["id"]
-                    logger.warning(f"⚠️ Dev mode: using DB profile {profile_id}")
+                    logger.warning(f"Dev mode: using DB profile {profile_id}")
                     ctx = ProfileContext(profile_id=profile_id, user_id=current_user.id)
                     await _cache_set_profile(current_user.id, "default", ctx)
                     return ctx
@@ -290,9 +291,11 @@ async def get_profile_context(
             detail="No profiles found in database. Please create a profile first (run account setup or insert a row into the profiles table)."
         )
 
-    supabase = _get_supabase()
-    if not supabase:
+    repo = _get_repo()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
+
+    from app.repositories.models import QueryFilters
 
     if not x_profile_id:
         # Check cache for default profile
@@ -302,12 +305,7 @@ async def get_profile_context(
             return cached
 
         # Auto-select default profile
-        result = supabase.table("profiles")\
-            .select("id")\
-            .eq("user_id", current_user.id)\
-            .eq("is_default", True)\
-            .limit(1)\
-            .execute()
+        result = repo.table_query("profiles", "select", filters=QueryFilters(select="id", eq={"user_id": current_user.id, "is_default": True}, limit=1))
 
         if not result.data:
             raise HTTPException(
@@ -330,11 +328,7 @@ async def get_profile_context(
             return cached
 
         # Validate profile exists
-        result = supabase.table("profiles")\
-            .select("id, user_id")\
-            .eq("id", profile_id)\
-            .limit(1)\
-            .execute()
+        result = repo.table_query("profiles", "select", filters=QueryFilters(select="id, user_id", eq={"id": profile_id}, limit=1))
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Profile not found")

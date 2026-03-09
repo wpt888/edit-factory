@@ -21,7 +21,8 @@ from app.services.tts_library_service import get_tts_library_service
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tts-library", tags=["TTS Library"])
 
-from app.db import get_supabase
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
 
 
 # ============== PYDANTIC MODELS ==============
@@ -64,8 +65,8 @@ async def check_duplicates(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Check if any of the provided texts already exist in the TTS library."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     if not request.texts:
@@ -75,13 +76,11 @@ async def check_duplicates(
         raise HTTPException(status_code=400, detail="Too many texts (max 500)")
 
     # Fetch all ready assets for the profile
-    result = (
-        supabase.table("editai_tts_assets")
-        .select("id, tts_text, audio_duration")
-        .eq("profile_id", profile.profile_id)
-        .eq("status", "ready")
-        .execute()
-    )
+    result = repo.table_query("editai_tts_assets", "select",
+        filters=QueryFilters(
+            select="id, tts_text, audio_duration",
+            eq={"profile_id": profile.profile_id, "status": "ready"},
+        ))
 
     assets = result.data or []
 
@@ -110,41 +109,39 @@ async def list_tts_assets(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """List all TTS assets for the current profile, with is_used badge."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Fetch assets
-    result = (
-        supabase.table("editai_tts_assets")
-        .select("*")
-        .eq("profile_id", profile.profile_id)
-        .order("created_at", desc=True)
-        .execute()
-    )
+    result = repo.table_query("editai_tts_assets", "select",
+        filters=QueryFilters(
+            eq={"profile_id": profile.profile_id},
+            order_by="created_at",
+            order_desc=True,
+        ))
 
     assets = result.data or []
 
     # Fetch used texts from clip_content for this profile's recent clips
     used_texts = set()
     try:
-        clips_result = (
-            supabase.table("editai_clips")
-            .select("id")
-            .eq("profile_id", profile.profile_id)
-            .order("created_at", desc=True)
-            .limit(500)
-            .execute()
-        )
+        clips_result = repo.table_query("editai_clips", "select",
+            filters=QueryFilters(
+                select="id",
+                eq={"profile_id": profile.profile_id},
+                order_by="created_at",
+                order_desc=True,
+                limit=500,
+            ))
         clip_ids = [c["id"] for c in (clips_result.data or [])]
 
         if clip_ids:
-            content_result = (
-                supabase.table("editai_clip_content")
-                .select("tts_text")
-                .in_("clip_id", clip_ids)
-                .execute()
-            )
+            content_result = repo.table_query("editai_clip_content", "select",
+                filters=QueryFilters(
+                    select="tts_text",
+                    in_={"clip_id": clip_ids},
+                ))
             for row in content_result.data or []:
                 if row.get("tts_text"):
                     used_texts.add(row["tts_text"].strip())
@@ -182,18 +179,15 @@ async def get_tts_asset(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Get a single TTS asset by ID."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    result = (
-        supabase.table("editai_tts_assets")
-        .select("*")
-        .eq("id", asset_id)
-        .eq("profile_id", profile.profile_id)
-        .limit(1)
-        .execute()
-    )
+    result = repo.table_query("editai_tts_assets", "select",
+        filters=QueryFilters(
+            eq={"id": asset_id, "profile_id": profile.profile_id},
+            limit=1,
+        ))
 
     if not result.data:
         raise HTTPException(status_code=404, detail="TTS asset not found")
@@ -203,20 +197,18 @@ async def get_tts_asset(
     # Check is_used
     is_used = False
     try:
-        clips_result = (
-            supabase.table("editai_clips")
-            .select("id")
-            .eq("profile_id", profile.profile_id)
-            .execute()
-        )
+        clips_result = repo.table_query("editai_clips", "select",
+            filters=QueryFilters(
+                select="id",
+                eq={"profile_id": profile.profile_id},
+            ))
         clip_ids = [c["id"] for c in (clips_result.data or [])]
         if clip_ids and asset.get("tts_text"):
-            content_result = (
-                supabase.table("editai_clip_content")
-                .select("tts_text")
-                .in_("clip_id", clip_ids)
-                .execute()
-            )
+            content_result = repo.table_query("editai_clip_content", "select",
+                filters=QueryFilters(
+                    select="tts_text",
+                    in_={"clip_id": clip_ids},
+                ))
             used_texts = {r["tts_text"].strip() for r in (content_result.data or []) if r.get("tts_text")}
             is_used = asset["tts_text"].strip() in used_texts
     except Exception:
@@ -245,8 +237,8 @@ async def create_tts_asset(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Create a new TTS asset. Generates MP3 + SRT in background."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     validate_tts_text_length(request.tts_text, "tts_text")
@@ -256,7 +248,7 @@ async def create_tts_asset(
     now = datetime.now(timezone.utc).isoformat()
 
     # Insert with status=generating
-    supabase.table("editai_tts_assets").insert({
+    repo.table_query("editai_tts_assets", "insert", data={
         "id": asset_id,
         "profile_id": profile.profile_id,
         "tts_text": request.tts_text.strip(),
@@ -264,12 +256,12 @@ async def create_tts_asset(
         "char_count": len(request.tts_text.strip()),
         "status": "generating",
         "tts_provider": "elevenlabs",
-    }).execute()
+    })
 
     # Background generation
     async def _generate():
         try:
-            bg_supabase = get_supabase()
+            bg_repo = get_repository()
             tts_lib = get_tts_library_service()
             result = await tts_lib.generate_asset(
                 text=request.tts_text.strip(),
@@ -277,7 +269,7 @@ async def create_tts_asset(
                 asset_id=asset_id,
                 model=request.tts_model,
             )
-            bg_supabase.table("editai_tts_assets").update({
+            bg_repo.table_query("editai_tts_assets", "update", data={
                 "mp3_path": result["mp3_path"],
                 "srt_path": result["srt_path"],
                 "srt_content": result["srt_content"],
@@ -287,17 +279,17 @@ async def create_tts_asset(
                 "tts_voice_id": result["tts_voice_id"],
                 "status": "ready",
                 "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", asset_id).execute()
+            }, filters=QueryFilters(eq={"id": asset_id}))
             logger.info(f"TTS asset {asset_id} generated successfully")
         except Exception as e:
             logger.error(f"TTS asset {asset_id} generation failed: {e}")
-            bg_supabase = get_supabase()
-            if bg_supabase:
-                bg_supabase.table("editai_tts_assets").update({
+            bg_repo = get_repository()
+            if bg_repo:
+                bg_repo.table_query("editai_tts_assets", "update", data={
                     "status": "failed",
                     "error_message": str(e),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
-                }).eq("id", asset_id).execute()
+                }, filters=QueryFilters(eq={"id": asset_id}))
 
     background_tasks.add_task(_generate)
 
@@ -320,21 +312,18 @@ async def update_tts_asset(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Update text of a TTS asset. Triggers auto-regeneration of MP3 + SRT."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     validate_tts_text_length(request.tts_text, "tts_text")
 
     # Verify asset exists and belongs to profile
-    result = (
-        supabase.table("editai_tts_assets")
-        .select("*")
-        .eq("id", asset_id)
-        .eq("profile_id", profile.profile_id)
-        .limit(1)
-        .execute()
-    )
+    result = repo.table_query("editai_tts_assets", "select",
+        filters=QueryFilters(
+            eq={"id": asset_id, "profile_id": profile.profile_id},
+            limit=1,
+        ))
 
     if not result.data:
         raise HTTPException(status_code=404, detail="TTS asset not found")
@@ -343,13 +332,13 @@ async def update_tts_asset(
     now = datetime.now(timezone.utc).isoformat()
 
     # Update text and set generating
-    supabase.table("editai_tts_assets").update({
+    repo.table_query("editai_tts_assets", "update", data={
         "tts_text": request.tts_text.strip(),
         "char_count": len(request.tts_text.strip()),
         "status": "generating",
         "error_message": None,
         "updated_at": now,
-    }).eq("id", asset_id).execute()
+    }, filters=QueryFilters(eq={"id": asset_id}))
 
     # Background regeneration
     async def _regenerate():
@@ -363,7 +352,8 @@ async def update_tts_asset(
                 old_mp3_path=asset.get("mp3_path"),
                 old_srt_path=asset.get("srt_path"),
             )
-            supabase.table("editai_tts_assets").update({
+            bg_repo = get_repository()
+            bg_repo.table_query("editai_tts_assets", "update", data={
                 "mp3_path": gen_result["mp3_path"],
                 "srt_path": gen_result["srt_path"],
                 "srt_content": gen_result["srt_content"],
@@ -373,15 +363,16 @@ async def update_tts_asset(
                 "tts_voice_id": gen_result["tts_voice_id"],
                 "status": "ready",
                 "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", asset_id).execute()
+            }, filters=QueryFilters(eq={"id": asset_id}))
             logger.info(f"TTS asset {asset_id} regenerated successfully")
         except Exception as e:
             logger.error(f"TTS asset {asset_id} regeneration failed: {e}")
-            supabase.table("editai_tts_assets").update({
+            bg_repo = get_repository()
+            bg_repo.table_query("editai_tts_assets", "update", data={
                 "status": "failed",
                 "error_message": str(e),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", asset_id).execute()
+            }, filters=QueryFilters(eq={"id": asset_id}))
 
     background_tasks.add_task(_regenerate)
 
@@ -402,19 +393,16 @@ async def delete_tts_asset(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Delete a TTS asset and its files."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Verify ownership
-    result = (
-        supabase.table("editai_tts_assets")
-        .select("*")
-        .eq("id", asset_id)
-        .eq("profile_id", profile.profile_id)
-        .limit(1)
-        .execute()
-    )
+    result = repo.table_query("editai_tts_assets", "select",
+        filters=QueryFilters(
+            eq={"id": asset_id, "profile_id": profile.profile_id},
+            limit=1,
+        ))
 
     if not result.data:
         raise HTTPException(status_code=404, detail="TTS asset not found")
@@ -426,7 +414,8 @@ async def delete_tts_asset(
     tts_lib.delete_asset_files(asset.get("mp3_path"), asset.get("srt_path"))
 
     # Delete from DB
-    supabase.table("editai_tts_assets").delete().eq("id", asset_id).execute()
+    repo.table_query("editai_tts_assets", "delete",
+        filters=QueryFilters(eq={"id": asset_id}))
 
     return {"detail": "Asset deleted"}
 
@@ -441,21 +430,20 @@ async def batch_delete_tts_assets(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Delete multiple TTS assets at once."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     if not request.ids:
         return {"deleted": 0}
 
     # Fetch all matching assets owned by this profile
-    result = (
-        supabase.table("editai_tts_assets")
-        .select("id, mp3_path, srt_path")
-        .eq("profile_id", profile.profile_id)
-        .in_("id", request.ids)
-        .execute()
-    )
+    result = repo.table_query("editai_tts_assets", "select",
+        filters=QueryFilters(
+            select="id, mp3_path, srt_path",
+            eq={"profile_id": profile.profile_id},
+            in_={"id": request.ids},
+        ))
 
     assets = result.data or []
     if not assets:
@@ -468,7 +456,8 @@ async def batch_delete_tts_assets(
 
     # Delete from DB
     asset_ids = [a["id"] for a in assets]
-    supabase.table("editai_tts_assets").delete().in_("id", asset_ids).execute()
+    repo.table_query("editai_tts_assets", "delete",
+        filters=QueryFilters(in_={"id": asset_ids}))
 
     logger.info(f"Batch deleted {len(asset_ids)} TTS assets")
     return {"deleted": len(asset_ids)}
@@ -480,18 +469,16 @@ async def serve_audio(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Serve the MP3 audio file for a TTS asset."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    result = (
-        supabase.table("editai_tts_assets")
-        .select("mp3_path, profile_id")
-        .eq("id", asset_id)
-        .eq("profile_id", profile.profile_id)
-        .limit(1)
-        .execute()
-    )
+    result = repo.table_query("editai_tts_assets", "select",
+        filters=QueryFilters(
+            select="mp3_path, profile_id",
+            eq={"id": asset_id, "profile_id": profile.profile_id},
+            limit=1,
+        ))
 
     row = result.data[0] if result.data else None
     if not row or not row.get("mp3_path"):
@@ -517,18 +504,16 @@ async def serve_srt(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Serve the SRT subtitle file for a TTS asset."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    result = (
-        supabase.table("editai_tts_assets")
-        .select("srt_path, profile_id")
-        .eq("id", asset_id)
-        .eq("profile_id", profile.profile_id)
-        .limit(1)
-        .execute()
-    )
+    result = repo.table_query("editai_tts_assets", "select",
+        filters=QueryFilters(
+            select="srt_path, profile_id",
+            eq={"id": asset_id, "profile_id": profile.profile_id},
+            limit=1,
+        ))
 
     row = result.data[0] if result.data else None
     if not row or not row.get("srt_path"):

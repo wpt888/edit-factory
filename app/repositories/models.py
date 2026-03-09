@@ -53,8 +53,15 @@ class QueryFilters:
     is_: Dict[str, Any] = field(default_factory=dict)
     like: Dict[str, str] = field(default_factory=dict)
     contains: Dict[str, Any] = field(default_factory=dict)
+    or_: Optional[str] = None  # Raw PostgREST or-filter string
+    not_is: Dict[str, Any] = field(default_factory=dict)  # .not_.is_(col, val)
     order_by: Optional[str] = None
     order_desc: bool = False
     limit: Optional[int] = None
     offset: Optional[int] = None
     select: str = "*"
+    on_conflict: Optional[str] = None  # For upsert ON CONFLICT columns
+    range_start: Optional[int] = None  # For .range(start, end)
+    range_end: Optional[int] = None
+    count: Optional[str] = None  # "exact" for count queries
+    maybe_single: bool = False  # Use .maybe_single() instead of .execute()

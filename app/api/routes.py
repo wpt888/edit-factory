@@ -85,19 +85,15 @@ async def get_all_costs(
     Returns {"entries": [...]} with all cost records.
     """
     from app.services.cost_tracker import get_cost_tracker
-    from app.db import get_supabase
+    from app.repositories.factory import get_repository
+    from app.repositories.models import QueryFilters
 
     tracker = get_cost_tracker()
-    supabase = get_supabase()
+    repo = get_repository()
 
-    if supabase:
+    if repo:
         try:
-            query = supabase.table("api_costs")\
-                .select("*")\
-                .eq("profile_id", profile.profile_id)\
-                .order("created_at", desc=True)\
-                .limit(500)
-            result = query.execute()
+            result = repo.table_query("api_costs", "select", filters=QueryFilters(eq={"profile_id": profile.profile_id}, order_by="created_at", order_desc=True, limit=500))
             return {"entries": result.data or [], "source": "supabase"}
         except Exception as e:
             logger.warning(f"Failed to fetch all costs from Supabase: {e}")
@@ -257,12 +253,13 @@ async def health_check():
     # Check Supabase connectivity
     supabase_ok = False
     try:
-        from app.db import get_supabase
-        supabase = get_supabase()
-        if supabase:
+        from app.repositories.factory import get_repository
+        from app.repositories.models import QueryFilters
+        repo = get_repository()
+        if repo:
             # Lightweight query: count with limit 0 — no data transfer
             await asyncio.to_thread(
-                lambda: supabase.table("editai_projects").select("id", count="exact").limit(0).execute()
+                lambda: repo.table_query("editai_projects", "select", filters=QueryFilters(select="id", limit=0))
             )
             supabase_ok = True  # If we got here without exception, DB is reachable
     except Exception:

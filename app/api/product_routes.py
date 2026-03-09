@@ -16,7 +16,8 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.auth import ProfileContext, get_profile_context
 from app.config import get_settings
-from app.db import get_supabase
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
 
 logger = logging.getLogger(__name__)
 
@@ -41,32 +42,28 @@ async def get_product_filters(
     Used to populate filter dropdowns in the product browser. NULLs are
     excluded from both lists. Returns sorted lists.
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Verify feed ownership
-    feed_check = supabase.table("product_feeds")\
-        .select("id")\
-        .eq("id", feed_id)\
-        .eq("profile_id", profile.profile_id)\
-        .limit(1)\
-        .execute()
+    feed_check = repo.table_query("product_feeds", "select",
+        filters=QueryFilters(
+            select="id",
+            eq={"id": feed_id, "profile_id": profile.profile_id},
+            limit=1,
+        ))
 
     if not feed_check.data:
         raise HTTPException(status_code=404, detail="Feed not found")
 
     # Fetch all brand values for this feed
-    brands_result = supabase.table("products")\
-        .select("brand")\
-        .eq("feed_id", feed_id)\
-        .execute()
+    brands_result = repo.table_query("products", "select",
+        filters=QueryFilters(select="brand", eq={"feed_id": feed_id}))
 
     # Fetch all product_type values for this feed
-    types_result = supabase.table("products")\
-        .select("product_type")\
-        .eq("feed_id", feed_id)\
-        .execute()
+    types_result = repo.table_query("products", "select",
+        filters=QueryFilters(select="product_type", eq={"feed_id": feed_id}))
 
     # Deduplicate in Python — supabase-py v2 has no native DISTINCT
     brands = sorted(set(r["brand"] for r in (brands_result.data or []) if r.get("brand")))
@@ -96,17 +93,17 @@ async def list_products(
         category: Filter by product_type (exact match)
         brand: Filter by brand (exact match)
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Verify feed ownership and get stored product_count for unfiltered totals
-    feed_check = supabase.table("product_feeds")\
-        .select("id, product_count")\
-        .eq("id", feed_id)\
-        .eq("profile_id", profile.profile_id)\
-        .limit(1)\
-        .execute()
+    feed_check = repo.table_query("product_feeds", "select",
+        filters=QueryFilters(
+            select="id, product_count",
+            eq={"id": feed_id, "profile_id": profile.profile_id},
+            limit=1,
+        ))
 
     if not feed_check.data:
         raise HTTPException(status_code=404, detail="Feed not found")
@@ -119,26 +116,28 @@ async def list_products(
     # Determine if any filter is active
     any_filter = bool(search or on_sale is True or category or brand)
 
-    # Build base query
-    query = supabase.table("products")\
-        .select("*")\
-        .eq("feed_id", feed_id)
-
-    # Apply filters conditionally
-    if search:
-        query = query.ilike("title", f"%{search}%")
+    # Build filters
+    eq_filters = {"feed_id": feed_id}
+    like_filters = {}
     if on_sale is True:
-        query = query.eq("is_on_sale", True)
+        eq_filters["is_on_sale"] = True
     if category:
-        query = query.eq("product_type", category)
+        eq_filters["product_type"] = category
     if brand:
-        query = query.eq("brand", brand)
+        eq_filters["brand"] = brand
+    if search:
+        like_filters["title"] = f"%{search}%"
 
     # Fetch page of results
-    result = query\
-        .order("created_at", desc=False)\
-        .range(offset, offset + page_size - 1)\
-        .execute()
+    result = repo.table_query("products", "select",
+        filters=QueryFilters(
+            eq=eq_filters,
+            like=like_filters,
+            order_by="created_at",
+            order_desc=False,
+            range_start=offset,
+            range_end=offset + page_size - 1,
+        ))
 
     products = result.data or []
 
@@ -146,18 +145,14 @@ async def list_products(
     # - No filters: use stored product_count (cheap, no extra query)
     # - Filters active: run a separate count query with same filters applied
     if any_filter:
-        count_query = supabase.table("products")\
-            .select("id", count="exact")\
-            .eq("feed_id", feed_id)
-        if search:
-            count_query = count_query.ilike("title", f"%{search}%")
-        if on_sale is True:
-            count_query = count_query.eq("is_on_sale", True)
-        if category:
-            count_query = count_query.eq("product_type", category)
-        if brand:
-            count_query = count_query.eq("brand", brand)
-        count_result = count_query.execute()
+        count_result = repo.table_query("products", "select",
+            filters=QueryFilters(
+                select="id",
+                count="exact",
+                eq=eq_filters,
+                like=like_filters,
+                limit=0,
+            ))
         total = count_result.count or 0
     else:
         total = feed_check.data[0].get("product_count", 0) or 0

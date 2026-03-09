@@ -19,7 +19,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.api.auth import ProfileContext, get_profile_context
-from app.db import get_supabase
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
 
 logger = logging.getLogger(__name__)
 
@@ -80,14 +81,15 @@ def _enrich_association(assoc_row: dict, product_row: Optional[dict]) -> dict:
     return enriched
 
 
-def _fetch_product(supabase, product_id: str) -> Optional[dict]:
+def _fetch_product(repo, product_id: str) -> Optional[dict]:
     """Fetch product details from catalog view. Returns None on error."""
     try:
-        result = supabase.table(CATALOG_TABLE)\
-            .select("id, title, image_link, brand")\
-            .eq("id", product_id)\
-            .limit(1)\
-            .execute()
+        result = repo.table_query(CATALOG_TABLE, "select",
+            filters=QueryFilters(
+                select="id, title, image_link, brand",
+                eq={"id": product_id},
+                limit=1,
+            ))
         return result.data[0] if result.data else None
     except Exception as exc:
         logger.warning("Failed to fetch product %s from catalog: %s", product_id, exc)
@@ -106,17 +108,18 @@ async def create_association(
     Upserts on segment_id — calling POST again with a different product_id
     replaces the previous association for that segment.
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Validate segment belongs to the current profile
     try:
-        seg_result = supabase.table(SEGMENTS_TABLE)\
-            .select("id, profile_id")\
-            .eq("id", body.segment_id)\
-            .limit(1)\
-            .execute()
+        seg_result = repo.table_query(SEGMENTS_TABLE, "select",
+            filters=QueryFilters(
+                select="id, profile_id",
+                eq={"id": body.segment_id},
+                limit=1,
+            ))
     except Exception as exc:
         logger.error("DB error validating segment %s: %s", body.segment_id, exc)
         raise HTTPException(status_code=500, detail="Database error validating segment")
@@ -129,20 +132,19 @@ async def create_association(
         raise HTTPException(status_code=403, detail="Segment does not belong to your profile")
 
     # Validate product exists in catalog
-    product = _fetch_product(supabase, body.catalog_product_id)
+    product = _fetch_product(repo, body.catalog_product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found in catalog")
 
-    # Upsert association (ON CONFLICT on segment_id → replace)
+    # Upsert association (ON CONFLICT on segment_id -> replace)
     try:
         assoc_data = {
             "segment_id": body.segment_id,
             "catalog_product_id": body.catalog_product_id,
             "selected_image_urls": body.selected_image_urls,
         }
-        upsert_result = supabase.table(ASSOC_TABLE)\
-            .upsert(assoc_data, on_conflict="segment_id")\
-            .execute()
+        upsert_result = repo.table_query(ASSOC_TABLE, "upsert", data=assoc_data,
+            filters=QueryFilters(on_conflict="segment_id"))
     except Exception as exc:
         logger.error("DB error upserting association for segment %s: %s", body.segment_id, exc)
         raise HTTPException(status_code=500, detail="Database error creating association")
@@ -161,11 +163,11 @@ async def get_associations_batch(
 ):
     """Batch-fetch associations for multiple segments (ASSOC-03 batch).
 
-    Returns a mapping of segment_id → AssociationResponse (or null if no association).
+    Returns a mapping of segment_id -> AssociationResponse (or null if no association).
     Prevents N+1 queries when loading the segments page.
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     ids = [s.strip() for s in segment_ids.split(",") if s.strip()]
@@ -174,10 +176,8 @@ async def get_associations_batch(
 
     # Fetch all associations in one query
     try:
-        assoc_result = supabase.table(ASSOC_TABLE)\
-            .select("*")\
-            .in_("segment_id", ids)\
-            .execute()
+        assoc_result = repo.table_query(ASSOC_TABLE, "select",
+            filters=QueryFilters(in_={"segment_id": ids}))
     except Exception as exc:
         logger.error("DB error fetching batch associations: %s", exc)
         raise HTTPException(status_code=500, detail="Database error fetching associations")
@@ -189,10 +189,11 @@ async def get_associations_batch(
     products_by_id: dict[str, dict] = {}
     if product_ids:
         try:
-            prod_result = supabase.table(CATALOG_TABLE)\
-                .select("id, title, image_link, brand")\
-                .in_("id", product_ids)\
-                .execute()
+            prod_result = repo.table_query(CATALOG_TABLE, "select",
+                filters=QueryFilters(
+                    select="id, title, image_link, brand",
+                    in_={"id": product_ids},
+                ))
             for p in (prod_result.data or []):
                 products_by_id[p["id"]] = p
         except Exception as exc:
@@ -214,17 +215,18 @@ async def get_association_for_segment(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Get the product association for a single segment (ASSOC-03)."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Validate segment belongs to current profile
     try:
-        seg_result = supabase.table(SEGMENTS_TABLE)\
-            .select("id, profile_id")\
-            .eq("id", segment_id)\
-            .limit(1)\
-            .execute()
+        seg_result = repo.table_query(SEGMENTS_TABLE, "select",
+            filters=QueryFilters(
+                select="id, profile_id",
+                eq={"id": segment_id},
+                limit=1,
+            ))
     except Exception as exc:
         logger.error("DB error validating segment %s: %s", segment_id, exc)
         raise HTTPException(status_code=500, detail="Database error validating segment")
@@ -238,11 +240,11 @@ async def get_association_for_segment(
 
     # Fetch association
     try:
-        assoc_result = supabase.table(ASSOC_TABLE)\
-            .select("*")\
-            .eq("segment_id", segment_id)\
-            .limit(1)\
-            .execute()
+        assoc_result = repo.table_query(ASSOC_TABLE, "select",
+            filters=QueryFilters(
+                eq={"segment_id": segment_id},
+                limit=1,
+            ))
     except Exception as exc:
         logger.error("DB error fetching association for segment %s: %s", segment_id, exc)
         raise HTTPException(status_code=500, detail="Database error fetching association")
@@ -251,7 +253,7 @@ async def get_association_for_segment(
         raise HTTPException(status_code=404, detail="No product associated with this segment")
 
     assoc = assoc_result.data[0]
-    product = _fetch_product(supabase, assoc["catalog_product_id"])
+    product = _fetch_product(repo, assoc["catalog_product_id"])
     return _enrich_association(assoc, product)
 
 
@@ -262,17 +264,18 @@ async def update_association_images(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Update the selected image URLs on an existing association (ASSOC-04)."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Fetch the association to verify it exists and belongs to the profile's segment
     try:
-        assoc_result = supabase.table(ASSOC_TABLE)\
-            .select("*, editai_segments!segment_id(profile_id)")\
-            .eq("id", association_id)\
-            .limit(1)\
-            .execute()
+        assoc_result = repo.table_query(ASSOC_TABLE, "select",
+            filters=QueryFilters(
+                select="*, editai_segments!segment_id(profile_id)",
+                eq={"id": association_id},
+                limit=1,
+            ))
     except Exception as exc:
         logger.error("DB error fetching association %s: %s", association_id, exc)
         raise HTTPException(status_code=500, detail="Database error fetching association")
@@ -292,10 +295,9 @@ async def update_association_images(
 
     # Update selected_image_urls
     try:
-        update_result = supabase.table(ASSOC_TABLE)\
-            .update({"selected_image_urls": body.selected_image_urls})\
-            .eq("id", association_id)\
-            .execute()
+        update_result = repo.table_query(ASSOC_TABLE, "update",
+            data={"selected_image_urls": body.selected_image_urls},
+            filters=QueryFilters(eq={"id": association_id}))
     except Exception as exc:
         logger.error("DB error updating association %s: %s", association_id, exc)
         raise HTTPException(status_code=500, detail="Database error updating association")
@@ -304,7 +306,7 @@ async def update_association_images(
         raise HTTPException(status_code=500, detail="Update returned no data")
 
     updated_assoc = update_result.data[0]
-    product = _fetch_product(supabase, updated_assoc["catalog_product_id"])
+    product = _fetch_product(repo, updated_assoc["catalog_product_id"])
     return _enrich_association(updated_assoc, product)
 
 
@@ -315,17 +317,18 @@ async def update_pip_config(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Update the PiP overlay configuration on an existing association (OVRL-01)."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Fetch the association to verify it exists and belongs to the profile's segment
     try:
-        assoc_result = supabase.table(ASSOC_TABLE)\
-            .select("*, editai_segments!segment_id(profile_id)")\
-            .eq("id", association_id)\
-            .limit(1)\
-            .execute()
+        assoc_result = repo.table_query(ASSOC_TABLE, "select",
+            filters=QueryFilters(
+                select="*, editai_segments!segment_id(profile_id)",
+                eq={"id": association_id},
+                limit=1,
+            ))
     except Exception as exc:
         logger.error("DB error fetching association %s: %s", association_id, exc)
         raise HTTPException(status_code=500, detail="Database error fetching association")
@@ -344,10 +347,9 @@ async def update_pip_config(
 
     # Update pip_config
     try:
-        update_result = supabase.table(ASSOC_TABLE)\
-            .update({"pip_config": body.model_dump()})\
-            .eq("id", association_id)\
-            .execute()
+        update_result = repo.table_query(ASSOC_TABLE, "update",
+            data={"pip_config": body.model_dump()},
+            filters=QueryFilters(eq={"id": association_id}))
     except Exception as exc:
         logger.error("DB error updating pip_config for association %s: %s", association_id, exc)
         raise HTTPException(status_code=500, detail="Database error updating pip config")
@@ -356,7 +358,7 @@ async def update_pip_config(
         raise HTTPException(status_code=500, detail="Update returned no data")
 
     updated_assoc = update_result.data[0]
-    product = _fetch_product(supabase, updated_assoc["catalog_product_id"])
+    product = _fetch_product(repo, updated_assoc["catalog_product_id"])
     return _enrich_association(updated_assoc, product)
 
 
@@ -366,17 +368,18 @@ async def delete_association_for_segment(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Remove the product association from a segment (ASSOC-02)."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Validate segment belongs to current profile
     try:
-        seg_result = supabase.table(SEGMENTS_TABLE)\
-            .select("id, profile_id")\
-            .eq("id", segment_id)\
-            .limit(1)\
-            .execute()
+        seg_result = repo.table_query(SEGMENTS_TABLE, "select",
+            filters=QueryFilters(
+                select="id, profile_id",
+                eq={"id": segment_id},
+                limit=1,
+            ))
     except Exception as exc:
         logger.error("DB error validating segment %s: %s", segment_id, exc)
         raise HTTPException(status_code=500, detail="Database error validating segment")
@@ -390,11 +393,12 @@ async def delete_association_for_segment(
 
     # Verify association exists before deleting
     try:
-        check_result = supabase.table(ASSOC_TABLE)\
-            .select("id")\
-            .eq("segment_id", segment_id)\
-            .limit(1)\
-            .execute()
+        check_result = repo.table_query(ASSOC_TABLE, "select",
+            filters=QueryFilters(
+                select="id",
+                eq={"segment_id": segment_id},
+                limit=1,
+            ))
     except Exception as exc:
         logger.error("DB error checking association for segment %s: %s", segment_id, exc)
         raise HTTPException(status_code=500, detail="Database error checking association")
@@ -404,10 +408,8 @@ async def delete_association_for_segment(
 
     # Delete the association
     try:
-        supabase.table(ASSOC_TABLE)\
-            .delete()\
-            .eq("segment_id", segment_id)\
-            .execute()
+        repo.table_query(ASSOC_TABLE, "delete",
+            filters=QueryFilters(eq={"segment_id": segment_id}))
     except Exception as exc:
         logger.error("DB error deleting association for segment %s: %s", segment_id, exc)
         raise HTTPException(status_code=500, detail="Database error deleting association")

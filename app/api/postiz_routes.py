@@ -14,7 +14,8 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
-from app.db import get_supabase
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
 from app.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -254,13 +255,13 @@ async def upload_to_postiz(
         media = await publisher.upload_video(video_path, profile_id=profile.profile_id)
 
         # Update clip status in database
-        supabase = get_supabase()
-        if supabase:
+        repo = get_repository()
+        if repo:
             try:
-                supabase.table("editai_clips").update({
+                repo.update_clip(request.clip_id, {
                     "postiz_status": "sent",
                     "updated_at": datetime.now(timezone.utc).isoformat()
-                }).eq("id", request.clip_id).execute()
+                })
             except Exception as e:
                 logger.warning(f"Failed to update clip status: {e}")
 
@@ -307,7 +308,7 @@ async def bulk_upload_to_postiz(
 
     uploaded = []
     failed = []
-    supabase = get_supabase()
+    repo = get_repository()
 
     for clip_info in request.clips:
         clip_id = clip_info.get("clip_id")
@@ -339,12 +340,12 @@ async def bulk_upload_to_postiz(
             media = await publisher.upload_video(video_path, profile_id=profile.profile_id)
 
             # Update clip status in database
-            if supabase:
+            if repo:
                 try:
-                    supabase.table("editai_clips").update({
+                    repo.update_clip(clip_id, {
                         "postiz_status": "sent",
                         "updated_at": datetime.now(timezone.utc).isoformat()
-                    }).eq("id", clip_id).execute()
+                    })
                 except Exception as e:
                     logger.warning(f"Failed to update clip {clip_id} status: {e}")
 
@@ -388,17 +389,13 @@ async def publish_clip(
     Returns job_id for progress tracking.
     """
     logger.info(f"[Profile {profile.profile_id}] Publishing clip {request.clip_id} to {len(request.integration_ids)} platforms")
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Verify clip exists, has final_video_path, and belongs to profile (via project)
     try:
-        result = supabase.table("editai_clips")\
-            .select("*, editai_projects!inner(profile_id)")\
-            .eq("id", request.clip_id)\
-            .limit(1)\
-            .execute()
+        result = repo.table_query("editai_clips", "select", filters=QueryFilters(select="*, editai_projects!inner(profile_id)", eq={"id": request.clip_id}, limit=1))
     except Exception:
         raise HTTPException(status_code=404, detail="Clip not found")
     if not result.data:
@@ -471,8 +468,8 @@ async def bulk_publish_clips(
     (schedule_interval_minutes apart) starting from schedule_date.
     """
     logger.info(f"[Profile {profile.profile_id}] Bulk publishing {len(request.clip_ids)} clips")
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     settings = get_settings()
@@ -480,10 +477,7 @@ async def bulk_publish_clips(
     # Fetch all clips at once instead of one-by-one (N+1 fix)
     valid_clips = []
     try:
-        result = supabase.table("editai_clips")\
-            .select("id, final_video_path, editai_projects!inner(profile_id)")\
-            .in_("id", request.clip_ids)\
-            .execute()
+        result = repo.table_query("editai_clips", "select", filters=QueryFilters(select="id, final_video_path, editai_projects!inner(profile_id)", in_={"id": request.clip_ids}))
         clips_by_id = {c["id"]: c for c in (result.data or [])}
     except Exception as e:
         logger.error(f"Failed to fetch clips for bulk publish: {e}")
@@ -573,6 +567,25 @@ async def get_post_status(
         raise HTTPException(status_code=500, detail="Failed to get post status")
 
 
+@router.delete("/posts/{post_id}")
+async def delete_postiz_post(
+    post_id: str,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Delete a post from Postiz."""
+    logger.info(f"[Profile {profile.profile_id}] Deleting post: {post_id}")
+    try:
+        from app.services.postiz_service import get_postiz_publisher
+        publisher = get_postiz_publisher(profile.profile_id)
+        await publisher.delete_post(post_id, profile_id=profile.profile_id)
+        return {"id": post_id, "message": "Post deleted successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"[Profile {profile.profile_id}] Failed to delete post: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete post")
+
+
 # ============== BACKGROUND TASKS ==============
 
 async def _publish_clip_task(
@@ -619,10 +632,10 @@ async def _publish_clip_task(
 
         if result.success:
             # Track in database (optional)
-            supabase = get_supabase()
-            if supabase:
+            repo = get_repository()
+            if repo:
                 try:
-                    supabase.table("editai_postiz_publications").insert({
+                    repo.table_query("editai_postiz_publications", "insert", data={
                         "clip_id": clip_id,
                         "postiz_post_id": result.post_id,
                         "platform": ", ".join(result.platforms) if result.platforms else None,
@@ -630,7 +643,7 @@ async def _publish_clip_task(
                         "scheduled_at": schedule_date.isoformat() if schedule_date else None,
                         "published_at": None if schedule_date else datetime.now(timezone.utc).isoformat(),
                         "status": "scheduled" if schedule_date else "published"
-                    }).execute()
+                    })
                 except Exception as e:
                     logger.warning(f"Failed to track publication (table may not exist): {e}")
 

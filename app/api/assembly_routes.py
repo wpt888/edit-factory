@@ -17,7 +17,8 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
 
 from app.api.auth import ProfileContext, get_profile_context
-from app.db import get_supabase
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
 from app.services.assembly_service import get_assembly_service
 from app.services.ffmpeg_semaphore import is_nvenc_available
 from app.services.job_storage import get_job_storage
@@ -45,8 +46,8 @@ def _evict_old_entries(store: dict, max_entries: int = _MAX_MEMORY_ENTRIES):
 def _db_create_assembly_job(job_id: str, profile_id: str, job: dict):
     """Insert a new assembly job into editai_assembly_jobs. Graceful degradation."""
     try:
-        supabase = get_supabase()
-        if not supabase:
+        repo = get_repository()
+        if not repo:
             return
         row = {
             "id": job_id,
@@ -58,7 +59,7 @@ def _db_create_assembly_job(job_id: str, profile_id: str, job: dict):
             "error": job.get("error"),
             "started_at": job.get("started_at"),
         }
-        supabase.table("editai_assembly_jobs").insert(row).execute()
+        repo.create_assembly_job(row)
         logger.debug(f"Assembly job {job_id} created in DB")
     except Exception as e:
         logger.warning(f"Failed to create assembly job {job_id} in DB: {e}")
@@ -67,8 +68,8 @@ def _db_create_assembly_job(job_id: str, profile_id: str, job: dict):
 def _db_update_assembly_job(job_id: str, job: dict):
     """Update assembly job status/progress in DB. Graceful degradation."""
     try:
-        supabase = get_supabase()
-        if not supabase:
+        repo = get_repository()
+        if not repo:
             return
         update = {
             "status": job.get("status"),
@@ -82,7 +83,7 @@ def _db_update_assembly_job(job_id: str, job: dict):
         if job.get("failed_at"):
             update["failed_at"] = job["failed_at"]
 
-        supabase.table("editai_assembly_jobs").update(update).eq("id", job_id).execute()
+        repo.update_assembly_job(job_id, update)
         logger.debug(f"Assembly job {job_id} updated in DB")
     except Exception as e:
         logger.warning(f"Failed to update assembly job {job_id} in DB: {e}")
@@ -91,18 +92,14 @@ def _db_update_assembly_job(job_id: str, job: dict):
 def _db_load_assembly_job(job_id: str) -> Optional[dict]:
     """Load assembly job from DB into _assembly_jobs cache. Returns job dict or None."""
     try:
-        supabase = get_supabase()
-        if not supabase:
+        repo = get_repository()
+        if not repo:
             return None
-        result = supabase.table("editai_assembly_jobs")\
-            .select("*")\
-            .eq("id", job_id)\
-            .limit(1)\
-            .execute()
-        if not result.data:
+        result = repo.get_assembly_job(job_id)
+        if not result:
             return None
 
-        row = result.data[0]
+        row = result
         job = {
             "status": row.get("status", "processing"),
             "progress": row.get("progress", 0),
@@ -264,8 +261,8 @@ async def render_assembly(
     """
     logger.info(f"[Profile {profile.profile_id}] Starting assembly render for script ({len(request.script_text)} chars)")
 
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Generate job ID
@@ -273,11 +270,7 @@ async def render_assembly(
 
     # Fetch preset data
     try:
-        preset_result = supabase.table("editai_export_presets")\
-            .select("*")\
-            .eq("name", request.preset_name)\
-            .limit(1)\
-            .execute()
+        preset_result = repo.table_query("editai_export_presets", "select", filters=QueryFilters(eq={"name": request.preset_name}, limit=1))
 
         if preset_result.data:
             preset_data = preset_result.data[0]

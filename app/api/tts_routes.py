@@ -15,7 +15,7 @@ from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import validate_tts_text_length, validate_file_mime_type, ALLOWED_AUDIO_MIMES
 from app.rate_limit import limiter
 from app.config import get_settings
-from app.db import get_supabase
+from app.repositories.factory import get_repository
 from app.services.tts import get_tts_service
 from app.services.job_storage import get_job_storage
 
@@ -282,19 +282,15 @@ async def generate_tts(
     logger.info(f"[Profile {profile.profile_id}] TTS generation request: provider={provider}, voice={voice_id}, text_len={len(text)}")
 
     # Check quota if profile has one set
-    supabase = get_supabase()
-    if supabase:
+    repo = get_repository()
+    if repo:
         try:
-            profile_data = supabase.table("profiles")\
-                .select("monthly_quota_usd")\
-                .eq("id", profile.profile_id)\
-                .limit(1)\
-                .execute()
+            profile_row = repo.get_profile(profile.profile_id)
 
-            if not profile_data.data:
+            if not profile_row:
                 monthly_quota = 0.0
             else:
-                monthly_quota = float(profile_data.data[0].get("monthly_quota_usd", 0) or 0)
+                monthly_quota = float(profile_row.get("monthly_quota_usd", 0) or 0)
 
             if monthly_quota > 0:
                 from app.services.cost_tracker import get_cost_tracker

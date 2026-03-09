@@ -21,6 +21,17 @@ class DataRepository(ABC):
     Implementations: SupabaseRepository (cloud), SQLiteRepository (local).
     """
 
+    def get_client(self):
+        """Return the raw database client for complex chained queries.
+
+        This is an escape hatch for routes with complex query patterns
+        (e.g., .or_(), .range(), .maybe_single() chains) that cannot
+        be expressed via table_query() QueryFilters alone.
+
+        Returns None if no client is available.
+        """
+        return None
+
     # ──────────────────────────────────────────────
     # 1. Projects
     # ──────────────────────────────────────────────

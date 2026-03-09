@@ -27,7 +27,8 @@ from pydantic import BaseModel, field_validator
 
 from app.api.auth import ProfileContext, get_profile_context
 from app.config import get_settings
-from app.db import get_supabase
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
 from app.services.job_storage import get_job_storage
 from app.services.srt_validator import sanitize_srt_full
 
@@ -127,24 +128,21 @@ async def generate_product_video(
     Returns:
         {"job_id": str, "status": "pending"}
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Verify product exists — source determines which table to query
     if request.source == "catalog":
-        product_result = supabase.table("v_catalog_products")\
-            .select("id, title")\
-            .eq("id", product_id)\
-            .limit(1)\
-            .execute()
+        product_result = repo.table_query("v_catalog_products", "select",
+            filters=QueryFilters(select="id, title", eq={"id": product_id}, limit=1))
     else:
-        product_result = supabase.table("products")\
-            .select("id, title, feed_id, product_feeds!inner(profile_id)")\
-            .eq("id", product_id)\
-            .eq("product_feeds.profile_id", profile.profile_id)\
-            .limit(1)\
-            .execute()
+        product_result = repo.table_query("products", "select",
+            filters=QueryFilters(
+                select="id, title, feed_id, product_feeds!inner(profile_id)",
+                eq={"id": product_id, "product_feeds.profile_id": profile.profile_id},
+                limit=1,
+            ))
 
     if not product_result.data:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -194,8 +192,8 @@ async def batch_generate_products(
     Returns:
         {"batch_id": str, "total": int}
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
     job_storage = get_job_storage()
 
@@ -217,10 +215,8 @@ async def batch_generate_products(
     # Fetch product titles in one query for display — non-fatal if it fails
     try:
         titles_table = "v_catalog_products" if request.source == "catalog" else "products"
-        titles_result = supabase.table(titles_table)\
-            .select("id, title")\
-            .in_("id", request.product_ids)\
-            .execute()
+        titles_result = repo.table_query(titles_table, "select",
+            filters=QueryFilters(select="id, title", in_={"id": request.product_ids}))
 
         if titles_result.data:
             title_map = {row["id"]: row.get("title", "") for row in titles_result.data}
@@ -517,29 +513,27 @@ async def _generate_product_video_task(
             profile_id=profile_id,
         )
 
-        supabase = get_supabase()
+        repo = get_repository()
 
         # Fetch full product row — source determines table
         product_table = "v_catalog_products" if request.source == "catalog" else "products"
-        product_result = supabase.table(product_table)\
-            .select("*")\
-            .eq("id", product_id)\
-            .maybe_single()\
-            .execute()
+        product_result = repo.table_query(product_table, "select",
+            filters=QueryFilters(eq={"id": product_id}, maybe_single=True))
 
         if not product_result.data:
             raise ValueError(f"Product {product_id} not found")
 
-        product = product_result.data
+        product = product_result.data[0]
 
         # Read profile template settings (video_template_settings JSONB column)
         try:
-            profile_result = get_supabase().table("profiles")\
-                .select("video_template_settings")\
-                .eq("id", profile_id)\
-                .maybe_single()\
-                .execute()
-            tmpl_cfg = (profile_result.data or {}).get("video_template_settings") or {}
+            profile_result = repo.table_query("profiles", "select",
+                filters=QueryFilters(
+                    select="video_template_settings",
+                    eq={"id": profile_id},
+                    maybe_single=True,
+                ))
+            tmpl_cfg = (profile_result.data[0] if profile_result.data else {}).get("video_template_settings") or {}
         except Exception as _tmpl_exc:
             logger.warning("[%s] Failed to read profile template settings: %s", job_id, _tmpl_exc)
             tmpl_cfg = {}
@@ -814,21 +808,21 @@ async def _generate_product_video_task(
         now = datetime.now(timezone.utc).isoformat()
 
         # Insert editai_projects row
-        project_insert = supabase.table("editai_projects").insert({
+        project_insert = repo.create_project({
             "name": project_name,
             "profile_id": profile_id,
             "status": "completed",
             "target_duration": request.duration_s,
             "created_at": now,
             "updated_at": now,
-        }).execute()
+        })
 
-        project_id = project_insert.data[0].get("id") if project_insert.data else None
+        project_id = project_insert.get("id") if project_insert else None
         if not project_id:
             raise ValueError("Failed to insert editai_projects row — no id returned")
 
         # Insert editai_clips row
-        clip_insert = supabase.table("editai_clips").insert({
+        clip_insert = repo.create_clip({
             "project_id": project_id,
             "profile_id": profile_id,
             "raw_video_path": str(composed_path),
@@ -838,9 +832,9 @@ async def _generate_product_video_task(
             "is_selected": True,
             "created_at": now,
             "updated_at": now,
-        }).execute()
+        })
 
-        clip_id = clip_insert.data[0]["id"] if clip_insert.data else None
+        clip_id = clip_insert.get("id") if clip_insert else None
         if not clip_id:
             logger.warning("[%s] editai_clips insert returned no id — library insert may have failed", job_id)
 

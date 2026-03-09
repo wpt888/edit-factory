@@ -25,7 +25,9 @@ import re as _re
 from pydantic import BaseModel, Field, validator
 
 from app.api.auth import ProfileContext, get_profile_context
-from app.db import get_supabase
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
+from app.utils import normalize_path
 from app.rate_limit import limiter
 from app.services.script_generator import get_script_generator
 from app.services.assembly_service import get_assembly_service, strip_product_group_tags
@@ -75,6 +77,21 @@ def _get_pipeline_state_lock(pipeline_id: str) -> threading.Lock:
 
 # Cancel infrastructure for pipeline renders
 import time as _time_mod
+
+def _safe_relative_path(raw_path: Optional[str]) -> Optional[str]:
+    """Strip absolute path to output_dir-relative path for client consumption."""
+    if not raw_path:
+        return None
+    p = Path(raw_path)
+    try:
+        return p.relative_to(get_settings().output_dir).as_posix()
+    except (ValueError, Exception):
+        # Already relative or different base — try stripping "output/" prefix
+        posix = p.as_posix()
+        if "output/" in posix:
+            return posix.split("output/", 1)[1]
+        return p.name
+
 
 _cancelled_pipelines: Dict[str, float] = {}  # pipeline_id -> monotonic timestamp
 _cancelled_pipelines_lock = threading.Lock()
@@ -166,7 +183,8 @@ def _evict_old_pipelines():
 def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
     """Upsert full pipeline state to editai_pipelines. Graceful degradation."""
     try:
-        supabase = get_supabase()
+        repo = get_repository()
+        supabase = repo.get_client() if repo else None
         if not supabase:
             return
         # Convert int keys in previews/render_jobs to strings for JSON
@@ -202,7 +220,8 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
 def _db_update_render_jobs(pipeline_id: str, render_jobs: dict):
     """Update only render_jobs column for a pipeline. Graceful degradation."""
     try:
-        supabase = get_supabase()
+        repo = get_repository()
+        supabase = repo.get_client() if repo else None
         if not supabase:
             return
         render_jobs_json = {str(k): v for k, v in render_jobs.items()}
@@ -217,7 +236,8 @@ def _db_update_render_jobs(pipeline_id: str, render_jobs: dict):
 def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
     """Load pipeline from DB into _pipelines cache. Returns pipeline dict or None."""
     try:
-        supabase = get_supabase()
+        repo = get_repository()
+        supabase = repo.get_client() if repo else None
         if not supabase:
             return None
         result = supabase.table("editai_pipelines")\
@@ -327,7 +347,8 @@ def _get_pipeline_or_load(pipeline_id: str) -> Optional[dict]:
 
 def _compute_segment_duration(profile_id: str) -> float:
     """Compute total duration of all segments for a profile."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         return 0.0
     try:
@@ -568,7 +589,8 @@ async def list_pipelines(
 
     # Try DB first
     try:
-        supabase = get_supabase()
+        repo = get_repository()
+        supabase = repo.get_client() if repo else None
         if supabase:
             result = supabase.table("editai_pipelines")\
                 .select("id, idea, provider, variant_count, keyword_count, created_at")\
@@ -623,7 +645,8 @@ async def delete_pipeline(
     # Remove from DB (verify ownership first, then clean up in-memory cache)
     db_found = False
     try:
-        supabase = get_supabase()
+        repo = get_repository()
+        supabase = repo.get_client() if repo else None
         if supabase:
             result = supabase.table("editai_pipelines")\
                 .select("id, profile_id")\
@@ -740,7 +763,8 @@ async def update_source_selection(
     # Persist to DB — gracefully handle missing column (migration 021 not yet applied)
     db_persisted = False
     try:
-        supabase = get_supabase()
+        repo = get_repository()
+        supabase = repo.get_client() if repo else None
         if supabase:
             supabase.table("editai_pipelines").update({
                 "source_video_ids": request.source_video_ids
@@ -827,7 +851,8 @@ async def update_pipeline_scripts(
 
     # Persist to DB — convert int keys to strings for JSONB compatibility
     try:
-        supabase = get_supabase()
+        repo = get_repository()
+        supabase = repo.get_client() if repo else None
         if supabase:
             tts_previews_json = {str(k): v for k, v in pipeline.get("tts_previews", {}).items()}
             segment_usage_json = {str(k): v for k, v in pipeline.get("segment_usage", {}).items()}
@@ -933,7 +958,8 @@ async def generate_pipeline(
         )
 
     # Fetch unique keywords from editai_segments table, grouped by product_group
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     unique_keywords = []
     product_groups_dict = {}  # {group_label: [keywords]}
 
@@ -1120,7 +1146,8 @@ async def adopt_library_tts(
         )
 
     # Fetch the TTS asset from the library
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1586,7 +1613,8 @@ async def render_variants(
         )
 
     # Fetch preset data
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1976,7 +2004,8 @@ async def render_variants(
             with render_jobs_lock:
                 job["library_saved"] = False
             try:
-                supabase_lib = get_supabase()
+                repo_lib = get_repository()
+                supabase_lib = repo_lib.get_client() if repo_lib else None
                 if supabase_lib:
                     # Step A: Get or create a library project (locked to prevent duplicates)
                     library_project_id = pipeline.get("library_project_id")
@@ -2206,11 +2235,11 @@ async def get_pipeline_status(pipeline_id: str):
             # Sanitize error details for public endpoint
             sanitized_error = "Processing failed. Check server logs for details." if job.get("error") else None
             sanitized_lib_error = "Library save failed. Check server logs for details." if job.get("library_error") else None
-            # M3: Strip absolute file paths — only expose filenames to the client
+            # M3: Strip absolute file paths — expose path relative to output_dir
             raw_video_path = job.get("final_video_path")
             raw_thumb_path = job.get("thumbnail_path")
-            safe_video_path = Path(raw_video_path).name if raw_video_path else None
-            safe_thumb_path = Path(raw_thumb_path).name if raw_thumb_path else None
+            safe_video_path = _safe_relative_path(raw_video_path)
+            safe_thumb_path = _safe_relative_path(raw_thumb_path)
             # BUG-PR-11: Sanitize public status — omit internal metadata (render_fingerprint, lock info)
             variants.append(VariantStatus(
                 variant_index=idx,
@@ -2286,9 +2315,37 @@ async def get_pipeline_scripts(pipeline_id: str):
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
+    # Build preview_info from stored previews (needed for history restore)
+    preview_info: Dict[str, dict] = {}
+    for idx_key, preview_data in pipeline.get("previews", {}).items():
+        pd = preview_data.get("preview_data", {}) if isinstance(preview_data, dict) else {}
+        audio_path_str = pd.get("audio_path")
+        has_audio = bool(audio_path_str and Path(audio_path_str).exists())
+        audio_duration = pd.get("audio_duration", 0.0) if has_audio else 0.0
+        has_srt = bool(pd.get("srt_content"))
+        preview_info[str(idx_key)] = {
+            "has_audio": has_audio,
+            "audio_duration": audio_duration,
+            "has_srt": has_srt,
+        }
+
+    # Build tts_info from stored tts_previews (Step 2 per-script TTS)
+    tts_info: Dict[str, dict] = {}
+    for idx_key, tts_data in pipeline.get("tts_previews", {}).items():
+        if isinstance(tts_data, dict):
+            audio_path_str = tts_data.get("audio_path")
+            has_audio = bool(audio_path_str and Path(audio_path_str).exists())
+            audio_duration = tts_data.get("audio_duration", 0.0) if has_audio else 0.0
+            tts_info[str(idx_key)] = {
+                "has_audio": has_audio,
+                "audio_duration": audio_duration,
+            }
+
     return {
         "pipeline_id": pipeline_id,
         "scripts": pipeline.get("scripts", []),
+        "preview_info": preview_info,
+        "tts_info": tts_info,
     }
 
 
@@ -2312,7 +2369,8 @@ async def sync_pipeline_to_library(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -2596,6 +2654,8 @@ class PreviewRenderRequest(BaseModel):
     min_segment_duration: float = 3.0
     subtitle_settings: Optional[dict] = None
     words_per_subtitle: int = Field(default=2, ge=1, le=20)  # BUG-PR-19
+    ultra_rapid_intro: bool = True  # Match PipelineRenderRequest default
+    interstitial_slides: Optional[List[dict]] = None
 
     # BUG-PR-14: Validate source_video_ids are valid UUIDs
     @validator("source_video_ids", each_item=True, pre=True)
@@ -2613,6 +2673,7 @@ class PreviewRenderStatusResponse(BaseModel):
     current_step: str = ""
     matches_fingerprint: Optional[str] = None
     error: Optional[str] = None
+    preview_limitations: Optional[List[str]] = None
 
 
 @router.post("/render-preview/{pipeline_id}/{variant_index}")
@@ -2652,9 +2713,13 @@ async def render_preview(
     if not audio_path_str or not Path(audio_path_str).exists():
         raise HTTPException(status_code=400, detail="TTS audio file missing from disk. Re-run Preview All.")
 
-    # Compute fingerprint from segment IDs
+    # Compute fingerprint from segment IDs + preview-affecting params
     seg_ids = [str(m.get("segment_id", "none")) for m in render_request.match_overrides]
-    matches_fingerprint = hashlib.md5("|".join(seg_ids).encode()).hexdigest()[:12]
+    fp_parts = seg_ids + [
+        f"uri={render_request.ultra_rapid_intro}",
+        f"isl={len(render_request.interstitial_slides) if render_request.interstitial_slides else 0}",
+    ]
+    matches_fingerprint = hashlib.md5("|".join(fp_parts).encode()).hexdigest()[:12]
 
     # Initialize preview_renders dict if needed
     if "preview_renders" not in pipeline:
@@ -2736,6 +2801,8 @@ async def render_preview(
                         min_segment_duration=render_request.min_segment_duration,
                         on_progress=on_progress,
                         max_words_per_phrase=render_request.words_per_subtitle,
+                        ultra_rapid_intro=render_request.ultra_rapid_intro,
+                        interstitial_slides=render_request.interstitial_slides,
                     ),
                     timeout=300  # 5-minute timeout for preview
                 )
@@ -2802,6 +2869,7 @@ async def get_preview_status(
         current_step=render_state.get("current_step", ""),
         matches_fingerprint=render_state.get("matches_fingerprint"),
         error=render_state.get("error"),
+        preview_limitations=render_state.get("preview_limitations"),
     )
 
 
@@ -2809,6 +2877,7 @@ async def get_preview_status(
 async def get_preview_video(
     pipeline_id: str,
     variant_index: int,
+    request: Request,
 ):
     """
     Stream the preview MP4 video for a variant.
@@ -2824,9 +2893,50 @@ async def get_preview_video(
     if not render_state or render_state.get("status") != "completed":
         raise HTTPException(status_code=404, detail="Preview not ready")
 
-    video_path_str = render_state.get("preview_video_path")
-    if not video_path_str or not Path(video_path_str).exists():
+    video_path_str = normalize_path(render_state.get("preview_video_path", ""))
+    video_path = Path(video_path_str)
+    if not video_path_str or not video_path.exists():
         raise HTTPException(status_code=404, detail="Preview video file not found")
+
+    file_size = video_path.stat().st_size
+    range_header = request.headers.get("range")
+
+    if range_header:
+        # Parse Range: bytes=start-end
+        import re as _range_re
+        m = _range_re.match(r"bytes=(\d+)-(\d*)", range_header)
+        if not m:
+            raise HTTPException(status_code=416, detail="Invalid Range header")
+        start = int(m.group(1))
+        end = int(m.group(2)) if m.group(2) else file_size - 1
+        end = min(end, file_size - 1)
+        if start >= file_size:
+            raise HTTPException(status_code=416, detail="Range not satisfiable")
+        content_length = end - start + 1
+
+        def iter_range():
+            with open(video_path, "rb") as f:
+                f.seek(start)
+                remaining = content_length
+                while remaining > 0:
+                    chunk = f.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        from starlette.responses import StreamingResponse
+        return StreamingResponse(
+            iter_range(),
+            status_code=206,
+            media_type="video/mp4",
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Content-Length": str(content_length),
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "public, max-age=300",
+            },
+        )
 
     return FileResponse(
         path=video_path_str,

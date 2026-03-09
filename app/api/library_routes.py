@@ -173,7 +173,8 @@ _generation_progress: Dict[str, dict] = {}
 _progress_lock = threading.Lock()
 _MAX_PROGRESS_ENTRIES = 500
 
-from app.db import get_supabase
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
 
 
 def _evict_old_progress():
@@ -402,7 +403,8 @@ async def download_clip_srt(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Download SRT subtitle file for a clip."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -430,7 +432,8 @@ async def download_clip_audio(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Download TTS audio (MP3) file for a clip."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -469,7 +472,8 @@ async def create_project(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Creează un proiect nou."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -512,7 +516,8 @@ async def list_projects(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Listează toate proiectele."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -535,7 +540,8 @@ async def get_project(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Obține detaliile unui proiect."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -574,7 +580,8 @@ async def get_project_progress(
         return progress
 
     # If no progress tracked, check project status
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if supabase:
         try:
             result = supabase.table("editai_projects").select("status").eq("id", project_id).eq("profile_id", profile.profile_id).limit(1).execute()
@@ -599,7 +606,8 @@ async def update_project(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Actualizează un proiect."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -642,7 +650,8 @@ async def cancel_generation(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Cancel an in-progress generation for a project."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -669,7 +678,8 @@ async def delete_project(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Șterge un proiect și toate clipurile asociate."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -718,7 +728,8 @@ async def generate_raw_clips(
     - video: uploaded file
     - video_path: local path to video file (for testing)
     """
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -820,7 +831,8 @@ async def _generate_raw_clips_task(
 
     logger.info(f"[Profile {profile_id}] Starting raw clip generation for project {project_id}")
 
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         logger.error(f"[Profile {profile_id}] Supabase not available for raw clips generation")
         if held_lock:
@@ -990,7 +1002,8 @@ async def generate_from_segments(
         generate_tts: Dacă să genereze audio TTS
         mute_source_voice: Dacă să suprime vocea din video sursă
     """
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1230,7 +1243,8 @@ async def _generate_from_segments_task(
 
     logger.info(f"[Profile {profile_id}] Starting clip generation from segments for project {project_id}")
 
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         logger.error(f"[Profile {profile_id}] Supabase not available for segment generation")
         return
@@ -1622,7 +1636,8 @@ async def list_project_clips(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Listează toate clipurile unui proiect (pentru galerie/triaj)."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1643,7 +1658,8 @@ async def list_project_clips(
 @router.get("/tags")
 async def list_tags(profile: ProfileContext = Depends(get_profile_context)):
     """Return all unique tags used across clips for this profile."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
     try:
@@ -1675,7 +1691,8 @@ async def list_all_clips(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Listează toate clipurile pentru librărie cu suport cursor-based pagination."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1779,7 +1796,8 @@ async def get_clip(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Obține detaliile unui clip, inclusiv conținutul asociat."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1819,7 +1837,8 @@ async def update_clip(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Actualizează un clip (nume, selecție, status Postiz)."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1863,7 +1882,8 @@ async def toggle_clip_selection(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Selectează/deselectează un clip pentru procesare ulterioară."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1893,7 +1913,8 @@ async def bulk_select_clips(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Selectează/deselectează mai multe clipuri odată."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1929,7 +1950,8 @@ async def remove_clip_audio(
     Elimină definitiv pista audio dintr-un videoclip.
     Creează o versiune nouă a videoclipului fără sunet.
     """
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -2013,7 +2035,8 @@ async def delete_clip(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Soft-delete a clip (move to trash)."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -2045,7 +2068,8 @@ async def bulk_delete_clips(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Soft-delete multiple clips simultaneously (move to trash)."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -2104,7 +2128,8 @@ async def bulk_delete_clips(
 @router.get("/trash")
 async def list_trash(profile: ProfileContext = Depends(get_profile_context)):
     """List soft-deleted clips (trash view)."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
     try:
@@ -2140,7 +2165,8 @@ async def list_trash(profile: ProfileContext = Depends(get_profile_context)):
 @router.post("/clips/{clip_id}/restore")
 async def restore_clip(clip_id: str, profile: ProfileContext = Depends(get_profile_context)):
     """Restore a soft-deleted clip from trash."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
     try:
@@ -2165,7 +2191,8 @@ async def restore_clip(clip_id: str, profile: ProfileContext = Depends(get_profi
 @router.delete("/clips/{clip_id}/permanent")
 async def permanently_delete_clip(clip_id: str, profile: ProfileContext = Depends(get_profile_context)):
     """Permanently delete a clip from trash (files + DB)."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
     try:
@@ -2195,7 +2222,8 @@ async def update_clip_content(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Actualizează conținutul asociat unui clip (TTS text, SRT, stil)."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -2238,7 +2266,8 @@ async def copy_content_from_clip(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Copiază conținutul (TTS, SRT, stil) de la un alt clip."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -2288,7 +2317,8 @@ async def list_export_presets(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Listează toate preset-urile de export disponibile."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -2360,7 +2390,8 @@ async def render_final_clip(
     Randează clipul final cu TTS și subtitrări.
     Folosește preset-ul de export specificat pentru encoding optimizat.
     """
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -2473,7 +2504,8 @@ async def _render_final_clip_task(
 
     logger.info(f"[Profile {profile_id}] Starting final render for clip {clip_id} in project {project_id}")
 
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         logger.error(f"[Profile {profile_id}] Supabase not available for render")
         return
@@ -2942,7 +2974,8 @@ async def _bulk_render_sequential(clip_ids: list, preset_name: str, profile_id: 
 
 async def _start_render_for_clip(clip_id: str, preset_name: str, profile_id: str = None):
     """Helper pentru bulk render."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         return
 
@@ -3068,7 +3101,8 @@ def _delete_clip_files(clip: dict):
 
 def _update_project_counts_sync(project_id: str, profile_id: Optional[str] = None):
     """Actualizează contoarele de clipuri în proiect (sync — run via asyncio.to_thread)."""
-    supabase = get_supabase()
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
     if not supabase:
         return
 

@@ -12,7 +12,8 @@ from pydantic import BaseModel
 
 from app.api.auth import get_current_user, AuthUser
 from app.config import get_settings
-from app.db import get_supabase
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/profiles", tags=["profiles"])
@@ -85,17 +86,12 @@ async def list_profiles(current_user: AuthUser = Depends(get_current_user)):
     """
     List all profiles for the current user.
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        result = supabase.table("profiles")\
-            .select("*")\
-            .eq("user_id", current_user.id)\
-            .order("is_default", desc=True)\
-            .order("created_at", desc=False)\
-            .execute()
+        result = repo.list_profiles(current_user.id)
 
         profiles = result.data or []
         logger.info(f"[User {current_user.id}] Listed {len(profiles)} profiles")
@@ -115,8 +111,8 @@ async def create_profile(
     Create a new profile for the current user.
     New profiles are created with is_default=False.
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
@@ -130,14 +126,11 @@ async def create_profile(
             "updated_at": now
         }
 
-        result = supabase.table("profiles")\
-            .insert(profile_data)\
-            .execute()
+        created_profile = repo.create_profile(profile_data)
 
-        if not result.data:
+        if not created_profile:
             raise HTTPException(status_code=500, detail="Failed to create profile")
 
-        created_profile = result.data[0]
         logger.info(f"[Profile {created_profile['id']}] Created by user {current_user.id}: {profile.name}")
         return created_profile
 
@@ -157,21 +150,15 @@ async def get_profile(
     Get a single profile by ID.
     Returns 404 if not found, 403 if belongs to another user.
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        result = supabase.table("profiles")\
-            .select("*")\
-            .eq("id", profile_id)\
-            .limit(1)\
-            .execute()
+        profile = repo.get_profile(profile_id)
 
-        if not result.data:
+        if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
-
-        profile = result.data[0]
 
         # Check ownership
         if profile["user_id"] != current_user.id:
@@ -198,22 +185,18 @@ async def update_profile(
     Update a profile's name and/or description.
     Returns 404 if not found, 403 if belongs to another user.
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
         # First check ownership
-        result = supabase.table("profiles")\
-            .select("id, user_id")\
-            .eq("id", profile_id)\
-            .limit(1)\
-            .execute()
+        profile = repo.get_profile(profile_id)
 
-        if not result.data:
+        if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        if result.data[0]["user_id"] != current_user.id:
+        if profile["user_id"] != current_user.id:
             logger.warning(f"[Profile {profile_id}] Update denied for user {current_user.id}")
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
@@ -225,17 +208,13 @@ async def update_profile(
             update_data["description"] = profile_update.description
 
         # Update profile
-        result = supabase.table("profiles")\
-            .update(update_data)\
-            .eq("id", profile_id)\
-            .execute()
+        result = repo.update_profile(profile_id, update_data)
 
-        if not result.data:
+        if not result:
             raise HTTPException(status_code=500, detail="Failed to update profile")
 
-        updated_profile = result.data[0]
         logger.info(f"[Profile {profile_id}] Updated by user {current_user.id}")
-        return updated_profile
+        return result
 
     except HTTPException:
         raise
@@ -255,22 +234,18 @@ async def patch_profile(
     Invalidates Postiz publisher cache when tts_settings change.
     Returns 404 if not found, 403 if belongs to another user.
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
         # First check ownership
-        result = supabase.table("profiles")\
-            .select("id, user_id")\
-            .eq("id", profile_id)\
-            .limit(1)\
-            .execute()
+        profile = repo.get_profile(profile_id)
 
-        if not result.data:
+        if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        if result.data[0]["user_id"] != current_user.id:
+        if profile["user_id"] != current_user.id:
             logger.warning(f"[Profile {profile_id}] PATCH denied for user {current_user.id}")
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
@@ -293,12 +268,9 @@ async def patch_profile(
             update_data["ai_instructions"] = updates.ai_instructions
 
         # Update profile
-        result = supabase.table("profiles")\
-            .update(update_data)\
-            .eq("id", profile_id)\
-            .execute()
+        updated_profile = repo.update_profile(profile_id, update_data)
 
-        if not result.data:
+        if not updated_profile:
             raise HTTPException(status_code=500, detail="Failed to update profile")
 
         # Invalidate Postiz cache if tts_settings changed
@@ -310,7 +282,6 @@ async def patch_profile(
             except Exception as e:
                 logger.warning(f"[Profile {profile_id}] Failed to reset Postiz cache: {e}")
 
-        updated_profile = result.data[0]
         logger.info(f"[Profile {profile_id}] PATCH by user {current_user.id}, tts_settings_updated={tts_settings_updated}")
         return updated_profile
 
@@ -331,22 +302,16 @@ async def delete_profile(
     Cannot delete if is_default=True. Set another profile as default first.
     CASCADE delete handled by database (deletes all associated projects/clips).
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
         # Check ownership and default status
-        result = supabase.table("profiles")\
-            .select("id, user_id, is_default")\
-            .eq("id", profile_id)\
-            .limit(1)\
-            .execute()
+        profile = repo.get_profile(profile_id)
 
-        if not result.data:
+        if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
-
-        profile = result.data[0]
 
         if profile["user_id"] != current_user.id:
             logger.warning(f"[Profile {profile_id}] Delete denied for user {current_user.id}")
@@ -360,10 +325,7 @@ async def delete_profile(
             )
 
         # Delete profile (CASCADE will delete associated projects/clips)
-        supabase.table("profiles")\
-            .delete()\
-            .eq("id", profile_id)\
-            .execute()
+        repo.delete_profile(profile_id)
 
         logger.info(f"[Profile {profile_id}] Deleted by user {current_user.id}")
         return {"status": "deleted", "profile_id": profile_id}
@@ -384,22 +346,18 @@ async def set_default_profile(
     Set a profile as the default profile for the user.
     Automatically unsets is_default on other profiles.
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
         # Check ownership
-        result = supabase.table("profiles")\
-            .select("id, user_id")\
-            .eq("id", profile_id)\
-            .limit(1)\
-            .execute()
+        profile = repo.get_profile(profile_id)
 
-        if not result.data:
+        if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        if result.data[0]["user_id"] != current_user.id:
+        if profile["user_id"] != current_user.id:
             logger.warning(f"[Profile {profile_id}] Set-default denied for user {current_user.id}")
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
@@ -407,21 +365,13 @@ async def set_default_profile(
 
         # Two-step update: race window exists between these calls if concurrent requests
         # target different profiles. A DB-level constraint or transaction would eliminate this.
-        supabase.table("profiles")\
-            .update({"is_default": False, "updated_at": now})\
-            .eq("user_id", current_user.id)\
-            .neq("id", profile_id)\
-            .execute()
+        repo.table_query("profiles", "update", data={"is_default": False, "updated_at": now}, filters=QueryFilters(eq={"user_id": current_user.id}, neq={"id": profile_id}))
 
-        result = supabase.table("profiles")\
-            .update({"is_default": True, "updated_at": now})\
-            .eq("id", profile_id)\
-            .execute()
+        updated_profile = repo.update_profile(profile_id, {"is_default": True, "updated_at": now})
 
-        if not result.data:
+        if not updated_profile:
             raise HTTPException(status_code=500, detail="Failed to set default profile")
 
-        updated_profile = result.data[0]
         logger.info(f"[Profile {profile_id}] Set as default by user {current_user.id}")
         return updated_profile
 
@@ -442,26 +392,22 @@ async def get_profile_dashboard(
     Get profile activity dashboard data.
     Returns video counts, API costs, and recent activity.
     """
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
         # Verify ownership
-        profile_result = supabase.table("profiles")\
-            .select("user_id, monthly_quota_usd")\
-            .eq("id", profile_id)\
-            .limit(1)\
-            .execute()
+        profile = repo.get_profile(profile_id)
 
-        if not profile_result.data:
+        if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        if profile_result.data[0]["user_id"] != current_user.id:
+        if profile["user_id"] != current_user.id:
             logger.warning(f"[Profile {profile_id}] Dashboard access denied for user {current_user.id}")
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
-        monthly_quota = float(profile_result.data[0].get("monthly_quota_usd", 0) or 0)
+        monthly_quota = float(profile.get("monthly_quota_usd", 0) or 0)
 
         # Calculate date filter
         now = datetime.now(timezone.utc)
@@ -475,23 +421,23 @@ async def get_profile_dashboard(
             start_date = None  # All time
 
         # Project count
-        projects_query = supabase.table("editai_projects")\
-            .select("id", count="exact")\
-            .eq("profile_id", profile_id)
+        projects_filters = QueryFilters(select="id", eq={"profile_id": profile_id})
         if start_date:
-            projects_query = projects_query.gte("created_at", start_date.isoformat())
-        projects_result = projects_query.execute()
+            projects_filters.gte = {"created_at": start_date.isoformat()}
+        projects_result = repo.table_query("editai_projects", "select", filters=projects_filters)
 
         # Clip count
-        clips_query = supabase.table("editai_clips")\
-            .select("id, final_status", count="exact")\
-            .eq("profile_id", profile_id)
+        clips_filters = QueryFilters(select="id, final_status", eq={"profile_id": profile_id})
         if start_date:
-            clips_query = clips_query.gte("created_at", start_date.isoformat())
-        clips_result = clips_query.execute()
+            clips_filters.gte = {"created_at": start_date.isoformat()}
+        clips_result = repo.table_query("editai_clips", "select", filters=clips_filters)
+
+        clips_data = clips_result.data or []
+        projects_count = len(projects_result.data) if projects_result.data else 0
+        clips_count = len(clips_data)
 
         # Count rendered clips (final_status = 'completed')
-        rendered_count = sum(1 for c in clips_result.data if c.get("final_status") == "completed")
+        rendered_count = sum(1 for c in clips_data if c.get("final_status") == "completed")
 
         # Get costs summary
         from app.services.cost_tracker import get_cost_tracker
@@ -501,14 +447,14 @@ async def get_profile_dashboard(
         # Get monthly costs for quota display
         monthly_costs = tracker.get_monthly_costs(profile_id)
 
-        logger.info(f"[Profile {profile_id}] Dashboard retrieved: {projects_result.count} projects, {clips_result.count} clips")
+        logger.info(f"[Profile {profile_id}] Dashboard retrieved: {projects_count} projects, {clips_count} clips")
 
         return {
             "profile_id": profile_id,
             "time_range": time_range,
             "stats": {
-                "projects_count": projects_result.count or 0,
-                "clips_count": clips_result.count or 0,
+                "projects_count": projects_count,
+                "clips_count": clips_count,
                 "rendered_count": rendered_count
             },
             "costs": {
@@ -552,24 +498,20 @@ async def get_subtitle_settings(
     current_user: AuthUser = Depends(get_current_user)
 ):
     """Return saved subtitle settings for a profile, or defaults."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        result = supabase.table("profiles")\
-            .select("user_id, subtitle_settings")\
-            .eq("id", profile_id)\
-            .limit(1)\
-            .execute()
+        profile = repo.get_profile(profile_id)
 
-        if not result.data:
+        if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        if result.data[0]["user_id"] != current_user.id:
+        if profile["user_id"] != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
-        saved = result.data[0].get("subtitle_settings")
+        saved = profile.get("subtitle_settings")
         return {**DEFAULT_SUBTITLE_SETTINGS, **(saved or {})}
 
     except HTTPException:
@@ -586,32 +528,25 @@ async def update_subtitle_settings(
     current_user: AuthUser = Depends(get_current_user)
 ):
     """Save subtitle settings to a profile."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        result = supabase.table("profiles")\
-            .select("id, user_id")\
-            .eq("id", profile_id)\
-            .limit(1)\
-            .execute()
+        profile = repo.get_profile(profile_id)
 
-        if not result.data:
+        if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        if result.data[0]["user_id"] != current_user.id:
+        if profile["user_id"] != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
         settings_dict = settings.model_dump()
 
-        supabase.table("profiles")\
-            .update({
-                "subtitle_settings": settings_dict,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            })\
-            .eq("id", profile_id)\
-            .execute()
+        repo.update_profile(profile_id, {
+            "subtitle_settings": settings_dict,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
 
         logger.info(f"[Profile {profile_id}] Subtitle settings updated by user {current_user.id}")
         return settings_dict
@@ -636,25 +571,21 @@ async def get_ai_instructions(
     current_user: AuthUser = Depends(get_current_user)
 ):
     """Return saved AI instructions for a profile, or empty string default."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        result = supabase.table("profiles")\
-            .select("user_id, ai_instructions")\
-            .eq("id", profile_id)\
-            .limit(1)\
-            .execute()
+        profile = repo.get_profile(profile_id)
 
-        if not result.data:
+        if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
 
         settings = get_settings()
-        if not settings.auth_disabled and result.data[0]["user_id"] != current_user.id:
+        if not settings.auth_disabled and profile["user_id"] != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
-        return {"ai_instructions": result.data[0].get("ai_instructions") or ""}
+        return {"ai_instructions": profile.get("ai_instructions") or ""}
 
     except HTTPException:
         raise
@@ -670,31 +601,24 @@ async def update_ai_instructions(
     current_user: AuthUser = Depends(get_current_user)
 ):
     """Save AI instructions for a profile."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        result = supabase.table("profiles")\
-            .select("id, user_id")\
-            .eq("id", profile_id)\
-            .limit(1)\
-            .execute()
+        profile = repo.get_profile(profile_id)
 
-        if not result.data:
+        if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
 
         settings = get_settings()
-        if not settings.auth_disabled and result.data[0]["user_id"] != current_user.id:
+        if not settings.auth_disabled and profile["user_id"] != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
 
-        supabase.table("profiles")\
-            .update({
-                "ai_instructions": body.ai_instructions,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            })\
-            .eq("id", profile_id)\
-            .execute()
+        repo.update_profile(profile_id, {
+            "ai_instructions": body.ai_instructions,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
 
         logger.info(f"[Profile {profile_id}] AI instructions updated by user {current_user.id}")
         return {"ai_instructions": body.ai_instructions}

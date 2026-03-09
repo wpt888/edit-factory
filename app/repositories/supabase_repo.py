@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 class SupabaseRepository(DataRepository):
     """Concrete DataRepository backed by Supabase (PostgREST)."""
 
+    def get_client(self):
+        """Return the raw Supabase client for complex chained queries."""
+        return get_supabase()
+
     # ── helpers ───────────────────────────────────────
 
     def _apply_filters(self, query, filters: Optional[QueryFilters]):
@@ -45,12 +49,18 @@ class SupabaseRepository(DataRepository):
             query = query.ilike(col, pattern)
         for col, val in filters.contains.items():
             query = query.contains(col, val)
+        for col, val in filters.not_is.items():
+            query = query.not_.is_(col, val)
+        if filters.or_:
+            query = query.or_(filters.or_)
         if filters.order_by:
             query = query.order(filters.order_by, desc=filters.order_desc)
         if filters.limit is not None:
             query = query.limit(filters.limit)
         if filters.offset is not None:
             query = query.offset(filters.offset)
+        if filters.range_start is not None and filters.range_end is not None:
+            query = query.range(filters.range_start, filters.range_end)
         return query
 
     def _select(
@@ -796,11 +806,22 @@ class SupabaseRepository(DataRepository):
 
         if operation == "select":
             select_cols = filters.select if filters and filters.select else "*"
-            query = table.select(select_cols)
+            count_mode = filters.count if filters and filters.count else None
+            if count_mode:
+                query = table.select(select_cols, count=count_mode)
+            else:
+                query = table.select(select_cols)
             query = self._apply_filters(query, filters)
+            if filters and filters.maybe_single:
+                result = query.maybe_single().execute()
+                # maybe_single returns a single dict or None
+                if result.data is None:
+                    return QueryResult(data=[], count=0)
+                return QueryResult(data=[result.data] if isinstance(result.data, dict) else result.data, count=1)
             result = query.execute()
             rows = result.data or []
-            return QueryResult(data=rows, count=len(rows))
+            row_count = result.count if count_mode and hasattr(result, 'count') else len(rows)
+            return QueryResult(data=rows, count=row_count)
 
         elif operation == "insert":
             if data is None:
@@ -821,7 +842,11 @@ class SupabaseRepository(DataRepository):
         elif operation == "upsert":
             if data is None:
                 raise ValueError("data is required for upsert operation")
-            result = table.upsert(data).execute()
+            on_conflict = filters.on_conflict if filters and filters.on_conflict else None
+            if on_conflict:
+                result = table.upsert(data, on_conflict=on_conflict).execute()
+            else:
+                result = table.upsert(data).execute()
             rows = result.data or []
             return QueryResult(data=rows, count=len(rows))
 
@@ -832,5 +857,11 @@ class SupabaseRepository(DataRepository):
             rows = result.data or []
             return QueryResult(data=rows, count=len(rows))
 
+        elif operation == "rpc":
+            # RPC calls: table_name is function name, data is params
+            result = sb.rpc(table_name, data or {}).execute()
+            rows = result.data or []
+            return QueryResult(data=rows, count=len(rows))
+
         else:
-            raise ValueError(f"Unknown operation: {operation}. Use select/insert/update/upsert/delete.")
+            raise ValueError(f"Unknown operation: {operation}. Use select/insert/update/upsert/delete/rpc.")

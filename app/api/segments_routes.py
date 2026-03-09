@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import validate_file_mime_type, ALLOWED_VIDEO_MIMES
-from app.utils import sanitize_filename as _sanitize_filename
+from app.utils import sanitize_filename as _sanitize_filename, normalize_path
 from app.rate_limit import limiter
 from app.services.ffmpeg_semaphore import get_prep_codec_params, safe_ffmpeg_run
 
@@ -28,22 +28,22 @@ import logging
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/segments", tags=["segments"])
 
-from app.db import get_supabase
+from app.repositories.factory import get_repository
+from app.repositories.models import QueryFilters
 
 
-def _refresh_segments_count(supabase, video_id: str, profile_id: str) -> None:
+def _refresh_segments_count(repo, video_id: str, profile_id: str) -> None:
     """Recount segments for a source video and update the cached column."""
     try:
-        count_result = supabase.table("editai_segments")\
-            .select("id", count="exact")\
-            .eq("source_video_id", video_id)\
-            .eq("profile_id", profile_id)\
-            .execute()
+        count_result = repo.table_query("editai_segments", "select",
+            filters=QueryFilters(
+                select="id", count="exact",
+                eq={"source_video_id": video_id, "profile_id": profile_id},
+            ))
         new_count = count_result.count or 0
-        supabase.table("editai_source_videos")\
-            .update({"segments_count": new_count})\
-            .eq("id", video_id)\
-            .execute()
+        repo.table_query("editai_source_videos", "update",
+            data={"segments_count": new_count},
+            filters=QueryFilters(eq={"id": video_id}))
     except Exception as e:
         logger.warning(f"Failed to refresh segments_count for video {video_id}: {e}")
 
@@ -312,10 +312,11 @@ def _process_source_video_background(
     profile_id: str,
 ):
     """Background task: transcode (if needed), extract metadata, generate thumbnail."""
-    supabase = get_supabase()
-    if not supabase:
+    repo = get_repository()
+    if not repo:
         logger.error(f"[BG] No DB for source video {video_id}")
         return
+    supabase = repo.get_client()
 
     source_dir = video_path.parent
     current_path = video_path
@@ -393,7 +394,10 @@ async def upload_source_video(
     Transcoding, metadata extraction, and thumbnail generation run in background.
     Poll GET /source-videos/{id} until status='ready'.
     """
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -477,7 +481,10 @@ async def list_source_videos(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """List all source videos for the current profile."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -517,7 +524,10 @@ async def get_source_video(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Get source video details."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -556,7 +566,10 @@ async def delete_source_video(
 ):
     """Delete source video and all its segments."""
     logger.info(f"[Profile {profile.profile_id}] Deleting source video: {video_id}")
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -594,7 +607,7 @@ async def delete_source_video(
 
     # Delete source video files
     if video_data.get("file_path"):
-        Path(video_data["file_path"]).unlink(missing_ok=True)
+        Path(normalize_path(video_data["file_path"])).unlink(missing_ok=True)
     if video_data.get("thumbnail_path"):
         Path(video_data["thumbnail_path"]).unlink(missing_ok=True)
 
@@ -609,7 +622,10 @@ async def stream_source_video(
     """Stream source video for playback."""
     effective_profile_id = profile.profile_id
 
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -624,7 +640,7 @@ async def stream_source_video(
     if not result.data:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    video_path = Path(result.data[0]["file_path"])
+    video_path = Path(normalize_path(result.data[0]["file_path"]))
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found")
 
@@ -722,7 +738,10 @@ async def get_source_video_waveform(
     """Get audio waveform data for visualization."""
     effective_profile_id = profile.profile_id
 
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -735,7 +754,7 @@ async def get_source_video_waveform(
     if not result.data:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    video_path = Path(result.data[0]["file_path"])
+    video_path = Path(normalize_path(result.data[0]["file_path"]))
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found")
 
@@ -762,7 +781,10 @@ async def get_source_video_voice_detection(
 
     Uses Silero VAD to detect speech segments.
     """
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -775,7 +797,7 @@ async def get_source_video_voice_detection(
     if not result.data:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    video_path = Path(result.data[0]["file_path"])
+    video_path = Path(normalize_path(result.data[0]["file_path"]))
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found")
 
@@ -804,7 +826,10 @@ async def create_segment(
 ):
     """Create a new segment for a source video."""
     logger.info(f"[Profile {profile.profile_id}] Creating segment for source video: {video_id}")
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -835,7 +860,7 @@ async def create_segment(
 
     thumbnail_path = segments_dir / f"{segment_id}_thumb.jpg"
     midpoint = segment.start_time + (duration / 2)
-    _generate_thumbnail(Path(source_video["file_path"]), thumbnail_path, midpoint)
+    _generate_thumbnail(Path(normalize_path(source_video["file_path"])), thumbnail_path, midpoint)
 
     try:
         result = supabase.table("editai_segments").insert({
@@ -864,7 +889,7 @@ async def create_segment(
                 update_fields["keywords"] = kw
             supabase.table("editai_segments").update(update_fields).eq("id", segment_id).execute()
 
-        _refresh_segments_count(supabase, video_id, profile.profile_id)
+        _refresh_segments_count(repo, video_id, profile.profile_id)
 
         return SegmentResponse(
             id=segment_id,
@@ -896,7 +921,10 @@ async def list_video_segments(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """List all segments for a source video."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -943,7 +971,10 @@ async def list_all_segments(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """List all segments (library view) with optional filters, scoped to current profile."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1005,7 +1036,10 @@ async def list_product_groups_bulk(
     Must be placed before /{segment_id} to avoid the catch-all parameterized route matching
     the literal string "product-groups-bulk".
     """
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1061,7 +1095,10 @@ async def get_segment(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Get segment details."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1101,7 +1138,10 @@ async def update_segment(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Update segment (keywords, times, notes)."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1169,7 +1209,10 @@ async def delete_segment(
 ):
     """Delete a segment."""
     logger.info(f"[Profile {profile.profile_id}] Deleting segment: {segment_id}")
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1192,7 +1235,7 @@ async def delete_segment(
         .eq("profile_id", profile.profile_id)\
         .execute()
 
-    _refresh_segments_count(supabase, source_video_id, profile.profile_id)
+    _refresh_segments_count(repo, source_video_id, profile.profile_id)
 
     # Delete files
     if seg.get("extracted_video_path"):
@@ -1209,7 +1252,10 @@ async def toggle_favorite(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Toggle favorite status for a segment."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1242,7 +1288,10 @@ async def update_segment_transforms(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Update transforms for a segment (quick dedicated endpoint)."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1268,7 +1317,10 @@ async def update_project_segment_transforms(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Update per-project transform overrides for a segment."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1302,7 +1354,10 @@ async def extract_segment(
 ):
     """Extract segment to a separate video file."""
     logger.info(f"[Profile {profile.profile_id}] Extracting segment: {segment_id}")
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1317,7 +1372,7 @@ async def extract_segment(
         raise HTTPException(status_code=404, detail="Segment not found")
 
     seg = result.data[0]
-    source_path = Path(seg["editai_source_videos"]["file_path"])
+    source_path = Path(normalize_path(seg["editai_source_videos"]["file_path"]))
 
     if not source_path.exists():
         raise HTTPException(status_code=404, detail="Source video file not found")
@@ -1364,7 +1419,10 @@ async def stream_segment(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Stream a segment (extracted or from source)."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1381,7 +1439,7 @@ async def stream_segment(
 
     # If extracted file exists, serve it
     if seg.get("extracted_video_path"):
-        path = Path(seg["extracted_video_path"])
+        path = Path(normalize_path(seg["extracted_video_path"]))
         if path.exists():
             return FileResponse(path=str(path), media_type="video/mp4", headers={"Cache-Control": "public, max-age=3600"})
 
@@ -1403,7 +1461,10 @@ async def create_product_group(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Create a product group for a source video."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1472,7 +1533,10 @@ async def list_product_groups(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """List all product groups for a source video."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1513,7 +1577,10 @@ async def update_product_group(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Update a product group."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1598,7 +1665,10 @@ async def delete_product_group(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Delete a product group and unassign its segments."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1647,7 +1717,10 @@ async def reassign_product_groups(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Batch reassign all segments to product groups based on overlap."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1673,7 +1746,10 @@ async def match_segments_to_srt(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Match segments to SRT content based on keywords, scoped to current profile."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1769,7 +1845,10 @@ async def assign_segments_to_project(
 ):
     """Assign segments to a project."""
     logger.info(f"[Profile {profile.profile_id}] Assigning {len(segment_ids)} segments to project: {project_id}")
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -1811,7 +1890,10 @@ async def get_project_segments(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Get segments assigned to a project."""
-    supabase = get_supabase()
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
