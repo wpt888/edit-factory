@@ -242,7 +242,12 @@ export function SimplePipeline({ onSwitchToAdvanced }: SimplePipelineProps) {
   const handleDownload = useCallback((variant: VariantResult) => {
     if (!variant.final_video_path) return;
     const url = `${API_URL.replace(/\/api\/v1$/, "")}/api/v1/library/clips/${variant.clip_id}/download`;
-    window.open(url, "_blank");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `clip_${variant.clip_id?.slice(0, 8) || "video"}.mp4`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }, []);
 
   // Download all completed variants
