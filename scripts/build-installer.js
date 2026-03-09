@@ -188,6 +188,25 @@ function verifyPrerequisites() {
   }
 
   console.log('[build] All prerequisites verified.');
+
+  // Estimate bundled venv size (excluding torch/whisper which are filtered by electron-builder)
+  const HEAVY_DIRS = ['torch', 'torchaudio', 'torchvision', 'nvidia', 'triton', 'whisper', 'TTS', 'Cython'];
+  const VENV_LIB = path.join(PROJECT_ROOT, 'venv', 'Lib', 'site-packages');
+  if (fs.existsSync(VENV_LIB)) {
+    let heavyFound = [];
+    for (const dir of HEAVY_DIRS) {
+      const dirPath = path.join(VENV_LIB, dir);
+      if (fs.existsSync(dirPath)) {
+        heavyFound.push(dir);
+      }
+    }
+    if (heavyFound.length > 0) {
+      console.log(`[build]   NOTE: Heavy packages found in venv (excluded from bundle by filter): ${heavyFound.join(', ')}`);
+      console.log('[build]   These will NOT be included in the installer (electron-builder filter).');
+    } else {
+      console.log('[build]   OK: No heavy ML packages in venv (clean for bundling)');
+    }
+  }
 }
 
 // ──────────────────────────────────────────────
