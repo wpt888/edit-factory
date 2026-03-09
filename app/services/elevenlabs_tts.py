@@ -61,7 +61,23 @@ class ElevenLabsTTS:
         voice_id: Optional[str] = None,
         model_id: Optional[str] = None
     ):
+        # Key resolution: explicit param > KeyVault > env var
+        if not api_key:
+            try:
+                from app.services.key_vault import get_key_vault
+                vault = get_key_vault()
+                api_key = vault.get_key("elevenlabs_api_key")
+            except Exception:
+                pass
         self.api_key = api_key or os.getenv("ELEVENLABS_API_KEY")
+
+        if not voice_id:
+            try:
+                from app.services.key_vault import get_key_vault
+                vault = get_key_vault()
+                voice_id = vault.get_key("elevenlabs_voice_id")
+            except Exception:
+                pass
         self.voice_id = voice_id or os.getenv("ELEVENLABS_VOICE_ID")
         self.model_id = model_id or os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5")
 
@@ -479,3 +495,13 @@ def get_elevenlabs_tts() -> Optional[ElevenLabsTTS]:
                     _elevenlabs_instance = _UNAVAILABLE
                     return None
     return _elevenlabs_instance
+
+
+def _reset_elevenlabs_tts() -> None:
+    """Clear the singleton so the next call to get_elevenlabs_tts() picks up new keys.
+
+    Called by desktop_routes after the user saves new API keys in the setup wizard.
+    """
+    global _elevenlabs_instance
+    with _elevenlabs_lock:
+        _elevenlabs_instance = None
