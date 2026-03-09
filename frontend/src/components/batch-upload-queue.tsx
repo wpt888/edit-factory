@@ -225,13 +225,13 @@ export function BatchUploadQueue({ variantCount = 3 }: BatchUploadQueueProps) {
             )
           );
 
-          // 2. Upload + generate raw clips
+          // 2. Upload + generate clips
           const formData = new FormData();
           formData.append("video", currentItem.file);
           formData.append("variant_count", variantCount.toString());
 
           const genRes = await apiFetch(
-            `/library/projects/${projectId}/generate-raw`,
+            `/library/projects/${projectId}/generate`,
             {
               method: "POST",
               body: formData,
