@@ -228,9 +228,9 @@ Plans:
   5. Next.js middleware checks auth state on every navigation — no protected route is accessible by manually typing the URL while logged out
 **Plans**: 3 plans
 Plans:
-- [ ] 64-01-PLAN.md — DataRepository interface + SQLite schema from migrations
-- [ ] 64-02-PLAN.md — SupabaseRepository implementation + repository factory
-- [ ] 64-03-PLAN.md — Migrate all routes and services to repository pattern
+- [ ] 67-01-PLAN.md — JWT token injection + AuthProvider wiring
+- [ ] 67-02-PLAN.md — Logout button + password reset flow
+- [ ] 67-03-PLAN.md — Next.js middleware route protection
 
 ### Phase 68: License Key Validation Polish
 **Goal**: The Lemon Squeezy license key validation runs at first launch and periodically thereafter, with an offline grace period so the app remains usable when the user temporarily loses internet
