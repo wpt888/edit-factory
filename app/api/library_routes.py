@@ -1834,22 +1834,17 @@ async def get_clip(
 ):
     """Obține detaliile unui clip, inclusiv conținutul asociat."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        # Clip with profile ownership check
-        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
-        if not clip.data:
+        clip = repo.get_clip(clip_id)
+        if not clip or clip.get("profile_id") != profile.profile_id:
             raise HTTPException(status_code=404, detail="Clip not found")
 
-        # Content
-        content = supabase.table("editai_clip_content").select("*").eq("clip_id", clip_id).execute()
+        content = repo.get_clip_content(clip_id)
 
         return {
-            "clip": clip.data[0],
-            "content": content.data[0] if content.data else None
+            "clip": clip,
+            "content": content
         }
     except HTTPException:
         raise
@@ -1875,11 +1870,13 @@ async def update_clip(
 ):
     """Actualizează un clip (nume, selecție, status Postiz)."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     try:
+        # Verify ownership first
+        existing = repo.get_clip(clip_id)
+        if not existing or existing.get("profile_id") != profile.profile_id:
+            raise HTTPException(status_code=404, detail="Clip not found")
+
         update_data = {"updated_at": datetime.now(timezone.utc).isoformat()}
 
         if request.variant_name is not None:
@@ -1897,14 +1894,13 @@ async def update_clip(
             clean_tags = list(set(tag.strip().lower() for tag in request.tags if tag.strip()))[:20]
             update_data["tags"] = clean_tags
 
-        result = supabase.table("editai_clips").update(update_data).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
+        updated = repo.update_clip(clip_id, update_data)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Clip not found")
 
-        if result.data:
-            clip = result.data[0]
-            if request.is_selected is not None:
-                await _update_project_counts(clip["project_id"], profile.profile_id)
-            return {"status": "updated", "clip": clip}
-        raise HTTPException(status_code=404, detail="Clip not found")
+        if request.is_selected is not None:
+            await _update_project_counts(updated["project_id"], profile.profile_id)
+        return {"status": "updated", "clip": updated}
     except HTTPException:
         raise
     except Exception as e:
@@ -1920,22 +1916,20 @@ async def toggle_clip_selection(
 ):
     """Selectează/deselectează un clip pentru procesare ulterioară."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        result = supabase.table("editai_clips").update({
+        clip = repo.get_clip(clip_id)
+        if not clip or clip.get("profile_id") != profile.profile_id:
+            raise HTTPException(status_code=404, detail="Clip not found")
+
+        updated = repo.update_clip(clip_id, {
             "is_selected": selected,
             "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
+        })
 
-        if result.data:
-            clip = result.data[0]
-            # Actualizăm contorul în proiect
-            await _update_project_counts(clip["project_id"], profile.profile_id)
-            return {"status": "updated", "clip_id": clip_id, "is_selected": selected}
-        raise HTTPException(status_code=404, detail="Clip not found")
+        # Actualizăm contorul în proiect
+        await _update_project_counts(updated["project_id"], profile.profile_id)
+        return {"status": "updated", "clip_id": clip_id, "is_selected": selected}
     except HTTPException:
         raise
     except Exception as e:
@@ -1951,27 +1945,28 @@ async def bulk_select_clips(
 ):
     """Selectează/deselectează mai multe clipuri odată."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        # Bulk update all clips in a single query instead of N+1 individual updates
-        result = supabase.table("editai_clips").update({
-            "is_selected": selected,
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }).in_("id", clip_ids).eq("profile_id", profile.profile_id).execute()
+        updated_clips = []
+        for cid in clip_ids:
+            clip = repo.get_clip(cid)
+            if not clip or clip.get("profile_id") != profile.profile_id:
+                continue  # skip clips not belonging to profile
+            updated = repo.update_clip(cid, {
+                "is_selected": selected,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            })
+            if updated:
+                updated_clips.append(updated)
 
         # Collect unique project IDs from updated clips to refresh counts
-        project_ids = set()
-        for clip in (result.data or []):
-            project_ids.add(clip["project_id"])
+        project_ids = list(set(c["project_id"] for c in updated_clips))
 
         # Actualizăm contoarele
         for project_id in project_ids:
             await _update_project_counts(project_id, profile.profile_id)
 
-        return {"status": "updated", "count": len(clip_ids), "is_selected": selected}
+        return {"status": "updated", "count": len(updated_clips), "is_selected": selected}
     except Exception as e:
         logger.error(f"Error bulk selecting clips: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
