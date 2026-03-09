@@ -619,22 +619,23 @@ async def get_project_progress(
     if progress:
         return progress
 
-    # If no progress tracked, check project status
+    # If no progress tracked, check project status from repository
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if supabase:
-        try:
-            result = supabase.table("editai_projects").select("status").eq("id", project_id).eq("profile_id", profile.profile_id).limit(1).execute()
-        except Exception:
-            return {"percentage": 0, "current_step": "Project not found", "estimated_remaining": None}
-        if result.data:
-            status = result.data[0].get("status")
-            if status == "generating":
-                return {"percentage": 0, "current_step": "Initializing...", "estimated_remaining": None}
-            elif status == "ready_for_triage":
-                return {"percentage": 100, "current_step": "Complete", "estimated_remaining": 0}
-            elif status == "failed":
-                return {"percentage": 100, "current_step": "Failed", "estimated_remaining": 0}
+    try:
+        proj = repo.get_project(project_id)
+        if not proj or proj.get("profile_id") != profile.profile_id:
+            raise HTTPException(status_code=404, detail="Progress not found")
+        status = proj.get("status")
+        if status == "generating":
+            return {"percentage": 0, "current_step": "Initializing...", "estimated_remaining": None}
+        elif status == "ready_for_triage":
+            return {"percentage": 100, "current_step": "Complete", "estimated_remaining": 0}
+        elif status == "failed":
+            return {"percentage": 100, "current_step": "Failed", "estimated_remaining": 0}
+    except HTTPException:
+        raise
+    except Exception:
+        pass
 
     raise HTTPException(status_code=404, detail="Progress not found")
 
@@ -691,9 +692,6 @@ async def cancel_generation(
 ):
     """Cancel an in-progress generation for a project."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     verify_project_ownership(project_id, profile.profile_id)
     mark_project_cancelled(project_id)
@@ -702,10 +700,10 @@ async def cancel_generation(
     cleanup_project_lock(project_id)
 
     try:
-        supabase.table("editai_projects").update({
+        repo.update_project(project_id, {
             "status": "failed",
             "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", project_id).eq("profile_id", profile.profile_id).execute()
+        })
     except Exception as e:
         logger.error(f"Failed to update project status on cancel: {e}")
 
@@ -3146,41 +3144,25 @@ def _delete_clip_files(clip: dict):
 def _update_project_counts_sync(project_id: str, profile_id: Optional[str] = None):
     """Actualizează contoarele de clipuri în proiect (sync — run via asyncio.to_thread)."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        return
 
     try:
-        # Count total clips (not deleted) using count queries instead of fetching all rows
-        total_query = supabase.table("editai_clips").select("id", count="exact").eq("project_id", project_id).eq("is_deleted", False)
+        # List all non-deleted clips for this project
+        eq_filters = {"is_deleted": False}
         if profile_id:
-            total_query = total_query.eq("profile_id", profile_id)
-        total_result = total_query.execute()
-        total = total_result.count or 0
+            eq_filters["profile_id"] = profile_id
+        result = repo.list_clips(project_id, QueryFilters(eq=eq_filters))
+        clips = result.data or []
 
-        # Count selected clips
-        selected_query = supabase.table("editai_clips").select("id", count="exact").eq("project_id", project_id).eq("is_selected", True).eq("is_deleted", False)
-        if profile_id:
-            selected_query = selected_query.eq("profile_id", profile_id)
-        selected_result = selected_query.execute()
-        selected = selected_result.count or 0
+        total = len(clips)
+        selected = sum(1 for c in clips if c.get("is_selected"))
+        exported = sum(1 for c in clips if c.get("final_status") == "completed")
 
-        # Count rendered clips
-        rendered_query = supabase.table("editai_clips").select("id", count="exact").eq("project_id", project_id).eq("final_status", "completed").eq("is_deleted", False)
-        if profile_id:
-            rendered_query = rendered_query.eq("profile_id", profile_id)
-        rendered_result = rendered_query.execute()
-        exported = rendered_result.count or 0
-
-        update_query = supabase.table("editai_projects").update({
+        repo.update_project(project_id, {
             "variants_count": total,
             "selected_count": selected,
             "exported_count": exported,
             "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", project_id)
-        if profile_id:
-            update_query = update_query.eq("profile_id", profile_id)
-        update_query.execute()
+        })
     except Exception as e:
         logger.warning(f"Failed to update project counts: {e}")
 
