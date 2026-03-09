@@ -4,6 +4,7 @@ import "./globals.css";
 import { NavBarWrapper } from "@/components/navbar-wrapper";
 import { Toaster } from "sonner";
 import { ProfileProvider } from "@/contexts/profile-context";
+import { AuthProvider } from "@/components/auth-provider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -62,8 +63,10 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} ${montserrat.variable} ${roboto.variable} ${openSans.variable} ${oswald.variable} ${bebasNeue.variable} antialiased`}
       >
         <ProfileProvider>
-          <NavBarWrapper />
-          {children}
+          <AuthProvider>
+            <NavBarWrapper />
+            {children}
+          </AuthProvider>
         </ProfileProvider>
         <Toaster
           position="top-right"

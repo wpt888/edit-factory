@@ -1,8 +1,10 @@
 /**
  * Simple API client for local development.
+ * Automatically injects Supabase JWT token into every request.
  */
 
 import { ApiError } from "./api-error";
+import { createClient } from "@/lib/supabase/client";
 
 export { ApiError, handleApiError } from "./api-error";
 
@@ -26,7 +28,7 @@ export async function apiFetch(
   options: FetchOptions = {}
 ): Promise<Response> {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { headers: customHeaders, timeout = DEFAULT_TIMEOUT_MS, retry: _retry, signal: existingSignal, ...restOptions } = options;
+  const { headers: customHeaders, skipAuth, timeout = DEFAULT_TIMEOUT_MS, retry: _retry, signal: existingSignal, ...restOptions } = options;
 
   // Auto-inject profile ID from localStorage (SSR-safe)
   const profileId =
@@ -34,9 +36,24 @@ export async function apiFetch(
       ? localStorage.getItem("editai_current_profile_id")
       : null;
 
+  // Auto-inject Supabase JWT token (unless skipAuth is set)
+  let authHeader: Record<string, string> = {};
+  if (!skipAuth && typeof window !== "undefined") {
+    try {
+      const supabase = createClient();
+      const { data } = await supabase.auth.getSession();
+      if (data.session?.access_token) {
+        authHeader = { Authorization: `Bearer ${data.session.access_token}` };
+      }
+    } catch {
+      // If session retrieval fails, proceed without auth header
+    }
+  }
+
   const headers: HeadersInit = {
     ...(!(options.body instanceof FormData) && { "Content-Type": "application/json" }),
     ...(profileId && { "X-Profile-Id": profileId }),
+    ...authHeader,
     ...customHeaders, // Custom headers can override
   };
 
