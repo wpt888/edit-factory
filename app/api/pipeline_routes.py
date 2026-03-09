@@ -201,6 +201,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
         row = {
             "id": pipeline_id,
             "profile_id": pipeline_dict.get("profile_id"),
+            "name": pipeline_dict.get("name", ""),
             "idea": pipeline_dict.get("idea", ""),
             "context": pipeline_dict.get("context", ""),
             "provider": pipeline_dict.get("provider", "gemini"),
@@ -306,6 +307,7 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
         pipeline = {
             "pipeline_id": pipeline_id,
             "profile_id": row["profile_id"],
+            "name": row.get("name", ""),
             "idea": row.get("idea", ""),
             "context": row.get("context", ""),
             "provider": row.get("provider", "gemini"),
@@ -391,6 +393,7 @@ def _voice_settings_match(a: Optional[dict], b: Optional[dict]) -> bool:
 
 class PipelineGenerateRequest(BaseModel):
     """Request model for pipeline generation."""
+    name: str = Field(default="", max_length=200)  # Human-readable name for the script set
     idea: str = Field(..., max_length=2000)       # User's video idea/concept
     context: str = Field(default="", max_length=5000)  # Product/brand context
     variant_count: int = Field(default=3, ge=1, le=10)  # Number of script variants (1-10)
@@ -463,6 +466,7 @@ class PipelineRenderRequest(BaseModel):
     enable_glow: bool = False
     glow_blur: int = 0
     adaptive_sizing: bool = False
+    opacity: int = 100
     # Video filters
     enable_denoise: bool = False
     denoise_strength: float = 2.0
@@ -543,6 +547,7 @@ class PipelineStatusResponse(BaseModel):
 class PipelineImportRequest(BaseModel):
     """Request model for importing scripts into a new pipeline (from history)."""
     scripts: List[str] = Field(..., max_length=10)
+    name: str = ""
     idea: str = "Imported from history"
     context: str = ""
 
@@ -557,6 +562,7 @@ class PipelineImportRequest(BaseModel):
 class PipelineListItem(BaseModel):
     """Lightweight pipeline summary for list endpoint."""
     pipeline_id: str
+    name: str = ""
     idea: str
     provider: str
     variant_count: int
@@ -596,7 +602,7 @@ async def list_pipelines(
         supabase = repo.get_client() if repo else None
         if supabase:
             result = supabase.table("editai_pipelines")\
-                .select("id, idea, provider, variant_count, keyword_count, created_at")\
+                .select("id, name, idea, provider, variant_count, keyword_count, created_at")\
                 .eq("profile_id", profile.profile_id)\
                 .order("created_at", desc=True)\
                 .limit(limit)\
@@ -605,6 +611,7 @@ async def list_pipelines(
                 for row in result.data:
                     items.append(PipelineListItem(
                         pipeline_id=row["id"],
+                        name=row.get("name", ""),
                         idea=row.get("idea", ""),
                         provider=row.get("provider", "gemini"),
                         variant_count=row.get("variant_count", 0),
@@ -626,6 +633,7 @@ async def list_pipelines(
     for p in profile_pipelines[:limit]:
         items.append(PipelineListItem(
             pipeline_id=p["pipeline_id"],
+            name=p.get("name", ""),
             idea=p.get("idea", ""),
             provider=p.get("provider", "gemini"),
             variant_count=p.get("variant_count", 0),
@@ -876,6 +884,37 @@ async def update_pipeline_scripts(
     return {"status": "updated", "pipeline_id": pipeline_id, "script_count": len(request.scripts)}
 
 
+class PipelineRenameRequest(BaseModel):
+    """Request model for renaming a pipeline."""
+    name: str = Field(..., max_length=200)
+
+
+@router.patch("/{pipeline_id}/name")
+async def rename_pipeline(
+    pipeline_id: str,
+    request: PipelineRenameRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Update the name of an existing pipeline."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Pipeline {pipeline_id} not found")
+
+    pipeline["name"] = request.name
+
+    try:
+        repo = get_repository()
+        supabase = repo.get_client() if repo else None
+        if supabase:
+            supabase.table("editai_pipelines").update({
+                "name": request.name,
+            }).eq("id", pipeline_id).execute()
+    except Exception as e:
+        logger.warning(f"Failed to update name for pipeline {pipeline_id} in DB: {e}")
+
+    return {"status": "updated", "pipeline_id": pipeline_id, "name": request.name}
+
+
 @router.post("/import", response_model=PipelineGenerateResponse)
 async def import_pipeline(
     request: PipelineImportRequest,
@@ -898,6 +937,7 @@ async def import_pipeline(
             "pipeline_id": pipeline_id,
             "scripts": request.scripts,
             "provider": request.provider,
+            "name": request.name,
             "idea": request.idea,
             "context": request.context,
             "variant_count": len(request.scripts),
@@ -1048,6 +1088,7 @@ async def generate_pipeline(
                 "pipeline_id": pipeline_id,
                 "scripts": scripts,
                 "provider": request.provider,
+                "name": request.name,
                 "idea": request.idea,
                 "context": request.context,
                 "variant_count": len(scripts),
@@ -1666,7 +1707,8 @@ async def render_variants(
         "shadowDepth": render_request.shadow_depth,
         "enableGlow": render_request.enable_glow,
         "glowBlur": render_request.glow_blur,
-        "adaptiveSizing": render_request.adaptive_sizing
+        "adaptiveSizing": render_request.adaptive_sizing,
+        "opacity": render_request.opacity
     }
 
     # Clear any previous cancellation flag so re-renders work
@@ -2912,3 +2954,260 @@ async def get_preview_video(
             "Cache-Control": "public, max-age=300",
         }
     )
+
+
+# ============== VIDEO CAPTION GENERATION ==============
+
+class GenerateVideoCaptionsRequest(BaseModel):
+    pipeline_id: str
+    variant_indices: List[int]  # which variants to generate captions for
+    tone: str = "professional"  # professional, casual, funny, luxury, urgenta
+    language: str = "ro"  # ro, en
+    include_hashtags: bool = True
+    include_cta: bool = True
+    template_id: Optional[str] = None
+    custom_instructions: Optional[str] = None
+    variants_per_clip: int = Field(default=3, ge=1, le=5)
+
+
+class VideoCaptionTemplateCreate(BaseModel):
+    name: str
+    prompt_template: str
+    is_default: bool = False
+
+
+class VideoCaptionTemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    prompt_template: Optional[str] = None
+    is_default: Optional[bool] = None
+
+
+@router.post("/generate-video-captions")
+async def generate_video_captions(
+    req: GenerateVideoCaptionsRequest,
+    ctx: ProfileContext = Depends(get_profile_context),
+):
+    """Generate AI social media caption variants for rendered pipeline clips using Gemini."""
+    pipeline = _get_pipeline_or_load(req.pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    scripts = pipeline.get("scripts", [])
+    pipeline_context = pipeline.get("context", "")
+
+    # Load template if provided
+    template_text = ""
+    if req.template_id:
+        repo = get_repository()
+        if repo:
+            try:
+                tpl = repo.table_query("video_caption_templates", "select",
+                    filters=QueryFilters(
+                        eq={"id": req.template_id, "profile_id": ctx.profile_id},
+                        limit=1,
+                    ))
+                if tpl.data:
+                    template_text = tpl.data[0]["prompt_template"]
+            except Exception as e:
+                logger.warning(f"Failed to load caption template: {e}")
+
+    # Prepare tone instructions
+    tone_instructions = {
+        "professional": "Use a professional, polished tone suitable for business social media.",
+        "casual": "Use a relaxed, friendly, conversational tone.",
+        "funny": "Use humor, wit, and playful language to engage the audience.",
+        "luxury": "Use an elegant, aspirational, premium tone that conveys exclusivity.",
+        "urgenta": "Use urgency and scarcity language to drive immediate action (limited time, act now, etc.).",
+    }
+    tone_desc = tone_instructions.get(req.tone, f"Use a {req.tone} tone.")
+
+    lang_map = {"ro": "Romanian", "en": "English"}
+    language_name = lang_map.get(req.language, req.language)
+
+    # Generate captions per variant
+    results: Dict[int, List[str]] = {}
+    errors: Dict[int, str] = {}
+
+    try:
+        import google.generativeai as genai
+        settings = get_settings()
+        if not settings.gemini_api_key:
+            raise HTTPException(status_code=503, detail="Gemini API key not configured")
+        genai.configure(api_key=settings.gemini_api_key)
+        model = genai.GenerativeModel("gemini-2.0-flash")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Failed to initialize Gemini: {e}")
+
+    for variant_idx in req.variant_indices:
+        script_text = scripts[variant_idx] if variant_idx < len(scripts) else ""
+
+        prompt_parts = []
+
+        # Template prepended first
+        if template_text:
+            prompt_parts.append(template_text)
+
+        prompt_parts.append(
+            f"Generate exactly {req.variants_per_clip} distinct social media caption variants in {language_name}.\n"
+            f"{tone_desc}"
+        )
+
+        # Context from pipeline (includes product descriptions)
+        if pipeline_context:
+            prompt_parts.append(f"Context:\n{pipeline_context}")
+
+        # Script for this specific variant
+        if script_text:
+            prompt_parts.append(f"Video script:\n{script_text}")
+
+        if req.include_hashtags:
+            prompt_parts.append("Include relevant hashtags (5-10 hashtags) in each caption.")
+        else:
+            prompt_parts.append("Do NOT include any hashtags.")
+
+        if req.include_cta:
+            prompt_parts.append("Include a clear call to action in each caption.")
+        else:
+            prompt_parts.append("Do NOT include a call to action.")
+
+        if req.custom_instructions:
+            prompt_parts.append(f"Additional instructions: {req.custom_instructions}")
+
+        prompt_parts.append(
+            f"\nReturn ONLY a JSON array of exactly {req.variants_per_clip} caption strings. "
+            "Each caption should be distinct in style/angle while keeping the same message. "
+            "No explanations, no markdown, just the JSON array."
+        )
+
+        full_prompt = "\n\n".join(prompt_parts)
+
+        try:
+            response = model.generate_content(full_prompt)
+            raw = response.text.strip()
+            # Parse JSON array from response
+            # Strip markdown code fences if present
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+                if raw.endswith("```"):
+                    raw = raw[:-3].strip()
+                elif "```" in raw:
+                    raw = raw[:raw.rfind("```")].strip()
+            captions = _json.loads(raw)
+            if isinstance(captions, list):
+                results[variant_idx] = [str(c) for c in captions[:req.variants_per_clip]]
+            else:
+                # Gemini returned non-array — wrap single response
+                results[variant_idx] = [str(captions)]
+        except Exception as e:
+            logger.error(f"Caption generation failed for variant {variant_idx}: {e}")
+            errors[variant_idx] = str(e)
+
+    return {
+        "captions": {str(k): v for k, v in results.items()},
+        "errors": {str(k): v for k, v in errors.items()},
+    }
+
+
+# ============== VIDEO CAPTION TEMPLATE CRUD ==============
+
+@router.get("/video-caption-templates")
+async def list_video_caption_templates(
+    ctx: ProfileContext = Depends(get_profile_context),
+):
+    """List video caption templates for this profile."""
+    repo = get_repository()
+    if not repo:
+        return {"templates": []}
+
+    result = repo.table_query("video_caption_templates", "select",
+        filters=QueryFilters(
+            eq={"profile_id": ctx.profile_id},
+            order_by="created_at",
+            order_desc=True,
+        ))
+
+    return {"templates": result.data or []}
+
+
+@router.post("/video-caption-templates")
+async def create_video_caption_template(
+    req: VideoCaptionTemplateCreate,
+    ctx: ProfileContext = Depends(get_profile_context),
+):
+    """Create a video caption template."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    template_id = str(uuid.uuid4())
+    repo.table_query("video_caption_templates", "insert", data={
+        "id": template_id,
+        "profile_id": ctx.profile_id,
+        "name": req.name,
+        "prompt_template": req.prompt_template,
+        "is_default": req.is_default,
+    })
+
+    if req.is_default:
+        repo.table_query("video_caption_templates", "update",
+            data={"is_default": False},
+            filters=QueryFilters(
+                eq={"profile_id": ctx.profile_id},
+                neq={"id": template_id},
+            ))
+
+    return {"id": template_id, "name": req.name}
+
+
+@router.put("/video-caption-templates/{template_id}")
+async def update_video_caption_template(
+    template_id: str,
+    req: VideoCaptionTemplateUpdate,
+    ctx: ProfileContext = Depends(get_profile_context),
+):
+    """Update a video caption template."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    updates = {}
+    if req.name is not None:
+        updates["name"] = req.name
+    if req.prompt_template is not None:
+        updates["prompt_template"] = req.prompt_template
+    if req.is_default is not None:
+        updates["is_default"] = req.is_default
+        if req.is_default:
+            repo.table_query("video_caption_templates", "update",
+                data={"is_default": False},
+                filters=QueryFilters(
+                    eq={"profile_id": ctx.profile_id},
+                    neq={"id": template_id},
+                ))
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    repo.table_query("video_caption_templates", "update", data=updates,
+        filters=QueryFilters(eq={"id": template_id, "profile_id": ctx.profile_id}))
+
+    return {"updated": True}
+
+
+@router.delete("/video-caption-templates/{template_id}")
+async def delete_video_caption_template(
+    template_id: str,
+    ctx: ProfileContext = Depends(get_profile_context),
+):
+    """Delete a video caption template."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    repo.table_query("video_caption_templates", "delete",
+        filters=QueryFilters(eq={"id": template_id, "profile_id": ctx.profile_id}))
+
+    return {"deleted": True}

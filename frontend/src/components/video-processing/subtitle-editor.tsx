@@ -29,6 +29,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import { Type } from "lucide-react";
 import {
   SubtitleSettings,
@@ -202,8 +203,24 @@ export function SubtitleEditor({
             value={[settings.fontSize]}
             onValueChange={([value]) => updateSetting("fontSize", value)}
             min={12}
-            max={72}
+            max={200}
             step={1}
+            className="w-full"
+          />
+        </div>
+
+        {/* Opacity */}
+        <div className="space-y-3">
+          <div className="flex justify-between items-center">
+            <Label>Opacity</Label>
+            <span className="text-sm text-muted-foreground">{settings.opacity ?? 100}%</span>
+          </div>
+          <Slider
+            value={[settings.opacity ?? 100]}
+            onValueChange={([value]) => updateSetting("opacity", value)}
+            min={0}
+            max={100}
+            step={5}
             className="w-full"
           />
         </div>
@@ -283,6 +300,97 @@ export function SubtitleEditor({
             0% = sus, 50% = centru, 100% = jos
           </p>
         </div>
+
+        <Separator />
+
+        {/* Shadow Settings */}
+        <div className="space-y-3">
+          <h4 className="text-sm font-medium">Shadow</h4>
+          <div className="space-y-3">
+            <div className="flex justify-between items-center">
+              <Label>Shadow Depth</Label>
+              <span className="text-sm text-muted-foreground">{settings.shadowDepth ?? 0}px</span>
+            </div>
+            <Slider
+              value={[settings.shadowDepth ?? 0]}
+              onValueChange={([value]) => updateSetting("shadowDepth", value)}
+              min={0}
+              max={4}
+              step={1}
+              className="w-full"
+            />
+          </div>
+
+          {(settings.shadowDepth ?? 0) > 0 && (
+            <ColorPicker
+              label="Shadow Color"
+              value={settings.shadowColor ?? "#000000"}
+              onChange={(value) => updateSetting("shadowColor", value)}
+            />
+          )}
+        </div>
+
+        {/* Glow Settings */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-medium">Glow Effect</h4>
+            <Switch
+              checked={settings.enableGlow ?? false}
+              onCheckedChange={(checked) => updateSetting("enableGlow", checked)}
+            />
+          </div>
+
+          {settings.enableGlow && (
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <Label>Glow Blur</Label>
+                <span className="text-sm text-muted-foreground">{settings.glowBlur ?? 0}px</span>
+              </div>
+              <Slider
+                value={[settings.glowBlur ?? 0]}
+                onValueChange={([value]) => updateSetting("glowBlur", value)}
+                min={0}
+                max={10}
+                step={1}
+                className="w-full"
+              />
+              <p className="text-xs text-muted-foreground">
+                Outline becomes semi-transparent for glow effect
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Border Style */}
+        <div className="space-y-2">
+          <Label>Border Style</Label>
+          <Select
+            value={String(settings.borderStyle ?? 1)}
+            onValueChange={(value) => updateSetting("borderStyle", Number(value))}
+          >
+            <SelectTrigger className="bg-muted/50">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="1">Outline + Shadow</SelectItem>
+              <SelectItem value="3">Box Background</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Adaptive Sizing */}
+        <div className="flex items-center justify-between">
+          <div>
+            <Label>Adaptive Sizing</Label>
+            <p className="text-xs text-muted-foreground">
+              Auto-reduce font for long text
+            </p>
+          </div>
+          <Switch
+            checked={settings.adaptiveSizing ?? false}
+            onCheckedChange={(checked) => updateSetting("adaptiveSizing", checked)}
+          />
+        </div>
       </div>
 
       {/* Live Preview */}
@@ -315,14 +423,25 @@ export function SubtitleEditor({
                     fontFamily: settings.fontFamily,
                     fontSize: `${scaledFontSize}px`,
                     color: settings.textColor,
+                    opacity: (settings.opacity ?? 100) / 100,
                     WebkitTextStroke: `${scaledOutline}px ${settings.outlineColor}`,
                     paintOrder: 'stroke fill',
-                    textShadow: (settings.shadowDepth ?? 0) > 0
-                      ? `0 ${scaledOutline}px ${scaledOutline * 2}px rgba(0,0,0,0.8)`
-                      : '0 1px 3px rgba(0,0,0,0.85)',
+                    textShadow: [
+                      (settings.shadowDepth ?? 0) > 0
+                        ? `0 ${settings.shadowDepth}px ${(settings.shadowDepth ?? 0) * 2}px ${settings.shadowColor ?? "rgba(0,0,0,0.8)"}`
+                        : '0 1px 3px rgba(0,0,0,0.85)',
+                      settings.enableGlow && (settings.glowBlur ?? 0) > 0
+                        ? `0 0 ${settings.glowBlur}px ${settings.outlineColor}`
+                        : '',
+                    ].filter(Boolean).join(', '),
                     fontWeight: 700,
                     top: `${settings.positionY}%`,
                     transform: "translateY(-50%)",
+                    ...(settings.borderStyle === 3 ? {
+                      backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                      padding: '4px 8px',
+                      borderRadius: '4px',
+                    } : {}),
                   }}
                 >
                   {subtitleLines.length > 0 ? subtitleLines[0].text : "Sample subtitle text"}

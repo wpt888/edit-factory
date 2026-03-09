@@ -950,6 +950,24 @@ async def _generate_raw_clips_task(
                     "final_video": result["final_video"]
                 }]
 
+            # Find highest existing variant_index to accumulate clips instead of overwriting
+            start_variant_index = 1
+            try:
+                supabase = repo.get_client()
+                if supabase:
+                    existing_clips = supabase.table("editai_clips").select("variant_index").eq("project_id", project_id).eq("profile_id", profile_id).eq("is_deleted", False).execute()
+                    if existing_clips.data:
+                        max_index = max(clip.get("variant_index", 0) for clip in existing_clips.data)
+                        start_variant_index = max_index + 1
+                        logger.info(f"Found {len(existing_clips.data)} existing clips, new variants start from {start_variant_index}")
+            except Exception as e:
+                logger.warning(f"Could not check existing clips, starting from 1: {e}")
+
+            # Re-index variants to continue from start_variant_index
+            for i, variant in enumerate(variants):
+                variant["variant_index"] = start_variant_index + i
+                variant["variant_name"] = f"variant_{start_variant_index + i}"
+
             for variant in variants:
                 video_file = Path(variant["final_video"])
                 duration = await asyncio.to_thread(_get_video_duration, video_file)
@@ -2069,27 +2087,27 @@ async def delete_clip(
     clip_id: str,
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Soft-delete a clip (move to trash)."""
+    """Permanently delete a clip (files + DB)."""
     repo = get_repository()
     supabase = repo.get_client() if repo else None
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", False).execute()
-        if not clip.data:
+        clip_result = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", False).limit(1).execute()
+        if not clip_result.data:
             raise HTTPException(status_code=404, detail="Clip not found")
-        # DB-01: Include profile_id filter to prevent IDOR
-        supabase.table("editai_clips").update({
-            "is_deleted": True,
-            "deleted_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
-        logger.info(f"Soft-deleted clip {clip_id}")
+        # Delete files from disk
+        _delete_clip_files(clip_result.data[0])
+        # Delete content first (child), then clip record (parent); include profile_id filter
+        supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
+        supabase.table("editai_clips").delete().eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
+        logger.info(f"Permanently deleted clip {clip_id}")
         return {"status": "deleted", "clip_id": clip_id}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error soft-deleting clip: {e}")
+        logger.error(f"Error deleting clip: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -2102,7 +2120,7 @@ async def bulk_delete_clips(
     request: BulkDeleteRequest,
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Soft-delete multiple clips simultaneously (move to trash)."""
+    """Permanently delete multiple clips simultaneously (files + DB)."""
     repo = get_repository()
     supabase = repo.get_client() if repo else None
     if not supabase:
@@ -2113,9 +2131,9 @@ async def bulk_delete_clips(
     clip_ids = request.clip_ids
 
     try:
-        # Fetch all active clips at once
+        # Fetch all active clips with full data for file deletion
         result = supabase.table("editai_clips")\
-            .select("id")\
+            .select("*")\
             .in_("id", clip_ids)\
             .eq("profile_id", profile.profile_id)\
             .eq("is_deleted", False)\
@@ -2129,17 +2147,18 @@ async def bulk_delete_clips(
             if clip_id not in found_ids:
                 failed.append({"id": clip_id, "error": "Not found"})
 
-        if found_ids:
+        if found_clips:
             found_id_list = list(found_ids)
-            # Batch soft-delete clips
-            supabase.table("editai_clips").update({
-                "is_deleted": True,
-                "deleted_at": datetime.now(timezone.utc).isoformat(),
-            }).in_("id", found_id_list).eq("profile_id", profile.profile_id).execute()
+            # Delete files from disk
+            for clip in found_clips:
+                _delete_clip_files(clip)
+            # Delete content first (child), then clip records (parent)
+            supabase.table("editai_clip_content").delete().in_("clip_id", found_id_list).execute()
+            supabase.table("editai_clips").delete().in_("id", found_id_list).eq("profile_id", profile.profile_id).execute()
 
         deleted = list(found_ids)
         for clip_id in deleted:
-            logger.info(f"Bulk soft-delete: moved clip {clip_id} to trash")
+            logger.info(f"Permanently deleted clip {clip_id}")
 
     except Exception as e:
         logger.error(f"Error in bulk delete: {e}")

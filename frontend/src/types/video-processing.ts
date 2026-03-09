@@ -21,6 +21,9 @@ export interface SubtitleSettings {
 
   // Adaptive sizing (Phase 11 - SUB-03)
   adaptiveSizing?: boolean;     // Default false
+
+  // Text opacity (0-100, default 100 = fully opaque)
+  opacity?: number;
 }
 
 export interface SubtitleLine {
@@ -142,6 +145,7 @@ export const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
   enableGlow: false,
   glowBlur: 0,
   adaptiveSizing: false,
+  opacity: 100,
 };
 
 export const FONT_OPTIONS = [

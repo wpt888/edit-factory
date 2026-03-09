@@ -171,6 +171,7 @@ class AssemblyRenderRequest(BaseModel):
     enable_glow: bool = False
     glow_blur: int = 0
     adaptive_sizing: bool = False
+    opacity: int = 100
     # Video filters
     enable_denoise: bool = False
     denoise_strength: float = 2.0
@@ -312,7 +313,8 @@ async def render_assembly(
         "shadowDepth": request.shadow_depth,
         "enableGlow": request.enable_glow,
         "glowBlur": request.glow_blur,
-        "adaptiveSizing": request.adaptive_sizing
+        "adaptiveSizing": request.adaptive_sizing,
+        "opacity": request.opacity
     }
 
     # Initialize job status (with eviction)

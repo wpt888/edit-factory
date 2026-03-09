@@ -9,9 +9,14 @@ import {
   ChevronLeft,
   ChevronRight,
   RefreshCw,
+  CheckSquare,
+  Square,
+  Trash2,
+  X,
 } from "lucide-react";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 import { PostDetailModal } from "@/components/PostDetailModal";
+import { toast } from "sonner";
 
 /* ---------- Types ---------- */
 
@@ -120,6 +125,10 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
   const [calendarData, setCalendarData] = useState<CalendarData | null>(null);
   const [loadingCalendar, setLoadingCalendar] = useState(false);
   const [selectedPost, setSelectedPost] = useState<PostizPost | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const monthDays = useMemo(() => getMonthCalendarDays(viewYear, viewMonth), [viewYear, viewMonth]);
 
@@ -175,6 +184,77 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
       };
     });
   }, []);
+
+  /* ---------- Selection ---------- */
+
+  const toggleSelect = useCallback((postId: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(postId)) next.delete(postId);
+      else next.add(postId);
+      return next;
+    });
+  }, []);
+
+  const selectAllForDate = useCallback((dateStr: string) => {
+    const posts = postsByDate[dateStr] || [];
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      const allSelected = posts.every(p => next.has(p.id));
+      for (const p of posts) {
+        if (allSelected) next.delete(p.id);
+        else next.add(p.id);
+      }
+      return next;
+    });
+  }, [postsByDate]);
+
+  const selectAllVisible = useCallback(() => {
+    if (!calendarData) return;
+    setSelectedIds(prev => {
+      const allIds = calendarData.postiz_posts.map(p => p.id);
+      const allSelected = allIds.length > 0 && allIds.every(id => prev.has(id));
+      return allSelected ? new Set() : new Set(allIds);
+    });
+  }, [calendarData]);
+
+  const exitSelectionMode = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+    setShowDeleteConfirm(false);
+  }, []);
+
+  const handleBulkDelete = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    setBulkDeleting(true);
+    try {
+      const res = await apiPost("/postiz/posts/bulk-delete", {
+        post_ids: Array.from(selectedIds),
+      });
+      const data = await res.json();
+      if (data.total_deleted > 0) {
+        const deletedSet = new Set(data.deleted as string[]);
+        setCalendarData(prev => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            postiz_posts: prev.postiz_posts.filter(p => !deletedSet.has(p.id)),
+          };
+        });
+        toast.success(`${data.total_deleted} post(s) deleted`);
+      }
+      if (data.total_failed > 0) {
+        toast.error(`${data.total_failed} post(s) failed to delete`);
+      }
+      exitSelectionMode();
+    } catch (err) {
+      console.error("Bulk delete failed:", err);
+      toast.error("Bulk delete failed");
+    } finally {
+      setBulkDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  }, [selectedIds, exitSelectionMode]);
 
   /* ---------- Fetch ---------- */
 
@@ -259,8 +339,69 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
               <RefreshCw className={`size-3.5 mr-1.5 ${loadingCalendar ? "animate-spin" : ""}`} />
               Sync
             </Button>
+            {!selectionMode ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSelectionMode(true)}
+                disabled={!calendarData || calendarData.postiz_posts.length === 0}
+                className="ml-1"
+              >
+                <CheckSquare className="size-3.5 mr-1.5" />
+                Select
+              </Button>
+            ) : (
+              <Button variant="ghost" size="sm" onClick={exitSelectionMode} className="ml-1">
+                <X className="size-3.5 mr-1.5" />
+                Cancel
+              </Button>
+            )}
           </div>
         </div>
+
+        {/* Selection toolbar */}
+        {selectionMode && (
+          <div className="flex items-center gap-2 mt-2 pt-2 border-t">
+            <Button variant="outline" size="sm" onClick={selectAllVisible}>
+              {calendarData && selectedIds.size === calendarData.postiz_posts.length && calendarData.postiz_posts.length > 0
+                ? "Deselect All"
+                : "Select All"}
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              {selectedIds.size} selected
+            </span>
+            <div className="flex-1" />
+            {showDeleteConfirm ? (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-destructive font-medium">
+                  Delete {selectedIds.size} post(s)?
+                </span>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleBulkDelete}
+                  disabled={bulkDeleting}
+                >
+                  {bulkDeleting ? <Loader2 className="size-3.5 mr-1.5 animate-spin" /> : <Trash2 className="size-3.5 mr-1.5" />}
+                  Confirm
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setShowDeleteConfirm(false)} disabled={bulkDeleting}>
+                  No
+                </Button>
+              </div>
+            ) : (
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={selectedIds.size === 0}
+                onClick={() => setShowDeleteConfirm(true)}
+              >
+                <Trash2 className="size-3.5 mr-1.5" />
+                Delete Selected ({selectedIds.size})
+              </Button>
+            )}
+          </div>
+        )}
       </CardHeader>
       <CardContent className="p-0">
         {loadingCalendar && !calendarData ? (
@@ -304,17 +445,30 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
                     >
                       {/* Day number header */}
                       <div className="flex items-center justify-between px-1.5 py-1">
-                        <span
-                          className={`text-xs leading-none ${
-                            isToday
-                              ? "bg-primary text-primary-foreground rounded-full size-6 flex items-center justify-center font-bold"
-                              : isCurrentMonth
-                              ? "text-foreground font-medium"
-                              : "text-muted-foreground/50"
-                          }`}
-                        >
-                          {dayNum}
-                        </span>
+                        <div className="flex items-center gap-1">
+                          {selectionMode && posts.length > 0 && (
+                            <button
+                              className="text-muted-foreground hover:text-foreground transition-colors"
+                              onClick={(e) => { e.stopPropagation(); selectAllForDate(dateStr); }}
+                              title={`Select all posts for this day`}
+                            >
+                              {posts.every(p => selectedIds.has(p.id))
+                                ? <CheckSquare className="size-3" />
+                                : <Square className="size-3" />}
+                            </button>
+                          )}
+                          <span
+                            className={`text-xs leading-none ${
+                              isToday
+                                ? "bg-primary text-primary-foreground rounded-full size-6 flex items-center justify-center font-bold"
+                                : isCurrentMonth
+                                ? "text-foreground font-medium"
+                                : "text-muted-foreground/50"
+                            }`}
+                          >
+                            {dayNum}
+                          </span>
+                        </div>
                         {totalItems > 0 && (
                           <Badge variant="secondary" className="text-[9px] px-1 py-0 h-4">
                             {totalItems}
@@ -332,15 +486,22 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
                                 hour12: false,
                               })
                             : "";
+                          const isSelected = selectedIds.has(post.id);
                           return (
                             <div
                               key={post.id}
-                              className={`rounded px-1 py-0.5 text-[10px] leading-tight border cursor-pointer hover:opacity-80 transition-opacity ${stateColor(post.state)}`}
+                              className={`rounded px-1 py-0.5 text-[10px] leading-tight border cursor-pointer hover:opacity-80 transition-opacity ${stateColor(post.state)} ${
+                                selectionMode && isSelected ? "ring-1 ring-primary" : ""
+                              }`}
                               title={`[${post.state}] ${post.platform_name}\n${timeStr}\n${stripHtml(post.content || "(no content)")}`}
-                              onClick={() => setSelectedPost(post)}
+                              onClick={() => selectionMode ? toggleSelect(post.id) : setSelectedPost(post)}
                             >
                               <div className="flex items-center gap-1">
-                                {post.platform_picture ? (
+                                {selectionMode ? (
+                                  isSelected
+                                    ? <CheckSquare className="size-3 shrink-0 text-primary" />
+                                    : <Square className="size-3 shrink-0" />
+                                ) : post.platform_picture ? (
                                   <img src={post.platform_picture} alt="" className="size-3 rounded-full shrink-0" />
                                 ) : null}
                                 <span className="truncate font-medium">

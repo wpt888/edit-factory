@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,7 @@ import {
   Loader2,
   Clock,
   Send,
+  CalendarDays,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 import { toast } from "sonner";
@@ -42,6 +43,7 @@ interface Integration {
 
 interface PipelineScheduleProps {
   completedClips: CompletedClip[];
+  initialCaptions?: Record<string, string>;  // clip_id -> AI-generated caption
 }
 
 const TIMEZONES = [
@@ -50,15 +52,22 @@ const TIMEZONES = [
   "Asia/Tokyo", "Asia/Shanghai", "Australia/Sydney",
 ];
 
+/* ---------- Module-level integrations cache (survives remounts) ---------- */
+
+let _integrationsCache: Integration[] | undefined;
+let _integrationsFetchPromise: Promise<void> | null = null;
+
 /* ---------- Component ---------- */
 
-export function PipelineSchedule({ completedClips }: PipelineScheduleProps) {
+export function PipelineSchedule({ completedClips, initialCaptions }: PipelineScheduleProps) {
   const isMountedRef = useRef(true);
   useEffect(() => () => { isMountedRef.current = false; }, []);
 
-  // Schedule form state
-  const [integrations, setIntegrations] = useState<Integration[]>([]);
-  const [selectedIntegrationIds, setSelectedIntegrationIds] = useState<Set<string>>(new Set());
+  // Schedule form state — use cache if available to avoid loading flash on remount
+  const [integrations, setIntegrations] = useState<Integration[]>(_integrationsCache || []);
+  const [selectedIntegrationIds, setSelectedIntegrationIds] = useState<Set<string>>(
+    () => new Set((_integrationsCache || []).map(i => i.id))
+  );
   const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
   const [scheduleDate, setScheduleDate] = useState(() => {
     const d = new Date();
@@ -68,32 +77,77 @@ export function PipelineSchedule({ completedClips }: PipelineScheduleProps) {
   const [postTime, setPostTime] = useState("09:00");
   const [timezone, setTimezone] = useState("Europe/Bucharest");
   const [caption, setCaption] = useState("");
+  const [perVariantCaptions, setPerVariantCaptions] = useState<Record<string, string>>({});
+  const [captionMode, setCaptionMode] = useState<"shared" | "individual">("individual");
   const [scheduling, setScheduling] = useState(false);
-  const [loadingIntegrations, setLoadingIntegrations] = useState(true);
+  const [loadingIntegrations, setLoadingIntegrations] = useState(_integrationsCache === undefined);
 
   // Auto-select all completed clips
   useEffect(() => {
     setSelectedClipIds(new Set(completedClips.map(c => c.clip_id)));
   }, [completedClips]);
 
+  // Merge AI-generated captions into per-variant captions (only for empty fields)
+  const manuallyEditedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!initialCaptions || Object.keys(initialCaptions).length === 0) return;
+    setPerVariantCaptions(prev => {
+      const merged = { ...prev };
+      for (const [clipId, caption] of Object.entries(initialCaptions)) {
+        if (!manuallyEditedRef.current.has(clipId)) {
+          merged[clipId] = caption;
+        }
+      }
+      return merged;
+    });
+    // Switch to individual mode when AI captions arrive
+    setCaptionMode("individual");
+  }, [initialCaptions]);
+
   /* ---------- Fetch ---------- */
 
-  const fetchIntegrations = useCallback(async () => {
-    setLoadingIntegrations(true);
-    try {
-      const res = await apiGet("/postiz/integrations");
-      const data = await res.json();
-      const intgs = Array.isArray(data) ? data : data.integrations || [];
-      if (isMountedRef.current) {
-        setIntegrations(intgs);
-        setSelectedIntegrationIds(new Set(intgs.map((i: Integration) => i.id)));
-      }
-    } catch {
-      // Postiz may not be configured
-    } finally {
-      if (isMountedRef.current) setLoadingIntegrations(false);
-    }
+  const applyCache = useCallback((intgs: Integration[]) => {
+    setIntegrations(intgs);
+    setSelectedIntegrationIds(new Set(intgs.map(i => i.id)));
+    setLoadingIntegrations(false);
   }, []);
+
+  const fetchIntegrations = useCallback(async () => {
+    // If cache exists, skip fetch entirely
+    if (_integrationsCache) {
+      applyCache(_integrationsCache);
+      return;
+    }
+
+    // If another instance is already fetching, wait for it
+    if (_integrationsFetchPromise) {
+      await _integrationsFetchPromise;
+      if (isMountedRef.current && _integrationsCache) {
+        applyCache(_integrationsCache);
+      }
+      return;
+    }
+
+    setLoadingIntegrations(true);
+
+    _integrationsFetchPromise = (async () => {
+      try {
+        const res = await apiGet("/postiz/integrations", { timeout: 5000 });
+        const data = await res.json();
+        _integrationsCache = Array.isArray(data) ? data : data.integrations || [];
+      } catch {
+        _integrationsCache = [];
+      } finally {
+        _integrationsFetchPromise = null;
+      }
+    })();
+
+    await _integrationsFetchPromise;
+
+    if (isMountedRef.current && _integrationsCache) {
+      applyCache(_integrationsCache);
+    }
+  }, [applyCache]);
 
   useEffect(() => { fetchIntegrations(); }, [fetchIntegrations]);
 
@@ -115,6 +169,26 @@ export function PipelineSchedule({ completedClips }: PipelineScheduleProps) {
     });
   };
 
+  const updatePerVariantCaption = (clipId: string, value: string) => {
+    manuallyEditedRef.current.add(clipId);
+    setPerVariantCaptions(prev => ({ ...prev, [clipId]: value }));
+  };
+
+  // Compute per-variant schedule dates: variant 1 = selected date, variant N = +24h * (N-1)
+  const variantSchedules = useMemo(() => {
+    const selectedClips = completedClips.filter(c => selectedClipIds.has(c.clip_id));
+    return selectedClips.map((clip, idx) => {
+      const base = new Date(`${scheduleDate}T${postTime}:00`);
+      base.setDate(base.getDate() + idx);
+      return {
+        clip,
+        date: base,
+        dateStr: base.toISOString().split("T")[0],
+        timeStr: postTime,
+      };
+    });
+  }, [completedClips, selectedClipIds, scheduleDate, postTime]);
+
   const handleSchedule = async () => {
     if (selectedClipIds.size === 0) { toast.error("Select at least one clip"); return; }
     if (selectedIntegrationIds.size === 0) { toast.error("Select at least one integration"); return; }
@@ -122,11 +196,24 @@ export function PipelineSchedule({ completedClips }: PipelineScheduleProps) {
     setScheduling(true);
     try {
       const scheduleDatetime = `${scheduleDate}T${postTime}:00`;
+
+      // Build per-clip captions map if in individual mode
+      const captions: Record<string, string> | undefined =
+        captionMode === "individual"
+          ? Object.fromEntries(
+              completedClips
+                .filter(c => selectedClipIds.has(c.clip_id))
+                .map(c => [c.clip_id, perVariantCaptions[c.clip_id] || ""])
+            )
+          : undefined;
+
       const res = await apiPost("/postiz/bulk-publish", {
         clip_ids: [...selectedClipIds],
-        caption,
+        caption: captionMode === "shared" ? caption : "",
+        captions,
         integration_ids: [...selectedIntegrationIds],
         schedule_date: scheduleDatetime,
+        schedule_interval_minutes: 1440, // 24 hours between each variant
         timezone,
       });
       const data = await res.json();
@@ -191,7 +278,7 @@ export function PipelineSchedule({ completedClips }: PipelineScheduleProps) {
             {/* Date / Time / Timezone */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="pipe-sched-date">Schedule Date</Label>
+                <Label htmlFor="pipe-sched-date">First Post Date</Label>
                 <input
                   id="pipe-sched-date"
                   type="date"
@@ -228,6 +315,31 @@ export function PipelineSchedule({ completedClips }: PipelineScheduleProps) {
               </div>
             </div>
 
+            {/* Per-variant schedule preview */}
+            {variantSchedules.length > 1 && (
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <CalendarDays className="size-4" />
+                  Schedule Preview (1 post per day)
+                </Label>
+                <div className="rounded-md border bg-muted/30 p-3 space-y-1.5">
+                  {variantSchedules.map(({ clip, dateStr, timeStr }) => (
+                    <div key={clip.clip_id} className="flex items-center justify-between text-sm">
+                      <span className="font-medium">Variant {clip.variant_index + 1}</span>
+                      <span className="text-muted-foreground">
+                        {new Date(dateStr + "T00:00:00").toLocaleDateString("ro-RO", {
+                          weekday: "short",
+                          day: "numeric",
+                          month: "short",
+                        })}{" "}
+                        at {timeStr}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Integrations */}
             {loadingIntegrations ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -262,16 +374,70 @@ export function PipelineSchedule({ completedClips }: PipelineScheduleProps) {
               </p>
             )}
 
-            {/* Caption */}
-            <div className="space-y-2">
-              <Label htmlFor="pipe-sched-caption">Caption</Label>
-              <Textarea
-                id="pipe-sched-caption"
-                placeholder="Write a caption for your post..."
-                value={caption}
-                onChange={(e) => setCaption(e.target.value)}
-                rows={3}
-              />
+            {/* Caption Mode Toggle */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label>Caption</Label>
+                {completedClips.length > 1 && (
+                  <div className="flex gap-1 rounded-lg border p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setCaptionMode("shared")}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                        captionMode === "shared"
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      Same for all
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCaptionMode("individual")}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                        captionMode === "individual"
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      Per variant
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {captionMode === "shared" ? (
+                <Textarea
+                  id="pipe-sched-caption"
+                  placeholder="Write a caption for all clips..."
+                  value={caption}
+                  onChange={(e) => setCaption(e.target.value)}
+                  rows={3}
+                />
+              ) : (
+                <div className="space-y-3">
+                  {completedClips
+                    .filter(c => selectedClipIds.has(c.clip_id))
+                    .map((clip) => (
+                      <div key={clip.clip_id} className="space-y-1">
+                        <Label className="text-xs text-muted-foreground">
+                          Variant {clip.variant_index + 1}
+                        </Label>
+                        <Textarea
+                          placeholder={`Caption for Variant ${clip.variant_index + 1}...`}
+                          value={perVariantCaptions[clip.clip_id] || ""}
+                          onChange={(e) => updatePerVariantCaption(clip.clip_id, e.target.value)}
+                          rows={2}
+                        />
+                      </div>
+                    ))}
+                  {selectedClipIds.size === 0 && (
+                    <p className="text-sm text-muted-foreground">
+                      Select clips above to add captions.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Schedule button */}

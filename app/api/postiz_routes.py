@@ -52,10 +52,22 @@ class PublishRequest(BaseModel):
 
 class BulkPublishRequest(BaseModel):
     clip_ids: List[str]
-    caption: str
+    caption: str = ""  # Shared caption (fallback)
+    captions: Optional[Dict[str, str]] = None  # Per-clip captions: clip_id → caption
     integration_ids: List[str]
     schedule_date: Optional[str] = None
     schedule_interval_minutes: int = 30  # Interval between posts for bulk
+
+
+class BulkDeleteRequest(BaseModel):
+    post_ids: List[str]
+
+
+class BulkDeleteResponse(BaseModel):
+    deleted: List[str]
+    failed: List[dict]  # [{id, error}]
+    total_deleted: int
+    total_failed: int
 
 
 class PublishResponse(BaseModel):
@@ -521,6 +533,7 @@ async def bulk_publish_clips(
         profile_id=profile.profile_id,
         clips=valid_clips,
         caption=request.caption,
+        captions=request.captions,
         integration_ids=request.integration_ids,
         schedule_start=schedule_dt,
         interval_minutes=request.schedule_interval_minutes
@@ -565,6 +578,45 @@ async def get_post_status(
     except Exception as e:
         logger.error(f"[Profile {profile.profile_id}] Failed to get post status: {e}")
         raise HTTPException(status_code=500, detail="Failed to get post status")
+
+
+@router.post("/posts/bulk-delete", response_model=BulkDeleteResponse)
+async def bulk_delete_postiz_posts(
+    request: BulkDeleteRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Delete multiple posts from Postiz in bulk."""
+    logger.info(f"[Profile {profile.profile_id}] Bulk deleting {len(request.post_ids)} posts")
+
+    if not request.post_ids:
+        return BulkDeleteResponse(deleted=[], failed=[], total_deleted=0, total_failed=0)
+
+    try:
+        from app.services.postiz_service import get_postiz_publisher
+        publisher = get_postiz_publisher(profile.profile_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    deleted: List[str] = []
+    failed: List[dict] = []
+
+    for post_id in request.post_ids:
+        try:
+            await publisher.delete_post(post_id, profile_id=profile.profile_id)
+            deleted.append(post_id)
+        except ValueError:
+            failed.append({"id": post_id, "error": "Post not found"})
+        except Exception as e:
+            logger.error(f"[Profile {profile.profile_id}] Failed to delete post {post_id}: {e}")
+            failed.append({"id": post_id, "error": "Delete failed"})
+
+    logger.info(f"[Profile {profile.profile_id}] Bulk delete complete: {len(deleted)} deleted, {len(failed)} failed")
+    return BulkDeleteResponse(
+        deleted=deleted,
+        failed=failed,
+        total_deleted=len(deleted),
+        total_failed=len(failed),
+    )
 
 
 @router.delete("/posts/{post_id}")
@@ -666,6 +718,7 @@ async def _bulk_publish_task(
     profile_id: str,
     clips: List[dict],
     caption: str,
+    captions: Optional[Dict[str, str]],
     integration_ids: List[str],
     schedule_start: Optional[datetime],
     interval_minutes: int
@@ -704,11 +757,14 @@ async def _bulk_publish_task(
                 if schedule_start:
                     clip_schedule = schedule_start + timedelta(minutes=idx * interval_minutes)
 
+                # Use per-clip caption if available, otherwise shared caption
+                clip_caption = (captions or {}).get(clip["id"], caption)
+
                 # Create post
                 result = await publisher.create_post(
                     media_id=media.id,
                     media_path=media.path,
-                    caption=caption,
+                    caption=clip_caption,
                     integration_ids=integration_ids,
                     schedule_date=clip_schedule,
                     integrations_info=integrations_info,

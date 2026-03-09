@@ -52,18 +52,29 @@ class SubtitleStyleConfig:
     # Style controls
     border_style: int = 1  # 1=outline+shadow
 
+    # Text opacity (0-100, default 100)
+    opacity: int = 100
+
     # Video resolution
     video_width: int = 1080
     video_height: int = 1920
 
     def to_force_style_string(self) -> str:
         """Generate FFmpeg force_style parameter string."""
+        # Apply opacity to PrimaryColour alpha channel
+        # ASS alpha: 00=opaque, FF=transparent
+        primary = self.primary_color
+        if self.opacity < 100 and primary.startswith("&H"):
+            ass_alpha = int((100 - self.opacity) / 100 * 255)
+            # Replace existing alpha byte (positions 2-4 after &H)
+            primary = f"&H{ass_alpha:02X}{primary[4:]}"
+
         style_parts = [
             f"PlayResX={self.video_width}",
             f"PlayResY={self.video_height}",
             f"FontName={self.font_family}",
             f"FontSize={self.font_size}",
-            f"PrimaryColour={self.primary_color}",
+            f"PrimaryColour={primary}",
             f"Bold={self.bold}",
             f"Alignment={self.alignment}",
             f"MarginV={self.margin_v}",
@@ -169,6 +180,7 @@ class SubtitleStyleConfig:
             enable_glow=settings.get('enableGlow', False),
             glow_blur=int(settings.get('glowBlur', 0)),
             border_style=settings.get('borderStyle', 1),
+            opacity=int(settings.get('opacity', 100)),
             video_width=video_width,
             video_height=video_height,
         )

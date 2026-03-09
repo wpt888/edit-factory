@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 import { toast } from "sonner";
+import { PostizMonthlyCalendar } from "@/components/PostizMonthlyCalendar";
 
 interface Integration {
   id: string;
@@ -71,20 +72,9 @@ const PLATFORM_NAMES: Record<string, string> = {
   tiktok: "TikTok",
 };
 
-// Platform colors for selection border
-const PLATFORM_COLORS: Record<string, string> = {
-  x: "border-gray-800",
-  twitter: "border-gray-800",
-  bluesky: "border-blue-400",
-  threads: "border-gray-700",
-  instagram: "border-pink-500",
-  "instagram-standalone": "border-pink-500",
-  youtube: "border-red-500",
-  linkedin: "border-blue-600",
-  "linkedin-page": "border-blue-600",
-  facebook: "border-blue-500",
-  tiktok: "border-gray-900",
-};
+// Unified green for all selected platforms — per-platform colors were too subtle on dark backgrounds
+const SELECTED_BORDER = "border-green-500";
+const SELECTED_BG = "bg-green-500/15";
 
 type DialogState = "form" | "publishing" | "success" | "error";
 
@@ -308,7 +298,7 @@ export function PublishDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[520px] max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[900px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Share2 className="h-5 w-5" />
@@ -321,7 +311,24 @@ export function PublishDialog({
           <div className="space-y-5">
             {/* Platform selector */}
             <div className="space-y-2">
-              <Label>Platforme</Label>
+              <div className="flex items-center justify-between">
+                <Label>Platforme</Label>
+                {integrations.length > 0 && (
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={() => {
+                      if (selectedIds.size === integrations.length) {
+                        setSelectedIds(new Set());
+                      } else {
+                        setSelectedIds(new Set(integrations.map((i) => i.id)));
+                      }
+                    }}
+                  >
+                    {selectedIds.size === integrations.length ? "Deselecteaza tot" : "Selecteaza tot"}
+                  </button>
+                )}
+              </div>
               {loadingIntegrations ? (
                 <div className="flex items-center justify-center py-4">
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -334,8 +341,6 @@ export function PublishDialog({
                 <div className="flex flex-wrap gap-2">
                   {integrations.map((integration) => {
                     const isSelected = selectedIds.has(integration.id);
-                    const borderColor =
-                      PLATFORM_COLORS[integration.type] || "border-primary";
                     return (
                       <button
                         key={integration.id}
@@ -343,7 +348,7 @@ export function PublishDialog({
                         onClick={() => toggleIntegration(integration.id)}
                         className={`flex items-center gap-2 px-3 py-2 rounded-full border-2 transition-all text-sm ${
                           isSelected
-                            ? `${borderColor} bg-accent`
+                            ? `${SELECTED_BORDER} ${SELECTED_BG}`
                             : "border-transparent bg-muted hover:bg-accent/50"
                         }`}
                       >
@@ -437,13 +442,16 @@ export function PublishDialog({
                 />
               </div>
               {scheduleEnabled && (
-                <input
-                  type="datetime-local"
-                  value={scheduleDate}
-                  onChange={(e) => setScheduleDate(e.target.value)}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  min={minScheduleDate}
-                />
+                <>
+                  <input
+                    type="datetime-local"
+                    value={scheduleDate}
+                    onChange={(e) => setScheduleDate(e.target.value)}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    min={minScheduleDate}
+                  />
+                  <PostizMonthlyCalendar title="Calendar postari" />
+                </>
               )}
             </div>
           </div>

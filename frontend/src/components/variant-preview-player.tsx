@@ -123,6 +123,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
                   enableGlow: subtitleSettings.enableGlow,
                   glowBlur: subtitleSettings.glowBlur,
                   adaptiveSizing: subtitleSettings.adaptiveSizing,
+                  opacity: subtitleSettings.opacity,
                 }
               : undefined,
             words_per_subtitle: wordsPerSubtitle,

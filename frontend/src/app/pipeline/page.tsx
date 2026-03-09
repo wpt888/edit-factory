@@ -64,6 +64,7 @@ import { checkFallbacks } from "@/lib/api-fallback";
 import { EmptyState } from "@/components/empty-state";
 import { PublishDialog } from "@/components/PublishDialog";
 import { PipelineSchedule } from "@/components/PipelineSchedule";
+import { PipelineCaptionGenerator } from "@/components/PipelineCaptionGenerator";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ProductPickerDialog } from "@/components/product-picker-dialog";
 import { ImagePickerDialog } from "@/components/image-picker-dialog";
@@ -108,6 +109,7 @@ interface PreviewData {
 
 interface PipelineListItem {
   pipeline_id: string;
+  name: string;
   idea: string;
   provider: string;
   variant_count: number;
@@ -226,17 +228,17 @@ function PipelinePage() {
   currentProfileIdRef.current = currentProfile?.id;
 
   // Simple / Advanced mode toggle (persisted to localStorage)
-  const [pipelineMode, setPipelineMode] = useState<PipelineMode>(() => {
-    if (typeof window !== "undefined") {
-      return (localStorage.getItem("ef_pipeline_mode") as PipelineMode) || "simple";
+  const [pipelineMode, setPipelineMode] = useState<PipelineMode>("simple");
+  useEffect(() => {
+    const saved = localStorage.getItem("ef_pipeline_mode") as PipelineMode;
+    if (saved && saved !== pipelineMode) {
+      setPipelineMode(saved);
     }
-    return "simple";
-  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const handleModeChange = useCallback((mode: PipelineMode) => {
     setPipelineMode(mode);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("ef_pipeline_mode", mode);
-    }
+    localStorage.setItem("ef_pipeline_mode", mode);
   }, []);
 
   // Stable callback for VariantPreviewPlayer close
@@ -265,6 +267,7 @@ function PipelinePage() {
   }, [searchParams, router, pathname]);
 
   // Step 1: Input
+  const [pipelineName, setPipelineName] = useState("");
   const [idea, setIdea] = useState("");
   const [context, setContext] = useState("");
   const [contextProducts, setContextProducts] = useState<ContextProduct[]>([]);
@@ -315,6 +318,7 @@ function PipelinePage() {
   const [variantStatuses, setVariantStatuses] = useState<VariantStatus[]>([]);
   const [presetName, setPresetName] = useState("TikTok");
   const [publishVariant, setPublishVariant] = useState<VariantStatus | null>(null);
+  const [generatedCaptions, setGeneratedCaptions] = useState<Record<string, string>>({});
 
   // History sidebar
   const [historyPipelines, setHistoryPipelines] = useState<PipelineListItem[]>([]);
@@ -327,6 +331,8 @@ function PipelinePage() {
   const [historyPreviewInfo, setHistoryPreviewInfo] = useState<Record<string, VariantPreviewInfo>>({});
   const [historyTtsInfo, setHistoryTtsInfo] = useState<Record<string, { has_audio: boolean; audio_duration: number }>>({});
   const [expandedIdeas, setExpandedIdeas] = useState<Set<string>>(new Set());
+  const [editingNameId, setEditingNameId] = useState<string | null>(null);
+  const [editingNameValue, setEditingNameValue] = useState("");
   const [playingAudio, setPlayingAudio] = useState<string | null>(null); // "pipelineId-variantIndex"
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -959,6 +965,7 @@ function PipelinePage() {
       ].filter(Boolean).join("\n\n");
 
       const res = await apiPost("/pipeline/generate", {
+        name: pipelineName.trim() || undefined,
         idea: idea.trim(),
         context: fullContext || undefined,
         variant_count: variantCount,
@@ -1197,6 +1204,7 @@ function PipelinePage() {
         enable_glow: subtitleSettings.enableGlow ?? false,
         glow_blur: subtitleSettings.glowBlur ?? 0,
         adaptive_sizing: subtitleSettings.adaptiveSizing ?? false,
+        opacity: subtitleSettings.opacity ?? 100,
       }, { timeout: 600_000 }); // 10 min — rendering can be very slow
 
       // apiPost throws on non-2xx, so if we reach here it succeeded.
@@ -1349,6 +1357,24 @@ function PipelinePage() {
         }
       },
     });
+  };
+
+  const handleSavePipelineName = async (id: string, newName: string) => {
+    const trimmed = newName.trim();
+    const item = historyPipelines.find(p => p.pipeline_id === id);
+    if (!item || item.name === trimmed) {
+      setEditingNameId(null);
+      return;
+    }
+    try {
+      await apiPatch(`/pipeline/${id}/name`, { name: trimmed });
+      setHistoryPipelines(prev => prev.map(p =>
+        p.pipeline_id === id ? { ...p, name: trimmed } : p
+      ));
+    } catch (err) {
+      handleApiError(err, "Failed to rename pipeline");
+    }
+    setEditingNameId(null);
   };
 
   // History sidebar: auto-load on mount and when profile changes
@@ -1641,6 +1667,7 @@ function PipelinePage() {
     try {
       const res = await apiPost("/pipeline/import", {
         scripts: selected,
+        name: historyItem?.name || "",
         idea: historyItem?.idea || "Imported from history",
         provider: "imported",
       });
@@ -2370,6 +2397,18 @@ function PipelinePage() {
                       </div>
                     </div>
                   )}
+                </div>
+
+                {/* Script set name */}
+                <div className="space-y-2">
+                  <Label htmlFor="pipeline-name">Script Set Name</Label>
+                  <Input
+                    id="pipeline-name"
+                    placeholder="e.g. Nike Air Max Campaign, Summer Sale Promo..."
+                    value={pipelineName}
+                    onChange={(e) => setPipelineName(e.target.value)}
+                    maxLength={200}
+                  />
                 </div>
 
                 {/* Idea textarea */}
@@ -3709,17 +3748,52 @@ function PipelinePage() {
                       <CardTitle className="text-lg">
                         Variant {status.variant_index + 1}
                       </CardTitle>
-                      <Badge
-                        variant={
-                          status.status === "completed"
-                            ? "default"
-                            : status.status === "failed" || status.status === "cancelled"
-                            ? "destructive"
-                            : "secondary"
-                        }
-                      >
-                        {status.status}
-                      </Badge>
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          variant={
+                            status.status === "completed"
+                              ? "default"
+                              : status.status === "failed" || status.status === "cancelled"
+                              ? "destructive"
+                              : "secondary"
+                          }
+                        >
+                          {status.status}
+                        </Badge>
+                        {(status.status === "completed" || status.status === "failed" || status.status === "cancelled") && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                            onClick={() => {
+                              setConfirmDialog({
+                                open: true,
+                                title: "Delete variant",
+                                description: `Are you sure you want to delete Variant ${status.variant_index + 1}? This will remove it from the list${status.clip_id ? " and delete the clip from the library" : ""}.`,
+                                confirmLabel: "Delete",
+                                variant: "destructive",
+                                onConfirm: async () => {
+                                  try {
+                                    if (status.clip_id) {
+                                      await apiDelete(`/library/clips/${status.clip_id}`);
+                                    }
+                                    setVariantStatuses(prev =>
+                                      prev.filter(v => v.variant_index !== status.variant_index)
+                                    );
+                                    toast.success(`Variant ${status.variant_index + 1} deleted`);
+                                  } catch (err) {
+                                    console.error("Failed to delete variant:", err);
+                                    toast.error("Failed to delete variant");
+                                  }
+                                  setConfirmDialog(prev => ({ ...prev, open: false }));
+                                },
+                              });
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-3">
@@ -3834,6 +3908,23 @@ function PipelinePage() {
               ))}
             </div>
 
+            {/* AI Caption Generation */}
+            {pipelineId && variantStatuses.some(v => v.status === "completed" && v.clip_id) && (
+              <PipelineCaptionGenerator
+                pipelineId={pipelineId}
+                completedClips={variantStatuses
+                  .filter(v => v.status === "completed" && v.clip_id)
+                  .map(v => ({
+                    clip_id: v.clip_id!,
+                    variant_index: v.variant_index,
+                    final_video_path: v.final_video_path || "",
+                    thumbnail_path: v.thumbnail_path,
+                  }))}
+                scripts={scripts}
+                onCaptionsGenerated={setGeneratedCaptions}
+              />
+            )}
+
             {/* Schedule & Publish section - always show calendar, schedule form only when clips exist */}
             <PipelineSchedule
               completedClips={variantStatuses
@@ -3844,6 +3935,7 @@ function PipelinePage() {
                   final_video_path: v.final_video_path || "",
                   thumbnail_path: v.thumbnail_path,
                 }))}
+              initialCaptions={generatedCaptions}
             />
           </div>
         )}
@@ -3876,8 +3968,37 @@ function PipelinePage() {
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
+                            {editingNameId === item.pipeline_id ? (
+                              <input
+                                autoFocus
+                                className="text-sm font-semibold w-full bg-transparent border-b border-primary outline-none px-0 py-0.5"
+                                value={editingNameValue}
+                                onChange={(e) => setEditingNameValue(e.target.value)}
+                                onBlur={() => handleSavePipelineName(item.pipeline_id, editingNameValue)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") { e.preventDefault(); handleSavePipelineName(item.pipeline_id, editingNameValue); }
+                                  if (e.key === "Escape") { setEditingNameId(null); }
+                                }}
+                                maxLength={200}
+                                placeholder="Script set name..."
+                              />
+                            ) : (
+                              <p
+                                className={`text-sm font-semibold truncate cursor-pointer hover:text-primary transition-colors ${
+                                  item.name ? "" : "text-muted-foreground/50 italic"
+                                }`}
+                                title={item.name || "Click to add a name"}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingNameId(item.pipeline_id);
+                                  setEditingNameValue(item.name || "");
+                                }}
+                              >
+                                {item.name || "Add name..."}
+                              </p>
+                            )}
                             <p
-                              className={`text-sm font-medium cursor-pointer ${
+                              className={`text-sm text-muted-foreground cursor-pointer ${
                                 expandedIdeas.has(item.pipeline_id) ? "whitespace-pre-wrap break-words" : "truncate"
                               }`}
                               onClick={(e) => {
