@@ -161,7 +161,7 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 **Milestone Goal:** Transform Edit Factory into a sellable local-first desktop product — replace Supabase with SQLite for local data, make all API calls (ElevenLabs, Gemini) go directly from the user's PC, simplify UX for non-technical content creators, fix auth flow, polish Electron packaging, and prepare for commercial launch via Lemon Squeezy licensing.
 
 - [x] **Phase 64: Data Abstraction Layer** - Repository pattern abstracting database access; SQLite schema from Supabase migrations (3 plans) (completed 2026-03-09)
-- [ ] **Phase 65: SQLite Local Database** - SQLite backend implementation for projects, clips, settings, cost tracking, TTS cache (2 plans)
+- [x] **Phase 65: SQLite Local Database** - SQLite backend implementation for projects, clips, settings, cost tracking, TTS cache (1 plan) (completed 2026-03-09)
 - [ ] **Phase 66: Local File Storage & Offline Mode** - Local filesystem for all video assets; offline project CRUD without internet (2 plans)
 - [ ] **Phase 67: Auth Flow Fixes** - JWT token injection in frontend API calls, logout button, password reset, route protection middleware (3 plans)
 - [ ] **Phase 68: License Key Validation Polish** - Lemon Squeezy periodic revalidation with offline grace period (1 plan)
@@ -199,7 +199,7 @@ Plans:
   4. TTS audio cache metadata is stored in SQLite — cache hits/misses work identically to the Supabase-backed version
 **Plans**: 1 plan
 Plans:
-- [ ] 65-01-PLAN.md — SQLiteRepository implementation + factory wiring
+- [x] 65-01-PLAN.md — SQLiteRepository implementation + factory wiring (completed 2026-03-09)
 
 ### Phase 66: Local File Storage & Offline Mode
 **Goal**: All video files (uploads, renders, thumbnails) are stored on the user's local filesystem with explicit paths, and the user can create, edit, and delete projects while completely offline — no internet connection required for local processing workflows
