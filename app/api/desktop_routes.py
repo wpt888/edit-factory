@@ -52,6 +52,19 @@ async def activate_license(body: ActivateRequest):
     return result
 
 
+@router.get("/license/status")
+async def get_license_status():
+    """Lightweight license status check -- reads local state only, no API call."""
+    settings = get_settings()
+    svc = LicenseService(settings.base_dir)
+    status = svc.get_status()
+    if not status["activated"]:
+        raise HTTPException(status_code=404, detail="No license activated")
+    if not status["valid"]:
+        raise HTTPException(status_code=403, detail="License expired -- grace period exceeded")
+    return status
+
+
 @router.post("/license/validate")
 async def validate_license():
     """Validate license on startup. Returns 403 if invalid and grace period expired."""

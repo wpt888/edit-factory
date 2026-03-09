@@ -13,7 +13,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 LS_BASE_URL = "https://api.lemonsqueezy.com"
-GRACE_PERIOD_DAYS = 7
+GRACE_PERIOD_HOURS = 72
+REVALIDATION_INTERVAL_HOURS = 24
 
 
 class LicenseService:
@@ -77,6 +78,35 @@ class LicenseService:
         })
         return {"success": True, "instance_id": instance_id}
 
+    def get_status(self) -> dict:
+        """Return current license status from local state only (no API call)."""
+        data = self._read()
+        if not data.get("license_key") or not data.get("instance_id"):
+            return {"activated": False, "valid": False, "grace_period": False, "needs_revalidation": False, "hours_remaining": 0}
+
+        last_validated_str = data.get("last_validated_at")
+        if not last_validated_str:
+            return {"activated": True, "valid": False, "grace_period": False, "needs_revalidation": True, "hours_remaining": 0}
+
+        try:
+            last_validated = datetime.fromisoformat(last_validated_str)
+        except ValueError:
+            return {"activated": True, "valid": False, "grace_period": False, "needs_revalidation": True, "hours_remaining": 0}
+
+        elapsed = datetime.now(timezone.utc) - last_validated
+        elapsed_hours = elapsed.total_seconds() / 3600
+        within_grace = elapsed_hours < GRACE_PERIOD_HOURS
+        needs_revalidation = elapsed_hours >= REVALIDATION_INTERVAL_HOURS
+        hours_remaining = max(0, GRACE_PERIOD_HOURS - elapsed_hours) if within_grace else 0
+
+        return {
+            "activated": True,
+            "valid": within_grace,
+            "grace_period": needs_revalidation and within_grace,
+            "needs_revalidation": needs_revalidation,
+            "hours_remaining": round(hours_remaining, 1),
+        }
+
     async def validate(self) -> dict:
         """
         Validate license. Implements offline grace period.
@@ -92,7 +122,7 @@ class LicenseService:
         if last_validated_str:
             try:
                 last_validated = datetime.fromisoformat(last_validated_str)
-                within_grace = (datetime.now(timezone.utc) - last_validated) < timedelta(days=GRACE_PERIOD_DAYS)
+                within_grace = (datetime.now(timezone.utc) - last_validated) < timedelta(hours=GRACE_PERIOD_HOURS)
             except ValueError:
                 pass
 
