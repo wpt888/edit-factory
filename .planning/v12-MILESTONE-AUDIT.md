@@ -1,170 +1,178 @@
 ---
 milestone: v12
-audited: 2026-03-09T14:00:00Z
+audited: 2026-03-09T11:00:00Z
 status: gaps_found
 scores:
-  requirements: 27/28
-  phases: 11/11
-  integration: 26/28
-  flows: 4/5
+  requirements: 26/28
+  phases: 12/12
+  integration: 18/21
+  flows: 4/6
 gaps:
   requirements:
+    - id: "UX-07"
+      status: "partial"
+      phase: "72"
+      claimed_by_plans: ["72-01-PLAN.md", "74-01-PLAN.md"]
+      completed_by_plans: ["72-01-SUMMARY.md", "74-01-SUMMARY.md"]
+      verification_status: "gaps_found"
+      evidence: "Frontend Romanian removed. Backend still returns Romanian in progress API at library_routes.py:629 (Proiect negăsit), :633 (Se inițializează...), :637 (Eșuat). These are user-visible API responses."
     - id: "UX-05"
-      status: "unsatisfied"
-      phase: "70"
-      claimed_by_plans: ["70-03-PLAN.md"]
-      completed_by_plans: ["70-03-SUMMARY.md"]
+      status: "satisfied"
+      phase: "75"
+      claimed_by_plans: ["75-01-PLAN.md"]
+      completed_by_plans: ["75-01-SUMMARY.md"]
       verification_status: "passed"
-      evidence: "BatchUploadQueue calls /library/projects/${projectId}/generate-raw but actual backend route is /projects/{project_id}/generate (library_routes.py:761). Every batch job fails with 404 at clip generation step."
+      evidence: "BatchUploadQueue calls /generate (not /generate-raw). Verified by grep: 0 matches for generate-raw in frontend/src/."
   integration:
-    - id: "INT-03"
-      description: "BatchUploadQueue calls non-existent endpoint /generate-raw instead of /generate"
-      file: "frontend/src/components/batch-upload-queue.tsx"
-      line: 234
-      affected_requirements: ["UX-05"]
-      severity: "high"
-      evidence: "grep confirms /generate-raw at line 234; backend route is POST /projects/{project_id}/generate at library_routes.py:761"
+    - id: "INT-04"
+      summary: "Service singletons not refreshed after API key save"
+      from_phase: 69
+      to_phase: 69
+      affected_requirements: ["API-01", "API-02"]
+      severity: "HIGH"
+      detail: "desktop_routes.py save_desktop_settings() stores keys in vault but does not call _reset_elevenlabs_tts() or refresh_gemini_availability(). Keys require backend restart to take effect."
+    - id: "INT-05"
+      summary: "Romanian strings in backend progress API"
+      from_phase: 72
+      affected_requirements: ["UX-07"]
+      severity: "MEDIUM"
+      detail: "library_routes.py lines 629, 633, 637 return Romanian strings in progress API responses visible to frontend users."
   flows:
-    - id: "FLOW-02"
-      description: "Batch upload flow breaks at clip generation — every queued video fails with 404 when BatchUploadQueue POSTs to /generate-raw"
-      affected_requirements: ["UX-05"]
+    - id: "FLOW-03"
+      name: "API Key Setup -> Immediate Use"
+      breaks_at: "Singleton refresh after key save"
+      affected_requirements: ["API-01", "API-02"]
+      detail: "After saving keys in setup wizard, ElevenLabs/Gemini singletons retain old (empty) keys until backend restart."
 tech_debt:
   - phase: 64-data-abstraction-layer
     items:
-      - "118 direct supabase references in library_routes.py bypass repository abstraction — SQLite backend cannot serve these routes"
-      - "Download route (library_routes.py:470-473) uses repo.get_client() which returns None for SQLiteRepository — breaks SimplePipeline download under SQLite"
-  - phase: 73-electron-polish
+      - "26+ library routes still use get_client() escape hatch instead of typed repository methods"
+      - "SQLiteRepository.get_client() returns None by design — routes using it return 503 in SQLite mode"
+  - phase: 65-sqlite-local-database
     items:
-      - "Missing icon.icns file in electron/build/ — macOS build would fail or use default icon (ELEC-06 partial)"
-      - "generate-icon.js only produces .ico format, not .icns for macOS"
+      - "DATA_BACKEND not auto-activated in desktop mode — Electron sets DESKTOP_MODE=true but not DATA_BACKEND=sqlite"
+      - "Full offline mode requires remaining routes to be migrated from get_client() to typed methods"
+  - phase: 70-ux-simplification-pipeline-batch
+    items:
+      - "GET /pipeline/presets endpoint is orphaned — frontend uses local TypeScript constant instead"
+  - phase: various
+    items:
+      - "Romanian comments throughout backend Python files (non-user-facing, low priority)"
 nyquist:
-  compliant_phases: 0
-  partial_phases: 0
-  missing_phases: 11
-  overall: "MISSING — no VALIDATION.md files exist for any v12 phase"
-  phases:
-    - { phase: 64, status: "MISSING" }
-    - { phase: 65, status: "MISSING" }
-    - { phase: 66, status: "MISSING" }
-    - { phase: 67, status: "MISSING" }
-    - { phase: 68, status: "MISSING" }
-    - { phase: 69, status: "MISSING" }
-    - { phase: 70, status: "MISSING" }
-    - { phase: 71, status: "MISSING" }
-    - { phase: 72, status: "MISSING" }
-    - { phase: 73, status: "MISSING" }
-    - { phase: 74, status: "MISSING" }
+  overall: "skipped"
+  reason: "nyquist_validation not configured"
 ---
 
 # v12 Desktop Product MVP — Milestone Audit Report
 
-**Audited:** 2026-03-09T14:00:00Z
+**Audited:** 2026-03-09T11:00:00Z
 **Status:** gaps_found
-**Re-audit:** Yes — previous audit found INT-01 (download 404) and INT-02 (Romanian text), closed via Phase 74
+**Score:** 26/28 requirements satisfied
+**Re-audit:** 3rd audit round (after Phase 74 and Phase 75 gap closures)
 
-## Requirements Coverage (27/28)
+## Requirements Coverage (3-Source Cross-Reference)
 
-### 3-Source Cross-Reference
+| Requirement | Phase | VERIFICATION | SUMMARY | Traceability | Final Status |
+|-------------|-------|-------------|---------|-------------|--------------|
+| DATA-01 | 65 | passed | - | Complete | satisfied |
+| DATA-02 | 64 | passed | - | Complete | satisfied |
+| DATA-03 | 66 | passed | - | Complete | satisfied |
+| DATA-04 | 66 | passed | - | Complete | satisfied |
+| DATA-05 | 65 | passed | - | Complete | satisfied |
+| DATA-06 | 64 | passed | - | Complete | satisfied |
+| AUTH-01 | 67 | passed | - | Complete | satisfied |
+| AUTH-02 | 67 | passed | - | Complete | satisfied |
+| AUTH-03 | 68 | passed | - | Complete | satisfied |
+| AUTH-04 | 67 | passed | - | Complete | satisfied |
+| AUTH-05 | 67 | passed | - | Complete | satisfied |
+| UX-01 | 70 | passed | - | Complete | satisfied |
+| UX-02 | 70 | passed | - | Complete | satisfied |
+| UX-03 | 71 | passed | - | Complete | satisfied |
+| UX-04 | 71 | passed | - | Complete | satisfied |
+| UX-05 | 75 | - | completed | Pending | **satisfied** (update checkbox) |
+| UX-06 | 72 | passed | - | Complete | satisfied |
+| UX-07 | 72 | passed* | - | Complete | **partial** |
+| ELEC-01 | 73 | passed | - | Complete | satisfied |
+| ELEC-02 | 73 | passed | - | Complete | satisfied |
+| ELEC-03 | 73 | passed | - | Complete | satisfied |
+| ELEC-04 | 73 | passed | - | Complete | satisfied |
+| ELEC-05 | 73 | passed | - | Complete | satisfied |
+| ELEC-06 | 73 | passed | - | Complete | satisfied |
+| API-01 | 69 | passed | - | Complete | satisfied |
+| API-02 | 69 | passed | - | Complete | satisfied |
+| API-03 | 69 | passed | - | Complete | satisfied |
+| API-04 | 69 | passed | - | Complete | satisfied |
 
-| REQ-ID | Description | Phase | VERIFICATION | SUMMARY | REQUIREMENTS.md | Final Status |
-|--------|-------------|-------|--------------|---------|-----------------|--------------|
-| DATA-01 | Local SQLite storage | 65 | passed | — | [x] | satisfied |
-| DATA-02 | Data abstraction layer | 64 | passed | — | [x] | satisfied |
-| DATA-03 | Offline project CRUD | 66 | passed | — | [x] | satisfied |
-| DATA-04 | Local filesystem for video | 66 | passed | — | [x] | satisfied |
-| DATA-05 | Cost tracking in SQLite | 65 | passed | — | [x] | satisfied |
-| DATA-06 | SQLite schema from migrations | 64 | passed | — | [x] | satisfied |
-| AUTH-01 | JWT token injection | 67 | passed | — | [x] | satisfied |
-| AUTH-02 | Logout button | 67 | passed | — | [x] | satisfied |
-| AUTH-03 | License validation + grace | 68 | passed | — | [x] | satisfied |
-| AUTH-04 | Password reset | 67 | passed | — | [x] | satisfied |
-| AUTH-05 | Route protection middleware | 67 | passed | — | [x] | satisfied |
-| UX-01 | Simplified 3-step pipeline | 70 | passed | — | [x] | satisfied |
-| UX-02 | Advanced params hidden | 70 | passed | — | [x] | satisfied |
-| UX-03 | Setup wizard with presets | 71 | passed | — | [x] | satisfied |
-| UX-04 | 5+ caption visual presets | 71 | passed | — | [x] | satisfied |
-| **UX-05** | **Batch video queue** | **70** | **passed** | **—** | **[x]** | **unsatisfied** |
-| UX-06 | Consistent brand name | 72 | passed | — | [x] | satisfied |
-| UX-07 | No Romanian text | 72+74 | passed | — | [x] | satisfied |
-| ELEC-01 | Real publish config | 73 | passed | — | [x] | satisfied |
-| ELEC-02 | Portable Node.js documented | 73 | passed | — | [x] | satisfied |
-| ELEC-03 | Installer under 500MB | 73 | passed | — | [x] | satisfied |
-| ELEC-04 | Auto-updater | 73 | passed | — | [x] | satisfied |
-| ELEC-05 | Brand icon + window title | 73 | passed | — | [x] | satisfied |
-| ELEC-06 | macOS target configured | 73 | passed | — | [x] | satisfied |
-| API-01 | ElevenLabs from vault | 69 | passed | — | [x] | satisfied |
-| API-02 | Gemini from vault | 69 | passed | — | [x] | satisfied |
-| API-03 | Encrypted API key storage | 69 | passed | — | [x] | satisfied |
-| API-04 | Fallback without API keys | 69 | passed | — | [x] | satisfied |
+*UX-07: Phase 72 verification checked frontend only. Backend still returns Romanian text in progress API responses.
 
-**Note on UX-05:** Phase 70 VERIFICATION passed because it verified the UI renders correctly and files can be added to the queue. However, the integration checker found the queue calls a non-existent endpoint (`/generate-raw` instead of `/generate`), meaning batch processing always fails with 404. The requirement is functionally unsatisfied.
+**Unsatisfied: UX-07** — Backend progress API at library_routes.py returns Romanian strings ("Proiect negăsit", "Se inițializează...", "Eșuat") that are visible to users.
 
-**Note on SUMMARY frontmatter:** No v12 phase SUMMARYs include `requirements_completed` field — cross-reference limited to VERIFICATION + REQUIREMENTS.md.
+## Phase Completion
 
-## Phase Verifications (11/11)
+| Phase | Name | Plans | Status |
+|-------|------|-------|--------|
+| 64 | Data Abstraction Layer | 3/3 | passed |
+| 65 | SQLite Local Database | 1/1 | passed |
+| 66 | Local File Storage & Offline | 3/3 | passed |
+| 67 | Auth Flow Fixes | 3/3 | passed |
+| 68 | License Key Validation Polish | 1/1 | passed |
+| 69 | Direct API Integration | 3/3 | passed |
+| 70 | UX — Pipeline & Batch | 3/3 | passed |
+| 71 | UX — Onboarding & Presets | 2/2 | passed |
+| 72 | Brand & Language Cleanup | 1/1 | passed |
+| 73 | Electron Polish | 3/3 | passed |
+| 74 | v12 Gap Closure | 1/1 | passed |
+| 75 | Batch Endpoint Fix | 1/1 | passed (no VERIFICATION.md) |
 
-| Phase | Name | Status | Score |
-|-------|------|--------|-------|
-| 64 | Data Abstraction Layer | passed | 4/4 |
-| 65 | SQLite Local Database | passed | 7/7 |
-| 66 | Local File Storage & Offline | passed | 7/7 |
-| 67 | Auth Flow Fixes | passed | 7/7 |
-| 68 | License Key Validation Polish | passed | 5/5 |
-| 69 | Direct API Integration | passed | 5/5 |
-| 70 | UX — Pipeline & Batch | passed | 11/11 |
-| 71 | UX — Onboarding & Presets | passed | 4/4 |
-| 72 | Brand & Language Cleanup | passed | 3/3 |
-| 73 | Electron Polish | passed | 6/6 |
-| 74 | v12 Gap Closure | passed | 2/2 |
+## Cross-Phase Integration
 
-All phases individually passed verification. The batch endpoint issue is a cross-phase integration gap not caught by phase-level verification.
+### Connected Exports: 18/21
 
-## Integration Check (26/28)
+All core wiring verified:
+- Repository pattern → all routes and services
+- JWT injection → all frontend API calls
+- LicenseGuard → layout wrapping
+- KeyVault → ElevenLabs/Gemini services
+- SimplePipeline/BatchUploadQueue → pipeline page
+- Caption presets → subtitle editor
+- Download endpoint → SimplePipeline
 
-### Connected (26)
-- Phase 64→65: DataRepository → SQLiteRepository (WIRED)
-- Phase 65→66: SQLiteRepository + MediaManager (WIRED)
-- Phase 67→all: JWT injection in apiFetch (WIRED)
-- Phase 67→68: Auth → License validation (WIRED)
-- Phase 69→71: KeyVault → Setup wizard (WIRED)
-- Phase 70→pipeline: SimplePipeline + mode toggle (WIRED)
-- Phase 70→74: SimplePipeline download → /clips/{id}/download route (WIRED)
-- Phase 72→all: "Edit Factory" brand consistent (WIRED)
-- Phase 73→desktop: Electron spawns backend with DESKTOP_MODE (WIRED)
+### Integration Gaps
 
-### Broken (2)
-- **INT-03:** BatchUploadQueue → `/generate-raw` (404) — actual route is `/generate`
-- Download route uses `get_client()` → fails under SQLite (tech debt, not gap — Supabase is default)
+1. **INT-04 (HIGH):** Service singletons not refreshed after API key save via setup wizard. `_reset_elevenlabs_tts()` and `refresh_gemini_availability()` exist but aren't called from `save_desktop_settings()`. Keys require restart. (API-01, API-02)
 
-## E2E Flows (4/5)
+2. **INT-05 (MEDIUM):** Romanian strings in backend progress API responses at library_routes.py:629,633,637. (UX-07)
 
-| Flow | Status | Notes |
-|------|--------|-------|
-| First launch → setup → API keys → pipeline | COMPLETE | Works with Supabase backend |
-| Upload → simple mode → style → download | COMPLETE | Fixed in Phase 74 |
-| Login → protected routes → logout → redirect | COMPLETE | — |
-| License validation → grace period → blocking | COMPLETE | — |
-| **Batch upload → queue → process multiple** | **BROKEN** | Fails at `/generate-raw` (404) |
+### Orphaned Exports
 
-## Tech Debt (Non-Blocking)
+1. `GET /pipeline/presets` endpoint — frontend uses local TypeScript constant instead (LOW)
 
-### Phase 64: Data Abstraction Layer
-- 118 direct supabase references in library_routes.py bypass repository abstraction
-- Download route (line 470-473) uses `get_client()` → returns None for SQLite
-- These are intentional: Phase 64 introduced the abstraction, full migration is future work
+## E2E Flow Verification
 
-### Phase 73: Electron Polish
-- Missing `icon.icns` for macOS (only `.ico` exists) — macOS build would use default icon
-- `generate-icon.js` only produces ICO format
+| Flow | Status |
+|------|--------|
+| Auth: Login → JWT → API → Protection | COMPLETE |
+| License: Setup → Validate → Recheck → Grace | COMPLETE |
+| Simple Pipeline: Upload → Style → Generate → Download | COMPLETE |
+| Batch Queue: Drag → Queue → Process → Results | COMPLETE |
+| API Key Setup → Immediate Use | BROKEN (singleton refresh) |
+| Offline Desktop Operation | BROKEN (DATA_BACKEND not auto-activated + get_client gaps) |
 
-## Nyquist Compliance
+## Tech Debt Summary
 
-No VALIDATION.md files exist for any v12 phase (0/11 compliant). Nyquist validation was not run during phase execution.
+| Phase | Item | Priority |
+|-------|------|----------|
+| 64 | 26+ routes use get_client() escape hatch | Medium |
+| 65 | DATA_BACKEND not auto-activated in Electron | Medium |
+| 70 | Orphaned /pipeline/presets endpoint | Low |
+| Various | Romanian comments in backend Python files | Low |
 
-## Previous Audit Gap Closure
+**Total: 4 tech debt items across 3 phases**
 
-| Previous Gap | Status | Closed By |
-|-------------|--------|-----------|
-| INT-01: SimplePipeline download 404 | CLOSED | Phase 74 — added `/clips/{clip_id}/download` route |
-| INT-02: Romanian text "Se initializeaza" | CLOSED | Phase 74 — replaced with "Initializing..." |
-| FLOW-01: Simple Mode download returns 404 | CLOSED | Phase 74 — download route + anchor element |
+## Actionable Gaps (Require Closure)
+
+1. **UX-07:** Replace Romanian strings at library_routes.py:629,633,637 with English equivalents
+2. **INT-04:** Call `_reset_elevenlabs_tts()` and `refresh_gemini_availability()` after saving keys in `save_desktop_settings()`
+
+---
+*Generated by GSD milestone audit workflow*
