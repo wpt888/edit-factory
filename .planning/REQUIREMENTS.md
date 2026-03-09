@@ -94,40 +94,40 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DATA-01 | TBD | Pending |
-| DATA-02 | TBD | Pending |
-| DATA-03 | TBD | Pending |
-| DATA-04 | TBD | Pending |
-| DATA-05 | TBD | Pending |
-| DATA-06 | TBD | Pending |
-| AUTH-01 | TBD | Pending |
-| AUTH-02 | TBD | Pending |
-| AUTH-03 | TBD | Pending |
-| AUTH-04 | TBD | Pending |
-| AUTH-05 | TBD | Pending |
-| UX-01 | TBD | Pending |
-| UX-02 | TBD | Pending |
-| UX-03 | TBD | Pending |
-| UX-04 | TBD | Pending |
-| UX-05 | TBD | Pending |
-| UX-06 | TBD | Pending |
-| UX-07 | TBD | Pending |
-| ELEC-01 | TBD | Pending |
-| ELEC-02 | TBD | Pending |
-| ELEC-03 | TBD | Pending |
-| ELEC-04 | TBD | Pending |
-| ELEC-05 | TBD | Pending |
-| ELEC-06 | TBD | Pending |
-| API-01 | TBD | Pending |
-| API-02 | TBD | Pending |
-| API-03 | TBD | Pending |
-| API-04 | TBD | Pending |
+| DATA-01 | 65 | Pending |
+| DATA-02 | 64 | Pending |
+| DATA-03 | 66 | Pending |
+| DATA-04 | 66 | Pending |
+| DATA-05 | 65 | Pending |
+| DATA-06 | 64 | Pending |
+| AUTH-01 | 67 | Pending |
+| AUTH-02 | 67 | Pending |
+| AUTH-03 | 68 | Pending |
+| AUTH-04 | 67 | Pending |
+| AUTH-05 | 67 | Pending |
+| UX-01 | 70 | Pending |
+| UX-02 | 70 | Pending |
+| UX-03 | 71 | Pending |
+| UX-04 | 71 | Pending |
+| UX-05 | 70 | Pending |
+| UX-06 | 72 | Pending |
+| UX-07 | 72 | Pending |
+| ELEC-01 | 73 | Pending |
+| ELEC-02 | 73 | Pending |
+| ELEC-03 | 73 | Pending |
+| ELEC-04 | 73 | Pending |
+| ELEC-05 | 73 | Pending |
+| ELEC-06 | 73 | Pending |
+| API-01 | 69 | Pending |
+| API-02 | 69 | Pending |
+| API-03 | 69 | Pending |
+| API-04 | 69 | Pending |
 
 **Coverage:**
 - v12 requirements: 28 total
-- Mapped to phases: 0
-- Unmapped: 28
+- Mapped to phases: 28
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-09*
-*Last updated: 2026-03-09 after initial definition*
+*Last updated: 2026-03-09 after v12 roadmap creation*

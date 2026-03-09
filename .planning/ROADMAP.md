@@ -12,7 +12,8 @@
 - ✅ **v8 Pipeline UX Overhaul** - Phases 38-42 (shipped 2026-02-24)
 - ✅ **v9 Assembly Pipeline Fix + Overlays** - Phases 43-46 (shipped 2026-02-28)
 - ✅ **v10 Desktop Launcher & Distribution** - Phases 47-54 (shipped 2026-03-01)
-- 🚧 **v11 Production Polish & Platform Hardening** - Phases 55-62 (in progress)
+- ✅ **v11 Production Polish & Platform Hardening** - Phases 55-63 (shipped 2026-03-03)
+- 🚧 **v12 Desktop Product MVP** - Phases 64-73 (in progress)
 
 ## Phases
 
@@ -140,144 +141,149 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 
 </details>
 
-### 🚧 v11 Production Polish & Platform Hardening (In Progress)
+<details>
+<summary>✅ v11 Production Polish & Platform Hardening (Phases 55-63) — SHIPPED 2026-03-03</summary>
 
-**Milestone Goal:** Comprehensive quality upgrade — fix security gaps, add real tests, improve UX with inline previews and modern dialogs, optimize performance with pagination and SSE, and harden architecture with durable job queues and persistent state.
+- [x] Phase 55: Security Hardening (3 plans) — completed 2026-03-02
+- [x] Phase 56: Testing Foundation (3 plans) — completed 2026-03-02
+- [x] Phase 57: DevOps & CI (2 plans) — completed 2026-03-02
+- [x] Phase 58: Architecture Upgrade (3 plans) — completed 2026-03-02
+- [x] Phase 59: Performance Optimization (3 plans) — completed 2026-03-02
+- [x] Phase 60: Monitoring & Observability (2 plans) — completed 2026-03-02
+- [x] Phase 61: UX Polish — Interactions (2 plans) — completed 2026-03-03
+- [x] Phase 62: UX Polish — Organization (2 plans) — completed 2026-03-03
+- [x] Phase 63: v11 Gap Closure (2 plans) — completed 2026-03-03
 
-- [x] **Phase 55: Security Hardening** - Enable RLS, per-route rate limits, MIME validation, input sanitization (completed 2026-03-02)
-- [x] **Phase 56: Testing Foundation** - Pytest unit/integration tests plus Playwright E2E with assertions (completed 2026-03-02)
-- [x] **Phase 57: DevOps & CI** - GitHub Actions pipeline, pinned dependencies, git-tag versioning (completed 2026-03-02)
-- [x] **Phase 58: Architecture Upgrade** - Redis job queue, persistent pipeline/assembly state, cloud storage support (completed 2026-03-02)
-- [x] **Phase 59: Performance Optimization** - Cursor pagination, SSE job progress, profile caching, TTS cache metrics (completed 2026-03-02)
-- [x] **Phase 60: Monitoring & Observability** - Sentry, extended health checks, failed render cleanup, file TTL (completed 2026-03-02)
-- [x] **Phase 61: UX Polish — Interactions** - Inline video player, AlertDialogs, soft-delete trash, drag-drop upload, keyboard shortcuts, hover preview (completed 2026-03-03)
-- [x] **Phase 62: UX Polish — Organization** - UI language consistency, dead page removal, clip tagging (completed 2026-03-03)
-- [x] **Phase 63: v11 Gap Closure** - Translate remaining Romanian error strings, create Phase 61 VERIFICATION.md, update requirement checkboxes (gap closure from audit) (completed 2026-03-03)
+</details>
 
-## Phase Details
+### 🚧 v12 Desktop Product MVP (Phases 64-73)
 
-### Phase 55: Security Hardening
-**Goal**: User data is protected end-to-end — RLS enforces row isolation at the database layer, rate limits throttle abuse at per-route granularity, file uploads are validated by actual MIME type, and user text cannot inject commands into the FFmpeg subtitle pipeline
-**Depends on**: Nothing (first phase of v11)
-**Requirements**: SEC-01, SEC-02, SEC-03, SEC-04
+**Milestone Goal:** Transform Edit Factory into a sellable local-first desktop product — replace Supabase with SQLite for local data, make all API calls (ElevenLabs, Gemini) go directly from the user's PC, simplify UX for non-technical content creators, fix auth flow, polish Electron packaging, and prepare for commercial launch via Lemon Squeezy licensing.
+
+- [ ] **Phase 64: Data Abstraction Layer** - Repository pattern abstracting database access; SQLite schema from Supabase migrations (3 plans)
+- [ ] **Phase 65: SQLite Local Database** - SQLite backend implementation for projects, clips, settings, cost tracking, TTS cache (2 plans)
+- [ ] **Phase 66: Local File Storage & Offline Mode** - Local filesystem for all video assets; offline project CRUD without internet (2 plans)
+- [ ] **Phase 67: Auth Flow Fixes** - JWT token injection in frontend API calls, logout button, password reset, route protection middleware (3 plans)
+- [ ] **Phase 68: License Key Validation Polish** - Lemon Squeezy periodic revalidation with offline grace period (1 plan)
+- [ ] **Phase 69: Direct API Integration** - ElevenLabs and Gemini calls from desktop; encrypted local API key storage; graceful fallback without keys (3 plans)
+- [ ] **Phase 70: UX Simplification — Pipeline & Batch** - 3-step simplified pipeline mode, collapsible advanced settings, batch job queue UI (3 plans)
+- [ ] **Phase 71: UX Simplification — Onboarding & Presets** - Setup wizard with API key guidance and presets; 5+ caption/subtitle visual presets (2 plans)
+- [ ] **Phase 72: Brand & Language Cleanup** - Consistent product name throughout app; remove all hardcoded Romanian text (1 plan)
+- [ ] **Phase 73: Electron Polish** - Real publish config, portable Node.js, installer optimization, auto-updater, branding assets, macOS target (3 plans)
+
+## v12 Phase Details
+
+### Phase 64: Data Abstraction Layer
+**Goal**: All database access goes through a repository pattern that abstracts the storage backend — services call repository methods (create_project, get_clips, save_settings) without knowing whether SQLite or Supabase is underneath, and all existing Supabase table schemas are translated to equivalent SQLite CREATE TABLE statements
+**Depends on**: Nothing (first phase of v12)
+**Requirements**: DATA-02, DATA-06
 **Success Criteria** (what must be TRUE):
-  1. A Supabase query run as an anon/user role for editai_* tables returns only that user's own rows — another user's data is invisible
-  2. Uploading more than 10 files/min to any upload endpoint returns HTTP 429 before any processing begins
-  3. Uploading a .exe file renamed as .mp4 is rejected with a clear error — the server detects the actual file type, not just the Content-Type header
-  4. A script or context text containing FFmpeg filter special characters (apostrophes, backslashes, colons) renders without errors and appears literally in the subtitle output
+  1. Every service file that currently imports `get_supabase()` instead calls a repository method — no direct Supabase client usage in business logic
+  2. A `DataRepository` interface exists with concrete `SupabaseRepository` and `SQLiteRepository` implementations — switching backend requires changing one config value
+  3. All editai_* Supabase tables have equivalent SQLite CREATE TABLE statements in a migrations file — column types are mapped (JSONB to TEXT, timestamptz to TEXT ISO8601)
+  4. Running the SQLite migration script creates all tables without errors — `sqlite3 test.db < migrations.sql` succeeds
+**Plans**: 3 plans
+
+### Phase 65: SQLite Local Database
+**Goal**: The desktop app stores all project, clip, and settings data in a local SQLite database file on the user's PC — no Supabase dependency for data storage, with cost tracking and TTS cache also persisted locally
+**Depends on**: Phase 64
+**Requirements**: DATA-01, DATA-05
+**Success Criteria** (what must be TRUE):
+  1. Creating a project via the API writes a row to `~/.editfactory/data.db` (or %APPDATA%/EditFactory/data.db) — verified by opening the file with sqlite3 CLI
+  2. Listing projects returns data from SQLite when `DATA_BACKEND=sqlite` — no Supabase calls appear in the server logs
+  3. Cost tracking entries (ElevenLabs usage, Gemini calls) are written to the local SQLite `api_costs` table — viewable in the usage page
+  4. TTS audio cache metadata is stored in SQLite — cache hits/misses work identically to the Supabase-backed version
 **Plans**: 2 plans
-Plans:
-- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
-- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
 
-### Phase 56: Testing Foundation
-**Goal**: The test suite provides meaningful confidence in critical backend services and real user workflows — unit tests cover the paths most likely to regress, integration tests catch API contract breaks, and E2E tests verify the workflows users actually run
-**Depends on**: Phase 55
-**Requirements**: TEST-01, TEST-02, TEST-03
+### Phase 66: Local File Storage & Offline Mode
+**Goal**: All video files (uploads, renders, thumbnails) are stored on the user's local filesystem with explicit paths, and the user can create, edit, and delete projects while completely offline — no internet connection required for local processing workflows
+**Depends on**: Phase 65
+**Requirements**: DATA-03, DATA-04
 **Success Criteria** (what must be TRUE):
-  1. Running `pytest` with coverage reports >80% line coverage across video_processor, assembly_service, job_storage, and cost_tracker
-  2. Running `pytest` on API integration tests verifies response structure (status codes, required fields, error shape) for the upload, render, TTS, and jobs endpoints using mock data — no live Supabase or FFmpeg needed
-  3. Running `npx playwright test` executes at least one E2E test per major workflow (library, pipeline, product video) that asserts API responses — not just screenshots
+  1. Uploading a video stores the file in `~/.editfactory/media/` (or configured path) — no cloud upload occurs
+  2. Rendered output videos, thumbnails, and intermediate files all live under the local media directory — `ls` shows the files
+  3. With WiFi/ethernet disabled, the user can create a new project, upload a video, and generate clips using local-only processing (Edge TTS + motion scoring) — no network error appears
+  4. Deleting a project also removes its associated local media files — no orphaned files remain
 **Plans**: 2 plans
-Plans:
-- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
-- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
 
-### Phase 57: DevOps & CI
-**Goal**: Every push to the repository automatically validates the codebase — lint, type-check, and tests run without manual intervention, all dependencies are reproducible from requirements.txt, and the version displayed in the app comes from git tags not hardcoded strings
-**Depends on**: Phase 56
-**Requirements**: DEVOPS-01, DEVOPS-02, DEVOPS-03
+### Phase 67: Auth Flow Fixes
+**Goal**: The authentication flow works end-to-end — the frontend injects JWT tokens into every API call, users can log out and reset their password, and unauthenticated users are redirected to the login page
+**Depends on**: Nothing (independent of data layer)
+**Requirements**: AUTH-01, AUTH-02, AUTH-04, AUTH-05
 **Success Criteria** (what must be TRUE):
-  1. Opening a pull request triggers a GitHub Actions workflow that runs Python lint + type-check and pytest — a failing test blocks merge
-  2. Opening a pull request triggers a GitHub Actions workflow that runs Next.js lint and type-check — a type error blocks merge
-  3. Installing from requirements.txt produces the identical package versions on any machine — no floating version ranges that could break between installs
-  4. The version shown in the app footer or /health endpoint matches the current git tag — no manual version bumps needed when tagging a release
+  1. Every API call from the frontend includes an `Authorization: Bearer <token>` header — visible in the browser network tab on any page
+  2. A "Logout" button is visible in the app header/sidebar — clicking it clears the session and redirects to the login page
+  3. The login page has a "Forgot password?" link that triggers a Supabase password reset email — clicking the email link allows setting a new password
+  4. Navigating to /library or /pipeline without being logged in redirects to /login within 1 second — the protected page content never flashes
+  5. Next.js middleware checks auth state on every navigation — no protected route is accessible by manually typing the URL while logged out
+**Plans**: 3 plans
+
+### Phase 68: License Key Validation Polish
+**Goal**: The Lemon Squeezy license key validation runs at first launch and periodically thereafter, with an offline grace period so the app remains usable when the user temporarily loses internet
+**Depends on**: Phase 67
+**Requirements**: AUTH-03
+**Success Criteria** (what must be TRUE):
+  1. On first launch without a stored license key, the app prompts for a Lemon Squeezy key before allowing access to any feature
+  2. A valid license key is re-validated against the Lemon Squeezy API every 24 hours — the last validation timestamp is stored locally
+  3. If the license check fails due to no internet, the app continues working for up to 72 hours (grace period) — after that, features are locked until re-validation succeeds
+**Plans**: 1 plan
+
+### Phase 69: Direct API Integration
+**Goal**: ElevenLabs TTS and Gemini AI calls go directly from the desktop app to the external APIs using the user's own keys, stored encrypted on disk — and the app works without any API keys by falling back to free alternatives
+**Depends on**: Phase 64
+**Requirements**: API-01, API-02, API-03, API-04
+**Success Criteria** (what must be TRUE):
+  1. A TTS request with `DATA_BACKEND=sqlite` calls ElevenLabs directly from the Next.js frontend or Electron main process — the FastAPI backend is not involved in the API call
+  2. A Gemini analysis request goes directly to the Gemini API from the desktop — no proxy through the backend
+  3. API keys entered in the setup wizard are stored in an encrypted file on disk (not plaintext .env) — reading the file without the decryption key shows ciphertext
+  4. With no ElevenLabs key configured, TTS falls back to Edge TTS (free) — the user sees a toast indicating the fallback
+  5. With no Gemini key configured, video analysis falls back to local motion/variance scoring only — no error is shown, clips are still generated
+**Plans**: 3 plans
+
+### Phase 70: UX Simplification — Pipeline & Batch
+**Goal**: Non-technical users can produce videos in 3 clicks (Upload, Choose Style, Download) without seeing technical parameters, while power users retain access to all controls — and multiple videos can be queued for batch processing with visible progress
+**Depends on**: Phase 66
+**Requirements**: UX-01, UX-02, UX-05
+**Success Criteria** (what must be TRUE):
+  1. The pipeline page has a "Simple Mode" toggle — when active, the workflow shows 3 steps (Upload, Choose Style, Download) with no mention of motion threshold, pHash, or variance scoring
+  2. In Simple Mode, clicking "Choose Style" offers 3-5 preset combinations (e.g., "Energetic Short", "Product Showcase", "Calm Narration") that auto-configure all backend parameters
+  3. An "Advanced" collapsible section exists on the pipeline page — expanding it reveals motion threshold, variance scoring, pHash distance, and all other technical parameters
+  4. Users can drag multiple videos into an upload queue — the queue shows each video's status (waiting, processing, done, failed) and processes them sequentially
+**Plans**: 3 plans
+
+### Phase 71: UX Simplification — Onboarding & Presets
+**Goal**: New users are guided through API key setup with smart presets that minimize configuration, and users can choose from multiple caption/subtitle visual styles without manually tweaking font parameters
+**Depends on**: Phase 69
+**Requirements**: UX-03, UX-04
+**Success Criteria** (what must be TRUE):
+  1. The setup wizard has a "Free TTS" preset button that auto-selects Edge TTS and skips the ElevenLabs API key field — first-time users can start producing videos in under 60 seconds
+  2. The setup wizard validates API keys inline (green checkmark on success, red error on failure) before allowing the user to proceed
+  3. The subtitle/caption settings show 5+ visual presets (e.g., "Bold White", "Neon Glow", "Minimal", "Karaoke", "Shadow Pop") as clickable thumbnails
+  4. Selecting a caption preset applies font, size, position, color, and effect settings — the user does not need to configure individual parameters
 **Plans**: 2 plans
-Plans:
-- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
-- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
 
-### Phase 58: Architecture Upgrade
-**Goal**: Jobs survive server restarts, pipeline and assembly progress is not lost when the process exits, the job tracking system is consistent across all job types, and file storage can be swapped to S3 or Supabase Storage without rewriting the render pipeline
-**Depends on**: Phase 55
-**Requirements**: ARCH-01, ARCH-02, ARCH-03, ARCH-04
+### Phase 72: Brand & Language Cleanup
+**Goal**: The product name is consistent everywhere in the app (single name, no "EditAI" vs "Edit Factory" confusion), and no hardcoded Romanian text remains in any user-facing string
+**Depends on**: Nothing (independent)
+**Requirements**: UX-06, UX-07
 **Success Criteria** (what must be TRUE):
-  1. Starting a render job, restarting the FastAPI server, and then polling the job status returns the job's current state — not a 404 or "unknown" status
-  2. Creating a pipeline with segments and navigating away, then returning, shows the same pipeline state — in-memory dict loss on restart no longer wipes user work
-  3. An assembly job appears in the same job status endpoint as video processing jobs — no separate polling path needed
-  4. Setting a FILE_STORAGE_BACKEND environment variable to "supabase" routes file reads and writes through Supabase Storage without changing any render pipeline code
-**Plans**: 2 plans
-Plans:
-- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
-- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
+  1. Searching the entire frontend codebase for "EditAI" (case-insensitive) returns zero matches — only the chosen product name appears
+  2. The window title, sidebar header, login page, setup wizard, and about dialog all show the same product name
+  3. Searching the frontend codebase for common Romanian words ("proiect", "sterge", "adauga", "incarcare", "eroare") returns zero matches — all strings are in English
+**Plans**: 1 plan
 
-### Phase 59: Performance Optimization
-**Goal**: The library page loads fast regardless of how many clips exist, job progress arrives instantly without polling overhead, profile data does not trigger a Supabase round-trip on every request, and the TTS cache behaves predictably under load
-**Depends on**: Phase 58
-**Requirements**: PERF-01, PERF-02, PERF-03, PERF-04
+### Phase 73: Electron Polish
+**Goal**: The Electron app is release-ready — publish config points to real GitHub repo, portable Node.js is bundled, installer is under 500 MB, auto-updater works from GitHub Releases, app has consistent branding, and macOS build target is configured
+**Depends on**: Phase 72
+**Requirements**: ELEC-01, ELEC-02, ELEC-03, ELEC-04, ELEC-05, ELEC-06
 **Success Criteria** (what must be TRUE):
-  1. The library page loads the first 50 clips immediately — scrolling to the bottom loads the next 50 without a full page reload or URL change
-  2. Starting a render job and watching the progress bar updates in real time without the browser making repeated polling requests — network tab shows a single persistent SSE connection
-  3. Making 10 rapid API requests that require profile context hits Supabase at most once during the 60-second TTL window — subsequent requests use cached data
-  4. The /api/v1/tts/cache/stats endpoint returns hit count, miss count, current size, and max size — and the cache automatically evicts the least recently used entry when full
-**Plans**: 2 plans
-Plans:
-- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
-- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
-
-### Phase 60: Monitoring & Observability
-**Goal**: Production errors are captured automatically, the health endpoint reflects the real state of all dependencies, failed renders clean up after themselves, and the output directory does not accumulate unbounded intermediate files
-**Depends on**: Phase 57
-**Requirements**: MON-01, MON-02, MON-03, MON-04
-**Success Criteria** (what must be TRUE):
-  1. Triggering an unhandled exception in a FastAPI route (with SENTRY_DSN configured) creates a new issue in the Sentry dashboard within 30 seconds
-  2. Calling GET /api/v1/health returns a JSON response showing individual status for Supabase, FFmpeg, and Redis — a disconnected Supabase shows "degraded" not "ok"
-  3. A render that fails mid-way (e.g., FFmpeg exits non-zero) leaves no partial output files in the output directory — only the input source file remains
-  4. Running the cleanup CLI (or automatic scheduler) removes intermediate files older than the configured TTL — the output directory shrinks measurably after cleanup runs
-**Plans**: 2 plans
-Plans:
-- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
-- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
-
-### Phase 61: UX Polish — Interactions
-**Goal**: Users interact with clips and media through modern, polished controls — watching clips without leaving the page, performing destructive actions with confirmation dialogs, recovering accidentally deleted clips, dragging files to upload, using keyboard shortcuts, and previewing clips on hover
-**Depends on**: Phase 59
-**Requirements**: UX-01, UX-02, UX-03, UX-06, UX-07, UX-08
-**Success Criteria** (what must be TRUE):
-  1. Clicking a clip thumbnail in the library opens an embedded HTML5 video player inline on the page — the video plays without opening a new tab or navigating away
-  2. Clicking "Delete clip" shows a Shadcn AlertDialog with Cancel and Confirm buttons — window.confirm() is not used anywhere in the app
-  3. A deleted clip moves to a Trash view and is recoverable for 30 days — after 30 days it is permanently removed
-  4. Dragging a video file from Windows Explorer onto the upload area starts the upload — no file picker dialog required
-  5. Pressing Delete on a selected clip triggers delete, Escape closes any open dialog or panel, and Space plays/pauses the currently focused video
-  6. Hovering over a clip thumbnail for more than 500ms starts a silent looping video preview directly on the card — no click needed
-**Plans**: 2 plans
-Plans:
-- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
-- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
-
-### Phase 62: UX Polish — Organization
-**Goal**: The app's language is internally consistent, dead marketing pages are removed from the routing tree, and users can tag and categorize clips to find them quickly in a growing library
-**Depends on**: Phase 61
-**Requirements**: UX-04, UX-05, UX-09
-**Success Criteria** (what must be TRUE):
-  1. Every label, button, tooltip, and error message in the UI uses the same language — no mixed Romanian/English strings on any single page
-  2. Navigating to /statsai, /preturi, /functionalitati, /cum-functioneaza, /contact, or /testimoniale returns a 404 — these routes no longer exist
-  3. A user can add one or more tags to a clip, filter the library by tag, and see only clips with that tag — the tag persists across page reloads
-**Plans**: 2 plans
-Plans:
-- [ ] 57-01-PLAN.md — Pin dependencies + git-tag versioning
-- [ ] 57-02-PLAN.md — GitHub Actions CI workflow
-
-### Phase 63: v11 Gap Closure
-**Goal**: Close all gaps identified by the v11 milestone audit — translate 32 remaining Romanian error strings to English, create missing Phase 61 VERIFICATION.md, and update requirement checkboxes for UX-03/UX-06/UX-08
-**Depends on**: Phase 62
-**Requirements**: UX-03, UX-04, UX-06, UX-08
-**Gap Closure**: Closes gaps from v11 audit (4 partial requirements + 1 integration gap)
-**Success Criteria** (what must be TRUE):
-  1. Every user-visible string in librarie/page.tsx, pipeline/page.tsx, and segments/page.tsx is in English — no Romanian error messages remain
-  2. Phase 61 has a VERIFICATION.md confirming soft-delete, drag-drop, and hover preview features are wired
-  3. REQUIREMENTS.md checkboxes for UX-03, UX-06, UX-08 are checked and UX-04 remains checked after the translation fix
-**Plans**: TBD
+  1. The electron-builder config has real `owner` and `repo` values (not PLACEHOLDER) — `grep PLACEHOLDER electron-builder.yml` returns no matches
+  2. A `resources/node/` directory contains a portable Node.js binary, and the build script documents how to download and place it
+  3. The built installer (.exe) is under 500 MB — PyTorch/Whisper are either lazy-downloaded on first use or use a lighter alternative
+  4. Running the installed app and triggering an update check downloads a new version from GitHub Releases and prompts the user to install — verified with a test release
+  5. The app icon (.ico/.icns), splash screen, and window title bar all show the product brand — no Electron default icon appears
+  6. Running `npx electron-builder --config` shows a macOS target (dmg/pkg) configured alongside the Windows NSIS target — even if not built on CI yet
+**Plans**: 3 plans
 
 ## Progress
 
@@ -293,15 +299,17 @@ Plans:
 | 38-42 | v8 | 8/8 | Complete | 2026-02-24 |
 | 43-46 | v9 | 6/6 | Complete | 2026-02-28 |
 | 47-54 | v10 | 18/18 | Complete | 2026-03-01 |
-| 55. Security Hardening | 3/3 | Complete    | 2026-03-02 | - |
-| 56. Testing Foundation | 3/3 | Complete    | 2026-03-02 | - |
-| 57. DevOps & CI | 2/2 | Complete    | 2026-03-02 | - |
-| 58. Architecture Upgrade | 3/3 | Complete    | 2026-03-02 | - |
-| 59. Performance Optimization | 3/3 | Complete    | 2026-03-02 | - |
-| 60. Monitoring & Observability | 2/2 | Complete    | 2026-03-02 | - |
-| 61. UX Polish — Interactions | 2/2 | Complete   | 2026-03-03 | - |
-| 62. UX Polish — Organization | 2/2 | Complete    | 2026-03-03 | - |
-| 63. v11 Gap Closure | 2/2 | Complete    | 2026-03-03 | - |
+| 55-63 | v11 | 22/22 | Complete | 2026-03-03 |
+| 64. Data Abstraction Layer | v12 | 0/3 | Not started | - |
+| 65. SQLite Local Database | v12 | 0/2 | Not started | - |
+| 66. Local File Storage & Offline | v12 | 0/2 | Not started | - |
+| 67. Auth Flow Fixes | v12 | 0/3 | Not started | - |
+| 68. License Key Validation Polish | v12 | 0/1 | Not started | - |
+| 69. Direct API Integration | v12 | 0/3 | Not started | - |
+| 70. UX — Pipeline & Batch | v12 | 0/3 | Not started | - |
+| 71. UX — Onboarding & Presets | v12 | 0/2 | Not started | - |
+| 72. Brand & Language Cleanup | v12 | 0/1 | Not started | - |
+| 73. Electron Polish | v12 | 0/3 | Not started | - |
 
 ---
-*Last updated: 2026-03-02 after v11 roadmap creation*
+*Last updated: 2026-03-09 after v12 roadmap creation*
