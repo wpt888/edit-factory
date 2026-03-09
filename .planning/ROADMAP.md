@@ -173,6 +173,9 @@ Full details: `.planning/milestones/v9-ROADMAP.md`
 - [x] **Phase 74: v12 Gap Closure** - Fix SimplePipeline download URL + Romanian text remnant (1 plan) (completed 2026-03-09)
 - [x] **Phase 75: Batch Endpoint Fix** - Fix BatchUploadQueue calling non-existent /generate-raw endpoint (1 plan) (completed 2026-03-09)
 - [x] **Phase 76: v12 Gap Closure Round 2** - Remove backend Romanian strings + refresh service singletons after API key save (1 plan) (completed 2026-03-09)
+- [ ] **Phase 77: SQLite Desktop Activation** - Set DATA_BACKEND=sqlite in Electron spawn + migrate critical routes from get_client() (1 plan)
+- [ ] **Phase 78: macOS Build Assets** - Generate missing icon.icns for macOS dmg build (1 plan)
+- [ ] **Phase 79: v12 Tech Debt Cleanup** - VERIFICATION.md for Phase 75 + Romanian comment cleanup + remove orphaned endpoint (1 plan)
 
 ## v12 Phase Details
 
@@ -354,7 +357,45 @@ Plans:
   2. After saving API keys via desktop settings endpoint, ElevenLabs and Gemini singletons are refreshed — new keys take effect without restarting the backend
 **Plans**: 1 plan
 Plans:
-- [ ] 76-01-PLAN.md — Replace Romanian progress strings + add singleton refresh after key save
+- [x] 76-01-PLAN.md — Replace Romanian progress strings + add singleton refresh after key save (completed 2026-03-09)
+
+### Phase 77: SQLite Desktop Activation
+**Goal**: The Electron desktop app actually uses the SQLite data layer that was built in Phases 64-65 — activate it by setting DATA_BACKEND=sqlite in the Electron backend spawn, and migrate the critical get_client() escape hatch routes to repository methods so the app works end-to-end in SQLite mode
+**Depends on**: Phase 64, Phase 65, Phase 66
+**Requirements**: DATA-01, DATA-02, DATA-03, DATA-04, DATA-05
+**Gap Closure**: Closes tech debt item from v12-MILESTONE-AUDIT.md (DATA_BACKEND=sqlite never activated in Electron spawn)
+**Success Criteria** (what must be TRUE):
+  1. `electron/src/main.js` spawns the backend with `DATA_BACKEND: 'sqlite'` set in the environment — `grep DATA_BACKEND electron/src/main.js` returns a match
+  2. The 5+ most-used library routes (list projects, get project, create project, list clips, get clip) use repository methods instead of get_client() — 503 errors no longer occur for these routes in SQLite mode
+  3. Starting the app in desktop mode creates/uses a local SQLite database — no Supabase requests appear for project CRUD operations
+**Plans**: 1 plan
+Plans:
+- [ ] 77-01-PLAN.md — Set DATA_BACKEND=sqlite in Electron spawn + migrate critical routes from get_client()
+
+### Phase 78: macOS Build Assets
+**Goal**: The macOS dmg build target declared in electron-builder config can actually be built — generate the missing icon.icns file from existing icon sources so the macOS build does not fail with a missing asset error
+**Depends on**: Phase 73
+**Requirements**: ELEC-06
+**Gap Closure**: Closes tech debt item from v12-MILESTONE-AUDIT.md (icon.icns missing at electron/build/icon.icns)
+**Success Criteria** (what must be TRUE):
+  1. `electron/build/icon.icns` exists — `ls -lh electron/build/icon.icns` shows the file
+  2. The .icns file is valid — it can be opened or inspected with standard tools without error
+**Plans**: 1 plan
+Plans:
+- [ ] 78-01-PLAN.md — Generate icon.icns from existing icon assets
+
+### Phase 79: v12 Tech Debt Cleanup
+**Goal**: Close the remaining low-priority tech debt items from the v12 audit — add a formal VERIFICATION.md for Phase 75, clean up Romanian comments in backend Python files, and remove the orphaned /pipeline/presets endpoint to keep the codebase clean
+**Depends on**: Nothing (independent cleanup)
+**Requirements**: UX-07 (Romanian cleanup)
+**Gap Closure**: Closes remaining low-priority tech debt from v12-MILESTONE-AUDIT.md
+**Success Criteria** (what must be TRUE):
+  1. A VERIFICATION.md exists in `.planning/phases/75-batch-endpoint-fix/` confirming the endpoint URL fix
+  2. Searching `library_routes.py`, `routes.py`, and `video_processor.py` for Romanian comments returns zero matches
+  3. The orphaned `GET /pipeline/presets` endpoint is removed from `routes.py` — no dead backend code remains
+**Plans**: 1 plan
+Plans:
+- [ ] 79-01-PLAN.md — VERIFICATION.md for Phase 75 + Romanian comment cleanup + remove orphaned endpoint
 
 ## Progress
 
@@ -384,6 +425,9 @@ Plans:
 | 74. v12 Gap Closure | 1/1 | Complete    | 2026-03-09 | - |
 | 75. Batch Endpoint Fix | 1/1 | Complete    | 2026-03-09 | - |
 | 76. v12 Gap Closure Round 2 | 1/1 | Complete    | 2026-03-09 | - |
+| 77. SQLite Desktop Activation | 0/1 | Pending | - | - |
+| 78. macOS Build Assets | 0/1 | Pending | - | - |
+| 79. v12 Tech Debt Cleanup | 0/1 | Pending | - | - |
 
 ---
-*Last updated: 2026-03-09 after phase 73 planning*
+*Last updated: 2026-03-09 after gap closure phases 77-79 added*
