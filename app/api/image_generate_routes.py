@@ -39,6 +39,7 @@ class GenerateRequest(BaseModel):
     model: str = "nano-banana-pro"  # nano-banana, nano-banana-2, nano-banana-pro
     resolution: Optional[str] = None  # "0.5K", "1K", "2K", "4K" — only for NanoBanana 2 and Pro
     user_text: Optional[str] = None
+    dry_run: bool = False  # If true, returns the final payload without calling FAL
 
 
 class LogoOverlayRequest(BaseModel):
@@ -213,21 +214,24 @@ async def generate_image(
     product_image_url = None
     p = None  # product data dict
 
+    logger.info(f"Generate request: product_id={req.product_id!r}, template_id={req.template_id!r}, model={req.model}")
+
     # Fetch product info (image + details) if product is selected
     if req.product_id:
         try:
-            product = repo.table_query("v_catalog_products_grouped", "select",
-                filters=QueryFilters(
-                    select="title,brand,price,description,image_link",
-                    eq={"id": req.product_id},
-                    limit=1,
-                ))
-            if product.data:
-                p = product.data[0]
+            # Use RPC with SECURITY DEFINER to bypass RLS on uf.products_catalog
+            from app.db import get_supabase
+            sb = get_supabase()
+            product_res = sb.rpc("get_product_for_image_gen", {"p_product_id": req.product_id}).execute()
+            logger.info(f"Product RPC result: {len(product_res.data or [])} rows, data={product_res.data[:1] if product_res.data else 'empty'}")
+            if product_res.data:
+                p = product_res.data[0]
                 product_image_url = p.get("image_link")
                 logger.info(f"Product fetched: {p.get('title', 'N/A')}, image_link={'yes' if product_image_url else 'no'}")
+            else:
+                logger.warning(f"Product not found for id={req.product_id}")
         except Exception as e:
-            logger.warning(f"Product fetch failed: {e}")
+            logger.error(f"Product fetch failed: {type(e).__name__}: {e}")
 
     if req.template_id:
         try:
@@ -272,6 +276,30 @@ async def generate_image(
     # Append user-specific text
     if req.user_text:
         final_prompt = f"{final_prompt}\n{req.user_text}"
+
+    # Dry run — return what WOULD be sent to FAL without actually calling it
+    if req.dry_run:
+        fal_endpoint = "generate"
+        if product_image_url:
+            from app.services.fal_image_service import MODEL_CONFIGS
+            config = MODEL_CONFIGS.get(req.model, {})
+            fal_endpoint = config.get("url", "") + "/edit"
+        return {
+            "dry_run": True,
+            "product_id": req.product_id,
+            "product_data": p,
+            "product_image_url": product_image_url,
+            "template_id": req.template_id,
+            "template_name": template_name,
+            "model": req.model,
+            "fal_endpoint": fal_endpoint,
+            "fal_payload": {
+                "prompt": final_prompt,
+                "aspect_ratio": req.aspect_ratio,
+                "resolution": req.resolution,
+                "image_urls": [product_image_url] if product_image_url else None,
+            },
+        }
 
     # Create DB record
     image_id = str(uuid.uuid4())
