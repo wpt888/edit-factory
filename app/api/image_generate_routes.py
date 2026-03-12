@@ -95,6 +95,7 @@ def _generate_image_task(
     template_name: Optional[str],
     model: str = "nano-banana-pro",
     resolution: Optional[str] = None,
+    product_image_url: Optional[str] = None,
 ):
     """Background task: generate image via FAL AI, download, update DB."""
     repo = get_repository()
@@ -113,12 +114,14 @@ def _generate_image_task(
         # Generate via FAL
         from app.services.fal_image_service import get_fal_generator
         fal = get_fal_generator()
+        image_urls = [product_image_url] if product_image_url else None
         result = fal.generate(
             prompt=prompt,
             aspect_ratio=aspect_ratio,
             num_images=1,
             model=model,
             resolution=resolution,
+            image_urls=image_urls,
         )
 
         images = result.get("images", [])
@@ -207,6 +210,24 @@ async def generate_image(
     # Build final prompt from template + user text
     final_prompt = req.prompt
     template_name = None
+    product_image_url = None
+    p = None  # product data dict
+
+    # Fetch product info (image + details) if product is selected
+    if req.product_id:
+        try:
+            product = repo.table_query("v_catalog_products_grouped", "select",
+                filters=QueryFilters(
+                    select="title,brand,price,description,image_link",
+                    eq={"id": req.product_id},
+                    limit=1,
+                ))
+            if product.data:
+                p = product.data[0]
+                product_image_url = p.get("image_link")
+                logger.info(f"Product fetched: {p.get('title', 'N/A')}, image_link={'yes' if product_image_url else 'no'}")
+        except Exception as e:
+            logger.warning(f"Product fetch failed: {e}")
 
     if req.template_id:
         try:
@@ -215,24 +236,38 @@ async def generate_image(
             if tpl.data:
                 template_name = tpl.data[0]["name"]
                 final_prompt = tpl.data[0]["prompt_template"]
-                # Substitute placeholders if product provided
-                if req.product_id:
-                    product = repo.table_query("v_catalog_products_grouped", "select",
-                        filters=QueryFilters(
-                            select="title,brand,price,description",
-                            eq={"id": req.product_id},
-                            limit=1,
-                        ))
-                    if product.data:
-                        p = product.data[0]
+                # Inject product info into template
+                if p:
+                    # Try placeholder substitution first (e.g. {title}, {brand})
+                    try:
                         final_prompt = final_prompt.format(
                             title=p.get("title", ""),
                             brand=p.get("brand", ""),
                             price=p.get("price", ""),
                             description=p.get("description", ""),
                         )
+                    except (KeyError, IndexError):
+                        pass  # Template doesn't use placeholders, that's fine
+                    # Always append product description at the end
+                    product_desc = f"\n\n--- PRODUCT INFORMATION ---\n"
+                    product_desc += f"Product: {p.get('title', 'N/A')}\n"
+                    if p.get("brand"):
+                        product_desc += f"Brand: {p['brand']}\n"
+                    if p.get("price"):
+                        product_desc += f"Price: {p['price']}\n"
+                    if p.get("description"):
+                        product_desc += f"Description: {p['description']}\n"
+                    final_prompt += product_desc
         except Exception as e:
             logger.warning(f"Template resolution failed: {e}")
+    elif p:
+        # No template selected — enrich prompt with product context
+        product_context = f"Product: {p.get('title', '')}"
+        if p.get("brand"):
+            product_context += f" by {p['brand']}"
+        if p.get("description"):
+            product_context += f"\nDescription: {p['description']}"
+        final_prompt = f"{product_context}\n\n{final_prompt}"
 
     # Append user-specific text
     if req.user_text:
@@ -265,6 +300,7 @@ async def generate_image(
         template_name=template_name,
         model=req.model,
         resolution=req.resolution,
+        product_image_url=product_image_url,
     )
 
     return {"image_id": image_id, "status": "pending", "model": req.model}

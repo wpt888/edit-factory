@@ -92,6 +92,7 @@ class FalImageGenerator:
         num_images: int = 1,
         model: str = DEFAULT_MODEL,
         resolution: Optional[str] = None,
+        image_urls: Optional[list[str]] = None,
     ) -> dict:
         """Generate image(s) via FAL AI.
 
@@ -101,6 +102,7 @@ class FalImageGenerator:
             num_images: Number of images to generate.
             model: Model key from MODEL_CONFIGS.
             resolution: Resolution for models that support it (e.g. "1K", "2K", "4K").
+            image_urls: Reference image URLs. When provided, uses the /edit endpoint.
 
         Returns:
             dict with 'images' list containing {url, content_type} items.
@@ -111,13 +113,21 @@ class FalImageGenerator:
             config = MODEL_CONFIGS[DEFAULT_MODEL]
             model = DEFAULT_MODEL
 
-        api_url = config["url"]
+        # Use /edit endpoint when reference images are provided
+        if image_urls:
+            api_url = config["url"] + "/edit"
+        else:
+            api_url = config["url"]
 
         # Build payload based on model's param_style
         payload = {
             "prompt": prompt,
             "num_images": num_images,
         }
+
+        # Add reference images for edit mode
+        if image_urls:
+            payload["image_urls"] = image_urls
 
         if config["param_style"] == "image_size":
             # NanoBanana v1: uses image_size mapped from aspect ratio
@@ -139,9 +149,12 @@ class FalImageGenerator:
                 if effective_resolution:
                     payload["resolution"] = effective_resolution
 
+        mode = "edit" if image_urls else "generate"
         logger.info(
-            f"FAL generate: model={model}, aspect={aspect_ratio}, "
-            f"resolution={payload.get('resolution', 'N/A')}, prompt={prompt[:80]}..."
+            f"FAL {mode}: model={model}, aspect={aspect_ratio}, "
+            f"resolution={payload.get('resolution', 'N/A')}, "
+            f"ref_images={len(image_urls) if image_urls else 0}, "
+            f"prompt={prompt[:80]}..."
         )
 
         response = self._client.post(api_url, json=payload)
