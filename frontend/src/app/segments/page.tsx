@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -18,6 +19,7 @@ import {
 import {
   Video,
   Upload,
+  FolderOpen,
   Trash2,
   Star,
   StarOff,
@@ -34,6 +36,7 @@ import {
   Package,
   Images,
   Layers,
+  Repeat1,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -81,6 +84,7 @@ interface Segment {
   notes?: string;
   transforms?: SegmentTransform | null;
   product_group?: string | null;
+  single_use: boolean;
   created_at: string;
   source_video_name?: string;
 }
@@ -124,11 +128,22 @@ export default function SegmentsPage() {
   const [showKeywordPopup, setShowKeywordPopup] = useState(false);
   const [editingSegment, setEditingSegment] = useState<Segment | null>(null);
 
+  // Left panel
+  const [videoSearchQuery, setVideoSearchQuery] = useState("");
+  const [leftTab, setLeftTab] = useState<string>("videos");
+
   // Upload dialog
   const [showUploadDialog, setShowUploadDialog] = useState(false);
   const [uploadName, setUploadName] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Local file dialog (no copy, uses file path directly)
+  const [showLocalDialog, setShowLocalDialog] = useState(false);
+  const [localPath, setLocalPath] = useState("");
+  const [localName, setLocalName] = useState("");
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [addingLocal, setAddingLocal] = useState(false);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const dragCounterRef = useRef(0);
   const uploadPollRef = useRef<ReturnType<typeof setInterval> | null>(null); // Bug #52
@@ -537,6 +552,68 @@ export default function SegmentsPage() {
     }
   };
 
+  // Add local video by path (no upload/copy)
+  const handleAddLocal = async () => {
+    if (!localPath.trim()) return;
+
+    setAddingLocal(true);
+    setLocalError(null);
+    try {
+      const res = await apiPost("/segments/source-videos/local", {
+        file_path: localPath.trim(),
+        name: localName.trim() || undefined,
+      });
+
+      if (res.ok) {
+        const newVideo = await res.json() as SourceVideo;
+        setSourceVideos((prev) => [newVideo, ...prev]);
+        setSelectedVideo(newVideo);
+        setShowLocalDialog(false);
+        setLocalPath("");
+        setLocalName("");
+        setLocalError(null);
+
+        // Poll until background processing finishes
+        if (uploadPollRef.current) {
+          clearInterval(uploadPollRef.current);
+          uploadPollRef.current = null;
+        }
+        if (newVideo.status === "processing") {
+          uploadPollRef.current = setInterval(async () => {
+            try {
+              const pollRes = await apiGetWithRetry(`/segments/source-videos/${newVideo.id}`);
+              if (!pollRes.ok) { if (uploadPollRef.current) { clearInterval(uploadPollRef.current); uploadPollRef.current = null; } return; }
+              const updated: SourceVideo = await pollRes.json();
+              if (updated.status === "ready" || updated.status === "error") {
+                if (uploadPollRef.current) { clearInterval(uploadPollRef.current); uploadPollRef.current = null; }
+                setSourceVideos((prev) =>
+                  prev.map((v) => (v.id === updated.id ? updated : v))
+                );
+                setSelectedVideo((prev) =>
+                  prev?.id === updated.id ? updated : prev
+                );
+                if (updated.status === "error") {
+                  setLocalError("Video processing failed.");
+                }
+              }
+            } catch {
+              if (uploadPollRef.current) { clearInterval(uploadPollRef.current); uploadPollRef.current = null; }
+            }
+          }, 2000);
+        }
+      } else {
+        const errorData = await res.json().catch(() => null);
+        const message = errorData?.detail || `Failed to add video (${res.status})`;
+        setLocalError(message);
+      }
+    } catch (error) {
+      handleApiError(error, "Error adding local video");
+      setLocalError("Failed to add video. Check the path and try again.");
+    } finally {
+      setAddingLocal(false);
+    }
+  };
+
   // Request delete video (show confirmation)
   const requestDeleteVideo = (video: SourceVideo) => {
     setDeleteConfirm({
@@ -739,6 +816,7 @@ export default function SegmentsPage() {
   const handleSegmentSelect = (seg: Segment) => {
     setSelectedSegment(seg);
     setActiveTransforms(seg.transforms || { ...DEFAULT_SEGMENT_TRANSFORM });
+    setLeftTab("transform");
   };
 
   // Fetch product associations for a batch of segment IDs
@@ -839,6 +917,24 @@ export default function SegmentsPage() {
     }
   };
 
+  // Toggle single use
+  const handleToggleSingleUse = async (segmentId: string) => {
+    try {
+      const res = await apiPost(`/segments/${segmentId}/single-use`);
+      if (res.ok) {
+        const { single_use } = await res.json();
+        setSegments((prev) =>
+          prev.map((s) => (s.id === segmentId ? { ...s, single_use } : s))
+        );
+        setAllSegments((prev) =>
+          prev.map((s) => (s.id === segmentId ? { ...s, single_use } : s))
+        );
+      }
+    } catch (error) {
+      handleApiError(error, "Error toggling single use");
+    }
+  };
+
   // Product group handlers
   const handleCreateGroup = async () => {
     if (!selectedVideo || !groupLabel.trim()) return;
@@ -918,6 +1014,10 @@ export default function SegmentsPage() {
   };
 
   // Left panel content - Source Videos
+  const filteredSourceVideos = videoSearchQuery.trim()
+    ? sourceVideos.filter((v) => v.name.toLowerCase().includes(videoSearchQuery.toLowerCase()))
+    : sourceVideos;
+
   const leftPanelContent = (
     <div
       className="h-full flex flex-col relative"
@@ -935,225 +1035,331 @@ export default function SegmentsPage() {
           </div>
         </div>
       )}
-      {/* Upload button */}
-      <div className="p-3 border-b border-border">
-        <Dialog open={showUploadDialog} onOpenChange={setShowUploadDialog}>
-          <DialogTrigger asChild>
-            <Button size="sm" className="w-full">
-              <Upload className="h-4 w-4 mr-1" />
-              Upload Video
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Upload Source Video</DialogTitle>
-              <DialogDescription>
-                Upload a video to create segments from
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="space-y-2">
-                <Label htmlFor="video-name">Name</Label>
-                <Input
-                  id="video-name"
-                  placeholder="Video name"
-                  value={uploadName}
-                  onChange={(e) => setUploadName(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Video File</Label>
-                <div
-                  className={`relative border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
-                    uploadFile
-                      ? "border-primary/50 bg-primary/5"
-                      : "border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/50"
-                  }`}
-                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith("video/"));
-                    if (file) {
-                      setUploadFile(file);
-                      if (!uploadName.trim()) {
-                        setUploadName(file.name.replace(/\.[^/.]+$/, ""));
-                      }
-                    }
-                  }}
-                  onClick={() => document.getElementById("video-file-input")?.click()}
-                >
-                  <input
-                    id="video-file-input"
-                    type="file"
-                    accept="video/*"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0] || null;
-                      setUploadFile(file);
-                      if (file && !uploadName.trim()) {
-                        setUploadName(file.name.replace(/\.[^/.]+$/, ""));
-                      }
-                    }}
-                  />
-                  {uploadFile ? (
-                    <div className="flex items-center justify-center gap-2">
-                      <Video className="h-5 w-5 text-primary" />
-                      <span className="text-sm font-medium truncate max-w-[200px]">{uploadFile.name}</span>
-                      <button
-                        type="button"
-                        className="ml-1 p-0.5 rounded hover:bg-muted"
-                        onClick={(e) => { e.stopPropagation(); setUploadFile(null); }}
-                      >
-                        <X className="h-3.5 w-3.5 text-muted-foreground" />
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <Upload className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
-                      <p className="text-sm text-muted-foreground">
-                        Drag & drop or <span className="text-primary font-medium">click to browse</span>
-                      </p>
-                      <p className="text-xs text-muted-foreground/70 mt-1">MP4, MOV, AVI, MKV</p>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-            {uploadError && (
-              <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm">
-                <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                <span>{uploadError}</span>
-              </div>
-            )}
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => { setShowUploadDialog(false); setUploadError(null); }}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleUpload}
-                disabled={!uploadFile || !uploadName.trim() || uploadingVideo}
-                className="min-w-[100px]"
-              >
-                {uploadingVideo ? "Uploading..." : "Upload"}
-              </Button>
-            </DialogFooter>
-            {(!uploadFile || !uploadName.trim()) && (
-              <p className="text-xs text-muted-foreground mt-2">
-                * Fill in the name and select a video file to enable the Upload button
-              </p>
-            )}
-          </DialogContent>
-        </Dialog>
-      </div>
 
-      {/* Videos list */}
-      <ScrollArea className={selectedSegment ? "flex-none max-h-[40%]" : "flex-1"}>
-        <div className="space-y-1 p-2">
-          {sourceVideos.length === 0 ? (
-            <div className="text-center py-8 px-4">
-              <Upload className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
-              <p className="text-sm text-muted-foreground">
-                No videos uploaded yet
-              </p>
-              <p className="text-xs text-muted-foreground/70 mt-1">
-                Drag & drop a video here or click Upload
-              </p>
-            </div>
-          ) : (
-            sourceVideos.map((video) => (
-              <div
-                key={video.id}
-                className={`group flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${
-                  selectedVideo?.id === video.id
-                    ? "bg-primary/10 border border-primary/50"
-                    : "hover:bg-muted"
-                }`}
-                onClick={() => video.status !== "processing" && setSelectedVideo(video)}
-              >
-                {/* Thumbnail */}
-                <div className="w-14 h-9 bg-muted rounded flex items-center justify-center overflow-hidden flex-shrink-0">
-                  {video.thumbnail_path ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={`${API_URL}/segments/files/${encodeURIComponent(video.thumbnail_path)}`}
-                      alt={video.name}
-                      className="w-full h-full object-cover"
+      <Tabs value={leftTab} onValueChange={setLeftTab} className="flex flex-col h-full">
+        <TabsList className="mx-2 mt-2 grid w-auto grid-cols-2 h-8">
+          <TabsTrigger value="videos" className="text-xs h-7">Videos</TabsTrigger>
+          <TabsTrigger value="transform" className="text-xs h-7">
+            Transform
+            {selectedSegment && <span className="ml-1 w-1.5 h-1.5 rounded-full bg-primary inline-block" />}
+          </TabsTrigger>
+        </TabsList>
+
+        {/* Videos tab */}
+        <TabsContent value="videos" className="flex-1 flex flex-col min-h-0 mt-0">
+          {/* Upload / Add Local buttons */}
+          <div className="p-2 border-b border-border flex gap-1.5">
+            <Dialog open={showLocalDialog} onOpenChange={setShowLocalDialog}>
+              <DialogTrigger asChild>
+                <Button size="sm" className="flex-1 h-7 text-xs">
+                  <FolderOpen className="h-3.5 w-3.5 mr-1" />
+                  Add Local
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Add Local Video</DialogTitle>
+                  <DialogDescription>
+                    Use a video directly from your computer — no copy, instant
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="local-path">File Path</Label>
+                    <Input
+                      id="local-path"
+                      placeholder="D:\Videos\my-video.mp4"
+                      value={localPath}
+                      onChange={(e) => {
+                        setLocalPath(e.target.value);
+                        if (!localName.trim() && e.target.value) {
+                          const filename = e.target.value.split(/[/\\]/).pop() || "";
+                          setLocalName(filename.replace(/\.[^/.]+$/, ""));
+                        }
+                      }}
                     />
-                  ) : (
-                    <Video className="h-4 w-4 text-muted-foreground" />
-                  )}
+                    <p className="text-xs text-muted-foreground">
+                      Paste the full path to the video file
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="local-name">Name (optional)</Label>
+                    <Input
+                      id="local-name"
+                      placeholder="Auto-filled from filename"
+                      value={localName}
+                      onChange={(e) => setLocalName(e.target.value)}
+                    />
+                  </div>
                 </div>
+                {localError && (
+                  <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm">
+                    <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                    <span>{localError}</span>
+                  </div>
+                )}
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => { setShowLocalDialog(false); setLocalError(null); }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleAddLocal}
+                    disabled={!localPath.trim() || addingLocal}
+                    className="min-w-[100px]"
+                  >
+                    {addingLocal ? "Adding..." : "Add Video"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium truncate">
-                    {video.name}
+            <Dialog open={showUploadDialog} onOpenChange={setShowUploadDialog}>
+              <DialogTrigger asChild>
+                <Button size="sm" variant="outline" className="h-7 text-xs px-2" title="Upload video (copies file)">
+                  <Upload className="h-3.5 w-3.5" />
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Upload Source Video</DialogTitle>
+                  <DialogDescription>
+                    Upload a video to create segments from
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="video-name">Name</Label>
+                    <Input
+                      id="video-name"
+                      placeholder="Video name"
+                      value={uploadName}
+                      onChange={(e) => setUploadName(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Video File</Label>
+                    <div
+                      className={`relative border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
+                        uploadFile
+                          ? "border-primary/50 bg-primary/5"
+                          : "border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/50"
+                      }`}
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith("video/"));
+                        if (file) {
+                          setUploadFile(file);
+                          if (!uploadName.trim()) {
+                            setUploadName(file.name.replace(/\.[^/.]+$/, ""));
+                          }
+                        }
+                      }}
+                      onClick={() => document.getElementById("video-file-input")?.click()}
+                    >
+                      <input
+                        id="video-file-input"
+                        type="file"
+                        accept="video/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] || null;
+                          setUploadFile(file);
+                          if (file && !uploadName.trim()) {
+                            setUploadName(file.name.replace(/\.[^/.]+$/, ""));
+                          }
+                        }}
+                      />
+                      {uploadFile ? (
+                        <div className="flex items-center justify-center gap-2">
+                          <Video className="h-5 w-5 text-primary" />
+                          <span className="text-sm font-medium truncate max-w-[200px]">{uploadFile.name}</span>
+                          <button
+                            type="button"
+                            className="ml-1 p-0.5 rounded hover:bg-muted"
+                            onClick={(e) => { e.stopPropagation(); setUploadFile(null); }}
+                          >
+                            <X className="h-3.5 w-3.5 text-muted-foreground" />
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <Upload className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
+                          <p className="text-sm text-muted-foreground">
+                            Drag & drop or <span className="text-primary font-medium">click to browse</span>
+                          </p>
+                          <p className="text-xs text-muted-foreground/70 mt-1">MP4, MOV, AVI, MKV</p>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                {uploadError && (
+                  <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm">
+                    <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                    <span>{uploadError}</span>
+                  </div>
+                )}
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => { setShowUploadDialog(false); setUploadError(null); }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleUpload}
+                    disabled={!uploadFile || !uploadName.trim() || uploadingVideo}
+                    className="min-w-[100px]"
+                  >
+                    {uploadingVideo ? "Uploading..." : "Upload"}
+                  </Button>
+                </DialogFooter>
+                {(!uploadFile || !uploadName.trim()) && (
+                  <p className="text-xs text-muted-foreground mt-2">
+                    * Fill in the name and select a video file to enable the Upload button
                   </p>
-                  {video.status === "processing" ? (
-                    <div className="flex items-center gap-1 text-[10px] text-amber-500">
-                      <RefreshCw className="h-3 w-3 animate-spin" />
-                      <span>Processing...</span>
-                    </div>
-                  ) : video.status === "error" ? (
-                    <div className="flex items-center gap-1 text-[10px] text-red-500">
-                      <AlertTriangle className="h-3 w-3" />
-                      <span>Error</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                      <span>{formatTime(video.duration || 0)}</span>
-                      <span>•</span>
-                      <span>{video.segments_count} seg</span>
-                    </div>
+                )}
+              </DialogContent>
+            </Dialog>
+          </div>
+
+          {/* Video search */}
+          <div className="relative px-2 py-1.5 border-b border-border">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              placeholder="Search videos..."
+              value={videoSearchQuery}
+              onChange={(e) => setVideoSearchQuery(e.target.value)}
+              className="h-7 pl-7 text-xs"
+            />
+            {videoSearchQuery && (
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">
+                {filteredSourceVideos.length}/{sourceVideos.length}
+              </span>
+            )}
+          </div>
+
+          {/* Videos list - full height */}
+          <ScrollArea className="flex-1">
+            <div className="space-y-1 p-2">
+              {filteredSourceVideos.length === 0 ? (
+                <div className="text-center py-8 px-4">
+                  <Upload className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">
+                    {videoSearchQuery ? "No matching videos" : "No videos uploaded yet"}
+                  </p>
+                  {!videoSearchQuery && (
+                    <p className="text-xs text-muted-foreground/70 mt-1">
+                      Drag & drop a video here or click Upload
+                    </p>
                   )}
                 </div>
+              ) : (
+                filteredSourceVideos.map((video) => (
+                  <div
+                    key={video.id}
+                    className={`group flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${
+                      selectedVideo?.id === video.id
+                        ? "bg-primary/10 border border-primary/50"
+                        : "hover:bg-muted"
+                    }`}
+                    onClick={() => video.status !== "processing" && setSelectedVideo(video)}
+                  >
+                    {/* Thumbnail */}
+                    <div className="w-14 h-9 bg-muted rounded flex items-center justify-center overflow-hidden flex-shrink-0">
+                      {video.thumbnail_path ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={`${API_URL}/segments/files/${encodeURIComponent(video.thumbnail_path)}`}
+                          alt={video.name}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <Video className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </div>
 
-                {/* Delete button */}
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium truncate">
+                        {video.name}
+                      </p>
+                      {video.status === "processing" ? (
+                        <div className="flex items-center gap-1 text-[10px] text-amber-500">
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                          <span>Processing...</span>
+                        </div>
+                      ) : video.status === "error" ? (
+                        <div className="flex items-center gap-1 text-[10px] text-red-500">
+                          <AlertTriangle className="h-3 w-3" />
+                          <span>Error</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                          <span>{formatTime(video.duration || 0)}</span>
+                          <span>•</span>
+                          <span>{video.segments_count} seg</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Delete button */}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="opacity-0 group-hover:opacity-100 h-6 w-6"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        requestDeleteVideo(video);
+                      }}
+                    >
+                      <Trash2 className="h-3 w-3 text-destructive" />
+                    </Button>
+                  </div>
+                ))
+              )}
+            </div>
+          </ScrollArea>
+        </TabsContent>
+
+        {/* Transform tab */}
+        <TabsContent value="transform" className="flex-1 flex flex-col min-h-0 mt-0">
+          {selectedSegment ? (
+            <div className="p-3 flex-1 overflow-auto">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-muted-foreground font-mono">
+                  {formatTime(selectedSegment.start_time)} - {formatTime(selectedSegment.end_time)}
+                </span>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="opacity-0 group-hover:opacity-100 h-6 w-6"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    requestDeleteVideo(video);
-                  }}
+                  className="h-6 w-6"
+                  onClick={() => { setSelectedSegment(null); setLeftTab("videos"); }}
+                  title="Close (Esc)"
                 >
-                  <Trash2 className="h-3 w-3 text-destructive" />
+                  <X className="h-3.5 w-3.5" />
                 </Button>
               </div>
-            ))
+              <SegmentTransformPanel
+                transforms={activeTransforms}
+                onChange={setActiveTransforms}
+                onSave={handleSaveTransforms}
+              />
+            </div>
+          ) : (
+            <div className="flex-1 flex items-center justify-center p-4">
+              <p className="text-sm text-muted-foreground text-center">
+                Select a segment to edit transforms
+              </p>
+            </div>
           )}
-        </div>
-      </ScrollArea>
-
-      {/* Transform panel - shown when segment is selected */}
-      {selectedSegment && (
-        <div className="border-t border-border p-3 flex-1 overflow-auto">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-muted-foreground font-mono">
-              {formatTime(selectedSegment.start_time)} - {formatTime(selectedSegment.end_time)}
-            </span>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              onClick={() => setSelectedSegment(null)}
-              title="Close panel (Esc)"
-            >
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-          <SegmentTransformPanel
-            transforms={activeTransforms}
-            onChange={setActiveTransforms}
-            onSave={handleSaveTransforms}
-          />
-        </div>
-      )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 
@@ -1358,6 +1564,15 @@ export default function SegmentsPage() {
                     variant="ghost"
                     size="icon"
                     className="h-5 w-5 flex-shrink-0"
+                    title={segment.single_use ? "Folosit o singură dată (activ)" : "Click pentru utilizare unică"}
+                    onClick={(e) => { e.stopPropagation(); handleToggleSingleUse(segment.id); }}
+                  >
+                    <Repeat1 className={`h-3 w-3 ${segment.single_use ? "text-orange-500" : "text-muted-foreground"}`} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-5 w-5 flex-shrink-0"
                     onClick={(e) => { e.stopPropagation(); handleToggleFavorite(segment.id); }}
                   >
                     {segment.is_favorite ? (
@@ -1488,32 +1703,28 @@ export default function SegmentsPage() {
   // Center content - Video Player
   const centerContent = (
     <div className="h-full flex flex-col">
-      {/* Video header */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-3">
-          <Link href="/librarie">
-            <Button variant="ghost" size="icon" className="h-8 w-8">
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-          </Link>
-          <div>
-            <h1 className="text-lg font-bold flex items-center gap-2">
-              <Scissors className="h-5 w-5" />
-              {selectedVideo ? selectedVideo.name : "Segment Editor"}
-            </h1>
-            {selectedVideo ? (
-              <p className="text-xs text-muted-foreground">
-                {selectedVideo.width}x{selectedVideo.height} • {selectedVideo.fps}fps • {formatTime(selectedVideo.duration || 0)}
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Select a video to start marking segments
-              </p>
-            )}
-          </div>
-        </div>
-        <Button onClick={fetchSourceVideos} variant="outline" size="sm">
-          <RefreshCw className="h-4 w-4 mr-1" />
+      {/* Video header - compact single line */}
+      <div className="flex items-center gap-2 mb-1 h-9">
+        <Link href="/librarie">
+          <Button variant="ghost" size="icon" className="h-7 w-7">
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+        </Link>
+        <h1 className="text-base font-semibold flex items-center gap-1.5 truncate">
+          <Scissors className="h-4 w-4 flex-shrink-0" />
+          {selectedVideo ? selectedVideo.name : "Segment Editor"}
+        </h1>
+        {selectedVideo && (
+          <span className="text-xs text-muted-foreground whitespace-nowrap">
+            {selectedVideo.width}x{selectedVideo.height} {selectedVideo.fps}fps {formatTime(selectedVideo.duration || 0)}
+          </span>
+        )}
+        {!selectedVideo && (
+          <span className="text-xs text-muted-foreground">Select a video</span>
+        )}
+        <div className="flex-1" />
+        <Button onClick={fetchSourceVideos} variant="outline" size="sm" className="h-7 text-xs">
+          <RefreshCw className="h-3.5 w-3.5 mr-1" />
           Refresh
         </Button>
       </div>

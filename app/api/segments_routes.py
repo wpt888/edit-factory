@@ -14,7 +14,7 @@ from typing import Optional, List
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Depends, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
@@ -70,11 +70,12 @@ class SourceVideoResponse(BaseModel):
     created_at: str
 
 class SegmentCreate(BaseModel):
-    start_time: float
-    end_time: float
+    start_time: float = Field(ge=0)
+    end_time: float = Field(gt=0)
     keywords: List[str] = []
     notes: Optional[str] = None
     product_group: Optional[str] = None
+    single_use: bool = False
 
 class SegmentTransformInput(BaseModel):
     rotation: float = 0.0
@@ -99,6 +100,7 @@ class SegmentResponse(BaseModel):
     notes: Optional[str]
     transforms: Optional[dict] = None
     product_group: Optional[str] = None
+    single_use: bool = False
     created_at: str
     # Joined data
     source_video_name: Optional[str] = None
@@ -110,11 +112,12 @@ class SegmentUpdate(BaseModel):
     notes: Optional[str] = None
     transforms: Optional[SegmentTransformInput] = None
     product_group: Optional[str] = None
+    single_use: Optional[bool] = None
 
 class ProductGroupCreate(BaseModel):
     label: str
-    start_time: float
-    end_time: float
+    start_time: float = Field(ge=0)
+    end_time: float = Field(gt=0)
     color: Optional[str] = None
 
 class ProductGroupUpdate(BaseModel):
@@ -370,6 +373,144 @@ def _process_source_video_background(
 
     except Exception as e:
         logger.error(f"[BG] Failed to process source video {video_id}: {e}")
+        try:
+            supabase.table("editai_source_videos").update({
+                "status": "error",
+            }).eq("id", video_id).execute()
+        except Exception:
+            pass
+
+
+class LocalVideoRequest(BaseModel):
+    """Request body for adding a local video by file path (no upload/copy)."""
+    file_path: str = Field(..., description="Absolute path to the video file on disk")
+    name: Optional[str] = Field(default=None, description="Display name (defaults to filename)")
+    description: Optional[str] = None
+
+
+@router.post("/source-videos/local", response_model=SourceVideoResponse)
+@limiter.limit("10/minute")
+async def add_local_source_video(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    body: LocalVideoRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Add a source video by local file path — no upload, no copy.
+
+    For local desktop usage: the file stays in its original location,
+    avoiding slow HTTP uploads and disk duplication.
+    """
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    local_path = Path(body.file_path)
+
+    # Validate file exists
+    if not local_path.is_file():
+        raise HTTPException(status_code=400, detail=f"File not found: {body.file_path}")
+
+    # Validate video extension
+    allowed_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm', '.mpeg', '.mpg', '.3gp', '.ogg'}
+    if local_path.suffix.lower() not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported video format: {local_path.suffix}. Allowed: {', '.join(sorted(allowed_extensions))}"
+        )
+
+    video_id = str(uuid.uuid4())
+    name = body.name or local_path.stem
+
+    logger.info(f"[Profile {profile.profile_id}] Adding local video: {name} -> {local_path}")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        supabase.table("editai_source_videos").insert({
+            "id": video_id,
+            "profile_id": profile.profile_id,
+            "name": name,
+            "description": body.description,
+            "file_path": str(local_path),
+            "thumbnail_path": None,
+            "duration": None,
+            "width": None,
+            "height": None,
+            "fps": None,
+            "file_size_bytes": None,
+            "segments_count": 0,
+            "status": "processing",
+        }).execute()
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to save video record")
+
+    # Metadata extraction + thumbnail in background (no transcode needed for local files)
+    background_tasks.add_task(
+        _process_local_video_background, video_id, local_path, profile.profile_id
+    )
+
+    return SourceVideoResponse(
+        id=video_id,
+        name=name,
+        description=body.description,
+        file_path=str(local_path),
+        thumbnail_path=None,
+        duration=None,
+        width=None,
+        height=None,
+        fps=None,
+        file_size_bytes=None,
+        segments_count=0,
+        status="processing",
+        created_at=now_iso,
+    )
+
+
+def _process_local_video_background(
+    video_id: str,
+    video_path: Path,
+    profile_id: str,
+):
+    """Background task for local videos: extract metadata + generate thumbnail.
+
+    Unlike _process_source_video_background, this does NOT transcode —
+    the file stays in its original location and format.
+    """
+    repo = get_repository()
+    if not repo:
+        logger.error(f"[BG-Local] No DB for source video {video_id}")
+        return
+    supabase = repo.get_client()
+
+    try:
+        # Get video metadata
+        video_info = _get_video_info(video_path)
+
+        # Generate thumbnail in the app's source_videos dir
+        settings = get_settings()
+        source_dir = settings.base_dir / "source_videos"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        thumbnail_path = source_dir / f"{video_id}_thumb.jpg"
+        _generate_thumbnail(video_path, thumbnail_path, timestamp=1)
+
+        supabase.table("editai_source_videos").update({
+            "file_path": str(video_path),
+            "thumbnail_path": str(thumbnail_path) if thumbnail_path.exists() else None,
+            "duration": video_info.get("duration"),
+            "width": video_info.get("width"),
+            "height": video_info.get("height"),
+            "fps": video_info.get("fps"),
+            "file_size_bytes": video_info.get("file_size_bytes"),
+            "status": "ready",
+        }).eq("id", video_id).execute()
+
+        logger.info(f"[BG-Local] Source video {video_id} ready")
+
+    except Exception as e:
+        logger.error(f"[BG-Local] Failed to process source video {video_id}: {e}")
         try:
             supabase.table("editai_source_videos").update({
                 "status": "error",
@@ -816,6 +957,17 @@ async def get_source_video_voice_detection(
         raise HTTPException(status_code=500, detail="Voice detection failed")
 
 
+def _validate_time_range(start_time: float, end_time: float, video_duration: Optional[float]):
+    """Validate that a time range falls within the video duration."""
+    if end_time <= start_time:
+        raise HTTPException(status_code=400, detail="End time must be after start time")
+    if video_duration is not None:
+        if start_time > video_duration:
+            raise HTTPException(status_code=400, detail=f"Start time ({start_time}s) exceeds video duration ({video_duration}s)")
+        if end_time > video_duration:
+            raise HTTPException(status_code=400, detail=f"End time ({end_time}s) exceeds video duration ({video_duration}s)")
+
+
 # ============== SEGMENTS ENDPOINTS ==============
 
 @router.post("/source-videos/{video_id}/segments", response_model=SegmentResponse)
@@ -835,7 +987,7 @@ async def create_segment(
 
     # Verify source video exists and belongs to profile
     video_result = supabase.table("editai_source_videos")\
-        .select("file_path, name")\
+        .select("file_path, name, duration")\
         .eq("id", video_id)\
         .eq("profile_id", profile.profile_id)\
         .execute()
@@ -845,9 +997,8 @@ async def create_segment(
 
     source_video = video_result.data[0]
 
-    # Validate times
-    if segment.end_time <= segment.start_time:
-        raise HTTPException(status_code=400, detail="End time must be after start time")
+    # Validate times against video duration
+    _validate_time_range(segment.start_time, segment.end_time, source_video.get("duration"))
 
     # Create segment
     segment_id = str(uuid.uuid4())
@@ -1161,14 +1312,29 @@ async def update_segment(
     if update.product_group is not None:
         update_data["product_group"] = update.product_group
 
-    # Validate times
-    if update.start_time is not None and update.start_time < 0:
-        raise HTTPException(status_code=400, detail="Start time must be >= 0")
-    if update.end_time is not None and update.end_time < 0:
-        raise HTTPException(status_code=400, detail="End time must be >= 0")
-    if update.start_time is not None and update.end_time is not None:
-        if update.end_time <= update.start_time:
-            raise HTTPException(status_code=400, detail="End time must be after start time")
+    # Validate times: fetch existing segment + video duration for cross-check
+    if update.start_time is not None or update.end_time is not None:
+        existing = supabase.table("editai_segments")\
+            .select("start_time, end_time, source_video_id")\
+            .eq("id", segment_id)\
+            .eq("profile_id", profile.profile_id)\
+            .execute()
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Segment not found")
+
+        effective_start = update.start_time if update.start_time is not None else existing.data[0]["start_time"]
+        effective_end = update.end_time if update.end_time is not None else existing.data[0]["end_time"]
+
+        if effective_start < 0:
+            raise HTTPException(status_code=400, detail="Start time must be >= 0")
+
+        video_result = supabase.table("editai_source_videos")\
+            .select("duration")\
+            .eq("id", existing.data[0]["source_video_id"])\
+            .execute()
+        video_duration = video_result.data[0].get("duration") if video_result.data else None
+
+        _validate_time_range(effective_start, effective_end, video_duration)
 
     result = supabase.table("editai_segments")\
         .update(update_data)\
@@ -1279,6 +1445,40 @@ async def toggle_favorite(
         .execute()
 
     return {"id": segment_id, "is_favorite": new_status}
+
+
+@router.post("/{segment_id}/single-use")
+async def toggle_single_use(
+    segment_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Toggle single_use status for a segment."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    result = supabase.table("editai_segments")\
+        .select("single_use")\
+        .eq("id", segment_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Segment not found")
+
+    current = result.data[0].get("single_use", False)
+    new_status = not current
+
+    supabase.table("editai_segments")\
+        .update({"single_use": new_status, "updated_at": datetime.now(timezone.utc).isoformat()})\
+        .eq("id", segment_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
+
+    return {"id": segment_id, "single_use": new_status}
 
 
 @router.put("/{segment_id}/transforms")
@@ -1470,15 +1670,15 @@ async def create_product_group(
 
     # Verify source video
     video = supabase.table("editai_source_videos")\
-        .select("id")\
+        .select("id, duration")\
         .eq("id", video_id)\
         .eq("profile_id", profile.profile_id)\
         .execute()
     if not video.data:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    if group.end_time <= group.start_time:
-        raise HTTPException(status_code=400, detail="End time must be after start time")
+    # Validate times against video duration
+    _validate_time_range(group.start_time, group.end_time, video.data[0].get("duration"))
 
     # Auto-assign color from palette if not provided
     if not group.color:
@@ -1609,6 +1809,22 @@ async def update_product_group(
 
     old = current.data[0]
     old_label = old["label"]
+
+    # Validate times if being updated
+    if update.start_time is not None or update.end_time is not None:
+        effective_start = update.start_time if update.start_time is not None else old["start_time"]
+        effective_end = update.end_time if update.end_time is not None else old["end_time"]
+
+        if effective_start < 0:
+            raise HTTPException(status_code=400, detail="Start time must be >= 0")
+
+        video_result = supabase.table("editai_source_videos")\
+            .select("duration")\
+            .eq("id", old["source_video_id"])\
+            .execute()
+        video_duration = video_result.data[0].get("duration") if video_result.data else None
+
+        _validate_time_range(effective_start, effective_end, video_duration)
 
     result = supabase.table("editai_product_groups")\
         .update(update_data)\
