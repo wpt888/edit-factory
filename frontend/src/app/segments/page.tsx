@@ -552,6 +552,29 @@ export default function SegmentsPage() {
     }
   };
 
+  // Open native file picker via backend
+  const [browsing, setBrowsing] = useState(false);
+  const handleBrowseLocal = async () => {
+    setBrowsing(true);
+    try {
+      const res = await apiGetWithRetry("/segments/browse-local");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.file_path) {
+          setLocalPath(data.file_path);
+          if (!localName.trim()) {
+            const filename = data.file_path.split(/[/\\]/).pop() || "";
+            setLocalName(filename.replace(/\.[^/.]+$/, ""));
+          }
+        }
+      }
+    } catch {
+      setLocalError("Failed to open file picker.");
+    } finally {
+      setBrowsing(false);
+    }
+  };
+
   // Add local video by path (no upload/copy)
   const handleAddLocal = async () => {
     if (!localPath.trim()) return;
@@ -1049,13 +1072,36 @@ export default function SegmentsPage() {
         <TabsContent value="videos" className="flex-1 flex flex-col min-h-0 mt-0">
           {/* Upload / Add Local buttons */}
           <div className="p-2 border-b border-border flex gap-1.5">
+            <Button
+              size="sm"
+              className="flex-1 h-7 text-xs"
+              disabled={browsing || addingLocal}
+              onClick={async () => {
+                // Open native file picker directly, then add the video
+                setBrowsing(true);
+                try {
+                  const res = await apiGetWithRetry("/segments/browse-local");
+                  if (res.ok) {
+                    const data = await res.json();
+                    if (data.file_path) {
+                      setLocalPath(data.file_path);
+                      const filename = data.file_path.split(/[/\\]/).pop() || "";
+                      setLocalName(filename.replace(/\.[^/.]+$/, ""));
+                      setShowLocalDialog(true);
+                    }
+                  }
+                } catch {
+                  setLocalError("Failed to open file picker.");
+                  setShowLocalDialog(true);
+                } finally {
+                  setBrowsing(false);
+                }
+              }}
+            >
+              <FolderOpen className="h-3.5 w-3.5 mr-1" />
+              {browsing ? "Selecting..." : addingLocal ? "Adding..." : "Add Local"}
+            </Button>
             <Dialog open={showLocalDialog} onOpenChange={setShowLocalDialog}>
-              <DialogTrigger asChild>
-                <Button size="sm" className="flex-1 h-7 text-xs">
-                  <FolderOpen className="h-3.5 w-3.5 mr-1" />
-                  Add Local
-                </Button>
-              </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Add Local Video</DialogTitle>
@@ -1066,20 +1112,33 @@ export default function SegmentsPage() {
                 <div className="grid gap-4 py-4">
                   <div className="space-y-2">
                     <Label htmlFor="local-path">File Path</Label>
-                    <Input
-                      id="local-path"
-                      placeholder="D:\Videos\my-video.mp4"
-                      value={localPath}
-                      onChange={(e) => {
-                        setLocalPath(e.target.value);
-                        if (!localName.trim() && e.target.value) {
-                          const filename = e.target.value.split(/[/\\]/).pop() || "";
-                          setLocalName(filename.replace(/\.[^/.]+$/, ""));
-                        }
-                      }}
-                    />
+                    <div className="flex gap-2">
+                      <Input
+                        id="local-path"
+                        placeholder="D:\Videos\my-video.mp4"
+                        value={localPath}
+                        className="flex-1"
+                        onChange={(e) => {
+                          setLocalPath(e.target.value);
+                          if (!localName.trim() && e.target.value) {
+                            const filename = e.target.value.split(/[/\\]/).pop() || "";
+                            setLocalName(filename.replace(/\.[^/.]+$/, ""));
+                          }
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleBrowseLocal}
+                        disabled={browsing}
+                        className="shrink-0"
+                      >
+                        {browsing ? "..." : "Browse"}
+                      </Button>
+                    </div>
                     <p className="text-xs text-muted-foreground">
-                      Paste the full path to the video file
+                      Click Browse to select, or paste the full path
                     </p>
                   </div>
                   <div className="space-y-2">

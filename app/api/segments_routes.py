@@ -388,6 +388,50 @@ class LocalVideoRequest(BaseModel):
     description: Optional[str] = None
 
 
+@router.get("/browse-local")
+async def browse_local_file(
+    request: Request,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Open a native file picker dialog and return the selected file path.
+
+    For local desktop usage only — opens a system file dialog on the server machine.
+    """
+    import threading
+
+    result = {"path": None}
+
+    def _pick_file():
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            file_path = filedialog.askopenfilename(
+                title="Select Video File",
+                filetypes=[
+                    ("Video files", "*.mp4 *.mov *.avi *.mkv *.wmv *.flv *.webm *.mpeg *.mpg *.3gp *.ogg"),
+                    ("All files", "*.*"),
+                ],
+            )
+            root.destroy()
+            result["path"] = file_path if file_path else None
+        except Exception as e:
+            logger.error(f"File picker error: {e}")
+            result["path"] = None
+
+    # tkinter must run on a separate thread (not asyncio event loop)
+    thread = threading.Thread(target=_pick_file)
+    thread.start()
+    thread.join(timeout=120)
+
+    if not result["path"]:
+        return {"file_path": None}
+
+    return {"file_path": result["path"]}
+
+
 @router.post("/source-videos/local", response_model=SourceVideoResponse)
 @limiter.limit("10/minute")
 async def add_local_source_video(
