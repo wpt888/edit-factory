@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,7 +34,9 @@ export function SimpleSegmentPopup({
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Bug #135: sync state when props change (e.g., editing a different segment)
-  useEffect(() => { setKeywords(initialKeywords); }, [initialKeywords]);
+  // Stabilize array reference to avoid infinite re-render loop
+  const keywordsKey = useMemo(() => initialKeywords.join("\0"), [initialKeywords]);
+  useEffect(() => { setKeywords(initialKeywords); }, [keywordsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setNotes(initialNotes); }, [initialNotes]);
 
   // Focus input on mount
