@@ -381,11 +381,106 @@ def _process_source_video_background(
             pass
 
 
+class FindLocalRequest(BaseModel):
+    """Request body to find a local file by name and size."""
+    filename: str = Field(..., description="Original filename from drag & drop")
+    size: int = Field(..., description="File size in bytes")
+
+
 class LocalVideoRequest(BaseModel):
     """Request body for adding a local video by file path (no upload/copy)."""
     file_path: str = Field(..., description="Absolute path to the video file on disk")
     name: Optional[str] = Field(default=None, description="Display name (defaults to filename)")
     description: Optional[str] = None
+
+
+@router.post("/find-local")
+async def find_local_file(
+    request: Request,
+    body: FindLocalRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Find a file on the local filesystem by filename and size.
+
+    Used when the browser drag & drop provides filename + size but not the full path.
+    Searches common user directories first, then all drives.
+    """
+    import os as _os
+
+    filename = body.filename
+    target_size = body.size
+    matches: List[str] = []
+
+    # Search common user directories first (fast)
+    home = Path(_os.path.expanduser("~"))
+    priority_dirs = [
+        home / "Videos",
+        home / "Downloads",
+        home / "Desktop",
+        home / "Documents",
+        home / "OneDrive" / "Videos",
+        home / "OneDrive" / "Desktop",
+        home / "OneDrive" / "Documents",
+    ]
+
+    for search_dir in priority_dirs:
+        if not search_dir.exists():
+            continue
+        try:
+            for root, _dirs, files in _os.walk(str(search_dir)):
+                if filename in files:
+                    candidate = Path(root) / filename
+                    try:
+                        if candidate.stat().st_size == target_size:
+                            matches.append(str(candidate))
+                            if len(matches) >= 5:
+                                break
+                    except OSError:
+                        continue
+                # Limit depth to 5 levels
+                depth = str(root).count(_os.sep) - str(search_dir).count(_os.sep)
+                if depth >= 5:
+                    _dirs.clear()
+        except PermissionError:
+            continue
+        if matches:
+            break
+
+    # If not found in common dirs, search all drives (Windows)
+    if not matches:
+        import string
+        drives = [f"{d}:\\" for d in string.ascii_uppercase
+                  if Path(f"{d}:\\").exists() and d not in ("A", "B")]
+        for drive in drives:
+            try:
+                for root, _dirs, files in _os.walk(drive):
+                    if filename in files:
+                        candidate = Path(root) / filename
+                        try:
+                            if candidate.stat().st_size == target_size:
+                                matches.append(str(candidate))
+                                if len(matches) >= 3:
+                                    break
+                        except OSError:
+                            continue
+                    # Skip system directories and limit depth
+                    depth = str(root).count(_os.sep) - drive.count(_os.sep)
+                    if depth >= 6:
+                        _dirs.clear()
+                    _dirs[:] = [d for d in _dirs if d not in (
+                        "Windows", "$Recycle.Bin", "System Volume Information",
+                        "ProgramData", "Program Files", "Program Files (x86)",
+                        "node_modules", ".git", "__pycache__", "venv",
+                    )]
+            except PermissionError:
+                continue
+            if matches:
+                break
+
+    if not matches:
+        raise HTTPException(status_code=404, detail=f"File '{filename}' ({target_size} bytes) not found on disk")
+
+    return {"matches": matches, "file_path": matches[0]}
 
 
 @router.get("/browse-local")

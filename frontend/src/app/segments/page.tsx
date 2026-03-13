@@ -471,7 +471,7 @@ export default function SegmentsPage() {
     };
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current = 0;
@@ -479,14 +479,35 @@ export default function SegmentsPage() {
 
     const files = Array.from(e.dataTransfer.files);
     const videoFile = files.find((f) => f.type.startsWith("video/"));
-    if (videoFile) {
-      setUploadFile(videoFile);
-      // Auto-fill name from filename (without extension)
-      const nameWithoutExt = videoFile.name.replace(/\.[^/.]+$/, "");
-      setUploadName(nameWithoutExt);
-      setUploadError(null);
-      setShowUploadDialog(true);
+    if (!videoFile) return;
+
+    // Try to find the local path via backend (avoids uploading the file)
+    try {
+      const findRes = await apiPost("/segments/find-local", {
+        filename: videoFile.name,
+        size: videoFile.size,
+      });
+      if (findRes.ok) {
+        const data = await findRes.json();
+        if (data.file_path) {
+          // Found it — pre-fill local dialog
+          setLocalPath(data.file_path);
+          setLocalName(videoFile.name.replace(/\.[^/.]+$/, ""));
+          setLocalError(null);
+          setShowLocalDialog(true);
+          return;
+        }
+      }
+    } catch {
+      // Fall through to upload dialog
     }
+
+    // Fallback: if file not found locally, use traditional upload
+    setUploadFile(videoFile);
+    const nameWithoutExt = videoFile.name.replace(/\.[^/.]+$/, "");
+    setUploadName(nameWithoutExt);
+    setUploadError(null);
+    setShowUploadDialog(true);
   }, []);
 
   const handleUpload = async () => {
