@@ -29,38 +29,47 @@ def apply_logo_overlay(
     Returns:
         output_path on success.
     """
+    base = None
+    logo = None
     try:
         base = Image.open(base_path).convert("RGBA")
         logo = Image.open(logo_path).convert("RGBA")
+
+        # Guard: reject logos larger than the base image (after scaling)
+        scaled_w = max(1, int(logo.width * scale))
+        scaled_h = max(1, int(logo.height * scale))
+        if scaled_w > base.width or scaled_h > base.height:
+            raise ValueError(
+                f"Logo ({scaled_w}x{scaled_h}) exceeds base image ({base.width}x{base.height})"
+            )
+
+        # Resize logo by scale factor
+        if scale != 1.0:
+            new_w = max(1, int(logo.width * scale))
+            new_h = max(1, int(logo.height * scale))
+            logo = logo.resize((new_w, new_h), Image.LANCZOS)
+
+        # Clamp position so logo stays within bounds
+        x = max(0, min(x, base.width - logo.width))
+        y = max(0, min(y, base.height - logo.height))
+
+        # Composite using alpha channel
+        base.paste(logo, (x, y), logo)
+
+        # Save as PNG to preserve quality
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        base.save(str(out), "PNG")
+
+        logger.info(f"Logo overlay applied: {output_path} (pos={x},{y} scale={scale})")
+        return str(out)
     except (OSError, Exception) as e:
+        if "exceeds base image" in str(e):
+            raise
         logger.error(f"Failed to open image for logo overlay: {e}")
         raise ValueError(f"Invalid image file: {e}")
-
-    # Guard: reject logos larger than the base image (after scaling)
-    scaled_w = max(1, int(logo.width * scale))
-    scaled_h = max(1, int(logo.height * scale))
-    if scaled_w > base.width or scaled_h > base.height:
-        raise ValueError(
-            f"Logo ({scaled_w}x{scaled_h}) exceeds base image ({base.width}x{base.height})"
-        )
-
-    # Resize logo by scale factor
-    if scale != 1.0:
-        new_w = max(1, int(logo.width * scale))
-        new_h = max(1, int(logo.height * scale))
-        logo = logo.resize((new_w, new_h), Image.LANCZOS)
-
-    # Clamp position so logo stays within bounds
-    x = max(0, min(x, base.width - logo.width))
-    y = max(0, min(y, base.height - logo.height))
-
-    # Composite using alpha channel
-    base.paste(logo, (x, y), logo)
-
-    # Save as PNG to preserve quality
-    out = Path(output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    base.save(str(out), "PNG")
-
-    logger.info(f"Logo overlay applied: {output_path} (pos={x},{y} scale={scale})")
-    return str(out)
+    finally:
+        if base is not None:
+            base.close()
+        if logo is not None:
+            logo.close()

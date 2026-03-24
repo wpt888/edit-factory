@@ -302,17 +302,17 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
 
             batch_segments = self.analyze_batch(batch, context)
 
-            # Fix batch offset: Gemini may return start_time/end_time relative
-            # to the batch's first frame (starting at 0) instead of absolute
-            # video timestamps. Detect this by checking if all segments fall
-            # within the batch's local time range and adjust if needed.
+            # BUG-6.5: Fix batch offset detection — always apply offset for batches
+            # after the first. Gemini frequently returns batch-relative timestamps.
             if i > 0 and batch_segments:
                 batch_start_time = batch[0][0]  # First frame timestamp in this batch
+                batch_end_time = batch[-1][0] + self.frame_interval
+                batch_local_duration = batch_end_time - batch_start_time
                 max_seg_time = max(s.end_time for s in batch_segments)
 
-                # If all segment times are below the batch's first frame timestamp,
-                # Gemini likely used batch-relative times — add the offset
-                if max_seg_time < batch_start_time:
+                # If all segment times fit within batch-local range (0 to local_duration),
+                # Gemini used batch-relative times — add the offset
+                if max_seg_time <= batch_local_duration * 1.1:  # 10% tolerance
                     for seg in batch_segments:
                         seg.start_time += batch_start_time
                         seg.end_time += batch_start_time
@@ -382,9 +382,14 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
         used_times = set()
 
         for seg in all_segments:
-            # Check they don't overlap with already selected segments
-            seg_range = set(range(int(seg.start_time), int(seg.end_time) + 1))
-            if seg_range & used_times:
+            # BUG-3.2: Use float comparison instead of integer set arithmetic
+            # to avoid missing sub-second overlaps
+            min_gap = 0.5
+            has_overlap = any(
+                not (seg.end_time + min_gap <= used_seg.start_time or seg.start_time >= used_seg.end_time + min_gap)
+                for used_seg in selected
+            )
+            if has_overlap:
                 continue
 
             seg_duration = seg.end_time - seg.start_time
@@ -393,7 +398,6 @@ Grupează frames-urile în segmente logice. Returnează TOATE segmentele, nu doa
 
             selected.append(seg)
             total_duration += seg_duration
-            used_times.update(seg_range)
 
             if total_duration >= target_duration:
                 break

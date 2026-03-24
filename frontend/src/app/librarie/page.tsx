@@ -65,6 +65,8 @@ interface GeneratedImage {
   error_message: string | null;
   template_name: string | null;
   model?: string;
+  product_id: string | null;
+  is_approved: boolean;
   created_at: string;
 }
 
@@ -708,8 +710,8 @@ function LibrarieContent() {
         const data = await res.json();
         setGeneratedImages(data.images || []);
       }
-    } catch {
-      /* ignore */
+    } catch (error) {
+      console.error("Failed to fetch images:", error);
     } finally {
       setLoadingImages(false);
     }
@@ -727,9 +729,9 @@ function LibrarieContent() {
     try {
       const res = await apiGet("/postiz/integrations");
       const data = await res.json();
-      setAvailableIntegrations(data.integrations || []);
-    } catch {
-      /* ignore */
+      setAvailableIntegrations(Array.isArray(data) ? data : data.integrations || []);
+    } catch (error) {
+      console.error("Failed to fetch integrations:", error);
     }
   };
 
@@ -787,6 +789,22 @@ function LibrarieContent() {
       handleApiError(error, "Error deleting image");
     } finally {
       setDeletingImageId(null);
+    }
+  };
+
+  // Toggle image approval
+  const toggleApproveImage = async (imageId: string) => {
+    try {
+      const res = await apiPatch(`/image-gen/${imageId}/approve`);
+      if (res.ok) {
+        const data = await res.json();
+        setGeneratedImages((prev) =>
+          prev.map((img) => img.id === imageId ? { ...img, is_approved: data.is_approved } : img)
+        );
+        toast.success(data.is_approved ? "Image approved!" : "Approval removed");
+      }
+    } catch (error) {
+      handleApiError(error, "Error toggling approval");
     }
   };
 
@@ -938,10 +956,11 @@ function LibrarieContent() {
                       {img.image_url || img.final_image_path || img.image_local_path ? (
                         /* eslint-disable-next-line @next/next/no-img-element */
                         <img
-                          src={img.image_url || `${API_URL}/image-gen/${img.id}/file`}
+                          src={img.final_image_path || img.image_local_path ? `${API_URL}/image-gen/${img.id}/file` : img.image_url || `${API_URL}/image-gen/${img.id}/file`}
                           alt={img.prompt?.slice(0, 60) || "Generated image"}
                           className="w-full h-full object-cover"
                           loading="lazy"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center">
@@ -971,6 +990,14 @@ function LibrarieContent() {
                         {img.status}
                       </Badge>
 
+                      {/* Approved badge */}
+                      {img.is_approved && (
+                        <Badge className="absolute top-2 left-2 text-xs bg-emerald-600 text-white">
+                          <CheckCircle2 className="h-3 w-3 mr-1" />
+                          Aprobat
+                        </Badge>
+                      )}
+
                       {/* Hover actions */}
                       <div className="absolute inset-0 bg-background/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                         {img.status === "completed" && (
@@ -980,7 +1007,7 @@ function LibrarieContent() {
                               variant="outline"
                               onClick={() => {
                                 window.open(
-                                  img.image_url || `${API_URL}/image-gen/${img.id}/file?download=true`,
+                                  `${API_URL}/image-gen/${img.id}/file?download=true`,
                                   "_blank"
                                 );
                               }}
@@ -1030,6 +1057,23 @@ function LibrarieContent() {
                           year: "numeric",
                         })}
                       </p>
+
+                      {/* Approval checkbox */}
+                      {img.status === "completed" && (
+                        <div className="flex items-center gap-1.5 mt-1.5">
+                          <Checkbox
+                            id={`approve-${img.id}`}
+                            checked={img.is_approved}
+                            onCheckedChange={() => toggleApproveImage(img.id)}
+                          />
+                          <label
+                            htmlFor={`approve-${img.id}`}
+                            className="text-xs cursor-pointer text-muted-foreground hover:text-foreground"
+                          >
+                            Aprobat
+                          </label>
+                        </div>
+                      )}
 
                       {/* Inline publish panel */}
                       {imagePublishId === img.id && (

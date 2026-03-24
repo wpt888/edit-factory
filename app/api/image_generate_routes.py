@@ -3,19 +3,22 @@ AI Image Generation Routes
 Generates images via FAL AI, applies logo overlays, sends to Telegram/Postiz.
 """
 
+import time
 import uuid
 import logging
 import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List
+from typing import Literal, Optional, List
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Form, Depends
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, UploadFile, File, Form, Depends, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import get_settings
+from app.rate_limit import limiter
+from app.api.validators import validate_upload_size
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 from app.api.auth import ProfileContext, get_profile_context
@@ -27,17 +30,45 @@ router = APIRouter(prefix="/image-gen", tags=["AI Image Generation"])
 # ============== In-memory generation progress ==============
 _generation_progress: dict[str, dict] = {}
 _progress_lock = threading.Lock()
+_PROGRESS_TTL = 3600  # 1 hour
+
+
+def _evict_stale_progress():
+    """Remove progress entries older than _PROGRESS_TTL. Call inside _progress_lock."""
+    now = time.time()
+    stale = [k for k, v in _generation_progress.items() if now - v.get("_ts", 0) > _PROGRESS_TTL]
+    for k in stale:
+        del _generation_progress[k]
+
+
+# ============== Gemini client singleton ==============
+_gemini_client = None
+_gemini_lock = threading.Lock()
+
+
+def _get_gemini_client():
+    """Lazy singleton for Gemini client."""
+    global _gemini_client
+    if _gemini_client is None:
+        with _gemini_lock:
+            if _gemini_client is None:
+                from google import genai
+                settings = get_settings()
+                if not settings.gemini_api_key:
+                    raise ValueError("Gemini API key not configured")
+                _gemini_client = genai.Client(api_key=settings.gemini_api_key)
+    return _gemini_client
 
 
 # ============== Pydantic models ==============
 
 class GenerateRequest(BaseModel):
-    prompt: str
+    prompt: str = Field(..., max_length=10000)
     template_id: Optional[str] = None
     product_id: Optional[str] = None
-    aspect_ratio: str = "1:1"
-    model: str = "nano-banana-pro"  # nano-banana, nano-banana-2, nano-banana-pro
-    resolution: Optional[str] = None  # "0.5K", "1K", "2K", "4K" — only for NanoBanana 2 and Pro
+    aspect_ratio: Literal["21:9", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16", "auto"] = "1:1"
+    model: Literal["nano-banana", "nano-banana-2", "nano-banana-pro"] = "nano-banana-pro"
+    resolution: Optional[Literal["0.5K", "1K", "2K", "4K"]] = None
     user_text: Optional[str] = None
     dry_run: bool = False  # If true, returns the final payload without calling FAL
 
@@ -46,6 +77,12 @@ class LogoOverlayRequest(BaseModel):
     x: int = 0
     y: int = 0
     scale: float = 1.0
+
+
+class LogoPositionUpdate(BaseModel):
+    x: int = 20
+    y: int = 20
+    scale: float = 0.3
 
 
 class SendTelegramRequest(BaseModel):
@@ -71,8 +108,8 @@ class TemplateUpdate(BaseModel):
 class GenerateCaptionRequest(BaseModel):
     image_id: Optional[str] = None  # if provided, uses the generated image context
     product_id: Optional[str] = None  # if provided, uses product info
-    tone: str = "professional"  # professional, casual, funny, luxury, urgenta
-    language: str = "ro"  # ro, en
+    tone: Literal["professional", "casual", "funny", "luxury", "urgenta"] = "professional"
+    language: Literal["ro", "en"] = "ro"
     include_hashtags: bool = True
     include_cta: bool = True  # call to action
     custom_instructions: Optional[str] = None  # user can add specific requirements
@@ -101,9 +138,11 @@ def _generate_image_task(
     """Background task: generate image via FAL AI, download, update DB."""
     repo = get_repository()
 
+    local_path = None
     try:
         with _progress_lock:
-            _generation_progress[image_id] = {"status": "generating", "progress": 0}
+            _evict_stale_progress()
+            _generation_progress[image_id] = {"status": "generating", "progress": 0, "_ts": time.time()}
 
         # Update DB status
         if repo:
@@ -134,7 +173,7 @@ def _generate_image_task(
             raise RuntimeError("FAL image has no URL")
 
         with _progress_lock:
-            _generation_progress[image_id] = {"status": "downloading", "progress": 50}
+            _generation_progress[image_id] = {"status": "downloading", "progress": 50, "_ts": time.time()}
 
         # Download to local
         dest_dir = get_settings().output_dir / "generated_images" / profile_id
@@ -143,47 +182,55 @@ def _generate_image_task(
         fal.download_image(image_url, local_path)
 
         with _progress_lock:
-            _generation_progress[image_id] = {"status": "completed", "progress": 100}
+            _generation_progress[image_id] = {"status": "completed", "progress": 100, "_ts": time.time()}
 
-        # Track cost
+        # Calculate cost
+        cost = None
         try:
-            from app.services.cost_tracker import get_cost_tracker
-            tracker = get_cost_tracker()
             from app.services.fal_image_service import get_cost_for_model
-            from app.services.cost_tracker import CostEntry
             cost = get_cost_for_model(model, resolution)
-            entry = CostEntry(
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                job_id=image_id,
-                service="fal_ai",
-                operation="image_generation",
-                input_units=1,
-                cost_usd=cost,
-                details={
-                    "profile_id": profile_id,
-                    "model": model,
-                    "resolution": resolution,
-                    "prompt_preview": prompt[:100],
-                },
-            )
-            tracker._add_entry(entry)
-            tracker._save_to_supabase(entry, profile_id=profile_id)
         except Exception as e:
-            logger.warning(f"Cost tracking failed: {e}")
+            logger.warning(f"Cost calculation failed: {e}")
 
-        # Update DB with results
+        # Track cost in cost tracker
+        if cost is not None:
+            try:
+                from app.services.cost_tracker import get_cost_tracker
+                tracker = get_cost_tracker()
+                tracker.log_fal_image(
+                    job_id=image_id,
+                    model=model,
+                    resolution=resolution,
+                    cost_override=cost,
+                    profile_id=profile_id,
+                    prompt_preview=prompt[:100],
+                )
+            except Exception as e:
+                logger.warning(f"Cost tracking failed: {e}")
+
+        # Update DB with results (including cost)
         if repo:
-            repo.table_query("generated_images", "update", data={
+            update_data = {
                 "status": "completed",
                 "image_url": image_url,
                 "image_local_path": local_path,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
-            }, filters=QueryFilters(eq={"id": image_id}))
+            }
+            if cost is not None:
+                update_data["cost_usd"] = cost
+            repo.table_query("generated_images", "update", data=update_data,
+                filters=QueryFilters(eq={"id": image_id}))
 
     except Exception as e:
         logger.error(f"Image generation failed for {image_id}: {e}")
+        # Cleanup partial file on failure
+        if local_path:
+            try:
+                Path(local_path).unlink(missing_ok=True)
+            except Exception:
+                pass
         with _progress_lock:
-            _generation_progress[image_id] = {"status": "failed", "progress": 0, "error": str(e)}
+            _generation_progress[image_id] = {"status": "failed", "progress": 0, "error": str(e), "_ts": time.time()}
         if repo:
             try:
                 repo.table_query("generated_images", "update", data={
@@ -198,12 +245,18 @@ def _generate_image_task(
 # ============== Generation endpoints ==============
 
 @router.post("/generate")
+@limiter.limit("10/minute")
 async def generate_image(
+    request: Request,
     req: GenerateRequest,
     background_tasks: BackgroundTasks,
     ctx: ProfileContext = Depends(get_profile_context),
 ):
     """Start AI image generation (background task)."""
+    settings = get_settings()
+    if not settings.fal_api_key:
+        raise HTTPException(status_code=503, detail="FAL API key not configured")
+
     repo = get_repository()
     if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -233,10 +286,13 @@ async def generate_image(
         except Exception as e:
             logger.error(f"Product fetch failed: {type(e).__name__}: {e}")
 
+    if req.product_id and p is None:
+        raise HTTPException(status_code=400, detail="Could not fetch product data. Generation aborted to avoid wasting tokens.")
+
     if req.template_id:
         try:
             tpl = repo.table_query("image_prompt_templates", "select",
-                filters=QueryFilters(eq={"id": req.template_id}, limit=1))
+                filters=QueryFilters(eq={"id": req.template_id, "profile_id": ctx.profile_id}, limit=1))
             if tpl.data:
                 template_name = tpl.data[0]["name"]
                 final_prompt = tpl.data[0]["prompt_template"]
@@ -263,7 +319,8 @@ async def generate_image(
                         product_desc += f"Description: {p['description']}\n"
                     final_prompt += product_desc
         except Exception as e:
-            logger.warning(f"Template resolution failed: {e}")
+            logger.error(f"Template resolution failed: {e}")
+            raise HTTPException(status_code=500, detail="Template resolution failed")
     elif p:
         # No template selected — enrich prompt with product context
         product_context = f"Product: {p.get('title', '')}"
@@ -279,20 +336,14 @@ async def generate_image(
 
     # Dry run — return what WOULD be sent to FAL without actually calling it
     if req.dry_run:
-        fal_endpoint = "generate"
-        if product_image_url:
-            from app.services.fal_image_service import MODEL_CONFIGS
-            config = MODEL_CONFIGS.get(req.model, {})
-            fal_endpoint = config.get("url", "") + "/edit"
         return {
             "dry_run": True,
             "product_id": req.product_id,
-            "product_data": p,
+            "product_data": {"title": p.get("title"), "brand": p.get("brand"), "has_image": bool(product_image_url)} if p else None,
             "product_image_url": product_image_url,
             "template_id": req.template_id,
             "template_name": template_name,
             "model": req.model,
-            "fal_endpoint": fal_endpoint,
             "fal_payload": {
                 "prompt": final_prompt,
                 "aspect_ratio": req.aspect_ratio,
@@ -355,7 +406,7 @@ async def get_generation_status(
         repo = get_repository()
         if repo:
             row = repo.table_query("generated_images", "select",
-                filters=QueryFilters(eq={"id": image_id}, limit=1))
+                filters=QueryFilters(eq={"id": image_id, "profile_id": ctx.profile_id}, limit=1))
             if row.data:
                 return row.data[0]
         return cached
@@ -364,7 +415,7 @@ async def get_generation_status(
     repo = get_repository()
     if repo:
         row = repo.table_query("generated_images", "select",
-            filters=QueryFilters(eq={"id": image_id}, limit=1))
+            filters=QueryFilters(eq={"id": image_id, "profile_id": ctx.profile_id}, limit=1))
         if row.data:
             return row.data[0]
 
@@ -374,8 +425,8 @@ async def get_generation_status(
 @router.get("/history")
 async def get_generation_history(
     ctx: ProfileContext = Depends(get_profile_context),
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
     """List generated images for this profile."""
     repo = get_repository()
@@ -480,6 +531,8 @@ async def upload_logo(
     if not file.content_type or file.content_type not in allowed_image_types:
         raise HTTPException(status_code=400, detail="File must be an image (png, jpeg, webp, svg, gif)")
 
+    await validate_upload_size(file, 5 * 1024 * 1024)  # 5MB limit for logos
+
     settings = get_settings()
     logo_dir = settings.output_dir / "logos" / ctx.profile_id
     logo_dir.mkdir(parents=True, exist_ok=True)
@@ -505,16 +558,30 @@ async def upload_logo(
 
 @router.get("/logo")
 async def get_logo_info(ctx: ProfileContext = Depends(get_profile_context)):
-    """Get current logo info for profile."""
+    """Get current logo info for profile, including saved position."""
     repo = get_repository()
     if not repo:
-        return {"logo_path": None}
+        return {"logo_path": None, "exists": False, "logo_position": {"x": 20, "y": 20, "scale": 0.3}}
 
     profile = repo.get_profile(ctx.profile_id)
     logo_path = profile.get("logo_path") if profile else None
     exists = logo_path and Path(logo_path).exists()
+    logo_position = (profile.get("logo_position") if profile else None) or {"x": 20, "y": 20, "scale": 0.3}
 
-    return {"logo_path": logo_path if exists else None, "exists": exists}
+    return {"logo_path": logo_path if exists else None, "exists": exists, "logo_position": logo_position}
+
+
+@router.put("/logo/position")
+async def save_logo_position(req: LogoPositionUpdate, ctx: ProfileContext = Depends(get_profile_context)):
+    """Persist logo position preference to profile."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    repo.update_profile(ctx.profile_id, {
+        "logo_position": {"x": req.x, "y": req.y, "scale": req.scale},
+    })
+    return {"x": req.x, "y": req.y, "scale": req.scale}
 
 
 @router.get("/logo/file")
@@ -529,23 +596,20 @@ async def serve_logo_file(ctx: ProfileContext = Depends(get_profile_context)):
     if not logo_path or not Path(logo_path).exists():
         raise HTTPException(status_code=404, detail="No logo uploaded for this profile")
 
-    return FileResponse(logo_path)
+    return FileResponse(logo_path, headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.get("/{image_id}/file")
-async def serve_image_file(
-    image_id: str,
-    ctx: ProfileContext = Depends(get_profile_context),
-):
-    """Serve the final image file (with logo if applied, otherwise base image)."""
+async def serve_image_file(image_id: str):
+    """Serve the final image file (public, no auth - image IDs are unguessable UUIDs)."""
     repo = get_repository()
     if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
     img = repo.table_query("generated_images", "select",
         filters=QueryFilters(
-            select="final_image_path, image_local_path, profile_id",
-            eq={"id": image_id, "profile_id": ctx.profile_id},
+            select="final_image_path, image_local_path",
+            eq={"id": image_id},
             limit=1,
         ))
 
@@ -556,7 +620,12 @@ async def serve_image_file(
     if not file_path or not Path(file_path).exists():
         raise HTTPException(status_code=404, detail="Image file not available")
 
-    return FileResponse(file_path)
+    # Path traversal guard
+    settings = get_settings()
+    if not Path(file_path).resolve().is_relative_to(settings.output_dir.resolve()):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    return FileResponse(file_path, headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.delete("/logo")
@@ -580,6 +649,49 @@ async def delete_logo(ctx: ProfileContext = Depends(get_profile_context)):
     })
 
     return {"deleted": True}
+
+
+# Parameterized routes MUST come after all static routes to avoid shadowing
+@router.delete("/{image_id}")
+async def delete_image(image_id: str, ctx: ProfileContext = Depends(get_profile_context)):
+    """Delete a generated image and its local files."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    img = repo.table_query("generated_images", "select",
+        filters=QueryFilters(eq={"id": image_id, "profile_id": ctx.profile_id}, limit=1))
+    if not img.data:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # Delete local files
+    for key in ("image_local_path", "final_image_path"):
+        p = img.data[0].get(key)
+        if p and Path(p).exists():
+            Path(p).unlink(missing_ok=True)
+
+    # Delete DB record
+    repo.table_query("generated_images", "delete", filters=QueryFilters(eq={"id": image_id}))
+    return {"deleted": True}
+
+
+@router.patch("/{image_id}/approve")
+async def toggle_image_approval(image_id: str, ctx: ProfileContext = Depends(get_profile_context)):
+    """Toggle is_approved on a generated image."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    img = repo.table_query("generated_images", "select",
+        filters=QueryFilters(eq={"id": image_id, "profile_id": ctx.profile_id}, limit=1))
+    if not img.data:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    new_val = not img.data[0].get("is_approved", False)
+    repo.table_query("generated_images", "update",
+        data={"is_approved": new_val},
+        filters=QueryFilters(eq={"id": image_id, "profile_id": ctx.profile_id}))
+    return {"id": image_id, "is_approved": new_val}
 
 
 # ============== Send endpoints ==============
@@ -821,7 +933,9 @@ async def get_available_models():
 # ============== AI Caption Generation ==============
 
 @router.post("/generate-caption")
+@limiter.limit("15/minute")
 async def generate_caption(
+    request: Request,
     req: GenerateCaptionRequest,
     ctx: ProfileContext = Depends(get_profile_context),
 ):
@@ -906,16 +1020,29 @@ async def generate_caption(
 
     # Call Gemini
     try:
-        import google.generativeai as genai
-
         settings = get_settings()
         if not settings.gemini_api_key:
             raise HTTPException(status_code=503, detail="Gemini API key not configured")
 
-        genai.configure(api_key=settings.gemini_api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        response = model.generate_content(prompt_text)
+        client = _get_gemini_client()
+        response = client.models.generate_content(
+            model=settings.gemini_model,
+            contents=prompt_text,
+        )
         caption = response.text.strip()
+
+        # Track Gemini caption cost
+        try:
+            from app.services.cost_tracker import get_cost_tracker
+            tracker = get_cost_tracker()
+            tracker.log_gemini_analysis(
+                job_id=req.image_id or "caption",
+                frames_analyzed=0,
+                profile_id=ctx.profile_id,
+                video_duration=0,
+            )
+        except Exception as cost_err:
+            logger.warning(f"Caption cost tracking failed: {cost_err}")
 
         return {"caption": caption, "tone": req.tone, "language": req.language}
 
@@ -986,7 +1113,9 @@ async def _publish_image_task(
 
 
 @router.post("/publish-image")
+@limiter.limit("10/minute")
 async def publish_image(
+    request: Request,
     req: PublishImageRequest,
     background_tasks: BackgroundTasks,
     ctx: ProfileContext = Depends(get_profile_context),

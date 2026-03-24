@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import httpx
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.config import get_settings
 
@@ -62,6 +63,9 @@ MODEL_CONFIGS = {
 
 DEFAULT_MODEL = "nano-banana-pro"
 
+# Concurrency limiter — at most 3 concurrent FAL API calls
+_fal_semaphore = threading.Semaphore(3)
+
 
 def get_cost_for_model(model: str, resolution: Optional[str] = None) -> float:
     """Get the cost per image for a given model and resolution."""
@@ -85,6 +89,7 @@ class FalImageGenerator:
             },
         )
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
     def generate(
         self,
         prompt: str,
@@ -157,22 +162,30 @@ class FalImageGenerator:
             f"prompt={prompt[:80]}..."
         )
 
-        response = self._client.post(api_url, json=payload)
-        response.raise_for_status()
+        with _fal_semaphore:
+            try:
+                response = self._client.post(api_url, json=payload)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    f"FAL API error {exc.response.status_code}: {exc.response.text[:500]}"
+                )
+                raise
         data = response.json()
 
         logger.info(f"FAL returned {len(data.get('images', []))} image(s)")
         return data
 
     def download_image(self, url: str, dest_path: str) -> str:
-        """Download generated image from FAL CDN to local path."""
+        """Download generated image from FAL CDN to local path (streaming)."""
         dest = Path(dest_path)
         dest.parent.mkdir(parents=True, exist_ok=True)
 
-        response = self._client.get(url)
-        response.raise_for_status()
-
-        dest.write_bytes(response.content)
+        with self._client.stream("GET", url) as response:
+            response.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in response.iter_bytes(65536):
+                    f.write(chunk)
         logger.info(f"Downloaded FAL image to {dest_path}")
         return str(dest)
 

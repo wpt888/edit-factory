@@ -25,7 +25,7 @@ class EncodingPreset(BaseModel):
     preset: Literal["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"] = "medium"
     gop_size: int = Field(ge=1, default=60)  # Keyframe interval (2 seconds at 30fps)
     keyint_min: int = Field(ge=1, default=60)  # Min keyframe interval
-    audio_bitrate: str = Field(pattern=r"^\d+k$", default="192k")
+    audio_bitrate: str = Field(pattern=r"^\d+k$", default="320k")
     audio_codec: str = "aac"
     audio_sample_rate: int = 48000
 
@@ -41,17 +41,36 @@ class EncodingPreset(BaseModel):
     target_bitrate_mbps: float = Field(gt=0, default=5.0)  # Informational
     max_file_size_mb: Optional[int] = None  # Platform limit (informational)
 
-    def to_ffmpeg_params(self, use_gpu: bool = False) -> list:
+    # VBR encoding settings
+    encoding_mode: Literal["crf", "vbr_1pass", "vbr_2pass"] = "vbr_2pass"
+    target_bitrate_kbps: int = Field(ge=500, le=50000, default=10000)
+    video_profile: Literal["baseline", "main", "high"] = "main"
+    video_level: str = "4.1"
+
+    def needs_two_pass(self) -> bool:
+        """Return True if this preset requires 2-pass encoding."""
+        return self.encoding_mode == "vbr_2pass"
+
+    def to_ffmpeg_params(self, use_gpu: bool = False, pass_number: int = 0, passlogfile: str = "") -> list:
         """
         Generate FFmpeg command parameters for this preset.
 
         Args:
             use_gpu: Use hardware acceleration (NVENC) if True
+            pass_number: 0 = single-pass (CRF or VBR 1-pass), 1 = first pass, 2 = second pass
+            passlogfile: Path prefix for 2-pass log files (required when pass_number > 0)
 
         Returns:
             List of FFmpeg parameters ready for subprocess
         """
         params = []
+
+        # Force CPU for 2-pass (NVENC doesn't support 2-pass)
+        if self.encoding_mode == "vbr_2pass" and use_gpu:
+            logger.info("VBR 2-pass forces CPU encoding (NVENC doesn't support 2-pass)")
+            use_gpu = False
+
+        is_vbr = self.encoding_mode in ("vbr_1pass", "vbr_2pass")
 
         if use_gpu:
             # GPU encoding with NVENC
@@ -65,7 +84,33 @@ class EncodingPreset(BaseModel):
             params.extend([
                 "-c:v", self.codec,
                 "-preset", self.preset,
-                "-crf", str(self.crf),
+            ])
+
+            if is_vbr:
+                # VBR mode: target bitrate with maxrate/bufsize
+                maxrate_kbps = int(self.target_bitrate_kbps * 1.5)
+                bufsize_kbps = self.target_bitrate_kbps * 2
+                params.extend([
+                    "-b:v", f"{self.target_bitrate_kbps}k",
+                    "-maxrate", f"{maxrate_kbps}k",
+                    "-bufsize", f"{bufsize_kbps}k",
+                ])
+            else:
+                # CRF mode
+                params.extend(["-crf", str(self.crf)])
+
+        # Profile and level (all modes)
+        if not use_gpu:
+            params.extend([
+                "-profile:v", self.video_profile,
+                "-level", self.video_level,
+            ])
+
+        # 2-pass flags
+        if pass_number in (1, 2) and passlogfile:
+            params.extend([
+                f"-pass", str(pass_number),
+                "-passlogfile", passlogfile,
             ])
 
         # Keyframe controls
@@ -81,12 +126,13 @@ class EncodingPreset(BaseModel):
                 "-bf", "2",  # B-frames for better compression (CPU only)
             ])
 
-        # Audio settings
-        params.extend([
-            "-c:a", self.audio_codec,
-            "-b:a", self.audio_bitrate,
-            "-ar", str(self.audio_sample_rate),
-        ])
+        # Audio settings (skip for pass 1 — no audio needed)
+        if pass_number != 1:
+            params.extend([
+                "-c:a", self.audio_codec,
+                "-b:a", self.audio_bitrate,
+                "-ar", str(self.audio_sample_rate),
+            ])
 
         # Pixel format for compatibility
         params.extend([
@@ -96,16 +142,17 @@ class EncodingPreset(BaseModel):
         # Thread limit to prevent CPU saturation (especially on high-core-count systems)
         params.extend(["-threads", "4"])
 
-        # Bitrate ceiling to prevent runaway file sizes (CPU only; GPU uses its own rate control)
-        # VID-11: Use kbps for precision — avoids int truncation from Mbps rounding
-        if not use_gpu:
+        # Bitrate ceiling for CRF mode (CPU only; GPU uses its own rate control)
+        # VBR mode already has maxrate/bufsize set above
+        if not use_gpu and not is_vbr:
+            # VID-11: Use kbps for precision — avoids int truncation from Mbps rounding
             max_bitrate_kbps = int(self.target_bitrate_mbps * 1500)  # 1.5x target in kbps
             params.extend([
                 "-maxrate", f"{max_bitrate_kbps}k",
                 "-bufsize", f"{max_bitrate_kbps * 2}k",
             ])
 
-        logger.debug(f"Generated FFmpeg params for {self.name} (GPU: {use_gpu})")
+        logger.debug(f"Generated FFmpeg params for {self.name} (GPU: {use_gpu}, pass: {pass_number})")
         return params
 
 
@@ -113,69 +160,85 @@ class EncodingPreset(BaseModel):
 PRESET_TIKTOK = EncodingPreset(
     name="TikTok",
     platform="tiktok",
-    description="Optimized for TikTok (9:16, CRF 20, -14 LUFS audio)",
+    description="Optimized for TikTok (9:16, VBR 2-pass 10 Mbps, -14 LUFS audio)",
     crf=20,
     preset="medium",
     gop_size=60,
     keyint_min=60,
-    audio_bitrate="192k",
+    audio_bitrate="320k",
     normalize_audio=True,
     target_lufs=-14.0,
     target_tp=-1.5,
     target_lra=7.0,
-    target_bitrate_mbps=5.0,
+    target_bitrate_mbps=10.0,
     max_file_size_mb=500,
+    encoding_mode="vbr_2pass",
+    target_bitrate_kbps=10000,
+    video_profile="main",
+    video_level="4.1",
 )
 
 PRESET_REELS = EncodingPreset(
     name="Instagram Reels",
     platform="reels",
-    description="Optimized for Instagram Reels (9:16, CRF 18, -14 LUFS audio)",
+    description="Optimized for Instagram Reels (9:16, VBR 2-pass 10 Mbps, -14 LUFS audio)",
     crf=18,  # Higher quality for Instagram
-    preset="medium",  # Was "slow" — medium uses 3-4x less RAM/CPU with negligible quality loss
+    preset="medium",
     gop_size=60,
     keyint_min=60,
-    audio_bitrate="192k",
+    audio_bitrate="320k",
     normalize_audio=True,
     target_lufs=-14.0,
     target_tp=-1.5,
     target_lra=7.0,
-    target_bitrate_mbps=6.0,
+    target_bitrate_mbps=10.0,
     max_file_size_mb=4000,
+    encoding_mode="vbr_2pass",
+    target_bitrate_kbps=10000,
+    video_profile="main",
+    video_level="4.1",
 )
 
 PRESET_YOUTUBE_SHORTS = EncodingPreset(
     name="YouTube Shorts",
     platform="youtube_shorts",
-    description="Optimized for YouTube Shorts (9:16, CRF 18, -14 LUFS audio)",
+    description="Optimized for YouTube Shorts (9:16, VBR 2-pass 10 Mbps, -14 LUFS audio)",
     crf=18,  # High quality for YouTube
-    preset="medium",  # Was "slow" — medium uses 3-4x less RAM/CPU with negligible quality loss
+    preset="medium",
     gop_size=60,
     keyint_min=60,
-    audio_bitrate="192k",
+    audio_bitrate="320k",
     normalize_audio=True,
     target_lufs=-14.0,
     target_tp=-1.5,
     target_lra=7.0,
-    target_bitrate_mbps=8.0,
+    target_bitrate_mbps=10.0,
     max_file_size_mb=None,  # No explicit limit
+    encoding_mode="vbr_2pass",
+    target_bitrate_kbps=10000,
+    video_profile="main",
+    video_level="4.1",
 )
 
 PRESET_GENERIC = EncodingPreset(
     name="Generic",
     platform="generic",
-    description="Balanced settings for any platform (CRF 20, -14 LUFS audio)",
+    description="Balanced settings for any platform (VBR 2-pass 10 Mbps, -14 LUFS audio)",
     crf=20,
     preset="medium",
     gop_size=60,
     keyint_min=60,
-    audio_bitrate="192k",
+    audio_bitrate="320k",
     normalize_audio=True,
     target_lufs=-14.0,
     target_tp=-1.5,
     target_lra=7.0,
-    target_bitrate_mbps=5.0,
+    target_bitrate_mbps=10.0,
     max_file_size_mb=None,
+    encoding_mode="vbr_2pass",
+    target_bitrate_kbps=10000,
+    video_profile="main",
+    video_level="4.1",
 )
 
 # Preset registry
@@ -228,6 +291,8 @@ def list_presets() -> list[dict]:
             "target_lufs": preset.target_lufs,
             "max_file_size_mb": preset.max_file_size_mb,
             "video_filters_enabled": preset.video_filters.has_any_enabled(),
+            "encoding_mode": preset.encoding_mode,
+            "target_bitrate_kbps": preset.target_bitrate_kbps,
         })
 
     return presets_list

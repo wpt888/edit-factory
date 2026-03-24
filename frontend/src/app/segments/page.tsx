@@ -754,7 +754,7 @@ export default function SegmentsPage() {
   };
 
   // Save segment with keywords (Bug #125: keep popup open until API success)
-  const handleSaveSegment = async (keywords: string[], notes: string) => {
+  const handleSaveSegment = async (keywords: string[], notes: string, singleUse: boolean) => {
     if (!selectedVideo || !pendingSegment) return;
 
     const segmentToSave = { ...pendingSegment };
@@ -768,6 +768,7 @@ export default function SegmentsPage() {
           end_time: segmentToSave.end,
           keywords,
           notes,
+          single_use: singleUse,
         }
       );
 
@@ -793,11 +794,11 @@ export default function SegmentsPage() {
   };
 
   // Update segment (keywords)
-  const handleUpdateSegment = async (keywords: string[], notes: string) => {
+  const handleUpdateSegment = async (keywords: string[], notes: string, singleUse: boolean) => {
     if (!editingSegment) return;
 
     try {
-      const res = await apiPatch(`/segments/${editingSegment.id}`, { keywords, notes });
+      const res = await apiPatch(`/segments/${editingSegment.id}`, { keywords, notes, single_use: singleUse });
 
       if (res.ok) {
         const updated = await res.json();
@@ -853,6 +854,26 @@ export default function SegmentsPage() {
       }
     } catch (error) {
       handleApiError(error, "Error saving transformations");
+    }
+  };
+
+  // Handle segment resize (drag edges on timeline)
+  const handleSegmentResize = async (segmentId: string, newStart: number, newEnd: number) => {
+    try {
+      const res = await apiPatch(`/segments/${segmentId}`, {
+        start_time: Math.round(newStart * 1000) / 1000,
+        end_time: Math.round(newEnd * 1000) / 1000,
+      });
+      if (!res.ok) throw new Error("Failed to update segment");
+      const updated = await res.json();
+      setSegments((prev) =>
+        prev.map((s) => (s.id === segmentId ? { ...s, ...updated } : s))
+      );
+      if (selectedSegment?.id === segmentId) {
+        setSelectedSegment((prev) => prev ? { ...prev, ...updated } : prev);
+      }
+    } catch (error) {
+      handleApiError(error, "Error resizing segment");
     }
   };
 
@@ -1818,6 +1839,7 @@ export default function SegmentsPage() {
             segments={segments}
             onSegmentCreate={handleSegmentCreate}
             onSegmentClick={(seg) => handleSegmentSelect(seg as Segment)}
+            onSegmentResize={handleSegmentResize}
             onGroupCreate={handleGroupCreateFromTimeline}
             activeTransforms={selectedSegment ? activeTransforms : undefined}
             currentSegment={selectedSegment || undefined}
@@ -1871,6 +1893,7 @@ export default function SegmentsPage() {
             endTime={editingSegment.end_time}
             initialKeywords={editingSegment.keywords}
             initialNotes={editingSegment.notes || ""}
+            initialSingleUse={editingSegment.single_use}
             isEditing={true}
           />
         )}

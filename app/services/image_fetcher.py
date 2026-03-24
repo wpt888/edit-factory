@@ -18,11 +18,17 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
 # Concurrency cap — don't overwhelm CDNs or the local event loop
 CONCURRENT_DOWNLOADS = 5
+
+
+def _get_download_semaphore() -> asyncio.Semaphore:
+    """Create a download semaphore for use in non-batch contexts."""
+    return asyncio.Semaphore(CONCURRENT_DOWNLOADS)
 
 # Aggressive timeouts — skip slow CDNs rather than hang the pipeline
 DOWNLOAD_TIMEOUT = httpx.Timeout(10.0, connect=3.0)
@@ -130,28 +136,17 @@ async def _download_one(
 
 
 def _convert_webp_to_jpg(webp_path: Path, jpg_path: Path) -> None:
-    """Convert a .webp file to .jpg using FFmpeg.
+    """Convert a .webp file to .jpg using Pillow (no FFmpeg dependency).
 
     Args:
         webp_path: Source .webp file path.
         jpg_path: Destination .jpg file path.
     """
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", str(webp_path),
-        str(jpg_path),
-    ]
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=60)
-    except subprocess.TimeoutExpired:
-        logger.warning("FFmpeg webp->jpg conversion timed out for %s", webp_path)
-        return
-    if result.returncode != 0:
-        logger.warning(
-            "FFmpeg webp->jpg conversion failed for %s: %s",
-            webp_path,
-            result.stderr.decode(errors="replace"),
-        )
+        with Image.open(webp_path) as img:
+            img.convert("RGB").save(str(jpg_path), "JPEG", quality=90)
+    except Exception as e:
+        logger.warning("Pillow webp->jpg conversion failed for %s: %s", webp_path, e)
 
 
 def _make_placeholder(dest: Path) -> Optional[str]:

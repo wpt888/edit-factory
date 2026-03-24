@@ -478,6 +478,8 @@ class AssemblyService:
         last_used_at: Dict[Optional[str], Dict[str, int]] = {}
         # Avoid set for cross-variant deprioritization
         _avoid_ids: set = avoid_segment_ids or set()
+        # Track single_use segments already placed in this render
+        _used_single_use_ids: set = set()
 
         for g, ids in group_seg_ids.items():
             rr_pointer[g] = variant_index % len(ids) if ids else 0
@@ -524,6 +526,9 @@ class AssemblyService:
                     continue
                 # Skip consecutive identical segment (always, even with n==1)
                 if sid == exclude_id:
+                    continue
+                # Skip single_use segments already placed
+                if sid in _used_single_use_ids:
                     continue
 
                 seg = segment_lookup[sid]
@@ -574,10 +579,12 @@ class AssemblyService:
             # but still respect exclude_id to prevent consecutive duplicates,
             # and prefer segments not in _avoid_ids.
             candidates = sorted(ids, key=lambda s: group_last_used.get(s, -999))
-            # Try: non-excluded + non-avoided, then non-excluded + avoided, then any
+            # Try: non-excluded + non-avoided + non-single-use-spent, then relax constraints
             fallback = None
             for sid in candidates:
                 if sid == exclude_id:
+                    continue
+                if sid in _used_single_use_ids:
                     continue
                 if sid not in _avoid_ids:
                     fallback = sid
@@ -586,10 +593,12 @@ class AssemblyService:
                 for sid in candidates:
                     if sid == exclude_id:
                         continue
+                    if sid in _used_single_use_ids:
+                        continue
                     fallback = sid
                     break
             if fallback is None:
-                fallback = candidates[0]  # absolute last resort
+                fallback = candidates[0]  # absolute last resort (may reuse single_use)
             fallback_idx = ids.index(fallback)
             rr_pointer[grp] = (fallback_idx + 1) % n
             group_last_used[fallback] = current_srt_idx
@@ -690,6 +699,11 @@ class AssemblyService:
                     non_dup = [c for c in non_overlapping if c[0]["id"] != prev_segment_id]
                     pool = non_dup if non_dup else non_overlapping
 
+                # Filter out already-used single_use segments
+                filtered_pool = [c for c in pool if not (c[0].get("single_use") and c[0]["id"] in _used_single_use_ids)]
+                if filtered_pool:
+                    pool = filtered_pool
+
                 # Prefer segments with oldest cooldown (most spacing) and not in avoid set
                 if len(pool) > 1:
                     def _sort_key(c):
@@ -730,6 +744,10 @@ class AssemblyService:
             # --- Build match result ---
             if chosen_segment:
                 seg_group = chosen_segment.get("product_group")
+
+                # Track single_use segments
+                if chosen_segment.get("single_use"):
+                    _used_single_use_ids.add(chosen_segment["id"])
 
                 # Keyword match: record cooldown without advancing pointer
                 if not is_auto:
@@ -823,6 +841,8 @@ class AssemblyService:
         # always repeating segments_data[0] when unmatched entries exist.
         fallback_segment = segments_data[0] if segments_data else None
         _fallback_idx = 0
+        # Track single_use segments already placed in this timeline
+        _used_single_use_in_timeline: set = set()
 
         current_timeline_pos = 0.0
         intro_entry_count = 0  # Track how many intro micro-segments were added
@@ -835,18 +855,25 @@ class AssemblyService:
             # Sort segments by duration (longer = more content to pick from) as proxy for quality
             scored = sorted(segments_data, key=lambda s: s.get("end_time", 0) - s.get("start_time", 0), reverse=True)
 
-            # Pick top MICRO_COUNT visually diverse segments
+            # Build a larger candidate pool for diversity between variants
+            CANDIDATE_POOL_SIZE = max(MICRO_COUNT * 3, 12)
+            candidate_pool = []
             used_sources = set()
-            intro_segments = []
             for seg in scored:
-                if len(intro_segments) >= MICRO_COUNT:
+                if len(candidate_pool) >= CANDIDATE_POOL_SIZE:
                     break
                 # Ensure diversity: different source videos or different time regions
                 source_key = (seg.get("source_video_path", ""), round(seg.get("start_time", 0) / 5))
                 if source_key in used_sources:
                     continue
                 used_sources.add(source_key)
-                intro_segments.append(seg)
+                candidate_pool.append(seg)
+
+            # Shuffle per variant_index so each variant gets a different intro
+            # Same variant_index always produces the same intro (reproducible)
+            rng = random.Random(variant_index)
+            rng.shuffle(candidate_pool)
+            intro_segments = candidate_pool[:MICRO_COUNT]
 
             # Create micro timeline entries
             for seg in intro_segments:
@@ -908,9 +935,21 @@ class AssemblyService:
                     logger.warning(f"No segment available for SRT entry: '{match.srt_text}'")
                     continue
             elif fallback_segment:
-                # Rotate through segments to avoid repeating the same one
+                # Rotate through segments to avoid repeating the same one,
+                # skipping single_use segments already placed
                 segment = segments_data[_fallback_idx % len(segments_data)]
                 _fallback_idx += 1
+                if segment.get("single_use") and segment["id"] in _used_single_use_in_timeline:
+                    # Try to find a non-single-use-exhausted segment
+                    _found_alt = False
+                    for _try in range(len(segments_data)):
+                        alt = segments_data[_fallback_idx % len(segments_data)]
+                        _fallback_idx += 1
+                        if not (alt.get("single_use") and alt["id"] in _used_single_use_in_timeline):
+                            segment = alt
+                            _found_alt = True
+                            break
+                    # If all exhausted, use the original pick (better than no video)
                 if match.segment_id:
                     logger.error(
                         f"RENDER MISMATCH: Override segment_id {match.segment_id} NOT FOUND "
@@ -961,6 +1000,10 @@ class AssemblyService:
 
             timeline.append(timeline_entry)
             current_timeline_pos += needed_duration
+
+            # Track single_use segments placed in timeline
+            if segment.get("single_use") and segment.get("id"):
+                _used_single_use_in_timeline.add(segment["id"])
 
             # Diagnostic: log each timeline entry's source for debugging render mismatches
             if idx < 10 or idx == len(match_results) - 1:
@@ -1644,7 +1687,7 @@ class AssemblyService:
                 logger.info(f"Filtering to {len(source_video_ids)} source video(s)")
             from app.repositories.models import QueryFilters
             seg_filters = QueryFilters(
-                select="id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, editai_source_videos(file_path)",
+                select="id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, single_use, editai_source_videos(file_path)",
                 order_by="id", order_desc=False,
             )
             if source_video_ids:
@@ -1670,6 +1713,7 @@ class AssemblyService:
                         "transforms": seg.get("transforms"),
                         "thumbnail_path": seg.get("thumbnail_path"),
                         "product_group": seg.get("product_group"),
+                        "single_use": seg.get("single_use", False),
                     })
 
             logger.info(f"Loaded {len(segments_data)} segments from library")
@@ -1696,7 +1740,7 @@ class AssemblyService:
                         f"filtered query: {missing_seg_ids[:5]}..."
                     )
                     missing_filters = QueryFilters(
-                        select="id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, editai_source_videos(file_path)",
+                        select="id, source_video_id, start_time, end_time, keywords, transforms, thumbnail_path, product_group, single_use, editai_source_videos(file_path)",
                         in_={"id": missing_seg_ids},
                         eq={"profile_id": profile_id},
                     )
@@ -1716,6 +1760,7 @@ class AssemblyService:
                                 "transforms": seg.get("transforms"),
                                 "thumbnail_path": seg.get("thumbnail_path"),
                                 "product_group": seg.get("product_group"),
+                                "single_use": seg.get("single_use", False),
                             })
                             added += 1
                     if added:
@@ -2029,6 +2074,10 @@ class AssemblyService:
             "extra_flags": "-movflags +faststart",
         }
 
+        # Extract subtitle style params so they match the final render
+        # (assemble_and_render overwrites these keys in subtitle_settings
+        # with function-parameter values, so we must pass them explicitly)
+        _ss = subtitle_settings or {}
         return await self.assemble_and_render(
             script_text=script_text,
             profile_id=profile_id,
@@ -2050,6 +2099,11 @@ class AssemblyService:
             enable_denoise=False,
             enable_sharpen=False,
             enable_color=False,
+            # Pass through subtitle style params to match final render output
+            shadow_depth=_ss.get("shadowDepth", 0),
+            enable_glow=_ss.get("enableGlow", False),
+            glow_blur=_ss.get("glowBlur", 0),
+            adaptive_sizing=_ss.get("adaptiveSizing", False),
             ultra_rapid_intro=ultra_rapid_intro,
             interstitial_slides=interstitial_slides,
             pip_overlays=None,

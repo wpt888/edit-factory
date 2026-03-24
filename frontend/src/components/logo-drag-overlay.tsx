@@ -3,6 +3,7 @@
 import React, { useRef, useState, useCallback, useEffect } from "react";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 
 interface LogoDragOverlayProps {
   imageUrl: string;
@@ -26,14 +27,14 @@ export function LogoDragOverlay({
   initialScale = 0.3,
 }: LogoDragOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const logoRef = useRef<HTMLImageElement>(null);
   const [dragging, setDragging] = useState(false);
   const [scale, setScale] = useState(initialScale);
   const [position, setPosition] = useState({ x: initialX, y: initialY });
   const dragOffset = useRef({ x: 0, y: 0 });
   const [displaySize, setDisplaySize] = useState({ width: 0, height: 0 });
+  const [logoNatural, setLogoNatural] = useState({ width: 0, height: 0 });
 
-  // Bug #127: refs for values used in drag-end effect to avoid stale closures
+  // Refs for values used in drag-end effect to avoid stale closures
   const positionRef = useRef(position);
   const scaleRef = useRef(scale);
   const toRealRef = useRef<(x: number, y: number) => { x: number; y: number }>(() => ({ x: 0, y: 0 }));
@@ -42,7 +43,7 @@ export function LogoDragOverlay({
   useEffect(() => { scaleRef.current = scale; }, [scale]);
   useEffect(() => { onPositionChangeRef.current = onPositionChange; }, [onPositionChange]);
 
-  // Bug #169: sync state when parent provides new initial values
+  // Sync state when parent provides new initial values
   useEffect(() => { setPosition({ x: initialX, y: initialY }); }, [initialX, initialY]);
   useEffect(() => { setScale(initialScale); }, [initialScale]);
 
@@ -76,6 +77,11 @@ export function LogoDragOverlay({
   );
   useEffect(() => { toRealRef.current = toReal; }, [toReal]);
 
+  // Compute the visual (display) size of the logo
+  const displayRatio = displaySize.width ? displaySize.width / imageWidth : 1;
+  const logoDisplayW = logoNatural.width ? logoNatural.width * scale * displayRatio : 0;
+  const logoDisplayH = logoNatural.height ? logoNatural.height * scale * displayRatio : 0;
+
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
@@ -95,17 +101,17 @@ export function LogoDragOverlay({
     if (!dragging) return;
 
     const handleMouseMove = (e: MouseEvent) => {
-      if (!containerRef.current || !dragging) return;
+      if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
-      const newX = Math.max(0, e.clientX - rect.left - dragOffset.current.x);
-      const newY = Math.max(0, e.clientY - rect.top - dragOffset.current.y);
+      const newX = e.clientX - rect.left - dragOffset.current.x;
+      const newY = e.clientY - rect.top - dragOffset.current.y;
 
-      const logoEl = logoRef.current;
-      const maxX = logoEl ? rect.width - logoEl.offsetWidth : rect.width;
-      const maxY = logoEl ? rect.height - logoEl.offsetHeight : rect.height;
+      // Clamp using the actual visual logo dimensions
+      const maxX = Math.max(0, rect.width - logoDisplayW);
+      const maxY = Math.max(0, rect.height - logoDisplayH);
 
-      const clampedX = Math.min(newX, Math.max(0, maxX));
-      const clampedY = Math.min(newY, Math.max(0, maxY));
+      const clampedX = Math.max(0, Math.min(newX, maxX));
+      const clampedY = Math.max(0, Math.min(newY, maxY));
 
       setPosition({ x: clampedX, y: clampedY });
     };
@@ -121,15 +127,14 @@ export function LogoDragOverlay({
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [dragging]);
+  }, [dragging, logoDisplayW, logoDisplayH]);
 
-  // Notify parent when dragging ends — Bug #127: use refs for current values
+  // Notify parent when dragging ends
   useEffect(() => {
     if (!dragging && positionRef.current.x !== initialX && positionRef.current.y !== initialY) {
       const real = toRealRef.current(positionRef.current.x, positionRef.current.y);
       onPositionChangeRef.current(real.x, real.y, scaleRef.current);
     }
-    // Only fire when dragging transitions to false
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragging]);
 
@@ -143,8 +148,30 @@ export function LogoDragOverlay({
     [position, toReal, onPositionChange]
   );
 
-  // Logo display size based on scale and container ratio
-  const logoDisplayScale = displaySize.width ? (displaySize.width / imageWidth) * scale : scale;
+  // Quick-position presets (in real image coordinates, accounting for actual logo size)
+  const scaledLogoW = logoNatural.width * scale;
+  const scaledLogoH = logoNatural.height * scale;
+
+  const quickPositions = [
+    { label: "TL", x: 20, y: 20 },
+    { label: "TR", x: Math.max(20, imageWidth - scaledLogoW - 20), y: 20 },
+    { label: "BL", x: 20, y: Math.max(20, imageHeight - scaledLogoH - 20) },
+    { label: "BR", x: Math.max(20, imageWidth - scaledLogoW - 20), y: Math.max(20, imageHeight - scaledLogoH - 20) },
+    { label: "Center", x: Math.round((imageWidth - scaledLogoW) / 2), y: Math.round((imageHeight - scaledLogoH) / 2) },
+  ];
+
+  const applyQuickPosition = useCallback(
+    (realX: number, realY: number) => {
+      if (!displaySize.width || !displaySize.height) return;
+      const ratioX = displaySize.width / imageWidth;
+      const ratioY = displaySize.height / imageHeight;
+      const displayX = Math.round(realX * ratioX);
+      const displayY = Math.round(realY * ratioY);
+      setPosition({ x: displayX, y: displayY });
+      onPositionChange(realX, realY, scale);
+    },
+    [displaySize, imageWidth, imageHeight, scale, onPositionChange]
+  );
 
   return (
     <div className="space-y-3">
@@ -160,22 +187,44 @@ export function LogoDragOverlay({
           draggable={false}
         />
 
-        {/* Draggable logo */}
-        <img
-          ref={logoRef}
-          src={logoUrl}
-          alt="Logo"
-          draggable={false}
-          className={`absolute pointer-events-auto ${dragging ? "opacity-80" : "opacity-100"} transition-opacity`}
-          style={{
-            left: position.x,
-            top: position.y,
-            transform: `scale(${logoDisplayScale})`,
-            transformOrigin: "top left",
-            cursor: dragging ? "grabbing" : "grab",
-          }}
-          onMouseDown={handleMouseDown}
-        />
+        {/* Draggable logo — uses explicit width/height so layout matches visual size */}
+        {logoDisplayW > 0 && logoDisplayH > 0 && (
+          <img
+            src={logoUrl}
+            alt="Logo"
+            draggable={false}
+            className={`absolute pointer-events-auto ${dragging ? "opacity-80" : "opacity-100"} transition-opacity`}
+            style={{
+              left: position.x,
+              top: position.y,
+              width: logoDisplayW,
+              height: logoDisplayH,
+              cursor: dragging ? "grabbing" : "grab",
+            }}
+            onMouseDown={handleMouseDown}
+            onLoad={(e) => {
+              const img = e.currentTarget;
+              if (img.naturalWidth && img.naturalHeight) {
+                setLogoNatural({ width: img.naturalWidth, height: img.naturalHeight });
+              }
+            }}
+          />
+        )}
+
+        {/* Hidden loader to get natural dimensions before first render */}
+        {logoNatural.width === 0 && (
+          <img
+            src={logoUrl}
+            alt=""
+            className="absolute opacity-0 pointer-events-none"
+            onLoad={(e) => {
+              const img = e.currentTarget;
+              if (img.naturalWidth && img.naturalHeight) {
+                setLogoNatural({ width: img.naturalWidth, height: img.naturalHeight });
+              }
+            }}
+          />
+        )}
       </div>
 
       {/* Scale slider */}
@@ -192,6 +241,25 @@ export function LogoDragOverlay({
         <span className="text-sm text-muted-foreground w-12 text-right">
           {scale.toFixed(2)}x
         </span>
+      </div>
+
+      {/* Quick-position buttons */}
+      <div className="flex items-center gap-2">
+        <Label className="text-sm whitespace-nowrap w-24">Quick Position</Label>
+        <div className="flex gap-1.5 flex-wrap">
+          {quickPositions.map((qp) => (
+            <Button
+              key={qp.label}
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => applyQuickPosition(qp.x, qp.y)}
+            >
+              {qp.label}
+            </Button>
+          ))}
+        </div>
       </div>
     </div>
   );

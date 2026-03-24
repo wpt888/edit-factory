@@ -284,6 +284,12 @@ CREATE TABLE IF NOT EXISTS editai_export_presets (
     keyint_min      INTEGER DEFAULT 60,
     video_preset    TEXT DEFAULT 'medium',
 
+    -- VBR encoding (from 029)
+    encoding_mode       TEXT DEFAULT 'vbr_2pass',
+    target_bitrate_kbps INTEGER DEFAULT 10000,
+    video_profile       TEXT DEFAULT 'main',
+    video_level         TEXT DEFAULT '4.1',
+
     -- Default flag (from 012)
     is_default      INTEGER DEFAULT 0,
 

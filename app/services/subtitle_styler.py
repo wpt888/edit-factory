@@ -302,17 +302,37 @@ def build_subtitle_filter(
 
     force_style = style_config.to_force_style_string()
 
-    # Escape SRT path for FFmpeg subtitles filter
-    # Order matters: backslashes first, then special chars
-    srt_path_escaped = str(srt_path).replace('\\', '/')
-    srt_path_escaped = srt_path_escaped.replace("'", "'\\''")
-    # Escape ALL colons — including the Windows drive letter colon.
-    # FFmpeg's subtitles filter uses ':' as option separator, so even C: must
-    # become C\: to avoid "Unable to parse option value ... as image size".
-    srt_path_escaped = srt_path_escaped.replace(':', '\\:')
-    srt_path_escaped = srt_path_escaped.replace('[', '\\[')
-    srt_path_escaped = srt_path_escaped.replace(']', '\\]')
-    # Spaces don't need escaping inside single-quoted FFmpeg subtitles filter path
+    # DEBUG: Log the complete subtitle style config to diagnose transparency bug
+    logger.debug(
+        f"[SUBTITLE-DEBUG] Input settings: opacity={settings.get('opacity', 'MISSING')}, "
+        f"textColor={settings.get('textColor', 'MISSING')}, "
+        f"outlineColor={settings.get('outlineColor', 'MISSING')}, "
+        f"enableGlow={settings.get('enableGlow', 'MISSING')}, "
+        f"glowBlur={settings.get('glowBlur', 'MISSING')}, "
+        f"shadowDepth={settings.get('shadowDepth', 'MISSING')}, "
+        f"fontSize={settings.get('fontSize', 'MISSING')}"
+    )
+    logger.debug(
+        f"[SUBTITLE-DEBUG] StyleConfig: opacity={style_config.opacity}, "
+        f"primary_color={style_config.primary_color}, "
+        f"outline_color={style_config.outline_color}, "
+        f"enable_glow={style_config.enable_glow}, "
+        f"glow_blur={style_config.glow_blur}, "
+        f"shadow_depth={style_config.shadow_depth}"
+    )
+    logger.debug(f"[SUBTITLE-DEBUG] force_style={force_style}")
+
+    # Log SRT file content (first 200 chars) to verify it's not empty/malformed
+    try:
+        srt_content_sample = srt_path.read_text(encoding='utf-8')[:200]
+        logger.debug(f"[SUBTITLE-DEBUG] SRT content (first 200 chars): {srt_content_sample!r}")
+        logger.debug(f"[SUBTITLE-DEBUG] SRT file size: {srt_path.stat().st_size} bytes")
+    except Exception as e:
+        logger.debug(f"[SUBTITLE-DEBUG] Could not read SRT file: {e}")
+
+    # BUG-1.4: Use shared escape function for consistent path handling across codepaths
+    from app.services.video_processor import escape_srt_path_for_ffmpeg
+    srt_path_escaped = escape_srt_path_for_ffmpeg(srt_path)
 
     # Build filter
     filter_str = f"subtitles='{srt_path_escaped}':force_style='{force_style}'"

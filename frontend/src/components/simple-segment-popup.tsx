@@ -6,16 +6,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { X, Plus, Tag } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { X, Plus, Tag, Repeat1 } from "lucide-react";
 import { formatTime } from "@/lib/utils";
 
 interface SimpleSegmentPopupProps {
   onClose: () => void;
-  onSave: (keywords: string[], notes: string) => void;
+  onSave: (keywords: string[], notes: string, singleUse: boolean) => void;
   startTime: number;
   endTime: number;
   initialKeywords?: string[];
   initialNotes?: string;
+  initialSingleUse?: boolean;
   isEditing?: boolean;
 }
 
@@ -26,11 +28,13 @@ export function SimpleSegmentPopup({
   endTime,
   initialKeywords = [],
   initialNotes = "",
+  initialSingleUse = false,
   isEditing = false,
 }: SimpleSegmentPopupProps) {
   const [keywords, setKeywords] = useState<string[]>(initialKeywords);
   const [newKeyword, setNewKeyword] = useState("");
   const [notes, setNotes] = useState(initialNotes);
+  const [singleUse, setSingleUse] = useState(initialSingleUse);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Bug #135: sync state when props change (e.g., editing a different segment)
@@ -84,9 +88,12 @@ export function SimpleSegmentPopup({
     setKeywords(keywords.filter((k) => k !== keyword));
   };
 
+  // Sync singleUse when props change (editing different segment)
+  useEffect(() => { setSingleUse(initialSingleUse); }, [initialSingleUse]);
+
   // Handle save
   const handleSave = () => {
-    onSave(keywords, notes);
+    onSave(keywords, notes, singleUse);
   };
 
   // Handle paste (split by comma)
@@ -195,6 +202,24 @@ export function SimpleSegmentPopup({
               rows={2}
               className="resize-none"
             />
+          </div>
+
+          {/* Single use option */}
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="single-use"
+              checked={singleUse}
+              onCheckedChange={(checked) => setSingleUse(checked === true)}
+            />
+            <div className="grid gap-0.5 leading-none">
+              <Label htmlFor="single-use" className="text-sm font-medium cursor-pointer flex items-center gap-1.5">
+                <Repeat1 className="h-3.5 w-3.5 text-orange-500" />
+                Folosește o singură dată
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Segmentul va apărea maxim o dată în videoclip, fără a fi repetat.
+              </p>
+            </div>
           </div>
 
           {/* Quick keyword suggestions */}

@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { apiPost, apiGet, apiPut, apiDelete, apiUpload } from "@/lib/api";
+import { apiPost, apiGet, apiPut, apiDelete, apiUpload, apiPatch, handleApiError } from "@/lib/api";
+import { useLocalStorageConfig } from "@/hooks/use-local-storage-config";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,7 +36,9 @@ import {
   Share2,
   Calendar,
   AlertTriangle,
+  Download,
 } from "lucide-react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
@@ -59,7 +62,10 @@ interface GeneratedImage {
   logo_config: { x: number; y: number; scale: number } | null;
   error_message: string | null;
   template_name: string | null;
+  cost_usd: number | null;
   created_at: string;
+  model?: string;
+  resolution?: string;
 }
 
 interface CatalogProduct {
@@ -156,21 +162,21 @@ export default function CreateImagePage() {
 
   // Step 1 state
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+  const [selectedTemplateId, setSelectedTemplateId] = useLocalStorageConfig<string>("editai_image_gen_template", "");
   const [promptText, setPromptText] = useState("");
   const [userText, setUserText] = useState("");
-  const [aspectRatio, setAspectRatio] = useState("1:1");
+  const [aspectRatio, setAspectRatio] = useLocalStorageConfig<string>("editai_image_gen_aspect", "1:1");
   const [generating, setGenerating] = useState(false);
   const [generationStatus, setGenerationStatus] = useState("");
   const [currentImageId, setCurrentImageId] = useState<string | null>(null);
   const [currentImage, setCurrentImage] = useState<GeneratedImage | null>(null);
 
   // Model & resolution
-  const [selectedModel, setSelectedModel] = useState("nano-banana-pro");
-  const [resolution, setResolution] = useState("1K");
+  const [selectedModel, setSelectedModel] = useLocalStorageConfig<string>("editai_image_gen_model", "nano-banana-pro");
+  const [resolution, setResolution] = useLocalStorageConfig<string>("editai_image_gen_resolution", "1K");
 
   // Step 2 state
-  const [addLogo, setAddLogo] = useState(false);
+  const [addLogo, setAddLogo] = useState(true);
   const [logoInfo, setLogoInfo] = useState<{ logo_path: string | null; exists: boolean }>({
     logo_path: null,
     exists: false,
@@ -219,6 +225,14 @@ export default function CreateImagePage() {
   const [products, setProducts] = useState<CatalogProduct[]>([]);
   const [selectedProductId, setSelectedProductId] = useState<string>("");
   const [productSearch, setProductSearch] = useState("");
+  const [productsWithApprovedImages, setProductsWithApprovedImages] = useState<Set<string>>(new Set());
+
+  // Confirm dialogs
+  const [confirmDeleteTemplate, setConfirmDeleteTemplate] = useState<string | null>(null);
+  const [confirmDeleteLogo, setConfirmDeleteLogo] = useState(false);
+
+  // Generate debounce guard
+  const generateClickRef = useRef(0);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const publishPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -259,11 +273,19 @@ export default function CreateImagePage() {
       const res = await apiGet("/image-gen/templates");
       if (res.ok) {
         const data = await res.json();
-        setTemplates(data.templates || []);
+        const tpls = data.templates || [];
+        setTemplates(tpls);
+        // Validate saved template still exists; fallback to default template
+        setSelectedTemplateId((prev: string) => {
+          if (prev && tpls.some((t: Template) => t.id === prev)) return prev;
+          const defaultTpl = tpls.find((t: Template) => t.is_default);
+          return defaultTpl ? defaultTpl.id : "";
+        });
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error("Failed to fetch templates:", err);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchLogoInfo = useCallback(async () => {
@@ -272,10 +294,17 @@ export default function CreateImagePage() {
       if (res.ok) {
         const data = await res.json();
         setLogoInfo(data);
+        if (data.exists) {
+          setAddLogo(true);
+          if (data.logo_position) {
+            setLogoPosition(data.logo_position);
+          }
+        }
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error("Failed to fetch logo info:", err);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchHistory = useCallback(async () => {
@@ -285,8 +314,8 @@ export default function CreateImagePage() {
         const data = await res.json();
         setHistory(data.images || []);
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error("Failed to fetch history:", err);
     }
   }, []);
 
@@ -299,8 +328,8 @@ export default function CreateImagePage() {
         const data = await res.json();
         setProducts(data.products || []);
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error("Failed to fetch products:", err);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -314,10 +343,23 @@ export default function CreateImagePage() {
         setIntegrations(data);
         setSelectedIntegrationIds(new Set(data.map((i: Integration) => i.id)));
       }
-    } catch {
+    } catch (err) {
+      console.error("Failed to fetch integrations:", err);
       setIntegrations([]);
     } finally {
       setLoadingIntegrations(false);
+    }
+  }, []);
+
+  const fetchProductsWithApprovedImages = useCallback(async () => {
+    try {
+      const res = await apiGet("/catalog/products/with-approved-images");
+      if (res.ok) {
+        const data = await res.json();
+        setProductsWithApprovedImages(new Set(data.product_ids || []));
+      }
+    } catch (err) {
+      console.error("Failed to fetch products with approved images:", err);
     }
   }, []);
 
@@ -325,7 +367,8 @@ export default function CreateImagePage() {
     fetchTemplates();
     fetchLogoInfo();
     fetchProducts();
-  }, [fetchTemplates, fetchLogoInfo, fetchProducts]);
+    fetchProductsWithApprovedImages();
+  }, [fetchTemplates, fetchLogoInfo, fetchProducts, fetchProductsWithApprovedImages]);
 
   // Debounced product search (Bug #158)
   useEffect(() => {
@@ -384,6 +427,11 @@ export default function CreateImagePage() {
   const handleGenerate = async () => {
     if (!promptText.trim() && !userText.trim()) return;
 
+    // Debounce guard (1s cooldown)
+    const now = Date.now();
+    if (now - generateClickRef.current < 1000) return;
+    generateClickRef.current = now;
+
     setGenerating(true);
     setGenerationStatus("Starting...");
     setCurrentImage(null);
@@ -404,60 +452,68 @@ export default function CreateImagePage() {
       const data = await res.json();
       setCurrentImageId(data.image_id);
 
-      // Start polling (clear any existing interval first)
+      // Start polling with exponential backoff
       if (pollRef.current) {
-        clearInterval(pollRef.current);
+        clearTimeout(pollRef.current as ReturnType<typeof setTimeout>);
         pollRef.current = null;
       }
-      let pollErrorCount = 0;
-      pollRef.current = setInterval(async () => {
+      let pollDelay = 2000;
+      const pollStartTime = Date.now();
+
+      const pollOnce = async () => {
+        // Max poll duration: 5 minutes
+        if (Date.now() - pollStartTime > 300000) {
+          pollRef.current = null;
+          setGenerating(false);
+          setGenerationStatus("Failed: Generation timed out. Check history for results.");
+          return;
+        }
         try {
           const statusRes = await apiGet(`/image-gen/${data.image_id}/status`);
           if (statusRes.ok) {
-            pollErrorCount = 0; // reset on success
+            pollDelay = 2000; // reset on success
             const statusData = await statusRes.json();
             setGenerationStatus(statusData.status || "generating");
 
             if (statusData.status === "completed") {
-              clearInterval(pollRef.current!);
               pollRef.current = null;
               setCurrentImage(statusData);
               setGenerating(false);
               setStep(2);
+              fetchHistory(); // auto-refresh history
+              return;
             } else if (statusData.status === "failed") {
-              clearInterval(pollRef.current!);
               pollRef.current = null;
               setGenerating(false);
               setGenerationStatus(`Failed: ${statusData.error_message || statusData.error || "Unknown error"}`);
+              return;
             }
           }
         } catch (err) {
-          // Bug #90: stop polling after repeated errors
           console.error("Image poll error:", err);
-          pollErrorCount++;
-          if (pollErrorCount > 5) {
-            clearInterval(pollRef.current!);
-            pollRef.current = null;
-            setGenerating(false);
-            setGenerationStatus("Image generation check failed. Please try again.");
-          }
+          pollDelay = Math.min(pollDelay * 2, 16000); // exponential backoff, max 16s
         }
-      }, 2000);
+        pollRef.current = setTimeout(pollOnce, pollDelay) as unknown as ReturnType<typeof setInterval>;
+      };
+
+      pollRef.current = setTimeout(pollOnce, pollDelay) as unknown as ReturnType<typeof setInterval>;
     } catch (err) {
       setGenerating(false);
-      setGenerationStatus("Failed to start generation");
+      handleApiError(err, "Failed to start generation");
     }
   };
 
   // Cleanup polling on unmount
   useEffect(() => {
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      if (pollRef.current) clearTimeout(pollRef.current as unknown as ReturnType<typeof setTimeout>);
       if (publishPollRef.current) clearTimeout(publishPollRef.current);
     };
   }, []);
 
   // ============== Logo ==============
+
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -466,13 +522,17 @@ export default function CreateImagePage() {
     const formData = new FormData();
     formData.append("file", file);
 
+    setUploadingLogo(true);
     try {
       const res = await apiUpload("/image-gen/logo/upload", formData);
       if (res.ok) {
         await fetchLogoInfo();
+        toast.success("Logo uploaded!");
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      handleApiError(err, "Failed to upload logo");
+    } finally {
+      setUploadingLogo(false);
     }
   };
 
@@ -488,6 +548,17 @@ export default function CreateImagePage() {
       });
 
       if (res.ok) {
+        // Persist logo position to profile
+        try {
+          await apiPut("/image-gen/logo/position", {
+            x: logoPosition.x,
+            y: logoPosition.y,
+            scale: logoPosition.scale,
+          });
+        } catch {
+          // non-critical
+        }
+
         // Refresh image data
         const statusRes = await apiGet(`/image-gen/${currentImageId}/status`);
         if (statusRes.ok) {
@@ -495,8 +566,8 @@ export default function CreateImagePage() {
           setCurrentImage(data);
         }
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      handleApiError(err, "Failed to apply logo");
     } finally {
       setApplyingLogo(false);
     }
@@ -506,8 +577,8 @@ export default function CreateImagePage() {
     try {
       await apiDelete("/image-gen/logo");
       await fetchLogoInfo();
-    } catch {
-      // ignore
+    } catch (err) {
+      handleApiError(err, "Failed to delete logo");
     }
   };
 
@@ -612,11 +683,12 @@ export default function CreateImagePage() {
 
   const startPublishPolling = useCallback((jobId: string) => {
     if (publishPollRef.current) clearTimeout(publishPollRef.current);
-    publishPollCountRef.current = 0;
+    const publishPollStart = Date.now();
+    let publishPollDelay = 1500;
 
     const pollOnce = async () => {
-      publishPollCountRef.current++;
-      if (publishPollCountRef.current > 200) {
+      // 5 minute max
+      if (Date.now() - publishPollStart > 300000) {
         publishPollRef.current = null;
         setPublishState("error");
         setPublishError("Timeout — publishing took too long.");
@@ -627,6 +699,7 @@ export default function CreateImagePage() {
         const res = await apiGet(`/postiz/publish/${jobId}/progress`);
         const data = await res.json();
         setPublishProgress({ step: data.step || "", percentage: data.percentage || 0 });
+        publishPollDelay = 1500; // reset on success
 
         if (data.status === "completed") {
           publishPollRef.current = null;
@@ -641,9 +714,9 @@ export default function CreateImagePage() {
           return;
         }
       } catch {
-        // Keep polling on transient errors
+        publishPollDelay = Math.min(publishPollDelay * 2, 10000); // backoff, max 10s
       }
-      publishPollRef.current = setTimeout(pollOnce, 1500);
+      publishPollRef.current = setTimeout(pollOnce, publishPollDelay);
     };
 
     publishPollRef.current = setTimeout(pollOnce, 1500);
@@ -738,10 +811,30 @@ export default function CreateImagePage() {
   // Otherwise, use the FAL CDN URL for display.
   const getImageDisplayUrl = (img: GeneratedImage | null) => {
     if (!img) return "";
-    if (img.final_image_path) {
+    if (img.final_image_path || img.image_local_path) {
       return `${API_URL}/image-gen/${img.id}/file`;
     }
     return img.image_url || "";
+  };
+
+  // ============== Download helper ==============
+  const downloadFile = async (url: string, filename: string) => {
+    let blobUrl: string | null = null;
+    try {
+      const res = await apiGet(url);
+      const blob = await res.blob();
+      blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch {
+      toast.error("Download error");
+    } finally {
+      if (blobUrl) setTimeout(() => URL.revokeObjectURL(blobUrl!), 1000);
+    }
   };
 
   // ============== Render ==============
@@ -773,7 +866,7 @@ export default function CreateImagePage() {
               size="sm"
               onClick={() => {
                 // Clear any active poll (Bug #51)
-                if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+                if (pollRef.current) { clearTimeout(pollRef.current as unknown as ReturnType<typeof setTimeout>); pollRef.current = null; }
                 setStep(1);
                 setCurrentImage(null);
                 setCurrentImageId(null);
@@ -828,21 +921,27 @@ export default function CreateImagePage() {
                       setShowHistory(false);
                     }}
                   >
-                    {img.image_url ? (
+                    {img.image_url || img.final_image_path || img.image_local_path ? (
                       <img
-                        src={img.image_url}
+                        src={getImageDisplayUrl(img)}
                         alt={img.template_name || "Generated"}
                         className="w-full aspect-square object-cover"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                       />
                     ) : (
                       <div className="w-full aspect-square bg-muted flex items-center justify-center">
                         <ImageIcon className="size-8 text-muted-foreground" />
                       </div>
                     )}
-                    <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-1.5">
+                    <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-1.5 flex items-center justify-between">
                       <Badge variant={img.status === "completed" ? "secondary" : "destructive"} className="text-xs">
                         {img.status}
                       </Badge>
+                      {img.cost_usd != null && (
+                        <Badge variant="outline" className="text-xs font-mono bg-black/40 text-white border-white/30">
+                          ${img.cost_usd.toFixed(2)}
+                        </Badge>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -882,7 +981,12 @@ export default function CreateImagePage() {
                     <SelectItem value="none">No product</SelectItem>
                     {products.map((p) => (
                       <SelectItem key={p.id} value={p.id}>
-                        {p.title} {p.brand ? `(${p.brand})` : ""}
+                        <span className="flex items-center gap-1.5">
+                          {productsWithApprovedImages.has(p.id) && (
+                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                          )}
+                          {p.title} {p.brand ? `(${p.brand})` : ""}
+                        </span>
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1099,7 +1203,7 @@ export default function CreateImagePage() {
                           variant="ghost"
                           size="icon"
                           className="size-7 text-destructive"
-                          onClick={() => handleDeleteTemplate(t.id)}
+                          onClick={() => setConfirmDeleteTemplate(t.id)}
                         >
                           <Trash2 className="size-3" />
                         </Button>
@@ -1119,7 +1223,14 @@ export default function CreateImagePage() {
           {/* Left: Image preview */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Generated Image</CardTitle>
+              <CardTitle className="text-base flex items-center gap-2">
+                Generated Image
+                {currentImage.cost_usd != null && (
+                  <Badge variant="outline" className="text-xs font-mono">
+                    ${currentImage.cost_usd.toFixed(2)}
+                  </Badge>
+                )}
+              </CardTitle>
             </CardHeader>
             <CardContent>
               {addLogo && logoInfo.exists && !currentImage.final_image_path && currentImage.image_url ? (
@@ -1138,12 +1249,28 @@ export default function CreateImagePage() {
                   src={getImageDisplayUrl(currentImage)}
                   alt="Generated"
                   className="w-full rounded-lg border"
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                 />
               ) : (
                 <div className="aspect-square bg-muted rounded-lg flex items-center justify-center">
                   <ImageIcon className="size-12 text-muted-foreground" />
                 </div>
               )}
+
+              {/* Metadata badges */}
+              <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                {currentImage.model && (
+                  <Badge variant="outline" className="text-xs">{currentImage.model}</Badge>
+                )}
+                {currentImage.resolution && (
+                  <Badge variant="outline" className="text-xs">{currentImage.resolution}</Badge>
+                )}
+                {currentImage.created_at && (
+                  <Badge variant="outline" className="text-xs">
+                    {new Date(currentImage.created_at).toLocaleString()}
+                  </Badge>
+                )}
+              </div>
 
               {currentImage.final_image_path && (
                 <div className="flex items-center gap-2 mt-2">
@@ -1164,6 +1291,19 @@ export default function CreateImagePage() {
                   </Button>
                 </div>
               )}
+
+              {/* Download button */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-2"
+                onClick={() => downloadFile(
+                  `/image-gen/${currentImage.id}/file`,
+                  `image_${currentImage.id.slice(0, 8)}.png`
+                )}
+              >
+                <Download className="size-3 mr-1" /> Download
+              </Button>
             </CardContent>
           </Card>
 
@@ -1181,7 +1321,7 @@ export default function CreateImagePage() {
                     <Badge variant="secondary">
                       <CheckCircle2 className="size-3 mr-1" /> Logo uploaded
                     </Badge>
-                    <Button variant="ghost" size="sm" onClick={handleDeleteLogo}>
+                    <Button variant="ghost" size="sm" onClick={() => setConfirmDeleteLogo(true)}>
                       <Trash2 className="size-3 mr-1" /> Remove
                     </Button>
                   </div>
@@ -1273,6 +1413,7 @@ export default function CreateImagePage() {
                   src={getImageDisplayUrl(currentImage)}
                   alt="Final"
                   className="w-full rounded-lg border"
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                 />
               ) : (
                 <div className="aspect-square bg-muted rounded-lg flex items-center justify-center">
@@ -1283,9 +1424,21 @@ export default function CreateImagePage() {
                 <p className="text-xs text-muted-foreground truncate">
                   Prompt: {currentImage.prompt}
                 </p>
-                {currentImage.logo_config && (
-                  <Badge variant="secondary" className="text-xs">Logo applied</Badge>
-                )}
+                <div className="flex items-center gap-2">
+                  {currentImage.logo_config && (
+                    <Badge variant="secondary" className="text-xs">Logo applied</Badge>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => downloadFile(
+                      `/image-gen/${currentImage.id}/file`,
+                      `image_${currentImage.id.slice(0, 8)}.png`
+                    )}
+                  >
+                    <Download className="size-3 mr-1" /> Download
+                  </Button>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -1559,7 +1712,8 @@ export default function CreateImagePage() {
                           publishing ||
                           selectedIntegrationIds.size === 0 ||
                           !caption.trim() ||
-                          (scheduleEnabled && !scheduleDate)
+                          (scheduleEnabled && !scheduleDate) ||
+                          (caption.length > minCharLimit)
                         }
                       >
                         {scheduleEnabled ? (
@@ -1676,6 +1830,34 @@ export default function CreateImagePage() {
           </Card>
         </div>
       )}
+      {/* Confirm dialogs */}
+      <ConfirmDialog
+        open={!!confirmDeleteTemplate}
+        onOpenChange={(open) => { if (!open) setConfirmDeleteTemplate(null); }}
+        title="Delete Template"
+        description="Are you sure you want to delete this template? This action cannot be undone."
+        confirmLabel="Delete"
+        variant="destructive"
+        loading={!!deletingTemplateId}
+        onConfirm={async () => {
+          if (confirmDeleteTemplate) {
+            await handleDeleteTemplate(confirmDeleteTemplate);
+            setConfirmDeleteTemplate(null);
+          }
+        }}
+      />
+      <ConfirmDialog
+        open={confirmDeleteLogo}
+        onOpenChange={setConfirmDeleteLogo}
+        title="Remove Logo"
+        description="Are you sure you want to remove your profile logo?"
+        confirmLabel="Remove"
+        variant="destructive"
+        onConfirm={async () => {
+          await handleDeleteLogo();
+          setConfirmDeleteLogo(false);
+        }}
+      />
     </div>
   );
 }

@@ -50,6 +50,7 @@ class Settings(BaseSettings):
 
     # fal.ai
     fal_api_key: str = ""
+    fal_base_url: str = "https://fal.run"
 
     # Google Drive
     google_drive_folder_id: str = ""

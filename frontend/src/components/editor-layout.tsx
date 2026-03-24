@@ -87,7 +87,7 @@ export function EditorLayout({
       </div>
 
       {/* Center Panel - Video Player */}
-      <div className="flex-1 bg-background overflow-auto p-4 min-w-0">
+      <div className="flex-1 bg-background overflow-hidden p-2 min-w-0">
         {children}
       </div>
 

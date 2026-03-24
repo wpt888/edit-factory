@@ -62,6 +62,25 @@ from app.services.ffmpeg_semaphore import safe_ffmpeg_run
 
 logger = logging.getLogger(__name__)
 
+# BUG-2.5: Single similarity threshold constant used across all dedup checks
+SIMILARITY_THRESHOLD = 8
+
+
+def escape_srt_path_for_ffmpeg(srt_path) -> str:
+    """Escape SRT path for FFmpeg subtitles filter (Windows-safe).
+
+    Handles backslashes, single quotes, colons (including drive letter),
+    and square brackets which are special in FFmpeg filter syntax.
+    """
+    escaped = str(srt_path).replace('\\', '/')
+    escaped = escaped.replace("'", "'\\''")
+    # Escape ALL colons including Windows drive letter — FFmpeg 8.x subtitles
+    # filter treats unescaped colons as option separators even in the filename
+    escaped = escaped.replace(':', '\\:')
+    escaped = escaped.replace('[', '\\[')
+    escaped = escaped.replace(']', '\\]')
+    return escaped
+
 
 def compute_phash(frame, hash_size=8):
     """Calculeaza perceptual hash pentru un frame."""
@@ -79,6 +98,54 @@ def compute_phash(frame, hash_size=8):
 def hamming_distance(hash1, hash2):
     """Calculeaza distanta Hamming intre doua hash-uri."""
     return np.sum(hash1 != hash2)
+
+
+def seg_distance(seg_a: 'VideoSegment', seg_b: 'VideoSegment') -> float:
+    """Compute visual distance between two segments using multi-point pHash.
+
+    Returns average Hamming distance across all hash pairs, or 0 if no hashes.
+    """
+    if not seg_a.visual_hashes or not seg_b.visual_hashes:
+        # Fallback: use temporal distance as proxy
+        return abs(seg_a.start_time - seg_b.start_time)
+
+    distances = []
+    for h1 in seg_a.visual_hashes:
+        for h2 in seg_b.visual_hashes:
+            if h1 is not None and h2 is not None:
+                distances.append(hamming_distance(h1, h2))
+    return np.mean(distances) if distances else 0.0
+
+
+def arrange_for_diversity(segments: List['VideoSegment']) -> List['VideoSegment']:
+    """Arrange segments to maximize visual diversity between consecutive clips.
+
+    Uses greedy furthest-insertion: start with the segment that has the
+    highest combined_score, then repeatedly pick the segment that is
+    most visually different from all already-placed segments.
+    """
+    if len(segments) <= 2:
+        return segments
+
+    remaining = list(segments)
+    # Start with the highest-scoring segment
+    remaining.sort(key=lambda s: s.combined_score, reverse=True)
+    arranged = [remaining.pop(0)]
+
+    while remaining:
+        best_idx = 0
+        best_min_dist = -1
+
+        for i, candidate in enumerate(remaining):
+            # Minimum distance to any already-placed segment
+            min_dist = min(seg_distance(candidate, placed) for placed in arranged)
+            if min_dist > best_min_dist:
+                best_min_dist = min_dist
+                best_idx = i
+
+        arranged.append(remaining.pop(best_idx))
+
+    return arranged
 
 
 @dataclass
@@ -106,7 +173,7 @@ class VideoSegment:
             self.variance_score * 0.20 +
             self.blur_score * 0.20 +
             self.contrast_score * 0.15 +
-            (1 - abs(self.avg_brightness - 0.5)) * 0.05
+            (1 - 2 * abs(self.avg_brightness - 0.5)) * 0.05  # BUG-2.3: full [0,1] range
         )
 
     def is_visually_similar(self, other: 'VideoSegment', threshold: int = 8) -> bool:
@@ -305,16 +372,19 @@ class VideoAnalyzer:
                 blur_scores.append(self._calculate_blur_score(gray))
                 contrast_scores.append(self._calculate_contrast_score(gray))
 
-            gray = cv2.GaussianBlur(gray, (21, 21), 0)
-            frames_gray.append(gray)
+            # BUG-2.1: Save raw gray for motion calculation, blur only for variance
+            gray_raw = gray
+            gray_blurred = cv2.GaussianBlur(gray, (21, 21), 0)
+            frames_gray.append(gray_blurred)
 
             if prev_gray is not None:
-                # Calculate difference between consecutive frames
-                diff = cv2.absdiff(prev_gray, gray)
-                motion = np.mean(diff) / 255.0
+                # Calculate motion diff on UN-blurred frames for accurate scores,
+                # then normalize with realistic divisor (/80 instead of /255)
+                diff = cv2.absdiff(prev_gray, gray_raw)
+                motion = min(np.mean(diff) / 80.0, 1.0)
                 motion_scores.append(motion)
 
-            prev_gray = gray
+            prev_gray = gray_raw
 
         # Motion score mediu
         motion_score = np.mean(motion_scores) if motion_scores else 0.0
@@ -381,11 +451,12 @@ class VideoAnalyzer:
             visual_hashes = []
             brightness_samples = []
 
-            # phash at mid-point only (sufficient for duplicate detection with tighter threshold)
-            mid_frame_idx = start_frame + int((end_frame - start_frame) * 0.5)
-            mid_frame = self._read_frame_at(mid_frame_idx)
-            if mid_frame is not None:
-                visual_hashes.append(compute_phash(mid_frame))
+            # BUG-3.1: Multi-point pHash (3 hashes per segment) for robust dedup
+            for pos in [0.25, 0.5, 0.75]:
+                frame_idx = start_frame + int((end_frame - start_frame) * pos)
+                frame = self._read_frame_at(frame_idx)
+                if frame is not None:
+                    visual_hashes.append(compute_phash(frame))
 
             # Brightness at 3 positions for better representative sampling
             for pos in [0.1, 0.5, 0.9]:
@@ -444,7 +515,7 @@ class VideoAnalyzer:
         target_duration: float,
         min_segment: float = 1.5,
         max_segment: float = 3.0,  # Max 3 seconds for dynamism
-        similarity_threshold: int = 8,  # VID-12: tightened from 12 for single-sample phash mode
+        similarity_threshold: int = SIMILARITY_THRESHOLD,
         min_motion: float = 0.008,
         progress_callback: Optional[callable] = None
     ) -> List[VideoSegment]:
@@ -492,9 +563,10 @@ class VideoAnalyzer:
                     segment = bucket[bucket_indices[zone_idx]]
                     bucket_indices[zone_idx] += 1
 
-                    # Check temporal overlap
+                    # BUG-3.3: Check temporal overlap with minimum gap
+                    MIN_GAP = 1.0
                     has_overlap = any(
-                        not (segment.end_time <= sel.start_time or segment.start_time >= sel.end_time)
+                        not (segment.end_time + MIN_GAP <= sel.start_time or segment.start_time >= sel.end_time + MIN_GAP)
                         for sel in selected
                     )
                     if has_overlap:
@@ -516,8 +588,8 @@ class VideoAnalyzer:
                     segments_added = True
                     break  # Move to next bucket
 
-        # Sort chronologically
-        selected.sort(key=lambda s: s.start_time)
+        # BUG-4.2: Arrange for visual diversity instead of simple chronological sort
+        selected = arrange_for_diversity(selected)
 
         logger.info(f"Selected {len(selected)} segments, duration: {total_duration:.1f}s")
         logger.info(f"  Skipped: {skipped_duplicates} duplicates, {skipped_overlap} overlaps")
@@ -1139,22 +1211,8 @@ class VideoEditor:
             f"Bold=1"
         )
 
-        # Correct escaping for ffmpeg subtitles filter on Windows
-        # 1. Convert backslash to forward slash
-        # 2. Escape-uim : cu \:
-        # 3. Escape ' with '\'' (close quote, add escaped quote, reopen)
-        # 4. Escape [ and ] which are special in ffmpeg filters
-        # VID-02: Drive-letter-aware colon escaping (matches subtitle_styler.py pattern)
-        srt_path_escaped = str(srt_path)
-        srt_path_escaped = srt_path_escaped.replace('\\', '/')
-        srt_path_escaped = srt_path_escaped.replace("'", "'\\''")
-        # Only escape colons that are NOT part of a Windows drive letter (e.g. C:/)
-        if len(srt_path_escaped) > 1 and srt_path_escaped[1] == ':':
-            srt_path_escaped = srt_path_escaped[0:2] + srt_path_escaped[2:].replace(':', '\\:')
-        else:
-            srt_path_escaped = srt_path_escaped.replace(':', '\\:')
-        srt_path_escaped = srt_path_escaped.replace('[', '\\[')
-        srt_path_escaped = srt_path_escaped.replace(']', '\\]')
+        # BUG-1.4: Use shared escape function for consistent path handling
+        srt_path_escaped = escape_srt_path_for_ffmpeg(srt_path)
 
         # IMPORTANT: For subtitles filter, we CANNOT use hwaccel with CPU filter
         # Subtitles filter ruleaza pe CPU, deci trebuie sa decodam pe CPU si sa encodam cu GPU
@@ -1333,16 +1391,33 @@ class VideoProcessorService:
 
         for gs in gemini_segments:
             # Convert Gemini score (0-100) to motion_score (0-1)
-            # Gemini score becomes motion_score for compatibility
             motion_score = gs.score / 100.0
+
+            # BUG-1.5 & 2.4: Compute pHash at midpoint for duplicate detection
+            # and set neutral scores for non-computed metrics
+            visual_hashes = []
+            try:
+                mid_time = (gs.start_time + gs.end_time) / 2
+                mid_frame_idx = int(mid_time * self.fps) if hasattr(self, 'fps') else None
+                if mid_frame_idx is not None:
+                    for pos in [0.25, 0.5, 0.75]:
+                        t = gs.start_time + (gs.end_time - gs.start_time) * pos
+                        frame_idx = int(t * self.fps)
+                        frame = self._read_frame_at(frame_idx)
+                        if frame is not None:
+                            visual_hashes.append(compute_phash(frame))
+            except Exception:
+                pass  # Graceful degradation: no hashes
 
             vs = VideoSegment(
                 start_time=gs.start_time,
                 end_time=gs.end_time,
                 motion_score=motion_score,
-                variance_score=motion_score * 0.8,  # Estimated from Gemini score
-                avg_brightness=0.5,  # Default — no frame analysis
-                visual_hashes=None,
+                variance_score=motion_score * 0.8,
+                avg_brightness=0.5,
+                blur_score=0.5,       # BUG-2.4: neutral for Gemini segments
+                contrast_score=0.5,   # BUG-2.4: neutral for Gemini segments
+                visual_hashes=visual_hashes if visual_hashes else None,
                 gemini_estimated=True
             )
             video_segments.append(vs)
@@ -1534,11 +1609,13 @@ class VideoProcessorService:
             return []
 
         selected = []
-        # Seed from all previously used segments to enable cross-variant dedup
-        used_in_this_variant = set()
+        # BUG-5.1: Build cross-variant exclusion set at runtime without mutating
+        # the variant's own set. Store only this variant's segments separately.
+        cross_variant_used = set()
         for prev_idx, prev_set in used_segments_by_variant.items():
             if prev_idx != variant_index:
-                used_in_this_variant.update(prev_set)
+                cross_variant_used.update(prev_set)
+        used_in_this_variant = set()  # Only this variant's own segments
         total_duration = 0.0
 
         # Find total video duration from segments
@@ -1574,7 +1651,7 @@ class VideoProcessorService:
             # Fallback: if zone has no segments, take the first available
             logger.warning(f"Variant {variant_index + 1}: No segments in zone, using fallback")
             for i, seg in enumerate(all_segments):
-                if i not in used_in_this_variant:
+                if i not in used_in_this_variant and i not in cross_variant_used:
                     selected.append(seg)
                     used_in_this_variant.add(i)
                     total_duration += seg.duration
@@ -1612,13 +1689,14 @@ class VideoProcessorService:
                     idx, seg = bucket[bucket_indices[bucket_idx]]
                     bucket_indices[bucket_idx] += 1
 
-                    if idx in used_in_this_variant:
+                    if idx in used_in_this_variant or idx in cross_variant_used:
                         continue
 
-                    # Check temporal overlap cu segmentele deja selectate
+                    # BUG-3.3: Check temporal overlap with minimum gap
+                    MIN_GAP = 1.0
                     has_overlap = False
                     for sel in selected:
-                        if not (seg.end_time <= sel.start_time or seg.start_time >= sel.end_time):
+                        if not (seg.end_time + MIN_GAP <= sel.start_time or seg.start_time >= sel.end_time + MIN_GAP):
                             has_overlap = True
                             break
 
@@ -1628,7 +1706,7 @@ class VideoProcessorService:
                     # Check visual similarity
                     is_similar = False
                     for sel in selected:
-                        if seg.is_visually_similar(sel, threshold=12):
+                        if seg.is_visually_similar(sel, threshold=SIMILARITY_THRESHOLD):
                             is_similar = True
                             break
 
@@ -1648,8 +1726,8 @@ class VideoProcessorService:
 
         used_segments_by_variant[variant_index] = used_in_this_variant
 
-        # Sort chronologically for export
-        selected.sort(key=lambda s: s.start_time)
+        # BUG-4.2: Arrange for visual diversity instead of simple chronological sort
+        selected = arrange_for_diversity(selected)
 
         zone_count = len(set(int(s.start_time / zone_duration) for s in selected)) if zone_duration > 0 else 0
         logger.info(f"Variant {variant_index + 1}: {len(selected)} segments from {zone_count} zones, {total_duration:.1f}s")
@@ -1705,12 +1783,27 @@ class VideoProcessorService:
                         # Convert AnalyzedSegment to VideoSegment
                         all_segments = []
                         for ai_seg in ai_segments:
+                            # BUG-1.5: Compute pHash for Gemini segments
+                            visual_hashes = []
+                            try:
+                                for pos in [0.25, 0.5, 0.75]:
+                                    t = ai_seg.start_time + (ai_seg.end_time - ai_seg.start_time) * pos
+                                    frame_idx = int(t * analyzer.fps)
+                                    frame = analyzer._read_frame_at(frame_idx)
+                                    if frame is not None:
+                                        visual_hashes.append(compute_phash(frame))
+                            except Exception:
+                                pass
                             seg = VideoSegment(
                                 start_time=ai_seg.start_time,
                                 end_time=ai_seg.end_time,
                                 motion_score=ai_seg.score / 100.0,
                                 variance_score=0.8,
-                                avg_brightness=0.5
+                                avg_brightness=0.5,
+                                blur_score=0.5,
+                                contrast_score=0.5,
+                                visual_hashes=visual_hashes if visual_hashes else None,
+                                gemini_estimated=True
                             )
                             all_segments.append(seg)
                         logger.info(f"Gemini found {len(all_segments)} context-matched segments")
@@ -1723,7 +1816,7 @@ class VideoProcessorService:
                         all_segments = analyzer.select_best_segments(
                             required_duration,
                             min_motion=0.008,
-                            similarity_threshold=10,
+                            similarity_threshold=SIMILARITY_THRESHOLD,
                             progress_callback=progress_callback
                         )
                 else:
@@ -1733,7 +1826,7 @@ class VideoProcessorService:
                     all_segments = analyzer.select_best_segments(
                         required_duration,
                         min_motion=0.008,
-                        similarity_threshold=10,
+                        similarity_threshold=SIMILARITY_THRESHOLD,
                         progress_callback=progress_callback
                     )
 

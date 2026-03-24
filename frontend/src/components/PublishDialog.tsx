@@ -11,7 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
+
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -21,6 +21,7 @@ import {
   XCircle,
   Calendar,
   AlertTriangle,
+  FileEdit,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 import { toast } from "sonner";
@@ -77,6 +78,7 @@ const SELECTED_BORDER = "border-green-500";
 const SELECTED_BG = "bg-green-500/15";
 
 type DialogState = "form" | "publishing" | "success" | "error";
+type PublishMode = "now" | "schedule" | "draft";
 
 export function PublishDialog({
   clipId,
@@ -93,8 +95,8 @@ export function PublishDialog({
   // Caption
   const [caption, setCaption] = useState("");
 
-  // Schedule
-  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  // Publish mode: now, schedule, or draft
+  const [publishMode, setPublishMode] = useState<PublishMode>("now");
   const [scheduleDate, setScheduleDate] = useState("");
 
   // Publishing state
@@ -117,7 +119,7 @@ export function PublishDialog({
     setErrorMessage("");
     setPublishJobId(null);
     setCaption("");
-    setScheduleEnabled(false);
+    setPublishMode("now");
     setScheduleDate("");
     setSelectedIds(new Set());
 
@@ -252,8 +254,11 @@ export function PublishDialog({
         integration_ids: Array.from(selectedIds),
       };
 
-      if (scheduleEnabled && scheduleDate) {
+      if (publishMode === "schedule" && scheduleDate) {
         body.schedule_date = new Date(scheduleDate).toISOString();
+      }
+      if (publishMode === "draft") {
+        body.save_as_draft = true;
       }
 
       const res = await apiPost("/postiz/publish", body);
@@ -431,17 +436,53 @@ export function PublishDialog({
               )}
             </div>
 
-            {/* Schedule */}
+            {/* Publish mode */}
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="schedule-toggle">Programeaza</Label>
-                <Switch
-                  id="schedule-toggle"
-                  checked={scheduleEnabled}
-                  onCheckedChange={setScheduleEnabled}
-                />
+              <Label>Mod publicare</Label>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPublishMode("now")}
+                  className={`flex flex-col items-center gap-1.5 px-3 py-3 rounded-lg border-2 transition-all text-sm ${
+                    publishMode === "now"
+                      ? "border-green-500 bg-green-500/15"
+                      : "border-transparent bg-muted hover:bg-accent/50"
+                  }`}
+                >
+                  <Share2 className="h-4 w-4" />
+                  <span className="font-medium">Publica acum</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPublishMode("schedule")}
+                  className={`flex flex-col items-center gap-1.5 px-3 py-3 rounded-lg border-2 transition-all text-sm ${
+                    publishMode === "schedule"
+                      ? "border-blue-500 bg-blue-500/15"
+                      : "border-transparent bg-muted hover:bg-accent/50"
+                  }`}
+                >
+                  <Calendar className="h-4 w-4" />
+                  <span className="font-medium">Programeaza</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPublishMode("draft")}
+                  className={`flex flex-col items-center gap-1.5 px-3 py-3 rounded-lg border-2 transition-all text-sm ${
+                    publishMode === "draft"
+                      ? "border-purple-500 bg-purple-500/15"
+                      : "border-transparent bg-muted hover:bg-accent/50"
+                  }`}
+                >
+                  <FileEdit className="h-4 w-4" />
+                  <span className="font-medium">Salveaza draft</span>
+                </button>
               </div>
-              {scheduleEnabled && (
+              {publishMode === "draft" && (
+                <p className="text-xs text-muted-foreground">
+                  Videoclipul va fi incarcat in Postiz ca draft. Poti programa postarea direct din Postiz.
+                </p>
+              )}
+              {publishMode === "schedule" && (
                 <>
                   <input
                     type="datetime-local"
@@ -477,7 +518,7 @@ export function PublishDialog({
             <CheckCircle2 className="h-14 w-14 text-green-500" />
             <div className="text-center">
               <p className="text-lg font-semibold">
-                {scheduleEnabled ? "Post scheduled!" : "Published successfully!"}
+                {publishMode === "schedule" ? "Post scheduled!" : publishMode === "draft" ? "Draft saved in Postiz!" : "Published successfully!"}
               </p>
               <p className="text-sm text-muted-foreground mt-1">
                 {progressStep}
@@ -511,16 +552,18 @@ export function PublishDialog({
                 disabled={
                   selectedIds.size === 0 ||
                   !caption.trim() ||
-                  (scheduleEnabled && !scheduleDate)
+                  (publishMode === "schedule" && !scheduleDate)
                 }
                 className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
               >
-                {scheduleEnabled ? (
+                {publishMode === "schedule" ? (
                   <Calendar className="h-4 w-4 mr-2" />
+                ) : publishMode === "draft" ? (
+                  <FileEdit className="h-4 w-4 mr-2" />
                 ) : (
                   <Share2 className="h-4 w-4 mr-2" />
                 )}
-                {scheduleEnabled ? "Programeaza" : "Publica"}
+                {publishMode === "schedule" ? "Programeaza" : publishMode === "draft" ? "Salveaza draft" : "Publica"}
               </Button>
             </>
           )}

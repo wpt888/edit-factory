@@ -17,7 +17,7 @@ import subprocess
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Dict
+from typing import Any, List, Literal, Optional, Dict
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body, Query, Request
@@ -494,6 +494,14 @@ class PipelineRenderRequest(BaseModel):
     # PiP overlay configs: segment_id -> { image_url, position, size, animation }
     pip_overlays: Optional[Dict[str, dict]] = None
 
+    # Encoding settings overrides
+    encoding_mode: Optional[Literal["crf", "vbr_1pass", "vbr_2pass"]] = None
+    target_bitrate_kbps: Optional[int] = Field(default=None, ge=500, le=50000)
+    audio_bitrate_kbps: Optional[int] = Field(default=None, ge=64, le=512)
+    video_profile: Optional[Literal["baseline", "main", "high"]] = None
+    video_level: Optional[str] = None
+    force_cpu: bool = False
+
 
 class PipelineRenderResponse(BaseModel):
     """Response model for render endpoint."""
@@ -819,10 +827,11 @@ async def update_pipeline_scripts(
     # M1: Acquire pipeline state lock to prevent races with concurrent preview/render tasks
     state_lock = _get_pipeline_state_lock(pipeline_id)
     with state_lock:
-        # Invalidate TTS cache for scripts that changed
+        # Invalidate TTS and preview caches for scripts that changed
         # Compare cleaned text (tags stripped) — tag-only changes don't invalidate TTS
         old_scripts = pipeline.get("scripts", [])
         tts_previews = pipeline.setdefault("tts_previews", {})
+        previews = pipeline.setdefault("previews", {})
         for i, new_script in enumerate(request.scripts):
             if i < len(old_scripts):
                 old_cleaned = strip_product_group_tags(old_scripts[i])
@@ -830,7 +839,10 @@ async def update_pipeline_scripts(
                 if _stable_hash(new_cleaned) != _stable_hash(old_cleaned):
                     tts_previews.pop(str(i), None)
                     tts_previews.pop(i, None)
-                    logger.info(f"Invalidated TTS cache for pipeline {pipeline_id} variant {i} (script changed)")
+                    # Also invalidate Step 3 preview — stale audio/timeline
+                    previews.pop(str(i), None)
+                    previews.pop(i, None)
+                    logger.info(f"Invalidated TTS + preview cache for pipeline {pipeline_id} variant {i} (script changed)")
 
         # Update scripts in memory
         pipeline["scripts"] = request.scripts
@@ -866,11 +878,13 @@ async def update_pipeline_scripts(
         supabase = repo.get_client() if repo else None
         if supabase:
             tts_previews_json = {str(k): v for k, v in pipeline.get("tts_previews", {}).items()}
+            previews_json = {str(k): v for k, v in pipeline.get("previews", {}).items()}
             segment_usage_json = {str(k): v for k, v in pipeline.get("segment_usage", {}).items()}
             supabase.table("editai_pipelines").update({
                 "scripts": request.scripts,
                 "variant_count": len(request.scripts),
                 "tts_previews": tts_previews_json,
+                "previews": previews_json,
                 "segment_usage": segment_usage_json,
             }).eq("id", pipeline_id).execute()
     except Exception as e:
@@ -971,8 +985,8 @@ async def import_pipeline(
 @router.post("/generate", response_model=PipelineGenerateResponse)
 @limiter.limit("5/minute")
 async def generate_pipeline(
-    request: PipelineGenerateRequest,
-    http_request: Request,
+    request: Request,
+    body: PipelineGenerateRequest,
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """
@@ -982,19 +996,19 @@ async def generate_pipeline(
     Next steps: preview each variant, then batch-render selected variants.
     """
     # Validate input
-    if request.variant_count < 1 or request.variant_count > 10:
+    if body.variant_count < 1 or body.variant_count > 10:
         raise HTTPException(
             status_code=400,
             detail="variant_count must be between 1 and 10"
         )
 
-    if request.provider not in ["gemini", "claude"]:
+    if body.provider not in ["gemini", "claude"]:
         raise HTTPException(
             status_code=400,
             detail="provider must be 'gemini' or 'claude'"
         )
 
-    if not request.idea.strip():
+    if not body.idea.strip():
         raise HTTPException(
             status_code=400,
             detail="idea cannot be empty"
@@ -1059,8 +1073,8 @@ async def generate_pipeline(
 
     # Generate scripts
     logger.info(
-        f"[Profile {profile.profile_id}] Generating pipeline with {request.variant_count} variants "
-        f"using {request.provider}"
+        f"[Profile {profile.profile_id}] Generating pipeline with {body.variant_count} variants "
+        f"using {body.provider}"
     )
 
     try:
@@ -1068,11 +1082,11 @@ async def generate_pipeline(
         # SCR-03: Run synchronous AI call in a thread to avoid blocking the async event loop
         scripts = await asyncio.to_thread(
             generator.generate_scripts,
-            idea=request.idea,
-            context=request.context,
+            idea=body.idea,
+            context=body.context,
             keywords=unique_keywords,
-            variant_count=request.variant_count,
-            provider=request.provider,
+            variant_count=body.variant_count,
+            provider=body.provider,
             product_groups=product_groups_dict if product_groups_dict else None,
             ai_instructions=ai_instructions,
             target_duration=total_segment_duration if total_segment_duration > 0 else None
@@ -1087,10 +1101,10 @@ async def generate_pipeline(
             _pipelines[pipeline_id] = {
                 "pipeline_id": pipeline_id,
                 "scripts": scripts,
-                "provider": request.provider,
-                "name": request.name,
-                "idea": request.idea,
-                "context": request.context,
+                "provider": body.provider,
+                "name": body.name,
+                "idea": body.idea,
+                "context": body.context,
                 "variant_count": len(scripts),
                 "keyword_count": len(unique_keywords),
                 "previews": {},
@@ -1114,7 +1128,7 @@ async def generate_pipeline(
         return PipelineGenerateResponse(
             pipeline_id=pipeline_id,
             scripts=scripts,
-            provider=request.provider,
+            provider=body.provider,
             keyword_count=len(unique_keywords),
             variant_count=len(scripts),
             total_segment_duration=round(total_segment_duration, 1)
@@ -1235,6 +1249,13 @@ async def adopt_library_tts(
             "tts_timestamps": asset.get("tts_timestamps"),
         }
 
+        # Invalidate Step 3 preview cache for this variant
+        previews = pipeline.get("previews", {})
+        if variant_index in previews or str(variant_index) in previews:
+            previews.pop(variant_index, None)
+            previews.pop(str(variant_index), None)
+            logger.info(f"Invalidated Step 3 preview cache for variant {variant_index} (TTS changed via library)")
+
     # Persist to DB (outside lock)
     _db_save_pipeline(pipeline_id, pipeline)
 
@@ -1346,6 +1367,14 @@ async def generate_variant_tts(
                 "srt_word_count": srt_word_count,
             }
 
+            # Invalidate Step 3 preview cache for this variant so /audio/ endpoint
+            # serves the fresh TTS instead of stale Step 3 audio
+            previews = pipeline.get("previews", {})
+            if variant_index in previews or str(variant_index) in previews:
+                previews.pop(variant_index, None)
+                previews.pop(str(variant_index), None)
+                logger.info(f"Invalidated Step 3 preview cache for variant {variant_index} (TTS regenerated)")
+
         # Persist to DB (outside lock)
         _db_save_pipeline(pipeline_id, pipeline)
 
@@ -1415,7 +1444,8 @@ async def preview_variant(
     voice_settings: Optional[Dict[str, Any]] = Body(None, embed=True),
     words_per_subtitle: int = Body(2, embed=True),
     min_segment_duration: float = Body(3.0, embed=True),
-    ultra_rapid_intro: bool = Body(True, embed=True)
+    ultra_rapid_intro: bool = Body(True, embed=True),
+    force_regenerate_tts: bool = Body(False, embed=True)
 ):
     """
     Preview segment matching for a single variant.
@@ -1447,6 +1477,16 @@ async def preview_variant(
     )
 
     # Check if TTS audio already exists from Step 2 preview
+    # When force_regenerate_tts is True, skip cache to generate fresh audio
+    if force_regenerate_tts:
+        logger.info(
+            f"[Profile {profile.profile_id}] Force TTS regeneration for variant {variant_index}"
+        )
+        # Clear cached TTS so assembly_service generates fresh audio
+        _tts_previews_dict = pipeline.get("tts_previews", {})
+        _tts_previews_dict.pop(variant_index, None)
+        _tts_previews_dict.pop(str(variant_index), None)
+
     # Normalize key lookup: prefer int key, fall back to str for legacy entries
     _tts_previews = pipeline.get("tts_previews", {})
     existing_tts = _tts_previews.get(variant_index) or _tts_previews.get(str(variant_index))
@@ -1454,26 +1494,21 @@ async def preview_variant(
     reuse_audio_duration = None
     reuse_srt_content = None
     if existing_tts:
-        # Verify script and voice settings haven't changed since TTS was generated
+        # Verify script hasn't changed since TTS was generated
         # TTS hashes use cleaned text (tags stripped) so tag edits don't invalidate
         stored_hash = existing_tts.get("script_hash")
         current_hash = _stable_hash(cleaned_text)
         script_match = stored_hash == current_hash
-        # For library audio: skip voice_settings check (same logic as render endpoint)
-        is_library = bool(existing_tts.get("library_asset_id"))
-        stored_settings = existing_tts.get("voice_settings")
-        settings_match = is_library or _voice_settings_match(stored_settings, voice_settings)
         if not script_match:
             logger.info(
                 f"[Profile {profile.profile_id}] TTS reuse SKIP for variant {variant_index}: "
                 f"script_hash mismatch (stored={stored_hash}, current={current_hash})"
             )
-        if not settings_match:
-            logger.info(
-                f"[Profile {profile.profile_id}] TTS reuse SKIP for variant {variant_index}: "
-                f"voice_settings mismatch (stored={stored_settings}, incoming={voice_settings})"
-            )
-        if script_match and settings_match:
+        # Trust Step 2 TTS if script matches — the user explicitly generated this audio,
+        # so preview must use it regardless of voice_settings differences.
+        # Voice_settings check was causing false negatives and making the preview
+        # fall back to file cache which returned stale audio.
+        if script_match:
             audio_path_str = existing_tts.get("audio_path")
             if audio_path_str and Path(audio_path_str).exists() and Path(audio_path_str).stat().st_size > 100:
                 reuse_audio_path = audio_path_str
@@ -1696,6 +1731,18 @@ async def render_variants(
             "audio_bitrate": "192k"
         }
 
+    # Merge encoding overrides from request into preset_data
+    if render_request.encoding_mode:
+        preset_data["encoding_mode"] = render_request.encoding_mode
+    if render_request.target_bitrate_kbps:
+        preset_data["target_bitrate_kbps"] = render_request.target_bitrate_kbps
+    if render_request.audio_bitrate_kbps:
+        preset_data["audio_bitrate"] = f"{render_request.audio_bitrate_kbps}k"
+    if render_request.video_profile:
+        preset_data["video_profile"] = render_request.video_profile
+    if render_request.video_level:
+        preset_data["video_level"] = render_request.video_level
+
     # Build subtitle settings dict (camelCase keys to match SubtitleStyleConfig.from_dict)
     subtitle_settings = {
         "fontSize": render_request.font_size,
@@ -1782,6 +1829,7 @@ async def render_variants(
                 f"denoise={render_request.enable_denoise}/{render_request.denoise_strength}",
                 f"sharpen={render_request.enable_sharpen}/{render_request.sharpen_amount}",
                 f"color={render_request.enable_color}/{render_request.brightness}/{render_request.contrast}/{render_request.saturation}",
+                f"enc={render_request.encoding_mode}/{render_request.target_bitrate_kbps}/{render_request.video_profile}/{render_request.video_level}",
             ]
             # Include match_overrides segment IDs in fingerprint
             _mo = render_request.match_overrides
@@ -1996,10 +2044,11 @@ async def render_variants(
                         pip_overlays=variant_pip_overlays,
                         avoid_segment_ids=render_avoid_ids if render_avoid_ids else None,
                     ),
-                    timeout=900
+                    timeout=1800 if preset_data.get("encoding_mode") == "vbr_2pass" else 900
                 )
             except asyncio.TimeoutError:
-                raise Exception("Render timed out after 15 minutes")
+                _timeout_mins = 30 if preset_data.get("encoding_mode") == "vbr_2pass" else 15
+                raise Exception(f"Render timed out after {_timeout_mins} minutes")
             except RuntimeError as rt_err:
                 # Catch specific assembly errors (e.g., "No segments found in library.")
                 # so the job is marked failed with a clear message instead of stuck in "processing"
@@ -2669,7 +2718,7 @@ async def get_pipeline_audio(
                 if audio_path.exists():
                     return FileResponse(path=str(audio_path), media_type="audio/mpeg",
                         content_disposition_type="inline",
-                        headers={"Cache-Control": "public, max-age=3600"})
+                        headers={"Cache-Control": "no-cache"})
         raise HTTPException(status_code=404, detail="No preview available for this variant")
 
     preview_data = preview.get("preview_data", {})
@@ -2686,7 +2735,7 @@ async def get_pipeline_audio(
         path=str(audio_path),
         media_type="audio/mpeg",
         content_disposition_type="inline",
-        headers={"Cache-Control": "public, max-age=3600"}
+        headers={"Cache-Control": "no-cache"}
     )
 
 
@@ -2816,7 +2865,18 @@ async def render_preview(
     }
 
     script_text = pipeline["scripts"][variant_index]
-    reuse_srt_content = tts_data.get("srt_content")
+    # SRT reuse guard: only reuse cached SRT if words_per_subtitle hasn't changed
+    # (mirrors the guard in render_variants to ensure preview matches final render)
+    cached_wpf = tts_data.get("words_per_subtitle")
+    render_wpf = render_request.words_per_subtitle
+    if cached_wpf is not None and cached_wpf != render_wpf:
+        logger.info(
+            f"[Preview render] SRT reuse BLOCKED: words_per_subtitle changed "
+            f"({cached_wpf} -> {render_wpf})"
+        )
+        reuse_srt_content = None
+    else:
+        reuse_srt_content = tts_data.get("srt_content")
     reuse_audio_duration = tts_data.get("audio_duration")
 
     _profile_id = profile.profile_id
@@ -3029,12 +3089,12 @@ async def generate_video_captions(
     errors: Dict[int, str] = {}
 
     try:
-        import google.generativeai as genai
+        from google import genai
         settings = get_settings()
         if not settings.gemini_api_key:
             raise HTTPException(status_code=503, detail="Gemini API key not configured")
-        genai.configure(api_key=settings.gemini_api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        gemini_client = genai.Client(api_key=settings.gemini_api_key)
+        gemini_model_name = settings.gemini_model
     except HTTPException:
         raise
     except Exception as e:
@@ -3084,7 +3144,7 @@ async def generate_video_captions(
         full_prompt = "\n\n".join(prompt_parts)
 
         try:
-            response = model.generate_content(full_prompt)
+            response = gemini_client.models.generate_content(model=gemini_model_name, contents=full_prompt)
             raw = response.text.strip()
             # Parse JSON array from response
             # Strip markdown code fences if present
@@ -3211,3 +3271,131 @@ async def delete_video_caption_template(
         filters=QueryFilters(eq={"id": template_id, "profile_id": ctx.profile_id}))
 
     return {"deleted": True}
+
+
+# ============== SUBTITLE FRAME PREVIEW ==============
+
+class SubtitleFrameRequest(BaseModel):
+    subtitle_settings: dict
+    timestamp: float = 2.0
+    sample_text: str = "Sample subtitle text"
+
+
+@router.post("/subtitle-frame-preview/{pipeline_id}/{variant_index}")
+async def subtitle_frame_preview(
+    pipeline_id: str,
+    variant_index: int,
+    request: SubtitleFrameRequest,
+    ctx: ProfileContext = Depends(get_profile_context),
+):
+    """Render a single FFmpeg frame with subtitle overlay for WYSIWYG preview."""
+    from app.services.subtitle_styler import build_subtitle_filter
+    import tempfile
+
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    # --- Find source video file path ---
+    source_video_path: Optional[Path] = None
+    source_video_ids = pipeline.get("source_video_ids", [])
+    if source_video_ids:
+        repo = get_repository()
+        if repo:
+            try:
+                result = repo.table_query(
+                    "editai_source_videos", "select",
+                    columns="file_path",
+                    filters=QueryFilters(eq={"id": source_video_ids[0]})
+                )
+                if result and len(result) > 0:
+                    fp = result[0].get("file_path")
+                    if fp:
+                        source_video_path = Path(normalize_path(fp))
+            except Exception as e:
+                logger.warning(f"subtitle-frame-preview: failed to fetch source video: {e}")
+
+    if not source_video_path or not source_video_path.exists():
+        raise HTTPException(status_code=400, detail="No source video available for preview")
+
+    # --- Get or create SRT content ---
+    settings = get_settings()
+    output_dir = settings.output_dir
+    preview_dir = output_dir / "subtitle_previews"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+
+    srt_content: Optional[str] = None
+    tts_previews = pipeline.get("tts_previews", {})
+    tts_entry = tts_previews.get(variant_index) or tts_previews.get(str(variant_index))
+    if tts_entry and tts_entry.get("srt_content"):
+        srt_content = tts_entry["srt_content"]
+
+    if not srt_content:
+        # Generate minimal temp SRT with sample text
+        ts = request.timestamp
+        start_tc = f"00:00:{int(ts):02d},000"
+        end_ts = ts + 3.0
+        end_tc = f"00:00:{int(end_ts):02d},000"
+        srt_content = f"1\n{start_tc} --> {end_tc}\n{request.sample_text}\n"
+
+    # --- Compute cache fingerprint ---
+    settings_json = _json.dumps(request.subtitle_settings, sort_keys=True)
+    fingerprint_input = f"{settings_json}|{source_video_path}|{request.timestamp}"
+    fingerprint = hashlib.md5(fingerprint_input.encode()).hexdigest()[:16]
+    output_path = preview_dir / f"{fingerprint}.jpg"
+
+    # Return cached if exists
+    if output_path.exists():
+        return FileResponse(str(output_path), media_type="image/jpeg")
+
+    # --- Write temp SRT ---
+    srt_tmp = preview_dir / f"_tmp_{fingerprint}.srt"
+    try:
+        srt_tmp.write_text(srt_content, encoding="utf-8")
+
+        # --- Build FFmpeg command ---
+        # Use PlayRes 1080x1920 so subtitles match final render proportionally
+        subtitle_filter = build_subtitle_filter(
+            srt_path=srt_tmp,
+            subtitle_settings=request.subtitle_settings,
+            video_width=1080,
+            video_height=1920,
+        )
+
+        vf = f"scale=540:960:force_original_aspect_ratio=increase,crop=540:960,{subtitle_filter}"
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", str(request.timestamp),
+            "-i", str(source_video_path),
+            "-vframes", "1",
+            "-vf", vf,
+            "-q:v", "3",
+            str(output_path),
+        ]
+
+        # Execute with semaphore
+        async with await acquire_preview_slot(timeout=30):
+            result = await asyncio.to_thread(safe_ffmpeg_run, cmd, timeout=15, operation="subtitle-frame-preview")
+
+        if result.returncode != 0:
+            logger.error(f"subtitle-frame-preview FFmpeg failed: {result.stderr[:500]}")
+            raise HTTPException(status_code=500, detail="FFmpeg frame render failed")
+
+        if not output_path.exists():
+            raise HTTPException(status_code=500, detail="FFmpeg produced no output")
+
+        # --- Cache cleanup: limit to 200 files ---
+        try:
+            cached = sorted(preview_dir.glob("*.jpg"), key=lambda p: p.stat().st_mtime)
+            if len(cached) > 200:
+                for old in cached[: len(cached) - 200]:
+                    old.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        return FileResponse(str(output_path), media_type="image/jpeg")
+
+    finally:
+        # Clean up temp SRT
+        srt_tmp.unlink(missing_ok=True)

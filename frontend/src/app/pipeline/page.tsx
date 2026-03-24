@@ -76,6 +76,8 @@ import { VariantPreviewPlayer } from "@/components/variant-preview-player";
 import { SimplePipeline } from "@/components/simple-mode-pipeline";
 import type { PipelineMode } from "@/types/pipeline-presets";
 import { BatchUploadQueue } from "@/components/batch-upload-queue";
+import { RenderSettingsPanel, DEFAULT_RENDER_SETTINGS } from "@/components/render-settings-panel";
+import type { RenderSettings } from "@/components/render-settings-panel";
 
 // TypeScript interfaces
 export interface MatchPreview {
@@ -317,6 +319,7 @@ function PipelinePage() {
   const [isRendering, setIsRendering] = useState(false);
   const [variantStatuses, setVariantStatuses] = useState<VariantStatus[]>([]);
   const [presetName, setPresetName] = useState("TikTok");
+  const [renderSettings, setRenderSettings] = useState<RenderSettings>({ ...DEFAULT_RENDER_SETTINGS });
   const [publishVariant, setPublishVariant] = useState<VariantStatus | null>(null);
   const [generatedCaptions, setGeneratedCaptions] = useState<Record<string, string>>({});
 
@@ -335,6 +338,13 @@ function PipelinePage() {
   const [editingNameValue, setEditingNameValue] = useState("");
   const [playingAudio, setPlayingAudio] = useState<string | null>(null); // "pipelineId-variantIndex"
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // TTS Library sidebar
+  const [ttsLibraryAssets, setTtsLibraryAssets] = useState<Array<{ id: string; tts_text: string; audio_duration: number; created_at: string; status: string }>>([]);
+  const [ttsLibraryLoading, setTtsLibraryLoading] = useState(false);
+  const [ttsLibraryExpanded, setTtsLibraryExpanded] = useState(false);
+  const [ttsLibrarySelected, setTtsLibrarySelected] = useState<Set<string>>(new Set());
+  const [ttsLibraryImporting, setTtsLibraryImporting] = useState(false);
 
   // Confirm dialog state (shared)
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -372,6 +382,7 @@ function PipelinePage() {
   const [ttsResults, setTtsResults] = useState<Record<number, { audio_duration: number; generating: boolean; stale: boolean; srt_content?: string; script_word_count?: number; srt_word_count?: number }>>({});
   const [regeneratingAll, setRegeneratingAll] = useState(false);
   const [regeneratingAllIndex, setRegeneratingAllIndex] = useState<number | null>(null);
+  const [regeneratingVariantAudio, setRegeneratingVariantAudio] = useState<Record<number, boolean>>({});
   const [playingTtsVariant, setPlayingTtsVariant] = useState<number | null>(null);
   const [srtPreviewOpen, setSrtPreviewOpen] = useState<Record<number, boolean>>({});
   const isMountedRef = useRef(true);
@@ -591,7 +602,6 @@ function PipelinePage() {
       .then(async (res) => {
         const data = await res.json();
         setAiInstructions(data.ai_instructions || "");
-        if (data.ai_instructions) setAiRulesExpanded(true);
       })
       .catch((err) => {
         console.warn("Failed to load AI instructions:", err);
@@ -1184,6 +1194,12 @@ function PipelinePage() {
         match_overrides: Object.keys(matchOverrides).length > 0 ? matchOverrides : undefined,
         interstitial_slides: filteredInterstitialSlides,
         pip_overlays: Object.keys(pipOverlays).length > 0 ? pipOverlays : undefined,
+        encoding_mode: renderSettings.encoding_mode,
+        target_bitrate_kbps: renderSettings.encoding_mode !== "crf" ? renderSettings.target_bitrate_kbps : undefined,
+        audio_bitrate_kbps: renderSettings.audio_bitrate_kbps,
+        video_profile: renderSettings.video_profile,
+        video_level: renderSettings.video_level,
+        force_cpu: renderSettings.force_cpu,
         voice_settings: {
           stability: voiceStability,
           similarity_boost: voiceSimilarity,
@@ -1205,7 +1221,7 @@ function PipelinePage() {
         glow_blur: subtitleSettings.glowBlur ?? 0,
         adaptive_sizing: subtitleSettings.adaptiveSizing ?? false,
         opacity: subtitleSettings.opacity ?? 100,
-      }, { timeout: 600_000 }); // 10 min — rendering can be very slow
+      }, { timeout: renderSettings.encoding_mode === "vbr_2pass" ? 1_200_000 : 600_000 }); // 20 min for 2-pass, 10 min otherwise
 
       // apiPost throws on non-2xx, so if we reach here it succeeded.
       // data.variants does not exist on PipelineRenderResponse — initialStatuses
@@ -1377,16 +1393,89 @@ function PipelinePage() {
     setEditingNameId(null);
   };
 
+  // TTS Library: fetch assets for sidebar
+  const fetchTtsLibrary = useCallback(async () => {
+    if (!currentProfile?.id) return;
+    setTtsLibraryLoading(true);
+    try {
+      const res = await apiGetWithRetry("/tts-library/");
+      const data = await res.json();
+      const ready = (data || []).filter((a: { status: string }) => a.status === "ready");
+      setTtsLibraryAssets(ready);
+    } catch (err) {
+      console.warn("Failed to load TTS library:", err);
+    } finally {
+      setTtsLibraryLoading(false);
+    }
+  }, [currentProfile?.id]);
+
+  // TTS Library: load assets into a new pipeline (accepts explicit list or uses selected state)
+  const handleLoadFromTtsLibraryWith = async (assets: typeof ttsLibraryAssets) => {
+    if (assets.length === 0) return;
+
+    setTtsLibraryImporting(true);
+    try {
+      // Create a new pipeline with the TTS texts as scripts
+      const scripts = assets.map(a => a.tts_text);
+      const res = await apiPost("/pipeline/import", {
+        scripts,
+        name: "",
+        idea: "Imported from TTS Library",
+        provider: "imported",
+      });
+      const data = await res.json();
+      const pid = data.pipeline_id;
+      setPipelineId(pid);
+      setScripts((data.scripts || []).map(formatScript));
+
+      // Auto-adopt each TTS library asset into the pipeline
+      const newTtsResults: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
+      for (let i = 0; i < assets.length; i++) {
+        try {
+          const adoptRes = await apiPost(`/pipeline/tts-from-library/${pid}/${i}`, {
+            asset_id: assets[i].id,
+          });
+          const adoptData = await adoptRes.json();
+          newTtsResults[i] = { audio_duration: adoptData.audio_duration, generating: false, stale: false };
+        } catch (err) {
+          console.warn(`Failed to adopt TTS asset ${assets[i].id}:`, err);
+        }
+      }
+      setTtsResults(newTtsResults);
+
+      // Reset state
+      setPreviews({});
+      setPreviewError(null);
+      setSelectedSourceIds(new Set());
+      fetchSourceVideos();
+      setStep(2);
+      setTtsLibrarySelected(new Set());
+
+      // Refresh history
+      fetchHistory();
+    } catch (err) {
+      handleApiError(err, "Failed to import from TTS Library");
+    } finally {
+      setTtsLibraryImporting(false);
+    }
+  };
+
+  const handleLoadFromTtsLibrary = () => {
+    const selected = ttsLibraryAssets.filter(a => ttsLibrarySelected.has(a.id));
+    return handleLoadFromTtsLibraryWith(selected);
+  };
+
   // History sidebar: auto-load on mount and when profile changes
   useEffect(() => {
     if (!currentProfile?.id) return;
     fetchHistory();
+    fetchTtsLibrary();
     setSelectedHistoryId(null);
     setHistoryScripts([]);
     setHistorySelectedScripts(new Set());
     setHistoryPreviewInfo({});
     setHistoryTtsInfo({});
-  }, [currentProfile?.id, fetchHistory]);
+  }, [currentProfile?.id, fetchHistory, fetchTtsLibrary]);
 
   // Fetch source videos on mount
   useEffect(() => {
@@ -2052,6 +2141,48 @@ function PipelinePage() {
       }
       return next;
     });
+  };
+
+  // Step 3: Regenerate audio for a single variant (force TTS regeneration + re-match)
+  const handleRegenerateVariantAudio = async (variantIndex: number) => {
+    if (!pipelineId) return;
+    if (regeneratingVariantAudio[variantIndex]) return;
+
+    setRegeneratingVariantAudio(prev => ({ ...prev, [variantIndex]: true }));
+
+    try {
+      const res = await apiPost(`/pipeline/preview/${pipelineId}/${variantIndex}`, {
+        elevenlabs_model: elevenlabsModel,
+        voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
+        source_video_ids: selectedSourceIdsRef.current.size > 0 ? Array.from(selectedSourceIdsRef.current) : undefined,
+        voice_settings: {
+          stability: voiceStability,
+          similarity_boost: voiceSimilarity,
+          style: voiceStyle,
+          speed: voiceSpeed,
+          use_speaker_boost: voiceSpeakerBoost,
+        },
+        words_per_subtitle: wordsPerSubtitle,
+        min_segment_duration: minSegmentDuration,
+        ultra_rapid_intro: ultraRapidIntro,
+        force_regenerate_tts: true,
+      }, { timeout: 300_000 });
+
+      const data = await res.json();
+      if (!isMountedRef.current) return;
+      setPreviews(prev => ({ ...prev, [variantIndex]: data }));
+    } catch (err) {
+      handleApiError(err, "Audio regeneration error");
+      if (err instanceof ApiError && err.isTimeout) {
+        setPreviewError("Audio regeneration timed out. Try again.");
+      } else {
+        setPreviewError("Failed to regenerate audio. Please check if the backend is running.");
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setRegeneratingVariantAudio(prev => ({ ...prev, [variantIndex]: false }));
+      }
+    }
   };
 
   // Per-script TTS: adopt library audio instead of generating
@@ -3203,6 +3334,15 @@ function PipelinePage() {
                             <Badge variant="secondary" className="text-xs">
                               {formatDuration(ttsResults[index].audio_duration)}
                             </Badge>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleGenerateTts(index)}
+                              title="Regenerate voice-over with current settings"
+                            >
+                              <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                              Regenerate
+                            </Button>
                           </>
                         ) : (
                           <Button
@@ -3561,6 +3701,8 @@ function PipelinePage() {
                   showPreview={true}
                   previewHeight={350}
                   compact={false}
+                  pipelineId={pipelineId ?? undefined}
+                  variantIndex={0}
                 />
               </CardContent>
             </Card>
@@ -3612,6 +3754,20 @@ function PipelinePage() {
                             title="Preview variant with video"
                           >
                             <Eye className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => handleRegenerateVariantAudio(index)}
+                            disabled={regeneratingVariantAudio[index]}
+                            title="Regenerate voiceover"
+                          >
+                            {regeneratingVariantAudio[index] ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-4 w-4" />
+                            )}
                           </Button>
                           <Badge variant="secondary">
                             {formatDuration(preview.audio_duration)}
@@ -3682,6 +3838,12 @@ function PipelinePage() {
                 <AlertDescription>{previewError}</AlertDescription>
               </Alert>
             )}
+
+            {/* Render settings */}
+            <RenderSettingsPanel
+              settings={renderSettings}
+              onChange={setRenderSettings}
+            />
 
             {/* Render button */}
             <Button
@@ -4168,6 +4330,91 @@ function PipelinePage() {
                   ))
                 )}
               </CardContent>
+            </Card>
+
+            {/* TTS Library Section */}
+            <Card className="mt-3">
+              <CardHeader className="pb-3 cursor-pointer" onClick={() => { setTtsLibraryExpanded(!ttsLibraryExpanded); if (!ttsLibraryExpanded && ttsLibraryAssets.length === 0) fetchTtsLibrary(); }}>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Library className="h-4 w-4" />
+                  TTS Library
+                  {ttsLibraryAssets.length > 0 && (
+                    <Badge variant="secondary" className="text-xs">{ttsLibraryAssets.length}</Badge>
+                  )}
+                  <ChevronDown className={`h-4 w-4 ml-auto transition-transform ${ttsLibraryExpanded ? "rotate-180" : ""}`} />
+                </CardTitle>
+              </CardHeader>
+              {ttsLibraryExpanded && (
+                <CardContent className="space-y-2 max-h-[calc(100vh-400px)] overflow-y-auto">
+                  {ttsLibraryLoading ? (
+                    <div className="flex items-center justify-center py-4">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : ttsLibraryAssets.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-4">No TTS assets in library</p>
+                  ) : (
+                    <>
+                      {ttsLibraryAssets.map((asset) => (
+                        <div key={asset.id} className="flex items-start gap-2 p-2 rounded-lg border border-border hover:bg-accent transition-colors">
+                          <Checkbox
+                            checked={ttsLibrarySelected.has(asset.id)}
+                            onCheckedChange={() => {
+                              setTtsLibrarySelected(prev => {
+                                const next = new Set(prev);
+                                if (next.has(asset.id)) next.delete(asset.id);
+                                else next.add(asset.id);
+                                return next;
+                              });
+                            }}
+                            className="mt-0.5"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs text-muted-foreground line-clamp-2">{asset.tts_text}</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="flex items-center gap-1 rounded-full bg-green-500/90 text-white px-2 py-0.5 text-[10px] font-medium">
+                                <Volume2 className="h-3 w-3" />
+                                {asset.audio_duration.toFixed(1)}s
+                              </span>
+                              <span className="text-[10px] text-muted-foreground">
+                                {new Date(asset.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      <div className="flex gap-2 pt-2">
+                        <Button
+                          size="sm"
+                          className="flex-1"
+                          disabled={ttsLibraryImporting}
+                          onClick={() => {
+                            // Select all then load
+                            const allIds = new Set(ttsLibraryAssets.map(a => a.id));
+                            setTtsLibrarySelected(allIds);
+                            // Use the full list directly instead of relying on state
+                            handleLoadFromTtsLibraryWith(ttsLibraryAssets);
+                          }}
+                        >
+                          {ttsLibraryImporting ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            "Load All"
+                          )}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-1"
+                          disabled={ttsLibrarySelected.size === 0 || ttsLibraryImporting}
+                          onClick={handleLoadFromTtsLibrary}
+                        >
+                          Load Selected ({ttsLibrarySelected.size})
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              )}
             </Card>
           </div>
 

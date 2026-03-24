@@ -48,6 +48,7 @@ class PublishRequest(BaseModel):
     integration_ids: List[str]
     schedule_date: Optional[str] = None  # ISO format datetime
     captions_per_platform: Optional[Dict[str, str]] = None  # integration_id → caption
+    save_as_draft: bool = False  # Save as draft in Postiz instead of publishing
 
 
 class BulkPublishRequest(BaseModel):
@@ -457,7 +458,8 @@ async def publish_clip(
         caption=request.caption,
         integration_ids=request.integration_ids,
         schedule_date=schedule_dt,
-        captions_per_platform=request.captions_per_platform
+        captions_per_platform=request.captions_per_platform,
+        save_as_draft=request.save_as_draft
     )
 
     return PublishResponse(
@@ -648,7 +650,8 @@ async def _publish_clip_task(
     caption: str,
     integration_ids: List[str],
     schedule_date: Optional[datetime],
-    captions_per_platform: Optional[Dict[str, str]] = None
+    captions_per_platform: Optional[Dict[str, str]] = None,
+    save_as_draft: bool = False
 ):
     """Background task to publish a single clip using profile-specific Postiz."""
     from app.services.postiz_service import get_postiz_publisher
@@ -679,7 +682,8 @@ async def _publish_clip_task(
             schedule_date=schedule_date,
             integrations_info=integrations_info,
             profile_id=profile_id,
-            captions_per_platform=captions_per_platform
+            captions_per_platform=captions_per_platform,
+            save_as_draft=save_as_draft
         )
 
         if result.success:
@@ -687,21 +691,29 @@ async def _publish_clip_task(
             repo = get_repository()
             if repo:
                 try:
+                    pub_status = "draft" if save_as_draft else ("scheduled" if schedule_date else "published")
                     repo.table_query("editai_postiz_publications", "insert", data={
                         "clip_id": clip_id,
                         "postiz_post_id": result.post_id,
                         "platform": ", ".join(result.platforms) if result.platforms else None,
                         "caption": caption[:500],  # Truncate for storage
                         "scheduled_at": schedule_date.isoformat() if schedule_date else None,
-                        "published_at": None if schedule_date else datetime.now(timezone.utc).isoformat(),
-                        "status": "scheduled" if schedule_date else "published"
+                        "published_at": None if (schedule_date or save_as_draft) else datetime.now(timezone.utc).isoformat(),
+                        "status": pub_status
                     })
                 except Exception as e:
                     logger.warning(f"Failed to track publication (table may not exist): {e}")
 
+            if save_as_draft:
+                success_msg = "Saved as draft in Postiz!"
+            elif schedule_date:
+                success_msg = f"Scheduled for {schedule_date.strftime('%Y-%m-%d %H:%M')}"
+            else:
+                success_msg = "Published successfully!"
+
             update_publish_progress(
                 job_id,
-                "Published successfully!" if not schedule_date else f"Scheduled for {schedule_date.strftime('%Y-%m-%d %H:%M')}",
+                success_msg,
                 100,
                 "completed"
             )

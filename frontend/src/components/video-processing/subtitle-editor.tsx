@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -30,7 +30,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
-import { Type } from "lucide-react";
+import { Type, Loader2, CheckCircle2 } from "lucide-react";
 import {
   SubtitleSettings,
   SubtitleLine,
@@ -40,6 +40,7 @@ import {
   CAPTION_PRESETS,
   CaptionPreset,
 } from "@/types/video-processing";
+import { apiPost } from "@/lib/api";
 
 // Bug #126: stable default to avoid invalidating useMemo on every render
 const DEFAULT_VIDEO_INFO: VideoInfo = { width: 1080, height: 1920, duration: 0, fps: 30, aspect_ratio: "9:16", is_vertical: true };
@@ -65,6 +66,10 @@ interface SubtitleEditorProps {
   className?: string;
   /** Compact mode (no preview, minimal spacing) */
   compact?: boolean;
+  /** Pipeline ID for FFmpeg frame preview */
+  pipelineId?: string;
+  /** Variant index for FFmpeg frame preview */
+  variantIndex?: number;
 }
 
 export function SubtitleEditor({
@@ -78,9 +83,73 @@ export function SubtitleEditor({
   isLoadingVideoInfo = false,
   className = "",
   compact = false,
+  pipelineId,
+  variantIndex = 0,
 }: SubtitleEditorProps) {
   // Track which preset is currently selected (null = manual/custom)
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
+
+  // FFmpeg frame preview state
+  const [ffmpegPreviewUrl, setFfmpegPreviewUrl] = useState<string | null>(null);
+  const [ffmpegLoading, setFfmpegLoading] = useState(false);
+  const ffmpegTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const abortRef = useRef<AbortController>(undefined);
+  const prevFingerprint = useRef("");
+
+  // Debounced FFmpeg frame preview fetch
+  useEffect(() => {
+    if (!pipelineId) return;
+
+    const fingerprint = JSON.stringify(settings);
+    if (fingerprint === prevFingerprint.current) return;
+
+    // Clear previous timer and abort in-flight request
+    if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
+    if (abortRef.current) abortRef.current.abort();
+
+    ffmpegTimer.current = setTimeout(async () => {
+      prevFingerprint.current = fingerprint;
+      setFfmpegLoading(true);
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      try {
+        const resp = await apiPost(
+          `/pipeline/subtitle-frame-preview/${pipelineId}/${variantIndex}`,
+          { subtitle_settings: settings },
+          { signal: controller.signal, timeout: 20000 }
+        );
+        const blob = await resp.blob();
+        if (controller.signal.aborted) return;
+
+        // Revoke old URL
+        setFfmpegPreviewUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(blob);
+        });
+      } catch (err: unknown) {
+        // Silently keep CSS preview on error
+        if (err instanceof Error && err.name !== "AbortError") {
+          console.warn("FFmpeg frame preview failed:", err);
+        }
+      } finally {
+        if (!controller.signal.aborted) setFfmpegLoading(false);
+      }
+    }, 2000);
+
+    return () => {
+      if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
+    };
+  }, [settings, pipelineId, variantIndex]);
+
+  // Cleanup blob URL on unmount
+  useEffect(() => {
+    return () => {
+      if (ffmpegPreviewUrl) URL.revokeObjectURL(ffmpegPreviewUrl);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Update a single setting (manual change clears preset selection)
   const updateSetting = <K extends keyof SubtitleSettings>(
@@ -164,39 +233,54 @@ export function SubtitleEditor({
             height: `${previewDimensions.height}px`,
           }}
         >
-          {/* Gradient background simulating video */}
-          <div className="absolute inset-0 bg-gradient-to-br from-gray-700 via-gray-800 to-gray-900" />
+          {ffmpegPreviewUrl ? (
+            <img
+              src={ffmpegPreviewUrl}
+              alt="Subtitle preview"
+              className="absolute inset-0 w-full h-full object-contain rounded-lg"
+            />
+          ) : (
+            <>
+              {/* Gradient background simulating video */}
+              <div className="absolute inset-0 bg-gradient-to-br from-gray-700 via-gray-800 to-gray-900" />
 
-          {/* Subtitle text */}
-          <div
-            className="absolute left-0 right-0 text-center px-4 transition-all duration-100"
-            style={{
-              fontFamily: settings.fontFamily,
-              fontSize: `${scaledFontSize}px`,
-              color: settings.textColor,
-              opacity: (settings.opacity ?? 100) / 100,
-              WebkitTextStroke: `${scaledOutline}px ${settings.outlineColor}`,
-              paintOrder: 'stroke fill',
-              textShadow: [
-                scaledShadowDepth > 0
-                  ? `0 ${scaledShadowDepth}px ${scaledShadowDepth * 2}px ${settings.shadowColor ?? "rgba(0,0,0,0.8)"}`
-                  : '0 1px 3px rgba(0,0,0,0.85)',
-                settings.enableGlow && scaledGlowBlur > 0
-                  ? `0 0 ${scaledGlowBlur}px ${settings.outlineColor}`
-                  : '',
-              ].filter(Boolean).join(', '),
-              fontWeight: 700,
-              top: `${settings.positionY}%`,
-              transform: "translateY(-50%)",
-              ...(settings.borderStyle === 3 ? {
-                backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                padding: '4px 8px',
-                borderRadius: '4px',
-              } : {}),
-            }}
-          >
-            {subtitleLines.length > 0 ? subtitleLines[0].text : "Sample subtitle text"}
-          </div>
+              {/* Subtitle text (CSS fallback) */}
+              <div
+                className="absolute left-0 right-0 text-center px-4 transition-all duration-100"
+                style={{
+                  fontFamily: settings.fontFamily,
+                  fontSize: `${scaledFontSize}px`,
+                  color: settings.textColor,
+                  opacity: (settings.opacity ?? 100) / 100,
+                  WebkitTextStroke: `${scaledOutline}px ${settings.outlineColor}`,
+                  paintOrder: 'stroke fill',
+                  textShadow: [
+                    scaledShadowDepth > 0
+                      ? `0 ${scaledShadowDepth}px ${scaledShadowDepth * 2}px ${settings.shadowColor ?? "rgba(0,0,0,0.8)"}`
+                      : '0 1px 3px rgba(0,0,0,0.85)',
+                    settings.enableGlow && scaledGlowBlur > 0
+                      ? `0 0 ${scaledGlowBlur}px ${settings.outlineColor}`
+                      : '',
+                  ].filter(Boolean).join(', '),
+                  fontWeight: 700,
+                  top: `${settings.positionY}%`,
+                  transform: "translateY(-50%)",
+                  ...(settings.borderStyle === 3 ? {
+                    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                  } : {}),
+                }}
+              >
+                {subtitleLines.length > 0 ? subtitleLines[0].text : "Sample subtitle text"}
+              </div>
+            </>
+          )}
+          {ffmpegLoading && (
+            <div className="absolute top-2 right-2">
+              <Loader2 className="h-4 w-4 animate-spin text-white/60" />
+            </div>
+          )}
         </div>
       </div>
 
@@ -205,6 +289,18 @@ export function SubtitleEditor({
         <p className="text-xs text-muted-foreground">
           Font: {settings.fontSize}px | Outline: {settings.outlineWidth}px | Y: {settings.positionY}%
         </p>
+        {pipelineId && (
+          ffmpegPreviewUrl ? (
+            <Badge variant="outline" className="text-[10px] text-green-500 border-green-500/30">
+              <CheckCircle2 className="h-3 w-3 mr-1" />
+              Accurate preview
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="text-[10px] text-amber-500 border-amber-500/30">
+              Approximate preview
+            </Badge>
+          )
+        )}
       </div>
     </div>
   ) : null;

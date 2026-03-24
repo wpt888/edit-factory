@@ -36,6 +36,7 @@ class KeyVault:
         "elevenlabs_voice_id",
         "supabase_url",
         "supabase_key",
+        "fal_api_key",
     })
 
     def __init__(self, base_dir: Path):

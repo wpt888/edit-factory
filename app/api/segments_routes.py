@@ -1163,7 +1163,8 @@ async def create_segment(
             "notes": segment.notes,
             "thumbnail_path": str(thumbnail_path) if thumbnail_path.exists() else None,
             "usage_count": 0,
-            "is_favorite": False
+            "is_favorite": False,
+            "single_use": segment.single_use
         }).execute()
 
         # Auto-assign product group if groups exist
@@ -1195,6 +1196,7 @@ async def create_segment(
             notes=segment.notes,
             transforms=None,
             product_group=product_group_label,
+            single_use=segment.single_use,
             created_at=datetime.now(timezone.utc).isoformat(),
             source_video_name=source_video.get("name")
         )

@@ -15,9 +15,10 @@ logger = logging.getLogger(__name__)
 
 # Pricing constants (approximate)
 ELEVENLABS_COST_PER_CHAR = 0.00024  # ~$0.24 per 1000 chars (Scale plan pricing)
-GEMINI_COST_PER_IMAGE = 0.02  # $0.02 per image
+GEMINI_COST_PER_IMAGE = 0.000007  # BUG-6.11: token-based pricing (~$0.007/1000 images)
 GEMINI_COST_PER_1K_INPUT_TOKENS = 0.000075
 GEMINI_COST_PER_1K_OUTPUT_TOKENS = 0.0003
+FAL_DEFAULT_COST_PER_IMAGE = 0.10
 
 
 @dataclass
@@ -61,7 +62,7 @@ class CostTracker:
         """Create log file if it doesn't exist."""
         if not self.log_file.exists():
             with open(self.log_file, 'w', encoding='utf-8') as f:
-                json.dump({"entries": [], "totals": {"elevenlabs": 0, "gemini": 0}}, f)
+                json.dump({"entries": [], "totals": {"elevenlabs": 0, "gemini": 0, "fal_ai": 0}}, f)
 
     def _load_log(self) -> Dict:
         """Load the cost log."""
@@ -75,9 +76,9 @@ class CostTracker:
                 self.log_file.rename(backup)
             except Exception:
                 pass
-            return {"entries": [], "totals": {"elevenlabs": 0, "gemini": 0}}
+            return {"entries": [], "totals": {"elevenlabs": 0, "gemini": 0, "fal_ai": 0}}
         except Exception:
-            return {"entries": [], "totals": {"elevenlabs": 0, "gemini": 0}}
+            return {"entries": [], "totals": {"elevenlabs": 0, "gemini": 0, "fal_ai": 0}}
 
     def _save_log(self, data: Dict):
         """Save the cost log with file-level locking. Writes to temp file then renames for atomicity."""
@@ -193,6 +194,41 @@ class CostTracker:
             logger.info(f"Cost logged: Gemini Analysis - {frames_analyzed} frames = ${total_cost:.4f}")
         return entry
 
+    def log_fal_image(
+        self,
+        job_id: str,
+        model: str = "unknown",
+        resolution: Optional[str] = None,
+        cost_override: Optional[float] = None,
+        profile_id: Optional[str] = None,
+        prompt_preview: str = "",
+    ) -> CostEntry:
+        """Log FAL AI image generation cost."""
+        cost = cost_override if cost_override is not None else FAL_DEFAULT_COST_PER_IMAGE
+
+        entry = CostEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            job_id=job_id,
+            service="fal_ai",
+            operation="image_generation",
+            input_units=1,
+            cost_usd=round(cost, 6),
+            details={
+                "profile_id": profile_id,
+                "model": model,
+                "resolution": resolution,
+                "prompt_preview": prompt_preview[:100] + "..." if len(prompt_preview) > 100 else prompt_preview,
+            },
+        )
+
+        self._add_entry(entry)
+        self._save_to_supabase(entry, profile_id=profile_id)
+        if profile_id:
+            logger.info(f"[Profile {profile_id}] Cost logged: FAL AI - {model} = ${cost:.4f}")
+        else:
+            logger.info(f"Cost logged: FAL AI - {model} = ${cost:.4f}")
+        return entry
+
     def _add_entry(self, entry: CostEntry):
         """Add entry to local log and update totals. Rotates to keep last 10000 entries."""
         with self._log_lock:
@@ -233,7 +269,7 @@ class CostTracker:
             filters.eq["profile_id"] = profile_id
         all_costs = self._repo.table_query("api_costs", "select", filters=filters)
 
-        totals = {"elevenlabs": 0, "gemini": 0}
+        totals = {"elevenlabs": 0, "gemini": 0, "fal_ai": 0}
         for row in all_costs.data:
             service = row["service"]
             if service in totals:
@@ -248,7 +284,7 @@ class CostTracker:
             today_filters.eq["profile_id"] = profile_id
         today_costs = self._repo.table_query("api_costs", "select", filters=today_filters)
 
-        today_totals = {"elevenlabs": 0, "gemini": 0}
+        today_totals = {"elevenlabs": 0, "gemini": 0, "fal_ai": 0}
         for row in today_costs.data:
             service = row["service"]
             if service in today_totals:
@@ -290,7 +326,7 @@ class CostTracker:
         today_entries = [e for e in entries if e.get("timestamp", "").startswith(today)]
 
         # Recalculate totals from filtered entries
-        totals = {"elevenlabs": 0, "gemini": 0}
+        totals = {"elevenlabs": 0, "gemini": 0, "fal_ai": 0}
         for e in entries:
             service = e.get("service")
             if service in totals:
@@ -303,6 +339,7 @@ class CostTracker:
             "today": {
                 "elevenlabs": round(sum(e.get("cost_usd", 0) for e in today_entries if e.get("service") == "elevenlabs"), 4),
                 "gemini": round(sum(e.get("cost_usd", 0) for e in today_entries if e.get("service") == "gemini"), 4),
+                "fal_ai": round(sum(e.get("cost_usd", 0) for e in today_entries if e.get("service") == "fal_ai"), 4),
             },
             "entry_count": len(entries),
             "last_entries": entries[-10:][::-1]

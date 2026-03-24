@@ -236,7 +236,7 @@ Begin generation now:"""
             if self._gemini_client is None:
                 self._gemini_client = genai.Client(
                     api_key=self.gemini_api_key,
-                    http_options={"timeout": 120},
+                    http_options={"timeout": 120_000},
                 )
             client = self._gemini_client
 
@@ -308,38 +308,71 @@ Begin generation now:"""
         Returns:
             List of individual script texts
         """
-        # Split by primary delimiter (line-anchored to avoid matching inside text)
-        scripts = re.split(r'(?m)^---SCRIPT---$', raw_response)
+        # Log raw response prefix for debugging parse failures
+        logger.debug(f"Raw AI response (first 500 chars): {raw_response[:500]}")
 
-        # BUG-SG-11: Skip preamble — first element from split is often an AI
-        # intro like "Here are the scripts:" rather than actual script content.
-        if len(scripts) > 1 and scripts[0].strip():
-            first = scripts[0].strip()
-            if len(first) < 20 or not re.search(r'[.!?]', first):
-                scripts = scripts[1:]
+        # Strategy 1: Primary delimiter with flexible whitespace
+        scripts = re.split(r'(?m)^\s*---\s*SCRIPT\s*---\s*$', raw_response)
 
-        # SCR-07: Fallback delimiter — if primary delimiter yields only 1 chunk,
-        # try numbered format like "Script 1:", "Script 2:", etc.
-        if len([s for s in scripts if s.strip()]) <= 1:
-            numbered_parts = re.split(r'(?:^|\n)\s*Script\s+\d+\s*:\s*', raw_response, flags=re.IGNORECASE)
+        non_empty = [s for s in scripts if s.strip()]
+
+        # Strategy 2: Markdown horizontal rule separator (--- or ___ or ***)
+        # Only use if it produces a reasonable number of parts (>= variant_count)
+        if len(non_empty) < 2:
+            hr_parts = re.split(r'(?m)^\s*(?:---+|___+|\*\*\*+)\s*$', raw_response)
+            hr_non_empty = [p for p in hr_parts if p.strip()]
+            if len(hr_non_empty) >= variant_count:
+                logger.info(f"Primary delimiter failed, using markdown HR fallback ({len(hr_non_empty)} scripts found)")
+                scripts = hr_parts
+                non_empty = hr_non_empty
+
+        # Strategy 3: Numbered format — "Script N:", "Variant N:", "Varianta N:", "Scriptul N:"
+        if len(non_empty) < 2:
+            numbered_parts = re.split(
+                r'(?:^|\n)\s*(?:Script|Variant[aă]?|Scriptul|Opțiunea)\s+\d+\s*[:\-\.]\s*',
+                raw_response,
+                flags=re.IGNORECASE
+            )
             numbered_parts = [p for p in numbered_parts if p.strip()]
             if len(numbered_parts) > 1:
-                logger.info(f"Primary delimiter failed, using numbered 'Script N:' fallback ({len(numbered_parts)} scripts found)")
+                logger.info(f"Using numbered heading fallback ({len(numbered_parts)} scripts found)")
                 scripts = numbered_parts
+                non_empty = numbered_parts
+
+        # Strategy 4: Double-blank-line paragraphs with significant length
+        if len(non_empty) < 2:
+            paragraph_parts = re.split(r'\n\s*\n\s*\n', raw_response)
+            paragraph_parts = [p for p in paragraph_parts if p.strip() and len(p.strip()) > 50]
+            if len(paragraph_parts) >= variant_count:
+                logger.info(f"Using paragraph separation fallback ({len(paragraph_parts)} scripts found)")
+                scripts = paragraph_parts
+                non_empty = paragraph_parts
+
+        # Skip preamble — first element from split is often an AI
+        # intro like "Here are the scripts:" rather than actual script content.
+        if len(non_empty) > 1 and scripts[0].strip():
+            first = scripts[0].strip()
+            # Skip if it's short, has no sentence-ending punctuation, or looks like an intro
+            if len(first) < 50 and not re.search(r'[.!?]\s', first):
+                scripts = scripts[1:]
 
         # Clean each script
         cleaned = []
         for script in scripts:
             script = script.strip()
             if script:
-                # BUG-SG-08: Markdown removal moved to _sanitize_for_tts to avoid
-                # duplicate logic. _format_sentences runs here first, then
-                # _sanitize_for_tts preserves the sentence-per-line formatting.
                 script = self._format_sentences(script)
                 cleaned.append(script)
 
         # Truncate to requested variant_count to avoid returning excess scripts
         cleaned = cleaned[:variant_count]
+
+        if len(cleaned) < variant_count:
+            logger.warning(
+                f"Parsed {len(cleaned)} scripts but {variant_count} were requested. "
+                f"Raw response length: {len(raw_response)} chars. "
+                f"First 200 chars: {raw_response[:200]}"
+            )
 
         return cleaned
 

@@ -263,7 +263,8 @@ def get_prep_codec_params(
         params = ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
 
     if include_audio:
-        params.extend(["-c:a", "aac"])
+        # BUG-6.2: Include sample rate and channels for both GPU and CPU paths
+        params.extend(["-c:a", "aac", "-ar", "48000", "-ac", "2"])
 
     return params
 

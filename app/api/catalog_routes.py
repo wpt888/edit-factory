@@ -128,6 +128,23 @@ async def get_catalog_filters(
     return {"brands": brands, "categories": categories}
 
 
+@router.get("/products/with-approved-images")
+async def get_products_with_approved_images(profile: ProfileContext = Depends(get_profile_context)):
+    """Return product IDs that have at least one approved generated image."""
+    repo = get_repository()
+    if not repo:
+        return {"product_ids": []}
+
+    try:
+        result = repo.table_query("get_products_with_approved_images", "rpc",
+            data={"p_profile_id": profile.profile_id})
+        ids = [str(row["product_id"]) for row in (result.data or []) if row.get("product_id")]
+        return {"product_ids": ids}
+    except Exception as e:
+        logger.warning(f"Failed to get products with approved images: {e}")
+        return {"product_ids": []}
+
+
 @router.get("/products/{product_id}/images")
 async def get_product_images(
     product_id: str,

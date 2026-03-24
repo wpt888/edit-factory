@@ -104,7 +104,7 @@ class PostizPublisher:
         Returns:
             List of PostizIntegration objects representing connected platforms
         """
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(
                 f"{self.api_url}/integrations",
                 headers=self.headers
@@ -235,7 +235,8 @@ class PostizPublisher:
         schedule_date: Optional[datetime] = None,
         integrations_info: Optional[Dict[str, str]] = None,
         profile_id: Optional[str] = None,
-        captions_per_platform: Optional[Dict[str, str]] = None
+        captions_per_platform: Optional[Dict[str, str]] = None,
+        save_as_draft: bool = False
     ) -> PublishResult:
         """
         Create a post on selected platforms.
@@ -249,6 +250,7 @@ class PostizPublisher:
             integrations_info: Dict mapping integration_id to platform type for settings
             profile_id: Optional profile ID for logging context
             captions_per_platform: Optional dict mapping integration_id to specific caption
+            save_as_draft: If True, save as draft in Postiz instead of publishing
 
         Returns:
             PublishResult with success status and post details
@@ -278,7 +280,7 @@ class PostizPublisher:
 
         # Build request body
         body: Dict[str, Any] = {
-            "type": "schedule" if schedule_date else "now",
+            "type": "draft" if save_as_draft else ("schedule" if schedule_date else "now"),
             "tags": [],
             "shortLink": False,
             "posts": posts

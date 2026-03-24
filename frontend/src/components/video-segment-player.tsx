@@ -20,7 +20,16 @@ import {
   Mic,
   Loader2,
   Layers,
+  HelpCircle,
+  ZoomIn,
+  ZoomOut,
+  Locate,
 } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 interface Segment {
   id?: string;
@@ -65,6 +74,7 @@ interface VideoSegmentPlayerProps {
   onSegmentCreate: (start: number, end: number) => void;
   onSegmentClick?: (segment: Segment) => void;
   onGroupCreate?: (start: number, end: number) => void;
+  onSegmentResize?: (segmentId: string, newStart: number, newEnd: number) => void;
   currentSegment?: Segment;
   sourceVideoId?: string;
   activeTransforms?: SegmentTransformPreview;
@@ -81,6 +91,7 @@ export function VideoSegmentPlayer({
   onSegmentCreate,
   onSegmentClick,
   onGroupCreate,
+  onSegmentResize,
   currentSegment,
   sourceVideoId,
   activeTransforms,
@@ -121,6 +132,17 @@ export function VideoSegmentPlayer({
   const [isScrubbing, setIsScrubbing] = useState(false);
   const wasPlayingBeforeScrub = useRef(false);
 
+  // Segment resize state
+  const [resizingInfo, setResizingInfo] = useState<{
+    segmentId: string;
+    edge: 'start' | 'end';
+    originalStart: number;
+    originalEnd: number;
+  } | null>(null);
+  const [resizePreview, setResizePreview] = useState<{ start: number; end: number } | null>(null);
+  const resizePreviewRef = useRef<{ start: number; end: number } | null>(null);
+  const wasPlayingBeforeResize = useRef(false);
+
   // Track which video IDs we've already fetched voice data for
   const voiceFetchedRef = useRef<Set<string>>(new Set());
 
@@ -131,6 +153,14 @@ export function VideoSegmentPlayer({
   const [zoomLevel, setZoomLevel] = useState(1); // 1 = fit all, higher = zoomed in
   const [scrollOffset, setScrollOffset] = useState(0); // 0-1 range for panning
   const timelineRef = useRef<HTMLDivElement>(null);
+
+  // Video preview zoom state
+  const [videoZoom, setVideoZoom] = useState(1);
+  const [videoPanX, setVideoPanX] = useState(0);
+  const [videoPanY, setVideoPanY] = useState(0);
+  const [isDraggingVideo, setIsDraggingVideo] = useState(false);
+  const videoDragStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+  const videoContainerRef = useRef<HTMLDivElement>(null);
 
   // Calculate visible timeline range based on zoom (guard against duration = 0)
   const safeDuration = duration || 1; // Prevent division by zero
@@ -183,6 +213,58 @@ export function VideoSegmentPlayer({
       });
     }
   }, []);
+
+  // Video zoom helpers
+  const videoZoomIn = useCallback(() => {
+    setVideoZoom((prev) => Math.min(5, prev * 1.2));
+  }, []);
+  const videoZoomOut = useCallback(() => {
+    setVideoZoom((prev) => {
+      const next = Math.max(1, prev / 1.2);
+      if (next <= 1.05) { setVideoPanX(0); setVideoPanY(0); return 1; }
+      return next;
+    });
+  }, []);
+  const videoZoomFit = useCallback(() => {
+    setVideoZoom(1); setVideoPanX(0); setVideoPanY(0);
+  }, []);
+
+  // Video preview wheel zoom
+  useEffect(() => {
+    const container = videoContainerRef.current;
+    if (!container) return;
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.deltaY < 0) {
+        setVideoZoom((prev) => Math.min(5, prev * 1.1));
+      } else {
+        setVideoZoom((prev) => {
+          const next = Math.max(1, prev / 1.1);
+          if (next <= 1.05) { setVideoPanX(0); setVideoPanY(0); return 1; }
+          return next;
+        });
+      }
+    };
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => container.removeEventListener('wheel', handleWheel);
+  }, []);
+
+  // Video drag-to-pan
+  useEffect(() => {
+    if (!isDraggingVideo) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      setVideoPanX(videoDragStart.current.panX + (e.clientX - videoDragStart.current.x));
+      setVideoPanY(videoDragStart.current.panY + (e.clientY - videoDragStart.current.y));
+    };
+    const handleMouseUp = () => setIsDraggingVideo(false);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDraggingVideo]);
 
   // Listen for fullscreen changes (e.g., user presses Escape)
   useEffect(() => {
@@ -338,12 +420,25 @@ export function VideoSegmentPlayer({
           e.preventDefault();
           toggleFullscreen();
           break;
+        case "+":
+        case "=": // Video zoom in
+          e.preventDefault();
+          videoZoomIn();
+          break;
+        case "-": // Video zoom out
+          e.preventDefault();
+          videoZoomOut();
+          break;
+        case "0": // Video zoom fit
+          e.preventDefault();
+          videoZoomFit();
+          break;
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [togglePlay, toggleMark, toggleGroupMark, cancelMark, seekTo, frameStep, onSegmentCreate, toggleFullscreen]);
+  }, [togglePlay, toggleMark, toggleGroupMark, cancelMark, seekTo, frameStep, onSegmentCreate, toggleFullscreen, videoZoomIn, videoZoomOut, videoZoomFit]);
 
   // Video event handlers with smooth playhead updates
   useEffect(() => {
@@ -413,11 +508,19 @@ export function VideoSegmentPlayer({
     }
   }, [volume, isMuted]);
 
-  // Calculate segment position on timeline (accounting for zoom)
+  // Calculate segment position on timeline (accounting for zoom + resize preview)
   const getSegmentStyle = (segment: Segment) => {
+    // Use preview times if this segment is being resized
+    let startTime = segment.start_time;
+    let endTime = segment.end_time;
+    if (resizingInfo && resizePreview && segment.id === resizingInfo.segmentId) {
+      startTime = resizePreview.start;
+      endTime = resizePreview.end;
+    }
+
     // Convert to zoomed coordinates
-    const segStart = ((segment.start_time - visibleStart) / visibleDuration) * 100;
-    const segEnd = ((segment.end_time - visibleStart) / visibleDuration) * 100;
+    const segStart = ((startTime - visibleStart) / visibleDuration) * 100;
+    const segEnd = ((endTime - visibleStart) / visibleDuration) * 100;
     const left = Math.max(0, segStart);
     const right = Math.min(100, segEnd);
     const width = right - left;
@@ -591,6 +694,75 @@ export function VideoSegmentPlayer({
     };
   }, [isScrubbing, getTimeFromMouseEvent, seekTo]);
 
+  // Segment resize drag logic
+  const startResize = useCallback((e: React.MouseEvent, segment: Segment, edge: 'start' | 'end') => {
+    if (!segment.id || !onSegmentResize) return;
+    e.stopPropagation();
+    e.preventDefault();
+    wasPlayingBeforeResize.current = isPlaying;
+    if (videoRef.current && isPlaying) {
+      videoRef.current.pause();
+    }
+    setResizingInfo({
+      segmentId: segment.id,
+      edge,
+      originalStart: segment.start_time,
+      originalEnd: segment.end_time,
+    });
+    const initial = { start: segment.start_time, end: segment.end_time };
+    setResizePreview(initial);
+    resizePreviewRef.current = initial;
+  }, [isPlaying, onSegmentResize]);
+
+  useEffect(() => {
+    if (!resizingInfo) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const time = getTimeFromMouseEvent(e);
+      if (time === null) return;
+      const clampedTime = Math.max(0, Math.min(safeDuration, time));
+
+      setResizePreview(prev => {
+        if (!prev) return prev;
+        const MIN_GAP = 0.1;
+        let updated: { start: number; end: number };
+        if (resizingInfo.edge === 'start') {
+          const newStart = Math.min(clampedTime, prev.end - MIN_GAP);
+          updated = { start: newStart, end: prev.end };
+        } else {
+          const newEnd = Math.max(clampedTime, prev.start + MIN_GAP);
+          updated = { start: prev.start, end: newEnd };
+        }
+        resizePreviewRef.current = updated;
+        return updated;
+      });
+
+      seekTo(clampedTime);
+    };
+
+    const handleMouseUp = () => {
+      const finalPreview = resizePreviewRef.current;
+      if (finalPreview && onSegmentResize) {
+        onSegmentResize(resizingInfo.segmentId, finalPreview.start, finalPreview.end);
+      }
+      setResizingInfo(null);
+      setResizePreview(null);
+      resizePreviewRef.current = null;
+      if (wasPlayingBeforeResize.current && videoRef.current) {
+        videoRef.current.play().catch(() => {});
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resizingInfo, getTimeFromMouseEvent, seekTo, safeDuration, onSegmentResize]);
+
   // Fetch waveform data when sourceVideoId changes + reset voice data
   useEffect(() => {
     if (!sourceVideoId) return;
@@ -733,60 +905,112 @@ export function VideoSegmentPlayer({
     onSegmentClick?.(segment);
   };
 
+  // Build video transform style combining active transforms + preview zoom/pan
+  const getVideoStyle = (): React.CSSProperties | undefined => {
+    const transforms: string[] = [];
+    if (activeTransforms) {
+      if (activeTransforms.flip_h) transforms.push("scaleX(-1)");
+      if (activeTransforms.flip_v) transforms.push("scaleY(-1)");
+      if (activeTransforms.rotation) transforms.push(`rotate(${activeTransforms.rotation}deg)`);
+      if (activeTransforms.scale !== 1.0) transforms.push(`scale(${activeTransforms.scale})`);
+      if (activeTransforms.pan_x || activeTransforms.pan_y)
+        transforms.push(`translate(${activeTransforms.pan_x}px, ${activeTransforms.pan_y}px)`);
+    }
+    if (videoZoom !== 1) transforms.push(`scale(${videoZoom})`);
+    if (videoPanX || videoPanY) transforms.push(`translate(${videoPanX}px, ${videoPanY}px)`);
+
+    return {
+      transform: transforms.length > 0 ? transforms.join(" ") : undefined,
+      opacity: activeTransforms?.opacity,
+      transition: isDraggingVideo ? undefined : "transform 0.15s ease, opacity 0.15s ease",
+    };
+  };
+
   return (
-    <div ref={containerRef} className="flex flex-col gap-2">
-      {/* Video */}
-      <div className="relative bg-black rounded-lg overflow-hidden aspect-video">
+    <div ref={containerRef} className="flex flex-col h-full gap-1">
+      {/* Video Preview - takes remaining space */}
+      <div
+        ref={videoContainerRef}
+        className={`relative bg-black rounded-lg overflow-hidden flex-1 min-h-0 ${videoZoom > 1 ? (isDraggingVideo ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
+        onMouseDown={(e) => {
+          if (videoZoom > 1) {
+            e.preventDefault();
+            setIsDraggingVideo(true);
+            videoDragStart.current = { x: e.clientX, y: e.clientY, panX: videoPanX, panY: videoPanY };
+          }
+        }}
+      >
         <video
           ref={videoRef}
           src={videoUrl}
           className="w-full h-full object-contain"
-          onClick={togglePlay}
-          style={activeTransforms ? {
-            transform: [
-              activeTransforms.flip_h ? "scaleX(-1)" : "",
-              activeTransforms.flip_v ? "scaleY(-1)" : "",
-              activeTransforms.rotation ? `rotate(${activeTransforms.rotation}deg)` : "",
-              activeTransforms.scale !== 1.0 ? `scale(${activeTransforms.scale})` : "",
-              (activeTransforms.pan_x || activeTransforms.pan_y)
-                ? `translate(${activeTransforms.pan_x}px, ${activeTransforms.pan_y}px)`
-                : "",
-            ].filter(Boolean).join(" ") || undefined,
-            opacity: activeTransforms.opacity,
-            transition: "transform 0.15s ease, opacity 0.15s ease",
-          } : undefined}
+          onClick={(e) => {
+            if (!isDraggingVideo) togglePlay();
+          }}
+          style={getVideoStyle()}
         />
 
         {/* Marking indicator */}
         {isMarking && (
-          <div className="absolute top-4 left-4 z-10">
-            <Badge variant="destructive" className="animate-pulse">
+          <div className="absolute top-2 left-2 z-10">
+            <Badge variant="destructive" className="animate-pulse text-xs">
               <Scissors className="w-3 h-3 mr-1" />
-              Marking... Press C to set end point
+              Marking... C to end
             </Badge>
           </div>
         )}
 
-        {/* Current time overlay */}
-        <div className="absolute bottom-4 left-4 z-10 bg-black/70 px-2 py-1 rounded text-white font-mono text-sm">
-          {formatTime(currentTime)} / {formatTime(duration)}
-        </div>
-
         {/* Playback speed indicator */}
         {playbackRate !== 1 && (
-          <div className="absolute bottom-4 right-4 z-10 bg-black/70 px-2 py-1 rounded text-white font-mono text-sm">
+          <div className="absolute bottom-2 right-2 z-10 bg-black/70 px-1.5 py-0.5 rounded text-white font-mono text-xs">
             {playbackRate}x
           </div>
         )}
+
+        {/* Video zoom overlay controls - top right */}
+        <div className="absolute top-2 right-2 z-10 flex items-center gap-1">
+          {videoZoom > 1 && (
+            <span className="bg-black/70 px-1.5 py-0.5 rounded text-white font-mono text-[10px]">
+              {Math.round(videoZoom * 100)}%
+            </span>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 bg-black/50 hover:bg-black/70 text-white"
+            onClick={(e) => { e.stopPropagation(); videoZoomFit(); }}
+            title="Fit (0)"
+          >
+            <Locate className="h-3 w-3" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 bg-black/50 hover:bg-black/70 text-white"
+            onClick={(e) => { e.stopPropagation(); videoZoomIn(); }}
+            title="Zoom in (+)"
+          >
+            <ZoomIn className="h-3 w-3" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 bg-black/50 hover:bg-black/70 text-white"
+            onClick={(e) => { e.stopPropagation(); videoZoomOut(); }}
+            title="Zoom out (-)"
+          >
+            <ZoomOut className="h-3 w-3" />
+          </Button>
+        </div>
       </div>
 
-      {/* Timeline with segments */}
+      {/* Timeline with segments - fixed h-28 */}
       <div
         ref={timelineRef}
-        className={`relative h-40 bg-muted rounded-md overflow-hidden select-none ${isScrubbing ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+        className={`relative h-28 flex-shrink-0 bg-muted rounded-md overflow-hidden select-none ${isScrubbing ? 'cursor-grabbing' : 'cursor-crosshair'}`}
         onMouseDown={handleTimelineMouseDown}
       >
-        {/* Waveform canvas - behind everything */}
+        {/* Waveform canvas */}
         {showWaveform && waveformData.length > 0 && (
           <canvas
             ref={canvasRef}
@@ -828,7 +1052,7 @@ export function VideoSegmentPlayer({
           );
         })}
 
-        {/* Time scale markers - pointer-events-none so clicks pass through to timeline */}
+        {/* Time scale markers */}
         <div className="absolute top-0 left-0 right-0 h-4 bg-background/50 flex items-center text-[10px] text-muted-foreground font-mono pointer-events-none">
           {Array.from({ length: Math.min(10, Math.ceil(visibleDuration / 5) + 1) }).map((_, i) => {
             const time = visibleStart + (i * visibleDuration / Math.min(10, Math.ceil(visibleDuration / 5)));
@@ -845,31 +1069,53 @@ export function VideoSegmentPlayer({
           })}
         </div>
 
-        {/* Segment markers - clickable with higher z-index, transparent during scrubbing */}
+        {/* Segment markers */}
         {segments.map((segment) => {
           const style = getSegmentStyle(segment);
           if (style.display === 'none') return null;
+          const isBeingResized = resizingInfo?.segmentId === segment.id;
+          const displayStart = isBeingResized && resizePreview ? resizePreview.start : segment.start_time;
+          const displayEnd = isBeingResized && resizePreview ? resizePreview.end : segment.end_time;
           return (
             <div
               key={segment.id || `seg-${segment.start_time}-${segment.end_time}`}
-              className={`absolute top-4 bottom-0 transition-all z-20 border-l-2 border-r-2 cursor-pointer ${
+              className={`absolute top-4 bottom-0 z-20 border-l-2 border-r-2 cursor-pointer ${
+                isBeingResized ? '' : 'transition-all'
+              } ${
                 currentSegment?.id === segment.id
                   ? "bg-blue-500/70 border-blue-400 ring-1 ring-blue-400/50"
                   : "bg-green-500/50 hover:bg-green-500/70 border-green-600"
               }`}
               style={style}
-              onMouseDown={(e) => {
-                // Prevent parent timeline from starting a scrub when clicking segments
-                e.stopPropagation();
-              }}
+              onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => handleSegmentClick(e, segment)}
-              title={`${formatTime(segment.start_time)} - ${formatTime(segment.end_time)}\n${segment.keywords.join(", ")}`}
+              title={`${formatTime(displayStart)} - ${formatTime(displayEnd)}\n${segment.keywords.join(", ")}`}
             >
-              {/* Segment label */}
               {parseFloat(style.width || '0') > 5 && (
                 <span className="absolute top-0.5 left-1 text-[9px] text-white font-medium truncate max-w-full">
                   {segment.keywords[0] || 'segment'}
                 </span>
+              )}
+              {/* Resize drag handles */}
+              {onSegmentResize && segment.id && (
+                <>
+                  <div
+                    className="absolute left-0 top-0 bottom-0 w-2 cursor-col-resize z-30 hover:bg-white/30"
+                    onMouseDown={(e) => startResize(e, segment, 'start')}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <div
+                    className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize z-30 hover:bg-white/30"
+                    onMouseDown={(e) => startResize(e, segment, 'end')}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </>
+              )}
+              {/* Time tooltip during resize */}
+              {isBeingResized && resizePreview && (
+                <div className="absolute -top-5 left-1/2 -translate-x-1/2 bg-black/80 text-white text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap z-40 font-mono">
+                  {formatTime(resizePreview.start)} - {formatTime(resizePreview.end)}
+                </div>
               )}
             </div>
           );
@@ -909,168 +1155,104 @@ export function VideoSegmentPlayer({
           />
         )}
 
-        {/* Playhead with draggable handle */}
+        {/* Playhead */}
         {getPlayheadPosition() >= 0 && getPlayheadPosition() <= 100 && (
           <div
             className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-40"
             style={{ left: `${getPlayheadPosition()}%`, pointerEvents: 'none' }}
           >
-            {/* Top handle - draggable */}
             <div
               className="absolute -top-1 -left-2 w-4 h-4 bg-red-500 rounded-full shadow-md cursor-grab active:cursor-grabbing hover:scale-110 transition-transform"
               style={{ pointerEvents: 'auto' }}
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                handleTimelineMouseDown(e);
-              }}
+              onMouseDown={(e) => { e.stopPropagation(); handleTimelineMouseDown(e); }}
             />
-            {/* Line is not interactive */}
             <div className="absolute top-3 bottom-0 left-0 w-0.5 bg-red-500" />
-            {/* Bottom arrow */}
             <div className="absolute -bottom-0.5 -left-1 w-2 h-2 bg-red-500 rotate-45" style={{ pointerEvents: 'none' }} />
           </div>
         )}
 
-        {/* Zoom indicator */}
+        {/* Zoom indicator + inline zoom controls */}
         {zoomLevel > 1 && (
-          <div className="absolute bottom-1 right-1 bg-black/70 px-1.5 py-0.5 rounded text-[10px] text-white font-mono z-50">
-            {zoomLevel.toFixed(1)}x zoom
+          <div className="absolute bottom-1 right-1 z-50 flex items-center gap-1">
+            <Slider
+              value={[scrollOffset * 100]}
+              min={0}
+              max={maxOffset * 100}
+              step={0.1}
+              onValueChange={([val]) => setScrollOffset(val / 100)}
+              className="w-24"
+              onMouseDown={(e) => e.stopPropagation()}
+            />
+            <button
+              className="bg-black/70 px-1.5 py-0.5 rounded text-[10px] text-white font-mono hover:bg-black/90"
+              onClick={(e) => { e.stopPropagation(); setZoomLevel(1); setScrollOffset(0); }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              {zoomLevel.toFixed(1)}x
+            </button>
           </div>
         )}
       </div>
 
-      {/* Zoom controls */}
-      {zoomLevel > 1 && (
-        <div className="flex items-center gap-2 px-2 text-xs text-muted-foreground">
-          <span>Timeline:</span>
-          <Slider
-            value={[scrollOffset * 100]}
-            min={0}
-            max={maxOffset * 100}
-            step={0.1}
-            onValueChange={([val]) => setScrollOffset(val / 100)}
-            className="flex-1 max-w-xs"
-          />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 text-xs"
-            onClick={() => { setZoomLevel(1); setScrollOffset(0); }}
-          >
-            Reset Zoom
-          </Button>
-        </div>
-      )}
-
-      {/* Waveform & Voice toggles */}
-      <div className="flex items-center gap-2 px-2">
-        <Button
-          variant={showWaveform ? "default" : "outline"}
-          size="sm"
-          className="h-7 text-xs gap-1"
-          onClick={() => setShowWaveform(!showWaveform)}
-          disabled={waveformData.length === 0 && !waveformLoading}
-        >
-          {waveformLoading ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <AudioLines className="h-3 w-3" />
-          )}
-          Waveform
-        </Button>
-        <Button
-          variant={showVoiceOverlay ? "default" : "outline"}
-          size="sm"
-          className="h-7 text-xs gap-1"
-          onClick={() => setShowVoiceOverlay(!showVoiceOverlay)}
-          disabled={!sourceVideoId}
-        >
-          {voiceLoading ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <Mic className="h-3 w-3" />
-          )}
-          Voice
-        </Button>
-        {waveformLoading && (
-          <span className="text-[10px] text-muted-foreground">Loading waveform...</span>
-        )}
-        {voiceLoading && (
-          <span className="text-[10px] text-muted-foreground">Detecting voice...</span>
-        )}
-      </div>
-
-      {/* Controls */}
-      <div className="flex items-center gap-2 px-2">
+      {/* Controls - single compact row */}
+      <div className="flex items-center gap-1 px-1 h-8 flex-shrink-0">
         {/* Play/Pause */}
-        <Button variant="ghost" size="icon" onClick={togglePlay}>
-          {isPlaying ? (
-            <Pause className="h-5 w-5" />
-          ) : (
-            <Play className="h-5 w-5" />
-          )}
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={togglePlay}>
+          {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
         </Button>
 
-        {/* Skip buttons */}
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => seekTo((videoRef.current?.currentTime ?? 0) - 5)}
-          title="5 seconds back (Shift+Left)"
-        >
-          <SkipBack className="h-4 w-4" />
+        {/* Skip */}
+        <Button variant="ghost" size="icon" className="h-7 w-7"
+          onClick={() => seekTo((videoRef.current?.currentTime ?? 0) - 5)} title="5s back">
+          <SkipBack className="h-3.5 w-3.5" />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => seekTo((videoRef.current?.currentTime ?? 0) + 5)}
-          title="5 seconds forward (Shift+Right)"
-        >
-          <SkipForward className="h-4 w-4" />
+        <Button variant="ghost" size="icon" className="h-7 w-7"
+          onClick={() => seekTo((videoRef.current?.currentTime ?? 0) + 5)} title="5s forward">
+          <SkipForward className="h-3.5 w-3.5" />
         </Button>
 
-        {/* Time display */}
-        <div className="text-xs font-mono text-muted-foreground whitespace-nowrap">
+        {/* Time */}
+        <span className="text-[11px] font-mono text-muted-foreground whitespace-nowrap">
           {formatTime(currentTime)} / {formatTime(duration)}
-        </div>
+        </span>
 
-        {/* Spacer */}
         <div className="flex-1" />
 
-        {/* Volume control with slider */}
-        <div className="flex items-center gap-1 group">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setIsMuted(!isMuted)}
-            className="h-8 w-8"
-          >
-            {isMuted || volume === 0 ? (
-              <VolumeX className="h-4 w-4" />
-            ) : (
-              <Volume2 className="h-4 w-4" />
-            )}
-          </Button>
-          <div className="w-20 opacity-60 group-hover:opacity-100 transition-opacity">
-            <Slider
-              value={[isMuted ? 0 : volume * 100]}
-              min={0}
-              max={100}
-              step={1}
-              onValueChange={([val]) => {
-                setVolume(val / 100);
-                if (val > 0) setIsMuted(false);
-              }}
-              className="cursor-pointer [&_[role=slider]]:bg-blue-500 [&_[role=slider]]:border-blue-600 [&_.relative]:bg-blue-200 [&_[data-orientation=horizontal]>[data-orientation=horizontal]]:bg-blue-500"
-            />
-          </div>
-        </div>
+        {/* Volume */}
+        <Button variant="ghost" size="icon" className="h-7 w-7"
+          onClick={() => setIsMuted(!isMuted)}>
+          {isMuted || volume === 0 ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+        </Button>
+
+        {/* Waveform toggle */}
+        <Button
+          variant={showWaveform ? "default" : "ghost"}
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => setShowWaveform(!showWaveform)}
+          disabled={waveformData.length === 0 && !waveformLoading}
+          title="Waveform"
+        >
+          {waveformLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <AudioLines className="h-3 w-3" />}
+        </Button>
+
+        {/* Voice toggle */}
+        <Button
+          variant={showVoiceOverlay ? "default" : "ghost"}
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => setShowVoiceOverlay(!showVoiceOverlay)}
+          disabled={!sourceVideoId}
+          title="Voice detection"
+        >
+          {voiceLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Mic className="h-3 w-3" />}
+        </Button>
 
         {/* Speed */}
         <select
           value={playbackRate}
           onChange={(e) => setPlaybackRate(parseFloat(e.target.value))}
-          className="bg-muted border border-border rounded px-2 py-1 text-sm"
+          className="bg-muted border border-border rounded px-1 py-0.5 text-xs h-7"
         >
           <option value="0.5">0.5x</option>
           <option value="0.75">0.75x</option>
@@ -1080,59 +1262,61 @@ export function VideoSegmentPlayer({
           <option value="2">2x</option>
         </select>
 
-        {/* Mark button */}
+        {/* Mark */}
         <Button
           variant={isMarking ? "destructive" : "outline"}
           size="sm"
           onClick={toggleMark}
-          className="gap-1"
+          className="h-7 text-xs gap-1 px-2"
         >
-          <Scissors className="h-4 w-4" />
-          {isMarking ? "Set End (C)" : "Mark (C)"}
+          <Scissors className="h-3 w-3" />
+          {isMarking ? "End(C)" : "Mark(C)"}
         </Button>
 
-        {/* Group mark button */}
+        {/* Group */}
         {onGroupCreate && (
           <Button
             variant={isGroupMarking ? "destructive" : "outline"}
             size="sm"
             onClick={toggleGroupMark}
-            className="gap-1"
+            className="h-7 text-xs gap-1 px-2"
           >
-            <Layers className="h-4 w-4" />
-            {isGroupMarking ? "Set End (G)" : "Group (G)"}
+            <Layers className="h-3 w-3" />
+            {isGroupMarking ? "End(G)" : "Group(G)"}
           </Button>
         )}
 
-        {/* Fullscreen button */}
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={toggleFullscreen}
-          title="Fullscreen (F)"
-          className="h-8 w-8"
-        >
-          {isFullscreen ? (
-            <Minimize2 className="h-4 w-4" />
-          ) : (
-            <Maximize2 className="h-4 w-4" />
-          )}
+        {/* Fullscreen */}
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={toggleFullscreen} title="Fullscreen (F)">
+          {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
         </Button>
-      </div>
 
-      {/* Keyboard shortcuts help */}
-      <div className="text-xs text-muted-foreground px-2 flex flex-wrap gap-x-4 gap-y-1">
-        <span><kbd className="px-1 bg-muted rounded">Space</kbd> Play/Pause</span>
-        <span><kbd className="px-1 bg-muted rounded">C</kbd> Mark Segment</span>
-        <span><kbd className="px-1 bg-muted rounded">G</kbd> Mark Group</span>
-        <span><kbd className="px-1 bg-muted rounded">I</kbd>/<kbd className="px-1 bg-muted rounded">O</kbd> In/Out</span>
-        <span><kbd className="px-1 bg-muted rounded">←</kbd>/<kbd className="px-1 bg-muted rounded">→</kbd> Frame</span>
-        <span><kbd className="px-1 bg-muted rounded">Shift+←</kbd>/<kbd className="px-1 bg-muted rounded">→</kbd> 5s</span>
-        <span><kbd className="px-1 bg-muted rounded">J</kbd>/<kbd className="px-1 bg-muted rounded">K</kbd>/<kbd className="px-1 bg-muted rounded">L</kbd> Speed</span>
-        <span><kbd className="px-1 bg-muted rounded">F</kbd> Fullscreen</span>
-        <span><kbd className="px-1 bg-muted rounded">Del</kbd> Delete Segment</span>
-        <span><kbd className="px-1 bg-muted rounded">Esc</kbd> Cancel/Exit</span>
-        <span><kbd className="px-1 bg-muted rounded">Scroll</kbd> Zoom Timeline</span>
+        {/* Keyboard shortcuts - popover */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-7 w-7" title="Keyboard shortcuts (?)">
+              <HelpCircle className="h-3.5 w-3.5" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-80 text-xs" side="top" align="end">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+              <span><kbd className="px-1 bg-muted rounded text-[10px]">Space</kbd> Play/Pause</span>
+              <span><kbd className="px-1 bg-muted rounded text-[10px]">C</kbd> Mark Segment</span>
+              <span><kbd className="px-1 bg-muted rounded text-[10px]">G</kbd> Mark Group</span>
+              <span><kbd className="px-1 bg-muted rounded text-[10px]">I</kbd>/<kbd className="px-1 bg-muted rounded text-[10px]">O</kbd> In/Out</span>
+              <span><kbd className="px-1 bg-muted rounded text-[10px]">←</kbd>/<kbd className="px-1 bg-muted rounded text-[10px]">→</kbd> Frame step</span>
+              <span><kbd className="px-1 bg-muted rounded text-[10px]">Shift+←/→</kbd> 5s jump</span>
+              <span><kbd className="px-1 bg-muted rounded text-[10px]">J/K/L</kbd> Speed</span>
+              <span><kbd className="px-1 bg-muted rounded text-[10px]">F</kbd> Fullscreen</span>
+              <span><kbd className="px-1 bg-muted rounded text-[10px]">+/-</kbd> Video zoom</span>
+              <span><kbd className="px-1 bg-muted rounded text-[10px]">0</kbd> Fit video</span>
+              <span><kbd className="px-1 bg-muted rounded text-[10px]">Del</kbd> Delete</span>
+              <span><kbd className="px-1 bg-muted rounded text-[10px]">Esc</kbd> Cancel</span>
+              <span><kbd className="px-1 bg-muted rounded text-[10px]">Scroll</kbd> Timeline zoom</span>
+              <span><kbd className="px-1 bg-muted rounded text-[10px]">[/]</kbd> Panels</span>
+            </div>
+          </PopoverContent>
+        </Popover>
       </div>
     </div>
   );

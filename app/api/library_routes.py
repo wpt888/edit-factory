@@ -567,7 +567,7 @@ async def list_projects(
         if status:
             eq_filters["status"] = status
         filters = QueryFilters(
-            eq=eq_filters if eq_filters else None,
+            eq=eq_filters,
             order_by="created_at",
             order_desc=True,
             limit=limit,
@@ -900,6 +900,7 @@ async def _generate_raw_clips_task(
             logger.warning(f"Project {project_id} is already being processed, skipping")
             return
 
+    result = None  # BUG-1.2: track result for cleanup decision in finally block
     try:
         # Update project status now that we hold the lock
         try:
@@ -933,7 +934,8 @@ async def _generate_raw_clips_task(
             srt_path=None,    # No subtitles
             subtitle_settings=None,
             variant_count=variant_count,
-            progress_callback=lambda step, status: logger.info(f"[{project_id}] {step}: {status}"),
+            # BUG-6.8: Use update_generation_progress instead of plain logger
+            progress_callback=lambda step, status: update_generation_progress(project_id, 50, f"{step}: {status}"),
             context_text=context_text,
             generate_audio=False,  # IMPORTANT: Do not generate audio
             mute_source_voice=False
@@ -994,9 +996,12 @@ async def _generate_raw_clips_task(
                     continue  # Continue with next clip instead of aborting
 
             # Update the project
+            # BUG-5.2: Use the actual max variant index instead of just len(variants)
+            # to reflect accumulated clips across multiple generation runs
+            max_variant_idx = max(v["variant_index"] for v in variants) if variants else 0
             repo.update_project(project_id, {
                 "status": "ready_for_triage",
-                "variants_count": len(variants)
+                "variants_count": max_variant_idx
             })
 
             logger.info(f"Generated {len(variants)} raw clips for project {project_id}")
@@ -1012,14 +1017,16 @@ async def _generate_raw_clips_task(
         except Exception as db_err:
             logger.error(f"Failed to update project {project_id} status to failed: {db_err}")
     finally:
-        # C6: Clean up uploaded input file on failure to avoid orphaned files
-        try:
-            input_file = Path(video_path)
-            if input_file.exists() and (str(settings.input_dir) in str(input_file.parent) or str(settings.media_dir) in str(input_file.parent)):
-                input_file.unlink(missing_ok=True)
-                logger.debug(f"Cleaned up input video: {video_path}")
-        except Exception as cleanup_err:
-            logger.warning(f"Failed to cleanup input video {video_path}: {cleanup_err}")
+        # BUG-1.2: Only clean up uploaded input file on FAILURE to avoid deleting
+        # the source video that Phase 2 rendering still needs.
+        if result is None or result.get("status") != "success":
+            try:
+                input_file = Path(video_path)
+                if input_file.exists() and (str(settings.input_dir) in str(input_file.parent) or str(settings.media_dir) in str(input_file.parent)):
+                    input_file.unlink(missing_ok=True)
+                    logger.debug(f"Cleaned up input video after failure: {video_path}")
+            except Exception as cleanup_err:
+                logger.warning(f"Failed to cleanup input video {video_path}: {cleanup_err}")
 
         # Always release and cleanup the lock
         lock.release()
@@ -1216,16 +1223,12 @@ def _build_mute_filter(mute_intervals: list, fade_duration: float = 0.8, min_vol
     if not merged_intervals:
         return None
 
-    # For a single large interval, use simple afade filter (cleanest result)
+    # BUG-6.7: For a single interval, use volume filter instead of afade chain.
+    # afade applies globally and the second afade can undo the first's effect.
+    # volume=enable='between(t,start,end)':volume=0 is precise and composable.
     if len(merged_intervals) == 1:
         start, end = merged_intervals[0]
-        fade_out_start = max(0, start - fade_duration)
-        # Use afade which has native exponential fade implementation
-        # curve=exp for exponential curve
-        return (
-            f"afade=t=out:st={fade_out_start:.3f}:d={fade_duration:.3f}:curve=exp,"
-            f"afade=t=in:st={end:.3f}:d={fade_duration:.3f}:curve=exp"
-        )
+        return f"volume=enable='between(t,{start:.3f},{end:.3f})':volume={min_volume}"
 
     # For multiple intervals, build a complex volume expression
     # Formula for exponential fade:
@@ -1336,6 +1339,17 @@ async def _generate_from_segments_task(
         return
 
     try:
+        # BUG-5.3: Recompute start_variant_index inside the background task (after
+        # acquiring the lock) to avoid TOCTOU race with concurrent requests.
+        try:
+            _existing = supabase.table("editai_clips").select("variant_index").eq("project_id", project_id).eq("profile_id", profile_id).eq("is_deleted", False).execute()
+            if _existing.data:
+                _max_idx = max(clip.get("variant_index", 0) for clip in _existing.data)
+                start_variant_index = _max_idx + 1
+                logger.info(f"[BUG-5.3] Recomputed start_variant_index={start_variant_index} inside lock")
+        except Exception as _e:
+            logger.warning(f"Failed to recompute start_variant_index, using passed value {start_variant_index}: {_e}")
+
         # Update project status now that we hold the lock
         try:
             supabase.table("editai_projects").update({
@@ -1422,12 +1436,20 @@ async def _generate_from_segments_task(
                     job_id=_gen_job_id
                 )
 
-                # Select segments for this variant
+                # BUG-1.3: Select segments for this variant with cross-variant diversity.
+                # Each variant gets a different ordering/offset to avoid identical outputs.
+                relative_idx = variant_idx - start_variant_index
                 if selection_mode == "sequential":
-                    selected = available_segments.copy()
+                    # Offset by variant index to start from different positions
+                    step = max(1, len(available_segments) // max(variant_count, 1))
+                    offset = relative_idx * step
+                    selected = available_segments[offset:] + available_segments[:offset]
                 elif selection_mode == "weighted":
-                    # For weighted, prioritize longer segments
-                    selected = sorted(available_segments, key=lambda x: x["duration"], reverse=True)
+                    # For weighted, prioritize longer segments but offset per variant
+                    sorted_segs = sorted(available_segments, key=lambda x: x["duration"], reverse=True)
+                    step = max(1, len(sorted_segs) // max(variant_count, 1))
+                    offset = relative_idx * step
+                    selected = sorted_segs[offset:] + sorted_segs[:offset]
                 else:  # random
                     selected = available_segments.copy()
                     random.shuffle(selected)
@@ -1740,6 +1762,76 @@ async def list_tags(profile: ProfileContext = Depends(get_profile_context)):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _get_or_create_sync_project(supabase, profile_id: str) -> str:
+    """Find or create the 'Imported from disk' project for orphan clip sync."""
+    existing = supabase.table("editai_projects").select("id")\
+        .eq("profile_id", profile_id)\
+        .eq("name", "Imported from disk")\
+        .limit(1).execute()
+    if existing.data:
+        return existing.data[0]["id"]
+    result = supabase.table("editai_projects").insert({
+        "profile_id": profile_id,
+        "name": "Imported from disk",
+        "description": "Auto-imported videos found on disk",
+        "status": "completed",
+    }).execute()
+    return result.data[0]["id"]
+
+
+async def _sync_orphan_clips(profile_id: str, supabase) -> int:
+    """Scan output/{profile_id}/ for .mp4 files not in DB and insert them."""
+    settings = get_settings()
+    profile_dir = settings.output_dir / profile_id
+    if not profile_dir.is_dir():
+        return 0
+
+    mp4_files = list(profile_dir.glob("*.mp4"))
+    if not mp4_files:
+        return 0
+
+    # Get all known video filenames for this profile (including soft-deleted)
+    known = supabase.table("editai_clips").select("raw_video_path, final_video_path")\
+        .eq("profile_id", profile_id)\
+        .execute()
+    known_names: set = set()
+    for row in (known.data or []):
+        for field in ("raw_video_path", "final_video_path"):
+            val = row.get(field)
+            if val:
+                known_names.add(Path(val).name)
+
+    orphans = [f for f in mp4_files if f.name not in known_names]
+    if not orphans:
+        return 0
+
+    sync_project_id = _get_or_create_sync_project(supabase, profile_id)
+    inserted = 0
+    for video_file in orphans:
+        try:
+            duration = _get_video_duration(video_file)
+            thumbnail = _generate_thumbnail(video_file, project_id=sync_project_id)
+            supabase.table("editai_clips").insert({
+                "project_id": sync_project_id,
+                "profile_id": profile_id,
+                "variant_index": 0,
+                "variant_name": video_file.stem,
+                "raw_video_path": str(video_file),
+                "final_video_path": str(video_file),
+                "thumbnail_path": str(thumbnail) if thumbnail else None,
+                "duration": duration,
+                "is_selected": False,
+                "is_deleted": False,
+                "final_status": "completed",
+            }).execute()
+            inserted += 1
+        except Exception as e:
+            logger.warning(f"Failed to sync orphan clip {video_file.name}: {e}")
+    if inserted:
+        logger.info(f"Synced {inserted} orphan clips for profile {profile_id}")
+    return inserted
+
+
 @router.get("/all-clips")
 async def list_all_clips(
     limit: int = Query(default=50, ge=1, le=200),
@@ -1754,6 +1846,13 @@ async def list_all_clips(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
+    # Sync orphan clips from disk on first page load only
+    if not cursor:
+        try:
+            await _sync_orphan_clips(profile.profile_id, supabase)
+        except Exception as e:
+            logger.warning(f"Orphan clip sync failed: {e}")
+
     try:
         # Total count query — counts clips for this profile (with optional tag filter)
         count_query = supabase.table("editai_clips")\
@@ -1767,7 +1866,7 @@ async def list_all_clips(
 
         # Data query — apply cursor filter when provided, otherwise use offset
         query = supabase.table("editai_clips")\
-            .select("*, editai_projects!inner(name)")\
+            .select("*, editai_projects(name)")\
             .eq("is_deleted", False)\
             .eq("profile_id", profile.profile_id)
         if tag:
@@ -2097,12 +2196,14 @@ async def delete_clip(
         clip_result = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", False).limit(1).execute()
         if not clip_result.data:
             raise HTTPException(status_code=404, detail="Clip not found")
-        # Delete files from disk
+        # Soft-delete: mark as deleted so orphan-sync won't re-import the file
+        supabase.table("editai_clips").update({
+            "is_deleted": True,
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
+        # Best-effort file cleanup (trash auto-purge handles leftovers)
         _delete_clip_files(clip_result.data[0])
-        # Delete content first (child), then clip record (parent); include profile_id filter
-        supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
-        supabase.table("editai_clips").delete().eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
-        logger.info(f"Permanently deleted clip {clip_id}")
+        logger.info(f"Soft-deleted clip {clip_id}")
         return {"status": "deleted", "clip_id": clip_id}
     except HTTPException:
         raise
@@ -2149,16 +2250,18 @@ async def bulk_delete_clips(
 
         if found_clips:
             found_id_list = list(found_ids)
-            # Delete files from disk
+            # Soft-delete: mark as deleted so orphan-sync won't re-import the files
+            supabase.table("editai_clips").update({
+                "is_deleted": True,
+                "deleted_at": datetime.now(timezone.utc).isoformat(),
+            }).in_("id", found_id_list).eq("profile_id", profile.profile_id).execute()
+            # Best-effort file cleanup (trash auto-purge handles leftovers)
             for clip in found_clips:
                 _delete_clip_files(clip)
-            # Delete content first (child), then clip records (parent)
-            supabase.table("editai_clip_content").delete().in_("clip_id", found_id_list).execute()
-            supabase.table("editai_clips").delete().in_("id", found_id_list).eq("profile_id", profile.profile_id).execute()
 
         deleted = list(found_ids)
         for clip_id in deleted:
-            logger.info(f"Permanently deleted clip {clip_id}")
+            logger.info(f"Soft-deleted clip {clip_id}")
 
     except Exception as e:
         logger.error(f"Error in bulk delete: {e}")
@@ -2669,6 +2772,8 @@ async def _render_final_clip_task(
 
                 # Apply silence removal to timestamped audio
                 original_audio_path = audio_path
+                # BUG-6.9: Save copy of timestamps before remap so we can restore on failure
+                original_tts_timestamps = list(tts_timestamps) if tts_timestamps else None
                 try:
                     from app.services.silence_remover import SilenceRemover
                     remover = SilenceRemover(min_silence_duration=0.25, padding=0.06, target_pause_duration=0.1)
@@ -2688,13 +2793,15 @@ async def _render_final_clip_task(
                             tts_timestamps = remap_timestamps_dict(tts_timestamps, silence_result.segments_map)
                             logger.info(f"Remapped TTS timestamps after silence removal ({len(silence_result.segments_map)} regions)")
                         except Exception as remap_err:
-                            # Remap failed — revert to original audio so timestamps stay in sync
-                            logger.warning(f"Timestamp remapping failed, reverting to original audio to preserve sync: {remap_err}")
+                            # BUG-6.9: Remap failed — revert BOTH audio and timestamps
+                            logger.warning(f"Timestamp remapping failed, reverting to original audio and timestamps: {remap_err}")
                             audio_path = original_audio_path
+                            tts_timestamps = original_tts_timestamps
                             silence_stats = None
                 except Exception as e:
                     logger.warning(f"Silence removal failed, using raw audio: {e}")
                     audio_path = original_audio_path
+                    tts_timestamps = original_tts_timestamps
 
             except Exception as e:
                 # Fallback to legacy TTS without timestamps
@@ -3322,11 +3429,19 @@ def _extend_video_with_segments(
 
             if source_path and Path(source_path).exists():
                 available_segments.append({
+                    "id": seg.get("id"),
+                    "single_use": seg.get("single_use", False),
                     "source_path": source_path,
                     "start_time": seg["start_time"],
                     "end_time": seg["end_time"],
                     "duration": seg["end_time"] - seg["start_time"]
                 })
+
+        # Exclude single_use segments from extension pool (conservative:
+        # we can't know which segments are in the base video)
+        non_single_use = [s for s in available_segments if not s.get("single_use")]
+        if non_single_use:
+            available_segments = non_single_use
 
         if not available_segments:
             logger.warning("No valid segments available for extension")
@@ -3349,7 +3464,8 @@ def _extend_video_with_segments(
 
         settings = get_settings()
         # Profile-scoped temp directory to prevent cross-profile file collisions
-        temp_dir = settings.base_dir / "temp" / profile_id / f"extend_{project_id[:8]}"
+        # BUG-5.4: Include unique suffix in temp dir name to avoid cross-clip collisions
+        temp_dir = settings.base_dir / "temp" / profile_id / f"extend_{project_id[:8]}_{uuid.uuid4().hex[:8]}"
         temp_dir.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -3397,7 +3513,8 @@ def _extend_video_with_segments(
             concat_list = temp_dir / "concat.txt"
             with open(concat_list, "w") as f:
                 for sf in segment_files:
-                    safe_path = str(sf).replace("'", "'\\''")
+                    # BUG-6.3: Convert backslashes to forward slashes for FFmpeg concat
+                    safe_path = str(sf).replace('\\', '/').replace("'", "'\\''")
                     f.write(f"file '{safe_path}'\n")
 
             # Concatenate and trim to exact duration
@@ -3640,7 +3757,10 @@ async def _render_with_preset(
 
     # Apply filters
     if filters:
-        cmd.extend(["-vf", ",".join(filters)])
+        vf_str = ",".join(filters)
+        cmd.extend(["-vf", vf_str])
+        # DEBUG: Log the complete -vf filter string to diagnose subtitle transparency
+        logger.debug(f"[RENDER-DEBUG] Complete -vf filter: {vf_str}")
 
     # Audio normalization (two-pass loudnorm) — skip in preview mode for speed
     audio_filters = []
@@ -3715,45 +3835,44 @@ async def _render_with_preset(
             }
             platform_key = platform_map.get(preset_name, "generic")
             encoding_preset = get_preset(platform_key)
-        logger.info(f"Using encoding preset: {encoding_preset.name} (platform: {encoding_preset.platform})")
+
+        # Override encoding preset fields from DB preset_data (if present)
+        _db_overrides = {}
+        if preset.get("encoding_mode"):
+            _db_overrides["encoding_mode"] = preset["encoding_mode"]
+        if preset.get("target_bitrate_kbps"):
+            _db_overrides["target_bitrate_kbps"] = int(preset["target_bitrate_kbps"])
+        if preset.get("video_profile"):
+            _db_overrides["video_profile"] = preset["video_profile"]
+        if preset.get("video_level"):
+            _db_overrides["video_level"] = preset["video_level"]
+        if _db_overrides:
+            encoding_preset = encoding_preset.model_copy(update=_db_overrides)
+            logger.info(f"Applied DB overrides to encoding preset: {_db_overrides}")
+
+        logger.info(f"Using encoding preset: {encoding_preset.name} (platform: {encoding_preset.platform}, mode: {encoding_preset.encoding_mode})")
 
         # Use GPU encoding when NVENC is available (much faster + frees CPU)
         _use_gpu = is_nvenc_available()
-        encoding_params = encoding_preset.to_ffmpeg_params(use_gpu=_use_gpu)
-        logger.info(f"Encoding with {'GPU (NVENC)' if _use_gpu else 'CPU (libx264)'}")
 
     # Extract audio bitrate from encoding params for comparison (skip in preview mode)
     if not _preview_mode and encoding_preset:
-        preset_audio_bitrate = encoding_preset.audio_bitrate
-
         # Override audio bitrate if database preset has higher value
-        db_audio_bitrate = preset.get("audio_bitrate", "192k")
-        if db_audio_bitrate and db_audio_bitrate != preset_audio_bitrate:
-            # Parse bitrates for comparison (e.g., "320k" -> 320)
+        db_audio_bitrate = preset.get("audio_bitrate", "320k")
+        if db_audio_bitrate:
             try:
                 db_bitrate_val = int(db_audio_bitrate.lower().replace("k", ""))
-                preset_bitrate_val = int(preset_audio_bitrate.lower().replace("k", ""))
+                preset_bitrate_val = int(encoding_preset.audio_bitrate.lower().replace("k", ""))
             except (ValueError, AttributeError):
-                logger.warning(f"Could not parse audio bitrates: db={db_audio_bitrate}, preset={preset_audio_bitrate}, using defaults")
-                db_bitrate_val = 192
-                preset_bitrate_val = 192
+                db_bitrate_val = 320
+                preset_bitrate_val = 320
             if db_bitrate_val > preset_bitrate_val:
-                logger.info(f"Database audio bitrate {db_audio_bitrate} higher than preset {preset_audio_bitrate}, using database value")
-                # Update audio bitrate in encoding params
-                for i, param in enumerate(encoding_params):
-                    if param == "-b:a":
-                        encoding_params[i+1] = db_audio_bitrate
-                        break
+                logger.info(f"Database audio bitrate {db_audio_bitrate} higher than preset {encoding_preset.audio_bitrate}, using database value")
+                encoding_preset = encoding_preset.model_copy(update={"audio_bitrate": db_audio_bitrate})
 
-    # Add FPS setting (from database preset)
-    cmd.extend(["-r", str(preset.get("fps", 30))])
-
-    # Add encoding parameters from EncodingPreset
-    cmd.extend(encoding_params)
-
-    # Audio mapping — use audio duration as master clock (video was pre-synced to match)
+    # Determine audio duration (needed for both single-pass and 2-pass)
+    _audio_dur = 0
     if audio_path and audio_path.exists():
-        # Get audio duration to use as explicit output duration (avoids -shortest truncation bugs)
         try:
             _probe = safe_ffmpeg_run(
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -3763,37 +3882,153 @@ async def _render_with_preset(
             _audio_dur = float(_probe.stdout.strip()) if _probe.returncode == 0 else 0
         except Exception:
             _audio_dur = 0
+        # BUG-6.4: If audio file exists but duration probe returned 0, try fallback
+        if _audio_dur == 0 and audio_path.stat().st_size > 0:
+            logger.warning(f"Audio file exists ({audio_path.stat().st_size} bytes) but ffprobe returned duration=0, using -shortest fallback")
+            # _audio_dur stays 0, -shortest will be used — which is correct for real audio
 
-        cmd.extend([
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-        ])
-        # Use explicit duration from audio to prevent premature cutoff
-        if _audio_dur > 0:
-            cmd.extend(["-t", str(_audio_dur)])
+    # ── 2-Pass VBR Rendering ──
+    if not _preview_mode and encoding_preset and encoding_preset.needs_two_pass():
+        import os
+        import tempfile
+        _passlog_prefix = str(output_path.parent / f"ffmpeg2pass_{uuid.uuid4().hex[:8]}")
+        _fps = str(preset.get("fps", 30))
+
+        try:
+            # ── PASS 1: Video analysis (no audio, no subtitles) ──
+            logger.info(f"VBR 2-pass: Starting pass 1 (analysis) — target {encoding_preset.target_bitrate_kbps}k")
+            pass1_cmd = ["ffmpeg", "-y", "-i", str(video_path)]
+
+            # Build video filters WITHOUT subtitles for pass 1 (saves time)
+            pass1_filters = []
+            pass1_filters.append(f"scale={preset['width']}:{preset['height']}:force_original_aspect_ratio=increase")
+            pass1_filters.append(f"crop={preset['width']}:{preset['height']}")
+            if enable_denoise:
+                chroma_spatial = denoise_strength * 0.75
+                luma_temporal = denoise_strength * 1.5
+                chroma_temporal = chroma_spatial * 1.5
+                pass1_filters.append(f"hqdn3d={denoise_strength:.1f}:{chroma_spatial:.2f}:{luma_temporal:.1f}:{chroma_temporal:.2f}")
+            if enable_sharpen:
+                matrix_size = 5
+                pass1_filters.append(f"unsharp={matrix_size}:{matrix_size}:{sharpen_amount:.2f}:{matrix_size}:{matrix_size}:0.0")
+            if enable_color:
+                color_params = []
+                if abs(brightness) > 0.001:
+                    color_params.append(f"brightness={brightness:.2f}")
+                if abs(contrast - 1.0) > 0.001:
+                    color_params.append(f"contrast={contrast:.2f}")
+                if abs(saturation - 1.0) > 0.001:
+                    color_params.append(f"saturation={saturation:.2f}")
+                if color_params:
+                    pass1_filters.append(f"eq={':'.join(color_params)}")
+
+            if pass1_filters:
+                pass1_cmd.extend(["-vf", ",".join(pass1_filters)])
+
+            pass1_cmd.extend(["-r", _fps])
+            pass1_params = encoding_preset.to_ffmpeg_params(use_gpu=False, pass_number=1, passlogfile=_passlog_prefix)
+            pass1_cmd.extend(pass1_params)
+            pass1_cmd.extend(["-an", "-f", "null", os.devnull])
+
+            logger.info(f"Pass 1 command: {' '.join(pass1_cmd)}")
+            result1 = await asyncio.to_thread(safe_ffmpeg_run, pass1_cmd, 1200, "VBR 2-pass: pass 1")
+            if result1.returncode != 0:
+                raise RuntimeError(f"FFmpeg 2-pass (pass 1) failed: {result1.stderr}")
+
+            # ── PASS 2: Final encode (full filters + audio) ──
+            logger.info(f"VBR 2-pass: Starting pass 2 (encoding)")
+            pass2_cmd = ["ffmpeg", "-y", "-i", str(video_path)]
+
+            # Add audio input
+            if audio_path and audio_path.exists():
+                pass2_cmd.extend(["-i", str(audio_path)])
+                has_audio_pass2 = True
+            else:
+                pass2_cmd.extend(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"])
+                has_audio_pass2 = False
+
+            # Full video filters (including subtitles) for pass 2
+            if filters:
+                vf_str = ",".join(filters)
+                pass2_cmd.extend(["-vf", vf_str])
+
+            # Audio filters (loudnorm) for pass 2
+            if audio_filters:
+                pass2_cmd.extend(["-af", ",".join(audio_filters)])
+
+            pass2_cmd.extend(["-r", _fps])
+            pass2_params = encoding_preset.to_ffmpeg_params(use_gpu=False, pass_number=2, passlogfile=_passlog_prefix)
+            pass2_cmd.extend(pass2_params)
+
+            # Audio mapping
+            if audio_path and audio_path.exists():
+                pass2_cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
+                if _audio_dur > 0:
+                    pass2_cmd.extend(["-t", str(_audio_dur)])
+            else:
+                pass2_cmd.extend(["-map", "0:v:0", "-map", "1:a:0", "-shortest"])
+
+            # Extra flags
+            extra_flags = preset.get("extra_flags", "-movflags +faststart")
+            if extra_flags:
+                pass2_cmd.extend(_validate_extra_flags(extra_flags))
+
+            pass2_cmd.append(str(output_path))
+
+            logger.info(f"Pass 2 command: {' '.join(pass2_cmd)}")
+            result2 = await asyncio.to_thread(safe_ffmpeg_run, pass2_cmd, 1800, "VBR 2-pass: pass 2")
+            if result2.returncode != 0:
+                raise RuntimeError(f"FFmpeg 2-pass (pass 2) failed: {result2.stderr}")
+
+        finally:
+            # Cleanup passlog files (ffmpeg creates .log and .log.mbtree)
+            import glob as _glob_mod
+            for passlog_file in _glob_mod.glob(f"{_passlog_prefix}*"):
+                try:
+                    os.remove(passlog_file)
+                except OSError:
+                    pass
+
     else:
-        # Silent audio - map video from 0, audio from lavfi 1
-        cmd.extend([
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-shortest"
-        ])
+        # ── Single-pass rendering (CRF, VBR 1-pass, or preview) ──
+        # BUG-1.1: Ensure encoding_params is always initialized (may not be set
+        # when _preview_mode is False and encoding_preset is None/falsy)
+        if not _preview_mode and encoding_preset:
+            encoding_params = encoding_preset.to_ffmpeg_params(use_gpu=_use_gpu)
+            logger.info(f"Encoding with {'GPU (NVENC)' if _use_gpu else 'CPU (libx264)'} (single-pass {encoding_preset.encoding_mode})")
+        elif not _preview_mode:
+            encoding_params = ["-c:v", "libx264", "-preset", "fast", "-crf", "23", "-c:a", "aac", "-b:a", "192k"]
+            logger.warning("No encoding preset available for single-pass render, using default libx264 CRF 23")
 
-    # Extra flags for social media compatibility (validated against allowlist)
-    extra_flags = preset.get("extra_flags", "-movflags +faststart")
-    if extra_flags:
-        cmd.extend(_validate_extra_flags(extra_flags))
+        # Add FPS setting (from database preset)
+        cmd.extend(["-r", str(preset.get("fps", 30))])
 
-    # Output
-    cmd.append(str(output_path))
+        # Add encoding parameters from EncodingPreset
+        cmd.extend(encoding_params)
 
-    logger.info(f"Rendering with command: {' '.join(cmd)}")
+        # Audio mapping — use audio duration as master clock (video was pre-synced to match)
+        if audio_path and audio_path.exists():
+            cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
+            if _audio_dur > 0:
+                cmd.extend(["-t", str(_audio_dur)])
+        else:
+            cmd.extend(["-map", "0:v:0", "-map", "1:a:0", "-shortest"])
 
-    result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 1200, "final render")
-    if result.returncode != 0:
-        raise RuntimeError(f"FFmpeg render failed: {result.stderr}")
+        # Extra flags for social media compatibility (validated against allowlist)
+        extra_flags = preset.get("extra_flags", "-movflags +faststart")
+        if extra_flags:
+            cmd.extend(_validate_extra_flags(extra_flags))
+
+        # Output
+        cmd.append(str(output_path))
+
+        logger.info(f"Rendering with command: {' '.join(cmd)}")
+
+        result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 1200, "final render")
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg render failed: {result.stderr}")
 
     if not output_path.exists() or output_path.stat().st_size == 0:
         raise RuntimeError(f"FFmpeg render produced no output file or empty file: {output_path}")
 
-    logger.info(f"Rendered: {output_path}")
+    logger.info(f"Rendered: {output_path} (mode: {encoding_preset.encoding_mode if encoding_preset else 'preview'})")

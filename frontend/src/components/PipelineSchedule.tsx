@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
@@ -20,8 +20,11 @@ import {
   Clock,
   Send,
   CalendarDays,
+  RefreshCw,
+  AlertCircle,
+  Save,
 } from "lucide-react";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGetWithRetry, apiPost } from "@/lib/api";
 import { toast } from "sonner";
 import { PostizMonthlyCalendar } from "@/components/PostizMonthlyCalendar";
 
@@ -56,6 +59,51 @@ const TIMEZONES = [
 
 let _integrationsCache: Integration[] | undefined;
 let _integrationsFetchPromise: Promise<void> | null = null;
+let _integrationsFetchFailed = false; // Track if cache is from a failed fetch
+
+/* ---------- Draft persistence ---------- */
+
+const DRAFT_KEY = "editai_schedule_draft";
+
+interface ScheduleDraft {
+  caption: string;
+  perVariantCaptions: Record<string, string>;
+  captionMode: "shared" | "individual";
+  scheduleDate: string;
+  postTime: string;
+  timezone: string;
+  selectedIntegrationIds: string[];
+  savedAt: number;
+}
+
+function loadDraft(): ScheduleDraft | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return null;
+    const draft: ScheduleDraft = JSON.parse(raw);
+    // Expire drafts older than 7 days
+    if (Date.now() - draft.savedAt > 7 * 24 * 60 * 60 * 1000) {
+      localStorage.removeItem(DRAFT_KEY);
+      return null;
+    }
+    return draft;
+  } catch {
+    return null;
+  }
+}
+
+function saveDraft(draft: Omit<ScheduleDraft, "savedAt">) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...draft, savedAt: Date.now() }));
+  } catch { /* quota exceeded — ignore */ }
+}
+
+function clearDraft() {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(DRAFT_KEY);
+}
 
 /* ---------- Component ---------- */
 
@@ -63,80 +111,117 @@ export function PipelineSchedule({ completedClips, initialCaptions }: PipelineSc
   const isMountedRef = useRef(true);
   useEffect(() => () => { isMountedRef.current = false; }, []);
 
+  // Load draft on initial render
+  const draftRef = useRef(loadDraft());
+  const draft = draftRef.current;
+
   // Schedule form state — use cache if available to avoid loading flash on remount
   const [integrations, setIntegrations] = useState<Integration[]>(_integrationsCache || []);
-  const [selectedIntegrationIds, setSelectedIntegrationIds] = useState<Set<string>>(
-    () => new Set((_integrationsCache || []).map(i => i.id))
-  );
+  const [selectedIntegrationIds, setSelectedIntegrationIds] = useState<Set<string>>(() => {
+    if (draft?.selectedIntegrationIds?.length) return new Set(draft.selectedIntegrationIds);
+    return new Set((_integrationsCache || []).map(i => i.id));
+  });
   const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
   const [scheduleDate, setScheduleDate] = useState(() => {
+    if (draft?.scheduleDate) {
+      // Only use draft date if it's not in the past
+      const today = new Date().toISOString().split("T")[0];
+      if (draft.scheduleDate >= today) return draft.scheduleDate;
+    }
     const d = new Date();
     d.setDate(d.getDate() + 1);
     return d.toISOString().split("T")[0];
   });
-  const [postTime, setPostTime] = useState("09:00");
-  const [timezone, setTimezone] = useState("Europe/Bucharest");
-  const [caption, setCaption] = useState("");
-  const [perVariantCaptions, setPerVariantCaptions] = useState<Record<string, string>>({});
-  const [captionMode, setCaptionMode] = useState<"shared" | "individual">("individual");
+  const [postTime, setPostTime] = useState(draft?.postTime || "09:00");
+  const [timezone, setTimezone] = useState(draft?.timezone || "Europe/Bucharest");
+  const [perVariantCaptions, setPerVariantCaptions] = useState<Record<string, string>>(draft?.perVariantCaptions || {});
   const [scheduling, setScheduling] = useState(false);
   const [loadingIntegrations, setLoadingIntegrations] = useState(_integrationsCache === undefined);
+  const [integrationError, setIntegrationError] = useState(false);
+  const [draftRestored, setDraftRestored] = useState(!!draft);
+
+  // Auto-save draft when form state changes
+  const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      saveDraft({
+        caption: "",
+        perVariantCaptions,
+        captionMode: "individual",
+        scheduleDate,
+        postTime,
+        timezone,
+        selectedIntegrationIds: [...selectedIntegrationIds],
+      });
+    }, 500); // debounce 500ms
+    return () => { if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current); };
+  }, [perVariantCaptions, scheduleDate, postTime, timezone, selectedIntegrationIds]);
 
   // Auto-select all completed clips
   useEffect(() => {
     setSelectedClipIds(new Set(completedClips.map(c => c.clip_id)));
   }, [completedClips]);
 
-  // Merge AI-generated captions into per-variant captions (only for empty fields)
-  const manuallyEditedRef = useRef<Set<string>>(new Set());
+  // Merge AI-generated captions into per-variant captions
   useEffect(() => {
     if (!initialCaptions || Object.keys(initialCaptions).length === 0) return;
     setPerVariantCaptions(prev => {
       const merged = { ...prev };
-      for (const [clipId, caption] of Object.entries(initialCaptions)) {
-        if (!manuallyEditedRef.current.has(clipId)) {
-          merged[clipId] = caption;
-        }
+      for (const [clipId, captionText] of Object.entries(initialCaptions)) {
+        merged[clipId] = captionText;
       }
       return merged;
     });
-    // Switch to individual mode when AI captions arrive
-    setCaptionMode("individual");
   }, [initialCaptions]);
 
   /* ---------- Fetch ---------- */
 
-  const applyCache = useCallback((intgs: Integration[]) => {
+  const applyIntegrations = useCallback((intgs: Integration[], fromDraft: boolean) => {
     setIntegrations(intgs);
-    setSelectedIntegrationIds(new Set(intgs.map(i => i.id)));
+    // Only auto-select all if no draft selection exists
+    if (!fromDraft || selectedIntegrationIds.size === 0) {
+      setSelectedIntegrationIds(new Set(intgs.map(i => i.id)));
+    }
     setLoadingIntegrations(false);
+    setIntegrationError(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const fetchIntegrations = useCallback(async () => {
-    // If cache exists, skip fetch entirely
-    if (_integrationsCache) {
-      applyCache(_integrationsCache);
+  const fetchIntegrations = useCallback(async (forceRefresh = false) => {
+    // If cache exists and not a forced refresh, skip fetch
+    if (_integrationsCache && !forceRefresh && !_integrationsFetchFailed) {
+      applyIntegrations(_integrationsCache, !!draft);
       return;
     }
 
     // If another instance is already fetching, wait for it
-    if (_integrationsFetchPromise) {
+    if (_integrationsFetchPromise && !forceRefresh) {
       await _integrationsFetchPromise;
       if (isMountedRef.current && _integrationsCache) {
-        applyCache(_integrationsCache);
+        applyIntegrations(_integrationsCache, !!draft);
       }
       return;
     }
 
     setLoadingIntegrations(true);
+    setIntegrationError(false);
+
+    // Clear stale cache on force refresh
+    if (forceRefresh) {
+      _integrationsCache = undefined;
+      _integrationsFetchFailed = false;
+    }
 
     _integrationsFetchPromise = (async () => {
       try {
-        const res = await apiGet("/postiz/integrations", { timeout: 5000 });
+        const res = await apiGetWithRetry("/postiz/integrations", { timeout: 15000, retry: 2 });
         const data = await res.json();
         _integrationsCache = Array.isArray(data) ? data : data.integrations || [];
+        _integrationsFetchFailed = false;
       } catch {
         _integrationsCache = [];
+        _integrationsFetchFailed = true;
       } finally {
         _integrationsFetchPromise = null;
       }
@@ -144,10 +229,15 @@ export function PipelineSchedule({ completedClips, initialCaptions }: PipelineSc
 
     await _integrationsFetchPromise;
 
-    if (isMountedRef.current && _integrationsCache) {
-      applyCache(_integrationsCache);
+    if (isMountedRef.current) {
+      if (_integrationsFetchFailed) {
+        setIntegrationError(true);
+        setLoadingIntegrations(false);
+      } else if (_integrationsCache) {
+        applyIntegrations(_integrationsCache, !!draft);
+      }
     }
-  }, [applyCache]);
+  }, [applyIntegrations, draft]);
 
   useEffect(() => { fetchIntegrations(); }, [fetchIntegrations]);
 
@@ -167,11 +257,6 @@ export function PipelineSchedule({ completedClips, initialCaptions }: PipelineSc
       next.has(clipId) ? next.delete(clipId) : next.add(clipId);
       return next;
     });
-  };
-
-  const updatePerVariantCaption = (clipId: string, value: string) => {
-    manuallyEditedRef.current.add(clipId);
-    setPerVariantCaptions(prev => ({ ...prev, [clipId]: value }));
   };
 
   // Compute per-variant schedule dates: variant 1 = selected date, variant N = +24h * (N-1)
@@ -197,19 +282,16 @@ export function PipelineSchedule({ completedClips, initialCaptions }: PipelineSc
     try {
       const scheduleDatetime = `${scheduleDate}T${postTime}:00`;
 
-      // Build per-clip captions map if in individual mode
-      const captions: Record<string, string> | undefined =
-        captionMode === "individual"
-          ? Object.fromEntries(
-              completedClips
-                .filter(c => selectedClipIds.has(c.clip_id))
-                .map(c => [c.clip_id, perVariantCaptions[c.clip_id] || ""])
-            )
-          : undefined;
+      // Build per-clip captions from AI generator or manual edits
+      const captions: Record<string, string> = Object.fromEntries(
+        completedClips
+          .filter(c => selectedClipIds.has(c.clip_id))
+          .map(c => [c.clip_id, perVariantCaptions[c.clip_id] || ""])
+      );
 
       const res = await apiPost("/postiz/bulk-publish", {
         clip_ids: [...selectedClipIds],
-        caption: captionMode === "shared" ? caption : "",
+        caption: "",
         captions,
         integration_ids: [...selectedIntegrationIds],
         schedule_date: scheduleDatetime,
@@ -218,9 +300,15 @@ export function PipelineSchedule({ completedClips, initialCaptions }: PipelineSc
       });
       const data = await res.json();
       toast.success(data.message || `Scheduled ${selectedClipIds.size} clip(s)!`);
-    } catch (err) {
+      // Clear draft after successful schedule
+      clearDraft();
+      setDraftRestored(false);
+    } catch (err: unknown) {
       console.error("Schedule failed:", err);
-      toast.error("Failed to schedule clips");
+      const detail = err && typeof err === "object" && "message" in err
+        ? (err as { message: string }).message
+        : String(err);
+      toast.error(`Failed to schedule clips: ${detail}`);
     } finally {
       if (isMountedRef.current) setScheduling(false);
     }
@@ -340,15 +428,60 @@ export function PipelineSchedule({ completedClips, initialCaptions }: PipelineSc
               </div>
             )}
 
+            {/* Draft restored banner */}
+            {draftRestored && (
+              <div className="flex items-center justify-between rounded-md border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30 px-3 py-2">
+                <div className="flex items-center gap-2 text-sm text-blue-700 dark:text-blue-300">
+                  <Save className="size-4" />
+                  Draft restaurat — caption-urile și setările anterioare au fost recuperate.
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs h-7"
+                  onClick={() => { clearDraft(); setDraftRestored(false); }}
+                >
+                  Șterge draft
+                </Button>
+              </div>
+            )}
+
             {/* Integrations */}
             {loadingIntegrations ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" />
-                Loading integrations...
+                Se încarcă integrările... (poate dura câteva secunde)
+              </div>
+            ) : integrationError ? (
+              <div className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
+                <div className="flex items-center gap-2 text-sm text-destructive">
+                  <AlertCircle className="size-4" />
+                  Nu s-au putut încărca integrările Postiz. Verifică conexiunea la Postiz.
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs gap-1"
+                  onClick={() => fetchIntegrations(true)}
+                >
+                  <RefreshCw className="size-3" />
+                  Reîncearcă
+                </Button>
               </div>
             ) : integrations.length > 0 ? (
               <div className="space-y-2">
-                <Label>Postiz Integrations</Label>
+                <div className="flex items-center justify-between">
+                  <Label>Postiz Integrations</Label>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 text-xs gap-1 text-muted-foreground"
+                    onClick={() => fetchIntegrations(true)}
+                  >
+                    <RefreshCw className="size-3" />
+                    Refresh
+                  </Button>
+                </div>
                 <div className="flex flex-wrap gap-2 border rounded-md p-2">
                   {integrations.map((integ) => (
                     <label
@@ -369,76 +502,45 @@ export function PipelineSchedule({ completedClips, initialCaptions }: PipelineSc
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">
-                No Postiz integrations configured. Connect your social accounts in Postiz first.
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  No Postiz integrations configured. Connect your social accounts in Postiz first.
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-xs gap-1 text-muted-foreground"
+                  onClick={() => fetchIntegrations(true)}
+                >
+                  <RefreshCw className="size-3" />
+                  Refresh
+                </Button>
+              </div>
             )}
 
-            {/* Caption Mode Toggle */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <Label>Caption</Label>
-                {completedClips.length > 1 && (
-                  <div className="flex gap-1 rounded-lg border p-0.5">
-                    <button
-                      type="button"
-                      onClick={() => setCaptionMode("shared")}
-                      className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                        captionMode === "shared"
-                          ? "bg-primary text-primary-foreground"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      Same for all
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCaptionMode("individual")}
-                      className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                        captionMode === "individual"
-                          ? "bg-primary text-primary-foreground"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      Per variant
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {captionMode === "shared" ? (
-                <Textarea
-                  id="pipe-sched-caption"
-                  placeholder="Write a caption for all clips..."
-                  value={caption}
-                  onChange={(e) => setCaption(e.target.value)}
-                  rows={3}
-                />
-              ) : (
-                <div className="space-y-3">
+            {/* Captions summary — captions are managed in the AI Caption Generator above */}
+            {Object.keys(perVariantCaptions).length > 0 && (
+              <div className="space-y-2">
+                <Label className="text-sm">Captions (from AI generator above)</Label>
+                <div className="rounded-md border bg-muted/30 p-3 space-y-2">
                   {completedClips
                     .filter(c => selectedClipIds.has(c.clip_id))
-                    .map((clip) => (
-                      <div key={clip.clip_id} className="space-y-1">
-                        <Label className="text-xs text-muted-foreground">
-                          Variant {clip.variant_index + 1}
-                        </Label>
-                        <Textarea
-                          placeholder={`Caption for Variant ${clip.variant_index + 1}...`}
-                          value={perVariantCaptions[clip.clip_id] || ""}
-                          onChange={(e) => updatePerVariantCaption(clip.clip_id, e.target.value)}
-                          rows={2}
-                        />
-                      </div>
-                    ))}
-                  {selectedClipIds.size === 0 && (
-                    <p className="text-sm text-muted-foreground">
-                      Select clips above to add captions.
-                    </p>
-                  )}
+                    .map((clip) => {
+                      const clipCaption = perVariantCaptions[clip.clip_id];
+                      return (
+                        <div key={clip.clip_id} className="text-sm">
+                          <span className="font-medium">Variant {clip.variant_index + 1}:</span>{" "}
+                          <span className="text-muted-foreground">
+                            {clipCaption
+                              ? clipCaption.length > 120 ? clipCaption.slice(0, 120) + "..." : clipCaption
+                              : "No caption set"}
+                          </span>
+                        </div>
+                      );
+                    })}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
 
             {/* Schedule button */}
             <div className="flex justify-end">
