@@ -729,18 +729,30 @@ async def delete_project(
         raise HTTPException(status_code=404, detail="Project not found")
 
     try:
-        # Delete clip files from disk
+        # Delete in order: files → child rows → parent row
+        # Each step is resilient so partial failure doesn't leave orphaned data
         clips_result = repo.list_clips(project_id)
-        for clip in clips_result.data:
-            _delete_clip_files(clip)
 
-        # Delete orphaned clip_content rows before project deletion
+        # Step 1: Delete clip files from disk (non-critical)
+        for clip in (clips_result.data or []):
+            try:
+                _delete_clip_files(clip)
+            except Exception as e:
+                logger.warning(f"Failed to delete files for clip {clip.get('id')}: {e}")
+
+        # Step 2: Delete child DB rows (clip_content, clips)
         if clips_result.data:
             clip_ids = [c["id"] for c in clips_result.data]
-            repo.delete_clip_content_by_clip_ids(clip_ids)
-            repo.delete_clips_by_ids(clip_ids)
+            try:
+                repo.delete_clip_content_by_clip_ids(clip_ids)
+            except Exception as e:
+                logger.warning(f"Failed to delete clip_content for project {project_id}: {e}")
+            try:
+                repo.delete_clips_by_ids(clip_ids)
+            except Exception as e:
+                logger.warning(f"Failed to delete clips for project {project_id}: {e}")
 
-        # Clean up project media directory (new structured media files)
+        # Step 3: Clean up project media directory
         try:
             media_manager = get_media_manager()
             deleted_count = media_manager.delete_project_media(project_id)
@@ -749,7 +761,7 @@ async def delete_project(
         except Exception as e:
             logger.warning(f"Failed to clean up media directory for project {project_id}: {e}")
 
-        # Delete the project
+        # Step 4: Delete the project record (must succeed)
         repo.delete_project(project_id)
         return {"status": "deleted", "project_id": project_id}
     except HTTPException:
@@ -808,7 +820,7 @@ async def generate_raw_clips(
             await validate_file_mime_type(video, ALLOWED_VIDEO_MIMES, "video")
 
             # User uploaded a file — store under project-scoped media directory
-            job_id = uuid.uuid4().hex[:12]
+            job_id = str(uuid.uuid4())
             media_manager = get_media_manager()
             final_video_path = media_manager.upload_path(project_id, job_id, video.filename)
 
@@ -876,6 +888,13 @@ async def _generate_raw_clips_task(
     # DB-08: Guard against missing profile_id
     if not profile_id:
         logger.error(f"Cannot generate raw clips for project {project_id}: profile_id is required")
+        # Set project status to failed so it doesn't stay stuck on "generating"
+        try:
+            _repo = get_repository()
+            if _repo:
+                _repo.update_project(project_id, {"status": "failed"})
+        except Exception:
+            pass
         if held_lock:
             held_lock.release()
         return
@@ -1028,6 +1047,8 @@ async def _generate_raw_clips_task(
             except Exception as cleanup_err:
                 logger.warning(f"Failed to cleanup input video {video_path}: {cleanup_err}")
 
+        # Clear stale progress entry
+        clear_generation_progress(project_id)
         # Always release and cleanup the lock
         lock.release()
         cleanup_project_lock(project_id)
@@ -1074,8 +1095,9 @@ async def generate_from_segments(
     # Verify the project exists and belongs to the profile
     project_data = verify_project_ownership(project_id, profile.profile_id)
 
-    # Reject immediately if a task is already running for this project (STAB-03)
-    if is_project_locked(project_id):
+    # Acquire lock atomically in the endpoint to prevent TOCTOU race (like generate_raw_clips)
+    lock = get_project_lock(project_id)
+    if not lock.acquire(blocking=False):
         raise HTTPException(
             status_code=409,
             detail="Project is currently being processed. Wait for the current job to finish before starting a new one."
@@ -1106,7 +1128,7 @@ async def generate_from_segments(
     # Constraints
     variant_count = max(1, min(10, request.variant_count))
 
-    # Launch generation in background
+    # Launch generation in background (lock is held, will be released by the task)
     background_tasks.add_task(
         _generate_from_segments_task,
         project_id=project_id,
@@ -1117,7 +1139,8 @@ async def generate_from_segments(
         target_duration=request.target_duration,
         tts_text=request.tts_text if request.generate_tts else None,
         mute_source_voice=request.mute_source_voice,
-        start_variant_index=start_variant_index
+        start_variant_index=start_variant_index,
+        held_lock=lock
     )
 
     return {
@@ -1287,7 +1310,8 @@ async def _generate_from_segments_task(
     tts_text: Optional[str],
     mute_source_voice: bool,
     start_variant_index: int = 1,
-    profile_id: Optional[str] = None  # DB-08: default None instead of "default"
+    profile_id: Optional[str] = None,  # DB-08: default None instead of "default"
+    held_lock: Optional[threading.Lock] = None  # Lock pre-acquired by endpoint
 ):
     """Task pentru generarea clipurilor din segmente în background."""
     import subprocess
@@ -1296,6 +1320,15 @@ async def _generate_from_segments_task(
     # DB-08: Guard against missing profile_id
     if not profile_id:
         logger.error(f"Cannot generate from segments for project {project_id}: profile_id is required")
+        # Set project status to failed so it doesn't stay stuck on "generating"
+        try:
+            _repo = get_repository()
+            if _repo:
+                _repo.update_project(project_id, {"status": "failed"})
+        except Exception:
+            pass
+        if held_lock:
+            held_lock.release()
         return
 
     logger.info(f"[Profile {profile_id}] Starting clip generation from segments for project {project_id}")
@@ -1304,6 +1337,15 @@ async def _generate_from_segments_task(
     supabase = repo.get_client() if repo else None
     if not supabase:
         logger.error(f"[Profile {profile_id}] Supabase not available for segment generation")
+        # Set project status to failed
+        try:
+            _repo = get_repository()
+            if _repo:
+                _repo.update_project(project_id, {"status": "failed"})
+        except Exception:
+            pass
+        if held_lock:
+            held_lock.release()
         return
 
     settings = get_settings()
@@ -1324,9 +1366,9 @@ async def _generate_from_segments_task(
         logger.warning(f"Failed to create job record for segment generation: {_e}")
         _gen_job_id = None
 
-    # Acquire project lock
-    lock = get_project_lock(project_id)
-    if not lock.acquire(blocking=False):
+    # Use pre-acquired lock from endpoint, or acquire one if called directly
+    lock = held_lock or get_project_lock(project_id)
+    if not held_lock and not lock.acquire(blocking=False):
         logger.warning(f"Project {project_id} is already being processed, skipping")
         if _gen_job_id:
             try:
@@ -1921,7 +1963,7 @@ async def list_all_clips(
                 "final_video_path": clip.get("final_video_path"),
                 "final_status": clip.get("final_status", "pending"),
                 "created_at": clip["created_at"],
-                "postiz_status": clip.get("postiz_status", "not_sent"),
+                "postiz_status": clip.get("postiz_status") or "not_sent",
                 "postiz_post_id": clip.get("postiz_post_id"),
                 "postiz_scheduled_at": clip.get("postiz_scheduled_at"),
                 "has_subtitles": bool(content.get("srt_content")),
@@ -2148,6 +2190,9 @@ async def remove_clip_audio(
 
         if result.returncode != 0:
             logger.error(f"FFmpeg error: {result.stderr}")
+            # Clean up partial output file on failure
+            if output_path.exists():
+                output_path.unlink(missing_ok=True)
             raise HTTPException(status_code=500, detail="Failed to remove audio")
 
         # Update database with new video path
@@ -2665,6 +2710,8 @@ async def _render_final_clip_task(
     supabase = repo.get_client() if repo else None
     if not supabase:
         logger.error(f"[Profile {profile_id}] Supabase not available for render")
+        # Cannot update DB since supabase is unavailable, but log clearly
+        logger.critical(f"Clip {clip_id} render abandoned: no DB connection. Clip may be stuck in processing state.")
         return
 
     settings = get_settings()
@@ -2718,7 +2765,10 @@ async def _render_final_clip_task(
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        raw_video_path = Path(clip_data["raw_video_path"])
+        raw_video_str = clip_data.get("raw_video_path")
+        if not raw_video_str:
+            raise FileNotFoundError(f"Clip {clip_id} has no raw_video_path in database")
+        raw_video_path = Path(raw_video_str)
         if not raw_video_path.exists():
             raise FileNotFoundError(f"Raw video not found: {raw_video_path}")
 
@@ -2808,9 +2858,22 @@ async def _render_final_clip_task(
                 logger.warning(f"Timestamps generation failed, falling back to standard TTS: {e}")
                 from app.services.elevenlabs_tts import get_elevenlabs_tts
                 tts = get_elevenlabs_tts()
-                if tts is None:
-                    # Fallback to Edge TTS when ElevenLabs is not configured
-                    logger.info("Using Edge TTS fallback — ElevenLabs API key not configured")
+                legacy_tts_ok = False
+                if tts is not None:
+                    try:
+                        audio_path, silence_stats = await tts.generate_audio_trimmed(
+                            text=content_data["tts_text"],
+                            output_path=audio_path,
+                            remove_silence=True,
+                            min_silence_duration=0.25,
+                            silence_padding=0.06
+                        )
+                        legacy_tts_ok = True
+                    except Exception as legacy_err:
+                        logger.warning(f"Legacy ElevenLabs TTS also failed: {legacy_err}")
+                if not legacy_tts_ok:
+                    # Fallback to Edge TTS
+                    logger.info("Using Edge TTS fallback")
                     from app.services.edge_tts_service import EdgeTTSService
                     edge_tts_fallback = EdgeTTSService()
                     await edge_tts_fallback.generate_audio(
@@ -2818,14 +2881,6 @@ async def _render_final_clip_task(
                         output_path=str(audio_path)
                     )
                     silence_stats = None
-                else:
-                    audio_path, silence_stats = await tts.generate_audio_trimmed(
-                        text=content_data["tts_text"],
-                        output_path=audio_path,
-                        remove_silence=True,
-                        min_silence_duration=0.25,
-                        padding=0.06
-                    )
 
             audio_duration = await asyncio.to_thread(_get_audio_duration, audio_path)
 
@@ -3060,18 +3115,18 @@ async def _render_final_clip_task(
     finally:
         # Always cleanup temp files (even on error)
         try:
-            if audio_path and Path(audio_path).exists():
-                Path(audio_path).unlink()
+            if audio_path:
+                Path(audio_path).unlink(missing_ok=True)
                 logger.debug(f"Cleaned up temp audio: {audio_path}")
             # Clean up original (pre-trim) TTS file if it differs from audio_path
-            if original_audio_path and original_audio_path != audio_path and Path(original_audio_path).exists():
+            if original_audio_path and original_audio_path != audio_path:
                 Path(original_audio_path).unlink(missing_ok=True)
                 logger.debug(f"Cleaned up original TTS audio: {original_audio_path}")
-            if srt_path and Path(srt_path).exists():
-                Path(srt_path).unlink()
+            if srt_path:
+                Path(srt_path).unlink(missing_ok=True)
                 logger.debug(f"Cleaned up temp srt: {srt_path}")
-            if adjusted_video_path and Path(adjusted_video_path).exists():
-                Path(adjusted_video_path).unlink()
+            if adjusted_video_path:
+                Path(adjusted_video_path).unlink(missing_ok=True)
                 logger.debug(f"Cleaned up adjusted video: {adjusted_video_path}")
         except Exception as cleanup_err:
             logger.warning(f"Failed to cleanup temp files: {cleanup_err}")
@@ -3207,7 +3262,8 @@ def _get_video_info(video_path: Path) -> dict:
                 "duration": float(format_info.get("duration", stream.get("duration", 0)))
             }
     except Exception as e:
-        logger.warning(f"Failed to get video info: {e}")
+        logger.warning(f"Failed to get video info for {video_path}: {e}")
+    logger.warning(f"Returning hardcoded video info defaults (1080x1920, 0s duration) for {video_path} — downstream processing may produce incorrect results")
     return {"width": 1080, "height": 1920, "duration": 0}
 
 

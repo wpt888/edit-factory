@@ -113,13 +113,15 @@ class JobStorage:
             except Exception as e:
                 logger.error(f"JobStorage: Failed to create job: {e}, using memory")
                 # Fallback to memory
-                self._memory_store[job_id] = job_data
-                self._evict_oldest_memory_jobs()
+                with self._update_lock:
+                    self._memory_store[job_id] = job_data
+                    self._evict_oldest_memory_jobs()
                 return job_data
         else:
             # In-memory storage
-            self._memory_store[job_id] = job_data
-            self._evict_oldest_memory_jobs()
+            with self._update_lock:
+                self._memory_store[job_id] = job_data
+                self._evict_oldest_memory_jobs()
             if profile_id:
                 logger.debug(f"[Profile {profile_id}] JobStorage: Created job {job_id} in memory")
             else:
@@ -281,10 +283,11 @@ class JobStorage:
                 logger.error(f"JobStorage: Failed to delete job: {e}")
 
         # Fallback to memory
-        if job_id in self._memory_store:
-            del self._memory_store[job_id]
-            logger.debug(f"JobStorage: Deleted job {job_id} from memory")
-            return True
+        with self._update_lock:
+            if job_id in self._memory_store:
+                del self._memory_store[job_id]
+                logger.debug(f"JobStorage: Deleted job {job_id} from memory")
+                return True
 
         return False
 
@@ -442,7 +445,7 @@ class JobStorage:
                     in_={"status": ["failed", "completed", "cancelled"]},
                     lt={"created_at": cutoff},
                 )
-                result = self._repo.table_query("editai_jobs", "delete", filters=cleanup_filters)
+                result = self._repo.table_query("jobs", "delete", filters=cleanup_filters)
                 db_count = len(result.data) if result.data else 0
                 logger.info(f"JobStorage: Cleaned up {db_count} old jobs (older than {days} days)")
                 count += db_count

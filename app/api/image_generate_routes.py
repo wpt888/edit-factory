@@ -1140,7 +1140,7 @@ async def publish_image(
         raise HTTPException(status_code=400, detail="At least one platform must be selected")
 
     # Create job for tracking
-    job_id = uuid.uuid4().hex[:12]
+    job_id = str(uuid.uuid4())
 
     # Parse schedule date if provided
     schedule_dt = None

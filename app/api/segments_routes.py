@@ -962,11 +962,18 @@ def _extract_waveform(video_path: str, num_samples: int = 800, duration: float =
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=120)
-        if result.returncode != 0:
-            logger.error(f"FFmpeg waveform extraction failed: {result.stderr[:500] if result.stderr else b''}")
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            stdout_data, stderr_data = proc.communicate(timeout=120)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate(timeout=10)
+            logger.error(f"FFmpeg waveform extraction timed out for {video_path}")
             return []
-        raw = result.stdout
+        if proc.returncode != 0:
+            logger.error(f"FFmpeg waveform extraction failed: {stderr_data[:500] if stderr_data else b''}")
+            return []
+        raw = stdout_data
         if not raw:
             return []
 

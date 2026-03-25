@@ -257,7 +257,7 @@ async def create_schedule_plan(
 
     # Generate IDs
     plan_id = str(uuid.uuid4())
-    job_id = uuid.uuid4().hex[:12]
+    job_id = str(uuid.uuid4())
     plan_name = request.name or f"Schedule {start_dt.isoformat()}"
 
     repo = get_repository()

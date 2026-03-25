@@ -1813,7 +1813,7 @@ function PipelinePage() {
     const controller = new AbortController();
     audioPlayAbortRef.current = controller;
 
-    apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}`, { signal: controller.signal })
+    apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}?_t=${Date.now()}`, { signal: controller.signal })
       .then(res => res.blob())
       .then(blob => {
         if (controller.signal.aborted) return;
@@ -2261,13 +2261,15 @@ function PipelinePage() {
     const controller = new AbortController();
     ttsPlayAbortRef.current = controller;
 
-    apiGet(`/pipeline/tts-audio/${pipelineId}/${variantIndex}`, { signal: controller.signal })
+    // Cache-bust: append timestamp to URL so browser never serves stale audio
+    const cacheBust = `_t=${Date.now()}`;
+    apiGet(`/pipeline/tts-audio/${pipelineId}/${variantIndex}?${cacheBust}`, { signal: controller.signal })
       .then(res => res.blob())
       .then(playBlob)
       .catch(() => {
         if (controller.signal.aborted) return;
         // Fallback: try preview audio (Step 3)
-        apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}`, { signal: controller.signal })
+        apiGet(`/pipeline/audio/${pipelineId}/${variantIndex}?${cacheBust}`, { signal: controller.signal })
           .then(res => res.blob())
           .then(playBlob)
           .catch(() => { if (!controller.signal.aborted) setPlayingTtsVariant(null); });

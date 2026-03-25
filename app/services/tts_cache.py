@@ -149,6 +149,28 @@ def cache_store(key_data: dict, provider_dir: str, audio_path: Path, metadata: d
         logger.warning(f"TTS cache write error: {e}")
 
 
+def cache_delete(key_data: dict, provider_dir: str) -> bool:
+    """
+    Delete a specific TTS cache entry (audio + metadata + SRT).
+
+    Returns True if any file was deleted.
+    """
+    h = _cache_key(key_data)
+    cache_dir = _get_cache_root() / provider_dir
+    deleted = False
+    for ext in (".mp3", ".meta.json", ".srt"):
+        p = cache_dir / f"{h}{ext}"
+        if p.exists():
+            try:
+                p.unlink()
+                deleted = True
+            except Exception:
+                pass
+    if deleted:
+        logger.info(f"TTS cache DELETE [{provider_dir}]: {h[:12]}...")
+    return deleted
+
+
 def srt_cache_lookup(key_data: dict, provider_dir: str = "elevenlabs") -> Optional[str]:
     """
     Look up cached SRT content.

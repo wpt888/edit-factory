@@ -206,12 +206,14 @@ async def get_gemini_status():
     result["configured"] = True
     result["model"] = settings.gemini_model
 
-    # Test connection with a simple request
+    # Test connection with a simple request (run in thread to avoid blocking event loop)
     try:
         from google import genai
+        import asyncio
 
         client = genai.Client(api_key=settings.gemini_api_key)
-        response = client.models.generate_content(
+        response = await asyncio.to_thread(
+            client.models.generate_content,
             model=settings.gemini_model,
             contents="Say OK"
         )
@@ -423,7 +425,7 @@ async def create_job(
     settings = get_settings()
     settings.ensure_dirs()
 
-    job_id = uuid.uuid4().hex[:12]
+    job_id = str(uuid.uuid4())
     if not output_name:
         output_name = f"reel_{job_id}"
 
@@ -538,6 +540,15 @@ async def process_job(job_id: str):
         })
 
     try:
+        # Check cancellation before starting heavy work
+        if get_job_storage().is_job_cancelled(job_id):
+            job["status"] = JobStatus.CANCELLED if hasattr(JobStatus, 'CANCELLED') else "cancelled"
+            job["progress"] = "Cancelled before processing started"
+            _cleanup_input_files(job)
+            job["updated_at"] = datetime.now(timezone.utc).isoformat()
+            get_job_storage().update_job(job_id, job)
+            return
+
         processor = get_processor(profile_id=job.get("profile_id", "default"))
         video_path = Path(job["video_path"])
 
@@ -556,6 +567,15 @@ async def process_job(job_id: str):
             generate_audio=job.get("generate_audio", True),
             mute_source_voice=job.get("mute_source_voice", False)  # Selective mute in segments
         )
+
+        # Re-check cancellation after processing completes
+        if get_job_storage().is_job_cancelled(job_id):
+            job["status"] = JobStatus.CANCELLED if hasattr(JobStatus, 'CANCELLED') else "cancelled"
+            job["progress"] = "Cancelled"
+            _cleanup_input_files(job)
+            job["updated_at"] = datetime.now(timezone.utc).isoformat()
+            get_job_storage().update_job(job_id, job)
+            return
 
         if result["status"] == "success":
             # Add analysis fallback indicator when Gemini is not available
@@ -589,7 +609,11 @@ async def process_job(job_id: str):
         _cleanup_input_files(job)
 
     job["updated_at"] = datetime.now(timezone.utc).isoformat()
-    # Persist final job state to storage
+    # Persist final job state — but respect external cancellation
+    current_job = get_job_storage().get_job(job_id)
+    if current_job and current_job.get("status") in ("cancelled",):
+        # Don't overwrite externally-set cancelled status
+        return
     get_job_storage().update_job(job_id, job)
 
 
@@ -799,9 +823,9 @@ async def get_tts_cache_stats(profile: ProfileContext = Depends(get_profile_cont
     return cache_stats()
 
 
-@router.post("/tts/generate")
+@router.post("/tts/generate-legacy")
 @limiter.limit("20/minute")
-async def generate_tts(
+async def generate_tts_legacy(
     request: Request,
     background_tasks: BackgroundTasks,
     text: str = Form(...),
@@ -829,7 +853,7 @@ async def generate_tts(
     # Validate text
     text = validate_tts_text_length(text)
 
-    job_id = uuid.uuid4().hex[:12]
+    job_id = str(uuid.uuid4())
 
     # Parse remove_silence
     remove_silence_bool = remove_silence.lower() in ("true", "1", "yes", "on")
@@ -904,13 +928,22 @@ async def process_tts_generate_job(job_id: str):
                 )
                 silence_stats = {"enabled": False}
             else:
-                audio_path, silence_stats = await tts.generate_audio_trimmed(
-                    text=job["text"],
-                    output_path=output_path,
-                    remove_silence=True,
-                    min_silence_duration=job["min_silence_duration"],
-                    silence_padding=job["silence_padding"]
-                )
+                try:
+                    audio_path, silence_stats = await tts.generate_audio_trimmed(
+                        text=job["text"],
+                        output_path=output_path,
+                        remove_silence=True,
+                        min_silence_duration=job["min_silence_duration"],
+                        silence_padding=job["silence_padding"]
+                    )
+                except Exception as el_err:
+                    logger.warning(f"ElevenLabs runtime failure, falling back to Edge-TTS: {el_err}")
+                    from app.services.edge_tts_service import EdgeTTSService
+                    edge_tts_service = EdgeTTSService()
+                    await edge_tts_service.generate_audio(text=job["text"], output_path=str(output_path))
+                    silence_stats = {"enabled": False}
+                    tts_fallback = "edge_tts"
+                    tts_fallback_reason = f"ElevenLabs runtime error: {el_err}"
 
             job["result"] = {
                 "status": "success",
@@ -937,7 +970,15 @@ async def process_tts_generate_job(job_id: str):
                     output_path=str(output_path)
                 )
             else:
-                await tts.generate_audio(job["text"], output_path)
+                try:
+                    await tts.generate_audio(job["text"], output_path)
+                except Exception as el_err:
+                    logger.warning(f"ElevenLabs runtime failure, falling back to Edge-TTS: {el_err}")
+                    from app.services.edge_tts_service import EdgeTTSService
+                    edge_tts_service = EdgeTTSService()
+                    await edge_tts_service.generate_audio(text=job["text"], output_path=str(output_path))
+                    tts_fallback = "edge_tts"
+                    tts_fallback_reason = f"ElevenLabs runtime error: {el_err}"
 
             job["result"] = {
                 "status": "success",
@@ -1031,7 +1072,7 @@ async def add_tts_to_videos(
     remove_silence_bool = remove_silence.lower() in ("true", "1", "yes", "on")
 
     # Create job for TTS processing
-    job_id = uuid.uuid4().hex[:12]
+    job_id = str(uuid.uuid4())
 
     job = {
         "job_id": job_id,
@@ -1080,6 +1121,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         tts = get_elevenlabs_tts()
         tts_fallback = None
         tts_fallback_reason = None
+        edge_tts_service = None
 
         if tts is None:
             # Fallback to Edge TTS when ElevenLabs is not configured
@@ -1120,14 +1162,23 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
                 silence_stats = {"enabled": False}
                 logger.info(f"Edge TTS audio generated (fallback): {audio_path}")
             else:
-                audio_path, silence_stats = await tts.generate_audio_trimmed(
-                    text=tts_text,
-                    output_path=audio_path,
-                    remove_silence=True,
-                    min_silence_duration=min_silence_duration,
-                    silence_padding=silence_padding
-                )
-                logger.info(f"TTS audio generated with silence removal: {audio_path}")
+                try:
+                    audio_path, silence_stats = await tts.generate_audio_trimmed(
+                        text=tts_text,
+                        output_path=audio_path,
+                        remove_silence=True,
+                        min_silence_duration=min_silence_duration,
+                        silence_padding=silence_padding
+                    )
+                    logger.info(f"TTS audio generated with silence removal: {audio_path}")
+                except Exception as el_err:
+                    logger.warning(f"ElevenLabs runtime failure, falling back to Edge-TTS: {el_err}")
+                    from app.services.edge_tts_service import EdgeTTSService
+                    edge_tts_service = EdgeTTSService()
+                    await edge_tts_service.generate_audio(text=tts_text, output_path=str(audio_path))
+                    silence_stats = {"enabled": False}
+                    tts_fallback = "edge_tts"
+                    tts_fallback_reason = f"ElevenLabs runtime error: {el_err}"
 
                 if "original_duration" in silence_stats and "new_duration" in silence_stats:
                     saved = silence_stats["original_duration"] - silence_stats["new_duration"]
@@ -1143,10 +1194,18 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
                 )
                 logger.info(f"Edge TTS audio generated (fallback): {audio_path}")
             else:
-                await tts.generate_audio(tts_text, audio_path)
-                logger.info(f"TTS audio generated: {audio_path}")
+                try:
+                    await tts.generate_audio(tts_text, audio_path)
+                    logger.info(f"TTS audio generated: {audio_path}")
+                except Exception as el_err:
+                    logger.warning(f"ElevenLabs runtime failure, falling back to Edge-TTS: {el_err}")
+                    from app.services.edge_tts_service import EdgeTTSService
+                    edge_tts_service = EdgeTTSService()
+                    await edge_tts_service.generate_audio(text=tts_text, output_path=str(audio_path))
+                    tts_fallback = "edge_tts"
+                    tts_fallback_reason = f"ElevenLabs runtime error: {el_err}"
 
-        # Add audio to each video
+        # Add audio to each video — use tts.add_audio_to_video if available, else FFmpeg directly
         results = []
         for i, video_path_str in enumerate(video_paths):
             job["progress"] = f"Adding voice-over to video {i + 1}/{len(video_paths)}..."
@@ -1166,7 +1225,22 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
             output_path = video_path.parent / f"{video_path.stem}{output_suffix}.mp4"
 
             try:
-                tts.add_audio_to_video(video_path, audio_path, output_path)
+                if tts is not None:
+                    tts.add_audio_to_video(video_path, audio_path, output_path)
+                else:
+                    # Edge-TTS fallback: use FFmpeg directly to combine video + audio
+                    from app.services.ffmpeg_semaphore import safe_ffmpeg_run
+                    cmd = [
+                        "ffmpeg", "-y", "-threads", "4",
+                        "-i", str(video_path),
+                        "-i", str(audio_path),
+                        "-map", "0:v", "-map", "1:a",
+                        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                        str(output_path)
+                    ]
+                    result = safe_ffmpeg_run(cmd, timeout=300, operation="add_audio_to_video_fallback")
+                    if result.returncode != 0:
+                        raise Exception(f"FFmpeg error: {result.stderr[:200] if result.stderr else 'unknown'}")
                 results.append({
                     "original": str(video_path),
                     "with_tts": str(output_path),

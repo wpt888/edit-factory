@@ -184,41 +184,48 @@ def _evict_old_pipelines():
 # ============== DB PERSISTENCE HELPERS ==============
 
 def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
-    """Upsert full pipeline state to editai_pipelines. Graceful degradation."""
-    try:
-        repo = get_repository()
-        supabase = repo.get_client() if repo else None
-        if not supabase:
-            return
-        # Convert int keys in previews/render_jobs to strings for JSON
-        previews_json = {str(k): v for k, v in pipeline_dict.get("previews", {}).items()}
-        render_jobs_json = {str(k): v for k, v in pipeline_dict.get("render_jobs", {}).items()}
-        tts_previews_json = {str(k): v for k, v in pipeline_dict.get("tts_previews", {}).items()}
-        # PIP-14: Include preview render paths in serialization
-        preview_renders_json = {str(k): v for k, v in pipeline_dict.get("preview_renders", {}).items()}
-        segment_usage_json = {str(k): v for k, v in pipeline_dict.get("segment_usage", {}).items()}
+    """Upsert full pipeline state to editai_pipelines. Graceful degradation with retry."""
+    for attempt in range(2):
+        try:
+            repo = get_repository()
+            supabase = repo.get_client() if repo else None
+            if not supabase:
+                return
+            # Snapshot dicts under a copy to avoid RuntimeError if another coroutine
+            # mutates the pipeline dict concurrently (dict.items() is not thread-safe).
+            previews_json = {str(k): v for k, v in dict(pipeline_dict.get("previews", {})).items()}
+            render_jobs_json = {str(k): v for k, v in dict(pipeline_dict.get("render_jobs", {})).items()}
+            tts_previews_json = {str(k): v for k, v in dict(pipeline_dict.get("tts_previews", {})).items()}
+            # PIP-14: Include preview render paths in serialization
+            preview_renders_json = {str(k): v for k, v in dict(pipeline_dict.get("preview_renders", {})).items()}
+            segment_usage_json = {str(k): v for k, v in dict(pipeline_dict.get("segment_usage", {})).items()}
 
-        row = {
-            "id": pipeline_id,
-            "profile_id": pipeline_dict.get("profile_id"),
-            "name": pipeline_dict.get("name", ""),
-            "idea": pipeline_dict.get("idea", ""),
-            "context": pipeline_dict.get("context", ""),
-            "provider": pipeline_dict.get("provider", "gemini"),
-            "variant_count": pipeline_dict.get("variant_count", 0),
-            "keyword_count": pipeline_dict.get("keyword_count", 0),
-            "scripts": pipeline_dict.get("scripts", []),
-            "previews": previews_json,
-            "render_jobs": render_jobs_json,
-            "tts_previews": tts_previews_json,
-            "preview_renders": preview_renders_json,
-            "segment_usage": segment_usage_json,
-            "source_video_ids": pipeline_dict.get("source_video_ids", []),
-        }
-        supabase.table("editai_pipelines").upsert(row).execute()
-        logger.debug(f"Pipeline {pipeline_id} saved to DB")
-    except Exception as e:
-        logger.warning(f"Failed to save pipeline {pipeline_id} to DB: {e}")
+            row = {
+                "id": pipeline_id,
+                "profile_id": pipeline_dict.get("profile_id"),
+                "name": pipeline_dict.get("name", ""),
+                "idea": pipeline_dict.get("idea", ""),
+                "context": pipeline_dict.get("context", ""),
+                "provider": pipeline_dict.get("provider", "gemini"),
+                "variant_count": pipeline_dict.get("variant_count", 0),
+                "keyword_count": pipeline_dict.get("keyword_count", 0),
+                "scripts": pipeline_dict.get("scripts", []),
+                "previews": previews_json,
+                "render_jobs": render_jobs_json,
+                "tts_previews": tts_previews_json,
+                "preview_renders": preview_renders_json,
+                "segment_usage": segment_usage_json,
+                "source_video_ids": pipeline_dict.get("source_video_ids", []),
+            }
+            supabase.table("editai_pipelines").upsert(row).execute()
+            logger.debug(f"Pipeline {pipeline_id} saved to DB")
+            return  # success
+        except Exception as e:
+            if attempt == 0:
+                logger.warning(f"Pipeline {pipeline_id} DB save failed (attempt 1, retrying): {e}")
+                import time; time.sleep(0.3)
+            else:
+                logger.error(f"Pipeline {pipeline_id} DB save FAILED after 2 attempts: {e}")
 
 
 def _db_update_render_jobs(pipeline_id: str, render_jobs: dict):
@@ -1307,6 +1314,26 @@ async def generate_variant_tts(
     try:
         assembly_service = get_assembly_service()
 
+        # Bust TTS file cache so ElevenLabs is re-called with fresh audio.
+        # Without this, cache_lookup returns the same audio for identical params,
+        # making "Regenerate Voice-over" produce the exact same result.
+        from app.services.tts_cache import cache_delete
+        from app.services.tts.elevenlabs import ElevenLabsTTSService
+        _tts_svc = ElevenLabsTTSService(
+            output_dir=Path("."), model_id=request.elevenlabs_model,
+            profile_id=profile.profile_id
+        )
+        _effective_voice = request.voice_id or _tts_svc._voice_id
+        ALLOWED_VOICE_KEYS = {"stability", "similarity_boost", "style", "use_speaker_boost", "speed"}
+        _vs = {k: v for k, v in (request.voice_settings or {}).items() if k in ALLOWED_VOICE_KEYS}
+        _cache_key = {
+            "text": cleaned_text, "voice_id": _effective_voice,
+            "model_id": request.elevenlabs_model, "provider": "elevenlabs_ts",
+            "vs": f"{_vs.get('stability', 0.5):.2f}_{_vs.get('similarity_boost', 0.75):.2f}_{_vs.get('style', 0.0):.2f}_{_vs.get('speed', 1.0):.2f}"
+        }
+        if cache_delete(_cache_key, "elevenlabs"):
+            logger.info(f"[Profile {profile.profile_id}] Busted TTS file cache for variant {variant_index}")
+
         audio_path, audio_duration, _timestamps = await assembly_service.generate_tts_with_timestamps(
             script_text=cleaned_text,
             profile_id=profile.profile_id,
@@ -1376,6 +1403,10 @@ async def generate_variant_tts(
                 logger.info(f"Invalidated Step 3 preview cache for variant {variant_index} (TTS regenerated)")
 
         # Persist to DB (outside lock)
+        logger.info(
+            f"[Profile {profile.profile_id}] Saving TTS for variant {variant_index}: "
+            f"audio_path={audio_path}, duration={audio_duration:.2f}s"
+        )
         _db_save_pipeline(pipeline_id, pipeline)
 
         return PipelineTtsResponse(
@@ -1429,7 +1460,7 @@ async def get_variant_tts_audio(
         path=str(audio_path),
         media_type="audio/mpeg",
         content_disposition_type="inline",
-        headers={"Cache-Control": "public, max-age=3600"}
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
     )
 
 
@@ -3181,14 +3212,17 @@ async def list_video_caption_templates(
     if not repo:
         return {"templates": []}
 
-    result = repo.table_query("video_caption_templates", "select",
-        filters=QueryFilters(
-            eq={"profile_id": ctx.profile_id},
-            order_by="created_at",
-            order_desc=True,
-        ))
-
-    return {"templates": result.data or []}
+    try:
+        result = repo.table_query("video_caption_templates", "select",
+            filters=QueryFilters(
+                eq={"profile_id": ctx.profile_id},
+                order_by="created_at",
+                order_desc=True,
+            ))
+        return {"templates": result.data or []}
+    except Exception as e:
+        logger.warning(f"Failed to query video_caption_templates: {e}")
+        return {"templates": []}
 
 
 @router.post("/video-caption-templates")

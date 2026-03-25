@@ -90,7 +90,12 @@ def _delete_old_files(directory: Path, cutoff: datetime, dry_run: bool) -> int:
 
 def cleanup_temp_files(days: int, dry_run: bool) -> int:
     """Remove files from the temp/ directory older than *days* days."""
-    temp_dir = _PROJECT_ROOT / "temp"
+    # Use settings.base_dir to handle desktop mode (AppData) correctly
+    try:
+        from app.config import get_settings
+        temp_dir = get_settings().base_dir / "temp"
+    except Exception:
+        temp_dir = _PROJECT_ROOT / "temp"
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     count = _delete_old_files(temp_dir, cutoff, dry_run)
     logger.info(

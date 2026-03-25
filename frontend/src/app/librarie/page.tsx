@@ -530,7 +530,7 @@ function LibrarieContent() {
           const data = await res.json();
           setClips((prev) =>
             prev.map((c) =>
-              c.id === clip.id ? { ...c, has_audio: false, raw_video_path: data.video_path } : c
+              c.id === clip.id ? { ...c, has_audio: false, raw_video_path: data.video_path, final_video_path: data.video_path } : c
             )
           );
           toast.success("Audio removed successfully!");

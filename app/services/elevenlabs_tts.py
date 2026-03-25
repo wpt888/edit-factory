@@ -69,6 +69,14 @@ class ElevenLabsTTS:
                 api_key = vault.get_key("elevenlabs_api_key")
             except Exception:
                 pass
+        # Prefer config.py settings over raw os.getenv for consistent resolution
+        if not api_key:
+            try:
+                from app.config import get_settings
+                _settings = get_settings()
+                api_key = _settings.elevenlabs_api_key
+            except Exception:
+                pass
         self.api_key = api_key or os.getenv("ELEVENLABS_API_KEY")
 
         if not voice_id:
@@ -78,7 +86,21 @@ class ElevenLabsTTS:
                 voice_id = vault.get_key("elevenlabs_voice_id")
             except Exception:
                 pass
+        if not voice_id:
+            try:
+                from app.config import get_settings
+                _settings = get_settings()
+                voice_id = _settings.elevenlabs_voice_id
+            except Exception:
+                pass
         self.voice_id = voice_id or os.getenv("ELEVENLABS_VOICE_ID")
+        if not model_id:
+            try:
+                from app.config import get_settings
+                _settings = get_settings()
+                model_id = _settings.elevenlabs_model
+            except Exception:
+                pass
         self.model_id = model_id or os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5")
 
         if not self.api_key:

@@ -50,13 +50,21 @@ interface CostSummary {
 
 interface CostEntry {
   id?: string;
-  job_id: string;
   service: string;
   operation: string;
-  units: number;
-  estimated_cost: number;
+  cost: number;
+  metadata?: {
+    job_id?: string;
+    units?: number;
+    details?: Record<string, unknown>;
+  };
+  // Flat aliases for backwards compat with local JSON format
+  job_id?: string;
+  units?: number;
+  estimated_cost?: number;
   details?: Record<string, unknown>;
   created_at?: string;
+  profile_id?: string;
 }
 
 interface ElevenLabsAccount {
@@ -580,7 +588,7 @@ export default function UsagePage() {
                         {formatDate(entry.created_at)}
                       </TableCell>
                       <TableCell className="text-muted-foreground font-mono text-xs">
-                        {entry.job_id?.slice(0, 8)}...
+                        {(entry.job_id || entry.metadata?.job_id || "-")?.slice(0, 8)}...
                       </TableCell>
                       <TableCell>
                         <Badge
@@ -601,13 +609,13 @@ export default function UsagePage() {
                       </TableCell>
                       <TableCell className="text-foreground">{entry.operation}</TableCell>
                       <TableCell className="text-foreground text-right">
-                        {entry.units?.toLocaleString() || "-"}
+                        {(entry.units ?? entry.metadata?.units)?.toLocaleString() || "-"}
                         <span className="text-muted-foreground text-xs ml-1">
                           {entry.service === "elevenlabs" ? "chars" : "frames"}
                         </span>
                       </TableCell>
                       <TableCell className="text-green-500 text-right font-medium">
-                        {formatCost(entry.estimated_cost || 0)}
+                        {formatCost(entry.estimated_cost || entry.cost || 0)}
                       </TableCell>
                     </TableRow>
                   )

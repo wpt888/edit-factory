@@ -15,14 +15,18 @@ import cv2
 import numpy as np
 from scipy.fftpack import dct
 
-# IMPORTANT: Load .env BEFORE checking GEMINI_API_KEY
-from dotenv import load_dotenv
-load_dotenv()
+# NOTE: .env loading is handled by pydantic-settings in app/config.py.
+# Do NOT call load_dotenv() here — it creates order-sensitive env state divergence.
 
 # Import GeminiAnalyzer (optional - works without API key too)
 try:
     from .gemini_analyzer import GeminiVideoAnalyzer, AnalyzedSegment
-    _gemini_key = os.getenv("GEMINI_API_KEY", "")
+    # Prefer settings over raw os.getenv
+    try:
+        from app.config import get_settings
+        _gemini_key = get_settings().gemini_api_key or ""
+    except Exception:
+        _gemini_key = os.getenv("GEMINI_API_KEY", "")
     if not _gemini_key or len(_gemini_key) <= 10:
         try:
             from app.services.key_vault import get_key_vault
@@ -1280,10 +1284,11 @@ class VideoEditor:
             str(output_video)
         ]
 
-        self._run_ffmpeg(cmd, f"concatenate {len(segment_files)} segments")
-
-        # Cleanup concat file
-        concat_file.unlink(missing_ok=True)
+        try:
+            self._run_ffmpeg(cmd, f"concatenate {len(segment_files)} segments")
+        finally:
+            # Always cleanup concat file, even on FFmpeg failure
+            concat_file.unlink(missing_ok=True)
 
         # Track for later cleanup
         self._track_intermediate(output_video)

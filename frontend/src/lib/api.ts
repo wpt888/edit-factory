@@ -10,7 +10,7 @@ export { ApiError, handleApiError } from "./api-error";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
-const DEFAULT_TIMEOUT_MS = 30000;
+const DEFAULT_TIMEOUT_MS = 120000; // 2 minutes — video uploads can be large
 
 interface FetchOptions extends RequestInit {
   skipAuth?: boolean;

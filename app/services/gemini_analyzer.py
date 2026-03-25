@@ -63,6 +63,15 @@ class GeminiVideoAnalyzer:
                 api_key = vault.get_key("gemini_api_key")
             except Exception:
                 pass
+        if not api_key:
+            try:
+                from app.config import get_settings
+                _settings = get_settings()
+                api_key = _settings.gemini_api_key
+                if not model_name:
+                    model_name = _settings.gemini_model
+            except Exception:
+                pass
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.model_name = model_name or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         self.frame_interval = frame_interval

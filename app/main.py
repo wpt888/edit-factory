@@ -73,6 +73,7 @@ from app.api.association_routes import router as association_router
 from app.api.tts_library_routes import router as tts_library_router
 from app.api.image_generate_routes import router as image_generate_router
 from app.api.schedule_routes import router as schedule_router
+from app.api.assembly_routes import router as assembly_router
 
 from app.logging_config import setup_logging
 setup_logging()
@@ -233,8 +234,11 @@ async def lifespan(app: FastAPI):
         logger.error("SUPABASE_JWT_SECRET is empty — JWT auth will reject all tokens. Set the secret or AUTH_DISABLED=true for development.")
     if settings.desktop_mode:
         logger.info("Desktop mode active — auth bypassed, config from %s", settings.base_dir)
-        if not settings.debug:
-            logger.warning("desktop_mode=True in non-debug mode — auth is bypassed in production!")
+        # Safety: desktop mode with auth bypass should only bind to localhost
+        if not settings.debug and settings.host not in ("127.0.0.1", "localhost", "0.0.0.0"):
+            logger.warning("desktop_mode=True in non-debug mode on non-localhost — auth is bypassed!")
+        if settings.host == "0.0.0.0" and not settings.debug:
+            logger.warning("SECURITY: desktop_mode=True with host=0.0.0.0 exposes unauthenticated API to network!")
     logger.info("Edit Factory started")
     logger.info(f"  Input dir: {settings.input_dir.absolute()}")
     logger.info(f"  Output dir: {settings.output_dir.absolute()}")
@@ -353,6 +357,7 @@ app.include_router(catalog_router, prefix="/api/v1", tags=["Catalog"])
 app.include_router(association_router, prefix="/api/v1", tags=["Associations"])
 app.include_router(tts_library_router, prefix="/api/v1", tags=["TTS Library"])
 app.include_router(image_generate_router, prefix="/api/v1", tags=["AI Image Generation"])
+app.include_router(assembly_router, prefix="/api/v1", tags=["Script-to-Video Assembly"])
 
 # Desktop-only routes (license, version, settings) — gated behind DESKTOP_MODE
 if settings.desktop_mode:

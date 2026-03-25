@@ -291,9 +291,35 @@ class AssemblyService:
         from app.services.silence_remover import SilenceRemover
 
         # Use provided temp_dir or create a new one
+        _owns_temp_dir = temp_dir is None
         if temp_dir is None:
             temp_dir = self.settings.base_dir / "temp" / profile_id / f"assembly_{uuid.uuid4().hex[:8]}"
         temp_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            return await self._generate_tts_with_timestamps_impl(
+                script_text, profile_id, elevenlabs_model, voice_id, voice_settings, temp_dir
+            )
+        except Exception:
+            # Clean up temp dir only if we created it
+            if _owns_temp_dir and temp_dir.exists():
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                logger.info(f"Cleaned up assembly temp dir after failure: {temp_dir}")
+            raise
+
+    async def _generate_tts_with_timestamps_impl(
+        self,
+        script_text: str,
+        profile_id: str,
+        elevenlabs_model: str,
+        voice_id: Optional[str],
+        voice_settings: Optional[dict],
+        temp_dir: Path
+    ) -> Tuple[Path, float, dict]:
+        """Internal implementation for generate_tts_with_timestamps."""
+        from app.services.tts.elevenlabs import ElevenLabsTTSService
+        from app.services.silence_remover import SilenceRemover
 
         # Generate TTS with timestamps (profile_id enables multi-account failover)
         tts_service = ElevenLabsTTSService(output_dir=temp_dir, model_id=elevenlabs_model, profile_id=profile_id)
@@ -1631,7 +1657,9 @@ class AssemblyService:
                 logger.info("Step 2/7: Reusing existing SRT content")
             else:
                 from app.services.tts_cache import srt_cache_lookup, srt_cache_store
-                _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "wpf": max_words_per_phrase}
+                _vs = voice_settings or {}
+                _vs_hash = f"{_vs.get('stability', 0.5):.2f}_{_vs.get('similarity_boost', 0.75):.2f}_{_vs.get('speed', 1.0):.2f}"
+                _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "wpf": max_words_per_phrase, "vs": _vs_hash}
                 cached_srt = srt_cache_lookup(_srt_cache_key)
                 if cached_srt:
                     srt_content = cached_srt
@@ -2167,7 +2195,10 @@ class AssemblyService:
         # Step 2: Generate SRT (with cache — use cleaned text for cache key)
         logger.info("Preview Step 2/4: Generating SRT subtitles")
         from app.services.tts_cache import srt_cache_lookup, srt_cache_store
-        _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "wpf": max_words_per_phrase}
+        # Include voice_settings hash — different speed/stability produces different timing
+        _vs = voice_settings or {}
+        _vs_hash = f"{_vs.get('stability', 0.5):.2f}_{_vs.get('similarity_boost', 0.75):.2f}_{_vs.get('speed', 1.0):.2f}"
+        _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "wpf": max_words_per_phrase, "vs": _vs_hash}
 
         srt_content = ""
         if reuse_srt_content:
