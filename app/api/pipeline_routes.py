@@ -2275,6 +2275,9 @@ async def render_variants(
                     exc_info=True
                 )
 
+            # Persist library_saved/library_error/clip_id to DB after library save attempt
+            _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+
         except Exception as e:
             # Safety net for unexpected errors
             logger.error(
