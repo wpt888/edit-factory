@@ -21,6 +21,11 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import {
   Sparkles,
@@ -31,6 +36,8 @@ import {
   Check,
   Copy,
   MessageSquareText,
+  ChevronDown,
+  Pencil,
 } from "lucide-react";
 import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { toast } from "sonner";
@@ -86,7 +93,10 @@ export function PipelineCaptionGenerator({
   const isMountedRef = useRef(true);
   useEffect(() => () => { isMountedRef.current = false; }, []);
 
-  // Settings state (persisted in localStorage)
+  // Manual captions per variant (always editable)
+  const [manualCaptions, setManualCaptions] = useState<Record<number, string>>({});
+
+  // AI settings state (persisted in localStorage)
   const [tone, setTone] = useState(() =>
     typeof window !== "undefined" ? localStorage.getItem(LS_TONE_KEY) || "professional" : "professional"
   );
@@ -96,6 +106,9 @@ export function PipelineCaptionGenerator({
   const [includeHashtags, setIncludeHashtags] = useState(true);
   const [includeCta, setIncludeCta] = useState(true);
   const [customInstructions, setCustomInstructions] = useState("");
+
+  // AI generation collapsible — open by default
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(true);
 
   // Template state
   const [templates, setTemplates] = useState<CaptionTemplate[]>([]);
@@ -112,9 +125,9 @@ export function PipelineCaptionGenerator({
 
   // Generation state
   const [generating, setGenerating] = useState(false);
-  // variant_index -> string[] (multiple caption options)
+  // variant_index -> string[] (multiple AI caption options)
   const [generatedCaptions, setGeneratedCaptions] = useState<Record<number, string[]>>({});
-  // variant_index -> selected caption index
+  // variant_index -> selected AI caption index
   const [selectedCaptionIdx, setSelectedCaptionIdx] = useState<Record<number, number>>({});
 
   // Persist tone/language to localStorage
@@ -129,6 +142,47 @@ export function PipelineCaptionGenerator({
     }
   }, [language]);
 
+  /* ---------- Propagate captions to parent ---------- */
+
+  const propagateCaptions = useCallback((
+    manual: Record<number, string>,
+    aiCaptions: Record<number, string[]>,
+    aiSelections: Record<number, number>,
+  ) => {
+    const captionMap: Record<string, string> = {};
+    for (const clip of completedClips) {
+      const manualText = manual[clip.variant_index];
+      if (manualText && manualText.trim()) {
+        captionMap[clip.clip_id] = manualText;
+      } else {
+        const varCaptions = aiCaptions[clip.variant_index];
+        const idx = aiSelections[clip.variant_index] ?? 0;
+        if (varCaptions && varCaptions[idx]) {
+          captionMap[clip.clip_id] = varCaptions[idx];
+        }
+      }
+    }
+    onCaptionsGenerated(captionMap);
+  }, [completedClips, onCaptionsGenerated]);
+
+  // Re-propagate when clip_ids change (pending-* → real ids after render completes)
+  useEffect(() => {
+    const hasContent = Object.values(manualCaptions).some(v => v?.trim()) ||
+                       Object.keys(generatedCaptions).length > 0;
+    if (hasContent) {
+      propagateCaptions(manualCaptions, generatedCaptions, selectedCaptionIdx);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [completedClips]);
+
+  /* ---------- Manual caption editing ---------- */
+
+  const handleManualCaptionChange = (variantIndex: number, text: string) => {
+    const updated = { ...manualCaptions, [variantIndex]: text };
+    setManualCaptions(updated);
+    propagateCaptions(updated, generatedCaptions, selectedCaptionIdx);
+  };
+
   /* ---------- Fetch templates ---------- */
 
   const fetchTemplates = useCallback(async () => {
@@ -140,7 +194,6 @@ export function PipelineCaptionGenerator({
       if (!isMountedRef.current) return;
       setTemplates(tpls);
 
-      // Auto-select: saved template, or default, or none
       const savedId = typeof window !== "undefined" ? localStorage.getItem(LS_TEMPLATE_KEY) : null;
       const savedExists = tpls.some((t: CaptionTemplate) => t.id === savedId);
       if (savedExists) {
@@ -232,7 +285,7 @@ export function PipelineCaptionGenerator({
     }
   };
 
-  /* ---------- Generate captions ---------- */
+  /* ---------- Generate captions via AI ---------- */
 
   const handleGenerate = async () => {
     const variantIndices = completedClips.map(c => c.variant_index);
@@ -261,18 +314,16 @@ export function PipelineCaptionGenerator({
       }
       setGeneratedCaptions(captions);
 
-      // Auto-select first caption for each variant
+      // Auto-select first AI caption for each variant (only if no manual caption)
       const selections: Record<number, number> = {};
-      const captionMap: Record<string, string> = {};
       for (const clip of completedClips) {
         const varCaptions = captions[clip.variant_index];
         if (varCaptions && varCaptions.length > 0) {
           selections[clip.variant_index] = 0;
-          captionMap[clip.clip_id] = varCaptions[0];
         }
       }
       setSelectedCaptionIdx(selections);
-      onCaptionsGenerated(captionMap);
+      propagateCaptions(manualCaptions, captions, selections);
 
       const errorCount = Object.keys(data.errors || {}).length;
       if (errorCount > 0) {
@@ -287,21 +338,19 @@ export function PipelineCaptionGenerator({
     }
   };
 
-  /* ---------- Caption selection ---------- */
+  /* ---------- AI Caption selection ---------- */
 
   const handleSelectCaption = (variantIndex: number, captionIdx: number) => {
-    setSelectedCaptionIdx(prev => ({ ...prev, [variantIndex]: captionIdx }));
+    const newSelections = { ...selectedCaptionIdx, [variantIndex]: captionIdx };
+    setSelectedCaptionIdx(newSelections);
 
-    // Update parent with new selection
-    const captionMap: Record<string, string> = {};
-    for (const clip of completedClips) {
-      const idx = clip.variant_index === variantIndex ? captionIdx : (selectedCaptionIdx[clip.variant_index] ?? 0);
-      const varCaptions = generatedCaptions[clip.variant_index];
-      if (varCaptions && varCaptions[idx]) {
-        captionMap[clip.clip_id] = varCaptions[idx];
-      }
+    // Apply the selected AI caption to the manual field
+    const varCaptions = generatedCaptions[variantIndex];
+    if (varCaptions && varCaptions[captionIdx]) {
+      const updated = { ...manualCaptions, [variantIndex]: varCaptions[captionIdx] };
+      setManualCaptions(updated);
+      propagateCaptions(updated, generatedCaptions, newSelections);
     }
-    onCaptionsGenerated(captionMap);
   };
 
   const copyCaption = (text: string) => {
@@ -318,259 +367,293 @@ export function PipelineCaptionGenerator({
       <div className="flex items-center gap-3">
         <MessageSquareText className="size-6 text-primary" />
         <div>
-          <h3 className="text-lg font-semibold">AI Social Media Captions</h3>
+          <h3 className="text-lg font-semibold">Social Media Captions</h3>
           <p className="text-sm text-muted-foreground">
-            Auto-generate caption variants for each video clip
+            Write captions manually or generate them with AI
           </p>
         </div>
       </div>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center justify-between">
-            <span className="flex items-center gap-2">
-              <Sparkles className="size-4" />
-              Caption Settings
-            </span>
-            <Dialog open={templateDialogOpen} onOpenChange={setTemplateDialogOpen}>
-              <DialogTrigger asChild>
-                <Button variant="ghost" size="sm">
-                  <Settings2 className="size-4 mr-1" />
-                  Templates
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
-                <DialogHeader>
-                  <DialogTitle>Caption Templates</DialogTitle>
-                </DialogHeader>
-                <div className="space-y-4">
-                  {/* Existing templates */}
-                  {templates.map((tpl) => (
-                    <div key={tpl.id} className="border rounded-md p-3 space-y-2">
-                      {editingTemplate?.id === tpl.id ? (
-                        <>
-                          <Input
-                            value={editingTemplate.name}
-                            onChange={(e) => setEditingTemplate({ ...editingTemplate, name: e.target.value })}
-                            placeholder="Template name"
-                          />
-                          <Textarea
-                            value={editingTemplate.prompt_template}
-                            onChange={(e) => setEditingTemplate({ ...editingTemplate, prompt_template: e.target.value })}
-                            rows={4}
-                          />
-                          <div className="flex gap-2">
-                            <Button size="sm" onClick={handleUpdateTemplate}>Save</Button>
-                            <Button size="sm" variant="ghost" onClick={() => setEditingTemplate(null)}>Cancel</Button>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="flex items-center justify-between">
-                            <span className="font-medium text-sm">{tpl.name}</span>
-                            <div className="flex items-center gap-1">
-                              {tpl.is_default && <Badge variant="secondary" className="text-xs">Default</Badge>}
-                              {!tpl.is_default && (
-                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleSetDefault(tpl.id)} title="Set as default">
-                                  <Check className="size-3" />
-                                </Button>
-                              )}
-                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditingTemplate({ ...tpl })} title="Edit">
-                                <Settings2 className="size-3" />
-                              </Button>
-                              <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => handleDeleteTemplate(tpl.id)} title="Delete">
-                                <Trash2 className="size-3" />
-                              </Button>
-                            </div>
-                          </div>
-                          <p className="text-xs text-muted-foreground line-clamp-3">{tpl.prompt_template}</p>
-                        </>
-                      )}
+      {/* Manual caption fields per variant — always visible */}
+      <div className="space-y-3">
+        {completedClips.map((clip) => (
+          <Card key={clip.clip_id}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Pencil className="size-3.5" />
+                Variant {clip.variant_index + 1} — Caption
+                {manualCaptions[clip.variant_index]?.trim() && (
+                  <Badge variant="default" className="text-xs">Has caption</Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Textarea
+                placeholder={`Write the social media caption for variant ${clip.variant_index + 1}...`}
+                value={manualCaptions[clip.variant_index] || ""}
+                onChange={(e) => handleManualCaptionChange(clip.variant_index, e.target.value)}
+                rows={3}
+                className="resize-y"
+              />
+              {manualCaptions[clip.variant_index]?.trim() && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  {manualCaptions[clip.variant_index].length} characters
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* AI Generation — collapsible */}
+      <Collapsible open={aiSettingsOpen} onOpenChange={setAiSettingsOpen}>
+        <Card>
+          <CollapsibleTrigger asChild>
+            <CardHeader className="pb-3 cursor-pointer hover:bg-accent/50 transition-colors">
+              <CardTitle className="text-base flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <Sparkles className="size-4" />
+                  AI Caption Generator
+                  <Badge variant="outline" className="text-xs font-normal">Optional</Badge>
+                </span>
+                <ChevronDown className={`size-4 transition-transform ${aiSettingsOpen ? "rotate-180" : ""}`} />
+              </CardTitle>
+            </CardHeader>
+          </CollapsibleTrigger>
+
+          <CollapsibleContent>
+            <CardContent className="space-y-4 pt-0">
+              {/* Template selector + management */}
+              <div className="flex items-end gap-2">
+                <div className="flex-1 space-y-2">
+                  <Label>Template</Label>
+                  {templatesLoading ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="size-4 animate-spin" />
+                      Loading templates...
                     </div>
-                  ))}
-
-                  {/* Create new template */}
-                  <div className="border-2 border-dashed rounded-md p-3 space-y-2">
-                    <Label className="text-sm font-medium">New Template</Label>
-                    <Input
-                      placeholder="Template name (e.g. Product Promo)"
-                      value={newTemplateName}
-                      onChange={(e) => setNewTemplateName(e.target.value)}
-                    />
-                    <Textarea
-                      placeholder="Template prompt... (e.g. You are a social media expert for an online fashion store. Focus on product benefits and lifestyle appeal.)"
-                      value={newTemplatePrompt}
-                      onChange={(e) => setNewTemplatePrompt(e.target.value)}
-                      rows={4}
-                    />
-                    <Button
-                      size="sm"
-                      onClick={handleCreateTemplate}
-                      disabled={!newTemplateName.trim() || !newTemplatePrompt.trim()}
-                    >
-                      <Plus className="size-4 mr-1" />
-                      Create Template
-                    </Button>
-                  </div>
+                  ) : (
+                    <Select value={selectedTemplateId || "none"} onValueChange={handleSelectTemplate}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="No template (generate freely)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">No template</SelectItem>
+                        {templates.map((tpl) => (
+                          <SelectItem key={tpl.id} value={tpl.id}>
+                            {tpl.name} {tpl.is_default ? "(default)" : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
-              </DialogContent>
-            </Dialog>
-          </CardTitle>
-        </CardHeader>
-
-        <CardContent className="space-y-4">
-          {/* Template selector */}
-          <div className="space-y-2">
-            <Label>Template</Label>
-            {templatesLoading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
-                Loading templates...
-              </div>
-            ) : (
-              <Select value={selectedTemplateId || "none"} onValueChange={handleSelectTemplate}>
-                <SelectTrigger>
-                  <SelectValue placeholder="No template (generate freely)" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">No template</SelectItem>
-                  {templates.map((tpl) => (
-                    <SelectItem key={tpl.id} value={tpl.id}>
-                      {tpl.name} {tpl.is_default ? "(default)" : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-
-          {/* Tone + Language */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Tone</Label>
-              <Select value={tone} onValueChange={setTone}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {TONES.map((t) => (
-                    <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Language</Label>
-              <Select value={language} onValueChange={setLanguage}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {LANGUAGES.map((l) => (
-                    <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {/* Options */}
-          <div className="flex gap-6">
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <Checkbox checked={includeHashtags} onCheckedChange={(v) => setIncludeHashtags(v === true)} />
-              Include hashtags
-            </label>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <Checkbox checked={includeCta} onCheckedChange={(v) => setIncludeCta(v === true)} />
-              Include CTA
-            </label>
-          </div>
-
-          {/* Custom instructions */}
-          <div className="space-y-2">
-            <Label>Custom Instructions (optional)</Label>
-            <Textarea
-              placeholder="Any additional instructions for the AI..."
-              value={customInstructions}
-              onChange={(e) => setCustomInstructions(e.target.value)}
-              rows={2}
-            />
-          </div>
-
-          {/* Generate button */}
-          <Button
-            onClick={handleGenerate}
-            disabled={generating}
-            className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 text-white border-none hover:from-blue-600 hover:to-cyan-600"
-          >
-            {generating ? (
-              <Loader2 className="size-4 mr-2 animate-spin" />
-            ) : (
-              <Sparkles className="size-4 mr-2" />
-            )}
-            Generate Captions for {completedClips.length} Clip{completedClips.length !== 1 ? "s" : ""}
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* Generated captions per variant */}
-      {Object.keys(generatedCaptions).length > 0 && (
-        <div className="space-y-4">
-          {completedClips.map((clip) => {
-            const varCaptions = generatedCaptions[clip.variant_index];
-            if (!varCaptions || varCaptions.length === 0) return null;
-            const selectedIdx = selectedCaptionIdx[clip.variant_index] ?? 0;
-
-            return (
-              <Card key={clip.clip_id}>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm flex items-center gap-2">
-                    Variant {clip.variant_index + 1} — Captions
-                    <Badge variant="outline" className="text-xs">
-                      {varCaptions.length} variant{varCaptions.length !== 1 ? "s" : ""}
-                    </Badge>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  {varCaptions.map((caption, idx) => (
-                    <div
-                      key={idx}
-                      onClick={() => handleSelectCaption(clip.variant_index, idx)}
-                      className={`relative p-3 rounded-md border-2 cursor-pointer transition-colors text-sm ${
-                        idx === selectedIdx
-                          ? "border-primary bg-primary/5"
-                          : "border-transparent bg-muted/50 hover:bg-muted"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <Badge
-                              variant={idx === selectedIdx ? "default" : "outline"}
-                              className="text-xs"
-                            >
-                              {idx === selectedIdx ? "Selected" : `Option ${idx + 1}`}
-                            </Badge>
-                          </div>
-                          <p className="whitespace-pre-wrap break-words">{caption}</p>
+                <Dialog open={templateDialogOpen} onOpenChange={setTemplateDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="ghost" size="sm">
+                      <Settings2 className="size-4 mr-1" />
+                      Templates
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+                    <DialogHeader>
+                      <DialogTitle>Caption Templates</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      {templates.map((tpl) => (
+                        <div key={tpl.id} className="border rounded-md p-3 space-y-2">
+                          {editingTemplate?.id === tpl.id ? (
+                            <>
+                              <Input
+                                value={editingTemplate.name}
+                                onChange={(e) => setEditingTemplate({ ...editingTemplate, name: e.target.value })}
+                                placeholder="Template name"
+                              />
+                              <Textarea
+                                value={editingTemplate.prompt_template}
+                                onChange={(e) => setEditingTemplate({ ...editingTemplate, prompt_template: e.target.value })}
+                                rows={4}
+                              />
+                              <div className="flex gap-2">
+                                <Button size="sm" onClick={handleUpdateTemplate}>Save</Button>
+                                <Button size="sm" variant="ghost" onClick={() => setEditingTemplate(null)}>Cancel</Button>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="flex items-center justify-between">
+                                <span className="font-medium text-sm">{tpl.name}</span>
+                                <div className="flex items-center gap-1">
+                                  {tpl.is_default && <Badge variant="secondary" className="text-xs">Default</Badge>}
+                                  {!tpl.is_default && (
+                                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleSetDefault(tpl.id)} title="Set as default">
+                                      <Check className="size-3" />
+                                    </Button>
+                                  )}
+                                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditingTemplate({ ...tpl })} title="Edit">
+                                    <Settings2 className="size-3" />
+                                  </Button>
+                                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => handleDeleteTemplate(tpl.id)} title="Delete">
+                                    <Trash2 className="size-3" />
+                                  </Button>
+                                </div>
+                              </div>
+                              <p className="text-xs text-muted-foreground line-clamp-3">{tpl.prompt_template}</p>
+                            </>
+                          )}
                         </div>
+                      ))}
+
+                      <div className="border-2 border-dashed rounded-md p-3 space-y-2">
+                        <Label className="text-sm font-medium">New Template</Label>
+                        <Input
+                          placeholder="Template name (e.g. Product Promo)"
+                          value={newTemplateName}
+                          onChange={(e) => setNewTemplateName(e.target.value)}
+                        />
+                        <Textarea
+                          placeholder="Template prompt... (e.g. You are a social media expert for an online fashion store. Focus on product benefits and lifestyle appeal.)"
+                          value={newTemplatePrompt}
+                          onChange={(e) => setNewTemplatePrompt(e.target.value)}
+                          rows={4}
+                        />
                         <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 shrink-0"
-                          onClick={(e) => { e.stopPropagation(); copyCaption(caption); }}
+                          size="sm"
+                          onClick={handleCreateTemplate}
+                          disabled={!newTemplateName.trim() || !newTemplatePrompt.trim()}
                         >
-                          <Copy className="size-3" />
+                          <Plus className="size-4 mr-1" />
+                          Create Template
                         </Button>
                       </div>
                     </div>
-                  ))}
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      )}
+                  </DialogContent>
+                </Dialog>
+              </div>
+
+              {/* Tone + Language */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Tone</Label>
+                  <Select value={tone} onValueChange={setTone}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TONES.map((t) => (
+                        <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Language</Label>
+                  <Select value={language} onValueChange={setLanguage}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {LANGUAGES.map((l) => (
+                        <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Options */}
+              <div className="flex gap-6">
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <Checkbox checked={includeHashtags} onCheckedChange={(v) => setIncludeHashtags(v === true)} />
+                  Include hashtags
+                </label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <Checkbox checked={includeCta} onCheckedChange={(v) => setIncludeCta(v === true)} />
+                  Include CTA
+                </label>
+              </div>
+
+              {/* Custom instructions */}
+              <div className="space-y-2">
+                <Label>Custom Instructions (optional)</Label>
+                <Textarea
+                  placeholder="Any additional instructions for the AI..."
+                  value={customInstructions}
+                  onChange={(e) => setCustomInstructions(e.target.value)}
+                  rows={2}
+                />
+              </div>
+
+              {/* Generate button */}
+              <Button
+                onClick={handleGenerate}
+                disabled={generating}
+                className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 text-white border-none hover:from-blue-600 hover:to-cyan-600"
+              >
+                {generating ? (
+                  <Loader2 className="size-4 mr-2 animate-spin" />
+                ) : (
+                  <Sparkles className="size-4 mr-2" />
+                )}
+                Generate Captions for {completedClips.length} Clip{completedClips.length !== 1 ? "s" : ""}
+              </Button>
+
+              {/* AI-generated caption options per variant */}
+              {Object.keys(generatedCaptions).length > 0 && (
+                <div className="space-y-3 pt-2">
+                  <p className="text-sm text-muted-foreground">
+                    Click an AI caption to use it. It will be copied to the caption field above.
+                  </p>
+                  {completedClips.map((clip) => {
+                    const varCaptions = generatedCaptions[clip.variant_index];
+                    if (!varCaptions || varCaptions.length === 0) return null;
+                    const selectedIdx = selectedCaptionIdx[clip.variant_index] ?? 0;
+
+                    return (
+                      <div key={clip.clip_id} className="space-y-2">
+                        <p className="text-sm font-medium">Variant {clip.variant_index + 1} — AI Options</p>
+                        {varCaptions.map((caption, idx) => (
+                          <div
+                            key={idx}
+                            onClick={() => handleSelectCaption(clip.variant_index, idx)}
+                            className={`relative p-3 rounded-md border-2 cursor-pointer transition-colors text-sm ${
+                              idx === selectedIdx
+                                ? "border-primary bg-primary/5"
+                                : "border-transparent bg-muted/50 hover:bg-muted"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <Badge
+                                    variant={idx === selectedIdx ? "default" : "outline"}
+                                    className="text-xs"
+                                  >
+                                    {idx === selectedIdx ? "Selected" : `Option ${idx + 1}`}
+                                  </Badge>
+                                </div>
+                                <p className="whitespace-pre-wrap break-words">{caption}</p>
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 shrink-0"
+                                onClick={(e) => { e.stopPropagation(); copyCaption(caption); }}
+                              >
+                                <Copy className="size-3" />
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </CollapsibleContent>
+        </Card>
+      </Collapsible>
     </div>
   );
 }

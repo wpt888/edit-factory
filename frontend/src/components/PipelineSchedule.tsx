@@ -518,29 +518,7 @@ export function PipelineSchedule({ completedClips, initialCaptions }: PipelineSc
               </div>
             )}
 
-            {/* Captions summary — captions are managed in the AI Caption Generator above */}
-            {Object.keys(perVariantCaptions).length > 0 && (
-              <div className="space-y-2">
-                <Label className="text-sm">Captions (from AI generator above)</Label>
-                <div className="rounded-md border bg-muted/30 p-3 space-y-2">
-                  {completedClips
-                    .filter(c => selectedClipIds.has(c.clip_id))
-                    .map((clip) => {
-                      const clipCaption = perVariantCaptions[clip.clip_id];
-                      return (
-                        <div key={clip.clip_id} className="text-sm">
-                          <span className="font-medium">Variant {clip.variant_index + 1}:</span>{" "}
-                          <span className="text-muted-foreground">
-                            {clipCaption
-                              ? clipCaption.length > 120 ? clipCaption.slice(0, 120) + "..." : clipCaption
-                              : "No caption set"}
-                          </span>
-                        </div>
-                      );
-                    })}
-                </div>
-              </div>
-            )}
+            {/* Captions are managed in the AI Caption Generator section above */}
 
             {/* Schedule button */}
             <div className="flex justify-end">
