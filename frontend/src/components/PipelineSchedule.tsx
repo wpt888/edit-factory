@@ -281,7 +281,16 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
 
     setScheduling(true);
     try {
-      const scheduleDatetime = `${scheduleDate}T${postTime}:00`;
+      // Build ISO datetime with the correct timezone offset
+      // Use Intl to get the UTC offset for the selected timezone
+      const refDate = new Date(`${scheduleDate}T${postTime}:00`);
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: timezone,
+        timeZoneName: "longOffset",
+      }).formatToParts(refDate);
+      const offsetPart = parts.find((p) => p.type === "timeZoneName");
+      const offset = offsetPart?.value?.replace("GMT", "") || "+00:00";
+      const scheduleDatetime = `${scheduleDate}T${postTime}:00${offset}`;
 
       // Build per-clip captions from AI generator or manual edits
       const captions: Record<string, string> = Object.fromEntries(
