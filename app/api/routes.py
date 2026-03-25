@@ -133,7 +133,7 @@ async def get_usage_stats(
             chars_limit = acc.get("character_limit") or 0
             chars_remaining = chars_limit - chars_used
             usage_pct = round((chars_used / chars_limit * 100), 1) if chars_limit > 0 else 0
-            estimated_cost = round(chars_used * 0.00022, 2)
+            estimated_cost = round(chars_used * 0.00024, 2)
 
             entry = {
                 "id": acc.get("id"),
@@ -449,15 +449,31 @@ async def create_job(
         await validate_upload_size(audio)
         await validate_file_mime_type(audio, ALLOWED_AUDIO_MIMES, "audio")
         audio_path = settings.input_dir / f"{job_id}_{_sanitize_filename(audio.filename)}"
-        with open(audio_path, "wb") as f:
-            shutil.copyfileobj(audio.file, f)
+        try:
+            with open(audio_path, "wb") as f:
+                shutil.copyfileobj(audio.file, f)
+        except OSError:
+            # Cleanup video file that was already saved
+            video_path.unlink(missing_ok=True)
+            if audio_path.exists():
+                audio_path.unlink()
+            raise HTTPException(status_code=500, detail="Failed to save uploaded audio")
 
     srt_path = None
     if srt:
         await validate_file_mime_type(srt, ALLOWED_SUBTITLE_MIMES, "subtitle")
         srt_path = settings.input_dir / f"{job_id}_{_sanitize_filename(srt.filename)}"
-        with open(srt_path, "wb") as f:
-            shutil.copyfileobj(srt.file, f)
+        try:
+            with open(srt_path, "wb") as f:
+                shutil.copyfileobj(srt.file, f)
+        except OSError:
+            # Cleanup previously saved files
+            video_path.unlink(missing_ok=True)
+            if audio_path:
+                audio_path.unlink(missing_ok=True)
+            if srt_path.exists():
+                srt_path.unlink()
+            raise HTTPException(status_code=500, detail="Failed to save uploaded subtitle")
 
     # Parse subtitle settings from JSON
     parsed_subtitle_settings = None
@@ -521,7 +537,7 @@ async def process_job(job_id: str):
         return
 
     job["status"] = JobStatus.PROCESSING
-    job["updated_at"] = datetime.now(timezone.utc).isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
     job["progress"] = "Starting..."
     # Persist PROCESSING status immediately so polling clients see correct state
     get_job_storage().update_job(job_id, {
@@ -532,7 +548,7 @@ async def process_job(job_id: str):
 
     def update_progress(step: str, status: str):
         job["progress"] = f"{step}: {status}"
-        job["updated_at"] = datetime.now(timezone.utc).isoformat()
+        job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
         get_job_storage().update_job(job_id, {
             "status": job["status"],
             "progress": job["progress"],
@@ -545,7 +561,7 @@ async def process_job(job_id: str):
             job["status"] = JobStatus.CANCELLED if hasattr(JobStatus, 'CANCELLED') else "cancelled"
             job["progress"] = "Cancelled before processing started"
             _cleanup_input_files(job)
-            job["updated_at"] = datetime.now(timezone.utc).isoformat()
+            job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
             get_job_storage().update_job(job_id, job)
             return
 
@@ -573,7 +589,7 @@ async def process_job(job_id: str):
             job["status"] = JobStatus.CANCELLED if hasattr(JobStatus, 'CANCELLED') else "cancelled"
             job["progress"] = "Cancelled"
             _cleanup_input_files(job)
-            job["updated_at"] = datetime.now(timezone.utc).isoformat()
+            job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
             get_job_storage().update_job(job_id, job)
             return
 
@@ -608,7 +624,7 @@ async def process_job(job_id: str):
         # Clean up input files even on exception to prevent disk leaks
         _cleanup_input_files(job)
 
-    job["updated_at"] = datetime.now(timezone.utc).isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
     # Persist final job state — but respect external cancellation
     current_job = get_job_storage().get_job(job_id)
     if current_job and current_job.get("status") in ("cancelled",):
@@ -894,7 +910,7 @@ async def process_tts_generate_job(job_id: str):
         return
 
     job["status"] = JobStatus.PROCESSING
-    job["updated_at"] = datetime.now(timezone.utc)
+    job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
     job["progress"] = "Generating voice-over with ElevenLabs..."
 
     try:
@@ -919,7 +935,7 @@ async def process_tts_generate_job(job_id: str):
         # Generate with silence removal
         if job["remove_silence"]:
             job["progress"] = "Generating TTS and removing silence..."
-            job["updated_at"] = datetime.now(timezone.utc)
+            job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
 
             if tts_fallback:
                 await edge_tts_service.generate_audio(
@@ -962,7 +978,7 @@ async def process_tts_generate_job(job_id: str):
                 job["progress"] = "Completed"
         else:
             job["progress"] = "Generating TTS..."
-            job["updated_at"] = datetime.now(timezone.utc)
+            job["updated_at"] = datetime.now(timezone.utc).isoformat()
 
             if tts_fallback:
                 await edge_tts_service.generate_audio(
@@ -998,7 +1014,7 @@ async def process_tts_generate_job(job_id: str):
         job["error"] = str(e)
         job["progress"] = f"Failed: {e}"
 
-    job["updated_at"] = datetime.now(timezone.utc).isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
     # Persist final job state to storage
     get_job_storage().update_job(job_id, job)
 
@@ -1113,7 +1129,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         return
 
     job["status"] = JobStatus.PROCESSING
-    job["updated_at"] = datetime.now(timezone.utc).isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
     job["progress"] = "Initializing TTS..."
     audio_path = None
 
@@ -1152,7 +1168,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         silence_stats = {}
         if remove_silence:
             job["progress"] = "Generating voice-over and removing silence..."
-            job["updated_at"] = datetime.now(timezone.utc)
+            job["updated_at"] = datetime.now(timezone.utc).isoformat()
 
             if tts_fallback:
                 await edge_tts_service.generate_audio(
@@ -1185,7 +1201,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
                     logger.info(f"Silence removed: {saved:.1f}s saved")
         else:
             job["progress"] = "Generating voice-over..."
-            job["updated_at"] = datetime.now(timezone.utc)
+            job["updated_at"] = datetime.now(timezone.utc).isoformat()
 
             if tts_fallback:
                 await edge_tts_service.generate_audio(
@@ -1209,7 +1225,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         results = []
         for i, video_path_str in enumerate(video_paths):
             job["progress"] = f"Adding voice-over to video {i + 1}/{len(video_paths)}..."
-            job["updated_at"] = datetime.now(timezone.utc)
+            job["updated_at"] = datetime.now(timezone.utc).isoformat()
 
             video_path = Path(video_path_str)
             if not video_path.exists():
@@ -1288,7 +1304,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
             except Exception:
                 pass
 
-    job["updated_at"] = datetime.now(timezone.utc).isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
     # Persist final job state to storage
     get_job_storage().update_job(job_id, job)
 

@@ -79,7 +79,7 @@ def _get_providers():
             "id": "elevenlabs",
             "name": "ElevenLabs",
             "description": "Premium quality voices",
-            "cost_per_1k_chars": 0.22,
+            "cost_per_1k_chars": 0.24,
             "available": bool(settings.elevenlabs_api_key),
             "supports_voice_cloning": False
         },

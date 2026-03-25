@@ -384,6 +384,9 @@ class ElevenLabsTTSService(TTSService):
                 "character_end_times_seconds": [0.05, 0.09, 0.14, ...]
             }
         """
+        if len(text) > ELEVENLABS_MAX_CHARS:
+            raise ValueError(f"Text too long ({len(text)} chars, max {ELEVENLABS_MAX_CHARS})")
+
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -401,7 +404,8 @@ class ElevenLabsTTSService(TTSService):
         from app.services.tts_cache import cache_lookup, cache_store
         vs = voice_settings
         cache_key = {
-            "text": text, "voice_id": voice_id, "model_id": effective_model, "provider": "elevenlabs_ts",
+            "text": text, "voice_id": voice_id, "model_id": effective_model, "provider": "elevenlabs",
+            "type": "with_timestamps",
             "vs": f"{vs['stability']:.2f}_{vs['similarity_boost']:.2f}_{vs['style']:.2f}_{vs.get('speed', 1.0):.2f}"
         }
         cached = cache_lookup(cache_key, "elevenlabs", output_path)

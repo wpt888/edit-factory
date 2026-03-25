@@ -32,3 +32,4 @@ def setup_logging(level=logging.INFO):
         uv_logger = logging.getLogger(name)
         uv_logger.handlers.clear()
         uv_logger.addHandler(handler)
+        uv_logger.propagate = False

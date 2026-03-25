@@ -83,70 +83,91 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 def _recover_stuck_projects_sync():
-    """Synchronous version of stuck project recovery (runs in thread)."""
+    """Recover projects stuck in 'generating' for more than 10 minutes."""
     try:
         from app.repositories.factory import get_repository
         from app.repositories.models import QueryFilters
+        from datetime import timedelta
         repo = get_repository()
         if not repo:
             return
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
         result = repo.table_query(
             "editai_projects", "select",
-            filters=QueryFilters(select="id", eq={"status": "generating"}),
+            filters=QueryFilters(select="id,updated_at", eq={"status": "generating"}),
         )
         if result.data:
+            recovered = 0
             for proj in result.data:
-                repo.update_project(proj["id"], {
-                    "status": "failed",
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                })
-            logger.info(f"Recovered {len(result.data)} stuck projects (generating -> failed)")
+                updated = proj.get("updated_at", "")
+                if updated and updated < cutoff:
+                    repo.update_project(proj["id"], {
+                        "status": "failed",
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    })
+                    recovered += 1
+            if recovered:
+                logger.info(f"Recovered {recovered} stuck projects (generating >10min -> failed)")
     except Exception as e:
         logger.warning(f"Failed to recover stuck projects: {e}")
 
 
 def _recover_stuck_clips_sync():
-    """Synchronous version of stuck clip recovery (runs in thread)."""
+    """Recover clips stuck in 'processing' for more than 10 minutes."""
     try:
         from app.repositories.factory import get_repository
         from app.repositories.models import QueryFilters
+        from datetime import timedelta
         repo = get_repository()
         if not repo:
             return
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
         result = repo.table_query(
             "editai_clips", "select",
-            filters=QueryFilters(select="id", eq={"final_status": "processing"}),
+            filters=QueryFilters(select="id,updated_at", eq={"final_status": "processing"}),
         )
         if result.data:
+            recovered = 0
             for clip in result.data:
-                repo.update_clip(clip["id"], {
-                    "final_status": "failed",
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                })
-            logger.info(f"Recovered {len(result.data)} stuck clips (processing -> failed)")
+                updated = clip.get("updated_at", "")
+                if updated and updated < cutoff:
+                    repo.update_clip(clip["id"], {
+                        "final_status": "failed",
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    })
+                    recovered += 1
+            if recovered:
+                logger.info(f"Recovered {recovered} stuck clips (processing >10min -> failed)")
     except Exception as e:
         logger.warning(f"Failed to recover stuck clips: {e}")
 
 
 def _recover_stuck_jobs_sync():
-    """Synchronous version of stuck job recovery (runs in thread)."""
+    """Recover jobs stuck in 'processing' for more than 10 minutes."""
     try:
         from app.repositories.factory import get_repository
         from app.repositories.models import QueryFilters
+        from datetime import timedelta
         repo = get_repository()
         if not repo:
             return
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
         result = repo.table_query(
             "jobs", "select",
-            filters=QueryFilters(select="id", eq={"status": "processing"}),
+            filters=QueryFilters(select="id,updated_at", eq={"status": "processing"}),
         )
         if result.data:
+            recovered = 0
             for job in result.data:
-                repo.update_job(job["id"], {
-                    "status": "failed",
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                })
-            logger.info(f"Recovered {len(result.data)} stuck jobs (processing -> failed)")
+                updated = job.get("updated_at", "")
+                if updated and updated < cutoff:
+                    repo.update_job(job["id"], {
+                        "status": "failed",
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    })
+                    recovered += 1
+            if recovered:
+                logger.info(f"Recovered {recovered} stuck jobs (processing >10min -> failed)")
     except Exception as e:
         logger.warning(f"Failed to recover stuck jobs: {e}")
 
@@ -228,10 +249,10 @@ async def lifespan(app: FastAPI):
     await init_semaphores()
 
     settings.ensure_dirs()
-    if settings.auth_disabled and not settings.debug and not getattr(settings, 'desktop_mode', False):
-        raise RuntimeError("AUTH_DISABLED=true is not allowed in non-debug mode")
+    if settings.auth_disabled and not settings.debug:
+        raise RuntimeError("AUTH_DISABLED=true is not allowed in non-debug mode. Set DEBUG=true for development or disable AUTH_DISABLED.")
     if not settings.auth_disabled and not settings.supabase_jwt_secret:
-        logger.error("SUPABASE_JWT_SECRET is empty — JWT auth will reject all tokens. Set the secret or AUTH_DISABLED=true for development.")
+        raise RuntimeError("SUPABASE_JWT_SECRET is empty — JWT auth will reject all tokens. Set the secret or AUTH_DISABLED=true for development.")
     if settings.desktop_mode:
         logger.info("Desktop mode active — auth bypassed, config from %s", settings.base_dir)
         # Safety: desktop mode with auth bypass should only bind to localhost
@@ -304,10 +325,13 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # CORS - configured from environment variables
 # In production: ALLOWED_ORIGINS=https://editai.obsid.ro
-# NOTE: CORS must be added BEFORE SlowAPI so it wraps as the outermost middleware,
+# NOTE: Starlette processes middleware in reverse registration order (last-added runs first).
+# SlowAPI must be registered BEFORE CORS so that CORS wraps SlowAPI as the outermost layer,
 # ensuring CORS headers are present even on 429 rate-limit responses.
 allowed_origins = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()]
 logger.info(f"CORS allowed origins: {allowed_origins}")
+
+app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -317,8 +341,6 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Profile-Id"],
     expose_headers=["Content-Disposition", "Content-Length", "Content-Range", "X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"],
 )
-
-app.add_middleware(SlowAPIMiddleware)
 
 # Sentry crash reporting
 # Path 1: SENTRY_DSN env var — works in all modes (production server, dev, desktop)

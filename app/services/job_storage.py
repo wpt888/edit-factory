@@ -176,30 +176,23 @@ class JobStorage:
         Returns:
             Updated job data or None if not found
         """
-        # DB-04: Do in-memory update inside lock, Supabase I/O outside lock
+        # DB-04: In-memory update inside lock; if not in memory, fetch from Supabase
+        # then update under lock to prevent TOCTOU race between concurrent callers
         with self._update_lock:
-            # Read from in-memory store first (no network call while holding lock)
             job = self._memory_store.get(job_id)
             if job is None:
-                # Not in memory — will try Supabase outside lock below
-                pass
+                # Not in memory — fetch from Supabase while holding lock to prevent
+                # concurrent callers from both fetching stale state and overwriting each other
+                job = self.get_job(job_id)
+                if not job:
+                    logger.warning(f"JobStorage: Job {job_id} not found for update")
+                    return None
             else:
-                # Merge updates into in-memory copy
                 job = job.copy()
-                job.update(updates)
-                job["updated_at"] = datetime.now(timezone.utc).isoformat()
-                self._memory_store[job_id] = job.copy()
-
-        # If not found in memory, try Supabase (outside lock)
-        if job is None:
-            job = self.get_job(job_id)
-            if not job:
-                logger.warning(f"JobStorage: Job {job_id} not found for update")
-                return None
+            # Merge updates into the fetched/copied job
             job.update(updates)
             job["updated_at"] = datetime.now(timezone.utc).isoformat()
-            with self._update_lock:
-                self._memory_store[job_id] = job.copy()
+            self._memory_store[job_id] = job.copy()
 
         # Supabase I/O outside lock to avoid holding lock during network calls
         if self._repo:
@@ -248,8 +241,16 @@ class JobStorage:
                 if status:
                     filters.eq["status"] = status
                 result = self._repo.list_jobs(limit=limit, profile_id=profile_id, filters=filters)
-                # Extract job data from JSONB
-                return [row.get("data", {}) for row in result.data]
+                # Extract job data from JSONB, normalizing top-level fields
+                jobs = []
+                for row in result.data:
+                    job_data = row.get("data", {})
+                    # Merge top-level DB fields into data blob (same as get_job)
+                    for key in ("id", "status", "progress"):
+                        if key in row and row[key] is not None:
+                            job_data[key] = row[key]
+                    jobs.append(job_data)
+                return jobs
             except Exception as e:
                 logger.warning(f"JobStorage: Failed to list jobs: {e}, using memory")
 

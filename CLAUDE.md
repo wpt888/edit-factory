@@ -166,9 +166,10 @@ _project_locks: Dict[str, threading.Lock] = {}
 ### Video Scoring
 
 ```python
-combined_score = (motion * 0.6) + (variance * 0.3) + (brightness * 0.1)
+combined_score = (motion * 0.40) + (variance * 0.20) + (blur * 0.20) + (contrast * 0.15) + (brightness_term * 0.05)
 ```
-Perceptual hashing (pHash) with Hamming distance threshold of 12 for duplicate detection.
+Where `brightness_term = 1 - 2 * abs(avg_brightness - 0.5)` (peaks at 0.5, penalizes extremes).
+Perceptual hashing (pHash) with Hamming distance threshold of 8 for duplicate detection.
 
 ### Form Data Type Coercion
 

@@ -33,7 +33,7 @@ from app.services.audio_normalizer import measure_loudness, build_loudnorm_filte
 from app.services.video_filters import VideoFilters, DenoiseConfig, SharpenConfig, ColorConfig
 from app.services.subtitle_styler import build_subtitle_filter
 from app.services.tts_subtitle_generator import generate_srt_from_timestamps
-from app.services.srt_validator import sanitize_srt_text, sanitize_srt_full
+from app.services.srt_validator import sanitize_srt_text, sanitize_srt_full, SRTValidator
 from app.utils import sanitize_filename as _sanitize_filename, normalize_path
 
 import logging
@@ -903,7 +903,16 @@ async def _generate_raw_clips_task(
 
     repo = get_repository()
     if not repo:
-        logger.error(f"[Profile {profile_id}] Repository not available for raw clips generation")
+        logger.error(f"[Profile {profile_id}] Repository not available for raw clips generation. Project {project_id} may be stuck in 'generating'.")
+        try:
+            # Attempt direct Supabase update as last resort
+            from app.db import get_supabase
+            _sb = get_supabase()
+            if _sb:
+                _sb.table("editai_projects").update({"status": "failed"}).eq("id", project_id).execute()
+                logger.info(f"[Profile {profile_id}] Marked project {project_id} as failed via direct Supabase fallback")
+        except Exception as _e:
+            logger.error(f"[Profile {profile_id}] Failed to mark project {project_id} as failed: {_e}")
         if held_lock:
             held_lock.release()
         return
@@ -943,6 +952,12 @@ async def _generate_raw_clips_task(
             temp_dir=temp_dir
         )
 
+        # Check for cancellation before starting heavy processing
+        if is_project_cancelled(project_id):
+            logger.info(f"Project {project_id} was cancelled before processing started")
+            repo.update_project(project_id, {"status": "failed"})
+            return
+
         # Generate RAW clips (no audio, no subtitles)
         result = await asyncio.to_thread(
             processor.process_video,
@@ -959,6 +974,12 @@ async def _generate_raw_clips_task(
             generate_audio=False,  # IMPORTANT: Do not generate audio
             mute_source_voice=False
         )
+
+        # Check for cancellation after processing completes
+        if is_project_cancelled(project_id):
+            logger.info(f"Project {project_id} was cancelled during processing")
+            repo.update_project(project_id, {"status": "failed"})
+            return
 
         if result["status"] == "success":
             # Save clips to DB
@@ -1030,7 +1051,7 @@ async def _generate_raw_clips_task(
             logger.error(f"Failed to generate clips for project {project_id}: {result.get('error')}")
 
     except Exception as e:
-        logger.error(f"Error generating raw clips for {project_id}: {e}")
+        logger.error(f"Error generating raw clips for {project_id}: {e}", exc_info=True)
         try:
             repo.update_project(project_id, {"status": "failed"})
         except Exception as db_err:
@@ -1716,7 +1737,7 @@ async def _generate_from_segments_task(
             logger.error(f"Failed to generate any clips for project {project_id}")
 
     except Exception as e:
-        logger.error(f"Error generating from segments for {project_id}: {e}")
+        logger.error(f"Error generating from segments for {project_id}: {e}", exc_info=True)
         try:
             status_result = supabase.table("editai_projects").update({
                 "status": "failed",
@@ -1908,7 +1929,7 @@ async def list_all_clips(
 
         # Data query — apply cursor filter when provided, otherwise use offset
         query = supabase.table("editai_clips")\
-            .select("*, editai_projects(name)")\
+            .select("*, editai_projects(name, context_text)")\
             .eq("is_deleted", False)\
             .eq("profile_id", profile.profile_id)
         if tag:
@@ -1970,6 +1991,7 @@ async def list_all_clips(
                 "has_voiceover": bool(content.get("tts_audio_path")),
                 "has_audio": has_audio,
                 "tags": clip.get("tags") or [],
+                "context_text": project_data.get("context_text") or None,
             })
 
         # Compute next_cursor: the created_at of the last clip if a full page was returned
@@ -2441,6 +2463,7 @@ async def update_clip_content(
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
         if content.tts_text is not None:
+            validate_tts_text_length(content.tts_text)
             content_data["tts_text"] = content.tts_text
         if content.srt_content is not None:
             content_data["srt_content"] = sanitize_srt_text(content.srt_content)
@@ -2525,7 +2548,12 @@ async def list_export_presets(
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        result = supabase.table("editai_export_presets").select("*").order("is_default", desc=True).execute()
+        # Filter by profile_id OR global presets (profile_id IS NULL)
+        result = supabase.table("editai_export_presets")\
+            .select("*")\
+            .or_(f"profile_id.eq.{profile.profile_id},profile_id.is.null")\
+            .order("is_default", desc=True)\
+            .execute()
         return {"presets": result.data}
     except Exception as e:
         logger.error(f"Error listing presets: {e}")
@@ -2951,8 +2979,12 @@ async def _render_final_clip_task(
                 logger.info(f"Video > Audio ({video_duration:.1f}s > {audio_duration:.1f}s): trimming video")
                 adjusted_video_path = temp_dir / f"trimmed_{clip_id}.mp4"
                 async with await acquire_prep_slot():
-                    await asyncio.to_thread(_trim_video_to_duration, raw_video_path, adjusted_video_path, audio_duration)
-                final_video_path = adjusted_video_path
+                    trim_ok = await asyncio.to_thread(_trim_video_to_duration, raw_video_path, adjusted_video_path, audio_duration)
+                if trim_ok and adjusted_video_path.exists():
+                    final_video_path = adjusted_video_path
+                else:
+                    logger.warning(f"Trim failed for clip {clip_id}, using original video")
+                    final_video_path = raw_video_path
 
             else:
                 # VIDEO SHORTER: Extend with additional segments
@@ -2985,8 +3017,13 @@ async def _render_final_clip_task(
         # 3. Generate SRT - user-provided takes priority, then auto-generate from TTS timestamps
         if content_data and content_data.get("srt_content"):
             srt_path = temp_dir / f"srt_{clip_id}.srt"
+            # Validate and fix SRT before writing
+            validator = SRTValidator()
+            is_valid, fixed_srt, issues = validator.validate_and_fix(content_data["srt_content"])
+            if issues:
+                logger.warning(f"SRT validation issues for clip {clip_id}: {issues[:3]}")
+            srt_text = sanitize_srt_full(fixed_srt)
             with open(srt_path, "w", encoding="utf-8") as f:
-                srt_text = sanitize_srt_full(content_data["srt_content"])
                 f.write(srt_text)
             logger.info(f"Using user-provided SRT for clip {clip_id}")
         elif tts_timestamps:
@@ -3004,7 +3041,7 @@ async def _render_final_clip_task(
                 _srt_cache_key = {"text": content_data["tts_text"], "voice_id": _tts_voice, "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "pause_version": "v2", "vs": _vs_key}
                 cached_srt = srt_cache_lookup(_srt_cache_key)
                 if cached_srt:
-                    auto_srt = cached_srt
+                    auto_srt = cached_srt  # Already sanitized when stored
                 else:
                     _render_max_wpf = content_data.get("max_words_per_phrase", content_data.get("words_per_subtitle", 2))
                     auto_srt = generate_srt_from_timestamps(tts_timestamps, max_words_per_phrase=_render_max_wpf)
@@ -3013,8 +3050,10 @@ async def _render_final_clip_task(
 
                 if auto_srt:
                     srt_path = temp_dir / f"srt_{clip_id}.srt"
+                    # Only sanitize if not from cache (cached content is already sanitized)
+                    srt_to_write = auto_srt if cached_srt else sanitize_srt_full(auto_srt)
                     with open(srt_path, "w", encoding="utf-8") as f:
-                        f.write(sanitize_srt_full(auto_srt))
+                        f.write(srt_to_write)
                     logger.info(f"Auto-generated SRT from TTS timestamps for clip {clip_id}")
                 else:
                     logger.warning(f"TTS timestamps produced empty SRT for clip {clip_id}")
@@ -3077,14 +3116,15 @@ async def _render_final_clip_task(
         stored_path = file_storage.store(output_path, storage_key)
         logger.debug(f"FileStorage.store for clip {clip_id}: {output_path} -> {stored_path}")
 
+        # Mark render as succeeded BEFORE DB update to prevent file deletion on DB failure
+        render_succeeded = True
+
         # Update the clip
         supabase.table("editai_clips").update({
             "final_video_path": stored_path,
             "final_status": "completed",
             "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("id", clip_id).eq("profile_id", profile_id).execute()
-
-        render_succeeded = True
 
         # Save the export — non-critical, must not revert clip status on failure
         try:
@@ -3104,7 +3144,7 @@ async def _render_final_clip_task(
         logger.info(f"Rendered final clip {clip_id} -> {output_path}")
 
     except Exception as e:
-        logger.error(f"Error rendering clip {clip_id}: {e}")
+        logger.error(f"Error rendering clip {clip_id}: {e}", exc_info=True)
         try:
             supabase.table("editai_clips").update({
                 "final_status": "failed",
@@ -3268,7 +3308,7 @@ def _get_video_info(video_path: Path) -> dict:
 
 
 def _get_video_duration(video_path: Path) -> float:
-    """Obține durata video-ului."""
+    """Get video duration via ffprobe. Returns 0.0 on failure (logged)."""
     try:
         cmd = [
             "ffprobe", "-v", "error",
@@ -3278,9 +3318,14 @@ def _get_video_duration(video_path: Path) -> float:
         ]
         result = safe_ffmpeg_run(cmd, timeout=30, operation="ffprobe duration")
         if result.returncode == 0:
-            return float(result.stdout.strip())
-    except Exception:
-        pass
+            duration = float(result.stdout.strip())
+            if duration > 0:
+                return duration
+            logger.warning(f"ffprobe returned 0 duration for {video_path}")
+        else:
+            logger.warning(f"ffprobe failed for {video_path}: {result.stderr[:200] if result.stderr else 'no stderr'}")
+    except Exception as e:
+        logger.warning(f"Failed to get video duration for {video_path}: {e}")
     return 0.0
 
 
@@ -3748,6 +3793,10 @@ async def _render_with_preset(
     Video enhancement filters (Phase 9) are applied AFTER scale/crop, BEFORE subtitles.
     Filter order is locked: denoise -> sharpen -> color (don't sharpen noise).
     """
+    # Initialize encoding variables at function scope to prevent UnboundLocalError
+    _use_gpu = False
+    encoding_params = []
+
     # Build FFmpeg command
     cmd = ["ffmpeg", "-y", "-i", str(video_path)]
 

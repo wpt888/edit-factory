@@ -2226,6 +2226,21 @@ async def assign_segments_to_project(
     if not project.data:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Verify all segments belong to the same profile
+    if segment_ids:
+        owned_segments = supabase.table("editai_segments")\
+            .select("id")\
+            .in_("id", segment_ids)\
+            .eq("profile_id", profile.profile_id)\
+            .execute()
+        owned_ids = {s["id"] for s in (owned_segments.data or [])}
+        unauthorized = [sid for sid in segment_ids if sid not in owned_ids]
+        if unauthorized:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied: {len(unauthorized)} segment(s) do not belong to your profile"
+            )
+
     # Clear existing assignments
     supabase.table("editai_project_segments")\
         .delete()\
@@ -2307,7 +2322,10 @@ async def get_project_segments(
 # ============== FILES ENDPOINT ==============
 
 @router.get("/files/{file_path:path}")
-async def serve_segment_file(file_path: str):
+async def serve_segment_file(
+    file_path: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
     """Serve segment files (thumbnails, extracted videos)."""
     settings = get_settings()
 
