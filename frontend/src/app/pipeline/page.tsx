@@ -4072,7 +4072,7 @@ function PipelinePage() {
               ))}
             </div>
 
-            {/* Schedule & Publish section - always show calendar, schedule form only when clips exist */}
+            {/* Schedule & Publish — calendar, then captions, then schedule form */}
             <PipelineSchedule
               completedClips={variantStatuses
                 .filter(v => v.status === "completed" && v.clip_id)
@@ -4083,22 +4083,20 @@ function PipelinePage() {
                   thumbnail_path: v.thumbnail_path,
                 }))}
               initialCaptions={generatedCaptions}
+              captionSlot={pipelineId && variantStatuses.length > 0 ? (
+                <PipelineCaptionGenerator
+                  pipelineId={pipelineId}
+                  completedClips={variantStatuses.map(v => ({
+                    clip_id: v.clip_id || `pending-${v.variant_index}`,
+                    variant_index: v.variant_index,
+                    final_video_path: v.final_video_path || "",
+                    thumbnail_path: v.thumbnail_path,
+                  }))}
+                  scripts={scripts}
+                  onCaptionsGenerated={setGeneratedCaptions}
+                />
+              ) : undefined}
             />
-
-            {/* AI Caption Generation — always visible in Step 4, after calendar */}
-            {pipelineId && variantStatuses.length > 0 && (
-              <PipelineCaptionGenerator
-                pipelineId={pipelineId}
-                completedClips={variantStatuses.map(v => ({
-                  clip_id: v.clip_id || `pending-${v.variant_index}`,
-                  variant_index: v.variant_index,
-                  final_video_path: v.final_video_path || "",
-                  thumbnail_path: v.thumbnail_path,
-                }))}
-                scripts={scripts}
-                onCaptionsGenerated={setGeneratedCaptions}
-              />
-            )}
           </div>
         )}
 

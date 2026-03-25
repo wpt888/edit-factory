@@ -47,6 +47,7 @@ interface Integration {
 interface PipelineScheduleProps {
   completedClips: CompletedClip[];
   initialCaptions?: Record<string, string>;  // clip_id -> AI-generated caption
+  captionSlot?: React.ReactNode;  // Rendered between calendar and schedule form
 }
 
 const TIMEZONES = [
@@ -107,7 +108,7 @@ function clearDraft() {
 
 /* ---------- Component ---------- */
 
-export function PipelineSchedule({ completedClips, initialCaptions }: PipelineScheduleProps) {
+export function PipelineSchedule({ completedClips, initialCaptions, captionSlot }: PipelineScheduleProps) {
   const isMountedRef = useRef(true);
   useEffect(() => () => { isMountedRef.current = false; }, []);
 
@@ -333,6 +334,9 @@ export function PipelineSchedule({ completedClips, initialCaptions }: PipelineSc
 
       {/* ===== Monthly Calendar ===== */}
       <PostizMonthlyCalendar />
+
+      {/* ===== Caption slot (rendered between calendar and schedule) ===== */}
+      {captionSlot}
 
       {/* ===== Quick Schedule Form ===== */}
       {hasCompletedClips && (
