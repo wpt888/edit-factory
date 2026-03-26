@@ -109,7 +109,7 @@ _MAX_PROGRESS_ENTRIES = 1000
 
 def _evict_old_progress():
     """Remove oldest entries if store exceeds max size. Caller must hold _publish_progress_lock."""
-    if len(_publish_progress) > _MAX_PROGRESS_ENTRIES:
+    if len(_publish_progress) >= _MAX_PROGRESS_ENTRIES:
         to_remove = sorted(_publish_progress.keys(), key=lambda k: _publish_progress[k].get("updated_at", ""))[:len(_publish_progress) - _MAX_PROGRESS_ENTRIES]
         for key in to_remove:
             _publish_progress.pop(key, None)

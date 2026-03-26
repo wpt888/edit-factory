@@ -1200,7 +1200,7 @@ function LibrarieContent() {
             </div>
             {loadingTrash ? (
               <div className="flex items-center justify-center py-20">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" role="status" aria-label="Loading"></div>
               </div>
             ) : trashClips.length === 0 ? (
               <EmptyState
@@ -1550,6 +1550,7 @@ function LibrarieContent() {
                         checked={selectedClipIds.has(clip.id)}
                         onCheckedChange={() => toggleClipSelection(clip.id)}
                         className="h-5 w-5 bg-background/80 border-2"
+                        aria-label={`Select clip ${clip.variant_name || clip.id.slice(0, 8)}`}
                       />
                     </div>
 

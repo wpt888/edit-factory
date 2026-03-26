@@ -175,6 +175,7 @@ export default function UsagePage() {
       const data = await res.json();
       if (!isMountedRef.current) return;
       setAllEntries(data.entries || []);
+      if (!isMountedRef.current) return;
       setShowAllEntries(true);
     } catch (error) {
       handleApiError(error, "Error loading costs");
@@ -595,7 +596,7 @@ export default function UsagePage() {
                         {formatDate(entry.created_at)}
                       </TableCell>
                       <TableCell className="text-muted-foreground font-mono text-xs">
-                        {(entry.job_id || entry.metadata?.job_id || "-")?.slice(0, 8)}...
+                        {(() => { const jid = entry.job_id || entry.metadata?.job_id; return jid ? `${jid.slice(0, 8)}...` : "-"; })()}
                       </TableCell>
                       <TableCell>
                         <Badge

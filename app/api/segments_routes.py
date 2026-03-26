@@ -976,6 +976,7 @@ def _extract_waveform(video_path: str, num_samples: int = 800, duration: float =
     ]
 
     try:
+        # Note: uses raw Popen (not safe_ffmpeg_run) because we need binary stdout for PCM data
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             stdout_data, stderr_data = proc.communicate(timeout=120)

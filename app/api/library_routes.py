@@ -645,6 +645,8 @@ async def get_project_progress(
             return {"percentage": 100, "current_step": "Complete", "estimated_remaining": 0}
         elif status == "failed":
             return {"percentage": 100, "current_step": "Failed", "estimated_remaining": 0}
+        elif status in ("draft", "cancelled"):
+            return {"percentage": 0, "current_step": "Not started", "estimated_remaining": None}
     except HTTPException:
         raise
     except Exception:
