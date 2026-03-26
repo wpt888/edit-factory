@@ -47,7 +47,7 @@ interface Integration {
 interface PipelineScheduleProps {
   completedClips: CompletedClip[];
   initialCaptions?: Record<string, string>;  // clip_id -> AI-generated caption
-  captionSlot?: React.ReactNode;  // Rendered between calendar and schedule form
+  captionSlot?: React.ReactNode;  // DEPRECATED — captions now rendered directly in pipeline page
 }
 
 const TIMEZONES = [

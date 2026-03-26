@@ -4107,7 +4107,24 @@ function PipelinePage() {
               ))}
             </div>
 
-            {/* Schedule & Publish — calendar, then captions, then schedule form */}
+            {/* Captions — rendered directly (not as captionSlot) to avoid remounting on poll updates */}
+            {pipelineId && variantStatuses.length > 0 && (
+              <PipelineCaptionGenerator
+                pipelineId={pipelineId}
+                completedClips={variantStatuses.map(v => ({
+                  clip_id: v.clip_id || `pending-${v.variant_index}`,
+                  variant_index: v.variant_index,
+                  final_video_path: v.final_video_path || "",
+                  thumbnail_path: v.thumbnail_path,
+                }))}
+                scripts={scripts}
+                contextProducts={contextProducts}
+                onProductsChange={setContextProducts}
+                onCaptionsGenerated={setGeneratedCaptions}
+              />
+            )}
+
+            {/* Schedule & Publish — calendar then schedule form */}
             <PipelineSchedule
               completedClips={variantStatuses
                 .filter(v => v.status === "completed" && v.clip_id)
@@ -4118,21 +4135,6 @@ function PipelinePage() {
                   thumbnail_path: v.thumbnail_path,
                 }))}
               initialCaptions={generatedCaptions}
-              captionSlot={pipelineId && variantStatuses.length > 0 ? (
-                <PipelineCaptionGenerator
-                  pipelineId={pipelineId}
-                  completedClips={variantStatuses.map(v => ({
-                    clip_id: v.clip_id || `pending-${v.variant_index}`,
-                    variant_index: v.variant_index,
-                    final_video_path: v.final_video_path || "",
-                    thumbnail_path: v.thumbnail_path,
-                  }))}
-                  scripts={scripts}
-                  contextProducts={contextProducts}
-                  onProductsChange={setContextProducts}
-                  onCaptionsGenerated={setGeneratedCaptions}
-                />
-              ) : undefined}
             />
           </div>
         )}
