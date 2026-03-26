@@ -229,6 +229,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "name": pipeline_dict.get("name", ""),
                 "idea": pipeline_dict.get("idea", ""),
                 "context": pipeline_dict.get("context", ""),
+                "context_products": pipeline_dict.get("context_products", []),
                 "provider": pipeline_dict.get("provider", "gemini"),
                 "variant_count": pipeline_dict.get("variant_count", 0),
                 "keyword_count": pipeline_dict.get("keyword_count", 0),

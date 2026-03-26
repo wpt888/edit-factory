@@ -211,6 +211,8 @@ export function PipelineCaptionGenerator({
   }, [completedClips, onCaptionsGenerated]);
 
   // Re-propagate when clip_ids change (pending-* → real ids after render completes)
+  // Use a stable string key to avoid infinite re-render loops from array reference changes
+  const clipIdsKey = completedClips.map(c => `${c.clip_id}:${c.variant_index}`).join(",");
   useEffect(() => {
     const hasContent = Object.values(manualCaptions).some(v => v?.trim()) ||
                        Object.keys(generatedCaptions).length > 0;
@@ -218,7 +220,7 @@ export function PipelineCaptionGenerator({
       propagateCaptions(manualCaptions, generatedCaptions, selectedCaptionIdx);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [completedClips]);
+  }, [clipIdsKey]);
 
   /* ---------- Manual caption editing ---------- */
 
@@ -231,14 +233,12 @@ export function PipelineCaptionGenerator({
   /* ---------- Fetch templates ---------- */
 
   const fetchTemplates = useCallback(async () => {
+    setTemplatesLoading(true);
+    setTemplatesError(false);
     try {
-      setTemplatesLoading(true);
-      setTemplatesError(false);
-      console.log("[CaptionGenerator] Fetching templates...");
-      const res = await apiGetWithRetry("/pipeline/video-caption-templates");
+      const res = await apiGetWithRetry("/pipeline/video-caption-templates", { timeout: 15_000 });
       const data = await res.json();
       const tpls = data.templates || [];
-      console.log("[CaptionGenerator] Loaded", tpls.length, "templates");
       if (!isMountedRef.current) return;
       setTemplates(tpls);
 
@@ -257,7 +257,8 @@ export function PipelineCaptionGenerator({
       console.error("[CaptionGenerator] Failed to fetch templates:", err);
       if (isMountedRef.current) setTemplatesError(true);
     } finally {
-      if (isMountedRef.current) setTemplatesLoading(false);
+      // Always clear loading — even if unmounted, React ignores the setState
+      setTemplatesLoading(false);
     }
   }, []);
 
