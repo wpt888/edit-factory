@@ -3922,6 +3922,43 @@ function PipelinePage() {
                         >
                           {status.status}
                         </Badge>
+                        {status.status === "processing" && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={async () => {
+                              try {
+                                await apiPost(`/pipeline/${pipelineId}/cancel/${status.variant_index}`, {});
+                                setVariantStatuses(prev =>
+                                  prev.map(v =>
+                                    v.variant_index === status.variant_index
+                                      ? { ...v, status: "cancelled" as const, current_step: "Cancelled by user", progress: 0 }
+                                      : v
+                                  )
+                                );
+                                toast.success(`Variant ${status.variant_index + 1} cancelled`);
+                                // If all variants are now done, stop polling
+                                const updatedStatuses = variantStatuses.map(v =>
+                                  v.variant_index === status.variant_index
+                                    ? { ...v, status: "cancelled" as const }
+                                    : v
+                                );
+                                const allDone = updatedStatuses.every(
+                                  v => v.status === "completed" || v.status === "failed" || v.status === "cancelled"
+                                );
+                                if (allDone) {
+                                  setIsRendering(false);
+                                }
+                              } catch (err) {
+                                handleApiError(err, "Failed to cancel variant");
+                              }
+                            }}
+                          >
+                            <X className="h-3 w-3 mr-1" />
+                            Stop
+                          </Button>
+                        )}
                         {(status.status === "completed" || status.status === "failed" || status.status === "cancelled") && (
                           <Button
                             variant="ghost"

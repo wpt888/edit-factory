@@ -100,11 +100,22 @@ _cancelled_pipelines: Dict[str, float] = {}  # pipeline_id -> monotonic timestam
 _cancelled_pipelines_lock = threading.Lock()
 _MAX_CANCELLED_PIPELINES = 200
 
+# Per-variant cancellation: "pipeline_id:variant_index" -> monotonic timestamp
+_cancelled_variants: Dict[str, float] = {}
+_cancelled_variants_lock = threading.Lock()
+
 
 def is_pipeline_cancelled(pipeline_id: str) -> bool:
     """Check if a pipeline has been flagged for cancellation."""
     with _cancelled_pipelines_lock:
         return pipeline_id in _cancelled_pipelines
+
+
+def is_variant_cancelled(pipeline_id: str, variant_index: int) -> bool:
+    """Check if a specific variant has been flagged for cancellation."""
+    key = f"{pipeline_id}:{variant_index}"
+    with _cancelled_variants_lock:
+        return key in _cancelled_variants
 
 
 def mark_pipeline_cancelled(pipeline_id: str):
@@ -115,6 +126,18 @@ def mark_pipeline_cancelled(pipeline_id: str):
             sorted_ids = sorted(_cancelled_pipelines, key=_cancelled_pipelines.get)
             for pid in sorted_ids[:len(_cancelled_pipelines) - _MAX_CANCELLED_PIPELINES]:
                 _cancelled_pipelines.pop(pid, None)
+
+
+def mark_variant_cancelled(pipeline_id: str, variant_index: int):
+    """Flag a specific variant for cancellation."""
+    key = f"{pipeline_id}:{variant_index}"
+    with _cancelled_variants_lock:
+        _cancelled_variants[key] = _time_mod.monotonic()
+        # Evict old entries to prevent unbounded growth
+        if len(_cancelled_variants) > _MAX_CANCELLED_PIPELINES * 10:
+            sorted_keys = sorted(_cancelled_variants, key=_cancelled_variants.get)
+            for k in sorted_keys[:len(_cancelled_variants) - _MAX_CANCELLED_PIPELINES * 5]:
+                _cancelled_variants.pop(k, None)
 
 
 def clear_pipeline_cancelled(pipeline_id: str):
@@ -751,6 +774,50 @@ async def cancel_pipeline_render(
     _db_update_render_jobs(pipeline_id, pipeline.get("render_jobs", {}))
 
     return {"status": "cancelled", "pipeline_id": pipeline_id}
+
+
+@router.post("/{pipeline_id}/cancel/{variant_index}")
+async def cancel_variant_render(
+    pipeline_id: str,
+    variant_index: int,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Cancel a single variant's render while letting others continue."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Set per-variant cancellation flag (checked in do_render loop)
+    mark_variant_cancelled(pipeline_id, variant_index)
+
+    # Immediately update the job status so polling reflects it
+    pipeline_id_str = str(pipeline_id)
+    with _render_locks_meta_lock:
+        render_lock = _render_locks.get(pipeline_id_str)
+    if not render_lock:
+        with _render_locks_meta_lock:
+            render_lock = threading.Lock()
+            _render_locks[pipeline_id_str] = render_lock
+
+    with render_lock:
+        job = pipeline.get("render_jobs", {}).get(variant_index)
+        if job and job.get("status") == "processing":
+            job["status"] = "cancelled"
+            job["current_step"] = "Cancelled by user"
+            job["progress"] = 0
+
+    with _pipelines_lock:
+        if pipeline_id not in _pipelines:
+            _pipelines[pipeline_id] = pipeline
+
+    _db_update_render_jobs(pipeline_id, pipeline.get("render_jobs", {}))
+
+    logger.info(f"[Profile {profile.profile_id}] Cancelled variant {variant_index} of pipeline {pipeline_id}")
+
+    return {"status": "cancelled", "pipeline_id": pipeline_id, "variant_index": variant_index}
 
 
 @router.get("/{pipeline_id}/source-selection")
@@ -1886,7 +1953,7 @@ async def render_variants(
                 return
 
             # PIP-04: Check cancellation before starting render
-            if is_pipeline_cancelled(pipeline_id):
+            if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, vid):
                 logger.info(f"Pipeline {pipeline_id} variant {vid} skipped: cancelled")
                 return
 
@@ -1931,7 +1998,7 @@ async def render_variants(
             script_text = pipeline["scripts"][vid]
 
             # Check for cancellation before starting
-            if is_pipeline_cancelled(pipeline_id):
+            if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, vid):
                 with render_jobs_lock:
                     job["status"] = "cancelled"
                     job["current_step"] = "Cancelled by user"
@@ -2075,7 +2142,7 @@ async def render_variants(
                         render_avoid_ids.update(used_set if isinstance(used_set, list) else list(used_set))
 
             # Check for cancellation before heavy render
-            if is_pipeline_cancelled(pipeline_id):
+            if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, vid):
                 with render_jobs_lock:
                     job["status"] = "cancelled"
                     job["current_step"] = "Cancelled by user"
