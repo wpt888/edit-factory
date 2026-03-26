@@ -718,17 +718,24 @@ export default function SegmentsPage() {
     const mergedStart = Math.min(...allStarts);
     const mergedEnd = Math.max(...allEnds);
 
-    // Delete overlapping segments first
+    // Delete overlapping segments first — abort on any failure to prevent inconsistency
+    const deletedIds = new Set<string>();
     for (const seg of overlappingSegments) {
       try {
         await apiDelete(`/segments/${seg.id}`);
+        deletedIds.add(seg.id);
       } catch (error) {
         handleApiError(error, "Error deleting segment during merge");
+        // Only remove segments that were actually deleted from the backend
+        if (deletedIds.size > 0) {
+          setSegments((prev) => prev.filter((s) => !deletedIds.has(s.id)));
+          setAllSegments((prev) => prev.filter((s) => !deletedIds.has(s.id)));
+        }
+        return; // Abort merge — partial state is inconsistent
       }
     }
 
     // Update local state to remove deleted segments
-    const deletedIds = new Set(overlappingSegments.map((s) => s.id));
     setSegments((prev) => prev.filter((s) => !deletedIds.has(s.id)));
     setAllSegments((prev) => prev.filter((s) => !deletedIds.has(s.id)));
 

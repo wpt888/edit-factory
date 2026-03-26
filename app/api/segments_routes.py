@@ -886,18 +886,18 @@ async def delete_source_video(
         .eq("profile_id", profile.profile_id)\
         .execute()
 
-    # Delete segment files
+    # Delete from database first (cascade will handle segments)
+    supabase.table("editai_source_videos").delete()\
+        .eq("id", video_id)\
+        .eq("profile_id", profile.profile_id)\
+        .execute()
+
+    # Delete segment files only after DB delete succeeds
     for seg in segments.data:
         if seg.get("extracted_video_path"):
             Path(seg["extracted_video_path"]).unlink(missing_ok=True)
         if seg.get("thumbnail_path"):
             Path(seg["thumbnail_path"]).unlink(missing_ok=True)
-
-    # Delete from database (cascade will handle segments)
-    supabase.table("editai_source_videos").delete()\
-        .eq("id", video_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
 
     # Delete source video files
     if video_data.get("file_path"):
@@ -1305,7 +1305,9 @@ async def list_all_segments(
         # PostgreSQL array contains
         query = query.contains("keywords", [keyword])
 
-    result = query.order("created_at", desc=True).limit(limit).offset(offset).execute()
+    # Fetch extra rows to compensate for post-query duration filtering
+    fetch_limit = limit * 3 if (min_duration or max_duration) else limit
+    result = query.order("created_at", desc=True).limit(fetch_limit).offset(offset).execute()
 
     segments = []
     for s in result.data:
@@ -1316,6 +1318,9 @@ async def list_all_segments(
             continue
         if max_duration and duration > max_duration:
             continue
+
+        if len(segments) >= limit:
+            break
 
         segments.append(SegmentResponse(
             id=s["id"],

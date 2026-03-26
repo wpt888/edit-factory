@@ -333,6 +333,7 @@ function PipelinePage() {
   const [historyImporting, setHistoryImporting] = useState(false);
   const [historyPreviewInfo, setHistoryPreviewInfo] = useState<Record<string, VariantPreviewInfo>>({});
   const [historyTtsInfo, setHistoryTtsInfo] = useState<Record<string, { has_audio: boolean; audio_duration: number }>>({});
+  const [historyContextProducts, setHistoryContextProducts] = useState<ContextProduct[]>([]);
   const [expandedIdeas, setExpandedIdeas] = useState<Set<string>>(new Set());
   const [editingNameId, setEditingNameId] = useState<string | null>(null);
   const [editingNameValue, setEditingNameValue] = useState("");
@@ -873,13 +874,12 @@ function PipelinePage() {
     () => variantStatuses.filter(v => v.status === "completed").map(v => v.variant_index).join(","),
     [variantStatuses]
   );
-  useMemo(() => {
+  useEffect(() => {
     variantStatuses.filter(v => v.status === "completed").forEach(v => {
       if (!videoCacheBustRef.current[v.variant_index]) {
         videoCacheBustRef.current[v.variant_index] = Date.now();
       }
     });
-    return null;
   }, [completedFingerprint]); // eslint-disable-line react-hooks/exhaustive-deps
   const getVideoCacheBust = useCallback((variantIndex: number) => {
     return videoCacheBustRef.current[variantIndex] || Date.now();
@@ -978,6 +978,7 @@ function PipelinePage() {
         name: pipelineName.trim() || undefined,
         idea: idea.trim(),
         context: fullContext || undefined,
+        context_products: contextProducts.length > 0 ? contextProducts : undefined,
         variant_count: variantCount,
         provider,
       }, { timeout: 300_000, signal: abortController.signal }); // 5 min — AI script generation is slow
@@ -1340,6 +1341,8 @@ function PipelinePage() {
       }
       // Store TTS info (Step 2 per-script TTS)
       setHistoryTtsInfo(data.tts_info || {});
+      // Store context products for restore
+      setHistoryContextProducts(data.context_products || []);
     } catch (err) {
       handleApiError(err, "Failed to load pipeline scripts");
     } finally {
@@ -1501,10 +1504,11 @@ function PipelinePage() {
 
   // Load profile's saved default voice on mount
   useEffect(() => {
-    if (!currentProfile) return;
+    if (!currentProfile?.id) return;
+    const profileId = currentProfile.id;
     const loadDefaultVoice = async () => {
       try {
-        const res = await apiGetWithRetry(`/profiles/${currentProfile.id}`);
+        const res = await apiGetWithRetry(`/profiles/${profileId}`);
         const data = await res.json();
         const tts = data.tts_settings;
         const savedVoiceId = tts?.voice_id;
@@ -1522,19 +1526,21 @@ function PipelinePage() {
         if (tts?.words_per_subtitle !== undefined) setWordsPerSubtitle(tts.words_per_subtitle);
         if (tts?.min_segment_duration !== undefined) setMinSegmentDuration(tts.min_segment_duration);
         if (tts?.ultra_rapid_intro !== undefined) setUltraRapidIntro(tts.ultra_rapid_intro);
+        if (tts?.elevenlabs_model) setElevenlabsModel(tts.elevenlabs_model);
       } catch {
         // Silently fail — voice selector still works with default
       }
     };
     loadDefaultVoice();
-  }, [currentProfile]);
+  }, [currentProfile?.id]);
 
   // Load subtitle settings from profile
   useEffect(() => {
-    if (!currentProfile) return;
+    if (!currentProfile?.id) return;
+    const profileId = currentProfile.id;
     const loadSubtitleSettings = async () => {
       try {
-        const res = await apiGetWithRetry(`/profiles/${currentProfile.id}/subtitle-settings`);
+        const res = await apiGetWithRetry(`/profiles/${profileId}/subtitle-settings`);
         const data = await res.json();
         setSubtitleSettings({ ...DEFAULT_SUBTITLE_SETTINGS, ...data });
       } catch {
@@ -1544,12 +1550,12 @@ function PipelinePage() {
       }
     };
     loadSubtitleSettings();
-  }, [currentProfile]);
+  }, [currentProfile?.id]);
 
   // Debounced save subtitle settings to profile
   const handleSubtitleSettingsChange = useCallback((newSettings: SubtitleSettings) => {
     setSubtitleSettings(newSettings);
-    if (!currentProfile) return;
+    if (!currentProfileIdRef.current) return;
     if (subtitleSaveTimer.current) clearTimeout(subtitleSaveTimer.current);
     subtitleSaveTimer.current = setTimeout(async () => {
       try {
@@ -1560,7 +1566,7 @@ function PipelinePage() {
         // Silent — settings still work locally
       }
     }, 1000);
-  }, [currentProfile]);
+  }, []);
 
   // Debounced auto-save scripts to backend
   const saveScriptsToBackend = useCallback((pId: string, updatedScripts: string[]) => {
@@ -1707,6 +1713,8 @@ function PipelinePage() {
       setScripts(historyScripts.map(formatScript));
       // Carry over TTS results: prefer tts_info (Step 2) over preview_info (Step 3)
       setTtsResults(buildRestoredTts(historyTtsInfo, historyPreviewInfo));
+      // Restore context products from history
+      setContextProducts(historyContextProducts);
       setSelectedHistoryId(null);
       setHistoryScripts([]);
       setHistorySelectedScripts(new Set());
@@ -1758,6 +1766,7 @@ function PipelinePage() {
         scripts: selected,
         name: historyItem?.name || "",
         idea: historyItem?.idea || "Imported from history",
+        context_products: historyContextProducts.length > 0 ? historyContextProducts : undefined,
         provider: "imported",
       });
 
@@ -1911,6 +1920,7 @@ function PipelinePage() {
       const speed = localStorage.getItem("ef_voice_speed");
       const boost = localStorage.getItem("ef_voice_speaker_boost");
       const wps = localStorage.getItem("ef_words_per_subtitle");
+      const elModel = localStorage.getItem("ef_elevenlabs_model");
       const hasVoiceValues = stability !== null || similarity !== null || style !== null || speed !== null || boost !== null;
       if (stability !== null) setVoiceStability(parseFloat(stability));
       if (similarity !== null) setVoiceSimilarity(parseFloat(similarity));
@@ -1918,6 +1928,7 @@ function PipelinePage() {
       if (speed !== null) setVoiceSpeed(parseFloat(speed));
       if (boost !== null) setVoiceSpeakerBoost(boost === "true");
       if (wps !== null) setWordsPerSubtitle(parseInt(wps, 10));
+      if (elModel !== null) setElevenlabsModel(elModel);
       const msd = localStorage.getItem("ef_min_segment_duration");
       if (msd !== null) setMinSegmentDuration(parseFloat(msd));
       const uri = localStorage.getItem("ef_ultra_rapid_intro");
@@ -1933,8 +1944,8 @@ function PipelinePage() {
 
   // Keep voice settings ref in sync for debounced save (Bug #87)
   useEffect(() => {
-    voiceSettingsValuesRef.current = { voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro };
-  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro]);
+    voiceSettingsValuesRef.current = { voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel };
+  }, [voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel]);
 
   // Persist voice settings to localStorage (skip initial render before load)
   useEffect(() => {
@@ -1947,7 +1958,8 @@ function PipelinePage() {
     localStorage.setItem("ef_words_per_subtitle", String(wordsPerSubtitle));
     localStorage.setItem("ef_min_segment_duration", String(minSegmentDuration));
     localStorage.setItem("ef_ultra_rapid_intro", String(ultraRapidIntro));
-  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro]);
+    localStorage.setItem("ef_elevenlabs_model", elevenlabsModel);
+  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel]);
 
   // Debounced auto-save voice settings to profile.
   // FE-07: This uses a read-then-patch pattern (GET profile -> merge tts_settings -> PATCH)
@@ -1958,7 +1970,7 @@ function PipelinePage() {
   //    save paths may have written.
   useEffect(() => {
     if (!voiceSettingsLoaded || !voiceSettingsHydrated.current) return;
-    if (!currentProfile) return;
+    if (!currentProfileIdRef.current) return;
     const savedProfileId = currentProfileIdRef.current;
     if (voiceSettingsSaveTimer.current) clearTimeout(voiceSettingsSaveTimer.current);
     voiceSettingsSaveTimer.current = setTimeout(async () => {
@@ -1982,13 +1994,14 @@ function PipelinePage() {
             words_per_subtitle: vs.wordsPerSubtitle,
             min_segment_duration: vs.minSegmentDuration,
             ultra_rapid_intro: vs.ultraRapidIntro,
+            elevenlabs_model: vs.elevenlabsModel,
           },
         });
       } catch {
         // Silent — settings still work locally via localStorage
       }
     }, 1000);
-  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, currentProfile]);
+  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel, currentProfile?.id]);
 
   // Per-script TTS: generate voice-over for a single script
   const handleGenerateTts = async (variantIndex: number) => {
@@ -3521,6 +3534,7 @@ function PipelinePage() {
                         <Checkbox
                           checked={selectedSourceIds.has(video.id)}
                           onCheckedChange={() => handleSourceToggle(video.id)}
+                          onClick={(e) => e.stopPropagation()}
                         />
                         {video.thumbnail_path ? (
                           // eslint-disable-next-line @next/next/no-img-element
@@ -4093,6 +4107,8 @@ function PipelinePage() {
                     thumbnail_path: v.thumbnail_path,
                   }))}
                   scripts={scripts}
+                  contextProducts={contextProducts}
+                  onProductsChange={setContextProducts}
                   onCaptionsGenerated={setGeneratedCaptions}
                 />
               ) : undefined}
@@ -4330,90 +4346,6 @@ function PipelinePage() {
               </CardContent>
             </Card>
 
-            {/* TTS Library Section */}
-            <Card className="mt-3">
-              <CardHeader className="pb-3 cursor-pointer" onClick={() => { setTtsLibraryExpanded(!ttsLibraryExpanded); if (!ttsLibraryExpanded && ttsLibraryAssets.length === 0) fetchTtsLibrary(); }}>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Library className="h-4 w-4" />
-                  TTS Library
-                  {ttsLibraryAssets.length > 0 && (
-                    <Badge variant="secondary" className="text-xs">{ttsLibraryAssets.length}</Badge>
-                  )}
-                  <ChevronDown className={`h-4 w-4 ml-auto transition-transform ${ttsLibraryExpanded ? "rotate-180" : ""}`} />
-                </CardTitle>
-              </CardHeader>
-              {ttsLibraryExpanded && (
-                <CardContent className="space-y-2 max-h-[calc(100vh-400px)] overflow-y-auto">
-                  {ttsLibraryLoading ? (
-                    <div className="flex items-center justify-center py-4">
-                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                    </div>
-                  ) : ttsLibraryAssets.length === 0 ? (
-                    <p className="text-sm text-muted-foreground text-center py-4">No TTS assets in library</p>
-                  ) : (
-                    <>
-                      {ttsLibraryAssets.map((asset) => (
-                        <div key={asset.id} className="flex items-start gap-2 p-2 rounded-lg border border-border hover:bg-accent transition-colors">
-                          <Checkbox
-                            checked={ttsLibrarySelected.has(asset.id)}
-                            onCheckedChange={() => {
-                              setTtsLibrarySelected(prev => {
-                                const next = new Set(prev);
-                                if (next.has(asset.id)) next.delete(asset.id);
-                                else next.add(asset.id);
-                                return next;
-                              });
-                            }}
-                            className="mt-0.5"
-                          />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs text-muted-foreground line-clamp-2">{asset.tts_text}</p>
-                            <div className="flex items-center gap-2 mt-1">
-                              <span className="flex items-center gap-1 rounded-full bg-green-500/90 text-white px-2 py-0.5 text-[10px] font-medium">
-                                <Volume2 className="h-3 w-3" />
-                                {asset.audio_duration.toFixed(1)}s
-                              </span>
-                              <span className="text-[10px] text-muted-foreground">
-                                {new Date(asset.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                      <div className="flex gap-2 pt-2">
-                        <Button
-                          size="sm"
-                          className="flex-1"
-                          disabled={ttsLibraryImporting}
-                          onClick={() => {
-                            // Select all then load
-                            const allIds = new Set(ttsLibraryAssets.map(a => a.id));
-                            setTtsLibrarySelected(allIds);
-                            // Use the full list directly instead of relying on state
-                            handleLoadFromTtsLibraryWith(ttsLibraryAssets);
-                          }}
-                        >
-                          {ttsLibraryImporting ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            "Load All"
-                          )}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="flex-1"
-                          disabled={ttsLibrarySelected.size === 0 || ttsLibraryImporting}
-                          onClick={handleLoadFromTtsLibrary}
-                        >
-                          Load Selected ({ttsLibrarySelected.size})
-                        </Button>
-                      </div>
-                    </>
-                  )}
-                </CardContent>
-              )}
-            </Card>
           </div>
 
         </div>{/* end flex container */}

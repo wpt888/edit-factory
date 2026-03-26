@@ -86,11 +86,15 @@ class VoiceDetector:
                 self.utils = _cached_utils
                 logger.info("Silero VAD model reused from cache")
                 return
-            # M7: Don't retry if a previous load already failed
+            # M7: Rate-limit retries — allow retry after 5 minutes
+            import time as _time
             if _model_load_attempted:
-                logger.debug("Silero VAD model load already attempted and failed, skipping retry")
-                return
+                _last_attempt_time = getattr(_load_silero_vad, "_last_attempt_time", 0)
+                if _time.monotonic() - _last_attempt_time < 300:
+                    logger.debug("Silero VAD model load recently failed, skipping retry (5min cooldown)")
+                    return
             _model_load_attempted = True
+            _load_silero_vad._last_attempt_time = _time.monotonic()
             try:
                 model, utils = torch.hub.load(
                     repo_or_dir='snakers4/silero-vad',
@@ -386,14 +390,22 @@ def mute_voice_segments(
     # Use + to combine multiple conditions (OR in FFmpeg)
     vol = keep_percentage if keep_percentage > 0 else 0
 
-    # Build combined conditions
-    conditions = []
-    for seg in voice_segments:
-        conditions.append(f"between(t,{seg.start_time:.3f},{seg.end_time:.3f})")
+    # Build combined conditions — split into multiple chained filters if too many segments
+    # to avoid exceeding FFmpeg filter string length limits
+    MAX_SEGMENTS_PER_FILTER = 50
+    conditions = [f"between(t,{seg.start_time:.3f},{seg.end_time:.3f})" for seg in voice_segments]
 
-    # Single volume filter with all conditions
-    combined_condition = "+".join(conditions)
-    audio_filter = f"volume={vol}:enable='{combined_condition}'"
+    if len(conditions) <= MAX_SEGMENTS_PER_FILTER:
+        combined_condition = "+".join(conditions)
+        audio_filter = f"volume={vol}:enable='{combined_condition}'"
+    else:
+        # Chain multiple volume filters for large segment counts
+        filter_parts = []
+        for chunk_start in range(0, len(conditions), MAX_SEGMENTS_PER_FILTER):
+            chunk = conditions[chunk_start:chunk_start + MAX_SEGMENTS_PER_FILTER]
+            combined = "+".join(chunk)
+            filter_parts.append(f"volume={vol}:enable='{combined}'")
+        audio_filter = ",".join(filter_parts)
 
     cmd = [
         "ffmpeg", "-y", "-threads", "4",

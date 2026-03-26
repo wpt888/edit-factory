@@ -472,18 +472,22 @@ class JobStorage:
                 logger.error(f"JobStorage: Failed to cleanup old jobs: {e}")
 
         # Clean up in-memory store — snapshot under lock
+        # Only count memory-only jobs (not already counted from Supabase) to avoid double-counting
         with self._update_lock:
             snapshot = dict(self._memory_store)
         expired_keys = [
             job_id for job_id, job in snapshot.items()
             if job.get("created_at", "") < cutoff
         ]
+        memory_only_count = 0
         with self._update_lock:
             for job_id in expired_keys:
-                self._memory_store.pop(job_id, None)
+                job = self._memory_store.pop(job_id, None)
+                if job and job.get("_memory_only"):
+                    memory_only_count += 1
         if expired_keys:
-            logger.info(f"JobStorage: Cleaned up {len(expired_keys)} old jobs from memory")
-        count += len(expired_keys)
+            logger.info(f"JobStorage: Cleaned up {len(expired_keys)} old jobs from memory ({memory_only_count} memory-only)")
+        count += memory_only_count
 
         return count
 

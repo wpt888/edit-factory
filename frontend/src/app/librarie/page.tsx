@@ -442,11 +442,15 @@ function LibrarieContent() {
     const newTag = value === "all" ? "" : value;
     setFilterTag(newTag);
     updateURL({ tag: newTag });
+    // Abort any in-flight tag fetch to prevent out-of-order responses
+    fetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
     // Reset clip list and re-fetch with the new tag filter
     setClips([]);
     setNextCursor(null);
     setHasMore(true);
-    fetchAllClips(null, newTag);
+    fetchAllClips(null, newTag, controller.signal);
   };
 
   // Update clip tags — saves to backend and updates local state optimistically

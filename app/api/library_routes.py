@@ -58,7 +58,8 @@ from app.services.ffmpeg_semaphore import (
 _ffmpeg_render_semaphore = None  # DEPRECATED — use acquire_render_slot() instead
 
 # ============== FFmpeg EXTRA FLAGS ALLOWLIST ==============
-SAFE_FFMPEG_FLAGS = {"-movflags", "+faststart", "-max_muxing_queue_size", "-brand", "-fflags"}
+SAFE_FFMPEG_FLAGS = {"-movflags", "-max_muxing_queue_size", "-brand", "-fflags"}
+SAFE_FFMPEG_VALUES = {"+faststart", "+genpts", "+igndts"}
 
 
 def _validate_extra_flags(flags_str: str) -> list:
@@ -68,11 +69,18 @@ def _validate_extra_flags(flags_str: str) -> list:
     i = 0
     while i < len(tokens):
         token = tokens[i]
-        if token in SAFE_FFMPEG_FLAGS or token.startswith("+"):
+        if token in SAFE_FFMPEG_FLAGS:
+            validated.append(token)
+            # Include the next token as value if it exists
+            if i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+                validated.append(tokens[i + 1])
+                i += 1
+        elif token in SAFE_FFMPEG_VALUES:
             validated.append(token)
         elif token.startswith("-") and token not in SAFE_FFMPEG_FLAGS:
             # Skip unknown flag and its value
             i += 1  # skip value
+        # Unknown non-flag tokens are silently dropped
         i += 1
     return validated
 
@@ -2008,9 +2016,9 @@ async def list_all_clips(
             content = content_map.get(clip["id"], {})
             project_data = clip.get("editai_projects", {})
 
-            # Check if audio was removed (filename contains _noaudio)
+            # Check audio presence — use content data if available, fallback to filename heuristic
             video_path = clip.get("final_video_path") or clip.get("raw_video_path", "")
-            has_audio = "_noaudio" not in video_path
+            has_audio = content.get("tts_audio_path") is not None if content else "_noaudio" not in video_path
 
             clips_with_info.append({
                 "id": clip["id"],

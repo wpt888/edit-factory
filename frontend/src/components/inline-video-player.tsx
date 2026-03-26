@@ -19,9 +19,7 @@ export function InlineVideoPlayer({ open, onOpenChange, videoUrl, title, videoRe
   const videoRef = externalRef || internalRef;
 
   useEffect(() => {
-    if (open && videoRef.current) {
-      videoRef.current.play().catch(() => {}); // Autoplay may be blocked
-    }
+    // Pause when dialog closes (autoPlay attribute handles play on open)
     if (!open && videoRef.current) {
       videoRef.current.pause();
     }

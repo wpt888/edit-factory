@@ -117,7 +117,8 @@ class ElevenLabsTTSService(TTSService):
     @property
     def cost_per_1k_chars(self) -> float:
         """Return cost per 1000 characters (Scale plan pricing)."""
-        return 0.24
+        from app.services.cost_tracker import ELEVENLABS_COST_PER_CHAR
+        return ELEVENLABS_COST_PER_CHAR * 1000
 
     async def list_voices(self, language: Optional[str] = None) -> List[TTSVoice]:
         """
@@ -222,7 +223,7 @@ class ElevenLabsTTSService(TTSService):
                 cost=0.0
             )
 
-        # Prepare request with 192kbps MP3 output format
+        # Prepare request with 128kbps 44.1kHz MP3 output format
         url = f"{self.BASE_URL}/text-to-speech/{voice_id}?output_format=mp3_44100_128"
         headers = {
             "Accept": "audio/mpeg",
@@ -256,12 +257,23 @@ class ElevenLabsTTSService(TTSService):
             with open(output_path, "wb") as f:
                 f.write(response.content)
 
-            # Calculate duration using librosa
+            # Calculate duration using librosa, fallback to ffprobe
             try:
                 duration_seconds = librosa.get_duration(path=str(output_path))
             except Exception as e:
-                logger.warning(f"Failed to get audio duration: {e}")
+                logger.warning(f"Failed to get audio duration via librosa: {e}, trying ffprobe")
                 duration_seconds = 0.0
+                try:
+                    from app.services.ffmpeg_semaphore import safe_ffmpeg_run
+                    probe_result = safe_ffmpeg_run(
+                        ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                         "-of", "default=noprint_wrappers=1:nokey=1", str(output_path)],
+                        timeout=10, operation="ffprobe_tts_duration"
+                    )
+                    if probe_result.returncode == 0 and probe_result.stdout.strip():
+                        duration_seconds = float(probe_result.stdout.strip())
+                except Exception as e2:
+                    logger.warning(f"Failed to get audio duration via ffprobe: {e2}")
 
             # Calculate cost
             cost = (len(text) / 1000.0) * self.cost_per_1k_chars
@@ -460,12 +472,23 @@ class ElevenLabsTTSService(TTSService):
             # Extract alignment data
             alignment = response_data.get("alignment", {})
 
-            # Calculate duration using librosa
+            # Calculate duration using librosa, fallback to ffprobe
             try:
                 duration_seconds = librosa.get_duration(path=str(output_path))
             except Exception as e:
-                logger.warning(f"Failed to get audio duration: {e}")
+                logger.warning(f"Failed to get audio duration via librosa: {e}, trying ffprobe")
                 duration_seconds = 0.0
+                try:
+                    from app.services.ffmpeg_semaphore import safe_ffmpeg_run
+                    probe_result = safe_ffmpeg_run(
+                        ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                         "-of", "default=noprint_wrappers=1:nokey=1", str(output_path)],
+                        timeout=10, operation="ffprobe_tts_duration"
+                    )
+                    if probe_result.returncode == 0 and probe_result.stdout.strip():
+                        duration_seconds = float(probe_result.stdout.strip())
+                except Exception as e2:
+                    logger.warning(f"Failed to get audio duration via ffprobe: {e2}")
 
             # Calculate cost
             cost = (len(text) / 1000.0) * self.cost_per_1k_chars

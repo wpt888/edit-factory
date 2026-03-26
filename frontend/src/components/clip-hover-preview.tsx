@@ -40,7 +40,10 @@ export function ClipHoverPreview({ thumbnailPath, videoPath, clipId, alt, childr
   // Play/pause video based on showVideo state
   useEffect(() => {
     if (showVideo && videoRef.current) {
-      videoRef.current.play().catch(() => {});
+      videoRef.current.play().catch(() => {
+        // Autoplay blocked or video failed — fall back to thumbnail
+        setShowVideo(false);
+      });
     } else if (!showVideo && videoRef.current) {
       videoRef.current.pause();
       videoRef.current.currentTime = 0;
@@ -82,6 +85,7 @@ export function ClipHoverPreview({ thumbnailPath, videoPath, clipId, alt, childr
           playsInline
           className="absolute inset-0 w-full h-full object-cover"
           preload="none"
+          onError={() => setShowVideo(false)}
         />
       )}
 

@@ -133,7 +133,8 @@ async def get_usage_stats(
             chars_limit = acc.get("character_limit") or 0
             chars_remaining = chars_limit - chars_used
             usage_pct = round((chars_used / chars_limit * 100), 1) if chars_limit > 0 else 0
-            estimated_cost = round(chars_used * 0.00024, 2)
+            from app.services.cost_tracker import ELEVENLABS_COST_PER_CHAR
+            estimated_cost = round(chars_used * ELEVENLABS_COST_PER_CHAR, 2)
 
             entry = {
                 "id": acc.get("id"),
@@ -184,7 +185,7 @@ async def get_usage_stats(
 
 
 @router.get("/gemini/status")
-async def get_gemini_status():
+async def get_gemini_status(profile: ProfileContext = Depends(get_profile_context)):
     """
     Test Gemini API connectivity and return status.
     Returns connection status, model info, and link to check balance.
@@ -537,7 +538,7 @@ async def process_job(job_id: str):
         return
 
     job["status"] = JobStatus.PROCESSING
-    job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
     job["progress"] = "Starting..."
     # Persist PROCESSING status immediately so polling clients see correct state
     get_job_storage().update_job(job_id, {
@@ -548,7 +549,7 @@ async def process_job(job_id: str):
 
     def update_progress(step: str, status: str):
         job["progress"] = f"{step}: {status}"
-        job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
+        job["updated_at"] = datetime.now(timezone.utc).isoformat()
         get_job_storage().update_job(job_id, {
             "status": job["status"],
             "progress": job["progress"],
@@ -561,7 +562,7 @@ async def process_job(job_id: str):
             job["status"] = JobStatus.CANCELLED if hasattr(JobStatus, 'CANCELLED') else "cancelled"
             job["progress"] = "Cancelled before processing started"
             _cleanup_input_files(job)
-            job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
+            job["updated_at"] = datetime.now(timezone.utc).isoformat()
             get_job_storage().update_job(job_id, job)
             return
 
@@ -589,7 +590,7 @@ async def process_job(job_id: str):
             job["status"] = JobStatus.CANCELLED if hasattr(JobStatus, 'CANCELLED') else "cancelled"
             job["progress"] = "Cancelled"
             _cleanup_input_files(job)
-            job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
+            job["updated_at"] = datetime.now(timezone.utc).isoformat()
             get_job_storage().update_job(job_id, job)
             return
 
@@ -624,7 +625,7 @@ async def process_job(job_id: str):
         # Clean up input files even on exception to prevent disk leaks
         _cleanup_input_files(job)
 
-    job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
     # Persist final job state — but respect external cancellation
     current_job = get_job_storage().get_job(job_id)
     if current_job and current_job.get("status") in ("cancelled",):
@@ -691,9 +692,10 @@ async def stream_job_progress(job_id: str, request: Request):
                 if current_status == "completed":
                     # Build result payload
                     result_data = current_job.get("result")
-                    # For assembly jobs, include final_video_path
+                    # For assembly jobs, include final_video_path (filename only, not full path)
                     if current_job.get("job_type") == "assembly" and current_job.get("final_video_path"):
-                        result_data = {"final_video_path": current_job["final_video_path"]}
+                        _fvp = Path(current_job["final_video_path"]).name
+                        result_data = {"final_video_path": _fvp}
                     payload = {
                         "job_id": job_id,
                         "status": "completed",
@@ -910,7 +912,7 @@ async def process_tts_generate_job(job_id: str):
         return
 
     job["status"] = JobStatus.PROCESSING
-    job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
     job["progress"] = "Generating voice-over with ElevenLabs..."
 
     try:
@@ -935,7 +937,7 @@ async def process_tts_generate_job(job_id: str):
         # Generate with silence removal
         if job["remove_silence"]:
             job["progress"] = "Generating TTS and removing silence..."
-            job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
+            job["updated_at"] = datetime.now(timezone.utc).isoformat()
 
             if tts_fallback:
                 await edge_tts_service.generate_audio(
@@ -1014,7 +1016,7 @@ async def process_tts_generate_job(job_id: str):
         job["error"] = str(e)
         job["progress"] = f"Failed: {e}"
 
-    job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
     # Persist final job state to storage
     get_job_storage().update_job(job_id, job)
 
@@ -1129,7 +1131,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
         return
 
     job["status"] = JobStatus.PROCESSING
-    job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
     job["progress"] = "Initializing TTS..."
     audio_path = None
 
@@ -1304,7 +1306,7 @@ async def process_tts_job(job_id: str, profile_id: Optional[str] = "default"):
             except Exception:
                 pass
 
-    job["updated_at"] = datetime.now(timezone.utc).isoformat().isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
     # Persist final job state to storage
     get_job_storage().update_job(job_id, job)
 
