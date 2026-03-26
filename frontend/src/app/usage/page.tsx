@@ -192,7 +192,7 @@ export default function UsagePage() {
 
   const totalSpent = costSummary?.total_all || 0;
   const budgetRemaining = budget - totalSpent;
-  const budgetUsedPercent = Math.min((totalSpent / budget) * 100, 100);
+  const budgetUsedPercent = budget > 0 ? Math.min((totalSpent / budget) * 100, 100) : 0;
 
   const formatCost = (cost: number) => `$${cost.toFixed(4)}`;
   const formatDate = (dateStr?: string) => {

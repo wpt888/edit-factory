@@ -706,7 +706,7 @@ async def cancel_generation(
 
     try:
         repo.update_project(project_id, {
-            "status": "failed",
+            "status": "cancelled",
             "updated_at": datetime.now(timezone.utc).isoformat()
         })
     except Exception as e:
@@ -727,6 +727,13 @@ async def delete_project(
     proj = repo.get_project(project_id)
     if not proj or proj.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # Check if project is currently being processed
+    if is_project_locked(project_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Project is currently being processed. Cancel generation first before deleting."
+        )
 
     try:
         # Delete in order: files → child rows → parent row
@@ -929,6 +936,19 @@ async def _generate_raw_clips_task(
             return
 
     result = None  # BUG-1.2: track result for cleanup decision in finally block
+    # Create a job record for crash recovery (previously only Phase 2 had one)
+    job_id = f"rawgen_{project_id}"
+    try:
+        from app.services.job_storage import get_job_storage
+        get_job_storage().create_job({
+            "job_id": job_id,
+            "job_type": "raw_clip_generation",
+            "project_id": project_id,
+            "status": "processing",
+            "progress": "Starting raw clip generation...",
+        }, profile_id=profile_id)
+    except Exception as _je:
+        logger.warning(f"Failed to create job record for raw generation: {_je}")
     try:
         # Update project status now that we hold the lock
         try:
@@ -955,7 +975,8 @@ async def _generate_raw_clips_task(
         # Check for cancellation before starting heavy processing
         if is_project_cancelled(project_id):
             logger.info(f"Project {project_id} was cancelled before processing started")
-            repo.update_project(project_id, {"status": "failed"})
+            clear_project_cancelled(project_id)
+            repo.update_project(project_id, {"status": "cancelled"})
             return
 
         # Generate RAW clips (no audio, no subtitles)
@@ -978,7 +999,8 @@ async def _generate_raw_clips_task(
         # Check for cancellation after processing completes
         if is_project_cancelled(project_id):
             logger.info(f"Project {project_id} was cancelled during processing")
-            repo.update_project(project_id, {"status": "failed"})
+            clear_project_cancelled(project_id)
+            repo.update_project(project_id, {"status": "cancelled"})
             return
 
         if result["status"] == "success":
@@ -1068,6 +1090,13 @@ async def _generate_raw_clips_task(
             except Exception as cleanup_err:
                 logger.warning(f"Failed to cleanup input video {video_path}: {cleanup_err}")
 
+        # Update job record with final status
+        try:
+            from app.services.job_storage import get_job_storage
+            final_status = "completed" if (result and result.get("status") == "success") else "failed"
+            get_job_storage().update_job(job_id, {"status": final_status, "progress": "Done"}, profile_id=profile_id)
+        except Exception:
+            pass
         # Clear stale progress entry
         clear_generation_progress(project_id)
         # Always release and cleanup the lock
@@ -1124,45 +1153,49 @@ async def generate_from_segments(
             detail="Project is currently being processed. Wait for the current job to finish before starting a new one."
         )
 
-    # Get segments assigned to the project
-    segments_result = supabase.table("editai_project_segments")\
-        .select("*, editai_segments(*, editai_source_videos(file_path, name))")\
-        .eq("project_id", project_id)\
-        .order("sequence_order")\
-        .execute()
+    try:
+        # Get segments assigned to the project
+        segments_result = supabase.table("editai_project_segments")\
+            .select("*, editai_segments(*, editai_source_videos(file_path, name))")\
+            .eq("project_id", project_id)\
+            .order("sequence_order")\
+            .execute()
 
-    if not segments_result.data:
-        raise HTTPException(status_code=400, detail="No segments assigned to this project")
+        if not segments_result.data:
+            raise HTTPException(status_code=400, detail="No segments assigned to this project")
 
-    # Find the highest existing variant_index to continue from there
-    existing_clips = supabase.table("editai_clips").select("variant_index").eq("project_id", project_id).eq("profile_id", profile.profile_id).eq("is_deleted", False).execute()
-    start_variant_index = 1
-    if existing_clips.data:
-        max_index = max(clip.get("variant_index", 0) for clip in existing_clips.data)
-        start_variant_index = max_index + 1
-        logger.info(f"Found {len(existing_clips.data)} existing clips, starting from variant {start_variant_index}")
+        # Find the highest existing variant_index to continue from there
+        existing_clips = supabase.table("editai_clips").select("variant_index").eq("project_id", project_id).eq("profile_id", profile.profile_id).eq("is_deleted", False).execute()
+        start_variant_index = 1
+        if existing_clips.data:
+            max_index = max(clip.get("variant_index", 0) for clip in existing_clips.data)
+            start_variant_index = max_index + 1
+            logger.info(f"Found {len(existing_clips.data)} existing clips, starting from variant {start_variant_index}")
 
-    # Validate TTS text length before dispatching background task
-    if request.generate_tts and request.tts_text:
-        validate_tts_text_length(request.tts_text, "tts_text")
+        # Validate TTS text length before dispatching background task
+        if request.generate_tts and request.tts_text:
+            validate_tts_text_length(request.tts_text, "tts_text")
 
-    # Constraints
-    variant_count = max(1, min(10, request.variant_count))
+        # Constraints
+        variant_count = max(1, min(10, request.variant_count))
 
-    # Launch generation in background (lock is held, will be released by the task)
-    background_tasks.add_task(
-        _generate_from_segments_task,
-        project_id=project_id,
-        profile_id=profile.profile_id,
-        segments=segments_result.data,
-        variant_count=variant_count,
-        selection_mode=request.selection_mode,
-        target_duration=request.target_duration,
-        tts_text=request.tts_text if request.generate_tts else None,
-        mute_source_voice=request.mute_source_voice,
-        start_variant_index=start_variant_index,
-        held_lock=lock
-    )
+        # Launch generation in background (lock is held, will be released by the task)
+        background_tasks.add_task(
+            _generate_from_segments_task,
+            project_id=project_id,
+            profile_id=profile.profile_id,
+            segments=segments_result.data,
+            variant_count=variant_count,
+            selection_mode=request.selection_mode,
+            target_duration=request.target_duration,
+            tts_text=request.tts_text if request.generate_tts else None,
+            mute_source_voice=request.mute_source_voice,
+            start_variant_index=start_variant_index,
+            held_lock=lock
+        )
+    except Exception:
+        lock.release()
+        raise
 
     return {
         "status": "generating",
@@ -1909,12 +1942,19 @@ async def list_all_clips(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    # Sync orphan clips from disk on first page load only
+    # Sync orphan clips from disk on first page load only, rate-limited to once per 5 minutes
     if not cursor:
-        try:
-            await _sync_orphan_clips(profile.profile_id, supabase)
-        except Exception as e:
-            logger.warning(f"Orphan clip sync failed: {e}")
+        import time as _time
+        _now = _time.monotonic()
+        _last = getattr(list_all_clips, "_last_orphan_sync", {}).get(profile.profile_id, 0)
+        if _now - _last > 300:  # 5 minutes
+            try:
+                await _sync_orphan_clips(profile.profile_id, supabase)
+                if not hasattr(list_all_clips, "_last_orphan_sync"):
+                    list_all_clips._last_orphan_sync = {}
+                list_all_clips._last_orphan_sync[profile.profile_id] = _now
+            except Exception as e:
+                logger.warning(f"Orphan clip sync failed: {e}")
 
     try:
         # Total count query — counts clips for this profile (with optional tag filter)
@@ -2131,17 +2171,10 @@ async def bulk_select_clips(
     repo = get_repository()
 
     try:
-        updated_clips = []
-        for cid in clip_ids:
-            clip = repo.get_clip(cid)
-            if not clip or clip.get("profile_id") != profile.profile_id:
-                continue  # skip clips not belonging to profile
-            updated = repo.update_clip(cid, {
-                "is_selected": selected,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            })
-            if updated:
-                updated_clips.append(updated)
+        updated_clips = repo.bulk_update_clips(clip_ids, profile.profile_id, {
+            "is_selected": selected,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
 
         # Collect unique project IDs from updated clips to refresh counts
         project_ids = list(set(c["project_id"] for c in updated_clips))
@@ -2229,15 +2262,21 @@ async def remove_clip_audio(
 
         supabase.table("editai_clips").update(update_data).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
 
-        # Optionally delete old file (keeping it for now as backup)
-        # if video_path != output_path and video_path.exists():
-        #     video_path.unlink()
+        # Clear TTS audio path in clip content so has_audio state stays consistent (P7-3)
+        try:
+            supabase.table("editai_clip_content").update({
+                "tts_audio_path": None,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("clip_id", clip_id).execute()
+        except Exception as content_err:
+            logger.warning(f"Failed to clear tts_audio_path for clip {clip_id}: {content_err}")
 
         logger.info(f"Audio removed successfully for clip {clip_id}")
         return {
             "status": "success",
             "clip_id": clip_id,
             "video_path": str(output_path),
+            "has_audio": False,
             "message": "Audio removed successfully"
         }
 
@@ -2589,6 +2628,31 @@ async def cleanup_output_endpoint(
     return {"status": "completed", **result}
 
 
+@router.post("/maintenance/cleanup-exports")
+async def cleanup_old_exports(
+    max_age_days: int = Query(default=90, ge=1, le=365),
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Cleanup export records older than specified days to prevent unbounded table growth."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+        client = repo.get_client()
+        if client:
+            result = client.table("editai_exports").delete()\
+                .lt("created_at", cutoff)\
+                .eq("profile_id", profile.profile_id)\
+                .execute()
+            deleted_count = len(result.data) if result.data else 0
+            return {"status": "completed", "deleted_exports": deleted_count}
+        return {"status": "skipped", "reason": "No database client"}
+    except Exception as e:
+        logger.error(f"Failed to cleanup exports: {e}")
+        raise HTTPException(status_code=500, detail="Failed to cleanup exports")
+
+
 # ============== FINAL RENDER ==============
 
 @router.post("/clips/{clip_id}/render")
@@ -2637,6 +2701,10 @@ async def render_final_clip(
         clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
         if not clip.data:
             raise HTTPException(status_code=404, detail="Clip not found")
+
+        # Reject if this clip is already being rendered
+        if clip.data[0].get("final_status") == "processing":
+            raise HTTPException(status_code=409, detail="Clip is already being rendered. Please wait for the current render to finish.")
 
         # Reject immediately if a task is already running for this project (STAB-03)
         render_project_id = clip.data[0].get("project_id")
@@ -2737,9 +2805,28 @@ async def _render_final_clip_task(
     repo = get_repository()
     supabase = repo.get_client() if repo else None
     if not supabase:
-        logger.error(f"[Profile {profile_id}] Supabase not available for render")
-        # Cannot update DB since supabase is unavailable, but log clearly
-        logger.critical(f"Clip {clip_id} render abandoned: no DB connection. Clip may be stuck in processing state.")
+        # Retry a few times — Supabase may be temporarily unavailable
+        import time as _time
+        for _attempt in range(3):
+            _time.sleep(2)
+            repo = get_repository()
+            supabase = repo.get_client() if repo else None
+            if supabase:
+                logger.info(f"[Profile {profile_id}] Supabase recovered on attempt {_attempt + 1}")
+                break
+    if not supabase:
+        logger.critical(f"Clip {clip_id} render abandoned: no DB connection after retries.")
+        # Last-ditch attempt to mark clip as failed so it doesn't stay stuck in processing
+        try:
+            _last_repo = get_repository()
+            _last_client = _last_repo.get_client() if _last_repo else None
+            if _last_client:
+                _last_client.table("editai_clips").update({
+                    "final_status": "failed",
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", clip_id).execute()
+        except Exception:
+            logger.critical(f"Clip {clip_id} stuck in processing state — DB unreachable for status reset.")
         return
 
     settings = get_settings()
@@ -2900,13 +2987,22 @@ async def _render_final_clip_task(
                     except Exception as legacy_err:
                         logger.warning(f"Legacy ElevenLabs TTS also failed: {legacy_err}")
                 if not legacy_tts_ok:
-                    # Fallback to Edge TTS
+                    # Fallback to Edge TTS — try to match user's configured voice language
                     logger.info("Using Edge TTS fallback")
-                    from app.services.edge_tts_service import EdgeTTSService
+                    from app.services.edge_tts_service import EdgeTTSService, POPULAR_VOICES
                     edge_tts_fallback = EdgeTTSService()
+                    # Derive Edge TTS voice from user's ElevenLabs voice ID or content language
+                    _edge_voice = "ro-RO-EmilNeural"  # default
+                    _tts_voice = content_data.get("tts_voice_id") or content_data.get("voice_id") or ""
+                    _tts_lang = content_data.get("tts_language", "").lower()
+                    if _tts_lang.startswith("en") or "english" in _tts_voice.lower():
+                        _edge_voice = POPULAR_VOICES.get("en_us_male", "en-US-GuyNeural")
+                    elif _tts_lang.startswith("ro") or "romanian" in _tts_voice.lower():
+                        _edge_voice = POPULAR_VOICES.get("ro_male", "ro-RO-EmilNeural")
                     await edge_tts_fallback.generate_audio(
                         text=content_data["tts_text"],
-                        output_path=str(audio_path)
+                        output_path=str(audio_path),
+                        voice=_edge_voice
                     )
                     silence_stats = None
 

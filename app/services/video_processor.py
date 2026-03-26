@@ -405,9 +405,9 @@ class VideoAnalyzer:
             mid = frames_gray[len(frames_gray) // 2]
             last = frames_gray[-1]
 
-            diff1 = np.mean(cv2.absdiff(first, mid)) / 255.0
-            diff2 = np.mean(cv2.absdiff(mid, last)) / 255.0
-            diff3 = np.mean(cv2.absdiff(first, last)) / 255.0
+            diff1 = min(np.mean(cv2.absdiff(first, mid)) / 80.0, 1.0)
+            diff2 = min(np.mean(cv2.absdiff(mid, last)) / 80.0, 1.0)
+            diff3 = min(np.mean(cv2.absdiff(first, last)) / 80.0, 1.0)
 
             variance_score = (diff1 + diff2 + diff3) / 3.0
 
@@ -740,12 +740,9 @@ class VideoEditor:
         return output_path, segments_info
 
     def _check_nvenc_available(self) -> bool:
-        """Verifica disponibilitatea NVENC."""
-        try:
-            result = safe_ffmpeg_run(["ffmpeg", "-encoders"], timeout=5, operation="check nvenc")
-            return "h264_nvenc" in (result.stdout or "")
-        except Exception:
-            return False
+        """Verifica disponibilitatea NVENC. Uses cached result from ffmpeg_semaphore."""
+        from app.services.ffmpeg_semaphore import is_nvenc_available
+        return is_nvenc_available()
 
     def _run_ffmpeg(self, cmd: list, operation: str) -> subprocess.CompletedProcess:
         """
@@ -1069,43 +1066,62 @@ class VideoEditor:
         except (json.JSONDecodeError, KeyError, ValueError) as probe_err:
             logger.warning(f"ffprobe failed for {audio_path}: {probe_err}, audio_duration unknown")
 
-        if self.use_gpu:
-            cmd = [
-                "ffmpeg", "-y",
-                "-hwaccel", "cuda",
-                "-i", str(video_path),
-                "-i", str(audio_path),
-            ]
-            if audio_duration is not None:
-                cmd.extend(["-t", str(audio_duration)])
-            cmd.extend([
-                "-map", "0:v", "-map", "1:a",
-                "-c:v", self.video_codec,
-                "-preset", self.video_preset,
-                "-cq", self.video_quality,
-                "-pix_fmt", "yuv420p",  # VID-07: ensure compatibility for GPU path
-                "-c:a", "aac",
-                str(output_video)
-            ])
-        else:
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", str(video_path),
-                "-i", str(audio_path),
-            ]
-            if audio_duration is not None:
-                cmd.extend(["-t", str(audio_duration)])
-            cmd.extend([
-                "-map", "0:v", "-map", "1:a",
-                "-c:v", self.video_codec,
-                "-preset", self.video_preset,
-                "-crf", str(self.video_quality),
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                str(output_video)
-            ])
+        # Use -c:v copy (stream copy) to avoid lossy re-encode when only muxing audio
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(video_path),
+            "-i", str(audio_path),
+        ]
+        if audio_duration is not None:
+            cmd.extend(["-t", str(audio_duration)])
+        cmd.extend([
+            "-map", "0:v", "-map", "1:a",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            str(output_video)
+        ])
 
-        self._run_ffmpeg(cmd, "add audio")
+        try:
+            self._run_ffmpeg(cmd, "add audio (copy)")
+        except Exception as copy_err:
+            # Fallback to re-encode if stream copy fails (codec incompatibility)
+            logger.warning(f"Stream copy failed ({copy_err}), falling back to re-encode")
+            if self.use_gpu:
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-hwaccel", "cuda",
+                    "-i", str(video_path),
+                    "-i", str(audio_path),
+                ]
+                if audio_duration is not None:
+                    cmd.extend(["-t", str(audio_duration)])
+                cmd.extend([
+                    "-map", "0:v", "-map", "1:a",
+                    "-c:v", self.video_codec,
+                    "-preset", self.video_preset,
+                    "-cq", self.video_quality,
+                    "-pix_fmt", "yuv420p",
+                    "-c:a", "aac",
+                    str(output_video)
+                ])
+            else:
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", str(video_path),
+                    "-i", str(audio_path),
+                ]
+                if audio_duration is not None:
+                    cmd.extend(["-t", str(audio_duration)])
+                cmd.extend([
+                    "-map", "0:v", "-map", "1:a",
+                    "-c:v", self.video_codec,
+                    "-preset", self.video_preset,
+                    "-crf", str(self.video_quality),
+                    "-pix_fmt", "yuv420p",
+                    "-c:a", "aac",
+                    str(output_video)
+                ])
+            self._run_ffmpeg(cmd, "add audio (re-encode)")
 
         # Track for cleanup
         self._track_intermediate(output_video)
@@ -1969,15 +1985,19 @@ class VideoProcessorService:
 
                 report_progress(f"Variant {variant_idx + 1} completed", "completed")
 
-            # CLEANUP - stergem fisierele intermediare
+            # CLEANUP - collect final files BEFORE cleanup to protect them
             report_progress("Cleaning up intermediate files")
-            self.editor.cleanup_intermediates()
-
-            # Collect final files BEFORE cleanup
             final_videos = set()
             for var in results["variants"]:
                 if var.get("final_video"):
                     final_videos.add(Path(var["final_video"]).name)
+
+            # Remove final video paths from intermediate tracking to prevent deletion
+            self.editor._intermediate_files = [
+                f for f in self.editor._intermediate_files
+                if Path(f).name not in final_videos
+            ]
+            self.editor.cleanup_intermediates()
 
             # Delete only intermediate files, NOT final ones
             for f in self.output_dir.glob(f"{output_name}*"):
