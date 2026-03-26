@@ -38,8 +38,14 @@ import {
   MessageSquareText,
   ChevronDown,
   Pencil,
+  ShoppingBag,
+  BookOpen,
+  XCircle,
+  Search,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
-import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
+import { apiGet, apiGetWithRetry, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { toast } from "sonner";
 
 /* ---------- Types ---------- */
@@ -58,10 +64,37 @@ interface CaptionTemplate {
   is_default: boolean;
 }
 
+interface ContextProduct {
+  title: string;
+  description: string;
+}
+
+interface CatalogProduct {
+  id: string;
+  title: string;
+  description: string;
+  brand: string;
+  sku: string;
+  image_link: string;
+  category: string;
+  price: number;
+  sale_price: number;
+  is_on_sale: boolean;
+}
+
+interface CatalogPagination {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+}
+
 interface PipelineCaptionGeneratorProps {
   pipelineId: string;
   completedClips: CompletedClip[];
   scripts: string[];
+  contextProducts?: ContextProduct[];
+  onProductsChange?: (products: ContextProduct[]) => void;
   onCaptionsGenerated: (captions: Record<string, string>) => void;
 }
 
@@ -88,6 +121,8 @@ export function PipelineCaptionGenerator({
   pipelineId,
   completedClips,
   scripts,
+  contextProducts = [],
+  onProductsChange,
   onCaptionsGenerated,
 }: PipelineCaptionGeneratorProps) {
   const isMountedRef = useRef(true);
@@ -115,13 +150,23 @@ export function PipelineCaptionGenerator({
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(() =>
     typeof window !== "undefined" ? localStorage.getItem(LS_TEMPLATE_KEY) || "" : ""
   );
-  const [templatesLoading, setTemplatesLoading] = useState(true);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState(false);
 
   // Template management dialog
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
   const [newTemplateName, setNewTemplateName] = useState("");
   const [newTemplatePrompt, setNewTemplatePrompt] = useState("");
   const [editingTemplate, setEditingTemplate] = useState<CaptionTemplate | null>(null);
+
+  // Catalog product picker state
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [catalogProducts, setCatalogProducts] = useState<CatalogProduct[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogPagination, setCatalogPagination] = useState<CatalogPagination>({ page: 1, page_size: 20, total: 0, total_pages: 1 });
+  const [catalogSearch, setCatalogSearch] = useState("");
+  const [selectedCatalogIds, setSelectedCatalogIds] = useState<Set<string>>(new Set());
+  const [catalogPage, setCatalogPage] = useState(1);
 
   // Generation state
   const [generating, setGenerating] = useState(false);
@@ -188,9 +233,12 @@ export function PipelineCaptionGenerator({
   const fetchTemplates = useCallback(async () => {
     try {
       setTemplatesLoading(true);
-      const res = await apiGet("/pipeline/video-caption-templates");
+      setTemplatesError(false);
+      console.log("[CaptionGenerator] Fetching templates...");
+      const res = await apiGetWithRetry("/pipeline/video-caption-templates");
       const data = await res.json();
       const tpls = data.templates || [];
+      console.log("[CaptionGenerator] Loaded", tpls.length, "templates");
       if (!isMountedRef.current) return;
       setTemplates(tpls);
 
@@ -205,14 +253,86 @@ export function PipelineCaptionGenerator({
           localStorage.setItem(LS_TEMPLATE_KEY, defaultTpl.id);
         }
       }
-    } catch {
-      // Silent — templates are optional
+    } catch (err) {
+      console.error("[CaptionGenerator] Failed to fetch templates:", err);
+      if (isMountedRef.current) setTemplatesError(true);
     } finally {
       if (isMountedRef.current) setTemplatesLoading(false);
     }
   }, []);
 
   useEffect(() => { fetchTemplates(); }, [fetchTemplates]);
+
+  /* ---------- Catalog product picker ---------- */
+
+  const stripHtml = (html: string): string => {
+    if (typeof window === "undefined") return html;
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    return doc.body.textContent?.trim() || "";
+  };
+
+  const fetchCatalogProducts = useCallback(async (search: string, page: number) => {
+    setCatalogLoading(true);
+    try {
+      const params = new URLSearchParams({ page: page.toString(), page_size: "20" });
+      if (search) params.set("search", search);
+      const res = await apiGet(`/catalog/products?${params}`);
+      const data = await res.json();
+      setCatalogProducts(data.products || []);
+      setCatalogPagination(data.pagination || { page: 1, page_size: 20, total: 0, total_pages: 1 });
+    } catch {
+      toast.error("Failed to load catalog products");
+    } finally {
+      setCatalogLoading(false);
+    }
+  }, []);
+
+  const handleOpenCatalog = () => {
+    if (catalogOpen) {
+      setCatalogOpen(false);
+      return;
+    }
+    setCatalogOpen(true);
+    fetchCatalogProducts("", 1);
+  };
+
+  const handleCatalogSearch = (value: string) => {
+    setCatalogSearch(value);
+    setCatalogPage(1);
+    fetchCatalogProducts(value, 1);
+  };
+
+  const handleCatalogPageChange = (newPage: number) => {
+    setCatalogPage(newPage);
+    fetchCatalogProducts(catalogSearch, newPage);
+  };
+
+  const toggleCatalogProduct = (id: string) => {
+    setSelectedCatalogIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleAddCatalogProducts = () => {
+    const selected = catalogProducts.filter(p => selectedCatalogIds.has(p.id));
+    if (selected.length === 0) return;
+    const newProducts = selected.map(p => ({
+      title: stripHtml(p.title),
+      description: stripHtml(p.description) || "No description available.",
+    }));
+    const updated = [...contextProducts, ...newProducts];
+    onProductsChange?.(updated);
+    setSelectedCatalogIds(new Set());
+    setCatalogOpen(false);
+  };
+
+  const handleRemoveProduct = (idx: number) => {
+    const updated = contextProducts.filter((_, i) => i !== idx);
+    onProductsChange?.(updated);
+  };
 
   /* ---------- Template selection ---------- */
 
@@ -242,8 +362,10 @@ export function PipelineCaptionGenerator({
       setNewTemplateName("");
       setNewTemplatePrompt("");
       fetchTemplates();
-    } catch {
-      toast.error("Failed to create template");
+    } catch (err) {
+      console.error("[CaptionGenerator] Failed to create template:", err);
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      toast.error(`Failed to create template: ${msg}`);
     }
   };
 
@@ -257,8 +379,10 @@ export function PipelineCaptionGenerator({
       toast.success("Template updated");
       setEditingTemplate(null);
       fetchTemplates();
-    } catch {
-      toast.error("Failed to update template");
+    } catch (err) {
+      console.error("[CaptionGenerator] Failed to update template:", err);
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      toast.error(`Failed to update template: ${msg}`);
     }
   };
 
@@ -271,7 +395,8 @@ export function PipelineCaptionGenerator({
         localStorage.removeItem(LS_TEMPLATE_KEY);
       }
       fetchTemplates();
-    } catch {
+    } catch (err) {
+      console.error("[CaptionGenerator] Failed to delete template:", err);
       toast.error("Failed to delete template");
     }
   };
@@ -280,7 +405,8 @@ export function PipelineCaptionGenerator({
     try {
       await apiPut(`/pipeline/video-caption-templates/${id}`, { is_default: true });
       fetchTemplates();
-    } catch {
+    } catch (err) {
+      console.error("[CaptionGenerator] Failed to set default:", err);
       toast.error("Failed to set default");
     }
   };
@@ -415,6 +541,11 @@ export function PipelineCaptionGenerator({
                   <Sparkles className="size-4" />
                   AI Caption Generator
                   <Badge variant="outline" className="text-xs font-normal">Optional</Badge>
+                  {contextProducts.length > 0 && (
+                    <Badge variant="secondary" className="text-xs font-normal">
+                      {contextProducts.length} {contextProducts.length === 1 ? "produs" : "produse"}
+                    </Badge>
+                  )}
                 </span>
                 <ChevronDown className={`size-4 transition-transform ${aiSettingsOpen ? "rotate-180" : ""}`} />
               </CardTitle>
@@ -423,6 +554,143 @@ export function PipelineCaptionGenerator({
 
           <CollapsibleContent>
             <CardContent className="space-y-4 pt-0">
+
+              {/* Product selection — inside AI section so it's visible alongside generation settings */}
+              <div className={`rounded-lg border p-3 space-y-3 ${contextProducts.length > 0 ? "border-primary/30 bg-primary/5" : "bg-muted/30"}`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ShoppingBag className="size-4 text-primary" />
+                    <span className="text-sm font-medium">
+                      {contextProducts.length === 0
+                        ? "Niciun produs selectat"
+                        : contextProducts.length === 1
+                          ? "Produs selectat"
+                          : `${contextProducts.length} produse selectate`}
+                    </span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7"
+                    onClick={handleOpenCatalog}
+                  >
+                    <BookOpen className="h-3.5 w-3.5 mr-1" />
+                    {catalogOpen ? "Închide Catalog" : "Adaugă din Catalog"}
+                  </Button>
+                </div>
+
+                {/* Product chips with remove */}
+                {contextProducts.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {contextProducts.map((product, idx) => (
+                      <span
+                        key={idx}
+                        title={product.description}
+                        className="inline-flex items-center gap-1 bg-primary/10 text-primary border border-primary/20 rounded-full px-2.5 py-1 text-xs font-medium max-w-[200px]"
+                      >
+                        <span className="truncate">{product.title}</span>
+                        {onProductsChange && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveProduct(idx)}
+                            className="flex-shrink-0 hover:bg-primary/20 rounded-full p-0.5 transition-colors"
+                          >
+                            <XCircle className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Catalog picker */}
+                {catalogOpen && (
+            <div className="border rounded-lg p-3 space-y-3 bg-muted/30">
+              {/* Search */}
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input
+                    placeholder="Caută produse..."
+                    value={catalogSearch}
+                    onChange={(e) => handleCatalogSearch(e.target.value)}
+                    className="pl-8 h-8 text-sm"
+                  />
+                </div>
+              </div>
+
+              {/* Products grid */}
+              {catalogLoading ? (
+                <div className="flex items-center justify-center py-6">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : catalogProducts.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">Niciun produs găsit</p>
+              ) : (
+                <div className="grid grid-cols-2 gap-2 max-h-[280px] overflow-y-auto">
+                  {catalogProducts.map((p) => (
+                    <div
+                      key={p.id}
+                      onClick={() => toggleCatalogProduct(p.id)}
+                      className={`flex items-start gap-2 p-2 rounded-md border cursor-pointer transition-colors text-xs ${
+                        selectedCatalogIds.has(p.id)
+                          ? "border-primary bg-primary/10"
+                          : "border-transparent bg-background hover:bg-accent/50"
+                      }`}
+                    >
+                      {p.image_link && (
+                        <img src={p.image_link} alt="" className="w-10 h-10 rounded object-cover flex-shrink-0" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium truncate">{stripHtml(p.title)}</p>
+                        {p.brand && <p className="text-muted-foreground truncate">{p.brand}</p>}
+                      </div>
+                      {selectedCatalogIds.has(p.id) && (
+                        <Check className="h-3.5 w-3.5 text-primary flex-shrink-0 mt-0.5" />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Pagination + Add button */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    disabled={catalogPage <= 1}
+                    onClick={() => handleCatalogPageChange(catalogPage - 1)}
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    {catalogPage} / {catalogPagination.total_pages || 1}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    disabled={catalogPage >= catalogPagination.total_pages}
+                    onClick={() => handleCatalogPageChange(catalogPage + 1)}
+                  >
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                <Button
+                  size="sm"
+                  disabled={selectedCatalogIds.size === 0}
+                  onClick={handleAddCatalogProducts}
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1" />
+                  Adaugă {selectedCatalogIds.size > 0 ? `(${selectedCatalogIds.size})` : ""}
+                </Button>
+              </div>
+                </div>
+              )}
+              </div>
+
               {/* Template selector + management */}
               <div className="flex items-end gap-2">
                 <div className="flex-1 space-y-2">
@@ -431,6 +699,13 @@ export function PipelineCaptionGenerator({
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <Loader2 className="size-4 animate-spin" />
                       Loading templates...
+                    </div>
+                  ) : templatesError ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <span>Failed to load templates.</span>
+                      <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={fetchTemplates}>
+                        Retry
+                      </Button>
                     </div>
                   ) : (
                     <Select value={selectedTemplateId || "none"} onValueChange={handleSelectTemplate}>
@@ -448,7 +723,7 @@ export function PipelineCaptionGenerator({
                     </Select>
                   )}
                 </div>
-                <Dialog open={templateDialogOpen} onOpenChange={setTemplateDialogOpen}>
+                <Dialog open={templateDialogOpen} onOpenChange={(open) => { setTemplateDialogOpen(open); if (open) fetchTemplates(); }}>
                   <DialogTrigger asChild>
                     <Button variant="ghost" size="sm">
                       <Settings2 className="size-4 mr-1" />
