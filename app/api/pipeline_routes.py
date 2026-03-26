@@ -398,11 +398,18 @@ def _voice_settings_match(a: Optional[dict], b: Optional[dict]) -> bool:
 
 # ============== PYDANTIC MODELS ==============
 
+class ContextProductItem(BaseModel):
+    """A product selected from the catalog during pipeline creation."""
+    title: str
+    description: str = ""
+
+
 class PipelineGenerateRequest(BaseModel):
     """Request model for pipeline generation."""
     name: str = Field(default="", max_length=200)  # Human-readable name for the script set
     idea: str = Field(..., max_length=2000)       # User's video idea/concept
     context: str = Field(default="", max_length=5000)  # Product/brand context
+    context_products: List[ContextProductItem] = Field(default_factory=list)  # Structured product data
     variant_count: int = Field(default=3, ge=1, le=10)  # Number of script variants (1-10)
     provider: str = "gemini"            # "gemini" or "claude"
 
@@ -565,6 +572,7 @@ class PipelineImportRequest(BaseModel):
     name: str = ""
     idea: str = "Imported from history"
     context: str = ""
+    context_products: List[ContextProductItem] = Field(default_factory=list)
 
     @validator("scripts", each_item=True)
     def validate_script_length(cls, v):
@@ -961,6 +969,7 @@ async def import_pipeline(
             "name": request.name,
             "idea": request.idea,
             "context": request.context,
+            "context_products": [p.dict() for p in request.context_products],
             "variant_count": len(request.scripts),
             "keyword_count": 0,
             "previews": {},
@@ -1112,6 +1121,7 @@ async def generate_pipeline(
                 "name": body.name,
                 "idea": body.idea,
                 "context": body.context,
+                "context_products": [p.dict() for p in body.context_products],
                 "variant_count": len(scripts),
                 "keyword_count": len(unique_keywords),
                 "previews": {},
@@ -1317,6 +1327,8 @@ async def generate_variant_tts(
         # Bust TTS file cache so ElevenLabs is re-called with fresh audio.
         # Without this, cache_lookup returns the same audio for identical params,
         # making "Regenerate Voice-over" produce the exact same result.
+        # IMPORTANT: cache key must match exactly what elevenlabs.py constructs
+        # in generate_audio_with_timestamps (provider="elevenlabs", type="with_timestamps").
         from app.services.tts_cache import cache_delete
         from app.services.tts.elevenlabs import ElevenLabsTTSService
         _tts_svc = ElevenLabsTTSService(
@@ -1326,10 +1338,18 @@ async def generate_variant_tts(
         _effective_voice = request.voice_id or _tts_svc._voice_id
         ALLOWED_VOICE_KEYS = {"stability", "similarity_boost", "style", "use_speaker_boost", "speed"}
         _vs = {k: v for k, v in (request.voice_settings or {}).items() if k in ALLOWED_VOICE_KEYS}
+        # Build voice_settings exactly as elevenlabs.py does (using its defaults for missing keys)
+        _full_vs = {
+            "stability": _vs.get("stability", _tts_svc.voice_settings["stability"]),
+            "similarity_boost": _vs.get("similarity_boost", _tts_svc.voice_settings["similarity_boost"]),
+            "style": _vs.get("style", _tts_svc.voice_settings["style"]),
+            "speed": _vs.get("speed", _tts_svc.voice_settings.get("speed", 1.0)),
+        }
         _cache_key = {
             "text": cleaned_text, "voice_id": _effective_voice,
-            "model_id": request.elevenlabs_model, "provider": "elevenlabs_ts",
-            "vs": f"{_vs.get('stability', 0.5):.2f}_{_vs.get('similarity_boost', 0.75):.2f}_{_vs.get('style', 0.0):.2f}_{_vs.get('speed', 1.0):.2f}"
+            "model_id": request.elevenlabs_model, "provider": "elevenlabs",
+            "type": "with_timestamps",
+            "vs": f"{_full_vs['stability']:.2f}_{_full_vs['similarity_boost']:.2f}_{_full_vs['style']:.2f}_{_full_vs['speed']:.2f}"
         }
         if cache_delete(_cache_key, "elevenlabs"):
             logger.info(f"[Profile {profile.profile_id}] Busted TTS file cache for variant {variant_index}")
@@ -1513,10 +1533,35 @@ async def preview_variant(
         logger.info(
             f"[Profile {profile.profile_id}] Force TTS regeneration for variant {variant_index}"
         )
-        # Clear cached TTS so assembly_service generates fresh audio
+        # Clear in-memory TTS preview so assembly_service doesn't reuse it
         _tts_previews_dict = pipeline.get("tts_previews", {})
         _tts_previews_dict.pop(variant_index, None)
         _tts_previews_dict.pop(str(variant_index), None)
+
+        # Also bust file-based TTS cache (same key format as elevenlabs.py)
+        from app.services.tts_cache import cache_delete
+        from app.services.tts.elevenlabs import ElevenLabsTTSService
+        _tts_svc = ElevenLabsTTSService(
+            output_dir=Path("."), model_id=elevenlabs_model,
+            profile_id=profile.profile_id
+        )
+        _effective_voice = voice_id or _tts_svc._voice_id
+        ALLOWED_VOICE_KEYS = {"stability", "similarity_boost", "style", "use_speaker_boost", "speed"}
+        _vs = {k: v for k, v in (voice_settings or {}).items() if k in ALLOWED_VOICE_KEYS}
+        _full_vs = {
+            "stability": _vs.get("stability", _tts_svc.voice_settings["stability"]),
+            "similarity_boost": _vs.get("similarity_boost", _tts_svc.voice_settings["similarity_boost"]),
+            "style": _vs.get("style", _tts_svc.voice_settings["style"]),
+            "speed": _vs.get("speed", _tts_svc.voice_settings.get("speed", 1.0)),
+        }
+        _cache_key = {
+            "text": cleaned_text, "voice_id": _effective_voice,
+            "model_id": elevenlabs_model, "provider": "elevenlabs",
+            "type": "with_timestamps",
+            "vs": f"{_full_vs['stability']:.2f}_{_full_vs['similarity_boost']:.2f}_{_full_vs['style']:.2f}_{_full_vs['speed']:.2f}"
+        }
+        if cache_delete(_cache_key, "elevenlabs"):
+            logger.info(f"[Profile {profile.profile_id}] Busted TTS file cache for variant {variant_index}")
 
     # Normalize key lookup: prefer int key, fall back to str for legacy entries
     _tts_previews = pipeline.get("tts_previews", {})
@@ -2472,6 +2517,7 @@ async def get_pipeline_scripts(pipeline_id: str):
     return {
         "pipeline_id": pipeline_id,
         "scripts": pipeline.get("scripts", []),
+        "context_products": pipeline.get("context_products", []),
         "preview_info": preview_info,
         "tts_info": tts_info,
     }
@@ -3148,8 +3194,17 @@ async def generate_video_captions(
             f"{tone_desc}"
         )
 
+        # Structured product data (preferred over raw context)
+        context_products = pipeline.get("context_products", [])
+        if context_products:
+            product_lines = []
+            for p in context_products:
+                title = p.get("title", "")
+                desc = p.get("description", "")
+                product_lines.append(f"- {title}: {desc}" if desc else f"- {title}")
+            prompt_parts.append(f"Products featured in this video:\n" + "\n".join(product_lines))
         # Context from pipeline (includes product descriptions)
-        if pipeline_context:
+        elif pipeline_context:
             prompt_parts.append(f"Context:\n{pipeline_context}")
 
         # Script for this specific variant
@@ -3238,24 +3293,28 @@ async def create_video_caption_template(
     if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    template_id = str(uuid.uuid4())
-    repo.table_query("video_caption_templates", "insert", data={
-        "id": template_id,
-        "profile_id": ctx.profile_id,
-        "name": req.name,
-        "prompt_template": req.prompt_template,
-        "is_default": req.is_default,
-    })
+    try:
+        template_id = str(uuid.uuid4())
+        repo.table_query("video_caption_templates", "insert", data={
+            "id": template_id,
+            "profile_id": ctx.profile_id,
+            "name": req.name,
+            "prompt_template": req.prompt_template,
+            "is_default": req.is_default,
+        })
 
-    if req.is_default:
-        repo.table_query("video_caption_templates", "update",
-            data={"is_default": False},
-            filters=QueryFilters(
-                eq={"profile_id": ctx.profile_id},
-                neq={"id": template_id},
-            ))
+        if req.is_default:
+            repo.table_query("video_caption_templates", "update",
+                data={"is_default": False},
+                filters=QueryFilters(
+                    eq={"profile_id": ctx.profile_id},
+                    neq={"id": template_id},
+                ))
 
-    return {"id": template_id, "name": req.name}
+        return {"id": template_id, "name": req.name}
+    except Exception as e:
+        logger.error(f"Failed to create video caption template: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create template: {str(e)}")
 
 
 @router.put("/video-caption-templates/{template_id}")
@@ -3269,29 +3328,35 @@ async def update_video_caption_template(
     if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    updates = {}
-    if req.name is not None:
-        updates["name"] = req.name
-    if req.prompt_template is not None:
-        updates["prompt_template"] = req.prompt_template
-    if req.is_default is not None:
-        updates["is_default"] = req.is_default
-        if req.is_default:
-            repo.table_query("video_caption_templates", "update",
-                data={"is_default": False},
-                filters=QueryFilters(
-                    eq={"profile_id": ctx.profile_id},
-                    neq={"id": template_id},
-                ))
+    try:
+        updates = {}
+        if req.name is not None:
+            updates["name"] = req.name
+        if req.prompt_template is not None:
+            updates["prompt_template"] = req.prompt_template
+        if req.is_default is not None:
+            updates["is_default"] = req.is_default
+            if req.is_default:
+                repo.table_query("video_caption_templates", "update",
+                    data={"is_default": False},
+                    filters=QueryFilters(
+                        eq={"profile_id": ctx.profile_id},
+                        neq={"id": template_id},
+                    ))
 
-    if not updates:
-        raise HTTPException(status_code=400, detail="No fields to update")
+        if not updates:
+            raise HTTPException(status_code=400, detail="No fields to update")
 
-    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-    repo.table_query("video_caption_templates", "update", data=updates,
-        filters=QueryFilters(eq={"id": template_id, "profile_id": ctx.profile_id}))
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+        repo.table_query("video_caption_templates", "update", data=updates,
+            filters=QueryFilters(eq={"id": template_id, "profile_id": ctx.profile_id}))
 
-    return {"updated": True}
+        return {"updated": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update video caption template {template_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update template: {str(e)}")
 
 
 @router.delete("/video-caption-templates/{template_id}")
@@ -3304,10 +3369,13 @@ async def delete_video_caption_template(
     if not repo:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    repo.table_query("video_caption_templates", "delete",
-        filters=QueryFilters(eq={"id": template_id, "profile_id": ctx.profile_id}))
-
-    return {"deleted": True}
+    try:
+        repo.table_query("video_caption_templates", "delete",
+            filters=QueryFilters(eq={"id": template_id, "profile_id": ctx.profile_id}))
+        return {"deleted": True}
+    except Exception as e:
+        logger.error(f"Failed to delete video caption template {template_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete template: {str(e)}")
 
 
 # ============== SUBTITLE FRAME PREVIEW ==============

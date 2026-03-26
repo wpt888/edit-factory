@@ -425,7 +425,7 @@ function PipelinePage() {
   const [groupTagSearch, setGroupTagSearch] = useState("");
   const sourceSelectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipelineIdRef = useRef<string | null>(null);
-  const initialSourceSelectionDone = useRef(false);
+  // initialSourceSelectionDone ref removed — no longer auto-selecting source videos
 
   // Product groups for tag insertion (fetched when source videos are selected)
   const [productGroups, setProductGroups] = useState<Array<{
@@ -568,13 +568,6 @@ function PipelinePage() {
       const res = await apiGet("/segments/source-videos");
       const data = await res.json();
       setSourceVideos(data || []);
-      // Auto-select all if no selection has been made yet
-      setSelectedSourceIds(prev => {
-        if (prev.size === 0 && data.length > 0) {
-          return new Set(data.map((v: { id: string }) => v.id));
-        }
-        return prev;
-      });
     } catch (err) {
       handleApiError(err, "Failed to load source videos");
     } finally {
@@ -643,16 +636,7 @@ function PipelinePage() {
     } catch {
       // Ignore — fresh pipeline or column not yet migrated
     }
-    // Fallback: if no saved selection, auto-select all source videos
-    if (!restored) {
-      setSelectedSourceIds(prev => {
-        if (prev.size === 0) {
-          const allIds = sourceVideos.map(v => v.id);
-          return allIds.length > 0 ? new Set(allIds) : prev;
-        }
-        return prev;
-      });
-    }
+    // No fallback — user selects manually if no saved selection exists
   }, [sourceVideos]);
 
   // Source videos: toggle a single video selection
@@ -700,19 +684,7 @@ function PipelinePage() {
     }
   };
 
-  // Safety net: auto-select all source videos when on step 2 with none selected (first time only).
-  // FE-11: This effect fires only once per component lifecycle because initialSourceSelectionDone
-  // is a ref that persists across re-renders. The guard prevents re-selecting all videos after a
-  // user deliberately deselects some. The selectedSourceIds.size === 0 check ensures this only
-  // triggers when no selection exists (e.g., fresh page load or after restoreSourceSelection clears).
-  useEffect(() => {
-    if (step === 2 && sourceVideos.length > 0 && selectedSourceIds.size === 0 && !sourceVideosLoading && !initialSourceSelectionDone.current) {
-      initialSourceSelectionDone.current = true;
-      const allIds = new Set(sourceVideos.map(v => v.id));
-      setSelectedSourceIds(allIds);
-    }
-  // BUG-FE-26: Use the Set reference instead of .size to track actual identity changes
-  }, [step, sourceVideos, selectedSourceIds, sourceVideosLoading]);
+  // Source videos start unselected — user picks manually on Step 2
 
   // FE-14: Derive a stable string key from the Set to avoid extra API calls on every render
   const selectedSourceIdsKey = useMemo(() => [...selectedSourceIds].sort().join(","), [selectedSourceIds]);
@@ -950,6 +922,19 @@ function PipelinePage() {
           }
         })
         .catch(() => {});
+
+      // Restore context products from pipeline if not already loaded
+      // (products selected in Step 1 must be visible in Step 4 for caption generation)
+      if (contextProducts.length === 0) {
+        apiGet(`/pipeline/scripts/${pipelineId}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data?.context_products?.length > 0) {
+              setContextProducts(data.context_products);
+            }
+          })
+          .catch(() => {});
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, pipelineId]);
@@ -1272,7 +1257,6 @@ function PipelinePage() {
     // M10: Stop render polling before resetting state
     stopRenderPolling();
     setStep(1);
-    initialSourceSelectionDone.current = false;
     setIdea("");
     setContext("");
     setContextProducts([]);

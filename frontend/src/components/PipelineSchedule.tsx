@@ -446,7 +446,13 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
               <div className="flex items-center justify-between rounded-md border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30 px-3 py-2">
                 <div className="flex items-center gap-2 text-sm text-blue-700 dark:text-blue-300">
                   <Save className="size-4" />
-                  Draft restaurat — caption-urile și setările anterioare au fost recuperate.
+                  Draft restaurat — {(() => {
+                    const hasCaptions = draft && Object.values(draft.perVariantCaptions || {}).some(c => c?.trim());
+                    const hasSettings = draft && (draft.scheduleDate || draft.postTime || draft.selectedIntegrationIds?.length);
+                    if (hasCaptions && hasSettings) return "caption-urile și setările anterioare au fost recuperate.";
+                    if (hasCaptions) return "caption-urile anterioare au fost recuperate.";
+                    return "setările anterioare au fost recuperate (fără caption-uri salvate).";
+                  })()}
                 </div>
                 <Button
                   variant="ghost"
