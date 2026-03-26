@@ -841,8 +841,8 @@ async def generate_raw_clips(
         else:
             raise HTTPException(status_code=400, detail="Must provide either video file or video_path")
 
-        # Get video info
-        video_info = _get_video_info(final_video_path)
+        # Get video info (offload to thread - spawns ffprobe subprocess)
+        video_info = await asyncio.to_thread(_get_video_info, final_video_path)
 
         # Constraints
         variant_count = max(1, min(10, variant_count))
@@ -3248,6 +3248,12 @@ async def _start_render_for_clip(clip_id: str, preset_name: str, profile_id: str
         if profile_id:
             query = query.eq("profile_id", profile_id)
         clip = query.limit(1).execute()
+        # Check project lock before starting render (same guard as single-clip endpoint)
+        if clip.data:
+            _proj_id = clip.data[0].get("project_id")
+            if _proj_id and is_project_locked(_proj_id):
+                logger.warning(f"Skipping bulk render for clip {clip_id}: project {_proj_id} is locked")
+                return
         content = supabase.table("editai_clip_content").select("*").eq("clip_id", clip_id).execute()
         preset = supabase.table("editai_export_presets").select("*").eq("name", preset_name).limit(1).execute()
 
@@ -3933,10 +3939,19 @@ async def _render_with_preset(
         if not encoding_preset:
             preset_name = preset.get("name", "Generic")
             platform_map = {
+                # Display names (from UI)
                 "TikTok": "tiktok",
                 "Instagram Reels": "reels",
                 "YouTube Shorts": "youtube_shorts",
-                "Generic": "generic"
+                "Generic": "generic",
+                "Preview": "generic",
+                # DB preset names (lowercase from editai_presets table)
+                "tiktok": "tiktok",
+                "instagram_reels": "reels",
+                "youtube_shorts": "youtube_shorts",
+                "facebook_reels": "generic",
+                "instagram_story": "generic",
+                "generic": "generic",
             }
             platform_key = platform_map.get(preset_name, "generic")
             encoding_preset = get_preset(platform_key)

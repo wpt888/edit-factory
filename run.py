@@ -4,14 +4,14 @@ Edit Factory - Run Script
 Porneste serverul FastAPI.
 """
 import uvicorn
-from app.config import get_settings
+from app.config import get_settings, APP_VERSION
 
 if __name__ == "__main__":
     settings = get_settings()
 
     print(f"""
     ===============================================
-              EDIT FACTORY v1.0.0
+              EDIT FACTORY {APP_VERSION}
     ===============================================
       Server: http://{settings.host}:{settings.port}
       Docs:   http://localhost:{settings.port}/docs

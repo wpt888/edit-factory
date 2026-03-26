@@ -50,6 +50,8 @@ import { PipOverlayPanel } from "@/components/pip-overlay-panel";
 import type { AssociationResponse } from "@/components/product-picker-dialog";
 import { PipConfig, DEFAULT_PIP_CONFIG } from "@/components/product-picker-dialog";
 import { apiGetWithRetry, apiPost, apiPatch, apiPut, apiDelete, apiUpload, handleApiError, API_URL } from "@/lib/api";
+import { ApiError } from "@/lib/api-error";
+import { useRouter } from "next/navigation";
 import { useProfile } from "@/contexts/profile-context";
 import type { SegmentTransform } from "@/types/video-processing";
 import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
@@ -101,6 +103,7 @@ interface ProductGroup {
 }
 
 export default function SegmentsPage() {
+  const router = useRouter();
   const { currentProfile, isLoading: profileLoading } = useProfile();
 
   // Source videos state
@@ -234,9 +237,13 @@ export default function SegmentsPage() {
         setSourceVideos(data);
       }
     } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        router.push("/login");
+        return;
+      }
       handleApiError(error, "Error loading source videos");
     }
-  }, []);
+  }, [router]);
 
   // Fetch product groups for a video
   const fetchProductGroups = useCallback(async (videoId: string) => {

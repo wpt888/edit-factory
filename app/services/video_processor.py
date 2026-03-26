@@ -198,7 +198,7 @@ class VideoSegment:
         return total_comparisons > 0 and (similar_count / total_comparisons) > 0.5
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "start": self.start_time,
             "end": self.end_time,
             "duration": self.duration,
@@ -206,9 +206,13 @@ class VideoSegment:
             "variance_score": round(self.variance_score, 4),
             "blur_score": round(self.blur_score, 4),
             "contrast_score": round(self.contrast_score, 4),
+            "avg_brightness": round(self.avg_brightness, 4),
             "combined_score": round(self.combined_score, 4),
             "gemini_estimated": self.gemini_estimated
         }
+        if self.visual_hashes:
+            d["visual_hashes"] = [h.tolist() if hasattr(h, 'tolist') else h for h in self.visual_hashes]
+        return d
 
 
 class VideoAnalyzer:
@@ -621,9 +625,10 @@ class VideoAnalyzer:
 
     def close(self):
         """Elibereaza resursele."""
-        if hasattr(self, 'cap') and self.cap is not None:
-            self.cap.release()
-            self.cap = None  # M8: Help GC by clearing reference
+        with self._cap_lock:
+            if hasattr(self, 'cap') and self.cap is not None:
+                self.cap.release()
+                self.cap = None  # M8: Help GC by clearing reference
 
 
 class VideoEditor:
@@ -1297,9 +1302,16 @@ class VideoEditor:
         return output_video
 
     def cleanup_temp(self, pattern: str = "*"):
-        """Curata fisierele temporare."""
-        for f in self.temp_dir.glob(pattern):
-            f.unlink(missing_ok=True)
+        """Clean up temporary files matching pattern. Only deletes files tracked by this instance."""
+        if pattern == "*" and self._intermediate_files:
+            # Safe mode: only delete files we created, not other jobs' files
+            for f in self._intermediate_files:
+                if f.exists():
+                    f.unlink(missing_ok=True)
+            self._intermediate_files.clear()
+        else:
+            for f in self.temp_dir.glob(pattern):
+                f.unlink(missing_ok=True)
 
 
 class VideoProcessorService:
@@ -1371,8 +1383,8 @@ class VideoProcessorService:
                 context=context
             )
 
-            # Convert to VideoSegment for compatibility
-            video_segments = self._gemini_to_video_segments(gemini_segments)
+            # Convert to VideoSegment for compatibility, using classic analyzer for pHash
+            video_segments = self._gemini_to_video_segments(gemini_segments, video_path)
 
             return {
                 "status": "success",
@@ -1389,43 +1401,53 @@ class VideoProcessorService:
 
     def _gemini_to_video_segments(
         self,
-        gemini_segments: List['AnalyzedSegment']
+        gemini_segments: List['AnalyzedSegment'],
+        video_path: Optional[Path] = None
     ) -> List[VideoSegment]:
         """Convertește segmentele Gemini în VideoSegment pentru compatibilitate."""
         video_segments = []
 
-        for gs in gemini_segments:
-            # Convert Gemini score (0-100) to motion_score (0-1)
-            motion_score = gs.score / 100.0
-
-            # BUG-1.5 & 2.4: Compute pHash at midpoint for duplicate detection
-            # and set neutral scores for non-computed metrics
-            visual_hashes = []
+        # Open a VideoAnalyzer to compute pHash for duplicate detection
+        analyzer = None
+        if video_path:
             try:
-                mid_time = (gs.start_time + gs.end_time) / 2
-                mid_frame_idx = int(mid_time * self.fps) if hasattr(self, 'fps') else None
-                if mid_frame_idx is not None:
-                    for pos in [0.25, 0.5, 0.75]:
-                        t = gs.start_time + (gs.end_time - gs.start_time) * pos
-                        frame_idx = int(t * self.fps)
-                        frame = self._read_frame_at(frame_idx)
-                        if frame is not None:
-                            visual_hashes.append(compute_phash(frame))
+                analyzer = VideoAnalyzer(video_path)
             except Exception:
-                pass  # Graceful degradation: no hashes
+                logger.warning("Could not open VideoAnalyzer for Gemini pHash computation")
 
-            vs = VideoSegment(
-                start_time=gs.start_time,
-                end_time=gs.end_time,
-                motion_score=motion_score,
-                variance_score=motion_score * 0.8,
-                avg_brightness=0.5,
-                blur_score=0.5,       # BUG-2.4: neutral for Gemini segments
-                contrast_score=0.5,   # BUG-2.4: neutral for Gemini segments
-                visual_hashes=visual_hashes if visual_hashes else None,
-                gemini_estimated=True
-            )
-            video_segments.append(vs)
+        try:
+            for gs in gemini_segments:
+                # Convert Gemini score (0-100) to motion_score (0-1)
+                motion_score = gs.score / 100.0
+
+                # Compute pHash at sample positions for duplicate detection
+                visual_hashes = []
+                if analyzer:
+                    try:
+                        for pos in [0.25, 0.5, 0.75]:
+                            t = gs.start_time + (gs.end_time - gs.start_time) * pos
+                            frame_idx = int(t * analyzer.fps)
+                            frame = analyzer._read_frame_at(frame_idx)
+                            if frame is not None:
+                                visual_hashes.append(compute_phash(frame))
+                    except Exception:
+                        pass  # Graceful degradation: no hashes
+
+                vs = VideoSegment(
+                    start_time=gs.start_time,
+                    end_time=gs.end_time,
+                    motion_score=motion_score,
+                    variance_score=motion_score * 0.8,
+                    avg_brightness=0.5,
+                    blur_score=0.5,       # Neutral for Gemini segments
+                    contrast_score=0.5,   # Neutral for Gemini segments
+                    visual_hashes=visual_hashes if visual_hashes else None,
+                    gemini_estimated=True
+                )
+                video_segments.append(vs)
+        finally:
+            if analyzer:
+                analyzer.close()
 
         return video_segments
 
@@ -1491,16 +1513,25 @@ class VideoProcessorService:
             if not analysis.get("segments"):
                 raise ValueError("Nu s-au găsit segmente valide în video")
 
-            # Convert segments from dict to VideoSegment
+            # Convert segments from dict to VideoSegment (preserve all scoring fields)
             all_segments = []
             for seg_dict in analysis["segments"]:
+                # Reconstruct visual_hashes from serialized form
+                raw_hashes = seg_dict.get("visual_hashes")
+                hashes = None
+                if raw_hashes:
+                    import numpy as np
+                    hashes = [np.array(h) if isinstance(h, list) else h for h in raw_hashes]
                 vs = VideoSegment(
                     start_time=seg_dict["start"],
                     end_time=seg_dict["end"],
                     motion_score=seg_dict.get("motion_score", 0.5),
                     variance_score=seg_dict.get("variance_score", 0.5),
-                    avg_brightness=0.5,
-                    visual_hashes=None
+                    avg_brightness=seg_dict.get("avg_brightness", 0.5),
+                    blur_score=seg_dict.get("blur_score", 0.5),
+                    contrast_score=seg_dict.get("contrast_score", 0.5),
+                    visual_hashes=hashes,
+                    gemini_estimated=seg_dict.get("gemini_estimated", False)
                 )
                 all_segments.append(vs)
 
@@ -1720,7 +1751,8 @@ class VideoProcessorService:
 
                     # CHECK DYNAMIC TRANSITION
                     # Segment must have decent motion score for dynamic transitions
-                    if seg.motion_score < 0.015:  # Threshold for dynamism
+                    # Skip this check for Gemini-selected segments (they use semantic quality, not motion)
+                    if not getattr(seg, 'gemini_estimated', False) and seg.motion_score < 0.015:
                         continue  # Skip segmente statice/plictisitoare
 
                     selected.append(seg)

@@ -32,6 +32,8 @@ import {
 import Link from "next/link";
 import { EmptyState } from "@/components/empty-state";
 import { apiGetWithRetry, handleApiError } from "@/lib/api";
+import { ApiError } from "@/lib/api-error";
+import { useRouter } from "next/navigation";
 
 interface CostSummary {
   source: string;
@@ -106,6 +108,7 @@ interface GeminiStatus {
 }
 
 export default function UsagePage() {
+  const router = useRouter();
   const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
   const [geminiStatus, setGeminiStatus] = useState<GeminiStatus | null>(null);
@@ -154,6 +157,10 @@ export default function UsagePage() {
       // Also fetch Gemini status
       await fetchGeminiStatus();
     } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        router.push("/login");
+        return;
+      }
       handleApiError(err, "Error loading statistics");
       setError("Could not connect to server. Make sure the backend is running on port 8000.");
     } finally {

@@ -64,6 +64,12 @@ class BulkDeleteRequest(BaseModel):
     post_ids: List[str]
 
 
+class GenerateCaptionRequest(BaseModel):
+    clip_id: str
+    platform: Optional[str] = None  # Optional platform hint for tone/length
+    language: str = "ro"  # Default Romanian
+
+
 class BulkDeleteResponse(BaseModel):
     deleted: List[str]
     failed: List[dict]  # [{id, error}]
@@ -272,7 +278,7 @@ async def upload_to_postiz(
         if repo:
             try:
                 repo.update_clip(request.clip_id, {
-                    "postiz_status": "sent",
+                    "postiz_status": "uploaded",
                     "updated_at": datetime.now(timezone.utc).isoformat()
                 })
             except Exception as e:
@@ -356,7 +362,7 @@ async def bulk_upload_to_postiz(
             if repo:
                 try:
                     repo.update_clip(clip_id, {
-                        "postiz_status": "sent",
+                        "postiz_status": "uploaded",
                         "updated_at": datetime.now(timezone.utc).isoformat()
                     })
                 except Exception as e:
@@ -640,6 +646,135 @@ async def delete_postiz_post(
         raise HTTPException(status_code=500, detail="Failed to delete post")
 
 
+@router.post("/generate-caption")
+@limiter.limit("20/minute")
+async def generate_caption(
+    http_request: Request,
+    request: GenerateCaptionRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Generate a social media caption using Gemini AI based on the product context
+    associated with the clip's project.
+    """
+    logger.info(f"[Profile {profile.profile_id}] Generating caption for clip {request.clip_id}")
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Fetch clip with project context
+    try:
+        result = repo.table_query(
+            "editai_clips", "select",
+            filters=QueryFilters(
+                select="id, project_id, variant_name, editai_projects!inner(name, context_text, description, profile_id)",
+                eq={"id": request.clip_id},
+                limit=1
+            )
+        )
+    except Exception:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    clip = result.data[0]
+    project = clip.get("editai_projects", {})
+
+    # Verify ownership
+    if project.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    context_text = project.get("context_text") or ""
+    project_name = project.get("name") or ""
+    project_description = project.get("description") or ""
+    clip_name = clip.get("variant_name") or ""
+
+    if not context_text and not project_description and not project_name:
+        raise HTTPException(
+            status_code=400,
+            detail="No product context available. Add context_text to the project first."
+        )
+
+    # Build prompt for Gemini
+    platform_hint = ""
+    if request.platform:
+        char_limits = {
+            "x": 280, "twitter": 280, "instagram": 2200, "tiktok": 4000,
+            "youtube": 5000, "linkedin": 3000, "facebook": 63206
+        }
+        limit = char_limits.get(request.platform.lower(), 2200)
+        platform_hint = f"\nPlatforma: {request.platform} (max {limit} caractere)"
+
+    lang_map = {"ro": "romana", "en": "engleza"}
+    lang_name = lang_map.get(request.language, request.language)
+
+    prompt = f"""Genereaza un caption captivant pentru social media bazat pe informatiile produsului de mai jos.
+
+Produs/Proiect: {project_name}
+{f'Descriere: {project_description}' if project_description else ''}
+{f'Context produs: {context_text}' if context_text else ''}
+{f'Clip: {clip_name}' if clip_name else ''}
+{platform_hint}
+
+Cerinte:
+- Scrie in limba {lang_name}
+- Ton: captivant, natural, potrivit pentru social media
+- Include emoji-uri relevante (nu exagera)
+- Include 3-5 hashtag-uri relevante la final
+- NU include ghilimele in jurul textului
+- Fii concis si la obiect
+- Daca ai informatii despre produs, mentioneaza beneficiile cheie
+
+Returneaza DOAR textul caption-ului, fara alte explicatii."""
+
+    try:
+        from google import genai
+        import os
+
+        # Get API key
+        api_key = None
+        try:
+            from app.services.key_vault import get_key_vault
+            vault = get_key_vault()
+            api_key = vault.get_key("gemini_api_key")
+        except Exception:
+            pass
+        if not api_key:
+            settings = get_settings()
+            api_key = settings.gemini_api_key
+        if not api_key:
+            api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="Gemini API key not configured")
+
+        client = genai.Client(api_key=api_key)
+        model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+        response = client.models.generate_content(model=model_name, contents=[prompt])
+        caption = response.text.strip()
+
+        # Remove surrounding quotes if Gemini adds them
+        if caption.startswith('"') and caption.endswith('"'):
+            caption = caption[1:-1]
+
+        logger.info(f"[Profile {profile.profile_id}] Generated caption ({len(caption)} chars)")
+        return {
+            "caption": caption,
+            "context_used": {
+                "project_name": project_name,
+                "has_context_text": bool(context_text),
+                "has_description": bool(project_description),
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Profile {profile.profile_id}] Failed to generate caption: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate caption with AI")
+
+
 # ============== BACKGROUND TASKS ==============
 
 async def _publish_clip_task(
@@ -785,6 +920,27 @@ async def _bulk_publish_task(
 
                 if result.success:
                     successful += 1
+                    # Track publication in database (same as single publish)
+                    try:
+                        repo = get_repository()
+                        if repo:
+                            pub_status = "draft" if save_as_draft else ("scheduled" if clip_schedule else "published")
+                            repo.table_query("editai_postiz_publications", "insert", data={
+                                "clip_id": clip["id"],
+                                "postiz_post_id": result.post_id,
+                                "platform": ", ".join(result.platforms) if result.platforms else None,
+                                "caption": (clip_caption or "")[:500],
+                                "scheduled_at": clip_schedule.isoformat() if clip_schedule else None,
+                                "published_at": None if (clip_schedule or save_as_draft) else datetime.now(timezone.utc).isoformat(),
+                                "status": pub_status
+                            })
+                            # Update clip postiz_status to "sent" on actual publish
+                            repo.update_clip(clip["id"], {
+                                "postiz_status": "sent",
+                                "updated_at": datetime.now(timezone.utc).isoformat()
+                            })
+                    except Exception as pub_err:
+                        logger.warning(f"Failed to track bulk publication for clip {clip['id']}: {pub_err}")
                 else:
                     failed += 1
                     logger.error(f"Failed to publish clip {clip['id']}: {result.error}")

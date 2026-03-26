@@ -291,6 +291,14 @@ async def lifespan(app: FastAPI):
                 logger.info(f"Startup output cleanup: {result['deleted_count']} files, {result['freed_bytes'] / (1024 * 1024):.1f} MB freed")
     except Exception as e:
         logger.warning(f"Startup output cleanup failed: {e}")
+    # Cleanup orphaned temp files from interrupted processing
+    try:
+        from app.api.library_routes import cleanup_orphaned_temp_files
+        temp_result = await asyncio.to_thread(cleanup_orphaned_temp_files)
+        if temp_result and temp_result.get("deleted_count"):
+            logger.info(f"Startup temp cleanup: {temp_result['deleted_count']} orphaned files removed")
+    except Exception as e:
+        logger.warning(f"Startup temp cleanup failed: {e}")
     yield
     # Shutdown
     from app.db import close_supabase
