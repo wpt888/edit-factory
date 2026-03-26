@@ -248,6 +248,8 @@ def _assign_product_group(
 
     Returns the group label if assigned, None otherwise.
     """
+    if not supabase:
+        return None
     groups = supabase.table("editai_product_groups")\
         .select("label, start_time, end_time")\
         .eq("source_video_id", video_id)\
@@ -279,6 +281,8 @@ def _assign_product_group(
 
 def _reassign_all_segments(supabase, video_id: str, profile_id: str):
     """Reassign all segments for a video to their matching product groups."""
+    if not supabase:
+        return
     segments = supabase.table("editai_segments")\
         .select("id, start_time, end_time, keywords, product_group")\
         .eq("source_video_id", video_id)\
@@ -480,7 +484,17 @@ async def find_local_file(
     if not matches:
         raise HTTPException(status_code=404, detail=f"File '{filename}' ({target_size} bytes) not found on disk")
 
-    return {"matches": matches, "file_path": matches[0]}
+    # Security: filter out matches from sensitive directories
+    settings = get_settings()
+    _sensitive_prefixes = ("Windows", "Program Files", "ProgramData", "AppData", ".ssh", ".gnupg")
+    safe_matches = [
+        m for m in matches
+        if not any(sp in m for sp in _sensitive_prefixes)
+    ]
+    if not safe_matches:
+        raise HTTPException(status_code=404, detail=f"File '{filename}' ({target_size} bytes) not found in allowed directories")
+
+    return {"matches": safe_matches, "file_path": safe_matches[0]}
 
 
 @router.get("/browse-local")

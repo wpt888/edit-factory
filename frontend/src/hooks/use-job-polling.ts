@@ -276,6 +276,7 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
     // heartbeat events are intentionally ignored — they just keep the connection alive
 
     eventSource.onerror = () => {
+      if (isCancelledRef.current) return; // Component unmounted — do not reconnect or poll
       sseReconnectCountRef.current++;
       if (sseReconnectCountRef.current > MAX_SSE_RECONNECTS) {
         console.error("[useJobPolling] SSE max reconnects reached, falling back to polling");
@@ -285,12 +286,10 @@ export function useJobPolling(options: UseJobPollingOptions): UseJobPollingRetur
         }
         eventSourceRef.current?.close();
         eventSourceRef.current = null;
-        pollFallbackRef.current(jobId);
+        if (!isCancelledRef.current) pollFallbackRef.current(jobId);
         return;
       }
-      if (!isCancelledRef.current) {
-        console.warn(`[useJobPolling] SSE reconnect attempt ${sseReconnectCountRef.current}/${MAX_SSE_RECONNECTS}`);
-      }
+      console.warn(`[useJobPolling] SSE reconnect attempt ${sseReconnectCountRef.current}/${MAX_SSE_RECONNECTS}`);
     };
   }, [calculateETA, cleanup]);
 

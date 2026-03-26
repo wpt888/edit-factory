@@ -60,7 +60,8 @@ class JobStorage:
         # Sort by created_at, evict oldest terminal jobs first
         terminal = sorted(
             [(k, v) for k, v in self._memory_store.items()
-             if v.get("status") in ("completed", "failed", "cancelled")],
+             if v.get("status") in ("completed", "failed", "cancelled")
+             and not v.get("_memory_only")],  # Don't evict jobs that only exist in memory
             key=lambda kv: kv[1].get("created_at", "")
         )
         to_remove = len(self._memory_store) - self._MAX_MEMORY_JOBS
@@ -112,7 +113,8 @@ class JobStorage:
                 return job_data
             except Exception as e:
                 logger.error(f"JobStorage: Failed to create job: {e}, using memory")
-                # Fallback to memory
+                # Fallback to memory — mark as memory-only so update_job can upsert later
+                job_data["_memory_only"] = True
                 with self._update_lock:
                     self._memory_store[job_id] = job_data
                     self._evict_oldest_memory_jobs()
@@ -195,6 +197,10 @@ class JobStorage:
             self._memory_store[job_id] = job.copy()
 
         # Supabase I/O outside lock to avoid holding lock during network calls
+        # Pop from the local copy AND remove from memory store to prevent persistent flag
+        is_memory_only = job.pop("_memory_only", False)
+        if is_memory_only and job_id in self._memory_store:
+            self._memory_store[job_id].pop("_memory_only", None)
         if self._repo:
             try:
                 # Build update data
@@ -208,8 +214,20 @@ class JobStorage:
                 if profile_id:
                     update_data["profile_id"] = profile_id
 
-                # Update in repository
-                self._repo.update_job(job_id, update_data)
+                if is_memory_only:
+                    # Job was created during Supabase outage — try to insert now
+                    try:
+                        update_data["id"] = job_id
+                        update_data["job_type"] = job.get("job_type", "video_processing")
+                        update_data["created_at"] = job.get("created_at", job["updated_at"])
+                        self._repo.create_job(update_data)
+                        logger.info(f"JobStorage: Promoted memory-only job {job_id} to Supabase")
+                    except Exception:
+                        # Insert failed — fall back to regular update (row may already exist)
+                        self._repo.update_job(job_id, update_data)
+                else:
+                    # Normal update
+                    self._repo.update_job(job_id, update_data)
 
                 if profile_id:
                     logger.debug(f"[Profile {profile_id}] JobStorage: Updated job {job_id}")

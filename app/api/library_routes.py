@@ -654,14 +654,14 @@ async def update_project(
     """Actualizează un proiect."""
     repo = get_repository()
 
-    # DB-20: Check if project is currently locked by a background task
-    if is_project_locked(project_id):
-        raise HTTPException(status_code=409, detail="Project is currently being processed")
-
-    # Verify ownership first
+    # Verify ownership first (before lock check to prevent oracle attack)
     proj = repo.get_project(project_id)
     if not proj or proj.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # DB-20: Check if project is currently locked by a background task (after ownership)
+    if is_project_locked(project_id):
+        raise HTTPException(status_code=409, detail="Project is currently being processed")
 
     allowed_fields = ["name", "description", "target_duration", "context_text"]
     filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
@@ -1905,8 +1905,8 @@ async def _sync_orphan_clips(profile_id: str, supabase) -> int:
     inserted = 0
     for video_file in orphans:
         try:
-            duration = _get_video_duration(video_file)
-            thumbnail = _generate_thumbnail(video_file, project_id=sync_project_id)
+            duration = await asyncio.to_thread(_get_video_duration, video_file)
+            thumbnail = await asyncio.to_thread(_generate_thumbnail, video_file, sync_project_id)
             supabase.table("editai_clips").insert({
                 "project_id": sync_project_id,
                 "profile_id": profile_id,

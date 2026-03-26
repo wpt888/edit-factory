@@ -179,6 +179,10 @@ class EdgeTTSService:
                 else:
                     raise RuntimeError(f"Edge TTS error: {e}") from e
 
+        # Validate output file is not empty (Edge TTS can silently produce 0-byte files)
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            raise RuntimeError(f"Edge TTS produced empty output for {len(text)} chars")
+
         logger.info(f"Audio saved: {output_path}")
         return output_path
 
@@ -194,19 +198,19 @@ class EdgeTTSService:
         """Synchronous version of generate_audio."""
         try:
             asyncio.get_running_loop()
-            # We're inside an async context - run in a separate thread to avoid deadlock
-            future = _executor.submit(asyncio.run, self.generate_audio(
-                text, output_path, voice, rate, volume, pitch
-            ))
-            try:
-                return future.result(timeout=120)
-            except concurrent.futures.TimeoutError:
-                raise Exception(f"Edge TTS generation timed out after 120s for {len(text)} characters")
         except RuntimeError:
-            # No running loop - safe to use asyncio.run
+            # No running loop - safe to use asyncio.run directly
             return asyncio.run(self.generate_audio(
                 text, output_path, voice, rate, volume, pitch
             ))
+        # We're inside an async context - run in a separate thread to avoid deadlock
+        future = _executor.submit(asyncio.run, self.generate_audio(
+            text, output_path, voice, rate, volume, pitch
+        ))
+        try:
+            return future.result(timeout=120)
+        except concurrent.futures.TimeoutError:
+            raise Exception(f"Edge TTS generation timed out after 120s for {len(text)} characters")
 
     async def generate_with_subtitles(
         self,
@@ -305,18 +309,19 @@ class EdgeTTSService:
         """Synchronous version of generate_with_subtitles."""
         try:
             asyncio.get_running_loop()
-            future = _executor.submit(asyncio.run, self.generate_with_subtitles(
-                text, audio_path, srt_path, voice, rate
-            ))
-            return future.result(timeout=120)
-        except (concurrent.futures.TimeoutError, TimeoutError) as e:
-            # BUG-ET-02: Catch timeout errors explicitly
-            logger.error(f"TTS subtitle generation timed out: {e}")
-            raise RuntimeError(f"TTS subtitle generation timed out after 120s") from e
         except RuntimeError:
+            # No running loop - safe to use asyncio.run directly
             return asyncio.run(self.generate_with_subtitles(
                 text, audio_path, srt_path, voice, rate
             ))
+        future = _executor.submit(asyncio.run, self.generate_with_subtitles(
+            text, audio_path, srt_path, voice, rate
+        ))
+        try:
+            return future.result(timeout=120)
+        except (concurrent.futures.TimeoutError, TimeoutError) as e:
+            logger.error(f"TTS subtitle generation timed out: {e}")
+            raise RuntimeError(f"TTS subtitle generation timed out after 120s") from e
 
     def _ms_to_srt_time(self, ms: float) -> str:
         """Convert milliseconds to SRT format (HH:MM:SS,mmm)."""
@@ -401,14 +406,15 @@ class EdgeTTSService:
         """Synchronous version of generate_variants."""
         try:
             asyncio.get_running_loop()
-            future = _executor.submit(asyncio.run, self.generate_variants(
-                texts, output_dir, voices, base_name
-            ))
-            return future.result(timeout=300)
         except RuntimeError:
+            # No running loop - safe to use asyncio.run directly
             return asyncio.run(self.generate_variants(
                 texts, output_dir, voices, base_name
             ))
+        future = _executor.submit(asyncio.run, self.generate_variants(
+            texts, output_dir, voices, base_name
+        ))
+        return future.result(timeout=300)
 
 
 def get_voice_for_language(language: str, gender: str = "male") -> str:

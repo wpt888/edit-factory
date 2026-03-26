@@ -89,6 +89,7 @@ interface ClipWithProject {
   has_voiceover: boolean;
   has_audio?: boolean;
   tags?: string[];
+  context_text?: string | null;
 }
 
 
@@ -136,6 +137,9 @@ function LibrarieContent() {
   // Mounted ref for async safety (Bug #119)
   const isMountedRef = useRef(true);
   useEffect(() => { return () => { isMountedRef.current = false; }; }, []);
+
+  // Abort controller for cancelling stale fetches on profile switch (P7-4)
+  const fetchAbortRef = useRef<AbortController | null>(null);
 
   // Audio removal state
   const [removingAudioClipId, setRemovingAudioClipId] = useState<string | null>(null);
@@ -215,7 +219,7 @@ function LibrarieContent() {
   );
 
   // Fetch all clips — supports cursor-based pagination (Bug #46: wrapped in useCallback)
-  const fetchAllClips = useCallback(async (cursor?: string | null, tagFilter?: string) => {
+  const fetchAllClips = useCallback(async (cursor?: string | null, tagFilter?: string, signal?: AbortSignal) => {
     try {
       if (cursor) {
         loadingMoreRef.current = true;
@@ -229,7 +233,8 @@ function LibrarieContent() {
       if (activeTag) params.set("tag", activeTag);
       const paramStr = params.toString();
       const url = `/library/all-clips${paramStr ? `?${paramStr}` : ""}`;
-      const res = await apiGetWithRetry(url);
+      const res = await apiGetWithRetry(url, { signal });
+      if (signal?.aborted) return;
       const data = await res.json();
       if (cursor) {
         // Append to existing clips (subsequent pages)
@@ -242,8 +247,9 @@ function LibrarieContent() {
       setNextCursor(data.next_cursor ?? null);
       setHasMore(data.has_more ?? false);
     } catch (error) {
+      if (signal?.aborted) return; // Stale fetch cancelled by profile switch
       if (error instanceof ApiError && error.status === 401) {
-        window.location.href = "/login";
+        router.push("/login");
         return;
       }
       handleApiError(error, "Error loading clips");
@@ -257,9 +263,9 @@ function LibrarieContent() {
 
   // Load next page via cursor
   const fetchNextPage = useCallback(() => {
-    if (!hasMore || loadingMoreRef.current) return; // Use ref for synchronous guard (Bug #118)
+    if (!hasMore || loading || loadingMoreRef.current) return; // Guard against initial load race
     fetchAllClips(nextCursor, filterTag);
-  }, [hasMore, nextCursor, filterTag, fetchAllClips]);
+  }, [hasMore, loading, nextCursor, filterTag, fetchAllClips]);
 
   // Keep a stable ref to fetchNextPage so the IntersectionObserver callback never goes stale
   const fetchNextPageRef = useRef(fetchNextPage);
@@ -396,13 +402,18 @@ function LibrarieContent() {
   useEffect(() => {
     if (profileLoading) return; // Wait for profile context
     if (!profileId) return; // No profile selected
+    // Abort any in-flight fetch from previous profile (P7-4)
+    fetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
     // Reset clips on profile switch to avoid stale data from previous profile (Bug #75)
     setClips([]);
     setNextCursor(null);
     setHasMore(true);
-    fetchAllClips();
+    fetchAllClips(null, undefined, controller.signal);
     fetchPostizStatus();
     fetchAvailableTags();
+    return () => { controller.abort(); };
   }, [profileLoading, profileId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle filter changes with URL update
@@ -530,7 +541,7 @@ function LibrarieContent() {
           const data = await res.json();
           setClips((prev) =>
             prev.map((c) =>
-              c.id === clip.id ? { ...c, has_audio: false, raw_video_path: data.video_path, final_video_path: data.video_path } : c
+              c.id === clip.id ? { ...c, has_audio: false, raw_video_path: data.video_path, ...(c.final_video_path ? { final_video_path: data.video_path } : {}) } : c
             )
           );
           toast.success("Audio removed successfully!");
@@ -549,7 +560,7 @@ function LibrarieContent() {
     setConfirmDialog({
       open: true,
       title: "Delete Clip",
-      description: `Are you sure you want to permanently delete "${clip.variant_name || `Variant ${clip.variant_index}`}"? This action cannot be undone.`,
+      description: `Are you sure you want to delete "${clip.variant_name || `Variant ${clip.variant_index}`}"? The clip will be moved to trash and can be restored within 30 days.`,
       confirmLabel: "Delete",
       variant: "destructive",
       onConfirm: async () => {
@@ -599,7 +610,7 @@ function LibrarieContent() {
     setConfirmDialog({
       open: true,
       title: "Delete Selected Clips",
-      description: `Are you sure you want to permanently delete ${count} selected clips? This action cannot be undone.`,
+      description: `Are you sure you want to delete ${count} selected clips? They will be moved to trash and can be restored within 30 days.`,
       confirmLabel: `Delete ${count} clips`,
       variant: "destructive",
       onConfirm: async () => {
@@ -706,10 +717,8 @@ function LibrarieContent() {
     setLoadingImages(true);
     try {
       const res = await apiGet("/image-gen/history?limit=50");
-      if (res.ok) {
-        const data = await res.json();
-        setGeneratedImages(data.images || []);
-      }
+      const data = await res.json();
+      setGeneratedImages(data.images || []);
     } catch (error) {
       console.error("Failed to fetch images:", error);
     } finally {
@@ -1785,6 +1794,8 @@ function LibrarieContent() {
           <PublishDialog
             clipId={publishDialogClip.id}
             videoPath={publishDialogClip.final_video_path || publishDialogClip.raw_video_path}
+            contextText={publishDialogClip.context_text || undefined}
+            projectName={publishDialogClip.project_name}
             open={!!publishDialogClip}
             onOpenChange={(open) => {
               if (!open) setPublishDialogClip(null);

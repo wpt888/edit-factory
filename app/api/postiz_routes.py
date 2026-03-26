@@ -2,6 +2,7 @@
 Postiz Social Media Publishing Routes.
 Handles video publishing to social media via Postiz API.
 """
+import asyncio
 import threading
 import uuid
 import logging
@@ -58,6 +59,7 @@ class BulkPublishRequest(BaseModel):
     integration_ids: List[str]
     schedule_date: Optional[str] = None
     schedule_interval_minutes: int = 30  # Interval between posts for bulk
+    save_as_draft: bool = False
 
 
 class BulkDeleteRequest(BaseModel):
@@ -544,7 +546,8 @@ async def bulk_publish_clips(
         captions=request.captions,
         integration_ids=request.integration_ids,
         schedule_start=schedule_dt,
-        interval_minutes=request.schedule_interval_minutes
+        interval_minutes=request.schedule_interval_minutes,
+        save_as_draft=request.save_as_draft
     )
 
     return PublishResponse(
@@ -751,7 +754,7 @@ Returneaza DOAR textul caption-ului, fara alte explicatii."""
         client = genai.Client(api_key=api_key)
         model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
-        response = client.models.generate_content(model=model_name, contents=[prompt])
+        response = await asyncio.to_thread(client.models.generate_content, model=model_name, contents=[prompt])
         caption = response.text.strip()
 
         # Remove surrounding quotes if Gemini adds them
@@ -868,7 +871,8 @@ async def _bulk_publish_task(
     captions: Optional[Dict[str, str]],
     integration_ids: List[str],
     schedule_start: Optional[datetime],
-    interval_minutes: int
+    interval_minutes: int,
+    save_as_draft: bool = False
 ):
     """Background task to publish multiple clips using profile-specific Postiz."""
     from app.services.postiz_service import get_postiz_publisher
