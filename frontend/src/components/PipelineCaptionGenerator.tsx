@@ -257,24 +257,42 @@ export function PipelineCaptionGenerator({
   /* ---------- Debounced save to backend ---------- */
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const saveSelectedCaptions = useCallback((manual: Record<number, string>) => {
+  const pendingSaveRef = useRef<Record<string, string> | null>(null);
+
+  const flushSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      // Build variant_index -> caption text map for backend
-      // Include empty strings too — they mark "user deliberately cleared this"
-      const selected: Record<string, string> = {};
-      for (const [varIdx, text] of Object.entries(manual)) {
-        selected[String(varIdx)] = text ?? "";
-      }
+    saveTimerRef.current = null;
+    const pending = pendingSaveRef.current;
+    if (pending) {
+      pendingSaveRef.current = null;
       apiPatch("/pipeline/selected-captions", {
         pipeline_id: pipelineId,
-        selected_captions: selected,
+        selected_captions: pending,
       }).catch(err => console.warn("[CaptionGenerator] Auto-save failed:", err));
-    }, 1500);  // 1.5s debounce
+    }
   }, [pipelineId]);
 
-  // Cleanup timer on unmount
-  useEffect(() => () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); }, []);
+  const saveSelectedCaptions = useCallback((manual: Record<number, string>) => {
+    // Build variant_index -> caption text map for backend
+    // Include empty strings too — they mark "user deliberately cleared this"
+    const selected: Record<string, string> = {};
+    for (const [varIdx, text] of Object.entries(manual)) {
+      selected[String(varIdx)] = text ?? "";
+    }
+    pendingSaveRef.current = selected;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(flushSave, 1500);
+  }, [flushSave]);
+
+  // Flush pending save on unmount (don't cancel it!)
+  useEffect(() => () => { flushSave(); }, [flushSave]);
+
+  // Also flush on browser refresh/close (beforeunload)
+  useEffect(() => {
+    const handleBeforeUnload = () => { flushSave(); };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [flushSave]);
 
   /* ---------- Manual caption editing ---------- */
 
