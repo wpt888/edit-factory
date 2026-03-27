@@ -3849,6 +3849,7 @@ class SaveSelectedCaptionsRequest(BaseModel):
 
 
 @router.patch("/selected-captions")
+@router.post("/selected-captions")  # POST alias for navigator.sendBeacon (only supports POST)
 async def save_selected_captions(
     req: SaveSelectedCaptionsRequest,
 ):

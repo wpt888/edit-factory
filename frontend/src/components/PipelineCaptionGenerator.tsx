@@ -259,18 +259,33 @@ export function PipelineCaptionGenerator({
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveRef = useRef<Record<string, string> | null>(null);
 
-  const flushSave = useCallback(() => {
+  // Send save request that survives page unload (keepalive: true)
+  const sendSave = useCallback((data: Record<string, string>, keepalive = false) => {
+    const url = `${window.location.origin.replace(/:3001|:3000/, ':8000')}/api/v1/pipeline/selected-captions`;
+    const body = JSON.stringify({ pipeline_id: pipelineId, selected_captions: data });
+    if (keepalive && navigator.sendBeacon) {
+      // sendBeacon is the most reliable for page unload
+      navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
+    } else {
+      // Normal async save (or keepalive fetch fallback)
+      fetch(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body,
+        keepalive,
+      }).catch(err => console.warn("[CaptionGenerator] Auto-save failed:", err));
+    }
+  }, [pipelineId]);
+
+  const flushSave = useCallback((keepalive = false) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = null;
     const pending = pendingSaveRef.current;
     if (pending) {
       pendingSaveRef.current = null;
-      apiPatch("/pipeline/selected-captions", {
-        pipeline_id: pipelineId,
-        selected_captions: pending,
-      }).catch(err => console.warn("[CaptionGenerator] Auto-save failed:", err));
+      sendSave(pending, keepalive);
     }
-  }, [pipelineId]);
+  }, [sendSave]);
 
   const saveSelectedCaptions = useCallback((manual: Record<number, string>) => {
     // Build variant_index -> caption text map for backend
@@ -281,15 +296,15 @@ export function PipelineCaptionGenerator({
     }
     pendingSaveRef.current = selected;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(flushSave, 1500);
+    saveTimerRef.current = setTimeout(() => flushSave(false), 1500);
   }, [flushSave]);
 
-  // Flush pending save on unmount (don't cancel it!)
-  useEffect(() => () => { flushSave(); }, [flushSave]);
+  // Flush pending save on unmount
+  useEffect(() => () => { flushSave(false); }, [flushSave]);
 
-  // Also flush on browser refresh/close (beforeunload)
+  // Flush with keepalive on browser refresh/close — survives page unload
   useEffect(() => {
-    const handleBeforeUnload = () => { flushSave(); };
+    const handleBeforeUnload = () => { flushSave(true); };
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [flushSave]);
