@@ -2905,6 +2905,8 @@ async def get_pipeline_status(pipeline_id: str):
 
     # Build variants status list
     variants = []
+    # Recovery: collect variant indices that need clip_id lookup
+    _clip_id_recovery_needed: list[int] = []
     for idx in range(len(pipeline["scripts"])):
         if idx in pipeline["render_jobs"]:
             # Variant has a render job
@@ -2917,6 +2919,10 @@ async def get_pipeline_status(pipeline_id: str):
             raw_thumb_path = job.get("thumbnail_path")
             safe_video_path = _safe_relative_path(raw_video_path)
             safe_thumb_path = _safe_relative_path(raw_thumb_path)
+            # Recovery: if completed but no clip_id, try to recover from editai_clips
+            clip_id = job.get("clip_id")
+            if job["status"] == "completed" and not clip_id:
+                _clip_id_recovery_needed.append(idx)
             # BUG-PR-11: Sanitize public status — omit internal metadata (render_fingerprint, lock info)
             variants.append(VariantStatus(
                 variant_index=idx,
@@ -2925,7 +2931,7 @@ async def get_pipeline_status(pipeline_id: str):
                 current_step=job["current_step"],
                 final_video_path=safe_video_path,
                 thumbnail_path=safe_thumb_path,
-                clip_id=job.get("clip_id"),
+                clip_id=clip_id,
                 error=sanitized_error,
                 library_saved=job.get("library_saved"),
                 library_error=sanitized_lib_error,
@@ -2941,6 +2947,41 @@ async def get_pipeline_status(pipeline_id: str):
                 final_video_path=None,
                 error=None
             ))
+
+    # Recovery: look up missing clip_ids from editai_clips for completed variants
+    if _clip_id_recovery_needed:
+        library_project_id = pipeline.get("library_project_id")
+        if library_project_id:
+            try:
+                from app.db import get_supabase
+                supabase_lib = get_supabase()
+                if supabase_lib:
+                    for vid in _clip_id_recovery_needed:
+                        try:
+                            clip_result = supabase_lib.table("editai_clips")\
+                                .select("id")\
+                                .eq("project_id", library_project_id)\
+                                .eq("variant_index", vid)\
+                                .eq("is_deleted", False)\
+                                .limit(1)\
+                                .execute()
+                            if clip_result.data and len(clip_result.data) > 0:
+                                recovered_id = clip_result.data[0]["id"]
+                                # Update the variant in the response
+                                for v in variants:
+                                    if v.variant_index == vid:
+                                        v.clip_id = recovered_id
+                                        break
+                                # Persist recovery to render_jobs so future calls don't need lookup
+                                if vid in pipeline.get("render_jobs", {}):
+                                    pipeline["render_jobs"][vid]["clip_id"] = recovered_id
+                                logger.info(f"Recovered clip_id {recovered_id} for variant {vid}")
+                        except Exception as clip_err:
+                            logger.warning(f"clip_id recovery failed for variant {vid}: {clip_err}")
+                    # Persist recovered clip_ids to DB
+                    _db_update_render_jobs(pipeline_id, pipeline.get("render_jobs", {}))
+            except Exception as recovery_err:
+                logger.warning(f"clip_id recovery batch failed: {recovery_err}")
 
     # Build preview_info from stored previews
     preview_info: Dict[str, VariantPreviewInfo] = {}
