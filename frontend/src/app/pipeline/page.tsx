@@ -1064,10 +1064,11 @@ function PipelinePage() {
           for (const varIdx of allVarIndices) {
             const vs = freshStatuses.find((v: VariantStatus) => String(v.variant_index) === varIdx);
             if (!vs?.clip_id) continue;
-            // Prefer user's saved selection/edit over AI default
-            if (selectedCaptions[varIdx]?.trim()) {
-              captionMap[vs.clip_id] = selectedCaptions[varIdx];
+            // If user has a saved selection (even empty = deliberately cleared), use it
+            if (varIdx in selectedCaptions) {
+              captionMap[vs.clip_id] = selectedCaptions[varIdx] || "";
             } else {
+              // No user selection — fall back to first AI option
               const arr = aiCaptions[varIdx] as string[] | undefined;
               if (arr?.length) {
                 captionMap[vs.clip_id] = arr[0];
@@ -4450,7 +4451,7 @@ function PipelinePage() {
                         </Button>
                         {status.clip_id && (
                           <Button
-                            className="w-full bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
+                            className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
                             onClick={() => setPublishVariant(status)}
                           >
                             <Share2 className="h-4 w-4 mr-2" />
@@ -4702,8 +4703,8 @@ function PipelinePage() {
                                         onClick={(e) => { e.stopPropagation(); handlePlayAudio(item.pipeline_id, idx); }}
                                         className={`flex items-center gap-1 flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
                                           isPlaying
-                                            ? "bg-green-500 text-white"
-                                            : "bg-green-500/90 text-white hover:bg-green-600"
+                                            ? "bg-primary text-primary-foreground"
+                                            : "bg-primary/90 text-primary-foreground hover:bg-primary"
                                         }`}
                                         title={isPlaying ? "Pause audio" : "Play audio preview"}
                                       >

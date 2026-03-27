@@ -133,22 +133,28 @@ export function PipelineCaptionGenerator({
   // Manual captions per variant (always editable)
   const [manualCaptions, setManualCaptions] = useState<Record<number, string>>({});
 
-  // Seed manual captions from initialCaptions (DB restore) — only once, when first received
+  // Seed manual captions from initialCaptions (DB restore)
   const initialCaptionsAppliedRef = useRef(false);
   useEffect(() => {
     if (initialCaptionsAppliedRef.current) return;
     if (!initialCaptions || Object.keys(initialCaptions).length === 0) return;
-    if (Object.values(manualCaptions).some(v => v?.trim())) return;  // Already has content
     // Map clip_id-keyed captions back to variant_index-keyed manualCaptions
     const restored: Record<number, string> = {};
     for (const clip of completedClips) {
-      const caption = initialCaptions[clip.clip_id];
-      if (caption?.trim()) {
-        restored[clip.variant_index] = caption;
+      if (clip.clip_id in initialCaptions) {
+        restored[clip.variant_index] = initialCaptions[clip.clip_id] || "";
       }
     }
     if (Object.keys(restored).length > 0) {
-      setManualCaptions(restored);
+      setManualCaptions(prev => {
+        const merged = { ...prev };
+        for (const [k, v] of Object.entries(restored)) {
+          if (!merged[Number(k)]?.trim()) {
+            merged[Number(k)] = v;
+          }
+        }
+        return merged;
+      });
       initialCaptionsAppliedRef.current = true;
     }
   }, [initialCaptions, completedClips]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -255,18 +261,15 @@ export function PipelineCaptionGenerator({
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       // Build variant_index -> caption text map for backend
+      // Include empty strings too — they mark "user deliberately cleared this"
       const selected: Record<string, string> = {};
       for (const [varIdx, text] of Object.entries(manual)) {
-        if (text?.trim()) {
-          selected[String(varIdx)] = text;
-        }
+        selected[String(varIdx)] = text ?? "";
       }
-      if (Object.keys(selected).length > 0) {
-        apiPatch("/pipeline/selected-captions", {
-          pipeline_id: pipelineId,
-          selected_captions: selected,
-        }).catch(err => console.warn("[CaptionGenerator] Auto-save failed:", err));
-      }
+      apiPatch("/pipeline/selected-captions", {
+        pipeline_id: pipelineId,
+        selected_captions: selected,
+      }).catch(err => console.warn("[CaptionGenerator] Auto-save failed:", err));
     }, 1500);  // 1.5s debounce
   }, [pipelineId]);
 
@@ -903,7 +906,7 @@ export function PipelineCaptionGenerator({
               <Button
                 onClick={handleGenerate}
                 disabled={generating}
-                className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 text-white border-none hover:from-blue-600 hover:to-cyan-600"
+                className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
               >
                 {generating ? (
                   <Loader2 className="size-4 mr-2 animate-spin" />
