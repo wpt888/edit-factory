@@ -318,6 +318,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
             preview_renders_json = {str(k): v for k, v in dict(pipeline_dict.get("preview_renders", {})).items()}
             segment_usage_json = {str(k): v for k, v in dict(pipeline_dict.get("segment_usage", {})).items()}
             captions_json = {str(k): v for k, v in dict(pipeline_dict.get("captions", {})).items()}
+            selected_captions_json = dict(pipeline_dict.get("selected_captions", {}))
 
             row = {
                 "id": pipeline_id,
@@ -337,8 +338,17 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "segment_usage": segment_usage_json,
                 "source_video_ids": pipeline_dict.get("source_video_ids", []),
                 "captions": captions_json,
+                "selected_captions": selected_captions_json,
             }
-            supabase.table("editai_pipelines").upsert(row).execute()
+            try:
+                supabase.table("editai_pipelines").upsert(row).execute()
+            except Exception as upsert_err:
+                if "selected_captions" in str(upsert_err):
+                    logger.warning("selected_captions column missing, retrying without it")
+                    row.pop("selected_captions", None)
+                    supabase.table("editai_pipelines").upsert(row).execute()
+                else:
+                    raise
             logger.debug(f"Pipeline {pipeline_id} saved to DB")
             return  # success
         except Exception as e:
@@ -450,6 +460,7 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "source_video_ids": row.get("source_video_ids") or [],
             "context_products": row.get("context_products") or [],
             "captions": row.get("captions") or {},
+            "selected_captions": row.get("selected_captions") or {},
             "created_at": row.get("created_at", ""),
         }
 
@@ -3066,6 +3077,7 @@ async def get_pipeline_scripts(pipeline_id: str):
         "preview_info": preview_info,
         "tts_info": tts_info,
         "captions": pipeline.get("captions", {}),
+        "selected_captions": pipeline.get("selected_captions", {}),
     }
 
 
@@ -3826,6 +3838,31 @@ async def generate_video_captions(
         "captions": {str(k): v for k, v in results.items()},
         "errors": {str(k): v for k, v in errors.items()},
     }
+
+
+# ============== SAVE SELECTED/EDITED CAPTIONS ==============
+
+
+class SaveSelectedCaptionsRequest(BaseModel):
+    pipeline_id: str
+    selected_captions: Dict[str, str]  # variant_index (string) -> final caption text
+
+
+@router.patch("/selected-captions")
+async def save_selected_captions(
+    req: SaveSelectedCaptionsRequest,
+):
+    """
+    Save the user's final caption selection/edits per variant.
+    Stores in pipeline["selected_captions"] separately from the AI-generated arrays.
+    """
+    pipeline = _get_pipeline_or_load(req.pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    pipeline["selected_captions"] = req.selected_captions
+    _db_save_pipeline(req.pipeline_id, pipeline)
+    return {"ok": True}
 
 
 # ============== VIDEO CAPTION TEMPLATE CRUD ==============

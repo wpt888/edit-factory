@@ -45,7 +45,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
-import { apiGet, apiGetWithRetry, apiPost, apiPut, apiDelete } from "@/lib/api";
+import { apiGet, apiGetWithRetry, apiPost, apiPut, apiPatch, apiDelete } from "@/lib/api";
 import { toast } from "sonner";
 
 /* ---------- Types ---------- */
@@ -248,12 +248,38 @@ export function PipelineCaptionGenerator({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clipIdsKey]);
 
+  /* ---------- Debounced save to backend ---------- */
+
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveSelectedCaptions = useCallback((manual: Record<number, string>) => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      // Build variant_index -> caption text map for backend
+      const selected: Record<string, string> = {};
+      for (const [varIdx, text] of Object.entries(manual)) {
+        if (text?.trim()) {
+          selected[String(varIdx)] = text;
+        }
+      }
+      if (Object.keys(selected).length > 0) {
+        apiPatch("/pipeline/selected-captions", {
+          pipeline_id: pipelineId,
+          selected_captions: selected,
+        }).catch(err => console.warn("[CaptionGenerator] Auto-save failed:", err));
+      }
+    }, 1500);  // 1.5s debounce
+  }, [pipelineId]);
+
+  // Cleanup timer on unmount
+  useEffect(() => () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); }, []);
+
   /* ---------- Manual caption editing ---------- */
 
   const handleManualCaptionChange = (variantIndex: number, text: string) => {
     const updated = { ...manualCaptions, [variantIndex]: text };
     setManualCaptions(updated);
     propagateCaptions(updated, generatedCaptions, selectedCaptionIdx);
+    saveSelectedCaptions(updated);
   };
 
   /* ---------- Fetch templates ---------- */
@@ -491,6 +517,7 @@ export function PipelineCaptionGenerator({
       }
       setManualCaptions(updatedManual);
       propagateCaptions(updatedManual, captions, selections);
+      saveSelectedCaptions(updatedManual);
 
       const errorCount = Object.keys(data.errors || {}).length;
       if (errorCount > 0) {
@@ -519,6 +546,7 @@ export function PipelineCaptionGenerator({
       const updated = { ...manualCaptions, [variantIndex]: varCaptions[captionIdx] };
       setManualCaptions(updated);
       propagateCaptions(updated, generatedCaptions, newSelections);
+      saveSelectedCaptions(updated);
     }
   };
 

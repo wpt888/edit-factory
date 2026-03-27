@@ -260,14 +260,23 @@ function PipelinePage() {
     return n >= 1 && n <= 4 ? n : 1;
   });
 
+  // Pipeline ID from URL — used for restoring session on page load
+  const urlPipelineId = searchParams.get("id");
+
+  // Helper: update URL params (step + pipeline id) without full navigation
+  const updateUrlParams = useCallback((stepNum: number, pid: string | null) => {
+    const params = new URLSearchParams();
+    params.set("step", String(stepNum));
+    if (pid) params.set("id", pid);
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  }, [router, pathname]);
+
   // BUG-FE-33: searchParams in deps ensures URL stays in sync; stale closure risk is
   // mitigated because searchParams is read synchronously within the callback.
   const setStep = useCallback((n: number) => {
     setStepRaw(n);
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("step", String(n));
-    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
-  }, [searchParams, router, pathname]);
+    updateUrlParams(n, pipelineIdRef.current);
+  }, [updateUrlParams]);
 
   // Step 1: Input
   const [pipelineName, setPipelineName] = useState("");
@@ -493,10 +502,12 @@ function PipelinePage() {
     return interstitialSlidesChangeHandlers.current[index];
   }, []);
 
-  // Keep pipelineIdRef in sync with state
+  // Keep pipelineIdRef in sync with state + URL
   useEffect(() => {
     pipelineIdRef.current = pipelineId;
-  }, [pipelineId]);
+    // Sync pipeline ID to URL so it's always visible and shareable
+    updateUrlParams(step, pipelineId);
+  }, [pipelineId]); // eslint-disable-line react-hooks/exhaustive-deps — step read intentionally from current value
 
   // Mark component as unmounted — must be a separate effect with [] deps
   // so the cleanup only runs on actual unmount, not on every pipelineId change.
@@ -506,6 +517,70 @@ function PipelinePage() {
     isMountedRef.current = true;
     return () => { isMountedRef.current = false; };
   }, []);
+
+  // Restore pipeline from URL ?id=<pipeline_id> on mount
+  const urlRestoreAttempted = useRef(false);
+  useEffect(() => {
+    if (urlRestoreAttempted.current || !urlPipelineId || pipelineId) return;
+    urlRestoreAttempted.current = true;
+
+    (async () => {
+      try {
+        const res = await apiGet(`/pipeline/scripts/${urlPipelineId}`);
+        const data = await res.json();
+        if (!isMountedRef.current) return;
+
+        setPipelineId(data.pipeline_id);
+        pipelineIdRef.current = data.pipeline_id; // Set ref immediately for URL sync
+        setScripts((data.scripts || []).map((s: string) => {
+          const lines = s.trim().split('\n').filter((l: string) => l.trim());
+          if (lines.length >= 3) return s;
+          const sentences = s.trim().split(/([.!?])\s+/).reduce<string[]>((acc, part, i, arr) => {
+            if (i % 2 === 0) acc.push(i + 1 < arr.length ? part + arr[i + 1] : part);
+            return acc;
+          }, []);
+          return sentences.map((sent: string) => sent.trim()).filter(Boolean).join('\n');
+        }));
+        if (data.context_products) setContextProducts(data.context_products);
+
+        // Restore TTS results from history info (inline to avoid hoisting issues)
+        const ttsInfo: Record<string, { has_audio: boolean; audio_duration: number }> = data.tts_info || {};
+        const previewInfo: Record<string, { has_audio: boolean; audio_duration: number }> = data.preview_info || {};
+        const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
+        Object.entries(ttsInfo).forEach(([key, info]) => {
+          if (info.has_audio) {
+            restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
+          }
+        });
+        if (Object.keys(restoredTts).length === 0) {
+          Object.entries(previewInfo).forEach(([key, info]) => {
+            if (info.has_audio) {
+              restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
+            }
+          });
+        }
+        setTtsResults(restoredTts);
+
+        // Restore source video selection
+        setSelectedSourceIds(new Set());
+        try {
+          const srcRes = await apiGet(`/pipeline/${data.pipeline_id}/source-selection`);
+          const srcData = await srcRes.json();
+          if (isMountedRef.current && srcData.source_video_ids?.length > 0) {
+            setSelectedSourceIds(new Set(srcData.source_video_ids));
+          }
+        } catch {
+          // No saved selection — user selects manually
+        }
+
+        // Navigate to step 2 if on step 1 (scripts are loaded)
+        if (step === 1) setStep(2);
+      } catch {
+        // Pipeline not found or expired — clear ID from URL
+        updateUrlParams(step, null);
+      }
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps — one-time mount restore
 
   // Format helpers
   const formatDuration = (seconds: number): string => {
@@ -973,20 +1048,33 @@ function PipelinePage() {
         if (data?.context_products?.length > 0 && contextProducts.length === 0) {
           setContextProducts(data.context_products);
         }
-        // Restore saved captions from DB (keyed by variant_index -> clip_id caption)
-        if (data?.captions && Object.keys(data.captions).length > 0) {
+        // Restore saved captions from DB
+        // Priority: selected_captions (user edits) > captions arr[0] (AI default)
+        const selectedCaptions = data?.selected_captions || {};
+        const aiCaptions = data?.captions || {};
+        const hasSelected = Object.keys(selectedCaptions).length > 0;
+        const hasAi = Object.keys(aiCaptions).length > 0;
+        if ((hasSelected || hasAi) && Object.keys(generatedCaptions).length === 0) {
           const captionMap: Record<string, string> = {};
-          for (const [varIdx, variants] of Object.entries(data.captions)) {
-            const arr = variants as string[];
-            if (arr?.length > 0) {
-              // Use freshStatuses from the resolved status call (not stale closure)
-              const vs = freshStatuses.find((v: VariantStatus) => String(v.variant_index) === varIdx);
-              if (vs?.clip_id) {
+          // Get all variant indices from either source
+          const allVarIndices = new Set([
+            ...Object.keys(selectedCaptions),
+            ...Object.keys(aiCaptions),
+          ]);
+          for (const varIdx of allVarIndices) {
+            const vs = freshStatuses.find((v: VariantStatus) => String(v.variant_index) === varIdx);
+            if (!vs?.clip_id) continue;
+            // Prefer user's saved selection/edit over AI default
+            if (selectedCaptions[varIdx]?.trim()) {
+              captionMap[vs.clip_id] = selectedCaptions[varIdx];
+            } else {
+              const arr = aiCaptions[varIdx] as string[] | undefined;
+              if (arr?.length) {
                 captionMap[vs.clip_id] = arr[0];
               }
             }
           }
-          if (Object.keys(captionMap).length > 0 && Object.keys(generatedCaptions).length === 0) {
+          if (Object.keys(captionMap).length > 0) {
             setGeneratedCaptions(captionMap);
           }
         }
@@ -3793,23 +3881,11 @@ function PipelinePage() {
                         ? "All scripts have voice-over generated"
                         : `${ttsCount} of ${scripts.length} scripts have voice-over. The remaining ${scripts.length - ttsCount} will be generated automatically.`}
                     </span>
-                    <div className="flex items-center gap-2">
-                      {selectedSourceIds.size === 0 && (
-                        <span className="text-xs text-amber-600 dark:text-amber-400">
-                          Select a video clip with segments above ↑
-                        </span>
-                      )}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-green-400 text-green-700 hover:bg-green-100 dark:text-green-300 dark:hover:bg-green-900"
-                        onClick={handlePreviewAll}
-                        disabled={isGenerating || previewingIndex !== null || isRendering || sourceVideos.length === 0 || selectedSourceIds.size === 0}
-                      >
-                        <ArrowRight className="h-3.5 w-3.5 mr-1" />
-                        {previewingIndex !== null ? "Generating preview..." : "Continue to Preview"}
-                      </Button>
-                    </div>
+                    {selectedSourceIds.size === 0 && (
+                      <span className="text-xs text-amber-600 dark:text-amber-400">
+                        Select a video clip with segments above ↑
+                      </span>
+                    )}
                   </AlertDescription>
                 </Alert>
               );
@@ -4100,26 +4176,43 @@ function PipelinePage() {
             {existingRenderCount > 0 && (
               <Button
                 variant="outline"
-                onClick={() => {
-                  apiGet(`/pipeline/status/${pipelineId}`)
-                    .then(res => res.json())
-                    .then(data => {
-                      if (!data?.variants) return;
-                      // Only show completed variants within current script range
-                      const currentScriptCount = scripts.length;
-                      const rendered = data.variants.filter(
-                        (v: { status: string; variant_index: number; final_video_path?: string }) =>
-                          v.status === "completed" &&
-                          v.final_video_path &&
-                          v.variant_index < currentScriptCount
-                      );
-                      setVariantStatuses(rendered);
-                      setIsRendering(false);
-                      setStep(4);
-                    })
-                    .catch(() => {
-                      toast.error("Failed to load existing renders");
-                    });
+                onClick={async () => {
+                  try {
+                    const res = await apiGet(`/pipeline/status/${pipelineId}`);
+                    const data = await res.json();
+                    if (!data?.variants) return;
+                    const currentScriptCount = scripts.length;
+                    let rendered = data.variants.filter(
+                      (v: { status: string; variant_index: number; final_video_path?: string }) =>
+                        v.status === "completed" &&
+                        v.final_video_path &&
+                        v.variant_index < currentScriptCount
+                    );
+                    // Auto-recover: if any completed variants failed library save, retry sync
+                    const hasUnsaved = rendered.some((v: { library_saved?: boolean }) => v.library_saved === false);
+                    if (hasUnsaved && pipelineId) {
+                      try {
+                        await apiPost(`/pipeline/sync-to-library/${pipelineId}`);
+                        const res2 = await apiGet(`/pipeline/status/${pipelineId}`);
+                        const data2 = await res2.json();
+                        if (data2?.variants) {
+                          rendered = data2.variants.filter(
+                            (v: { status: string; variant_index: number; final_video_path?: string }) =>
+                              v.status === "completed" &&
+                              v.final_video_path &&
+                              v.variant_index < currentScriptCount
+                          );
+                        }
+                      } catch {
+                        // Sync failed — continue with original data, user can retry manually
+                      }
+                    }
+                    setVariantStatuses(rendered);
+                    setIsRendering(false);
+                    setStep(4);
+                  } catch {
+                    toast.error("Failed to load existing renders");
+                  }
                 }}
                 className="w-full"
                 size="lg"
