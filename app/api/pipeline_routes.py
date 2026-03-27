@@ -42,6 +42,41 @@ def _stable_hash(text: str) -> str:
     """Stable hash that persists across Python process restarts (unlike built-in hash())."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
+
+def _increment_segment_usage(supabase_client, segment_ids: list):
+    """Increment usage_count for segments after a successful render.
+
+    Uses the increment_segment_usage_batch RPC for atomic batch increment.
+    Falls back to individual read-then-update if RPC is unavailable.
+    """
+    if not segment_ids:
+        return
+    _logger = logging.getLogger(__name__)
+    # Try atomic batch increment via Postgres function
+    try:
+        supabase_client.rpc(
+            "increment_segment_usage_batch",
+            {"segment_ids": segment_ids}
+        ).execute()
+        return
+    except Exception:
+        pass
+    # Fallback: individual read-then-update (not atomic, but functional)
+    for seg_id in segment_ids:
+        try:
+            current = supabase_client.table("editai_segments")\
+                .select("usage_count")\
+                .eq("id", seg_id)\
+                .execute()
+            if current.data:
+                new_count = (current.data[0].get("usage_count") or 0) + 1
+                supabase_client.table("editai_segments")\
+                    .update({"usage_count": new_count})\
+                    .eq("id", seg_id)\
+                    .execute()
+        except Exception as e:
+            _logger.warning(f"Failed to increment usage_count for segment {seg_id}: {e}")
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/pipeline", tags=["Multi-Variant Pipeline"])
 
@@ -146,6 +181,66 @@ def clear_pipeline_cancelled(pipeline_id: str):
         _cancelled_pipelines.pop(pipeline_id, None)
 
 
+def _compute_render_fingerprint(render_request, variant_index: int, script_text: str) -> str:
+    """Compute a stable SHA-256 fingerprint from ALL render-affecting parameters.
+
+    Used to detect when a variant can skip re-rendering because all parameters
+    are identical to the last successful render.
+    """
+    mo_segment_ids = []
+    if render_request.match_overrides:
+        mo_variant = render_request.match_overrides.get(variant_index) or render_request.match_overrides.get(str(variant_index))
+        if mo_variant:
+            mo_segment_ids = sorted(str(m.get("segment_id", "")) for m in mo_variant)
+
+    interstitial = []
+    if render_request.interstitial_slides:
+        interstitial = render_request.interstitial_slides.get(str(variant_index), [])
+
+    key_data = {
+        "script_text": script_text or "",
+        "preset_name": render_request.preset_name,
+        "voice_id": render_request.voice_id,
+        "elevenlabs_model": render_request.elevenlabs_model,
+        "voice_settings": render_request.voice_settings or {},
+        "words_per_subtitle": render_request.words_per_subtitle,
+        "min_segment_duration": render_request.min_segment_duration,
+        "ultra_rapid_intro": render_request.ultra_rapid_intro,
+        "font_size": render_request.font_size,
+        "font_family": render_request.font_family,
+        "text_color": render_request.text_color,
+        "outline_color": render_request.outline_color,
+        "outline_width": render_request.outline_width,
+        "position_y": render_request.position_y,
+        "shadow_depth": render_request.shadow_depth,
+        "enable_glow": render_request.enable_glow,
+        "glow_blur": render_request.glow_blur,
+        "adaptive_sizing": render_request.adaptive_sizing,
+        "opacity": render_request.opacity,
+        "enable_denoise": render_request.enable_denoise,
+        "denoise_strength": render_request.denoise_strength,
+        "enable_sharpen": render_request.enable_sharpen,
+        "sharpen_amount": render_request.sharpen_amount,
+        "enable_color": render_request.enable_color,
+        "brightness": render_request.brightness,
+        "contrast": render_request.contrast,
+        "saturation": render_request.saturation,
+        "encoding_mode": render_request.encoding_mode,
+        "target_bitrate_kbps": render_request.target_bitrate_kbps,
+        "audio_bitrate_kbps": render_request.audio_bitrate_kbps,
+        "video_profile": render_request.video_profile,
+        "video_level": render_request.video_level,
+        "force_cpu": render_request.force_cpu,
+        "match_override_segments": mo_segment_ids,
+        "interstitial_slides": interstitial,
+        "pip_overlays": render_request.pip_overlays or {},
+        "source_video_ids": sorted(render_request.source_video_ids or []),
+    }
+    return hashlib.sha256(
+        _json.dumps(key_data, sort_keys=True, default=str).encode()
+    ).hexdigest()[:32]
+
+
 def _evict_stale_render_locks():
     """Evict render locks not acquired for over 1 hour.
 
@@ -222,6 +317,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
             # PIP-14: Include preview render paths in serialization
             preview_renders_json = {str(k): v for k, v in dict(pipeline_dict.get("preview_renders", {})).items()}
             segment_usage_json = {str(k): v for k, v in dict(pipeline_dict.get("segment_usage", {})).items()}
+            captions_json = {str(k): v for k, v in dict(pipeline_dict.get("captions", {})).items()}
 
             row = {
                 "id": pipeline_id,
@@ -240,6 +336,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "preview_renders": preview_renders_json,
                 "segment_usage": segment_usage_json,
                 "source_video_ids": pipeline_dict.get("source_video_ids", []),
+                "captions": captions_json,
             }
             supabase.table("editai_pipelines").upsert(row).execute()
             logger.debug(f"Pipeline {pipeline_id} saved to DB")
@@ -351,6 +448,8 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "preview_renders": preview_renders,
             "segment_usage": segment_usage,
             "source_video_ids": row.get("source_video_ids") or [],
+            "context_products": row.get("context_products") or [],
+            "captions": row.get("captions") or {},
             "created_at": row.get("created_at", ""),
         }
 
@@ -540,6 +639,9 @@ class PipelineRenderRequest(BaseModel):
     video_level: Optional[str] = None
     force_cpu: bool = False
 
+    # Skip re-render: variants that already have a valid render with matching fingerprint
+    skip_variants: Optional[List[int]] = None
+
 
 class PipelineRenderResponse(BaseModel):
     """Response model for render endpoint."""
@@ -562,6 +664,20 @@ class VariantStatus(BaseModel):
     library_saved: Optional[bool] = None
     library_error: Optional[str] = None
     render_fingerprint: Optional[str] = None
+
+
+class RenderCheckResult(BaseModel):
+    """Per-variant render skip eligibility check result."""
+    variant_index: int
+    can_skip: bool
+    reason: str  # "fingerprint_match", "no_previous_render", "file_missing", "fingerprint_mismatch", "still_processing"
+    existing_video_path: Optional[str] = None
+
+
+class RenderCheckResponse(BaseModel):
+    """Response for the render check endpoint."""
+    results: List[RenderCheckResult]
+    any_skippable: bool
 
 
 class VariantPreviewInfo(BaseModel):
@@ -979,6 +1095,177 @@ async def update_pipeline_scripts(
     )
 
     return {"status": "updated", "pipeline_id": pipeline_id, "script_count": len(request.scripts)}
+
+
+class PipelineRegenerateScriptRequest(BaseModel):
+    """Request model for regenerating a single script via AI."""
+    provider: str = "gemini"  # "gemini" or "claude"
+
+
+class PipelineRegenerateScriptResponse(BaseModel):
+    """Response model for single script regeneration."""
+    status: str
+    script: str
+    variant_index: int
+
+
+@router.post("/regenerate-script/{pipeline_id}/{variant_index}",
+             response_model=PipelineRegenerateScriptResponse)
+@limiter.limit("10/minute")
+async def regenerate_script(
+    request: Request,
+    pipeline_id: str,
+    variant_index: int,
+    body: PipelineRegenerateScriptRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Regenerate a single script variant using AI.
+
+    Re-uses the original pipeline's idea, context, and context_products.
+    Generates 1 new variant and replaces the script at variant_index.
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Pipeline {pipeline_id} not found")
+
+    scripts = pipeline.get("scripts", [])
+    if variant_index < 0 or variant_index >= len(scripts):
+        raise HTTPException(
+            status_code=400,
+            detail=f"variant_index {variant_index} out of range (0-{len(scripts) - 1})"
+        )
+
+    if body.provider not in ["gemini", "claude"]:
+        raise HTTPException(status_code=400, detail="provider must be 'gemini' or 'claude'")
+
+    # Retrieve original generation context from pipeline
+    idea = pipeline.get("idea", "")
+    context_text = pipeline.get("context", "")
+    if not idea:
+        raise HTTPException(
+            status_code=400,
+            detail="Pipeline has no stored idea — cannot regenerate script"
+        )
+
+    # Fetch keywords and product groups (same logic as /generate)
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
+    unique_keywords = []
+    product_groups_dict = {}
+
+    if supabase:
+        try:
+            result = supabase.table("editai_segments")\
+                .select("keywords, product_group")\
+                .eq("profile_id", profile.profile_id)\
+                .execute()
+            all_keywords = set()
+            for seg in result.data:
+                keywords_list = seg.get("keywords") or []
+                pg = seg.get("product_group")
+                for kw in keywords_list:
+                    all_keywords.add(kw)
+                    if pg:
+                        if pg not in product_groups_dict:
+                            product_groups_dict[pg] = set()
+                        product_groups_dict[pg].add(kw)
+            unique_keywords = sorted(all_keywords)
+            product_groups_dict = {k: sorted(v) for k, v in product_groups_dict.items()}
+        except Exception as e:
+            logger.warning(f"Failed to fetch keywords for script regeneration: {e}")
+
+    # Fetch AI instructions
+    ai_instructions = ""
+    if supabase:
+        try:
+            profile_result = supabase.table("profiles")\
+                .select("ai_instructions")\
+                .eq("id", profile.profile_id)\
+                .limit(1)\
+                .execute()
+            if profile_result.data:
+                ai_instructions = profile_result.data[0].get("ai_instructions") or ""
+        except Exception as e:
+            logger.warning(f"Failed to fetch AI instructions: {e}")
+
+    total_segment_duration = _compute_segment_duration(profile.profile_id)
+
+    # Build context about existing scripts so AI generates a different one
+    other_scripts = [s for i, s in enumerate(scripts) if i != variant_index]
+    regen_context = context_text
+    if other_scripts:
+        regen_context += (
+            "\n\n[IMPORTANT: The following scripts already exist for this video. "
+            "Generate a COMPLETELY DIFFERENT script that covers different angles, "
+            "structures, or approaches. Do NOT repeat or rephrase these existing scripts.]\n\n"
+            + "\n---\n".join(f"EXISTING SCRIPT {i+1}:\n{s}" for i, s in enumerate(other_scripts))
+        )
+
+    try:
+        generator = get_script_generator()
+        new_scripts = await asyncio.to_thread(
+            generator.generate_scripts,
+            idea=idea,
+            context=regen_context,
+            keywords=unique_keywords,
+            variant_count=1,
+            provider=body.provider,
+            product_groups=product_groups_dict if product_groups_dict else None,
+            ai_instructions=ai_instructions,
+            target_duration=total_segment_duration if total_segment_duration > 0 else None
+        )
+
+        if not new_scripts:
+            raise HTTPException(status_code=500, detail="AI returned no script")
+
+        new_script = new_scripts[0]
+
+        # Update pipeline state
+        with _get_pipeline_state_lock(pipeline_id):
+            pipeline["scripts"][variant_index] = new_script
+
+            # Invalidate TTS for this variant (script changed)
+            tts_previews = pipeline.get("tts_previews", {})
+            str_idx = str(variant_index)
+            if str_idx in tts_previews:
+                del tts_previews[str_idx]
+            if variant_index in tts_previews:
+                del tts_previews[variant_index]
+
+            # Invalidate preview for this variant
+            previews = pipeline.get("previews", {})
+            if str_idx in previews:
+                del previews[str_idx]
+            if variant_index in previews:
+                del previews[variant_index]
+
+            pipeline_snapshot = dict(pipeline)
+
+        # Persist to DB
+        _db_save_pipeline(pipeline_id, pipeline_snapshot)
+
+        logger.info(
+            f"[Profile {profile.profile_id}] Regenerated script {variant_index} "
+            f"in pipeline {pipeline_id} using {body.provider}"
+        )
+
+        return PipelineRegenerateScriptResponse(
+            status="ok",
+            script=new_script,
+            variant_index=variant_index
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Script regeneration failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Script regeneration service unavailable. Please try again."
+        )
 
 
 class PipelineRenameRequest(BaseModel):
@@ -1683,10 +1970,33 @@ async def preview_variant(
         for other_idx, used_set in segment_usage_snapshot.items():
             if str(other_idx) != str(variant_index):
                 avoid_ids.update(used_set)
+
+        # Persistent diversity: deprioritize segments with usage_count > 0
+        try:
+            repo = get_repository()
+            _supa = repo.get_client() if repo else None
+            if _supa:
+                _usage_filter = _supa.table("editai_segments")\
+                    .select("id")\
+                    .eq("profile_id", profile.profile_id)\
+                    .gt("usage_count", 0)
+                if source_video_ids:
+                    _usage_filter = _usage_filter.in_("source_video_id", source_video_ids)
+                _used_before = _usage_filter.execute()
+                if _used_before.data:
+                    previously_used = {s["id"] for s in _used_before.data}
+                    avoid_ids.update(previously_used)
+                    logger.info(
+                        f"[Profile {profile.profile_id}] Variant {variant_index}: "
+                        f"deprioritizing {len(previously_used)} previously-used segments"
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to load segment usage history: {e}")
+
         if avoid_ids:
             logger.info(
                 f"[Profile {profile.profile_id}] Variant {variant_index}: "
-                f"deprioritizing {len(avoid_ids)} segments used by other variants"
+                f"total deprioritized segments: {len(avoid_ids)}"
             )
 
         preview_data = await assembly_service.preview_matches(
@@ -1782,6 +2092,96 @@ async def preview_variant(
     except Exception as e:
         logger.error(f"[Profile {profile.profile_id}] Preview failed for variant {variant_index}: {e}")
         raise HTTPException(status_code=503, detail="Preview service unavailable")
+
+
+@router.post("/check-render/{pipeline_id}", response_model=RenderCheckResponse)
+@limiter.limit("10/minute")
+async def check_render_skip(
+    request: Request,
+    pipeline_id: str,
+    render_request: PipelineRenderRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Check which variants can skip re-rendering because they already have
+    a valid render with identical parameters (matching fingerprint + file exists).
+    Call this before /render to offer the user a skip option.
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    results: List[RenderCheckResult] = []
+    for vid in render_request.variant_indices:
+        if vid < 0 or vid >= len(pipeline["scripts"]):
+            results.append(RenderCheckResult(
+                variant_index=vid, can_skip=False, reason="invalid_index"
+            ))
+            continue
+
+        script_text = pipeline["scripts"][vid]
+        new_fingerprint = _compute_render_fingerprint(render_request, vid, script_text)
+
+        existing_job = pipeline.get("render_jobs", {}).get(vid)
+        if not existing_job:
+            results.append(RenderCheckResult(
+                variant_index=vid, can_skip=False, reason="no_previous_render"
+            ))
+            continue
+
+        if existing_job.get("status") == "processing":
+            results.append(RenderCheckResult(
+                variant_index=vid, can_skip=False, reason="still_processing"
+            ))
+            continue
+
+        if existing_job.get("status") != "completed":
+            results.append(RenderCheckResult(
+                variant_index=vid, can_skip=False, reason="no_previous_render"
+            ))
+            continue
+
+        # Verify the rendered file still exists on disk
+        video_path = existing_job.get("final_video_path")
+        if not video_path or not Path(video_path).exists():
+            results.append(RenderCheckResult(
+                variant_index=vid, can_skip=False, reason="file_missing"
+            ))
+            continue
+
+        safe_path = _safe_relative_path(video_path)
+        old_fingerprint = existing_job.get("render_fingerprint")
+
+        # If fingerprint matches exactly → safe to skip
+        if old_fingerprint and old_fingerprint == new_fingerprint:
+            results.append(RenderCheckResult(
+                variant_index=vid, can_skip=True, reason="fingerprint_match",
+                existing_video_path=safe_path
+            ))
+            continue
+
+        # If no fingerprint or old format (pre-SHA256) but video exists →
+        # still offer skip option but with a different reason so UI can indicate
+        # that parameters may have changed
+        if not old_fingerprint or len(old_fingerprint) < 32:
+            results.append(RenderCheckResult(
+                variant_index=vid, can_skip=True, reason="render_exists_unverified",
+                existing_video_path=safe_path
+            ))
+            continue
+
+        # Fingerprint exists but doesn't match → parameters changed
+        results.append(RenderCheckResult(
+            variant_index=vid, can_skip=False, reason="fingerprint_mismatch",
+            existing_video_path=safe_path
+        ))
+
+    return RenderCheckResponse(
+        results=results,
+        any_skippable=any(r.can_skip for r in results)
+    )
 
 
 @router.post("/render/{pipeline_id}", response_model=PipelineRenderResponse)
@@ -1924,7 +2324,12 @@ async def render_variants(
         # Store source_video_ids in pipeline state for reference
         if render_request.source_video_ids:
             pipeline["source_video_ids"] = render_request.source_video_ids
+        _skip_set = set(render_request.skip_variants or [])
         for variant_index in render_request.variant_indices:
+            # Skip variants that user chose to keep from previous render
+            if variant_index in _skip_set:
+                continue
+
             existing_job = pipeline["render_jobs"].get(variant_index)
             if existing_job and existing_job.get("status") == "processing":
                 continue  # Skip — already rendering this variant
@@ -1958,45 +2363,19 @@ async def render_variants(
                 logger.info(f"Pipeline {pipeline_id} variant {vid} skipped: cancelled")
                 return
 
-            # ── Render fingerprint: unique hash of ALL render-affecting parameters ──
-            # M5: hashlib already imported at module level
-            _fp_parts = [
-                f"vid={vid}",
-                f"preset={render_request.preset_name}",
-                f"voice={render_request.voice_id}",
-                f"model={render_request.elevenlabs_model}",
-                f"wpf={render_request.words_per_subtitle}",
-                f"min_seg={render_request.min_segment_duration}",
-                f"ultra_rapid={render_request.ultra_rapid_intro}",
-                f"font={render_request.font_size}/{render_request.font_family}",
-                f"colors={render_request.text_color}/{render_request.outline_color}",
-                f"denoise={render_request.enable_denoise}/{render_request.denoise_strength}",
-                f"sharpen={render_request.enable_sharpen}/{render_request.sharpen_amount}",
-                f"color={render_request.enable_color}/{render_request.brightness}/{render_request.contrast}/{render_request.saturation}",
-                f"enc={render_request.encoding_mode}/{render_request.target_bitrate_kbps}/{render_request.video_profile}/{render_request.video_level}",
-            ]
-            # Include match_overrides segment IDs in fingerprint
-            _mo = render_request.match_overrides
-            if _mo:
-                _mo_variant = _mo.get(vid) or _mo.get(str(vid))
-                if _mo_variant:
-                    _seg_ids = [m.get("segment_id", "none") for m in _mo_variant]
-                    _fp_parts.append(f"segments={','.join(str(s) for s in _seg_ids)}")
-            _render_fingerprint = hashlib.md5("|".join(_fp_parts).encode()).hexdigest()[:12]
+            # ── Render fingerprint: SHA-256 hash of ALL render-affecting parameters ──
+            script_text = pipeline["scripts"][vid]
+            _render_fingerprint = _compute_render_fingerprint(render_request, vid, script_text)
 
             logger.info(
                 f"[Profile {_profile_id}] ═══ RENDER START ═══ "
                 f"pipeline={pipeline_id} variant={vid} fingerprint={_render_fingerprint}"
-            )
-            logger.info(
-                f"[RENDER {_render_fingerprint}] Parameters: {' | '.join(_fp_parts)}"
             )
 
             # PIP-04: pipeline is a mutable dict reference from _pipelines — all access
             # through pipeline[...] sees the latest state. Cancellation checks use
             # is_pipeline_cancelled() which reads from the separate _cancelled_pipelines dict.
             job = pipeline["render_jobs"][vid]
-            script_text = pipeline["scripts"][vid]
 
             # Check for cancellation before starting
             if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, vid):
@@ -2141,6 +2520,25 @@ async def render_variants(
                 for other_idx, used_set in pipeline.get("segment_usage", {}).items():
                     if str(other_idx) != str(vid):
                         render_avoid_ids.update(used_set if isinstance(used_set, list) else list(used_set))
+
+            # Persistent diversity: deprioritize segments with usage_count > 0
+            try:
+                _repo = get_repository()
+                _supa_render = _repo.get_client() if _repo else None
+                if _supa_render:
+                    _render_usage_q = _supa_render.table("editai_segments")\
+                        .select("id")\
+                        .eq("profile_id", _profile_id)\
+                        .gt("usage_count", 0)
+                    if render_request.source_video_ids:
+                        _render_usage_q = _render_usage_q.in_(
+                            "source_video_id", render_request.source_video_ids
+                        )
+                    _render_used = _render_usage_q.execute()
+                    if _render_used.data:
+                        render_avoid_ids.update(s["id"] for s in _render_used.data)
+            except Exception as e:
+                logger.warning(f"Failed to load segment usage for render: {e}")
 
             # Check for cancellation before heavy render
             if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, vid):
@@ -2334,7 +2732,7 @@ async def render_variants(
                             .limit(1)\
                             .execute()
                         if not existing_clip.data:
-                            clip_result = supabase_lib.table("editai_clips").insert({
+                            insert_payload = {
                                 "project_id": library_project_id,
                                 "profile_id": _profile_id,
                                 "variant_index": vid,
@@ -2345,24 +2743,45 @@ async def render_variants(
                                 "duration": duration,
                                 "is_selected": False,
                                 "is_deleted": False,
-                                "final_status": "completed"
-                            }).execute()
+                                "final_status": "completed",
+                            }
+                            try:
+                                insert_payload["render_fingerprint"] = _render_fingerprint
+                                clip_result = supabase_lib.table("editai_clips").insert(insert_payload).execute()
+                            except Exception as _fp_err:
+                                if "render_fingerprint" in str(_fp_err):
+                                    logger.warning("render_fingerprint column missing, retrying INSERT without it")
+                                    insert_payload.pop("render_fingerprint", None)
+                                    clip_result = supabase_lib.table("editai_clips").insert(insert_payload).execute()
+                                else:
+                                    raise
                             if clip_result.data and len(clip_result.data) > 0:
                                 with render_jobs_lock:
                                     job["clip_id"] = clip_result.data[0].get("id")
                         else:
                             # Existing clip — UPDATE with new video path and metadata
                             existing_id = existing_clip.data[0].get("id")
-                            supabase_lib.table("editai_clips").update({
+                            # Set clip_id early so it's available even if update fails
+                            with render_jobs_lock:
+                                job["clip_id"] = existing_id
+                            update_payload = {
                                 "raw_video_path": str(final_video_path),
                                 "final_video_path": str(final_video_path),
                                 "thumbnail_path": str(thumb_path) if thumb_path else None,
                                 "duration": duration,
                                 "final_status": "completed",
                                 "is_deleted": False,
-                            }).eq("id", existing_id).execute()
-                            with render_jobs_lock:
-                                job["clip_id"] = existing_id
+                            }
+                            try:
+                                update_payload["render_fingerprint"] = _render_fingerprint
+                                supabase_lib.table("editai_clips").update(update_payload).eq("id", existing_id).execute()
+                            except Exception as _fp_err:
+                                if "render_fingerprint" in str(_fp_err):
+                                    logger.warning("render_fingerprint column missing, retrying UPDATE without it")
+                                    update_payload.pop("render_fingerprint", None)
+                                    supabase_lib.table("editai_clips").update(update_payload).eq("id", existing_id).execute()
+                                else:
+                                    raise
                             logger.info(
                                 f"Updated existing clip {existing_id} with new video path"
                             )
@@ -2373,6 +2792,23 @@ async def render_variants(
                             f"[Profile {_profile_id}] Pipeline {pipeline_id} "
                             f"variant {vid} saved to library project {library_project_id}"
                         )
+
+                        # Increment usage_count for segments used in this variant
+                        try:
+                            used_seg_ids = pipeline.get("segment_usage", {}).get(str(vid), [])
+                            if used_seg_ids and supabase_lib and not job.get("usage_incremented"):
+                                _increment_segment_usage(supabase_lib, used_seg_ids)
+                                with render_jobs_lock:
+                                    job["usage_incremented"] = True
+                                logger.info(
+                                    f"[Profile {_profile_id}] Incremented usage_count "
+                                    f"for {len(used_seg_ids)} segments (variant {vid})"
+                                )
+                        except Exception as usage_err:
+                            logger.warning(
+                                f"[Profile {_profile_id}] Failed to increment segment "
+                                f"usage_count for variant {vid}: {usage_err}"
+                            )
                     else:
                         with render_jobs_lock:
                             job["library_error"] = "Failed to create or find library project"
@@ -2493,7 +2929,7 @@ async def get_pipeline_status(pipeline_id: str):
                 error=sanitized_error,
                 library_saved=job.get("library_saved"),
                 library_error=sanitized_lib_error,
-                render_fingerprint=None  # Internal hash omitted from public endpoint
+                render_fingerprint=job.get("render_fingerprint")
             ))
         else:
             # Variant not yet rendered
@@ -2588,6 +3024,7 @@ async def get_pipeline_scripts(pipeline_id: str):
         "context_products": pipeline.get("context_products", []),
         "preview_info": preview_info,
         "tts_info": tts_info,
+        "captions": pipeline.get("captions", {}),
     }
 
 
@@ -2734,6 +3171,22 @@ async def sync_pipeline_to_library(
                 job["clip_id"] = clip_id_to_set
             job["library_saved"] = True
             job.pop("library_error", None)
+
+        # Increment usage_count for segments used in this variant (skip if already done by render)
+        try:
+            used_seg_ids = pipeline.get("segment_usage", {}).get(str(vid), [])
+            if used_seg_ids and not job.get("usage_incremented"):
+                _increment_segment_usage(supabase, used_seg_ids)
+                job["usage_incremented"] = True
+                logger.info(
+                    f"Pipeline {pipeline_id} variant {vid}: incremented "
+                    f"usage_count for {len(used_seg_ids)} segments"
+                )
+        except Exception as usage_err:
+            logger.warning(
+                f"Pipeline {pipeline_id} variant {vid}: failed to "
+                f"increment segment usage_count: {usage_err}"
+            )
 
         synced += 1
         logger.info(f"Pipeline {pipeline_id} variant {vid} synced to library project {library_project_id}")
@@ -3321,6 +3774,13 @@ async def generate_video_captions(
             logger.error(f"Caption generation failed for variant {variant_idx}: {e}")
             errors[variant_idx] = str(e)
 
+    # Persist captions in pipeline state and DB (merge with existing, don't overwrite)
+    if results:
+        existing_captions = pipeline.get("captions", {})
+        merged_captions = {**existing_captions, **{str(k): v for k, v in results.items()}}
+        pipeline["captions"] = merged_captions
+        _db_save_pipeline(req.pipeline_id, pipeline)
+
     return {
         "captions": {str(k): v for k, v in results.items()},
         "errors": {str(k): v for k, v in errors.items()},
@@ -3347,8 +3807,8 @@ async def list_video_caption_templates(
             ))
         return {"templates": result.data or []}
     except Exception as e:
-        logger.warning(f"Failed to query video_caption_templates: {e}")
-        return {"templates": []}
+        logger.error(f"Failed to query video_caption_templates: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load templates: {e}")
 
 
 @router.post("/video-caption-templates")
@@ -3478,11 +3938,10 @@ async def subtitle_frame_preview(
             try:
                 result = repo.table_query(
                     "editai_source_videos", "select",
-                    columns="file_path",
-                    filters=QueryFilters(eq={"id": source_video_ids[0]})
+                    filters=QueryFilters(select="file_path", eq={"id": source_video_ids[0]})
                 )
-                if result and len(result) > 0:
-                    fp = result[0].get("file_path")
+                if result and result.data:
+                    fp = result.data[0].get("file_path")
                     if fp:
                         source_video_path = Path(normalize_path(fp))
             except Exception as e:

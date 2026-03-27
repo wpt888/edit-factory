@@ -77,6 +77,7 @@ import { SimplePipeline } from "@/components/simple-mode-pipeline";
 import type { PipelineMode } from "@/types/pipeline-presets";
 import { BatchUploadQueue } from "@/components/batch-upload-queue";
 import { RenderSettingsPanel, DEFAULT_RENDER_SETTINGS } from "@/components/render-settings-panel";
+import { SkipRenderDialog, RenderCheckResult } from "@/components/SkipRenderDialog";
 import type { RenderSettings } from "@/components/render-settings-panel";
 
 // TypeScript interfaces
@@ -317,7 +318,12 @@ function PipelinePage() {
   // Step 4: Render
   const [selectedVariants, setSelectedVariants] = useState<Set<number>>(new Set());
   const [isRendering, setIsRendering] = useState(false);
+  const [isResettingUsage, setIsResettingUsage] = useState(false);
   const [variantStatuses, setVariantStatuses] = useState<VariantStatus[]>([]);
+  const [showSkipDialog, setShowSkipDialog] = useState(false);
+  const [skipCheckResults, setSkipCheckResults] = useState<RenderCheckResult[] | null>(null);
+  const [isCheckingRender, setIsCheckingRender] = useState(false);
+  const [existingRenderCount, setExistingRenderCount] = useState(0);
   const [presetName, setPresetName] = useState("TikTok");
   const [renderSettings, setRenderSettings] = useState<RenderSettings>({ ...DEFAULT_RENDER_SETTINGS });
   const [publishVariant, setPublishVariant] = useState<VariantStatus | null>(null);
@@ -384,6 +390,10 @@ function PipelinePage() {
   const [regeneratingAll, setRegeneratingAll] = useState(false);
   const [regeneratingAllIndex, setRegeneratingAllIndex] = useState<number | null>(null);
   const [regeneratingVariantAudio, setRegeneratingVariantAudio] = useState<Record<number, boolean>>({});
+  const [regeneratingScript, setRegeneratingScript] = useState<Record<number, boolean>>({});
+  const [regeneratingAllScripts, setRegeneratingAllScripts] = useState(false);
+  const [regeneratingAllScriptsIndex, setRegeneratingAllScriptsIndex] = useState<number | null>(null);
+  const regenerateScriptsAbortRef = useRef<AbortController | null>(null);
   const [playingTtsVariant, setPlayingTtsVariant] = useState<number | null>(null);
   const [srtPreviewOpen, setSrtPreviewOpen] = useState<Record<number, boolean>>({});
   const isMountedRef = useRef(true);
@@ -873,12 +883,17 @@ function PipelinePage() {
       );
       setVariantStatuses(renderedVariants);
       // Stop polling only when every rendered variant is done (ignore not_started ones)
+      // AND library save has resolved (true or error) for all completed variants.
+      // Without this, polling stops while library_saved is still false (race condition).
       const allComplete =
         renderedVariants.length > 0 &&
         renderedVariants.every(
           (v) => v.status === "completed" || v.status === "failed" || v.status === "cancelled"
         );
-      if (allComplete) {
+      const librarySavesPending = renderedVariants.some(
+        (v) => v.status === "completed" && v.library_saved === false && !v.library_error
+      );
+      if (allComplete && !librarySavesPending) {
         stopRenderPolling();
         setIsRendering(false);
       }
@@ -898,15 +913,38 @@ function PipelinePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipelineId, isRendering, step]);
 
+  // Check for existing renders when on Step 3 (show "view existing" button)
+  useEffect(() => {
+    if (step === 3 && pipelineId) {
+      apiGet(`/pipeline/status/${pipelineId}`)
+        .then(res => res.json())
+        .then(data => {
+          if (!data?.variants) return;
+          const currentScriptCount = scripts.length;
+          const completed = data.variants.filter(
+            (v: { status: string; variant_index: number; final_video_path?: string }) =>
+              v.status === "completed" &&
+              v.final_video_path &&
+              v.variant_index < currentScriptCount
+          );
+          setExistingRenderCount(completed.length);
+        })
+        .catch(() => setExistingRenderCount(0));
+    } else {
+      setExistingRenderCount(0);
+    }
+  }, [step, pipelineId, scripts.length]);
+
   // One-time status check when entering Step 4 (detect already-complete variants)
   // FE-04: Removed isRendering guard — this check must run regardless of rendering state
   // so that returning to Step 4 (e.g. via history) shows completed variants.
   useEffect(() => {
     if (step === 4 && pipelineId) {
-      apiGet(`/pipeline/status/${pipelineId}`)
+      // Chain status and scripts calls to avoid stale closure on variantStatuses
+      const statusPromise = apiGet(`/pipeline/status/${pipelineId}`)
         .then(res => res.json())
         .then(data => {
-          if (!data?.variants) return;
+          if (!data?.variants) return [];
           // Filter out not_started variants (same logic as polling onData)
           const rendered = data.variants.filter(
             (v: { status: string }) => v.status !== "not_started"
@@ -920,21 +958,39 @@ function PipelinePage() {
           if (allDone) {
             setIsRendering(false);
           }
+          return rendered;  // Pass fresh statuses to the next .then()
         })
-        .catch(() => {});
+        .catch(() => [] as VariantStatus[]);
 
-      // Restore context products from pipeline if not already loaded
+      // Restore context products and saved captions from pipeline
       // (products selected in Step 1 must be visible in Step 4 for caption generation)
-      if (contextProducts.length === 0) {
-        apiGet(`/pipeline/scripts/${pipelineId}`)
-          .then(res => res.json())
-          .then(data => {
-            if (data?.context_products?.length > 0) {
-              setContextProducts(data.context_products);
+      // Wait for status to resolve so we have fresh variantStatuses for clip_id mapping
+      Promise.all([
+        statusPromise,
+        apiGet(`/pipeline/scripts/${pipelineId}`).then(res => res.json()).catch(() => null),
+      ]).then(([freshStatuses, data]) => {
+        if (!data) return;
+        if (data?.context_products?.length > 0 && contextProducts.length === 0) {
+          setContextProducts(data.context_products);
+        }
+        // Restore saved captions from DB (keyed by variant_index -> clip_id caption)
+        if (data?.captions && Object.keys(data.captions).length > 0) {
+          const captionMap: Record<string, string> = {};
+          for (const [varIdx, variants] of Object.entries(data.captions)) {
+            const arr = variants as string[];
+            if (arr?.length > 0) {
+              // Use freshStatuses from the resolved status call (not stale closure)
+              const vs = freshStatuses.find((v: VariantStatus) => String(v.variant_index) === varIdx);
+              if (vs?.clip_id) {
+                captionMap[vs.clip_id] = arr[0];
+              }
             }
-          })
-          .catch(() => {});
-      }
+          }
+          if (Object.keys(captionMap).length > 0 && Object.keys(generatedCaptions).length === 0) {
+            setGeneratedCaptions(captionMap);
+          }
+        }
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, pipelineId]);
@@ -1087,8 +1143,89 @@ function PipelinePage() {
     }
   };
 
-  // Step 3: Render selected variants
-  const handleRender = async () => {
+  // Build the render payload (shared between check-render and render calls)
+  const buildRenderPayload = () => {
+    const matchOverrides: Record<number, MatchPreview[]> = {};
+    for (const idx of Array.from(selectedVariants)) {
+      if (previews[idx]?.matches && previews[idx].matches.length > 0) {
+        matchOverrides[idx] = previews[idx].matches;
+      } else {
+        console.warn(
+          `[Render] Variant ${idx}: no match_overrides available — render will use auto-matching (may differ from preview!). ` +
+          `previews[${idx}] exists: ${!!previews[idx]}, matches count: ${previews[idx]?.matches?.length ?? 0}`
+        );
+      }
+    }
+
+    const filteredInterstitialSlides = Object.keys(interstitialSlides).length > 0
+      ? Object.fromEntries(
+          Object.entries(interstitialSlides)
+            .filter(([k]) => selectedVariants.has(Number(k)))
+            .map(([k, v]) => [k, v.filter((s) => s.imageUrl)])
+            .filter(([, v]) => (v as InterstitialSlide[]).length > 0)
+        )
+      : undefined;
+
+    const pipOverlays: Record<string, { image_url: string; position: string; size: string; animation: string }> = {};
+    for (const idx of Array.from(selectedVariants)) {
+      const preview = previews[idx];
+      if (!preview?.matches) continue;
+      for (const match of preview.matches) {
+        if (!match.segment_id) continue;
+        const assoc = associations[match.segment_id];
+        if (!assoc?.pip_config?.enabled) continue;
+        const imageUrl = assoc.selected_image_urls?.[0] || assoc.product_image;
+        if (!imageUrl) continue;
+        pipOverlays[match.segment_id] = {
+          image_url: imageUrl,
+          position: assoc.pip_config.position,
+          size: assoc.pip_config.size,
+          animation: assoc.pip_config.animation,
+        };
+      }
+    }
+
+    return {
+      variant_indices: Array.from(selectedVariants),
+      preset_name: presetName,
+      elevenlabs_model: elevenlabsModel,
+      voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
+      source_video_ids: selectedSourceIdsRef.current.size > 0 ? Array.from(selectedSourceIdsRef.current) : undefined,
+      match_overrides: Object.keys(matchOverrides).length > 0 ? matchOverrides : undefined,
+      interstitial_slides: filteredInterstitialSlides,
+      pip_overlays: Object.keys(pipOverlays).length > 0 ? pipOverlays : undefined,
+      encoding_mode: renderSettings.encoding_mode,
+      target_bitrate_kbps: renderSettings.encoding_mode !== "crf" ? renderSettings.target_bitrate_kbps : undefined,
+      audio_bitrate_kbps: renderSettings.audio_bitrate_kbps,
+      video_profile: renderSettings.video_profile,
+      video_level: renderSettings.video_level,
+      force_cpu: renderSettings.force_cpu,
+      voice_settings: {
+        stability: voiceStability,
+        similarity_boost: voiceSimilarity,
+        style: voiceStyle,
+        speed: voiceSpeed,
+        use_speaker_boost: voiceSpeakerBoost,
+      },
+      words_per_subtitle: wordsPerSubtitle,
+      min_segment_duration: minSegmentDuration,
+      ultra_rapid_intro: ultraRapidIntro,
+      font_size: subtitleSettings.fontSize,
+      font_family: subtitleSettings.fontFamily,
+      text_color: subtitleSettings.textColor,
+      outline_color: subtitleSettings.outlineColor,
+      outline_width: subtitleSettings.outlineWidth,
+      position_y: subtitleSettings.positionY,
+      shadow_depth: subtitleSettings.shadowDepth ?? 0,
+      enable_glow: subtitleSettings.enableGlow ?? false,
+      glow_blur: subtitleSettings.glowBlur ?? 0,
+      adaptive_sizing: subtitleSettings.adaptiveSizing ?? false,
+      opacity: subtitleSettings.opacity ?? 100,
+    };
+  };
+
+  // Step 3: Check for existing renders before starting
+  const handleRenderClick = async () => {
     if (!pipelineId || selectedVariants.size === 0) return;
 
     // Warn if any selected variant has no preview (match_overrides will be missing)
@@ -1105,113 +1242,70 @@ function PipelinePage() {
 
     setPreviewError(null);
 
+    // Check if any variants can skip re-rendering
+    try {
+      setIsCheckingRender(true);
+      const payload = buildRenderPayload();
+      const checkRes = (await apiPost(`/pipeline/check-render/${pipelineId}`, payload, { timeout: 10_000 })) as unknown as { results: RenderCheckResult[]; any_skippable: boolean } | null;
+      if (checkRes?.any_skippable) {
+        setSkipCheckResults(checkRes.results);
+        setShowSkipDialog(true);
+        return;
+      }
+    } catch (err) {
+      // If check fails, proceed with normal render (non-blocking)
+      console.warn("[Render] Skip check failed, proceeding with full render:", err);
+    } finally {
+      setIsCheckingRender(false);
+    }
+
+    // No skippable variants — render all directly
+    handleRender([]);
+  };
+
+  // Execute render with optional skip list
+  const handleRender = async (skipVariants: number[]) => {
+    if (!pipelineId || selectedVariants.size === 0) return;
+
+    setShowSkipDialog(false);
+    setSkipCheckResults(null);
+
     // Stop all active audio/video playback before transitioning to render step
     stopCurrentAudio();
     if (ttsAudioRef.current) {
       ttsAudioRef.current.pause();
       ttsAudioRef.current = null;
     }
-    // Close preview dialog so its video stops
     setPreviewVariant(null);
 
-    // Build initial variant statuses from selected variants BEFORE the API call.
-    // The render response returns rendering_variants (indices) and total_variants,
-    // NOT a `variants` field — so we must populate this from request data to avoid
-    // an empty-state flash when entering Step 4.
-    const initialStatuses: VariantStatus[] = Array.from(selectedVariants).map(idx => ({
-      variant_index: idx,
-      status: "processing" as const,
-      progress: 0,
-      current_step: "Initializing render...",
-    }));
+    const skipSet = new Set(skipVariants);
 
-    // Collect match overrides from timeline editor for each selected variant
-    const matchOverrides: Record<number, MatchPreview[]> = {};
-    for (const idx of Array.from(selectedVariants)) {
-      if (previews[idx]?.matches && previews[idx].matches.length > 0) {
-        matchOverrides[idx] = previews[idx].matches;
-      } else {
-        console.warn(
-          `[Render] Variant ${idx}: no match_overrides available — render will use auto-matching (may differ from preview!). ` +
-          `previews[${idx}] exists: ${!!previews[idx]}, matches count: ${previews[idx]?.matches?.length ?? 0}`
-        );
-      }
-    }
-
-    // Collect interstitial slides for each selected variant (filter out slides with no imageUrl)
-    const filteredInterstitialSlides = Object.keys(interstitialSlides).length > 0
-      ? Object.fromEntries(
-          Object.entries(interstitialSlides)
-            .filter(([k]) => selectedVariants.has(Number(k)))
-            .map(([k, v]) => [k, v.filter((s) => s.imageUrl)])
-            .filter(([, v]) => (v as InterstitialSlide[]).length > 0)
-        )
-      : undefined;
-
-    // Build pip_overlays: segment_id -> { image_url, position, size, animation }
-    // Only includes segments from selected variants whose association has pip_config.enabled
-    const pipOverlays: Record<string, { image_url: string; position: string; size: string; animation: string }> = {};
-    for (const idx of Array.from(selectedVariants)) {
-      const preview = previews[idx];
-      if (!preview?.matches) continue;
-      for (const match of preview.matches) {
-        if (!match.segment_id) continue;
-        const assoc = associations[match.segment_id];
-        if (!assoc?.pip_config?.enabled) continue;
-        // Use first selected image URL, or product_image as fallback
-        const imageUrl = assoc.selected_image_urls?.[0] || assoc.product_image;
-        if (!imageUrl) continue;
-        pipOverlays[match.segment_id] = {
-          image_url: imageUrl,
-          position: assoc.pip_config.position,
-          size: assoc.pip_config.size,
-          animation: assoc.pip_config.animation,
+    // Build initial variant statuses — skipped variants show as cached/completed
+    const initialStatuses: VariantStatus[] = Array.from(selectedVariants).map(idx => {
+      if (skipSet.has(idx)) {
+        return {
+          variant_index: idx,
+          status: "completed" as const,
+          progress: 100,
+          current_step: "Render existent folosit",
         };
       }
-    }
+      return {
+        variant_index: idx,
+        status: "processing" as const,
+        progress: 0,
+        current_step: "Initializing render...",
+      };
+    });
+
+    const payload = buildRenderPayload();
 
     try {
       const res = await apiPost(`/pipeline/render/${pipelineId}`, {
-        variant_indices: Array.from(selectedVariants),
-        preset_name: presetName,
-        elevenlabs_model: elevenlabsModel,
-        voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
-        source_video_ids: selectedSourceIdsRef.current.size > 0 ? Array.from(selectedSourceIdsRef.current) : undefined, // Bug #120
-        match_overrides: Object.keys(matchOverrides).length > 0 ? matchOverrides : undefined,
-        interstitial_slides: filteredInterstitialSlides,
-        pip_overlays: Object.keys(pipOverlays).length > 0 ? pipOverlays : undefined,
-        encoding_mode: renderSettings.encoding_mode,
-        target_bitrate_kbps: renderSettings.encoding_mode !== "crf" ? renderSettings.target_bitrate_kbps : undefined,
-        audio_bitrate_kbps: renderSettings.audio_bitrate_kbps,
-        video_profile: renderSettings.video_profile,
-        video_level: renderSettings.video_level,
-        force_cpu: renderSettings.force_cpu,
-        voice_settings: {
-          stability: voiceStability,
-          similarity_boost: voiceSimilarity,
-          style: voiceStyle,
-          speed: voiceSpeed,
-          use_speaker_boost: voiceSpeakerBoost,
-        },
-        words_per_subtitle: wordsPerSubtitle,
-        min_segment_duration: minSegmentDuration,
-        ultra_rapid_intro: ultraRapidIntro,
-        font_size: subtitleSettings.fontSize,
-        font_family: subtitleSettings.fontFamily,
-        text_color: subtitleSettings.textColor,
-        outline_color: subtitleSettings.outlineColor,
-        outline_width: subtitleSettings.outlineWidth,
-        position_y: subtitleSettings.positionY,
-        shadow_depth: subtitleSettings.shadowDepth ?? 0,
-        enable_glow: subtitleSettings.enableGlow ?? false,
-        glow_blur: subtitleSettings.glowBlur ?? 0,
-        adaptive_sizing: subtitleSettings.adaptiveSizing ?? false,
-        opacity: subtitleSettings.opacity ?? 100,
-      }, { timeout: renderSettings.encoding_mode === "vbr_2pass" ? 1_200_000 : 600_000 }); // 20 min for 2-pass, 10 min otherwise
+        ...payload,
+        skip_variants: skipVariants.length > 0 ? skipVariants : undefined,
+      }, { timeout: renderSettings.encoding_mode === "vbr_2pass" ? 1_200_000 : 600_000 });
 
-      // apiPost throws on non-2xx, so if we reach here it succeeded.
-      // data.variants does not exist on PipelineRenderResponse — initialStatuses
-      // already set above serve as placeholder until polling fills in real data.
       if (!isMountedRef.current) return;
       setIsRendering(true);
       setVariantStatuses(initialStatuses);
@@ -1987,6 +2081,95 @@ function PipelinePage() {
     }, 1000);
   }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel, currentProfile?.id]);
 
+  // Regenerate a single script via AI
+  const handleRegenerateScript = async (variantIndex: number) => {
+    if (!pipelineId || regeneratingScript[variantIndex] || regeneratingAllScripts) return;
+
+    setRegeneratingScript(prev => ({ ...prev, [variantIndex]: true }));
+    try {
+      const res = await apiPost(`/pipeline/regenerate-script/${pipelineId}/${variantIndex}`, {
+        provider,
+      }, { timeout: 120_000 });
+      const data = await res.json();
+
+      // Update script in local state
+      setScripts(prev => {
+        const next = [...prev];
+        next[variantIndex] = data.script;
+        return next;
+      });
+
+      // Mark TTS as stale since script changed
+      setTtsResults(prev => {
+        if (!prev[variantIndex]) return prev;
+        return { ...prev, [variantIndex]: { ...prev[variantIndex], stale: true } };
+      });
+
+      toast.success(`Script ${variantIndex + 1} regenerated`);
+    } catch (err) {
+      handleApiError(err, "Script regeneration error");
+      toast.error("Failed to regenerate script. Please try again.");
+    } finally {
+      setRegeneratingScript(prev => ({ ...prev, [variantIndex]: false }));
+    }
+  };
+
+  // Regenerate all scripts sequentially
+  const handleRegenerateAllScripts = async () => {
+    if (!pipelineId || scripts.length === 0 || regeneratingAllScripts) return;
+
+    const abort = new AbortController();
+    regenerateScriptsAbortRef.current = abort;
+    setRegeneratingAllScripts(true);
+
+    for (let i = 0; i < scripts.length; i++) {
+      if (abort.signal.aborted) break;
+      setRegeneratingAllScriptsIndex(i);
+      setRegeneratingScript(prev => ({ ...prev, [i]: true }));
+
+      try {
+        const res = await apiPost(`/pipeline/regenerate-script/${pipelineId}/${i}`, {
+          provider,
+        }, { timeout: 120_000 });
+        const data = await res.json();
+
+        setScripts(prev => {
+          const next = [...prev];
+          next[i] = data.script;
+          return next;
+        });
+
+        setTtsResults(prev => {
+          if (!prev[i]) return prev;
+          return { ...prev, [i]: { ...prev[i], stale: true } };
+        });
+      } catch (err) {
+        if (!abort.signal.aborted) {
+          handleApiError(err, "Script regeneration error");
+          toast.error(`Failed to regenerate script ${i + 1}`);
+        }
+        setRegeneratingScript(prev => ({ ...prev, [i]: false }));
+        break;
+      } finally {
+        setRegeneratingScript(prev => ({ ...prev, [i]: false }));
+      }
+    }
+
+    setRegeneratingAllScripts(false);
+    setRegeneratingAllScriptsIndex(null);
+    regenerateScriptsAbortRef.current = null;
+    if (!abort.signal.aborted) {
+      toast.success("All scripts regenerated");
+    }
+  };
+
+  const handleCancelRegenerateAllScripts = () => {
+    regenerateScriptsAbortRef.current?.abort();
+    setRegeneratingAllScripts(false);
+    setRegeneratingAllScriptsIndex(null);
+    setRegeneratingScript({});
+  };
+
   // Per-script TTS: generate voice-over for a single script
   const handleGenerateTts = async (variantIndex: number) => {
     if (!pipelineId) return;
@@ -2412,7 +2595,7 @@ function PipelinePage() {
                         ? "bg-green-600 text-white cursor-pointer hover:bg-green-700 transition-colors"
                         : (s.num === 3 && step === 2 && Object.keys(previews).length > 0)
                           || (s.num === 4 && step === 3 && variantStatuses.length > 0)
-                        ? "bg-blue-600 text-white cursor-pointer hover:bg-blue-700 transition-colors"
+                        ? "bg-primary text-primary-foreground cursor-pointer hover:bg-primary/80 transition-colors"
                         : "bg-secondary text-muted-foreground"
                     }`}
                     onClick={() => {
@@ -2884,6 +3067,25 @@ function PipelinePage() {
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-semibold">Review Scripts ({scripts.length})</h2>
               <div className="flex items-center gap-2">
+                {regeneratingAllScripts ? (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleCancelRegenerateAllScripts}
+                  >
+                    <X className="h-3.5 w-3.5 mr-1.5" />
+                    Stop Scripts ({(regeneratingAllScriptsIndex ?? 0) + 1}/{scripts.length})
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleRegenerateAllScripts}
+                    disabled={scripts.length === 0 || regeneratingAll || Object.values(regeneratingScript).some(Boolean)}
+                  >
+                    <Sparkles className="h-3.5 w-3.5 mr-1.5" />Regenerate All Scripts
+                  </Button>
+                )}
                 {regeneratingAll ? (
                   <Button
                     variant="destructive"
@@ -3148,6 +3350,21 @@ function PipelinePage() {
                           <Badge variant="outline" className="text-muted-foreground">
                             {script.replace(/\[([^\[\]]+)\]/g, "").length} chars
                           </Badge>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-muted-foreground hover:text-primary"
+                            title="Regenerate this script with AI"
+                            onClick={() => handleRegenerateScript(index)}
+                            disabled={regeneratingScript[index] || regeneratingAllScripts}
+                          >
+                            {regeneratingScript[index] ? (
+                              <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                            ) : (
+                              <Sparkles className="h-3.5 w-3.5 mr-1" />
+                            )}
+                            {regeneratingScript[index] ? "Regenerating..." : "Regenerate"}
+                          </Button>
                           {scripts.length > 1 && (
                             <Button
                               variant="ghost"
@@ -3218,9 +3435,9 @@ function PipelinePage() {
                     </CardHeader>
                     {totalSegmentDuration > 0 && estimatedDuration > totalSegmentDuration && (
                       <div className="px-6 pb-2">
-                        <Alert className="border-blue-500/50 bg-blue-500/10">
-                          <Info className="h-4 w-4 text-blue-500" />
-                          <AlertDescription className="text-blue-700 dark:text-blue-400 text-sm">
+                        <Alert className="border-muted-foreground/50 bg-muted/50">
+                          <Info className="h-4 w-4 text-muted-foreground" />
+                          <AlertDescription className="text-muted-foreground text-sm">
                             Script exceeds available video material ({Math.round(totalSegmentDuration)}s) by ~{estimatedDuration - Math.round(totalSegmentDuration)}s. Segments will be repeated to cover the difference.
                           </AlertDescription>
                         </Alert>
@@ -3362,7 +3579,7 @@ function PipelinePage() {
                           <Button
                             variant="outline"
                             size="sm"
-                            className="text-xs text-blue-600 border-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950"
+                            className="text-xs text-muted-foreground border-muted-foreground/30 hover:bg-muted"
                             onClick={() => handleUseLibraryTts(index)}
                           >
                             <Library className="h-3.5 w-3.5 mr-1.5" />
@@ -3598,32 +3815,66 @@ function PipelinePage() {
               );
             })()}
 
-            {/* Preview All button */}
+            {/* Reset segment diversity + Preview All button */}
             {(() => {
               const readyTtsCount = Object.values(ttsResults).filter(r => !r.generating && !r.stale).length;
               const allTtsReady = readyTtsCount === scripts.length && scripts.length > 0;
               return (
-                <Button
-                  onClick={handlePreviewAll}
-                  disabled={isGenerating || previewingIndex !== null || isRendering || sourceVideos.length === 0 || selectedSourceIds.size === 0}
-                  className="w-full"
-                  size="lg"
-                >
-                  {/* BUG-FE-35: Counter is safe — previewingIndex is only non-null during batched generation when scripts.length > 0 */}
-                  {previewingIndex !== null ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      {allTtsReady
-                        ? `Generating preview ${previewingIndex + 1} of ${scripts.length}...`
-                        : `Generating voice-over ${previewingIndex + 1} of ${scripts.length}...`}
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="h-4 w-4 mr-2" />
-                      {allTtsReady ? "Generate Previews" : "Generate Voice-Overs"}
-                    </>
-                  )}
-                </Button>
+                <div className="space-y-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full text-muted-foreground hover:text-foreground"
+                    disabled={isGenerating || previewingIndex !== null || isRendering || isResettingUsage}
+                    onClick={async () => {
+                      if (!confirm("Resetezi diversitatea segmentelor? Următoarele preview-uri vor putea reutiliza toate segmentele.")) return;
+                      setIsResettingUsage(true);
+                      try {
+                        const filterIds = selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined;
+                        if (filterIds && filterIds.length > 0) {
+                          for (const svId of filterIds) {
+                            await apiPost("/segments/reset-usage", { source_video_id: svId });
+                          }
+                        } else {
+                          await apiPost("/segments/reset-usage", {});
+                        }
+                        toast.success("Diversitatea segmentelor a fost resetată");
+                      } catch (err) {
+                        handleApiError(err, "Eroare la resetarea diversității");
+                      } finally {
+                        setIsResettingUsage(false);
+                      }
+                    }}
+                  >
+                    {isResettingUsage ? (
+                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                    )}
+                    {isResettingUsage ? "Se resetează..." : "Resetează diversitatea segmentelor"}
+                  </Button>
+                  <Button
+                    onClick={handlePreviewAll}
+                    disabled={isGenerating || previewingIndex !== null || isRendering || sourceVideos.length === 0 || selectedSourceIds.size === 0}
+                    className="w-full"
+                    size="lg"
+                  >
+                    {/* BUG-FE-35: Counter is safe — previewingIndex is only non-null during batched generation when scripts.length > 0 */}
+                    {previewingIndex !== null ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        {allTtsReady
+                          ? `Generating preview ${previewingIndex + 1} of ${scripts.length}...`
+                          : `Generating voice-over ${previewingIndex + 1} of ${scripts.length}...`}
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="h-4 w-4 mr-2" />
+                        {allTtsReady ? "Generate Previews" : "Generate Voice-Overs"}
+                      </>
+                    )}
+                  </Button>
+                </div>
               );
             })()}
             {Object.keys(previews).length > 0 && (
@@ -3845,16 +4096,63 @@ function PipelinePage() {
               onChange={setRenderSettings}
             />
 
+            {/* Continue to existing renders (same pattern as Step 2's "already generated") */}
+            {existingRenderCount > 0 && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  apiGet(`/pipeline/status/${pipelineId}`)
+                    .then(res => res.json())
+                    .then(data => {
+                      if (!data?.variants) return;
+                      // Only show completed variants within current script range
+                      const currentScriptCount = scripts.length;
+                      const rendered = data.variants.filter(
+                        (v: { status: string; variant_index: number; final_video_path?: string }) =>
+                          v.status === "completed" &&
+                          v.final_video_path &&
+                          v.variant_index < currentScriptCount
+                      );
+                      setVariantStatuses(rendered);
+                      setIsRendering(false);
+                      setStep(4);
+                    })
+                    .catch(() => {
+                      toast.error("Failed to load existing renders");
+                    });
+                }}
+                className="w-full"
+                size="lg"
+              >
+                <ArrowRight className="h-4 w-4 mr-2" />
+                Continue to Render Results (already rendered)
+              </Button>
+            )}
+
             {/* Render button */}
             <Button
-              onClick={handleRender}
-              disabled={isRendering || selectedVariants.size === 0}
+              onClick={handleRenderClick}
+              disabled={isRendering || isCheckingRender || selectedVariants.size === 0}
               className="w-full"
               size="lg"
             >
-              <Play className="h-4 w-4 mr-2" />
-              {isRendering ? "Rendering..." : `Render Selected (${selectedVariants.size})`}
+              {isCheckingRender ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4 mr-2" />
+              )}
+              {isCheckingRender ? "Se verifica..." : isRendering ? "Rendering..." : `Render Selected (${selectedVariants.size})`}
             </Button>
+
+            {/* Skip render dialog */}
+            {skipCheckResults && (
+              <SkipRenderDialog
+                open={showSkipDialog}
+                onClose={() => { setShowSkipDialog(false); setSkipCheckResults(null); }}
+                checkResults={skipCheckResults}
+                onConfirm={(skipVars, _renderVars) => handleRender(skipVars)}
+              />
+            )}
           </div>
         )}
 
@@ -3911,17 +4209,24 @@ function PipelinePage() {
                         Variant {status.variant_index + 1}
                       </CardTitle>
                       <div className="flex items-center gap-2">
-                        <Badge
-                          variant={
-                            status.status === "completed"
-                              ? "default"
-                              : status.status === "failed" || status.status === "cancelled"
-                              ? "destructive"
-                              : "secondary"
-                          }
-                        >
-                          {status.status}
-                        </Badge>
+                        {status.current_step === "Render existent folosit" ? (
+                          <Badge variant="default" className="bg-blue-600 hover:bg-blue-700">
+                            <CheckCircle className="h-3 w-3 mr-1" />
+                            Cached
+                          </Badge>
+                        ) : (
+                          <Badge
+                            variant={
+                              status.status === "completed"
+                                ? "default"
+                                : status.status === "failed" || status.status === "cancelled"
+                                ? "destructive"
+                                : "secondary"
+                            }
+                          >
+                            {status.status}
+                          </Badge>
+                        )}
                         {status.status === "processing" && (
                           <Button
                             variant="destructive"
@@ -4121,6 +4426,7 @@ function PipelinePage() {
                 contextProducts={contextProducts}
                 onProductsChange={setContextProducts}
                 onCaptionsGenerated={setGeneratedCaptions}
+                initialCaptions={generatedCaptions}
               />
             )}
 

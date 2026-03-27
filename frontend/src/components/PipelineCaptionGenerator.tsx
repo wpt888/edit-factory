@@ -96,6 +96,7 @@ interface PipelineCaptionGeneratorProps {
   contextProducts?: ContextProduct[];
   onProductsChange?: (products: ContextProduct[]) => void;
   onCaptionsGenerated: (captions: Record<string, string>) => void;
+  initialCaptions?: Record<string, string>;  // clip_id -> caption text (from DB restore)
 }
 
 const TONES = [
@@ -124,12 +125,33 @@ export function PipelineCaptionGenerator({
   contextProducts = [],
   onProductsChange,
   onCaptionsGenerated,
+  initialCaptions,
 }: PipelineCaptionGeneratorProps) {
   const isMountedRef = useRef(true);
   useEffect(() => () => { isMountedRef.current = false; }, []);
 
   // Manual captions per variant (always editable)
   const [manualCaptions, setManualCaptions] = useState<Record<number, string>>({});
+
+  // Seed manual captions from initialCaptions (DB restore) — only once, when first received
+  const initialCaptionsAppliedRef = useRef(false);
+  useEffect(() => {
+    if (initialCaptionsAppliedRef.current) return;
+    if (!initialCaptions || Object.keys(initialCaptions).length === 0) return;
+    if (Object.values(manualCaptions).some(v => v?.trim())) return;  // Already has content
+    // Map clip_id-keyed captions back to variant_index-keyed manualCaptions
+    const restored: Record<number, string> = {};
+    for (const clip of completedClips) {
+      const caption = initialCaptions[clip.clip_id];
+      if (caption?.trim()) {
+        restored[clip.variant_index] = caption;
+      }
+    }
+    if (Object.keys(restored).length > 0) {
+      setManualCaptions(restored);
+      initialCaptionsAppliedRef.current = true;
+    }
+  }, [initialCaptions, completedClips]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // AI settings state (persisted in localStorage)
   const [tone, setTone] = useState(() =>
@@ -189,13 +211,17 @@ export function PipelineCaptionGenerator({
 
   /* ---------- Propagate captions to parent ---------- */
 
+  // Use a ref to always access the latest completedClips without re-creating the callback
+  const completedClipsRef = useRef(completedClips);
+  completedClipsRef.current = completedClips;
+
   const propagateCaptions = useCallback((
     manual: Record<number, string>,
     aiCaptions: Record<number, string[]>,
     aiSelections: Record<number, number>,
   ) => {
     const captionMap: Record<string, string> = {};
-    for (const clip of completedClips) {
+    for (const clip of completedClipsRef.current) {
       const manualText = manual[clip.variant_index];
       if (manualText && manualText.trim()) {
         captionMap[clip.clip_id] = manualText;
@@ -208,7 +234,7 @@ export function PipelineCaptionGenerator({
       }
     }
     onCaptionsGenerated(captionMap);
-  }, [completedClips, onCaptionsGenerated]);
+  }, [onCaptionsGenerated]);
 
   // Re-propagate when clip_ids change (pending-* → real ids after render completes)
   // Use a stable string key to avoid infinite re-render loops from array reference changes
@@ -239,7 +265,6 @@ export function PipelineCaptionGenerator({
       const res = await apiGetWithRetry("/pipeline/video-caption-templates", { timeout: 15_000 });
       const data = await res.json();
       const tpls = data.templates || [];
-      if (!isMountedRef.current) return;
       setTemplates(tpls);
 
       const savedId = typeof window !== "undefined" ? localStorage.getItem(LS_TEMPLATE_KEY) : null;
@@ -255,9 +280,8 @@ export function PipelineCaptionGenerator({
       }
     } catch (err) {
       console.error("[CaptionGenerator] Failed to fetch templates:", err);
-      if (isMountedRef.current) setTemplatesError(true);
+      setTemplatesError(true);
     } finally {
-      // Always clear loading — even if unmounted, React ignores the setState
       setTemplatesLoading(false);
     }
   }, []);
@@ -420,6 +444,7 @@ export function PipelineCaptionGenerator({
 
     setGenerating(true);
     try {
+      console.log("[CaptionGenerator] Sending request for variants:", variantIndices);
       const res = await apiPost("/pipeline/generate-video-captions", {
         pipeline_id: pipelineId,
         variant_indices: variantIndices,
@@ -431,14 +456,19 @@ export function PipelineCaptionGenerator({
         custom_instructions: customInstructions.trim() || undefined,
         variants_per_clip: 3,
       }, { timeout: 120_000 });
+      console.log("[CaptionGenerator] Response status:", res.status);
       const data = await res.json();
-      if (!isMountedRef.current) return;
+      console.log("[CaptionGenerator] Response data:", JSON.stringify(data).slice(0, 500));
+      console.log("[CaptionGenerator] isMountedRef:", isMountedRef.current);
+      // NOTE: removed isMountedRef early-return — it was likely causing captions to silently drop
+      // when the component remounted during the async API call
 
       const captions: Record<number, string[]> = {};
       const captionsObj = data.captions || {};
       for (const [key, val] of Object.entries(captionsObj)) {
         captions[parseInt(key)] = val as string[];
       }
+      console.log("[CaptionGenerator] Parsed captions:", Object.keys(captions).length, "variants");
       setGeneratedCaptions(captions);
 
       // Auto-select first AI caption for each variant (only if no manual caption)
@@ -450,7 +480,17 @@ export function PipelineCaptionGenerator({
         }
       }
       setSelectedCaptionIdx(selections);
-      propagateCaptions(manualCaptions, captions, selections);
+
+      // Auto-fill manual caption fields with first AI option for each variant
+      const updatedManual: Record<number, string> = { ...manualCaptions };
+      for (const [varIdx, varCaptions] of Object.entries(captions)) {
+        const idx = Number(varIdx);
+        if (varCaptions && varCaptions.length > 0 && !updatedManual[idx]?.trim()) {
+          updatedManual[idx] = varCaptions[0];
+        }
+      }
+      setManualCaptions(updatedManual);
+      propagateCaptions(updatedManual, captions, selections);
 
       const errorCount = Object.keys(data.errors || {}).length;
       if (errorCount > 0) {
@@ -458,10 +498,12 @@ export function PipelineCaptionGenerator({
       } else {
         toast.success("Captions generated!");
       }
-    } catch {
+    } catch (err) {
+      console.error("[CaptionGenerator] Error:", err);
       toast.error("Failed to generate captions");
     } finally {
-      if (isMountedRef.current) setGenerating(false);
+      console.log("[CaptionGenerator] Finally block, isMounted:", isMountedRef.current);
+      setGenerating(false);
     }
   };
 
@@ -496,43 +538,12 @@ export function PipelineCaptionGenerator({
         <div>
           <h3 className="text-lg font-semibold">Social Media Captions</h3>
           <p className="text-sm text-muted-foreground">
-            Write captions manually or generate them with AI
+            Generate captions with AI or write them manually below
           </p>
         </div>
       </div>
 
-      {/* Manual caption fields per variant — always visible */}
-      <div className="space-y-3">
-        {completedClips.map((clip) => (
-          <Card key={clip.clip_id}>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Pencil className="size-3.5" />
-                Variant {clip.variant_index + 1} — Caption
-                {manualCaptions[clip.variant_index]?.trim() && (
-                  <Badge variant="default" className="text-xs">Has caption</Badge>
-                )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Textarea
-                placeholder={`Write the social media caption for variant ${clip.variant_index + 1}...`}
-                value={manualCaptions[clip.variant_index] || ""}
-                onChange={(e) => handleManualCaptionChange(clip.variant_index, e.target.value)}
-                rows={3}
-                className="resize-y"
-              />
-              {manualCaptions[clip.variant_index]?.trim() && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  {manualCaptions[clip.variant_index].length} characters
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {/* AI Generation — collapsible */}
+      {/* AI Generation — collapsible (shown BEFORE manual fields) */}
       <Collapsible open={aiSettingsOpen} onOpenChange={setAiSettingsOpen}>
         <Card>
           <CollapsibleTrigger asChild>
@@ -696,12 +707,7 @@ export function PipelineCaptionGenerator({
               <div className="flex items-end gap-2">
                 <div className="flex-1 space-y-2">
                   <Label>Template</Label>
-                  {templatesLoading ? (
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Loader2 className="size-4 animate-spin" />
-                      Loading templates...
-                    </div>
-                  ) : templatesError ? (
+                  {templatesError ? (
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <span>Failed to load templates.</span>
                       <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={fetchTemplates}>
@@ -709,19 +715,24 @@ export function PipelineCaptionGenerator({
                       </Button>
                     </div>
                   ) : (
-                    <Select value={selectedTemplateId || "none"} onValueChange={handleSelectTemplate}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="No template (generate freely)" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">No template</SelectItem>
-                        {templates.map((tpl) => (
-                          <SelectItem key={tpl.id} value={tpl.id}>
-                            {tpl.name} {tpl.is_default ? "(default)" : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <div className="relative">
+                      <Select value={selectedTemplateId || "none"} onValueChange={handleSelectTemplate}>
+                        <SelectTrigger>
+                          <SelectValue placeholder={templatesLoading ? "Loading..." : "No template (generate freely)"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">No template</SelectItem>
+                          {templates.map((tpl) => (
+                            <SelectItem key={tpl.id} value={tpl.id}>
+                              {tpl.name} {tpl.is_default ? "(default)" : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {templatesLoading && (
+                        <Loader2 className="size-3 animate-spin absolute right-8 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                      )}
+                    </div>
                   )}
                 </div>
                 <Dialog open={templateDialogOpen} onOpenChange={(open) => { setTemplateDialogOpen(open); if (open) fetchTemplates(); }}>
@@ -878,7 +889,7 @@ export function PipelineCaptionGenerator({
               {Object.keys(generatedCaptions).length > 0 && (
                 <div className="space-y-3 pt-2">
                   <p className="text-sm text-muted-foreground">
-                    Click an AI caption to use it. It will be copied to the caption field above.
+                    Click an AI caption to use it. It will be copied to the caption field below.
                   </p>
                   {completedClips.map((clip) => {
                     const varCaptions = generatedCaptions[clip.variant_index];
@@ -930,6 +941,37 @@ export function PipelineCaptionGenerator({
           </CollapsibleContent>
         </Card>
       </Collapsible>
+
+      {/* Manual caption fields per variant — always visible, below AI generator */}
+      <div className="space-y-3">
+        {completedClips.map((clip) => (
+          <Card key={clip.clip_id}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Pencil className="size-3.5" />
+                Variant {clip.variant_index + 1} — Caption
+                {manualCaptions[clip.variant_index]?.trim() && (
+                  <Badge variant="default" className="text-xs">Has caption</Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Textarea
+                placeholder={`Write the social media caption for variant ${clip.variant_index + 1}...`}
+                value={manualCaptions[clip.variant_index] || ""}
+                onChange={(e) => handleManualCaptionChange(clip.variant_index, e.target.value)}
+                rows={3}
+                className="resize-y"
+              />
+              {manualCaptions[clip.variant_index]?.trim() && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  {manualCaptions[clip.variant_index].length} characters
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
     </div>
   );
 }
