@@ -2701,58 +2701,73 @@ function PipelinePage() {
               { num: 2, label: "Review Scripts" },
               { num: 3, label: "Preview Matches" },
               { num: 4, label: "Render Videos" },
-            ].map((s, index) => (
-              <div key={s.num} className="flex items-center flex-1">
-                <div className="flex flex-col items-center">
-                  <div
-                    className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold ${
-                      step === s.num
-                        ? "bg-primary text-primary-foreground"
-                        : step > s.num
-                        ? "bg-green-600 text-white cursor-pointer hover:bg-green-700 transition-colors"
-                        : (s.num === 3 && step === 2 && Object.keys(previews).length > 0)
-                          || (s.num === 4 && step === 3 && variantStatuses.length > 0)
-                        ? "bg-primary text-primary-foreground cursor-pointer hover:bg-primary/80 transition-colors"
-                        : "bg-secondary text-muted-foreground"
-                    }`}
-                    onClick={() => {
-                      // BUG-FE-31: Step navigation rules:
-                      // 1. Backward navigation: always allowed (click any completed step)
-                      if (step > s.num) {
-                        setStep(s.num);
-                        setPreviewError(null);
-                      }
-                      // 2. Forward to Step 3: only from Step 2 when previews have been generated
-                      if (s.num === 3 && step === 2 && Object.keys(previews).length > 0) {
-                        setStep(3);
-                        setPreviewError(null);
-                      }
-                      // 3. Forward to Step 4: only from Step 3 when rendering has been initiated
-                      if (s.num === 4 && step === 3 && variantStatuses.length > 0) {
-                        setStep(4);
-                        setPreviewError(null);
-                      }
-                    }}
-                  >
-                    {step > s.num ? <CheckCircle className="h-5 w-5" /> : s.num}
+            ].map((s, index) => {
+              /*
+                Allow re-entering previously populated steps even when the current step is earlier.
+                This fixes the 1 -> 2 dead-end after returning from Step 2 back to Step 1.
+              */
+              const canJumpToStep2 = s.num === 2 && step === 1 && !!pipelineId && scripts.length > 0;
+              const canJumpToStep3 = s.num === 3 && step === 2 && Object.keys(previews).length > 0;
+              const canJumpToStep4 = s.num === 4 && step === 3 && variantStatuses.length > 0;
+              const isClickableForward = canJumpToStep2 || canJumpToStep3 || canJumpToStep4;
+
+              return (
+                <div key={s.num} className="flex items-center flex-1">
+                  <div className="flex flex-col items-center">
+                    <div
+                      className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold ${
+                        step === s.num
+                          ? "bg-primary text-primary-foreground"
+                          : step > s.num
+                          ? "bg-green-600 text-white cursor-pointer hover:bg-green-700 transition-colors"
+                          : isClickableForward
+                          ? "bg-primary text-primary-foreground cursor-pointer hover:bg-primary/80 transition-colors"
+                          : "bg-secondary text-muted-foreground"
+                      }`}
+                      onClick={() => {
+                        // BUG-FE-31: Step navigation rules:
+                        // 1. Backward navigation: always allowed (click any completed step)
+                        if (step > s.num) {
+                          setStep(s.num);
+                          setPreviewError(null);
+                        }
+                        // 2. Forward to Step 2: allowed from Step 1 when scripts already exist
+                        if (canJumpToStep2) {
+                          setStep(2);
+                          setPreviewError(null);
+                        }
+                        // 3. Forward to Step 3: only from Step 2 when previews have been generated
+                        if (canJumpToStep3) {
+                          setStep(3);
+                          setPreviewError(null);
+                        }
+                        // 4. Forward to Step 4: only from Step 3 when rendering has been initiated
+                        if (canJumpToStep4) {
+                          setStep(4);
+                          setPreviewError(null);
+                        }
+                      }}
+                    >
+                      {step > s.num ? <CheckCircle className="h-5 w-5" /> : s.num}
+                    </div>
+                    <p
+                      className={`text-xs mt-2 ${
+                        step === s.num ? "font-semibold" : "text-muted-foreground"
+                      }`}
+                    >
+                      {s.label}
+                    </p>
                   </div>
-                  <p
-                    className={`text-xs mt-2 ${
-                      step === s.num ? "font-semibold" : "text-muted-foreground"
-                    }`}
-                  >
-                    {s.label}
-                  </p>
+                  {index < 3 && (
+                    <div
+                      className={`flex-1 h-1 mx-2 ${
+                        step > s.num ? "bg-green-600" : "bg-secondary"
+                      }`}
+                    />
+                  )}
                 </div>
-                {index < 3 && (
-                  <div
-                    className={`flex-1 h-1 mx-2 ${
-                      step > s.num ? "bg-green-600" : "bg-secondary"
-                    }`}
-                  />
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
           {/* New Pipeline button — visible on steps 2-4 */}
           {step > 1 && (
