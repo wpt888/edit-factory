@@ -78,6 +78,55 @@ def _increment_segment_usage(supabase_client, segment_ids: list):
             _logger.warning(f"Failed to increment usage_count for segment {seg_id}: {e}")
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_embedded_product_blocks(context: str) -> str:
+    """Remove legacy frontend-injected product blocks from freeform context.
+
+    Older frontend builds persisted selected products both in `context_products`
+    and inline inside `context` as:
+
+        [Product: Title]
+        Description...
+
+    This leaked stale products into later Gemini calls when a pipeline was
+    restored and product selection changed. Keep `context` as manual text only.
+    """
+    if not context:
+        return ""
+
+    cleaned = _re.sub(
+        r"(?:^|\n)\[Product:\s*[^\]]+\]\s*(?:\n[^\n\[]*)*",
+        "",
+        context,
+        flags=_re.MULTILINE,
+    )
+    cleaned = _re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _build_effective_pipeline_context(
+    context: str,
+    context_products: Optional[List[Any]] = None,
+) -> str:
+    """Compose AI context from manual text plus structured product data."""
+    manual_context = _strip_embedded_product_blocks(context or "")
+    product_blocks: List[str] = []
+
+    for product in context_products or []:
+        if isinstance(product, dict):
+            title = (product.get("title") or "").strip()
+            description = (product.get("description") or "").strip()
+        else:
+            title = (getattr(product, "title", "") or "").strip()
+            description = (getattr(product, "description", "") or "").strip()
+
+        if title and description:
+            product_blocks.append(f"[Product: {title}]\n{description}")
+        elif title:
+            product_blocks.append(f"[Product: {title}]")
+
+    return "\n\n".join(part for part in [manual_context, *product_blocks] if part).strip()
 router = APIRouter(prefix="/pipeline", tags=["Multi-Variant Pipeline"])
 
 # In-memory pipeline state storage
@@ -339,13 +388,16 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "source_video_ids": pipeline_dict.get("source_video_ids", []),
                 "captions": captions_json,
                 "selected_captions": selected_captions_json,
+                "target_script_duration": pipeline_dict.get("target_script_duration"),
             }
             try:
                 supabase.table("editai_pipelines").upsert(row).execute()
             except Exception as upsert_err:
-                if "selected_captions" in str(upsert_err):
-                    logger.warning("selected_captions column missing, retrying without it")
+                err_str = str(upsert_err)
+                if "selected_captions" in err_str or "target_script_duration" in err_str:
+                    logger.warning(f"Column missing, retrying without it: {err_str[:100]}")
                     row.pop("selected_captions", None)
+                    row.pop("target_script_duration", None)
                     supabase.table("editai_pipelines").upsert(row).execute()
                 else:
                     raise
@@ -546,6 +598,7 @@ class PipelineGenerateRequest(BaseModel):
     context_products: List[ContextProductItem] = Field(default_factory=list)  # Structured product data
     variant_count: int = Field(default=3, ge=1, le=10)  # Number of script variants (1-10)
     provider: str = "gemini"            # "gemini" or "claude"
+    target_script_duration: Optional[float] = Field(default=None, ge=5, le=300)  # Desired script duration in seconds (overrides auto-computed from segments)
 
 
 class PipelineGenerateResponse(BaseModel):
@@ -742,6 +795,7 @@ class PipelineListItem(BaseModel):
     variant_count: int
     keyword_count: int
     created_at: str
+    target_script_duration: Optional[float] = None
 
 
 class PipelineListResponse(BaseModel):
@@ -776,7 +830,7 @@ async def list_pipelines(
         supabase = repo.get_client() if repo else None
         if supabase:
             result = supabase.table("editai_pipelines")\
-                .select("id, name, idea, provider, variant_count, keyword_count, created_at")\
+                .select("id, name, idea, provider, variant_count, keyword_count, created_at, target_script_duration")\
                 .eq("profile_id", profile.profile_id)\
                 .order("created_at", desc=True)\
                 .limit(limit)\
@@ -790,7 +844,8 @@ async def list_pipelines(
                         provider=row.get("provider", "gemini"),
                         variant_count=row.get("variant_count", 0),
                         keyword_count=row.get("keyword_count", 0),
-                        created_at=row.get("created_at", "")
+                        created_at=row.get("created_at", ""),
+                        target_script_duration=row.get("target_script_duration")
                     ))
                 return PipelineListResponse(pipelines=items, total=len(items))
     except Exception as e:
@@ -812,7 +867,8 @@ async def list_pipelines(
             provider=p.get("provider", "gemini"),
             variant_count=p.get("variant_count", 0),
             keyword_count=p.get("keyword_count", 0),
-            created_at=p.get("created_at", "")
+            created_at=p.get("created_at", ""),
+            target_script_duration=p.get("target_script_duration")
         ))
 
     return PipelineListResponse(pipelines=items, total=len(items))
@@ -1152,25 +1208,36 @@ async def regenerate_script(
 
     # Retrieve original generation context from pipeline
     idea = pipeline.get("idea", "")
-    context_text = pipeline.get("context", "")
+    stored_products = pipeline.get("context_products", [])
+    context_text = _build_effective_pipeline_context(
+        pipeline.get("context", ""),
+        stored_products,
+    )
     if not idea:
         raise HTTPException(
             status_code=400,
             detail="Pipeline has no stored idea — cannot regenerate script"
         )
 
-    # Fetch keywords and product groups (same logic as /generate)
+    # Fetch keywords and product groups, filtered by selected products if available
     repo = get_repository()
     supabase = repo.get_client() if repo else None
     unique_keywords = []
     product_groups_dict = {}
 
+    # Use stored context_products from pipeline to filter keywords
+    selected_product_titles = [p["title"] for p in stored_products if p.get("title")] if stored_products else []
+
     if supabase:
         try:
-            result = supabase.table("editai_segments")\
+            query = supabase.table("editai_segments")\
                 .select("keywords, product_group")\
-                .eq("profile_id", profile.profile_id)\
-                .execute()
+                .eq("profile_id", profile.profile_id)
+
+            if selected_product_titles:
+                query = query.in_("product_group", selected_product_titles)
+
+            result = query.execute()
             all_keywords = set()
             for seg in result.data:
                 keywords_list = seg.get("keywords") or []
@@ -1183,6 +1250,12 @@ async def regenerate_script(
                         product_groups_dict[pg].add(kw)
             unique_keywords = sorted(all_keywords)
             product_groups_dict = {k: sorted(v) for k, v in product_groups_dict.items()}
+
+            if selected_product_titles:
+                logger.info(
+                    f"[Profile {profile.profile_id}] Regenerate: filtered keywords by products: "
+                    f"{selected_product_titles}"
+                )
         except Exception as e:
             logger.warning(f"Failed to fetch keywords for script regeneration: {e}")
 
@@ -1200,7 +1273,8 @@ async def regenerate_script(
         except Exception as e:
             logger.warning(f"Failed to fetch AI instructions: {e}")
 
-    total_segment_duration = _compute_segment_duration(profile.profile_id)
+    # Use stored target_script_duration from the pipeline (user-specified desired output duration)
+    stored_target_duration = pipeline.get("target_script_duration")
 
     # Build context about existing scripts so AI generates a different one
     other_scripts = [s for i, s in enumerate(scripts) if i != variant_index]
@@ -1224,7 +1298,7 @@ async def regenerate_script(
             provider=body.provider,
             product_groups=product_groups_dict if product_groups_dict else None,
             ai_instructions=ai_instructions,
-            target_duration=total_segment_duration if total_segment_duration > 0 else None
+            target_duration=stored_target_duration
         )
 
         if not new_scripts:
@@ -1397,17 +1471,26 @@ async def generate_pipeline(
         )
 
     # Fetch unique keywords from editai_segments table, grouped by product_group
+    # When context_products are selected, filter to only those product groups
     repo = get_repository()
     supabase = repo.get_client() if repo else None
     unique_keywords = []
     product_groups_dict = {}  # {group_label: [keywords]}
 
+    # Build product filter from selected catalog products
+    selected_product_titles = [p.title for p in body.context_products] if body.context_products else []
+
     if supabase:
         try:
-            result = supabase.table("editai_segments")\
+            query = supabase.table("editai_segments")\
                 .select("keywords, product_group")\
-                .eq("profile_id", profile.profile_id)\
-                .execute()
+                .eq("profile_id", profile.profile_id)
+
+            # Filter segments to only the selected product groups
+            if selected_product_titles:
+                query = query.in_("product_group", selected_product_titles)
+
+            result = query.execute()
 
             # Flatten and deduplicate keywords, and group by product_group
             all_keywords = set()
@@ -1424,6 +1507,12 @@ async def generate_pipeline(
             unique_keywords = sorted(all_keywords)
             # Convert sets to sorted lists
             product_groups_dict = {k: sorted(v) for k, v in product_groups_dict.items()}
+
+            if selected_product_titles:
+                logger.info(
+                    f"[Profile {profile.profile_id}] Filtered keywords by selected products: "
+                    f"{selected_product_titles}"
+                )
 
         except Exception as e:
             logger.warning(f"Failed to fetch keywords from database: {e}")
@@ -1462,16 +1551,21 @@ async def generate_pipeline(
     try:
         generator = get_script_generator()
         # SCR-03: Run synchronous AI call in a thread to avoid blocking the async event loop
+        effective_context = _build_effective_pipeline_context(
+            body.context,
+            body.context_products,
+        )
+
         scripts = await asyncio.to_thread(
             generator.generate_scripts,
             idea=body.idea,
-            context=body.context,
+            context=effective_context,
             keywords=unique_keywords,
             variant_count=body.variant_count,
             provider=body.provider,
             product_groups=product_groups_dict if product_groups_dict else None,
             ai_instructions=ai_instructions,
-            target_duration=total_segment_duration if total_segment_duration > 0 else None
+            target_duration=body.target_script_duration
         )
 
         # Generate pipeline ID
@@ -1496,7 +1590,8 @@ async def generate_pipeline(
                 "preview_renders": {},
                 "render_jobs": {},
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "profile_id": profile.profile_id
+                "profile_id": profile.profile_id,
+                "target_script_duration": body.target_script_duration
             }
             pipeline_snapshot = dict(_pipelines[pipeline_id])
 
@@ -3078,6 +3173,11 @@ async def get_pipeline_scripts(pipeline_id: str):
         "tts_info": tts_info,
         "captions": pipeline.get("captions", {}),
         "selected_captions": pipeline.get("selected_captions", {}),
+        "name": pipeline.get("name", ""),
+        "idea": pipeline.get("idea", ""),
+        "context": _strip_embedded_product_blocks(pipeline.get("context", "")),
+        "provider": pipeline.get("provider", "gemini"),
+        "variant_count": pipeline.get("variant_count", len(pipeline.get("scripts", []))),
     }
 
 
@@ -3463,10 +3563,16 @@ async def render_preview(
 
     # Compute fingerprint from segment IDs (ordered) + merge groups + preview-affecting params.
     # Include index to ensure different orderings produce different fingerprints.
+    # Include TTS audio mtime so regenerated voiceover invalidates cached preview video.
     seg_parts = [f"{i}:{m.get('segment_id', 'none')}:{m.get('merge_group', '')}" for i, m in enumerate(render_request.match_overrides)]
+    try:
+        audio_mtime = str(Path(audio_path_str).stat().st_mtime)
+    except OSError:
+        audio_mtime = "0"
     fp_parts = seg_parts + [
         f"uri={render_request.ultra_rapid_intro}",
         f"isl={hashlib.md5(_json.dumps([{'url': s.get('imageUrl',''), 'dur': s.get('duration',0), 'anim': s.get('animation',''), 'after': s.get('afterMatchIndex',0)} for s in (render_request.interstitial_slides or [])], sort_keys=True).encode()).hexdigest()[:8]}",
+        f"tts={audio_mtime}",
     ]
     matches_fingerprint = hashlib.md5("|".join(fp_parts).encode()).hexdigest()[:12]
 
@@ -3707,7 +3813,7 @@ async def generate_video_captions(
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
     scripts = pipeline.get("scripts", [])
-    pipeline_context = pipeline.get("context", "")
+    pipeline_context = _strip_embedded_product_blocks(pipeline.get("context", ""))
 
     # Load template if provided
     template_text = ""

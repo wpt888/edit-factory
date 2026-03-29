@@ -119,6 +119,7 @@ interface PipelineListItem {
   variant_count: number;
   keyword_count: number;
   created_at: string;
+  target_script_duration?: number | null;
 }
 
 interface VariantStatus {
@@ -548,7 +549,7 @@ function PipelinePage() {
         // Restore pipeline metadata so "Back to Input" shows the original form
         if (data.name) setPipelineName(data.name);
         if (data.idea) setIdea(data.idea);
-        if (data.context) setContext(data.context);
+        if (data.context) setContext(stripEmbeddedProductBlocks(data.context));
         if (data.provider) setProvider(data.provider);
         if (data.variant_count) setVariantCount(data.variant_count);
 
@@ -596,6 +597,14 @@ function PipelinePage() {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const stripEmbeddedProductBlocks = (value: string): string => {
+    if (!value) return "";
+    return value
+      .replace(/(?:^|\n)\[Product:\s*[^\]]+\]\s*(?:\n[^\n\[]*)*/g, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
   };
 
   const countWords = (text: string): number => {
@@ -1054,9 +1063,7 @@ function PipelinePage() {
         apiGet(`/pipeline/scripts/${pipelineId}`).then(res => res.json()).catch(() => null),
       ]).then(([freshStatuses, data]) => {
         if (!data) return;
-        if (data?.context_products?.length > 0 && contextProducts.length === 0) {
-          setContextProducts(data.context_products);
-        }
+        setContextProducts(data?.context_products || []);
         // Restore saved captions from DB
         // Priority: selected_captions (user edits) > captions arr[0] (AI default)
         const selectedCaptions = data?.selected_captions || {};
@@ -1107,16 +1114,10 @@ function PipelinePage() {
     setIsGenerating(true);
 
     try {
-      // Combine manual text context with structured product data
-      const fullContext = [
-        context.trim(),
-        ...contextProducts.map(p => `[Product: ${p.title}]\n${p.description}`),
-      ].filter(Boolean).join("\n\n");
-
       const res = await apiPost("/pipeline/generate", {
         name: pipelineName.trim() || undefined,
         idea: idea.trim(),
-        context: fullContext || undefined,
+        context: stripEmbeddedProductBlocks(context) || undefined,
         context_products: contextProducts.length > 0 ? contextProducts : undefined,
         variant_count: variantCount,
         provider,
