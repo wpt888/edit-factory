@@ -56,6 +56,8 @@ import {
   AlertTriangle,
   Share2,
   RefreshCw,
+  LayoutGrid,
+  List,
 } from "lucide-react";
 import { usePolling } from "@/hooks";
 import { useProfile } from "@/contexts/profile-context";
@@ -75,7 +77,6 @@ import { TimelineEditor, SegmentOption, InterstitialSlide } from "@/components/t
 import { VariantPreviewPlayer } from "@/components/variant-preview-player";
 import { SimplePipeline } from "@/components/simple-mode-pipeline";
 import type { PipelineMode } from "@/types/pipeline-presets";
-import { BatchUploadQueue } from "@/components/batch-upload-queue";
 import { RenderSettingsPanel, DEFAULT_RENDER_SETTINGS } from "@/components/render-settings-panel";
 import { SkipRenderDialog, RenderCheckResult } from "@/components/SkipRenderDialog";
 import type { RenderSettings } from "@/components/render-settings-panel";
@@ -284,12 +285,12 @@ function PipelinePage() {
   const [context, setContext] = useState("");
   const [contextProducts, setContextProducts] = useState<ContextProduct[]>([]);
   const [variantCount, setVariantCount] = useState(3);
+  const [targetScriptDuration, setTargetScriptDuration] = useState(30);
   const [provider, setProvider] = useState("gemini");
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [aiInstructions, setAiInstructions] = useState("");
   const [aiRulesExpanded, setAiRulesExpanded] = useState(false);
-  const [batchExpanded, setBatchExpanded] = useState(false);
   const [aiRulesSaved, setAiRulesSaved] = useState(false);
   const [aiRulesDirty, setAiRulesDirty] = useState(false);
   const aiInstructionsSaveTimer = useRef<NodeJS.Timeout | null>(null);
@@ -437,6 +438,7 @@ function PipelinePage() {
   selectedSourceIdsRef.current = selectedSourceIds;
   const [sourceVideosLoading, setSourceVideosLoading] = useState(false);
   const [sourceVideoSearch, setSourceVideoSearch] = useState("");
+  const [sourceVideoViewMode, setSourceVideoViewMode] = useState<"list" | "grid">("list");
   // FE-16: This is a single shared search string for all variants' group tag dropdowns.
   // Ideally this would be Record<number, string> (per-variant) to prevent search state leaking
   // across variants when multiple group tag dropdowns are open. Left as-is for now because
@@ -542,6 +544,13 @@ function PipelinePage() {
           return sentences.map((sent: string) => sent.trim()).filter(Boolean).join('\n');
         }));
         if (data.context_products) setContextProducts(data.context_products);
+
+        // Restore pipeline metadata so "Back to Input" shows the original form
+        if (data.name) setPipelineName(data.name);
+        if (data.idea) setIdea(data.idea);
+        if (data.context) setContext(data.context);
+        if (data.provider) setProvider(data.provider);
+        if (data.variant_count) setVariantCount(data.variant_count);
 
         // Restore TTS results from history info (inline to avoid hoisting issues)
         const ttsInfo: Record<string, { has_audio: boolean; audio_duration: number }> = data.tts_info || {};
@@ -1111,6 +1120,7 @@ function PipelinePage() {
         context_products: contextProducts.length > 0 ? contextProducts : undefined,
         variant_count: variantCount,
         provider,
+        target_script_duration: targetScriptDuration,
       }, { timeout: 300_000, signal: abortController.signal }); // 5 min — AI script generation is slow
 
       if (abortController.signal.aborted || !isMountedRef.current) return;
@@ -1536,6 +1546,15 @@ function PipelinePage() {
             setHistoryScripts([]);
             setHistorySelectedScripts(new Set());
           }
+          // If the deleted pipeline is currently loaded in the editor, clear it
+          if (pipelineId === id) {
+            setPipelineId(null);
+            setScripts([]);
+            setPreviews({});
+            setTtsResults({});
+            setPreviewError(null);
+            setStep(1);
+          }
         } catch (err) {
           handleApiError(err, "Failed to delete pipeline");
         } finally {
@@ -1882,6 +1901,15 @@ function PipelinePage() {
       setTtsResults(buildRestoredTts(historyTtsInfo, historyPreviewInfo));
       // Restore context products from history
       setContextProducts(historyContextProducts);
+      // Restore pipeline metadata for "Back to Input"
+      const histItem = historyPipelines.find(p => p.pipeline_id === selectedHistoryId);
+      if (histItem) {
+        if (histItem.name) setPipelineName(histItem.name);
+        if (histItem.idea) setIdea(histItem.idea);
+        if (histItem.provider) setProvider(histItem.provider);
+        if (histItem.variant_count) setVariantCount(histItem.variant_count);
+        if (histItem.target_script_duration) setTargetScriptDuration(histItem.target_script_duration);
+      }
       setSelectedHistoryId(null);
       setHistoryScripts([]);
       setHistorySelectedScripts(new Set());
@@ -2726,6 +2754,37 @@ function PipelinePage() {
               </div>
             ))}
           </div>
+          {/* New Pipeline button — visible on steps 2-4 */}
+          {step > 1 && (
+            <div className="flex justify-end mt-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  if (isRendering) {
+                    setConfirmDialog({
+                      open: true,
+                      title: "Render in progress",
+                      description: "A render is in progress. Are you sure you want to start a new pipeline?",
+                      confirmLabel: "Start new pipeline",
+                      variant: "destructive",
+                      onConfirm: () => {
+                        setConfirmDialog((prev) => ({ ...prev, open: false }));
+                        handleCancelRender();
+                        resetPipeline();
+                      },
+                    });
+                  } else {
+                    resetPipeline();
+                  }
+                }}
+              >
+                <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+                Start New Pipeline
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Main content + History sidebar */}
@@ -3043,7 +3102,7 @@ function PipelinePage() {
                 </div>
 
                 {/* Configuration row */}
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-3 gap-4">
                   {/* Variant count */}
                   <div className="space-y-2">
                     <Label htmlFor="variant-count">Variants</Label>
@@ -3062,6 +3121,33 @@ function PipelinePage() {
                         ))}
                       </SelectContent>
                     </Select>
+                  </div>
+
+                  {/* Script Duration */}
+                  <div className="space-y-2">
+                    <Label>Duration (sec)</Label>
+                    <div className="flex items-center gap-2">
+                       <Slider
+                         value={[targetScriptDuration]}
+                         onValueChange={([v]) => setTargetScriptDuration(v)}
+                         min={10}
+                         max={120}
+                         step={1}
+                         className="flex-1"
+                       />
+                       <Input
+                         type="number"
+                         min={5}
+                         max={300}
+                         step={1}
+                         value={targetScriptDuration}
+                         onChange={(e) => {
+                           const v = parseInt(e.target.value);
+                           if (!isNaN(v) && v >= 5 && v <= 300) setTargetScriptDuration(v);
+                         }}
+                        className="w-16 h-8 text-center text-sm px-1"
+                      />
+                    </div>
                   </div>
 
                   {/* AI Provider */}
@@ -3091,7 +3177,7 @@ function PipelinePage() {
                 {totalSegmentDuration > 0 && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Info className="h-4 w-4" />
-                    <span>{Math.round(totalSegmentDuration)}s material video disponibil</span>
+                    <span>{Math.round(totalSegmentDuration)}s material video disponibil (brut)</span>
                   </div>
                 )}
 
@@ -3129,24 +3215,6 @@ function PipelinePage() {
               </CardContent>
             </Card>
 
-            {/* Batch Upload Queue (collapsible) */}
-            <div className="mt-6">
-              <Button
-                variant="ghost"
-                onClick={() => setBatchExpanded(!batchExpanded)}
-                className="flex items-center gap-2"
-              >
-                {batchExpanded ? (
-                  <ChevronUp className="h-4 w-4" />
-                ) : (
-                  <ChevronDown className="h-4 w-4" />
-                )}
-                Batch Upload Queue
-              </Button>
-              {batchExpanded && (
-                <BatchUploadQueue variantCount={variantCount} />
-              )}
-            </div>
           </div>
         )}
 
@@ -3790,69 +3858,144 @@ function PipelinePage() {
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {sourceVideos.length > 3 && (
-                      <div className="relative">
-                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          placeholder="Search videos by name..."
-                          value={sourceVideoSearch}
-                          onChange={(e) => setSourceVideoSearch(e.target.value)}
-                          className="pl-9 pr-9"
-                        />
-                        {sourceVideoSearch && (
-                          <button
-                            onClick={() => setSourceVideoSearch("")}
-                            className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
-                          >
-                            <X className="h-4 w-4" />
-                          </button>
-                        )}
-                      </div>
-                    )}
-                    {sourceVideos
-                      .filter(video => !sourceVideoSearch.trim() || video.name.toLowerCase().includes(sourceVideoSearch.toLowerCase()))
-                      .map(video => (
-                      <div
-                        key={video.id}
-                        className={`flex items-center gap-3 p-2 rounded-lg border cursor-pointer transition-colors ${
-                          selectedSourceIds.has(video.id)
-                            ? "bg-primary/5 border-primary/30"
-                            : "hover:bg-muted/50"
-                        }`}
-                        onClick={() => handleSourceToggle(video.id)}
-                      >
-                        <Checkbox
-                          checked={selectedSourceIds.has(video.id)}
-                          onCheckedChange={() => handleSourceToggle(video.id)}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                        {video.thumbnail_path ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={`${API_URL}/segments/files/${encodeURIComponent(video.thumbnail_path?.split('/').pop() || 'placeholder.png')}`}
-                            alt=""
-                            className="w-10 h-10 rounded object-cover flex-shrink-0"
-                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    <div className="flex items-center gap-2">
+                      {sourceVideos.length > 3 && (
+                        <div className="relative flex-1">
+                          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            placeholder="Search videos by name..."
+                            value={sourceVideoSearch}
+                            onChange={(e) => setSourceVideoSearch(e.target.value)}
+                            className="pl-9 pr-9"
                           />
-                        ) : (
-                          <div className="w-10 h-10 rounded bg-muted flex items-center justify-center flex-shrink-0">
-                            <Film className="h-5 w-5 text-muted-foreground" />
-                          </div>
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{video.name}</p>
+                          {sourceVideoSearch && (
+                            <button
+                              onClick={() => setSourceVideoSearch("")}
+                              className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          )}
                         </div>
-                        {video.duration && (
-                          <Badge variant="outline" className="text-xs flex-shrink-0">
-                            <Clock className="h-3 w-3 mr-1" />
-                            {formatDuration(video.duration)}
-                          </Badge>
-                        )}
-                        <Badge variant="secondary" className="text-xs flex-shrink-0">
-                          {video.segments_count} segments
-                        </Badge>
+                      )}
+                      <div className="flex items-center border rounded-md">
+                        <button
+                          onClick={() => setSourceVideoViewMode("list")}
+                          className={`p-2 transition-colors ${sourceVideoViewMode === "list" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                          title="List view"
+                        >
+                          <List className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setSourceVideoViewMode("grid")}
+                          className={`p-2 transition-colors ${sourceVideoViewMode === "grid" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                          title="Grid view"
+                        >
+                          <LayoutGrid className="h-4 w-4" />
+                        </button>
                       </div>
-                    ))}
+                    </div>
+                    <div className="max-h-[400px] overflow-y-auto pr-1">
+                      {sourceVideoViewMode === "list" ? (
+                        <div className="space-y-2">
+                          {sourceVideos
+                            .filter(video => !sourceVideoSearch.trim() || video.name.toLowerCase().includes(sourceVideoSearch.toLowerCase()))
+                            .map(video => (
+                            <div
+                              key={video.id}
+                              className={`flex items-center gap-3 p-2 rounded-lg border cursor-pointer transition-colors ${
+                                selectedSourceIds.has(video.id)
+                                  ? "bg-primary/5 border-primary/30"
+                                  : "hover:bg-muted/50"
+                              }`}
+                              onClick={() => handleSourceToggle(video.id)}
+                            >
+                              <Checkbox
+                                checked={selectedSourceIds.has(video.id)}
+                                onCheckedChange={() => handleSourceToggle(video.id)}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                              {video.thumbnail_path ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={`${API_URL}/segments/files/${encodeURIComponent(video.thumbnail_path?.split('/').pop() || 'placeholder.png')}`}
+                                  alt=""
+                                  className="w-10 h-10 rounded object-cover flex-shrink-0"
+                                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                                />
+                              ) : (
+                                <div className="w-10 h-10 rounded bg-muted flex items-center justify-center flex-shrink-0">
+                                  <Film className="h-5 w-5 text-muted-foreground" />
+                                </div>
+                              )}
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium truncate">{video.name}</p>
+                              </div>
+                              {video.duration && (
+                                <Badge variant="outline" className="text-xs flex-shrink-0">
+                                  <Clock className="h-3 w-3 mr-1" />
+                                  {formatDuration(video.duration)}
+                                </Badge>
+                              )}
+                              <Badge variant="secondary" className="text-xs flex-shrink-0">
+                                {video.segments_count} segments
+                              </Badge>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-3 gap-2">
+                          {sourceVideos
+                            .filter(video => !sourceVideoSearch.trim() || video.name.toLowerCase().includes(sourceVideoSearch.toLowerCase()))
+                            .map(video => (
+                            <div
+                              key={video.id}
+                              className={`relative p-2 rounded-lg border cursor-pointer transition-colors ${
+                                selectedSourceIds.has(video.id)
+                                  ? "bg-primary/5 border-primary/30"
+                                  : "hover:bg-muted/50"
+                              }`}
+                              onClick={() => handleSourceToggle(video.id)}
+                            >
+                              <div className="absolute top-1 left-1 z-10">
+                                <Checkbox
+                                  checked={selectedSourceIds.has(video.id)}
+                                  onCheckedChange={() => handleSourceToggle(video.id)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="bg-background/80"
+                                />
+                              </div>
+                              <div className="aspect-video rounded overflow-hidden bg-muted mb-1.5">
+                                {video.thumbnail_path ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={`${API_URL}/segments/files/${encodeURIComponent(video.thumbnail_path?.split('/').pop() || 'placeholder.png')}`}
+                                    alt=""
+                                    className="w-full h-full object-cover"
+                                    onError={(e) => { (e.target as HTMLImageElement).src = ""; (e.target as HTMLImageElement).style.display = "none"; }}
+                                  />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center">
+                                    <Film className="h-6 w-6 text-muted-foreground" />
+                                  </div>
+                                )}
+                              </div>
+                              <p className="text-xs font-medium truncate">{video.name}</p>
+                              <div className="flex items-center gap-1 mt-1">
+                                {video.duration && (
+                                  <Badge variant="outline" className="text-[10px] px-1 py-0">
+                                    {formatDuration(video.duration)}
+                                  </Badge>
+                                )}
+                                <Badge variant="secondary" className="text-[10px] px-1 py-0">
+                                  {video.segments_count} seg
+                                </Badge>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     <div className="text-xs text-muted-foreground pt-2 border-t">
                       Total segments available: {sourceVideos.filter(v => selectedSourceIds.has(v.id)).reduce((sum, v) => sum + v.segments_count, 0)}
                     </div>
@@ -4442,7 +4585,7 @@ function PipelinePage() {
                           <a
                             href={`${API_URL}/library/files/${encodeURIComponent(
                               status.final_video_path
-                            )}?v=${videoCacheBust}`}
+                            )}?v=${videoCacheBust}&download=true`}
                             download
                           >
                             <Download className="h-4 w-4 mr-2" />
@@ -4731,6 +4874,16 @@ function PipelinePage() {
                                     setScripts(historyScripts.map(formatScript));
                                     // Carry over TTS results: prefer tts_info (Step 2) over preview_info (Step 3)
                                     setTtsResults(buildRestoredTts(historyTtsInfo, historyPreviewInfo));
+                                    // Restore pipeline metadata for "Back to Input"
+                                    const histItem = historyPipelines.find(p => p.pipeline_id === selectedHistoryId);
+                                    if (histItem) {
+                                      if (histItem.name) setPipelineName(histItem.name);
+                                      if (histItem.idea) setIdea(histItem.idea);
+                                      if (histItem.provider) setProvider(histItem.provider);
+                                      if (histItem.variant_count) setVariantCount(histItem.variant_count);
+                                      if (histItem.target_script_duration) setTargetScriptDuration(histItem.target_script_duration);
+                                    }
+                                    setContextProducts(historyContextProducts);
                                     // Restore source video selection so product groups load
                                     setSelectedSourceIds(new Set());
                                     restoreSourceSelection(selectedHistoryId);
