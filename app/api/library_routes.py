@@ -1719,6 +1719,21 @@ async def _generate_from_segments_task(
                     "duration": actual_duration
                 })
 
+                # Increment usage_count for segments used in this variant
+                try:
+                    used_seg_ids = [s["id"] for s in segments_for_variant if s.get("id")]
+                    if used_seg_ids:
+                        _increment_segment_usage(supabase, used_seg_ids)
+                        logger.info(
+                            f"Incremented usage_count for {len(used_seg_ids)} "
+                            f"segments (variant {variant_idx})"
+                        )
+                except Exception as usage_err:
+                    logger.warning(
+                        f"Failed to increment segment usage_count "
+                        f"for variant {variant_idx}: {usage_err}"
+                    )
+
                 logger.info(f"Created variant {variant_idx} for project {project_id}: {actual_duration:.1f}s")
 
                 # Update progress after variant created
@@ -2003,7 +2018,7 @@ async def list_all_clips(
         # Get content info for all clips to check subtitles/voiceover
         clip_ids = [c["id"] for c in clips_result.data]
         content_result = supabase.table("editai_clip_content")\
-            .select("clip_id, srt_content, tts_audio_path")\
+            .select("clip_id, srt_content, tts_audio_path, tts_text, script_text")\
             .in_("clip_id", clip_ids)\
             .execute()
 
@@ -2042,6 +2057,13 @@ async def list_all_clips(
                 "has_audio": has_audio,
                 "tags": clip.get("tags") or [],
                 "context_text": project_data.get("context_text") or None,
+                "tiktok_posted": clip.get("tiktok_posted") or False,
+                "instagram_posted": clip.get("instagram_posted") or False,
+                "youtube_posted": clip.get("youtube_posted") or False,
+                "facebook_posted": clip.get("facebook_posted") or False,
+                "srt_content": content.get("srt_content") or None,
+                "tts_text": content.get("tts_text") or None,
+                "script_text": content.get("script_text") or None,
             })
 
         # Compute next_cursor: the created_at of the last clip if a full page was returned
@@ -2094,6 +2116,10 @@ class ClipUpdateRequest(BaseModel):
     postiz_post_id: Optional[str] = None
     postiz_scheduled_at: Optional[str] = None
     tags: Optional[List[str]] = None  # User-defined tags for clip organization
+    tiktok_posted: Optional[bool] = None
+    instagram_posted: Optional[bool] = None
+    youtube_posted: Optional[bool] = None
+    facebook_posted: Optional[bool] = None
 
 
 @router.patch("/clips/{clip_id}")
@@ -2127,6 +2153,14 @@ async def update_clip(
             # Normalize tags: lowercase, strip whitespace, deduplicate, limit to 20 tags
             clean_tags = list(set(tag.strip().lower() for tag in request.tags if tag.strip()))[:20]
             update_data["tags"] = clean_tags
+        if request.tiktok_posted is not None:
+            update_data["tiktok_posted"] = request.tiktok_posted
+        if request.instagram_posted is not None:
+            update_data["instagram_posted"] = request.instagram_posted
+        if request.youtube_posted is not None:
+            update_data["youtube_posted"] = request.youtube_posted
+        if request.facebook_posted is not None:
+            update_data["facebook_posted"] = request.facebook_posted
 
         updated = repo.update_clip(clip_id, update_data)
         if not updated:
@@ -3417,6 +3451,42 @@ def _get_video_info(video_path: Path) -> dict:
         logger.warning(f"Failed to get video info for {video_path}: {e}")
     logger.warning(f"Returning hardcoded video info defaults (1080x1920, 0s duration) for {video_path} — downstream processing may produce incorrect results")
     return {"width": 1080, "height": 1920, "duration": 0}
+
+
+def _increment_segment_usage(supabase_client, segment_ids: list):
+    """Increment usage_count for segments after a successful generation.
+
+    Uses the increment_segment_usage_batch RPC for atomic batch increment.
+    Falls back to individual read-then-update if RPC is unavailable.
+    """
+    if not segment_ids:
+        return
+    # Try atomic batch increment via Postgres function
+    try:
+        supabase_client.rpc(
+            "increment_segment_usage_batch",
+            {"segment_ids": segment_ids}
+        ).execute()
+        return
+    except Exception:
+        pass
+    # Fallback: individual read-then-update (not atomic, but functional)
+    for seg_id in segment_ids:
+        try:
+            current = supabase_client.table("editai_segments")\
+                .select("usage_count")\
+                .eq("id", seg_id)\
+                .execute()
+            if current.data:
+                new_count = (current.data[0].get("usage_count") or 0) + 1
+                supabase_client.table("editai_segments")\
+                    .update({"usage_count": new_count})\
+                    .eq("id", seg_id)\
+                    .execute()
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                f"Failed to increment usage_count for segment {seg_id}: {e}"
+            )
 
 
 def _get_video_duration(video_path: Path) -> float:

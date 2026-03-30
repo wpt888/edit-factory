@@ -38,7 +38,7 @@ import {
   AlertCircle,
   Link,
   Undo2,
-  Tag,
+  Tag as TagIcon,
   ImageIcon,
   Calendar,
   Send,
@@ -90,6 +90,13 @@ interface ClipWithProject {
   has_audio?: boolean;
   tags?: string[];
   context_text?: string | null;
+  tiktok_posted?: boolean;
+  instagram_posted?: boolean;
+  youtube_posted?: boolean;
+  facebook_posted?: boolean;
+  srt_content?: string | null;
+  tts_text?: string | null;
+  script_text?: string | null;
 }
 
 
@@ -115,6 +122,12 @@ function LibrarieContent() {
   );
   const [filterPostiz, setFilterPostiz] = useState<string>(
     searchParams.get("postiz") || "all"
+  );
+  const [filterTiktok, setFilterTiktok] = useState<string>(
+    searchParams.get("tiktok") || "all"
+  );
+  const [filterSocialPosted, setFilterSocialPosted] = useState<string>(
+    searchParams.get("social") || "all"
   );
 
   // Tag filter state
@@ -367,13 +380,27 @@ function LibrarieContent() {
       result = result.filter((clip) => clip.postiz_status === filterPostiz);
     }
 
+    // TikTok posted filter
+    if (filterTiktok === "posted") {
+      result = result.filter((clip) => clip.tiktok_posted);
+    } else if (filterTiktok === "not_posted") {
+      result = result.filter((clip) => !clip.tiktok_posted);
+    }
+
+    // Social posted filter
+    if (filterSocialPosted === "any_posted") {
+      result = result.filter((clip) => clip.tiktok_posted || clip.instagram_posted || clip.youtube_posted || clip.facebook_posted);
+    } else if (filterSocialPosted === "none_posted") {
+      result = result.filter((clip) => !clip.tiktok_posted && !clip.instagram_posted && !clip.youtube_posted && !clip.facebook_posted);
+    }
+
     // Tag filter (client-side; server already filters, this keeps it in sync)
     if (filterTag) {
       result = result.filter((clip) => (clip.tags || []).includes(filterTag));
     }
 
     return result;
-  }, [clips, searchQuery, filterSubtitles, filterVoiceover, filterPostiz, filterTag]);
+  }, [clips, searchQuery, filterSubtitles, filterVoiceover, filterPostiz, filterTiktok, filterSocialPosted, filterTag]);
 
   // Fetch Postiz connection status
   const fetchPostizStatus = async () => {
@@ -474,6 +501,51 @@ function LibrarieContent() {
     }
   };
 
+  // Toggle TikTok posted status
+  const toggleTiktokPosted = async (clipId: string) => {
+    const clip = clips.find((c) => c.id === clipId);
+    if (!clip) return;
+    const newValue = !clip.tiktok_posted;
+    // Optimistic update
+    setClips((prev) =>
+      prev.map((c) => (c.id === clipId ? { ...c, tiktok_posted: newValue } : c))
+    );
+    try {
+      await apiPatch(`/library/clips/${clipId}`, { tiktok_posted: newValue });
+      toast.success(newValue ? "Marked as posted on TikTok" : "Unmarked TikTok post");
+    } catch (error) {
+      handleApiError(error, "Error updating TikTok status");
+      // Revert
+      setClips((prev) =>
+        prev.map((c) => (c.id === clipId ? { ...c, tiktok_posted: !newValue } : c))
+      );
+    }
+  };
+
+  // Toggle social media posted status (generic)
+  const toggleSocialPosted = async (clipId: string, platform: "instagram_posted" | "youtube_posted" | "facebook_posted") => {
+    const clip = clips.find((c) => c.id === clipId);
+    if (!clip) return;
+    const newValue = !clip[platform];
+    setClips((prev) =>
+      prev.map((c) => (c.id === clipId ? { ...c, [platform]: newValue } : c))
+    );
+    const platformLabel = platform.replace("_posted", "").replace(/^./, (c) => c.toUpperCase());
+    try {
+      await apiPatch(`/library/clips/${clipId}`, { [platform]: newValue });
+      toast.success(newValue ? `Marked as posted on ${platformLabel}` : `Unmarked ${platformLabel} post`);
+    } catch (error) {
+      handleApiError(error, `Error updating ${platformLabel} status`);
+      setClips((prev) =>
+        prev.map((c) => (c.id === clipId ? { ...c, [platform]: !newValue } : c))
+      );
+    }
+  };
+
+  // Caption expand state
+  const [expandedCaptionId, setExpandedCaptionId] = useState<string | null>(null);
+  const [expandedScriptId, setExpandedScriptId] = useState<string | null>(null);
+
   // Get Postiz status badge
   const getPostizBadge = (clip: ClipWithProject) => {
     const status = clip.postiz_status || "not_sent";
@@ -486,7 +558,7 @@ function LibrarieContent() {
         };
       case "scheduled":
         return {
-          color: "bg-blue-500 text-white",
+          color: "bg-amber-500 text-white",
           label: "Scheduled",
           icon: <Clock className="h-3 w-3 mr-1" />,
         };
@@ -989,7 +1061,7 @@ function LibrarieContent() {
                             : img.status === "failed"
                             ? "bg-red-500 text-white"
                             : img.status === "processing"
-                            ? "bg-blue-500 text-white"
+                            ? "bg-amber-500 text-white"
                             : "bg-muted text-muted-foreground"
                         }`}
                       >
@@ -1030,7 +1102,7 @@ function LibrarieContent() {
                             </Button>
                             <Button
                               size="sm"
-                              className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600 disabled:opacity-50"
+                              className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                               disabled={!postizStatus?.connected}
                               onClick={() => openImagePublish(img.id)}
                               title={postizStatus?.connected ? "Publish to Social Media" : "Postiz not configured"}
@@ -1151,7 +1223,7 @@ function LibrarieContent() {
                           <div className="flex gap-1">
                             <Button
                               size="sm"
-                              className="flex-1 text-xs bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
+                              className="flex-1 text-xs bg-primary text-primary-foreground hover:bg-primary/90"
                               disabled={imagePublishing || imagePublishIntegrations.length === 0}
                               onClick={publishImage}
                             >
@@ -1385,10 +1457,50 @@ function LibrarieContent() {
                 </Select>
               </div>
 
+              {/* TikTok posted filter */}
+              <div className="w-[160px]">
+                <Label className="text-sm text-muted-foreground mb-2 block">
+                  TikTok
+                </Label>
+                <Select value={filterTiktok} onValueChange={(value) => {
+                  setFilterTiktok(value);
+                  updateURL({ tiktok: value });
+                }}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="posted">Posted</SelectItem>
+                    <SelectItem value="not_posted">Not posted</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Social Posted filter */}
+              <div className="w-[160px]">
+                <Label className="text-sm text-muted-foreground mb-2 block">
+                  Social Posted
+                </Label>
+                <Select value={filterSocialPosted} onValueChange={(value) => {
+                  setFilterSocialPosted(value);
+                  updateURL({ social: value });
+                }}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="any_posted">Any posted</SelectItem>
+                    <SelectItem value="none_posted">None posted</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
               {/* Tag filter */}
               <div className="w-[160px]">
                 <Label className="text-sm text-muted-foreground mb-2 block">
-                  <Tag className="h-3 w-3 inline mr-1" />
+                  <TagIcon className="h-3 w-3 inline mr-1" />
                   Tag
                 </Label>
                 <Select value={filterTag || "all"} onValueChange={handleTagFilter}>
@@ -1412,7 +1524,7 @@ function LibrarieContent() {
               <div className="mt-3 flex items-center gap-2">
                 <span className="text-xs text-muted-foreground">Filtered by tag:</span>
                 <Badge variant="secondary" className="text-xs gap-1">
-                  <Tag className="h-3 w-3" />
+                  <TagIcon className="h-3 w-3" />
                   {filterTag}
                   <button
                     type="button"
@@ -1478,7 +1590,7 @@ function LibrarieContent() {
                   </Button>
                   <Button
                     size="sm"
-                    className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600 disabled:opacity-50"
+                    className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                     onClick={openBulkUploadConfirm}
                     disabled={bulkDeleting || bulkUploading || !postizStatus?.connected}
                     title={postizStatus?.connected ? `Send to ${postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")}` : "Postiz not configured — configure in Settings"}
@@ -1562,6 +1674,22 @@ function LibrarieContent() {
                       {postizBadge.label}
                     </Badge>
 
+                    {/* Social media posted badges */}
+                    <div className="absolute top-8 right-2 flex flex-col gap-0.5">
+                      {clip.tiktok_posted && (
+                        <Badge className="bg-black text-white text-[10px] px-1.5 py-0">TikTok</Badge>
+                      )}
+                      {clip.instagram_posted && (
+                        <Badge className="bg-gradient-to-r from-purple-500 to-pink-500 text-white text-[10px] px-1.5 py-0">Instagram</Badge>
+                      )}
+                      {clip.youtube_posted && (
+                        <Badge className="bg-red-600 text-white text-[10px] px-1.5 py-0">YouTube</Badge>
+                      )}
+                      {clip.facebook_posted && (
+                        <Badge className="bg-blue-600 text-white text-[10px] px-1.5 py-0">Facebook</Badge>
+                      )}
+                    </div>
+
                     {/* Feature badges - positioned below checkbox */}
                     <div className="absolute top-10 left-2 flex flex-col gap-1">
                       {clip.has_subtitles && (
@@ -1636,7 +1764,7 @@ function LibrarieContent() {
                         )}
                         <Button
                           size="sm"
-                          className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600 disabled:opacity-50"
+                          className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                           disabled={!postizStatus?.connected}
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1696,8 +1824,8 @@ function LibrarieContent() {
                     </div>
                   </ClipHoverPreview>
 
-                  {/* Info with rename */}
-                  <CardContent className="p-2">
+                  {/* Info with rename and social checkboxes */}
+                  <CardContent className="p-2 space-y-1">
                     {renameClipId === clip.id ? (
                       <div className="flex items-center gap-1">
                         <Input
@@ -1764,6 +1892,75 @@ function LibrarieContent() {
                         onTagsChange={(newTags) => updateClipTags(clip.id, newTags)}
                       />
                     </div>
+                    {/* Social media posted checkboxes */}
+                    <div
+                      className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {([
+                        { key: "tiktok_posted" as const, label: "TikTok", toggle: () => toggleTiktokPosted(clip.id) },
+                        { key: "instagram_posted" as const, label: "IG", toggle: () => toggleSocialPosted(clip.id, "instagram_posted") },
+                        { key: "youtube_posted" as const, label: "YT", toggle: () => toggleSocialPosted(clip.id, "youtube_posted") },
+                        { key: "facebook_posted" as const, label: "FB", toggle: () => toggleSocialPosted(clip.id, "facebook_posted") },
+                      ]).map(({ key, label, toggle }) => (
+                        <div key={key} className="flex items-center gap-1">
+                          <Checkbox
+                            id={`${key}-${clip.id}`}
+                            checked={clip[key] || false}
+                            onCheckedChange={toggle}
+                            className="h-3.5 w-3.5"
+                          />
+                          <label
+                            htmlFor={`${key}-${clip.id}`}
+                            className={`text-xs cursor-pointer select-none ${
+                              clip[key] ? "text-foreground font-medium" : "text-muted-foreground"
+                            }`}
+                          >
+                            {label}
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Script preview */}
+                    {(clip.script_text || clip.tts_text) && (
+                      <div
+                        className="mt-1.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          className="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 flex items-center gap-1 transition-colors font-medium"
+                          onClick={() => setExpandedScriptId(expandedScriptId === clip.id ? null : clip.id)}
+                        >
+                          <FileText className="h-3 w-3" />
+                          {expandedScriptId === clip.id ? "Hide script" : "Show script"}
+                        </button>
+                        {expandedScriptId === clip.id && (
+                          <div className="mt-1 p-1.5 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded text-xs text-foreground max-h-32 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                            {clip.script_text || clip.tts_text}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {/* Caption preview */}
+                    {clip.srt_content && (
+                      <div
+                        className="mt-1.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+                          onClick={() => setExpandedCaptionId(expandedCaptionId === clip.id ? null : clip.id)}
+                        >
+                          <FileText className="h-3 w-3" />
+                          {expandedCaptionId === clip.id ? "Hide caption" : "Show caption"}
+                        </button>
+                        {expandedCaptionId === clip.id && (
+                          <div className="mt-1 p-1.5 bg-muted/50 rounded text-xs text-muted-foreground max-h-24 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                            {clip.srt_content.replace(/\d+\n[\d:,\s->]+\n/g, "").trim()}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               );
@@ -1837,6 +2034,7 @@ function LibrarieContent() {
             videoUrl={`${API_URL}/library/files/${encodeURIComponent(playingClip.final_video_path || playingClip.raw_video_path)}?v=${playingClip.id}`}
             title={playingClip.variant_name || `Varianta ${playingClip.variant_index}`}
             videoRef={videoRef}
+            scriptText={playingClip.tts_text}
           />
         )}
       </main>
