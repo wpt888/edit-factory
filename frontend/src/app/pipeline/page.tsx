@@ -300,6 +300,7 @@ function PipelinePage() {
   // Step 2: Scripts
   const [pipelineId, setPipelineId] = useState<string | null>(null);
   const [scripts, setScripts] = useState<string[]>([]);
+  const [approvedScripts, setApprovedScripts] = useState<Set<number>>(new Set());
   const [totalSegmentDuration, setTotalSegmentDuration] = useState<number>(0);
 
   // Step 3: Preview
@@ -1237,7 +1238,7 @@ function PipelinePage() {
       const allIndices = new Set(scripts.map((_, i) => i));
       setSelectedVariants(allIndices);
 
-      setStep(3);
+      // Stay on Step 2 so user can review voice-overs before proceeding
     } finally {
       if (isMountedRef.current) setPreviewingIndex(null);
     }
@@ -2299,6 +2300,13 @@ function PipelinePage() {
       ...prev,
       [variantIndex]: { audio_duration: 0, generating: true, stale: false }
     }));
+    // Clear approval — TTS regenerated, needs re-verification
+    setApprovedScripts(prev => {
+      if (!prev.has(variantIndex)) return prev;
+      const next = new Set(prev);
+      next.delete(variantIndex);
+      return next;
+    });
 
     try {
       const res = await apiPost(`/pipeline/tts/${pipelineId}/${variantIndex}`, {
@@ -2356,6 +2364,8 @@ function PipelinePage() {
 
     setRegeneratingAll(true);
     setRegeneratingAllIndex(0);
+    // Clear all approvals — all TTS being regenerated
+    setApprovedScripts(new Set());
 
     for (let i = 0; i < scripts.length; i++) {
       if (abortController.signal.aborted) break;
@@ -3512,10 +3522,17 @@ function PipelinePage() {
                 const estimatedDuration = Math.round(wordCount / WORDS_PER_SECOND);
 
                 return (
-                  <Card key={index}>
+                  <Card key={index} className={`transition-colors ${approvedScripts.has(index) ? "border-green-500 bg-green-50/50 dark:bg-green-950/20" : ""}`}>
                     <CardHeader>
                       <div className="flex items-center justify-between">
-                        <CardTitle className="text-lg">Script {index + 1}</CardTitle>
+                        <div className="flex items-center gap-3">
+                          <CardTitle className="text-lg">
+                            Script {index + 1}
+                            {approvedScripts.has(index) && (
+                              <CheckCircle className="inline-block h-4 w-4 ml-2 text-green-600" />
+                            )}
+                          </CardTitle>
+                        </div>
                         <div className="flex items-center gap-2">
                           <Badge variant="outline">
                             {wordCount} words (~{formatDuration(estimatedDuration)})
@@ -3589,6 +3606,15 @@ function PipelinePage() {
                                   }
                                   return next;
                                 });
+                                // Remap approvedScripts: remove deleted index, shift higher indices down
+                                setApprovedScripts(prev => {
+                                  const next = new Set<number>();
+                                  for (const ki of prev) {
+                                    if (ki < index) next.add(ki);
+                                    else if (ki > index) next.add(ki - 1);
+                                  }
+                                  return next;
+                                });
                                 // Remap selectedVariants: remove deleted index, shift higher indices down
                                 setSelectedVariants(prev => {
                                   const next = new Set<number>();
@@ -3632,6 +3658,13 @@ function PipelinePage() {
                               [index]: { ...prev[index], stale: true }
                             }));
                           }
+                          // Clear approval — script changed, needs re-verification
+                          setApprovedScripts(prev => {
+                            if (!prev.has(index)) return prev;
+                            const next = new Set(prev);
+                            next.delete(index);
+                            return next;
+                          });
                           // Clear any stale preview error so the banner doesn't persist during editing
                           if (previewError) setPreviewError(null);
                         }}
@@ -3701,7 +3734,7 @@ function PipelinePage() {
                       })()}
 
                       {/* Per-script TTS controls */}
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         {ttsResults[index]?.generating ? (
                           <Button variant="outline" size="sm" disabled>
                             <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
@@ -3758,6 +3791,29 @@ function PipelinePage() {
                             <Library className="h-3.5 w-3.5 mr-1.5" />
                             Use Library Audio ({formatDuration(libraryMatches[index].audio_duration)})
                           </Button>
+                        )}
+                        {ttsResults[index] && !ttsResults[index].generating && !ttsResults[index].stale && (
+                          <div className="ml-auto flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-2.5 py-1 dark:border-green-900 dark:bg-green-950/30">
+                            <Checkbox
+                              id={`approve-script-${index}`}
+                              checked={approvedScripts.has(index)}
+                              onCheckedChange={(checked) => {
+                                setApprovedScripts(prev => {
+                                  const next = new Set(prev);
+                                  if (checked === true) next.add(index);
+                                  else next.delete(index);
+                                  return next;
+                                });
+                              }}
+                              className="h-4.5 w-4.5 border-green-500 data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
+                            />
+                            <Label
+                              htmlFor={`approve-script-${index}`}
+                              className="cursor-pointer text-xs font-medium text-green-700 dark:text-green-300"
+                            >
+                              Approve voice-over
+                            </Label>
+                          </div>
                         )}
                       </div>
 
@@ -4113,6 +4169,28 @@ function PipelinePage() {
                 </div>
               );
             })()}
+            {/* Approval status */}
+            {scripts.length > 0 && (
+              <div className="flex items-center justify-between text-sm">
+                <span className={`font-medium ${approvedScripts.size === scripts.length ? "text-green-600" : "text-muted-foreground"}`}>
+                  {approvedScripts.size === 0
+                    ? "No scripts approved yet — listen and check the ones you like"
+                    : approvedScripts.size === scripts.length
+                    ? `All ${scripts.length} scripts approved`
+                    : `${approvedScripts.size} of ${scripts.length} scripts approved`}
+                </span>
+                {approvedScripts.size > 0 && approvedScripts.size < scripts.length && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => setApprovedScripts(new Set(scripts.map((_, i) => i)))}
+                  >
+                    Approve all
+                  </Button>
+                )}
+              </div>
+            )}
             {Object.keys(previews).length > 0 && (
               <Button
                 variant="outline"
