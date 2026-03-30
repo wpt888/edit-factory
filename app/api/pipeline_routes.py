@@ -755,6 +755,7 @@ class VariantTtsInfo(BaseModel):
     """TTS preview info for a variant (Step 2 per-script TTS)."""
     has_audio: bool = False
     audio_duration: float = 0.0
+    approved: bool = False
 
 
 class PipelineStatusResponse(BaseModel):
@@ -1276,15 +1277,27 @@ async def regenerate_script(
     # Use stored target_script_duration from the pipeline (user-specified desired output duration)
     stored_target_duration = pipeline.get("target_script_duration")
 
-    # Build context about existing scripts so AI generates a different one
-    other_scripts = [s for i, s in enumerate(scripts) if i != variant_index]
+    # Do not inject full existing scripts into the prompt. In practice this can
+    # leak stale product/model names from older variants back into regenerated
+    # output. Keep only high-level constraints.
+    other_scripts = [s for i, s in enumerate(scripts) if i != variant_index and (s or "").strip()]
     regen_context = context_text
     if other_scripts:
         regen_context += (
-            "\n\n[IMPORTANT: The following scripts already exist for this video. "
-            "Generate a COMPLETELY DIFFERENT script that covers different angles, "
-            "structures, or approaches. Do NOT repeat or rephrase these existing scripts.]\n\n"
-            + "\n---\n".join(f"EXISTING SCRIPT {i+1}:\n{s}" for i, s in enumerate(other_scripts))
+            "\n\n[IMPORTANT: Other variants already exist for this video. "
+            "Generate a COMPLETELY DIFFERENT script with a different hook, "
+            "structure, pacing, and CTA. Do NOT reuse recognizable phrases "
+            "or named products from previous variants unless they are also "
+            "present in the current product context.]"
+        )
+
+    allowed_titles = [p["title"] for p in stored_products if p.get("title")] if stored_products else []
+    if allowed_titles:
+        regen_context += (
+            "\n\n[CRITICAL: If you mention any explicit product or model names, "
+            "use only the products present in the current context: "
+            + ", ".join(allowed_titles)
+            + ". Do NOT introduce any other product names, SKUs, or models.]"
         )
 
     try:
@@ -1382,6 +1395,46 @@ async def rename_pipeline(
         logger.warning(f"Failed to update name for pipeline {pipeline_id} in DB: {e}")
 
     return {"status": "updated", "pipeline_id": pipeline_id, "name": request.name}
+
+
+class TtsApproveRequest(BaseModel):
+    approved: bool = True
+
+
+@router.patch("/{pipeline_id}/tts-approve/{variant_index}")
+async def approve_tts_variant(
+    pipeline_id: str,
+    variant_index: int,
+    request: TtsApproveRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Mark a variant's TTS voice-over as approved/unapproved (Step 2 verification)."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Pipeline {pipeline_id} not found")
+
+    tts_previews = pipeline.get("tts_previews", {})
+    key = str(variant_index)
+    if key not in tts_previews and variant_index not in tts_previews:
+        raise HTTPException(status_code=404, detail=f"No TTS data for variant {variant_index}")
+
+    # Update in-memory
+    tts_data = tts_previews.get(key) or tts_previews.get(variant_index)
+    tts_data["approved"] = request.approved
+
+    # Persist to DB
+    try:
+        repo = get_repository()
+        supabase = repo.get_client() if repo else None
+        if supabase:
+            tts_previews_json = {str(k): v for k, v in dict(tts_previews).items()}
+            supabase.table("editai_pipelines").update({
+                "tts_previews": tts_previews_json,
+            }).eq("id", pipeline_id).execute()
+    except Exception as e:
+        logger.warning(f"Failed to persist TTS approval for pipeline {pipeline_id}: {e}")
+
+    return {"status": "updated", "pipeline_id": pipeline_id, "variant_index": variant_index, "approved": request.approved}
 
 
 @router.post("/import", response_model=PipelineGenerateResponse)
@@ -1862,6 +1915,23 @@ async def generate_variant_tts(
         with state_lock:
             if "tts_previews" not in pipeline:
                 pipeline["tts_previews"] = {}
+
+            # Clean up old TTS audio files before overwriting
+            old_tts = pipeline["tts_previews"].get(variant_index)
+            if old_tts:
+                old_path = Path(old_tts.get("audio_path", ""))
+                if old_path.exists() and old_path != audio_path:
+                    old_dir = old_path.parent
+                    for f in old_dir.iterdir():
+                        try:
+                            f.unlink()
+                        except OSError:
+                            pass
+                    try:
+                        old_dir.rmdir()
+                    except OSError:
+                        pass
+                    logger.info(f"Cleaned up old TTS temp dir: {old_dir}")
 
             pipeline["tts_previews"][variant_index] = {
                 "audio_path": str(audio_path),
@@ -3113,6 +3183,7 @@ async def get_pipeline_status(pipeline_id: str):
             tts_info[str(idx_key)] = VariantTtsInfo(
                 has_audio=has_audio,
                 audio_duration=audio_duration,
+                approved=bool(tts_data.get("approved", False)),
             )
 
     # PIP-10: scripts removed from status polling response to reduce payload
@@ -3163,6 +3234,7 @@ async def get_pipeline_scripts(pipeline_id: str):
             tts_info[str(idx_key)] = {
                 "has_audio": has_audio,
                 "audio_duration": audio_duration,
+                "approved": bool(tts_data.get("approved", False)),
             }
 
     return {
