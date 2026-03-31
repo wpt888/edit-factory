@@ -1959,6 +1959,7 @@ async def list_all_clips(
     offset: int = Query(default=0, ge=0),
     cursor: Optional[str] = Query(default=None, description="ISO 8601 timestamp — return clips older than this value (cursor-based pagination)"),
     tag: Optional[str] = Query(default=None, description="Filter clips by tag"),
+    sync_orphans: bool = Query(default=False, description="Explicitly sync orphaned videos from disk before listing clips"),
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Listează toate clipurile pentru librărie cu suport cursor-based pagination."""
@@ -1967,8 +1968,9 @@ async def list_all_clips(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    # Sync orphan clips from disk on first page load only, rate-limited to once per 5 minutes
-    if not cursor:
+    # Only sync orphan clips on explicit opt-in.
+    # Listing the library should not mutate it.
+    if sync_orphans and not cursor:
         import time as _time
         _now = _time.monotonic()
         _last = getattr(list_all_clips, "_last_orphan_sync", {}).get(profile.profile_id, 0)
@@ -2018,7 +2020,7 @@ async def list_all_clips(
         # Get content info for all clips to check subtitles/voiceover
         clip_ids = [c["id"] for c in clips_result.data]
         content_result = supabase.table("editai_clip_content")\
-            .select("clip_id, srt_content, tts_audio_path, tts_text, script_text")\
+            .select("clip_id, srt_content, tts_audio_path, tts_text")\
             .in_("clip_id", clip_ids)\
             .execute()
 
@@ -2061,9 +2063,9 @@ async def list_all_clips(
                 "instagram_posted": clip.get("instagram_posted") or False,
                 "youtube_posted": clip.get("youtube_posted") or False,
                 "facebook_posted": clip.get("facebook_posted") or False,
+                "is_downloaded_posted": clip.get("is_downloaded_posted") or False,
                 "srt_content": content.get("srt_content") or None,
                 "tts_text": content.get("tts_text") or None,
-                "script_text": content.get("script_text") or None,
             })
 
         # Compute next_cursor: the created_at of the last clip if a full page was returned
@@ -2080,6 +2082,24 @@ async def list_all_clips(
         }
     except Exception as e:
         logger.error(f"Error listing all clips: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/sync-orphans")
+async def sync_orphan_clips(
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Explicitly import orphaned mp4 files from disk into the library."""
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        inserted = await _sync_orphan_clips(profile.profile_id, supabase)
+        return {"status": "completed", "inserted": inserted}
+    except Exception as e:
+        logger.error(f"Error syncing orphan clips: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -2120,6 +2140,7 @@ class ClipUpdateRequest(BaseModel):
     instagram_posted: Optional[bool] = None
     youtube_posted: Optional[bool] = None
     facebook_posted: Optional[bool] = None
+    is_downloaded_posted: Optional[bool] = None
 
 
 @router.patch("/clips/{clip_id}")
@@ -2161,6 +2182,8 @@ async def update_clip(
             update_data["youtube_posted"] = request.youtube_posted
         if request.facebook_posted is not None:
             update_data["facebook_posted"] = request.facebook_posted
+        if request.is_downloaded_posted is not None:
+            update_data["is_downloaded_posted"] = request.is_downloaded_posted
 
         updated = repo.update_clip(clip_id, update_data)
         if not updated:
@@ -2346,13 +2369,18 @@ async def delete_clip(
         clip_result = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", False).limit(1).execute()
         if not clip_result.data:
             raise HTTPException(status_code=404, detail="Clip not found")
+        clip = clip_result.data[0]
         # Soft-delete: mark as deleted so orphan-sync won't re-import the file
         supabase.table("editai_clips").update({
             "is_deleted": True,
             "deleted_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
-        # Best-effort file cleanup (trash auto-purge handles leftovers)
-        _delete_clip_files(clip_result.data[0])
+        # Remove the thumbnail immediately; it can be regenerated if the clip is restored.
+        if clip.get("thumbnail_path"):
+            try:
+                Path(clip["thumbnail_path"]).unlink(missing_ok=True)
+            except Exception as thumb_err:
+                logger.warning(f"Failed to delete thumbnail for clip {clip_id}: {thumb_err}")
         logger.info(f"Soft-deleted clip {clip_id}")
         return {"status": "deleted", "clip_id": clip_id}
     except HTTPException:
@@ -2405,9 +2433,14 @@ async def bulk_delete_clips(
                 "is_deleted": True,
                 "deleted_at": datetime.now(timezone.utc).isoformat(),
             }).in_("id", found_id_list).eq("profile_id", profile.profile_id).execute()
-            # Best-effort file cleanup (trash auto-purge handles leftovers)
             for clip in found_clips:
-                _delete_clip_files(clip)
+                thumb_path = clip.get("thumbnail_path")
+                if not thumb_path:
+                    continue
+                try:
+                    Path(thumb_path).unlink(missing_ok=True)
+                except Exception as thumb_err:
+                    logger.warning(f"Failed to delete thumbnail for clip {clip.get('id')}: {thumb_err}")
 
         deleted = list(found_ids)
         for clip_id in deleted:
@@ -2469,6 +2502,34 @@ async def list_trash(profile: ProfileContext = Depends(get_profile_context)):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.delete("/trash/empty")
+async def empty_trash(profile: ProfileContext = Depends(get_profile_context)):
+    """Permanently delete ALL clips in trash (files + DB)."""
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+    try:
+        result = supabase.table("editai_clips")\
+            .select("id, raw_video_path, thumbnail_path, final_video_path")\
+            .eq("profile_id", profile.profile_id)\
+            .eq("is_deleted", True)\
+            .execute()
+        clips = result.data or []
+        if not clips:
+            return {"status": "empty", "deleted_count": 0}
+        for clip in clips:
+            _delete_clip_files(clip)
+        clip_ids = [c["id"] for c in clips]
+        supabase.table("editai_clip_content").delete().in_("clip_id", clip_ids).execute()
+        supabase.table("editai_clips").delete().in_("id", clip_ids).eq("profile_id", profile.profile_id).execute()
+        logger.info(f"Emptied trash: {len(clips)} clips permanently deleted")
+        return {"status": "emptied", "deleted_count": len(clips)}
+    except Exception as e:
+        logger.error(f"Error emptying trash: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @router.post("/clips/{clip_id}/restore")
 async def restore_clip(clip_id: str, profile: ProfileContext = Depends(get_profile_context)):
     """Restore a soft-deleted clip from trash."""
@@ -2478,13 +2539,36 @@ async def restore_clip(clip_id: str, profile: ProfileContext = Depends(get_profi
         raise HTTPException(status_code=503, detail="Database not available")
     try:
         # DB-06: Use .limit(1) instead of .single()
-        clip_result = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", True).limit(1).execute()
+        clip_result = supabase.table("editai_clips")\
+            .select("id, project_id, raw_video_path, final_video_path, thumbnail_path")\
+            .eq("id", clip_id)\
+            .eq("profile_id", profile.profile_id)\
+            .eq("is_deleted", True)\
+            .limit(1)\
+            .execute()
         if not clip_result.data:
             raise HTTPException(status_code=404, detail="Clip not found in trash")
+        clip = clip_result.data[0]
+
+        thumbnail_path = clip.get("thumbnail_path")
+        if thumbnail_path and not Path(thumbnail_path).exists():
+            video_path_str = clip.get("final_video_path") or clip.get("raw_video_path")
+            if video_path_str:
+                video_path = Path(video_path_str)
+                if video_path.exists():
+                    regenerated_thumb = await asyncio.to_thread(
+                        _generate_thumbnail,
+                        video_path,
+                        clip.get("project_id"),
+                    )
+                    if regenerated_thumb:
+                        thumbnail_path = str(regenerated_thumb)
+
         # DB-01/DB-07: Include profile_id filter to prevent IDOR
         supabase.table("editai_clips").update({
             "is_deleted": False,
             "deleted_at": None,
+            "thumbnail_path": thumbnail_path,
         }).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
         logger.info(f"Restored clip {clip_id} from trash")
         return {"status": "restored", "clip_id": clip_id}
