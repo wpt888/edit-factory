@@ -350,7 +350,7 @@ function PipelinePage() {
   const [historySelectedScripts, setHistorySelectedScripts] = useState<Set<number>>(new Set());
   const [historyImporting, setHistoryImporting] = useState(false);
   const [historyPreviewInfo, setHistoryPreviewInfo] = useState<Record<string, VariantPreviewInfo>>({});
-  const [historyTtsInfo, setHistoryTtsInfo] = useState<Record<string, { has_audio: boolean; audio_duration: number }>>({});
+  const [historyTtsInfo, setHistoryTtsInfo] = useState<Record<string, { has_audio: boolean; audio_duration: number; approved?: boolean }>>({});
   const [historyContextProducts, setHistoryContextProducts] = useState<ContextProduct[]>([]);
   const [expandedIdeas, setExpandedIdeas] = useState<Set<string>>(new Set());
   const [editingNameId, setEditingNameId] = useState<string | null>(null);
@@ -407,6 +407,9 @@ function PipelinePage() {
   const [regeneratingAllScriptsIndex, setRegeneratingAllScriptsIndex] = useState<number | null>(null);
   const regenerateScriptsAbortRef = useRef<AbortController | null>(null);
   const [playingTtsVariant, setPlayingTtsVariant] = useState<number | null>(null);
+  const [ttsAudioProgress, setTtsAudioProgress] = useState(0);
+  const [ttsAudioDuration, setTtsAudioDuration] = useState(0);
+  const ttsSeekingRef = useRef(false);
   const [srtPreviewOpen, setSrtPreviewOpen] = useState<Record<number, boolean>>({});
   const isMountedRef = useRef(true);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -555,12 +558,14 @@ function PipelinePage() {
         if (data.variant_count) setVariantCount(data.variant_count);
 
         // Restore TTS results from history info (inline to avoid hoisting issues)
-        const ttsInfo: Record<string, { has_audio: boolean; audio_duration: number }> = data.tts_info || {};
+        const ttsInfo: Record<string, { has_audio: boolean; audio_duration: number; approved?: boolean }> = data.tts_info || {};
         const previewInfo: Record<string, { has_audio: boolean; audio_duration: number }> = data.preview_info || {};
         const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
+        const restoredApproved = new Set<number>();
         Object.entries(ttsInfo).forEach(([key, info]) => {
           if (info.has_audio) {
             restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
+            if (info.approved) restoredApproved.add(Number(key));
           }
         });
         if (Object.keys(restoredTts).length === 0) {
@@ -571,6 +576,7 @@ function PipelinePage() {
           });
         }
         setTtsResults(restoredTts);
+        if (restoredApproved.size > 0) setApprovedScripts(restoredApproved);
 
         // Restore source video selection
         setSelectedSourceIds(new Set());
@@ -1238,7 +1244,12 @@ function PipelinePage() {
       const allIndices = new Set(scripts.map((_, i) => i));
       setSelectedVariants(allIndices);
 
-      // Stay on Step 2 so user can review voice-overs before proceeding
+      // Auto-advance to Step 3 when all TTS was already ready (user clicked "Generate Previews", not "Generate Voice-Overs")
+      const readyCount = Object.values(ttsResultsRef.current).filter(r => !r.generating && !r.stale).length;
+      if (readyCount === scripts.length && scripts.length > 0 && Object.keys(newPreviews).length > 0) {
+        setStep(3);
+      }
+      // Otherwise stay on Step 2 so user can review voice-overs before proceeding
     } finally {
       if (isMountedRef.current) setPreviewingIndex(null);
     }
@@ -1870,13 +1881,15 @@ function PipelinePage() {
 
   // FE-13: Shared helper to restore TTS results from history info maps
   const buildRestoredTts = (
-    ttsInfo: Record<string, { has_audio: boolean; audio_duration: number }>,
+    ttsInfo: Record<string, { has_audio: boolean; audio_duration: number; approved?: boolean }>,
     previewInfo: Record<string, { has_audio: boolean; audio_duration: number; has_srt?: boolean }>,
-  ): Record<number, { audio_duration: number; generating: boolean; stale: boolean }> => {
+  ): { tts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }>; approved: Set<number> } => {
     const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
+    const restoredApproved = new Set<number>();
     Object.entries(ttsInfo).forEach(([key, info]) => {
       if (info.has_audio) {
         restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
+        if (info.approved) restoredApproved.add(Number(key));
       }
     });
     if (Object.keys(restoredTts).length === 0) {
@@ -1886,7 +1899,7 @@ function PipelinePage() {
         }
       });
     }
-    return restoredTts;
+    return { tts: restoredTts, approved: restoredApproved };
   };
 
   // History sidebar: import selected scripts
@@ -1900,7 +1913,9 @@ function PipelinePage() {
       setPipelineId(pid);
       setScripts(historyScripts.map(formatScript));
       // Carry over TTS results: prefer tts_info (Step 2) over preview_info (Step 3)
-      setTtsResults(buildRestoredTts(historyTtsInfo, historyPreviewInfo));
+      const restored = buildRestoredTts(historyTtsInfo, historyPreviewInfo);
+      setTtsResults(restored.tts);
+      if (restored.approved.size > 0) setApprovedScripts(restored.approved);
       // Restore context products from history
       setContextProducts(historyContextProducts);
       // Restore pipeline metadata for "Back to Input"
@@ -2536,6 +2551,8 @@ function PipelinePage() {
       ttsPlayAbortRef.current?.abort();
       ttsAudioRef.current?.pause();
       setPlayingTtsVariant(null);
+      setTtsAudioProgress(0);
+      setTtsAudioDuration(0);
       return;
     }
 
@@ -2555,11 +2572,15 @@ function PipelinePage() {
         if (revoked) return;
         revoked = true;
         setPlayingTtsVariant(null);
+        setTtsAudioProgress(0);
+        setTtsAudioDuration(0);
         URL.revokeObjectURL(url);
       };
       const audio = new Audio(url);
       audio.onended = cleanup;
       audio.onerror = cleanup;
+      audio.ontimeupdate = () => { if (!ttsSeekingRef.current) setTtsAudioProgress(audio.currentTime); };
+      audio.onloadedmetadata = () => setTtsAudioDuration(audio.duration);
       audio.play().catch(cleanup);
       ttsAudioRef.current = audio;
     };
@@ -3019,23 +3040,6 @@ function PipelinePage() {
                           </SelectContent>
                         </Select>
                       </div>
-
-                      {/* Quick action bar (visible when products selected) */}
-                      {selectedCatalogIds.size > 0 && (
-                        <div className="flex items-center justify-between bg-primary/10 rounded-md px-3 py-1.5">
-                          <span className="text-xs font-medium">
-                            {selectedCatalogIds.size} selected
-                          </span>
-                          <Button
-                            type="button"
-                            size="sm"
-                            className="h-7"
-                            onClick={handleAddToContext}
-                          >
-                            Add to Context
-                          </Button>
-                        </div>
-                      )}
 
                       {/* Products grid */}
                       {catalogLoading ? (
@@ -3526,6 +3530,25 @@ function PipelinePage() {
                     <CardHeader>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
+                          {ttsResults[index] && !ttsResults[index].generating && !ttsResults[index].stale && (
+                            <Checkbox
+                              id={`approve-header-${index}`}
+                              checked={approvedScripts.has(index)}
+                              onCheckedChange={(checked) => {
+                                const approved = checked === true;
+                                setApprovedScripts(prev => {
+                                  const next = new Set(prev);
+                                  if (approved) next.add(index);
+                                  else next.delete(index);
+                                  return next;
+                                });
+                                if (pipelineId) {
+                                  apiPatch(`/pipeline/${pipelineId}/tts-approve/${index}`, { approved }).catch(() => {});
+                                }
+                              }}
+                              className="h-5 w-5 border-green-500 data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
+                            />
+                          )}
                           <CardTitle className="text-lg">
                             Script {index + 1}
                             {approvedScripts.has(index) && (
@@ -3753,6 +3776,44 @@ function PipelinePage() {
                                 <><Play className="h-3.5 w-3.5 mr-1.5" />Play</>
                               )}
                             </Button>
+                            {playingTtsVariant === index && ttsAudioDuration > 0 && (
+                              <div
+                                className="relative h-5 flex-1 min-w-[100px] max-w-[200px] cursor-pointer group select-none"
+                                onMouseDown={(e) => {
+                                  const bar = e.currentTarget;
+                                  const seek = (clientX: number) => {
+                                    const rect = bar.getBoundingClientRect();
+                                    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+                                    setTtsAudioProgress(pct * ttsAudioDuration);
+                                    if (ttsAudioRef.current) ttsAudioRef.current.currentTime = pct * ttsAudioDuration;
+                                  };
+                                  ttsSeekingRef.current = true;
+                                  seek(e.clientX);
+                                  const onMove = (ev: MouseEvent) => seek(ev.clientX);
+                                  const onUp = () => {
+                                    ttsSeekingRef.current = false;
+                                    document.removeEventListener('mousemove', onMove);
+                                    document.removeEventListener('mouseup', onUp);
+                                  };
+                                  document.addEventListener('mousemove', onMove);
+                                  document.addEventListener('mouseup', onUp);
+                                }}
+                              >
+                                <div className="absolute top-1/2 -translate-y-1/2 w-full h-1 rounded-full bg-muted">
+                                  <div
+                                    className="h-full rounded-full bg-primary"
+                                    style={{ width: `${(ttsAudioProgress / ttsAudioDuration) * 100}%` }}
+                                  />
+                                </div>
+                                <div
+                                  className="absolute top-1/2 -translate-y-1/2 h-3 w-3 rounded-full bg-primary shadow-sm border-2 border-background"
+                                  style={{ left: `calc(${(ttsAudioProgress / ttsAudioDuration) * 100}% - 6px)` }}
+                                />
+                                <span className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                                  {Math.floor(ttsAudioProgress / 60)}:{String(Math.floor(ttsAudioProgress % 60)).padStart(2, '0')} / {Math.floor(ttsAudioDuration / 60)}:{String(Math.floor(ttsAudioDuration % 60)).padStart(2, '0')}
+                                </span>
+                              </div>
+                            )}
                             <Badge variant="secondary" className="text-xs">
                               {formatDuration(ttsResults[index].audio_duration)}
                             </Badge>
@@ -3798,12 +3859,16 @@ function PipelinePage() {
                               id={`approve-script-${index}`}
                               checked={approvedScripts.has(index)}
                               onCheckedChange={(checked) => {
+                                const approved = checked === true;
                                 setApprovedScripts(prev => {
                                   const next = new Set(prev);
-                                  if (checked === true) next.add(index);
+                                  if (approved) next.add(index);
                                   else next.delete(index);
                                   return next;
                                 });
+                                if (pipelineId) {
+                                  apiPatch(`/pipeline/${pipelineId}/tts-approve/${index}`, { approved }).catch(() => {});
+                                }
                               }}
                               className="h-4.5 w-4.5 border-green-500 data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
                             />
@@ -4967,7 +5032,9 @@ function PipelinePage() {
                                     setPipelineId(selectedHistoryId);
                                     setScripts(historyScripts.map(formatScript));
                                     // Carry over TTS results: prefer tts_info (Step 2) over preview_info (Step 3)
-                                    setTtsResults(buildRestoredTts(historyTtsInfo, historyPreviewInfo));
+                                    const restored2 = buildRestoredTts(historyTtsInfo, historyPreviewInfo);
+                                    setTtsResults(restored2.tts);
+                                    if (restored2.approved.size > 0) setApprovedScripts(restored2.approved);
                                     // Restore pipeline metadata for "Back to Input"
                                     const histItem = historyPipelines.find(p => p.pipeline_id === selectedHistoryId);
                                     if (histItem) {
