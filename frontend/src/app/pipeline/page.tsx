@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, useRef, Suspense, Component } from "react";
-import type { ReactNode, ErrorInfo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, Suspense, Component, memo } from "react";
+import type { ReactNode, ErrorInfo, ComponentProps } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -215,6 +215,510 @@ class PipelineErrorBoundary extends Component<{ children: ReactNode }, PipelineE
     return this.props.children;
   }
 }
+
+function useDebouncedInput(
+  value: string,
+  onCommit: (nextValue: string) => void,
+  delay = 300
+) {
+  const [draft, setDraft] = useState(value);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastCommittedRef = useRef(value);
+
+  useEffect(() => {
+    if (value !== lastCommittedRef.current) {
+      setDraft(value);
+      lastCommittedRef.current = value;
+    }
+  }, [value]);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const flushDraft = useCallback((nextValue: string) => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (nextValue === lastCommittedRef.current) return;
+    lastCommittedRef.current = nextValue;
+    onCommit(nextValue);
+  }, [onCommit]);
+
+  const updateDraft = useCallback((nextValue: string) => {
+    setDraft(nextValue);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      flushDraft(nextValue);
+    }, delay);
+  }, [delay, flushDraft]);
+
+  return { draft, updateDraft, flushDraft };
+}
+
+interface DebouncedInputProps extends Omit<ComponentProps<typeof Input>, "value" | "onChange"> {
+  value: string;
+  onCommit: (nextValue: string) => void;
+  debounceMs?: number;
+}
+
+const DebouncedInput = memo(function DebouncedInput({
+  value,
+  onCommit,
+  debounceMs = 300,
+  onBlur,
+  ...props
+}: DebouncedInputProps) {
+  const { draft, updateDraft, flushDraft } = useDebouncedInput(value, onCommit, debounceMs);
+
+  return (
+    <Input
+      {...props}
+      value={draft}
+      onChange={(e) => updateDraft(e.target.value)}
+      onBlur={(e) => {
+        flushDraft(e.target.value);
+        onBlur?.(e);
+      }}
+    />
+  );
+});
+
+interface DebouncedTextareaProps extends Omit<ComponentProps<typeof Textarea>, "value" | "onChange"> {
+  value: string;
+  onCommit: (nextValue: string) => void;
+  debounceMs?: number;
+}
+
+const DebouncedTextarea = memo(function DebouncedTextarea({
+  value,
+  onCommit,
+  debounceMs = 300,
+  onBlur,
+  ...props
+}: DebouncedTextareaProps) {
+  const { draft, updateDraft, flushDraft } = useDebouncedInput(value, onCommit, debounceMs);
+
+  return (
+    <Textarea
+      {...props}
+      value={draft}
+      onChange={(e) => updateDraft(e.target.value)}
+      onBlur={(e) => {
+        flushDraft(e.target.value);
+        onBlur?.(e);
+      }}
+    />
+  );
+});
+
+// ── Pure helpers (hoisted so ScriptCard + PipelinePage can share them) ──
+
+const formatDuration = (seconds: number): string => {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+};
+
+const countWords = (text: string): number => {
+  const cleaned = text.replace(/\[([^\[\]]+)\]/g, "");
+  return cleaned.trim().split(/\s+/).filter(Boolean).length;
+};
+
+/** Average TTS speech rate in words per second (ElevenLabs default) */
+const WORDS_PER_SECOND = 2.3;
+
+const analyzeGroupTags = (text: string): Array<{ label: string; isPaired: boolean; isOpen: boolean; occurrences: number }> => {
+  const matches = text.match(/\[([^\[\]]+)\]/g);
+  if (!matches) return [];
+  const counts: Record<string, number> = {};
+  for (const m of matches) {
+    const label = m.slice(1, -1);
+    counts[label] = (counts[label] || 0) + 1;
+  }
+  return Object.entries(counts).map(([label, occurrences]) => ({
+    label,
+    occurrences,
+    isPaired: occurrences % 2 === 0,
+    isOpen: occurrences % 2 === 1,
+  }));
+};
+
+// ── ScriptCard — memo'd to avoid re-rendering all cards on every keystroke ──
+
+interface ProductGroupInfo {
+  id: string;
+  label: string;
+  color: string | null;
+  source_video_id: string;
+  segments_count: number;
+}
+
+interface TtsResultInfo {
+  audio_duration: number;
+  generating: boolean;
+  stale: boolean;
+  srt_content?: string;
+  script_word_count?: number;
+  srt_word_count?: number;
+}
+
+interface ScriptCardProps {
+  index: number;
+  script: string;
+  isApproved: boolean;
+  ttsResult: TtsResultInfo | undefined;
+  totalSegmentDuration: number;
+  productGroups: ProductGroupInfo[];
+  groupTagSearch: string;
+  isRegenerating: boolean;
+  regeneratingAllScripts: boolean;
+  scriptsCount: number;
+  playingTtsVariant: number | null;
+  ttsAudioDuration: number;
+  ttsAudioProgress: number;
+  ttsAudioRef: React.RefObject<HTMLAudioElement | null>;
+  ttsSeekingRef: React.MutableRefObject<boolean>;
+  srtPreviewOpen: boolean;
+  libraryMatch: { asset_id: string; audio_duration: number } | undefined;
+  pipelineId: string | null;
+  onScriptChange: (index: number, value: string) => void;
+  onDelete: (index: number) => void;
+  onRegenerate: (index: number) => void;
+  onGenerateTts: (index: number) => void;
+  onPlayTts: (index: number) => void;
+  onUseLibraryTts: (index: number) => void;
+  onInsertGroupTag: (index: number, label: string) => void;
+  onApprove: (index: number, approved: boolean) => void;
+  onToggleSrtPreview: (index: number) => void;
+  onGroupTagSearchChange: (value: string) => void;
+  setTtsAudioProgress: (value: number) => void;
+}
+
+const ScriptCard = memo(function ScriptCard({
+  index,
+  script,
+  isApproved,
+  ttsResult,
+  totalSegmentDuration,
+  productGroups,
+  groupTagSearch,
+  isRegenerating,
+  regeneratingAllScripts,
+  scriptsCount,
+  playingTtsVariant,
+  ttsAudioDuration,
+  ttsAudioProgress,
+  ttsAudioRef,
+  ttsSeekingRef,
+  srtPreviewOpen,
+  libraryMatch,
+  pipelineId,
+  onScriptChange,
+  onDelete,
+  onRegenerate,
+  onGenerateTts,
+  onPlayTts,
+  onUseLibraryTts,
+  onInsertGroupTag,
+  onApprove,
+  onToggleSrtPreview,
+  onGroupTagSearchChange,
+  setTtsAudioProgress,
+}: ScriptCardProps) {
+  // Local draft for instant typing — debounced sync to parent
+  const { draft, updateDraft, flushDraft } = useDebouncedInput(script, (value) => onScriptChange(index, value), 300);
+
+  // Compute from local draft so badges update instantly while typing
+  const wordCount = countWords(draft);
+  const estimatedDuration = Math.round(wordCount / WORDS_PER_SECOND);
+  const charCount = draft.replace(/\[([^\[\]]+)\]/g, "").length;
+
+  return (
+    <Card className={`transition-colors ${isApproved ? "border-green-500 bg-green-50/50 dark:bg-green-950/20" : ""}`}>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            {ttsResult && !ttsResult.generating && !ttsResult.stale && (
+              <Checkbox
+                id={`approve-header-${index}`}
+                checked={isApproved}
+                onCheckedChange={(checked) => onApprove(index, checked === true)}
+                className="h-5 w-5 border-green-500 data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
+              />
+            )}
+            <CardTitle className="text-lg">
+              Script {index + 1}
+              {isApproved && (
+                <CheckCircle className="inline-block h-4 w-4 ml-2 text-green-600" />
+              )}
+            </CardTitle>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline">
+              {wordCount} words (~{formatDuration(estimatedDuration)})
+            </Badge>
+            <Badge variant="outline" className="text-muted-foreground">
+              {charCount} chars
+            </Badge>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-muted-foreground hover:text-primary"
+              title="Regenerate this script with AI"
+              onClick={() => onRegenerate(index)}
+              disabled={isRegenerating || regeneratingAllScripts}
+            >
+              {isRegenerating ? (
+                <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5 mr-1" />
+              )}
+              {isRegenerating ? "Regenerating..." : "Regenerate"}
+            </Button>
+            {scriptsCount > 1 && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                title="Delete script"
+                onClick={() => onDelete(index)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+      {totalSegmentDuration > 0 && estimatedDuration > totalSegmentDuration && (
+        <div className="px-6 pb-2">
+          <Alert className="border-muted-foreground/50 bg-muted/50">
+            <Info className="h-4 w-4 text-muted-foreground" />
+            <AlertDescription className="text-muted-foreground text-sm">
+              Script exceeds available video material ({Math.round(totalSegmentDuration)}s) by ~{estimatedDuration - Math.round(totalSegmentDuration)}s. Segments will be repeated to cover the difference.
+            </AlertDescription>
+          </Alert>
+        </div>
+      )}
+      <CardContent className="space-y-3">
+        <Textarea
+          id={`script-textarea-${index}`}
+          value={draft}
+          onChange={(e) => updateDraft(e.target.value)}
+          onBlur={(e) => flushDraft(e.target.value)}
+          rows={10}
+          className="resize-y font-mono text-sm"
+        />
+
+        {/* Insert Group Tag — searchable button grid */}
+        {productGroups.length > 0 && (() => {
+          const tagStates = analyzeGroupTags(draft);
+          const filtered = productGroups.filter(
+            (g) => !groupTagSearch.trim() || g.label.toLowerCase().includes(groupTagSearch.toLowerCase())
+          );
+          return (
+            <div className="space-y-1.5">
+              {productGroups.length > 4 && (
+                <div className="relative w-48">
+                  <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input
+                    placeholder="Filter groups..."
+                    value={groupTagSearch}
+                    onChange={(e) => onGroupTagSearchChange(e.target.value)}
+                    className="h-7 pl-7 text-xs"
+                  />
+                </div>
+              )}
+              <div className="flex flex-wrap gap-1.5">
+                {filtered.map((g) => {
+                  const state = tagStates.find((t) => t.label === g.label);
+                  const isOpen = state?.isOpen ?? false;
+                  const isPaired = state?.isPaired ?? false;
+                  return (
+                    <button
+                      key={g.id}
+                      type="button"
+                      onClick={() => onInsertGroupTag(index, g.label)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border transition-colors hover:bg-accent ${
+                        isOpen
+                          ? "ring-2 ring-amber-400 bg-amber-50 dark:bg-amber-950/30 border-amber-300"
+                          : isPaired
+                          ? "ring-2 ring-green-400 bg-green-50 dark:bg-green-950/30 border-green-300"
+                          : "border-border"
+                      }`}
+                    >
+                      {g.color && (
+                        <span
+                          className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: g.color }}
+                        />
+                      )}
+                      {g.label}
+                      <span className="text-muted-foreground">({g.segments_count})</span>
+                      {isPaired && <CheckCircle className="h-3 w-3 text-green-600 flex-shrink-0" />}
+                      {isOpen && <span className="text-amber-600 font-bold flex-shrink-0">…</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              {tagStates.length > 0 && (
+                <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                  <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" /> Open</span>
+                  <span className="inline-flex items-center gap-1"><CheckCircle className="h-2.5 w-2.5 text-green-600" /> Paired</span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Per-script TTS controls */}
+        <div className="flex flex-wrap items-center gap-2">
+          {ttsResult?.generating ? (
+            <Button variant="outline" size="sm" disabled>
+              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+              Generating...
+            </Button>
+          ) : ttsResult && !ttsResult.stale ? (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onPlayTts(index)}
+              >
+                {playingTtsVariant === index ? (
+                  <><Pause className="h-3.5 w-3.5 mr-1.5" />Pause</>
+                ) : (
+                  <><Play className="h-3.5 w-3.5 mr-1.5" />Play</>
+                )}
+              </Button>
+              {playingTtsVariant === index && ttsAudioDuration > 0 && (
+                <div
+                  className="relative h-5 flex-1 min-w-[100px] max-w-[200px] cursor-pointer group select-none"
+                  onMouseDown={(e) => {
+                    const bar = e.currentTarget;
+                    const seek = (clientX: number) => {
+                      const rect = bar.getBoundingClientRect();
+                      const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+                      setTtsAudioProgress(pct * ttsAudioDuration);
+                      if (ttsAudioRef.current) ttsAudioRef.current.currentTime = pct * ttsAudioDuration;
+                    };
+                    ttsSeekingRef.current = true;
+                    seek(e.clientX);
+                    const onMove = (ev: MouseEvent) => seek(ev.clientX);
+                    const onUp = () => {
+                      ttsSeekingRef.current = false;
+                      document.removeEventListener('mousemove', onMove);
+                      document.removeEventListener('mouseup', onUp);
+                    };
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
+                  }}
+                >
+                  <div className="absolute top-1/2 -translate-y-1/2 w-full h-1 rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary"
+                      style={{ width: `${(ttsAudioProgress / ttsAudioDuration) * 100}%` }}
+                    />
+                  </div>
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 h-3 w-3 rounded-full bg-primary shadow-sm border-2 border-background"
+                    style={{ left: `calc(${(ttsAudioProgress / ttsAudioDuration) * 100}% - 6px)` }}
+                  />
+                  <span className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                    {Math.floor(ttsAudioProgress / 60)}:{String(Math.floor(ttsAudioProgress % 60)).padStart(2, '0')} / {Math.floor(ttsAudioDuration / 60)}:{String(Math.floor(ttsAudioDuration % 60)).padStart(2, '0')}
+                  </span>
+                </div>
+              )}
+              <Badge variant="secondary" className="text-xs">
+                {formatDuration(ttsResult.audio_duration)}
+              </Badge>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onGenerateTts(index)}
+                title="Regenerate voice-over with current settings"
+              >
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                Regenerate
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onGenerateTts(index)}
+            >
+              <Volume2 className="h-3.5 w-3.5 mr-1.5" />
+              {ttsResult?.stale ? "Regenerate Voice-over" : "Generate Voice-over"}
+            </Button>
+          )}
+          {ttsResult?.stale && (
+            <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">
+              Script changed — audio outdated
+            </Badge>
+          )}
+          {libraryMatch && !ttsResult && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs text-muted-foreground border-muted-foreground/30 hover:bg-muted"
+              onClick={() => onUseLibraryTts(index)}
+            >
+              <Library className="h-3.5 w-3.5 mr-1.5" />
+              Use Library Audio ({formatDuration(libraryMatch.audio_duration)})
+            </Button>
+          )}
+          {ttsResult && !ttsResult.generating && !ttsResult.stale && (
+            <div className="ml-auto flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-2.5 py-1 dark:border-green-900 dark:bg-green-950/30">
+              <Checkbox
+                id={`approve-script-${index}`}
+                checked={isApproved}
+                onCheckedChange={(checked) => onApprove(index, checked === true)}
+                className="h-4.5 w-4.5 border-green-500 data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
+              />
+              <Label
+                htmlFor={`approve-script-${index}`}
+                className="cursor-pointer text-xs font-medium text-green-700 dark:text-green-300"
+              >
+                Approve voice-over
+              </Label>
+            </div>
+          )}
+        </div>
+
+        {/* SRT Subtitle Preview */}
+        {ttsResult?.srt_content && !ttsResult?.generating && !ttsResult?.stale && (
+          <div className="mt-2">
+            <button
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => onToggleSrtPreview(index)}
+            >
+              {srtPreviewOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              Subtitle Preview
+              <span className="text-muted-foreground">
+                — Script: {ttsResult.script_word_count} words | SRT: {ttsResult.srt_word_count} words
+              </span>
+              {ttsResult.script_word_count != null && ttsResult.srt_word_count != null && ttsResult.script_word_count! > ttsResult.srt_word_count! && (
+                <Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-4 ml-1">
+                  <AlertTriangle className="h-2.5 w-2.5 mr-0.5" />
+                  {ttsResult.script_word_count! - ttsResult.srt_word_count!} words missing
+                </Badge>
+              )}
+            </button>
+            {srtPreviewOpen && (
+              <pre className="mt-1.5 p-2 bg-muted/50 rounded text-[11px] font-mono max-h-48 overflow-y-auto whitespace-pre-wrap border">
+                {ttsResult.srt_content}
+              </pre>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+});
 
 export default function PipelinePageWrapper() {
   return (
@@ -599,13 +1103,6 @@ function PipelinePage() {
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps — one-time mount restore
 
-  // Format helpers
-  const formatDuration = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
-  };
-
   const stripEmbeddedProductBlocks = (value: string): string => {
     if (!value) return "";
     return value
@@ -613,15 +1110,6 @@ function PipelinePage() {
       .replace(/\n{3,}/g, "\n\n")
       .trim();
   };
-
-  const countWords = (text: string): number => {
-    // Strip [ProductGroup] tags before counting words
-    const cleaned = text.replace(/\[([^\[\]]+)\]/g, "");
-    return cleaned.trim().split(/\s+/).filter(Boolean).length;
-  };
-
-  /** Average TTS speech rate in words per second (ElevenLabs default) */
-  const WORDS_PER_SECOND = 2.3;
 
   // Format script: ensure each sentence starts on a new line
   const formatScript = (text: string): string => {
@@ -851,23 +1339,6 @@ function PipelinePage() {
     const matches = text.match(/\[([^\[\]]+)\]/g);
     if (!matches) return [];
     return [...new Set(matches.map(m => m.slice(1, -1)))];
-  };
-
-  // Analyze pairing state of group tags in a script
-  const analyzeGroupTags = (text: string): Array<{ label: string; isPaired: boolean; isOpen: boolean; occurrences: number }> => {
-    const matches = text.match(/\[([^\[\]]+)\]/g);
-    if (!matches) return [];
-    const counts: Record<string, number> = {};
-    for (const m of matches) {
-      const label = m.slice(1, -1);
-      counts[label] = (counts[label] || 0) + 1;
-    }
-    return Object.entries(counts).map(([label, occurrences]) => ({
-      label,
-      occurrences,
-      isPaired: occurrences % 2 === 0,
-      isOpen: occurrences % 2 === 1,
-    }));
   };
 
   // Catalog: open picker
@@ -1780,6 +2251,34 @@ function PipelinePage() {
       }
     }, 1000);
   }, []);
+
+  const handleScriptCommit = useCallback((index: number, nextValue: string) => {
+    setScripts((prev) => {
+      if (prev[index] === nextValue) return prev;
+      const next = [...prev];
+      next[index] = nextValue;
+      if (pipelineId) saveScriptsToBackend(pipelineId, next);
+      return next;
+    });
+
+    setTtsResults((prev) => {
+      const current = prev[index];
+      if (!current || current.generating || current.stale) return prev;
+      return {
+        ...prev,
+        [index]: { ...current, stale: true },
+      };
+    });
+
+    setApprovedScripts((prev) => {
+      if (!prev.has(index)) return prev;
+      const next = new Set(prev);
+      next.delete(index);
+      return next;
+    });
+
+    setPreviewError(null);
+  }, [pipelineId, saveScriptsToBackend]);
 
   // Check TTS library for duplicate texts when scripts load
   // Debounced 1.5s so rapid edits don't flood the API
@@ -2889,7 +3388,7 @@ function PipelinePage() {
                           setAiInstructions(e.target.value);
                           setAiRulesDirty(true);
                         }}
-                        className="resize-y text-sm"
+                        className="resize-y text-sm [field-sizing:fixed]"
                       />
                       <div className="flex justify-end">
                         <Button
@@ -2910,11 +3409,11 @@ function PipelinePage() {
                 {/* Script set name */}
                 <div className="space-y-2">
                   <Label htmlFor="pipeline-name">Script Set Name</Label>
-                  <Input
+                  <DebouncedInput
                     id="pipeline-name"
                     placeholder="e.g. Nike Air Max Campaign, Summer Sale Promo..."
                     value={pipelineName}
-                    onChange={(e) => setPipelineName(e.target.value)}
+                    onCommit={setPipelineName}
                     maxLength={200}
                   />
                 </div>
@@ -2922,13 +3421,13 @@ function PipelinePage() {
                 {/* Idea textarea */}
                 <div className="space-y-2">
                   <Label htmlFor="idea">Video Idea *</Label>
-                  <Textarea
+                  <DebouncedTextarea
                     id="idea"
                     placeholder="Describe your video idea..."
                     rows={5}
                     value={idea}
-                    onChange={(e) => setIdea(e.target.value)}
-                    className="resize-y"
+                    onCommit={setIdea}
+                    className="resize-y [field-sizing:fixed]"
                   />
                 </div>
 
@@ -2993,13 +3492,13 @@ function PipelinePage() {
 
                   {/* Expanded: textarea for manual text */}
                   {contextExpanded && (
-                    <Textarea
+                    <DebouncedTextarea
                       id="context"
                       placeholder="Additional context (brand info, instructions)..."
                       rows={3}
                       value={context}
-                      onChange={(e) => setContext(e.target.value)}
-                      className="resize-none max-h-[200px] overflow-y-auto"
+                      onCommit={setContext}
+                      className="resize-none max-h-[200px] overflow-y-auto [field-sizing:fixed]"
                     />
                   )}
 
@@ -3666,33 +4165,12 @@ function PipelinePage() {
                       </div>
                     )}
                     <CardContent className="space-y-3">
-                      <Textarea
+                      <DebouncedTextarea
                         id={`script-textarea-${index}`}
                         value={script}
-                        onChange={(e) => {
-                          const newScripts = [...scripts];
-                          newScripts[index] = e.target.value;
-                          setScripts(newScripts);
-                          if (pipelineId) saveScriptsToBackend(pipelineId, newScripts);
-                          // Mark TTS as stale if it exists
-                          if (ttsResults[index] && !ttsResults[index].generating) {
-                            setTtsResults(prev => ({
-                              ...prev,
-                              [index]: { ...prev[index], stale: true }
-                            }));
-                          }
-                          // Clear approval — script changed, needs re-verification
-                          setApprovedScripts(prev => {
-                            if (!prev.has(index)) return prev;
-                            const next = new Set(prev);
-                            next.delete(index);
-                            return next;
-                          });
-                          // Clear any stale preview error so the banner doesn't persist during editing
-                          if (previewError) setPreviewError(null);
-                        }}
+                        onCommit={(nextValue) => handleScriptCommit(index, nextValue)}
                         rows={10}
-                        className="resize-y font-mono text-sm"
+                        className="resize-y font-mono text-sm [field-sizing:fixed]"
                       />
 
                       {/* Insert Group Tag — searchable button grid */}
@@ -5141,3 +5619,4 @@ function PipelinePage() {
     </div>
   );
 }
+
