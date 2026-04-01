@@ -153,6 +153,14 @@ testing/.test_state.json
 # Screenshot verification artifacts
 imagini_ss/
 frontend/.playwright-mcp/
+# Root-level screenshot artifacts (don't block frontend/public PNGs)
+/*.png
+
+# Local databases
+data.db
+
+# One-off test/verification scripts
+verify_encoding_integration.py
 
 # GSD/AI loop runtime artifacts
 progress.txt
