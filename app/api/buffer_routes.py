@@ -410,11 +410,9 @@ async def _publish_clip_task(
                 except Exception as e:
                     logger.warning(f"Failed to track Buffer publication: {e}")
 
-            # Best-effort early cleanup (MinIO lifecycle handles it if app shuts down)
-            if result.post_id and storage_path:
-                asyncio.create_task(
-                    publisher.wait_and_cleanup(result.post_id, storage_path)
-                )
+            # Cleanup is handled by the server-side cron job (minio-cleanup.sh)
+            # which deletes videos 20 min after scheduled_at. No eager deletion —
+            # Buffer needs time to download the video asynchronously.
 
             msg = f"Scheduled for {schedule_date.strftime('%Y-%m-%d %H:%M')}" if schedule_date else "Published!"
             update_progress(job_id, msg, 100, "completed")
@@ -516,10 +514,7 @@ async def _bulk_publish_task(
                         except Exception as e:
                             logger.warning(f"Failed to track Buffer publication for clip {clip['id']}: {e}")
 
-                    if result.post_id and storage_path:
-                        asyncio.create_task(
-                            publisher.wait_and_cleanup(result.post_id, storage_path)
-                        )
+                    # Cleanup handled by server-side cron (minio-cleanup.sh)
                 else:
                     failed += 1
                     if storage_path:
