@@ -24,6 +24,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/buffer", tags=["buffer"])
 
 
+def smart_truncate(text: str, limit: int = 150) -> str:
+    """Truncate text at word boundary, preferring sentence-end punctuation."""
+    if not text or len(text) <= limit:
+        return text or ""
+    # Reserve space for ellipsis
+    cut = limit - 3
+    # Prefer breaking at last sentence-ending punctuation within limit
+    for punct in [". ", "! ", "? "]:
+        idx = text.rfind(punct, 0, cut + 1)
+        if idx != -1:
+            return text[:idx + 1] + "..."
+    # Fall back to last space
+    space_idx = text.rfind(" ", 0, cut + 1)
+    if space_idx > 0:
+        return text[:space_idx] + "..."
+    # No spaces at all — hard cut
+    return text[:cut] + "..."
+
+
 # ============== PYDANTIC MODELS ==============
 
 class BufferChannelResponse(BaseModel):
@@ -376,8 +395,7 @@ async def _publish_clip_task(
         )
 
         # Step 2: Create Buffer post (TikTok has 150 char limit)
-        if caption and len(caption) > 150:
-            caption = caption[:147] + "..."
+        caption = smart_truncate(caption, 150)
         update_progress(job_id, "Creating Buffer post...", 50)
         result = await publisher.create_post(
             video_url=public_url,
@@ -477,8 +495,7 @@ async def _bulk_publish_task(
 
                 clip_caption = (captions or {}).get(clip["id"], caption)
                 # TikTok via Buffer has 150 char limit
-                if clip_caption and len(clip_caption) > 150:
-                    clip_caption = clip_caption[:147] + "..."
+                clip_caption = smart_truncate(clip_caption, 150)
                 logger.info(f"[Job {job_id}] Calling create_post: url={public_url[:60]}..., schedule={clip_schedule}, caption_len={len(clip_caption or '')}")
 
                 result = await publisher.create_post(
