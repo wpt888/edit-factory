@@ -22,6 +22,6 @@ def _get_client_ip(request: Request) -> str:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
-# Global rate limiter — 60 requests/minute per IP (default for all routes)
+# Global rate limiter — 200 requests/minute per IP (default for all routes)
 # Per-route limits are applied via @limiter.limit() decorators in each router
-limiter = Limiter(key_func=_get_client_ip, default_limits=["60/minute"])
+limiter = Limiter(key_func=_get_client_ip, default_limits=["200/minute"])

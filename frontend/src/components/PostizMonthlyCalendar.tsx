@@ -71,7 +71,7 @@ const MONTH_NAMES = [
 function stateColor(state: string): string {
   switch (state) {
     case "PUBLISHED": return "bg-green-500/20 text-green-300 border-green-500/30";
-    case "QUEUE": return "bg-blue-500/20 text-blue-300 border-blue-500/30";
+    case "QUEUE": return "bg-amber-500/20 text-amber-300 border-amber-500/30";
     case "ERROR": return "bg-red-500/20 text-red-300 border-red-500/30";
     case "DRAFT": return "bg-gray-500/20 text-gray-400 border-gray-500/30";
     default: return "bg-gray-500/20 text-gray-400 border-gray-500/30";
@@ -150,6 +150,10 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
       if (!map[date]) map[date] = [];
       map[date].push(post);
     }
+    // Sort posts within each day chronologically by publish_date
+    for (const date of Object.keys(map)) {
+      map[date].sort((a, b) => new Date(a.publish_date).getTime() - new Date(b.publish_date).getTime());
+    }
     return map;
   }, [calendarData]);
 
@@ -160,6 +164,10 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
       const date = item.scheduled_date.split("T")[0];
       if (!map[date]) map[date] = [];
       map[date].push(item);
+    }
+    // Sort schedule items within each day chronologically
+    for (const date of Object.keys(map)) {
+      map[date].sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
     }
     return map;
   }, [calendarData]);

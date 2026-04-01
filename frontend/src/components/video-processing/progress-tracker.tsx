@@ -50,7 +50,7 @@ export function ProgressTracker({
           icon: <Loader2 className="h-4 w-4 animate-spin" />,
           variant: "default" as const,
           label: "Processing",
-          color: "text-blue-600",
+          color: "text-amber-600",
         };
       case "completed":
         return {

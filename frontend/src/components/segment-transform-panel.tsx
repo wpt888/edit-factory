@@ -121,7 +121,7 @@ export function SegmentTransformPanel({
         <Slider
           value={[transforms.scale * 100]}
           min={10}
-          max={500}
+          max={300}
           step={1}
           onValueChange={([v]) => update({ scale: v / 100 })}
         />

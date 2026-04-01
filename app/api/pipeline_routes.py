@@ -2964,6 +2964,30 @@ async def render_variants(
 
                         with render_jobs_lock:
                             job["library_saved"] = True
+
+                        # Save script text and SRT to clip_content
+                        _clip_id = job.get("clip_id")
+                        if _clip_id:
+                            try:
+                                _script_text = pipeline.get("scripts", [])[vid] if vid < len(pipeline.get("scripts", [])) else None
+                                _tts_data = pipeline.get("tts_previews", {}).get(vid) or pipeline.get("tts_previews", {}).get(str(vid), {})
+                                _srt = _tts_data.get("srt_content") if _tts_data else None
+                                _audio_path = _tts_data.get("audio_path") if _tts_data else None
+                                _content_payload = {"clip_id": _clip_id}
+                                if _script_text:
+                                    _content_payload["tts_text"] = _script_text
+                                if _srt:
+                                    _content_payload["srt_content"] = _srt
+                                if _audio_path:
+                                    _content_payload["tts_audio_path"] = _audio_path
+                                if len(_content_payload) > 1:
+                                    supabase_lib.table("editai_clip_content").upsert(
+                                        _content_payload, on_conflict="clip_id"
+                                    ).execute()
+                                    logger.info(f"Saved clip_content for clip {_clip_id} (variant {vid})")
+                            except Exception as cc_err:
+                                logger.warning(f"Failed to save clip_content for variant {vid}: {cc_err}")
+
                         logger.info(
                             f"[Profile {_profile_id}] Pipeline {pipeline_id} "
                             f"variant {vid} saved to library project {library_project_id}"
@@ -3396,6 +3420,28 @@ async def sync_pipeline_to_library(
                 job["clip_id"] = clip_id_to_set
             job["library_saved"] = True
             job.pop("library_error", None)
+
+        # Save script text and SRT to clip_content
+        if clip_id_to_set:
+            try:
+                _script_text = pipeline.get("scripts", [])[vid] if vid < len(pipeline.get("scripts", [])) else None
+                _tts_data = pipeline.get("tts_previews", {}).get(vid) or pipeline.get("tts_previews", {}).get(str(vid), {})
+                _srt = _tts_data.get("srt_content") if _tts_data else None
+                _audio_path = _tts_data.get("audio_path") if _tts_data else None
+                _content_payload = {"clip_id": clip_id_to_set}
+                if _script_text:
+                    _content_payload["tts_text"] = _script_text
+                if _srt:
+                    _content_payload["srt_content"] = _srt
+                if _audio_path:
+                    _content_payload["tts_audio_path"] = _audio_path
+                if len(_content_payload) > 1:
+                    supabase.table("editai_clip_content").upsert(
+                        _content_payload, on_conflict="clip_id"
+                    ).execute()
+                    logger.info(f"Pipeline {pipeline_id} variant {vid}: saved clip_content for clip {clip_id_to_set}")
+            except Exception as cc_err:
+                logger.warning(f"Pipeline {pipeline_id} variant {vid}: failed to save clip_content: {cc_err}")
 
         # Increment usage_count for segments used in this variant (skip if already done by render)
         try:

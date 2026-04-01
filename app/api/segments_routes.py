@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Depends, Request
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, Depends, Request, Body
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -508,37 +508,38 @@ async def browse_local_file(
     """
     import threading
 
-    result = {"path": None}
+    result = {"paths": []}
 
-    def _pick_file():
+    def _pick_files():
         try:
             import tkinter as tk
             from tkinter import filedialog
             root = tk.Tk()
             root.withdraw()
             root.attributes("-topmost", True)
-            file_path = filedialog.askopenfilename(
-                title="Select Video File",
+            file_paths = filedialog.askopenfilenames(
+                title="Select Video Files",
                 filetypes=[
                     ("Video files", "*.mp4 *.mov *.avi *.mkv *.wmv *.flv *.webm *.mpeg *.mpg *.3gp *.ogg"),
                     ("All files", "*.*"),
                 ],
             )
             root.destroy()
-            result["path"] = file_path if file_path else None
+            result["paths"] = list(file_paths) if file_paths else []
         except Exception as e:
             logger.error(f"File picker error: {e}")
-            result["path"] = None
+            result["paths"] = []
 
     # tkinter must run on a separate thread (not asyncio event loop)
-    thread = threading.Thread(target=_pick_file)
+    thread = threading.Thread(target=_pick_files)
     thread.start()
     thread.join(timeout=120)
 
-    if not result["path"]:
-        return {"file_path": None}
+    paths = result["paths"]
+    if not paths:
+        return {"file_path": None, "file_paths": []}
 
-    return {"file_path": result["path"]}
+    return {"file_path": paths[0], "file_paths": paths}
 
 
 @router.post("/source-videos/local", response_model=SourceVideoResponse)
@@ -1344,6 +1345,41 @@ async def list_all_segments(
     return segments
 
 
+@router.post("/reset-usage")
+async def reset_segment_usage(
+    source_video_id: Optional[str] = Body(None, embed=True),
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Reset usage_count to 0 for all segments belonging to this profile.
+
+    Optionally filter by source_video_id to reset only segments from a specific video.
+    """
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    query = supabase.table("editai_segments")\
+        .update({"usage_count": 0})\
+        .eq("profile_id", profile.profile_id)\
+        .gt("usage_count", 0)
+
+    if source_video_id:
+        query = query.eq("source_video_id", source_video_id)
+
+    result = query.execute()
+    reset_count = len(result.data) if result.data else 0
+
+    logger.info(
+        f"[Profile {profile.profile_id}] Reset usage_count for {reset_count} segments"
+        + (f" (source_video_id={source_video_id})" if source_video_id else "")
+    )
+
+    return {"reset_count": reset_count, "source_video_id": source_video_id}
+
+
 @router.get("/product-groups-bulk", response_model=List[ProductGroupResponse])
 async def list_product_groups_bulk(
     source_video_ids: str = Query(..., description="Comma-separated source video IDs"),
@@ -1465,7 +1501,7 @@ async def update_segment(
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Build update dict with only provided fields
-    update_data = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    update_data = {}
 
     if update.start_time is not None:
         update_data["start_time"] = update.start_time
@@ -1607,7 +1643,7 @@ async def toggle_favorite(
     new_status = not current
 
     supabase.table("editai_segments")\
-        .update({"is_favorite": new_status, "updated_at": datetime.now(timezone.utc).isoformat()})\
+        .update({"is_favorite": new_status})\
         .eq("id", segment_id)\
         .eq("profile_id", profile.profile_id)\
         .execute()
@@ -1641,7 +1677,7 @@ async def toggle_single_use(
     new_status = not current
 
     supabase.table("editai_segments")\
-        .update({"single_use": new_status, "updated_at": datetime.now(timezone.utc).isoformat()})\
+        .update({"single_use": new_status})\
         .eq("id", segment_id)\
         .eq("profile_id", profile.profile_id)\
         .execute()
@@ -1764,8 +1800,7 @@ async def extract_segment(
             if success:
                 supabase.table("editai_segments")\
                     .update({
-                        "extracted_video_path": str(output_path),
-                        "updated_at": datetime.now(timezone.utc).isoformat()
+                        "extracted_video_path": str(output_path)
                     })\
                     .eq("id", segment_id)\
                     .eq("profile_id", profile.profile_id)\

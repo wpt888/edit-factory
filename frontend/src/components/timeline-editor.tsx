@@ -136,6 +136,7 @@ export function TimelineEditor({
 
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const previewContainerRef = useRef<HTMLDivElement | null>(null);
   const isPreviewPlayingRef = useRef(false);
   const previewActiveIndexRef = useRef(0);
   const previewSegmentEndTimeRef = useRef<number | undefined>(undefined);
@@ -1011,7 +1012,7 @@ export function TimelineEditor({
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 text-xs gap-1.5 border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950/30"
+                className="h-7 text-xs gap-1.5 border-destructive text-destructive hover:bg-destructive/10"
                 onClick={deactivatePreview}
               >
                 <Square className="h-3 w-3" />
@@ -1021,7 +1022,7 @@ export function TimelineEditor({
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 text-xs gap-1.5 border-green-300 text-green-700 hover:bg-green-50 dark:border-green-700 dark:text-green-400 dark:hover:bg-green-950/30"
+                className="h-7 text-xs gap-1.5 border-primary text-primary hover:bg-primary/10"
                 onClick={activatePreview}
               >
                 <Play className="h-3 w-3" />
@@ -1048,6 +1049,7 @@ export function TimelineEditor({
         <div className="rounded-lg border bg-card mb-3 overflow-hidden">
           {/* Video display with subtitle overlay */}
           <div
+            ref={previewContainerRef}
             className="relative mx-auto bg-black flex items-center justify-center"
             style={{ aspectRatio: "9/16", maxHeight: "360px" }}
           >
@@ -1087,32 +1089,47 @@ export function TimelineEditor({
             )}
 
             {/* Subtitle overlay — respects subtitleSettings if provided */}
-            {matches[previewActiveIndex]?.srt_text && (
-              <div
-                className="absolute left-2 right-2 text-center pointer-events-none"
-                style={{
-                  top: `${subtitleSettings?.positionY ?? 85}%`,
-                  transform: "translateY(-50%)",
-                }}
-              >
-                <p
-                  className="font-semibold px-2 py-1 inline-block"
+            {matches[previewActiveIndex]?.srt_text && (() => {
+              // Use same proportional scaling as subtitle-editor.tsx
+              // ASS PlayRes reference height = 1920; scale to actual preview container height
+              const ASS_REF_HEIGHT = 1920;
+              const containerH = previewContainerRef.current?.clientHeight ?? 360;
+              const scale = containerH / ASS_REF_HEIGHT;
+              const fontSize = Math.max(8, (subtitleSettings?.fontSize ?? 48) * scale);
+              const outlineW = (subtitleSettings?.outlineWidth ?? 3) * scale;
+              const shadowDepth = ((subtitleSettings?.shadowDepth ?? 0)) * scale;
+              const glowBlur = ((subtitleSettings?.glowBlur ?? 0)) * scale;
+
+              return (
+                <div
+                  className="absolute left-2 right-2 text-center pointer-events-none"
                   style={{
-                    fontFamily: subtitleSettings?.fontFamily ?? "var(--font-montserrat), Montserrat, sans-serif",
-                    fontSize: `${Math.max(8, (subtitleSettings?.fontSize ?? 48) * 0.22)}px`,
-                    color: subtitleSettings?.textColor ?? "#FFFFFF",
-                    textShadow: subtitleSettings?.enableGlow
-                      ? `0 1px 4px rgba(0,0,0,0.9), 0 0 ${subtitleSettings?.glowBlur ?? 8}px rgba(0,0,0,0.7)`
-                      : "0 1px 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.7)",
-                    WebkitTextStroke: subtitleSettings?.outlineWidth
-                      ? `${Math.max(0.5, subtitleSettings.outlineWidth * 0.3)}px ${subtitleSettings?.outlineColor ?? "#000000"}`
-                      : undefined,
+                    top: `${subtitleSettings?.positionY ?? 85}%`,
+                    transform: "translateY(-50%)",
                   }}
                 >
-                  {matches[previewActiveIndex].srt_text}
-                </p>
-              </div>
-            )}
+                  <p
+                    className="font-semibold px-2 py-1 inline-block"
+                    style={{
+                      fontFamily: subtitleSettings?.fontFamily ?? "var(--font-montserrat), Montserrat, sans-serif",
+                      fontSize: `${fontSize}px`,
+                      color: subtitleSettings?.textColor ?? "#FFFFFF",
+                      textShadow: subtitleSettings?.enableGlow && glowBlur > 0
+                        ? `0 ${Math.max(1, shadowDepth)}px ${Math.max(3, shadowDepth * 2)}px rgba(0,0,0,0.85), 0 0 ${glowBlur}px rgba(0,0,0,0.7)`
+                        : shadowDepth > 0
+                          ? `0 ${shadowDepth}px ${shadowDepth * 2}px rgba(0,0,0,0.85)`
+                          : "0 1px 3px rgba(0,0,0,0.85)",
+                      WebkitTextStroke: outlineW > 0
+                        ? `${outlineW}px ${subtitleSettings?.outlineColor ?? "#000000"}`
+                        : undefined,
+                      paintOrder: "stroke fill",
+                    }}
+                  >
+                    {matches[previewActiveIndex].srt_text}
+                  </p>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Controls */}
@@ -1196,7 +1213,7 @@ export function TimelineEditor({
                     <button
                       key={`insert-${afterMatchIndex}`}
                       onClick={() => handleInsertSlide(afterMatchIndex)}
-                      className="flex-shrink-0 flex items-center justify-center w-5 h-[80px] rounded border border-dashed border-indigo-400 text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 hover:text-indigo-600 transition-colors"
+                      className="flex-shrink-0 flex items-center justify-center w-5 h-[80px] rounded border border-dashed border-primary/50 text-primary/50 hover:bg-primary/10 hover:text-primary transition-colors"
                       title={`Insert image slide ${afterMatchIndex === -1 ? "before first block" : "here"}`}
                     >
                       <Plus className="h-3 w-3" />
@@ -1275,7 +1292,7 @@ export function TimelineEditor({
                   const borderColor = isMatched
                     ? "border-green-500"
                     : isAutoFilled
-                    ? "border-blue-500"
+                    ? "border-muted-foreground"
                     : "border-amber-500";
 
                   const bgColor = isSelected
@@ -1283,7 +1300,7 @@ export function TimelineEditor({
                     : isMatched
                     ? "bg-green-50 dark:bg-green-950/20"
                     : isAutoFilled
-                    ? "bg-blue-50 dark:bg-blue-950/20"
+                    ? "bg-muted/50"
                     : "bg-amber-50 dark:bg-amber-950/20";
 
                   // Combine texts for tooltip
@@ -1387,7 +1404,7 @@ export function TimelineEditor({
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-7 text-xs gap-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                    className="h-7 text-xs gap-1 text-destructive hover:bg-destructive/10"
                     onClick={() => handleRemoveSlide(slide.id)}
                   >
                     <Trash2 className="h-3 w-3" />
@@ -1624,7 +1641,7 @@ export function TimelineEditor({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-6 w-6 opacity-0 group-hover:opacity-100 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-opacity"
+                    className="h-6 w-6 opacity-0 group-hover:opacity-100 text-destructive hover:bg-destructive/10 transition-opacity"
                     onClick={() => handleRemoveSlide(slide.id)}
                     title="Remove slide"
                   >
@@ -1671,11 +1688,11 @@ export function TimelineEditor({
                     isMatched
                       ? "border-l-green-500 bg-green-50 dark:bg-green-950/20"
                       : isAutoFilled
-                      ? "border-l-blue-500 bg-blue-50 dark:bg-blue-950/20"
+                      ? "border-l-muted-foreground bg-muted/50"
                       : "border-l-amber-500 bg-amber-50 dark:bg-amber-950/20"
                   } ${isDragging ? "opacity-50" : ""} ${
                     isDragOver
-                      ? "border-t-2 border-t-blue-500"
+                      ? "border-t-2 border-t-primary"
                       : "border-t-transparent"
                   } ${isInGroup ? "border-r-2 border-r-purple-400 dark:border-r-purple-600" : ""} ${
                     isGroupStart && isInGroup ? "rounded-tr-md" : ""
@@ -1734,7 +1751,7 @@ export function TimelineEditor({
                       <span
                         className={`w-10 text-center font-mono tabular-nums ${
                           isDurationOverridden
-                            ? "text-blue-600 dark:text-blue-400 font-semibold"
+                            ? "text-foreground font-semibold"
                             : "text-muted-foreground"
                         }`}
                         title={
@@ -1821,7 +1838,7 @@ export function TimelineEditor({
                           <Button
                             size="sm"
                             variant="outline"
-                            className="h-7 text-xs border-amber-400 text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-950/30"
+                            className="h-7 text-xs border-primary text-primary hover:bg-primary/10"
                             onClick={() => handleOpenDialog(idx)}
                             disabled={availableSegments.length === 0}
                           >
@@ -1852,7 +1869,7 @@ export function TimelineEditor({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-6 w-6 opacity-0 group-hover:opacity-100 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-opacity"
+                      className="h-6 w-6 opacity-0 group-hover:opacity-100 text-destructive hover:bg-destructive/10 transition-opacity"
                       onClick={() => handleRemoveSlide(slide.id)}
                       title="Remove slide"
                     >

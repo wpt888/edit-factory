@@ -61,6 +61,7 @@ from app.api.routes import router as api_router
 from app.api.library_routes import router as library_router
 from app.api.segments_routes import router as segments_router
 from app.api.postiz_routes import router as postiz_router
+from app.api.buffer_routes import router as buffer_router
 from app.api.profile_routes import router as profile_router
 from app.api import tts_routes
 from app.api.pipeline_routes import router as pipeline_router
@@ -170,6 +171,16 @@ def _recover_stuck_jobs_sync():
                 logger.info(f"Recovered {recovered} stuck jobs (processing >10min -> failed)")
     except Exception as e:
         logger.warning(f"Failed to recover stuck jobs: {e}")
+
+
+async def _periodic_trash_cleanup(interval_hours: int = 6):
+    """Run trash cleanup every N hours."""
+    while True:
+        await asyncio.sleep(interval_hours * 3600)
+        try:
+            await _cleanup_expired_trash()
+        except Exception as e:
+            logger.warning(f"Periodic trash cleanup failed: {e}")
 
 
 async def _cleanup_expired_trash():
@@ -294,13 +305,20 @@ async def lifespan(app: FastAPI):
     # Cleanup orphaned temp files from interrupted processing
     try:
         from app.api.library_routes import cleanup_orphaned_temp_files
-        temp_result = await asyncio.to_thread(cleanup_orphaned_temp_files)
-        if temp_result and temp_result.get("deleted_count"):
-            logger.info(f"Startup temp cleanup: {temp_result['deleted_count']} orphaned files removed")
+        deleted = await asyncio.to_thread(cleanup_orphaned_temp_files)
+        if deleted:
+            logger.info(f"Startup temp cleanup: {deleted} orphaned files removed")
     except Exception as e:
         logger.warning(f"Startup temp cleanup failed: {e}")
+    # Start periodic trash cleanup (every 6 hours)
+    cleanup_task = asyncio.create_task(_periodic_trash_cleanup(interval_hours=6))
     yield
     # Shutdown
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     from app.db import close_supabase
     close_supabase()
     from app.repositories.factory import close_repository
@@ -375,6 +393,7 @@ app.include_router(api_router, prefix="/api/v1", tags=["Video Processing"])
 app.include_router(library_router, prefix="/api/v1", tags=["Library & Workflow"])
 app.include_router(segments_router, prefix="/api/v1", tags=["Segments & Manual Selection"])
 app.include_router(postiz_router, prefix="/api/v1", tags=["Postiz Publishing"])
+app.include_router(buffer_router, prefix="/api/v1", tags=["Buffer Publishing"])
 app.include_router(schedule_router, prefix="/api/v1", tags=["Smart Schedule"])
 app.include_router(profile_router, prefix="/api/v1")
 app.include_router(tts_routes.router, prefix="/api/v1")

@@ -186,38 +186,39 @@ exit /b 0
 echo [WAIT] Waiting for services to be ready...
 
 :: Wait for backend (max 30 seconds)
-set BACKEND_READY=0
-for /l %%i in (1,1,30) do (
-    if !BACKEND_READY!==0 (
-        curl -s http://localhost:8000/docs >nul 2>&1
-        if !errorlevel!==0 (
-            echo   Backend: READY
-            set BACKEND_READY=1
-        ) else (
-            timeout /t 1 /nobreak >nul
-        )
-    )
+set /a BACKEND_RETRIES=0
+:check_backend_loop
+if !BACKEND_RETRIES! GEQ 30 (
+    echo   Backend: TIMEOUT ^(check logs\backend.log^)
+    goto :check_frontend_start
 )
-if !BACKEND_READY!==0 (
-    echo   Backend: TIMEOUT (check logs\backend.log)
+curl -s http://localhost:8000/docs >nul 2>&1
+if !errorlevel!==0 (
+    echo   Backend: READY
+    goto :check_frontend_start
 )
+timeout /t 1 /nobreak >nul
+set /a BACKEND_RETRIES+=1
+goto :check_backend_loop
 
+:check_frontend_start
 :: Wait for frontend (max 30 seconds)
-set FRONTEND_READY=0
-for /l %%i in (1,1,30) do (
-    if !FRONTEND_READY!==0 (
-        curl -s http://localhost:3000 >nul 2>&1
-        if !errorlevel!==0 (
-            echo   Frontend: READY
-            set FRONTEND_READY=1
-        ) else (
-            timeout /t 1 /nobreak >nul
-        )
-    )
+set /a FRONTEND_RETRIES=0
+:check_frontend_loop
+if !FRONTEND_RETRIES! GEQ 30 (
+    echo   Frontend: TIMEOUT ^(check logs\frontend.log^)
+    goto :services_check_done
 )
-if !FRONTEND_READY!==0 (
-    echo   Frontend: TIMEOUT (check logs\frontend.log)
+curl -s http://localhost:3000 >nul 2>&1
+if !errorlevel!==0 (
+    echo   Frontend: READY
+    goto :services_check_done
 )
+timeout /t 1 /nobreak >nul
+set /a FRONTEND_RETRIES+=1
+goto :check_frontend_loop
+
+:services_check_done
 
 echo.
 exit /b 0

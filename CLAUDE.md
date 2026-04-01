@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Edit Factory is a video processing platform for social media content creators (reels, TikTok, YouTube Shorts). It automates video production by combining Gemini AI video analysis, ElevenLabs/Edge-TTS text-to-speech, Whisper AI caption generation, Supabase project/clip management, and Postiz social media publishing.
+Edit Factory is a video processing platform for social media content creators (reels, TikTok, YouTube Shorts). It automates video production by combining Gemini AI script generation, ElevenLabs/Edge-TTS text-to-speech, keyword-based segment matching, FFmpeg video assembly, Supabase persistence, and Postiz social media publishing.
 
 ## Development Commands
 
@@ -83,33 +83,70 @@ Frontend (Next.js, port 3000)
 ### Key Directories
 
 - `app/` - FastAPI backend (main.py entry point, config.py settings)
-- `app/api/` - Route handlers: routes.py (video/TTS/jobs), library_routes.py (CRUD), segments_routes.py (manual selection), postiz_routes.py (publishing)
-- `app/services/` - Business logic services (video_processor, gemini_analyzer, elevenlabs_tts, edge_tts_service, voice_detector, job_storage, cost_tracker, postiz_service)
-- `frontend/src/app/` - Next.js App Router pages (librarie, usage, segments, statsai)
+- `app/api/` - Route handlers (17 routers, all mounted under `/api/v1`)
+- `app/services/` - Business logic services (singleton factory pattern)
+- `app/repositories/` - Data access layer (Supabase primary, SQLite fallback)
+- `frontend/src/app/` - Next.js App Router pages
 - `frontend/src/components/` - React components (Shadcn/UI)
 - `frontend/src/lib/api.ts` - API client wrapper
 - `CAPTIONS_AENEAS/` - Standalone Tkinter caption module with Whisper engine
 
 ### API Routes
 
-All routes mounted under `/api/v1` prefix. Four routers:
+All routes mounted under `/api/v1` prefix. Core routers:
 
 | File | Prefix | Purpose |
 |------|--------|---------|
-| `routes.py` | `/api/v1` | Video processing, TTS, job status |
-| `library_routes.py` | `/api/v1/library` | Project/clip CRUD, rendering, export |
-| `segments_routes.py` | `/api/v1/segments` | Manual video segment selection |
-| `postiz_routes.py` | `/api/v1/postiz` | Social media publishing via Postiz |
+| `pipeline_routes.py` | `/pipeline` | **Main workflow** — multi-variant script→preview→render pipeline |
+| `library_routes.py` | `/library` | Project/clip CRUD, legacy rendering, export |
+| `assembly_routes.py` | `/assembly` | Script-to-video assembly service |
+| `routes.py` | `/` | Video processing, TTS, job status |
+| `segments_routes.py` | `/segments` | Manual video segment selection |
+| `tts_routes.py` | `/tts` | TTS generation and voice management |
+| `tts_library_routes.py` | `/tts-library` | Reusable TTS audio library |
+| `profile_routes.py` | `/profiles` | User profile management |
+| `elevenlabs_accounts_routes.py` | `/elevenlabs-accounts` | Multi-account ElevenLabs management |
+| `schedule_routes.py` | `/schedule` | Smart content scheduling |
+| `postiz_routes.py` | `/postiz` | Social media publishing via Postiz |
+| `product_routes.py` | `/feeds` | Product feed management |
+| `product_generate_routes.py` | `/products` | Product video generation |
+| `catalog_routes.py` | `/catalog` | Product catalog |
+| `association_routes.py` | `/associations` | Product-segment associations |
+| `feed_routes.py` | `/feeds` | RSS/content feed parsing |
+| `image_generate_routes.py` | `/image-gen` | AI image generation (fal.ai) |
+
+### Multi-Variant Pipeline (Core Workflow)
+
+The pipeline (`pipeline_routes.py` + `frontend/src/app/pipeline/page.tsx`) is the primary user-facing workflow. It runs in 4 steps:
+
+1. **Step 1 — Script Generation**: User provides an idea/context → Gemini generates N script variants → stored in pipeline state
+2. **Step 2 — TTS Generation**: Each script variant gets TTS audio (ElevenLabs or Edge-TTS) → SRT subtitles generated via Whisper timing
+3. **Step 3 — Preview & Match**: SRT phrases matched to video segments by keyword → user reviews/edits timeline → can regenerate TTS per variant
+4. **Step 4 — Render**: Selected variants rendered via FFmpeg → segments assembled with audio, subtitles, transitions
+
+Pipeline state is held in-memory (`_pipelines` dict in `pipeline_routes.py`) with Supabase persistence. Each pipeline has: scripts, tts_previews, previews, render results.
+
+**Preview caching**: Render-preview uses a fingerprint-based cache (segment IDs + merge groups + TTS mtime + interstitial slides). When TTS is regenerated, the audio file mtime changes, invalidating the cache.
+
+### Repository Pattern (Data Access)
+
+Database access goes through `app/repositories/`:
+- `DataRepository` (ABC in `base.py`) defines the interface
+- `SupabaseRepository` is the primary implementation
+- `SQLiteRepository` is the fallback
+- `get_repository()` factory in `factory.py` returns the active repo
+
+Tables are prefixed with `editai_` in Supabase (e.g., `editai_segments`, `editai_pipelines`).
 
 ## Critical Architectural Patterns
 
 ### Authentication
 
 - Backend uses **Supabase JWT tokens** verified in `app/api/auth.py`
-- Auth is **opt-in per route** via `Depends(get_current_user)` — routes without this dependency are public
+- Auth is **opt-in per route** via `Depends(get_profile_context)` which returns a `ProfileContext` (profile_id + user_id)
+- `X-Profile-Id` header selects which profile to operate under (multi-profile support)
 - **Development bypass**: When `auth_disabled=True` in settings, returns a hardcoded dev user without token validation
-- Frontend uses Supabase Auth SDK via `AuthProvider` context — does NOT inject tokens into API calls automatically
-- The `skipAuth` option exists in the API client but frontend relies on Supabase session management
+- Frontend uses Supabase Auth SDK via `AuthProvider` context
 
 ### Background Job System
 
@@ -118,18 +155,21 @@ All routes mounted under `/api/v1` prefix. Four routers:
 3. Client polls `GET /api/v1/jobs/{job_id}` for status updates
 4. **JobStorage** (`app/services/job_storage.py`) uses dual persistence: Supabase primary → in-memory fallback
 
-### Two-Phase Video Processing
+### FFmpeg Concurrency Control
 
-1. **Raw clip generation**: Motion/variance analysis → segment scoring → selection
-2. **Final rendering**: Add audio + subtitles → FFmpeg encode → output
+Global FFmpeg concurrency is managed via `app/services/ffmpeg_semaphore.py`:
+- `acquire_render_slot()` — for full renders (limited concurrent FFmpeg processes)
+- `acquire_preview_slot()` — for preview renders (separate limit)
+- `safe_ffmpeg_run()` — wraps subprocess calls with timeout and error handling
+- `is_nvenc_available()` — detects GPU encoding support
 
-These are separated so users can review/select clips between phases. Multi-variant generation supported (1-10 variants per upload).
+Per-pipeline preview locks (`_preview_locks` in `pipeline_routes.py`) prevent concurrent preview renders for the same variant.
 
 ### Graceful Degradation Hierarchy
 
 Every external dependency has a fallback:
 - **Gemini AI** → falls back to motion/variance scoring only
-- **Supabase** → in-memory storage for jobs and costs
+- **Supabase** → SQLite repository fallback
 - **ElevenLabs TTS** → Edge TTS (free Microsoft voices)
 - **Postiz / Redis** → optional, system works without them
 
@@ -139,27 +179,22 @@ Services use singleton factory functions (not FastAPI Depends):
 ```python
 processor = get_processor()
 tracker = get_cost_tracker()
-publisher = get_postiz_publisher()
+assembly = get_assembly_service()
+script_gen = get_script_generator()
 ```
-`Depends()` is only used for authentication.
-
-### Concurrency
-
-Project-level threading locks in `library_routes.py` prevent race conditions during multi-variant processing:
-```python
-_project_locks: Dict[str, threading.Lock] = {}
-```
+`Depends()` is only used for authentication (`get_profile_context`).
 
 ### Frontend State Management
 
 - No global state library — uses React `useState` with local component state
+- Pipeline page (`frontend/src/app/pipeline/page.tsx`) is the largest component (~4500 lines), managing all 4 steps
 - Data fetched on mount via `useEffect`, filtered client-side
-- Optimistic updates after mutations (`setClips(prev => ...)`)
-- Library page does NOT poll jobs — it fetches final clips directly
+- Optimistic updates after mutations (`setPreviews(prev => ...)`)
+- `audioRef` + blob URLs for inline audio playback; `VariantPreviewPlayer` dialog for video preview
 
 ### Progress Tracking
 
-`_generation_progress` dict in `library_routes.py` is in-memory only — lost on server restart. Only used for real-time UI updates, not as source of truth.
+`_generation_progress` dicts in route files are in-memory only — lost on server restart. Only used for real-time UI updates, not as source of truth.
 
 ## Key Technical Details
 
@@ -191,13 +226,15 @@ Expected at `ffmpeg/ffmpeg-master-latest-win64-gpl/bin/` or in system PATH. Both
 
 ## Database Schema (Supabase)
 
-Main tables:
+Main tables (prefixed `editai_` in newer tables):
 - `projects`: id, name, description, status, target_duration, context_text
 - `clips`: id, project_id, variant_index, raw_video_path, thumbnail_path, duration, is_selected, final_video_path, final_status
+- `editai_segments`: id, source_video_id, keywords, start_time, end_time, usage_count
+- `editai_pipelines`: id, profile_id, status, scripts, tts_previews, previews
 - `api_costs`: id, service, operation, cost, metadata (JSONB)
 - `jobs`: id, job_type, status, progress, data (JSONB), created_at, updated_at
 
-Supabase client is a lazy-initialized singleton via `get_supabase()` in library_routes.py.
+Data access via `get_repository()` factory (returns SupabaseRepository or SQLiteRepository).
 
 ## Environment Variables
 
@@ -218,7 +255,7 @@ SUPABASE_JWT_SECRET=...       # For JWT auth validation
 AUTH_DISABLED=true             # Skip auth in development
 REDIS_URL=redis://localhost:6379/0
 GOOGLE_DRIVE_FOLDER_ID=...
-FAL_API_KEY=...               # fal.ai TTS alternative
+FAL_API_KEY=...               # fal.ai TTS alternative / image generation
 POSTIZ_API_URL=...            # Social media publishing
 POSTIZ_API_KEY=...
 ```

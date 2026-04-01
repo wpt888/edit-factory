@@ -140,12 +140,26 @@ def cache_store(key_data: dict, provider_dir: str, audio_path: Path, metadata: d
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        shutil.copy2(audio_path, cache_dir / f"{h}.mp3")
-        with open(cache_dir / f"{h}.meta.json", "w", encoding="utf-8") as f:
+        # Atomic write: write to temp files first, then rename
+        audio_dest = cache_dir / f"{h}.mp3"
+        meta_dest = cache_dir / f"{h}.meta.json"
+        audio_tmp = cache_dir / f"{h}.mp3.tmp"
+        meta_tmp = cache_dir / f"{h}.meta.json.tmp"
+
+        shutil.copy2(audio_path, audio_tmp)
+        with open(meta_tmp, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False)
+
+        # os.replace is atomic on all platforms
+        os.replace(audio_tmp, audio_dest)
+        os.replace(meta_tmp, meta_dest)
+
         logger.info(f"TTS cache STORE [{provider_dir}]: {h[:12]}...")
         _evict_if_needed(cache_dir)
     except Exception as e:
+        # Clean up temp files on failure
+        for tmp in [cache_dir / f"{h}.mp3.tmp", cache_dir / f"{h}.meta.json.tmp"]:
+            tmp.unlink(missing_ok=True)
         logger.warning(f"TTS cache write error: {e}")
 
 

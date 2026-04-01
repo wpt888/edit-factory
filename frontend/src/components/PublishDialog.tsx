@@ -30,12 +30,15 @@ import { apiGet, apiPost } from "@/lib/api";
 import { toast } from "sonner";
 import { PostizMonthlyCalendar } from "@/components/PostizMonthlyCalendar";
 
-interface Integration {
+// Unified platform item — can be a Postiz integration or a Buffer channel
+interface UnifiedPlatform {
   id: string;
   name: string;
-  type: string;
-  identifier?: string;
+  platformType: string; // facebook, instagram, tiktok, etc.
   picture?: string;
+  source: "postiz" | "buffer";
+  // Buffer-specific
+  channelId?: string;
 }
 
 interface PublishDialogProps {
@@ -78,7 +81,7 @@ const PLATFORM_NAMES: Record<string, string> = {
   tiktok: "TikTok",
 };
 
-// Unified green for all selected platforms — per-platform colors were too subtle on dark backgrounds
+// Unified green for all selected platforms
 const SELECTED_BORDER = "border-green-500";
 const SELECTED_BG = "bg-green-500/15";
 
@@ -94,9 +97,9 @@ export function PublishDialog({
   onOpenChange,
   onPublished,
 }: PublishDialogProps) {
-  // Integrations
-  const [integrations, setIntegrations] = useState<Integration[]>([]);
-  const [loadingIntegrations, setLoadingIntegrations] = useState(false);
+  // Unified platform list
+  const [platforms, setPlatforms] = useState<UnifiedPlatform[]>([]);
+  const [loadingPlatforms, setLoadingPlatforms] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Caption
@@ -116,9 +119,13 @@ export function PublishDialog({
 
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollCountRef = useRef(0);
-  const MAX_POLL_COUNT = 200; // ~5 min at 1.5s intervals
+  const MAX_POLL_COUNT = 200;
 
-  // Fetch integrations when dialog opens
+  // Track which polls are active (for multi-service polling)
+  const activeJobsRef = useRef<{ postiz?: string; buffer?: string }>({});
+  const completedJobsRef = useRef<{ postiz?: string; buffer?: string }>({});
+
+  // Fetch all platforms (Postiz + Buffer) when dialog opens
   useEffect(() => {
     if (!open) return;
     setDialogState("form");
@@ -130,25 +137,63 @@ export function PublishDialog({
     setPublishMode("now");
     setScheduleDate("");
     setSelectedIds(new Set());
+    activeJobsRef.current = {};
+    completedJobsRef.current = {};
 
-    let cancelled = false; // Bug #66: cancelled flag
-    const fetchIntegrations = async () => {
-      setLoadingIntegrations(true);
+    let cancelled = false;
+    setLoadingPlatforms(true);
+
+    const fetchAll = async () => {
+      const allPlatforms: UnifiedPlatform[] = [];
+
+      // Fetch Postiz integrations
       try {
         const res = await apiGet("/postiz/integrations");
-        if (cancelled) return;
-        const data = await res.json();
-        setIntegrations(data);
-        setSelectedIds(new Set(data.map((i: Integration) => i.id)));
+        if (!cancelled) {
+          const data = await res.json();
+          for (const item of data) {
+            allPlatforms.push({
+              id: `postiz:${item.id}`,
+              name: item.name,
+              platformType: item.type,
+              picture: item.picture,
+              source: "postiz",
+            });
+          }
+        }
       } catch {
-        if (cancelled) return;
-        setIntegrations([]);
-        toast.error("Could not load Postiz platforms");
-      } finally {
-        if (!cancelled) setLoadingIntegrations(false);
+        // Postiz not configured — skip
+      }
+
+      // Fetch Buffer channels
+      try {
+        const res = await apiGet("/buffer/channels");
+        if (!cancelled) {
+          const data = await res.json();
+          for (const ch of data) {
+            allPlatforms.push({
+              id: `buffer:${ch.id}`,
+              name: ch.name,
+              platformType: ch.service,
+              picture: ch.avatar,
+              source: "buffer",
+              channelId: ch.id,
+            });
+          }
+        }
+      } catch {
+        // Buffer not configured — skip
+      }
+
+      if (!cancelled) {
+        setPlatforms(allPlatforms);
+        // Select all by default
+        setSelectedIds(new Set(allPlatforms.map((p) => p.id)));
+        setLoadingPlatforms(false);
       }
     };
-    fetchIntegrations();
+
+    fetchAll();
     return () => { cancelled = true; };
   }, [open]);
 
@@ -166,44 +211,62 @@ export function PublishDialog({
     };
   }, [open]);
 
-  const toggleIntegration = (id: string) => {
+  const togglePlatform = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
 
+  // Derived: selected platforms split by source
+  const selectedPostizIds = useMemo(
+    () => Array.from(selectedIds)
+      .filter((id) => id.startsWith("postiz:"))
+      .map((id) => id.replace("postiz:", "")),
+    [selectedIds]
+  );
+
+  const selectedBufferChannels = useMemo(
+    () => platforms
+      .filter((p) => p.source === "buffer" && selectedIds.has(p.id))
+      .map((p) => p.channelId!),
+    [platforms, selectedIds]
+  );
+
+  const hasPostizSelected = selectedPostizIds.length > 0;
+  const hasBufferSelected = selectedBufferChannels.length > 0;
+
+  // Draft and Upload modes only work with Postiz
+  const hasDraftUpload = hasPostizSelected && !hasBufferSelected;
+
   const charWarningsMemo = useMemo(() => {
     const warnings: { platform: string; limit: number }[] = [];
     for (const id of selectedIds) {
-      const integration = integrations.find((i) => i.id === id);
-      if (!integration) continue;
-      const limit = PLATFORM_CHAR_LIMITS[integration.type] || 5000;
+      const p = platforms.find((pl) => pl.id === id);
+      if (!p) continue;
+      const limit = PLATFORM_CHAR_LIMITS[p.platformType] || 5000;
       if (caption.length > limit) {
         warnings.push({
-          platform: PLATFORM_NAMES[integration.type] || integration.type,
+          platform: PLATFORM_NAMES[p.platformType] || p.platformType,
           limit,
         });
       }
     }
     return warnings;
-  }, [selectedIds, integrations, caption]);
+  }, [selectedIds, platforms, caption]);
 
   const minCharLimit = useMemo(() => {
     let min = Infinity;
     for (const id of selectedIds) {
-      const integration = integrations.find((i) => i.id === id);
-      if (!integration) continue;
-      const limit = PLATFORM_CHAR_LIMITS[integration.type] || 5000;
+      const p = platforms.find((pl) => pl.id === id);
+      if (!p) continue;
+      const limit = PLATFORM_CHAR_LIMITS[p.platformType] || 5000;
       if (limit < min) min = limit;
     }
     return min === Infinity ? 5000 : min;
-  }, [selectedIds, integrations]);
+  }, [selectedIds, platforms]);
 
   // Generate caption with AI
   const handleGenerateCaption = async () => {
@@ -229,46 +292,96 @@ export function PublishDialog({
     }
   };
 
-  // Poll progress
-  const startPolling = useCallback((jobId: string) => {
+  // Poll a single job
+  const pollJob = useCallback(async (jobId: string, endpoint: string): Promise<"completed" | "failed" | "pending"> => {
+    try {
+      const res = await apiGet(endpoint);
+      const data = await res.json();
+      if (data.status === "completed") return "completed";
+      if (data.status === "failed" || data.status === "completed_with_errors") return "failed";
+      return "pending";
+    } catch {
+      return "pending";
+    }
+  }, []);
+
+  // Unified polling for both services
+  const startUnifiedPolling = useCallback((jobs: { postiz?: string; buffer?: string }) => {
     if (pollRef.current) clearTimeout(pollRef.current);
     pollCountRef.current = 0;
+    activeJobsRef.current = { ...jobs };
+    completedJobsRef.current = {};
+
+    const totalJobs = (jobs.postiz ? 1 : 0) + (jobs.buffer ? 1 : 0);
+    let completedCount = 0;
+    let failedCount = 0;
 
     const pollOnce = async () => {
       pollCountRef.current++;
       if (pollCountRef.current > MAX_POLL_COUNT) {
         pollRef.current = null;
         setDialogState("error");
-        setErrorMessage("Timeout — publicarea dureaza prea mult. Verifica in Postiz.");
+        setErrorMessage("Timeout — publicarea dureaza prea mult.");
         return;
       }
-      try {
-        const res = await apiGet(`/postiz/publish/${jobId}/progress`);
-        const data = await res.json();
-        setProgressStep(data.step || "");
-        setProgressPercent(data.percentage || 0);
 
-        if (data.status === "completed") {
-          pollRef.current = null;
+      // Poll Postiz job
+      if (jobs.postiz && !completedJobsRef.current.postiz) {
+        const status = await pollJob(jobs.postiz, `/postiz/publish/${jobs.postiz}/progress`);
+        if (status === "completed") {
+          completedJobsRef.current.postiz = "done";
+          completedCount++;
+        } else if (status === "failed") {
+          completedJobsRef.current.postiz = "failed";
+          failedCount++;
+          completedCount++;
+        }
+      }
+
+      // Poll Buffer job
+      if (jobs.buffer && !completedJobsRef.current.buffer) {
+        const status = await pollJob(jobs.buffer, `/buffer/publish/${jobs.buffer}/progress`);
+        if (status === "completed") {
+          completedJobsRef.current.buffer = "done";
+          completedCount++;
+        } else if (status === "failed") {
+          completedJobsRef.current.buffer = "failed";
+          failedCount++;
+          completedCount++;
+        }
+      }
+
+      // Update progress
+      const pct = Math.round((completedCount / totalJobs) * 100);
+      setProgressPercent(pct);
+
+      const parts: string[] = [];
+      if (jobs.postiz) parts.push(`Postiz: ${completedJobsRef.current.postiz || "in curs..."}`);
+      if (jobs.buffer) parts.push(`Buffer: ${completedJobsRef.current.buffer || "in curs..."}`);
+      setProgressStep(parts.join(" | "));
+
+      if (completedCount >= totalJobs) {
+        pollRef.current = null;
+        if (failedCount > 0 && failedCount < totalJobs) {
+          setDialogState("error");
+          setErrorMessage("Unele platforme au esuat. Verifica logurile.");
+        } else if (failedCount >= totalJobs) {
+          setDialogState("error");
+          setErrorMessage("Publicarea a esuat pe toate platformele.");
+        } else {
           setDialogState("success");
           onPublished?.();
-          return;
-        } else if (data.status === "failed" || data.status === "completed_with_errors") {
-          pollRef.current = null;
-          setDialogState("error");
-          setErrorMessage(data.step || "Publicarea a esuat");
-          return;
         }
-      } catch {
-        // Keep polling on transient errors
+        return;
       }
+
       pollRef.current = setTimeout(pollOnce, 1500);
     };
 
     pollRef.current = setTimeout(pollOnce, 1500);
-  }, [onPublished]);
+  }, [onPublished, pollJob]);
 
-  // Upload only (no post creation)
+  // Upload only (Postiz)
   const handleUploadOnly = async () => {
     setDialogState("uploading");
     setProgressStep("Se incarca videoclipul in Postiz...");
@@ -299,9 +412,8 @@ export function PublishDialog({
     }
   };
 
-  // Publish
+  // Unified publish — sends to both Postiz and Buffer as needed
   const handlePublish = async () => {
-    // Upload mode doesn't need platforms or caption
     if (publishMode === "upload") {
       await handleUploadOnly();
       return;
@@ -314,35 +426,63 @@ export function PublishDialog({
 
     setDialogState("publishing");
     setProgressPercent(0);
-    setProgressStep("Initializing...");
+    setProgressStep("Se porneste publicarea...");
+
+    const jobs: { postiz?: string; buffer?: string } = {};
 
     try {
-      const body: Record<string, unknown> = {
-        clip_id: clipId,
-        caption,
-        integration_ids: Array.from(selectedIds),
-      };
+      // Launch Postiz publish if any Postiz platforms selected
+      if (hasPostizSelected) {
+        const body: Record<string, unknown> = {
+          clip_id: clipId,
+          caption,
+          integration_ids: selectedPostizIds,
+        };
+        if (publishMode === "schedule" && scheduleDate) {
+          body.schedule_date = new Date(scheduleDate).toISOString();
+        }
+        if (publishMode === "draft") {
+          body.save_as_draft = true;
+        }
 
-      if (publishMode === "schedule" && scheduleDate) {
-        body.schedule_date = new Date(scheduleDate).toISOString();
+        const res = await apiPost("/postiz/publish", body);
+        const data = await res.json();
+        if (data.job_id) {
+          jobs.postiz = data.job_id;
+        }
       }
-      if (publishMode === "draft") {
-        body.save_as_draft = true;
+
+      // Launch Buffer publish for each selected channel
+      if (hasBufferSelected) {
+        // Buffer publishes one channel at a time, use the first selected
+        const channelId = selectedBufferChannels[0];
+        const body: Record<string, unknown> = {
+          clip_id: clipId,
+          caption,
+          channel_id: channelId,
+        };
+        if (publishMode === "schedule" && scheduleDate) {
+          body.schedule_date = new Date(scheduleDate).toISOString();
+        }
+
+        const res = await apiPost("/buffer/publish", body);
+        const data = await res.json();
+        if (data.job_id) {
+          jobs.buffer = data.job_id;
+        }
       }
 
-      const res = await apiPost("/postiz/publish", body);
-      const data = await res.json();
-
-      if (data.job_id) {
-        setPublishJobId(data.job_id);
-        startPolling(data.job_id);
-      } else {
+      if (!jobs.postiz && !jobs.buffer) {
         setDialogState("error");
-        setErrorMessage(data.message || "Nu s-a putut porni publicarea");
+        setErrorMessage("Nu s-a putut porni publicarea");
+        return;
       }
+
+      // Start unified polling
+      startUnifiedPolling(jobs);
+
     } catch (err) {
       setDialogState("error");
-      // Bug #116: use ApiError.detail if available
       if (err && typeof err === "object" && "detail" in err && (err as { detail: string }).detail) {
         setErrorMessage((err as { detail: string }).detail);
       } else {
@@ -351,7 +491,6 @@ export function PublishDialog({
     }
   };
 
-  // Bug #171: memoize min date so it only recalculates when the dialog opens
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const minScheduleDate = useMemo(() => new Date().toISOString().slice(0, 16), [open]);
 
@@ -370,14 +509,16 @@ export function PublishDialog({
   const charWarnings = charWarningsMemo;
   const minLimit = minCharLimit;
 
-  // Caption is required only for "now" publish — schedule/draft can proceed without it
   const isCaptionRequired = publishMode === "now";
   const isPublishDisabled =
     publishMode === "upload"
-      ? false // upload doesn't require anything extra
+      ? false
       : selectedIds.size === 0 ||
         (publishMode === "now" && !caption.trim()) ||
         (publishMode === "schedule" && !scheduleDate);
+
+  // Draft/Upload only available when no Buffer platforms are selected
+  const showDraftUpload = !hasBufferSelected;
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -394,10 +535,10 @@ export function PublishDialog({
           <div className="space-y-5">
             {/* Product context info */}
             {contextText && (
-              <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-blue-500/10 border border-blue-500/20">
-                <Info className="h-4 w-4 text-blue-400 mt-0.5 shrink-0" />
+              <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-muted/50 border border-border">
+                <Info className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                 <div className="text-sm">
-                  <span className="font-medium text-blue-400">Produs:</span>{" "}
+                  <span className="font-medium text-muted-foreground">Produs:</span>{" "}
                   <span className="text-muted-foreground">
                     {projectName && <span className="font-medium">{projectName} — </span>}
                     {contextText.length > 200 ? contextText.slice(0, 200) + "..." : contextText}
@@ -406,68 +547,73 @@ export function PublishDialog({
               </div>
             )}
 
-            {/* Platform selector */}
+            {/* Unified platform selector */}
             {publishMode !== "upload" && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label>Platforme</Label>
-                  {integrations.length > 0 && (
+                  {platforms.length > 0 && (
                     <button
                       type="button"
                       className="text-xs text-muted-foreground hover:text-foreground transition-colors"
                       onClick={() => {
-                        if (selectedIds.size === integrations.length) {
+                        if (selectedIds.size === platforms.length) {
                           setSelectedIds(new Set());
                         } else {
-                          setSelectedIds(new Set(integrations.map((i) => i.id)));
+                          setSelectedIds(new Set(platforms.map((p) => p.id)));
                         }
                       }}
                     >
-                      {selectedIds.size === integrations.length ? "Deselecteaza tot" : "Selecteaza tot"}
+                      {selectedIds.size === platforms.length ? "Deselecteaza tot" : "Selecteaza tot"}
                     </button>
                   )}
                 </div>
-                {loadingIntegrations ? (
+                {loadingPlatforms ? (
                   <div className="flex items-center justify-center py-4">
                     <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                   </div>
-                ) : integrations.length === 0 ? (
+                ) : platforms.length === 0 ? (
                   <p className="text-sm text-muted-foreground py-2">
-                    Nicio platforma conectata in Postiz. Configureaza integrari in Postiz.
+                    Nicio platforma conectata. Configureaza Postiz sau Buffer in Settings.
                   </p>
                 ) : (
                   <div className="flex flex-wrap gap-2">
-                    {integrations.map((integration) => {
-                      const isSelected = selectedIds.has(integration.id);
+                    {platforms.map((platform) => {
+                      const isSelected = selectedIds.has(platform.id);
                       return (
                         <button
-                          key={integration.id}
+                          key={platform.id}
                           type="button"
-                          onClick={() => toggleIntegration(integration.id)}
+                          onClick={() => togglePlatform(platform.id)}
                           className={`flex items-center gap-2 px-3 py-2 rounded-full border-2 transition-all text-sm ${
                             isSelected
                               ? `${SELECTED_BORDER} ${SELECTED_BG}`
                               : "border-transparent bg-muted hover:bg-accent/50"
                           }`}
                         >
-                          {integration.picture ? (
+                          {platform.picture ? (
                             /* eslint-disable-next-line @next/next/no-img-element */
                             <img
-                              src={integration.picture}
+                              src={platform.picture}
                               alt=""
                               className="h-6 w-6 rounded-full object-cover"
                             />
                           ) : (
                             <div className="h-6 w-6 rounded-full bg-muted-foreground/20 flex items-center justify-center text-xs font-bold">
-                              {(PLATFORM_NAMES[integration.type] || integration.type)[0]?.toUpperCase()}
+                              {(PLATFORM_NAMES[platform.platformType] || platform.platformType)[0]?.toUpperCase()}
                             </div>
                           )}
                           <span className="font-medium">
-                            {integration.name}
+                            {platform.name}
                           </span>
                           <Badge variant="secondary" className="text-xs">
-                            {PLATFORM_NAMES[integration.type] || integration.type}
+                            {PLATFORM_NAMES[platform.platformType] || platform.platformType}
                           </Badge>
+                          {platform.source === "buffer" && (
+                            <Badge variant="outline" className="text-xs text-blue-400 border-blue-400/50">
+                              Buffer
+                            </Badge>
+                          )}
                         </button>
                       );
                     })}
@@ -511,17 +657,16 @@ export function PublishDialog({
                   <div className="flex flex-wrap gap-2">
                     {selectedIds.size > 0 &&
                       Array.from(selectedIds).map((id) => {
-                        const integration = integrations.find((i) => i.id === id);
-                        if (!integration) return null;
-                        const limit =
-                          PLATFORM_CHAR_LIMITS[integration.type] || 5000;
+                        const p = platforms.find((pl) => pl.id === id);
+                        if (!p) return null;
+                        const limit = PLATFORM_CHAR_LIMITS[p.platformType] || 5000;
                         const isOver = caption.length > limit;
                         return (
                           <span
                             key={id}
                             className={isOver ? "text-red-500 font-medium" : ""}
                           >
-                            {PLATFORM_NAMES[integration.type] || integration.type}: {limit}
+                            {PLATFORM_NAMES[p.platformType] || p.platformType}: {limit}
                           </span>
                         );
                       })}
@@ -536,7 +681,6 @@ export function PublishDialog({
                     {caption.length}
                   </span>
                 </div>
-                {/* Warnings */}
                 {charWarnings.length > 0 && (
                   <div className="flex items-start gap-2 text-xs text-yellow-600">
                     <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
@@ -554,13 +698,13 @@ export function PublishDialog({
             {/* Publish mode */}
             <div className="space-y-3">
               <Label>Mod publicare</Label>
-              <div className="grid grid-cols-4 gap-2">
+              <div className={`grid gap-2 ${showDraftUpload ? "grid-cols-4" : "grid-cols-2"}`}>
                 <button
                   type="button"
                   onClick={() => setPublishMode("now")}
                   className={`flex flex-col items-center gap-1.5 px-3 py-3 rounded-lg border-2 transition-all text-sm ${
                     publishMode === "now"
-                      ? "border-green-500 bg-green-500/15"
+                      ? "border-primary bg-primary/15"
                       : "border-transparent bg-muted hover:bg-accent/50"
                   }`}
                 >
@@ -572,37 +716,41 @@ export function PublishDialog({
                   onClick={() => setPublishMode("schedule")}
                   className={`flex flex-col items-center gap-1.5 px-3 py-3 rounded-lg border-2 transition-all text-sm ${
                     publishMode === "schedule"
-                      ? "border-blue-500 bg-blue-500/15"
+                      ? "border-primary bg-primary/15"
                       : "border-transparent bg-muted hover:bg-accent/50"
                   }`}
                 >
                   <Calendar className="h-4 w-4" />
                   <span className="font-medium">Programeaza</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setPublishMode("draft")}
-                  className={`flex flex-col items-center gap-1.5 px-3 py-3 rounded-lg border-2 transition-all text-sm ${
-                    publishMode === "draft"
-                      ? "border-purple-500 bg-purple-500/15"
-                      : "border-transparent bg-muted hover:bg-accent/50"
-                  }`}
-                >
-                  <FileEdit className="h-4 w-4" />
-                  <span className="font-medium">Draft</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPublishMode("upload")}
-                  className={`flex flex-col items-center gap-1.5 px-3 py-3 rounded-lg border-2 transition-all text-sm ${
-                    publishMode === "upload"
-                      ? "border-orange-500 bg-orange-500/15"
-                      : "border-transparent bg-muted hover:bg-accent/50"
-                  }`}
-                >
-                  <Upload className="h-4 w-4" />
-                  <span className="font-medium">Upload</span>
-                </button>
+                {showDraftUpload && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setPublishMode("draft")}
+                      className={`flex flex-col items-center gap-1.5 px-3 py-3 rounded-lg border-2 transition-all text-sm ${
+                        publishMode === "draft"
+                          ? "border-primary bg-primary/15"
+                          : "border-transparent bg-muted hover:bg-accent/50"
+                      }`}
+                    >
+                      <FileEdit className="h-4 w-4" />
+                      <span className="font-medium">Draft</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPublishMode("upload")}
+                      className={`flex flex-col items-center gap-1.5 px-3 py-3 rounded-lg border-2 transition-all text-sm ${
+                        publishMode === "upload"
+                          ? "border-primary bg-primary/15"
+                          : "border-transparent bg-muted hover:bg-accent/50"
+                      }`}
+                    >
+                      <Upload className="h-4 w-4" />
+                      <span className="font-medium">Upload</span>
+                    </button>
+                  </>
+                )}
               </div>
               {publishMode === "draft" && (
                 <p className="text-xs text-muted-foreground">
@@ -653,10 +801,10 @@ export function PublishDialog({
                 {publishMode === "upload"
                   ? "Video incarcat in Postiz!"
                   : publishMode === "schedule"
-                    ? "Post scheduled!"
+                    ? "Postare programata!"
                     : publishMode === "draft"
-                      ? "Draft saved in Postiz!"
-                      : "Published successfully!"}
+                      ? "Draft salvat in Postiz!"
+                      : "Publicat cu succes!"}
               </p>
               <p className="text-sm text-muted-foreground mt-1">
                 {progressStep}
@@ -688,11 +836,7 @@ export function PublishDialog({
               <Button
                 onClick={handlePublish}
                 disabled={isPublishDisabled}
-                className={
-                  publishMode === "upload"
-                    ? "bg-gradient-to-r from-orange-500 to-amber-500 text-white border-none hover:from-orange-600 hover:to-amber-600"
-                    : "bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
-                }
+                className="bg-primary text-primary-foreground hover:bg-primary/90"
               >
                 {publishMode === "upload" ? (
                   <Upload className="h-4 w-4 mr-2" />

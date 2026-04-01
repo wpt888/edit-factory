@@ -161,7 +161,7 @@ class ElevenLabsTTS:
         }
 
         # Prepare request
-        # Request 192kbps MP3 output (~$0.24 per 1k chars, Scale plan pricing)
+        # Request 128kbps 44.1kHz MP3 output (~$0.24 per 1k chars, Scale plan pricing)
         url = f"{self.BASE_URL}/text-to-speech/{self.voice_id}?output_format=mp3_44100_128"
 
         headers = {
@@ -286,7 +286,7 @@ class ElevenLabsTTS:
                 str(output_path)
             ]
         else:
-            # Video has no audio - just add TTS audio directly
+            # Video has no audio - just add TTS audio directly, use -shortest to avoid trailing audio
             cmd = [
                 "ffmpeg", "-y", "-threads", "4",
                 "-i", str(video_path),
@@ -296,6 +296,7 @@ class ElevenLabsTTS:
                 "-c:v", "copy",
                 "-c:a", "aac",
                 "-b:a", "192k",
+                "-shortest",
                 str(output_path)
             ]
 

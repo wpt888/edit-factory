@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,7 +32,7 @@ interface PostDetailModalProps {
 function stateColor(state: string): string {
   switch (state) {
     case "PUBLISHED": return "bg-green-500/20 text-green-300 border-green-500/30";
-    case "QUEUE": return "bg-blue-500/20 text-blue-300 border-blue-500/30";
+    case "QUEUE": return "bg-amber-500/20 text-amber-300 border-amber-500/30";
     case "ERROR": return "bg-red-500/20 text-red-300 border-red-500/30";
     case "DRAFT": return "bg-gray-500/20 text-gray-400 border-gray-500/30";
     default: return "bg-gray-500/20 text-gray-400 border-gray-500/30";
@@ -93,6 +94,7 @@ export function PostDetailModal({ post, scheduleItem, onClose, onDeleted }: Post
     <>
       <Dialog open={!!post} onOpenChange={(open) => { if (!open) onClose(); }}>
         <DialogContent className="max-w-3xl p-0 gap-0 overflow-hidden">
+          <VisuallyHidden><DialogTitle>Post details</DialogTitle></VisuallyHidden>
           {/* Header */}
           <div className="px-6 pt-5 pb-3 border-b">
             <div className="flex items-center gap-3">

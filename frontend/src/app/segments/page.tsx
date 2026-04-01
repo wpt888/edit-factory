@@ -588,10 +588,12 @@ export default function SegmentsPage() {
       const res = await apiGetWithRetry("/segments/browse-local");
       if (res.ok) {
         const data = await res.json();
-        if (data.file_path) {
-          setLocalPath(data.file_path);
+        const paths: string[] = data.file_paths || (data.file_path ? [data.file_path] : []);
+        if (paths.length > 0) {
+          // Use first file for the dialog path field
+          setLocalPath(paths[0]);
           if (!localName.trim()) {
-            const filename = data.file_path.split(/[/\\]/).pop() || "";
+            const filename = paths[0].split(/[/\\]/).pop() || "";
             setLocalName(filename.replace(/\.[^/.]+$/, ""));
           }
         }
@@ -1133,17 +1135,77 @@ export default function SegmentsPage() {
               className="flex-1 h-7 text-xs"
               disabled={browsing || addingLocal}
               onClick={async () => {
-                // Open native file picker directly, then add the video
+                // Open native file picker (multi-select) then add video(s)
                 setBrowsing(true);
                 try {
                   const res = await apiGetWithRetry("/segments/browse-local");
                   if (res.ok) {
                     const data = await res.json();
-                    if (data.file_path) {
-                      setLocalPath(data.file_path);
-                      const filename = data.file_path.split(/[/\\]/).pop() || "";
+                    const paths: string[] = data.file_paths || (data.file_path ? [data.file_path] : []);
+                    if (paths.length === 0) return;
+                    if (paths.length === 1) {
+                      // Single file — show dialog for name editing
+                      setLocalPath(paths[0]);
+                      const filename = paths[0].split(/[/\\]/).pop() || "";
                       setLocalName(filename.replace(/\.[^/.]+$/, ""));
                       setShowLocalDialog(true);
+                    } else {
+                      // Multiple files — add all directly using filenames
+                      setAddingLocal(true);
+                      const addedVideos: SourceVideo[] = [];
+                      for (const fp of paths) {
+                        const filename = fp.split(/[/\\]/).pop() || "";
+                        const name = filename.replace(/\.[^/.]+$/, "");
+                        try {
+                          const addRes = await apiPost("/segments/source-videos/local", {
+                            file_path: fp,
+                            name: name || undefined,
+                          });
+                          if (addRes.ok) {
+                            const newVideo = await addRes.json() as SourceVideo;
+                            addedVideos.push(newVideo);
+                            setSourceVideos((prev) => [newVideo, ...prev]);
+                            setSelectedVideo(newVideo);
+                          }
+                        } catch {
+                          // skip failed files, continue with rest
+                        }
+                      }
+                      setAddingLocal(false);
+                      // Poll all processing videos until ready
+                      const processingIds = new Set(
+                        addedVideos.filter((v) => v.status === "processing").map((v) => v.id)
+                      );
+                      if (processingIds.size > 0) {
+                        if (uploadPollRef.current) {
+                          clearInterval(uploadPollRef.current);
+                          uploadPollRef.current = null;
+                        }
+                        uploadPollRef.current = setInterval(async () => {
+                          for (const vid of [...processingIds]) {
+                            try {
+                              const pollRes = await apiGetWithRetry(`/segments/source-videos/${vid}`);
+                              if (!pollRes.ok) { processingIds.delete(vid); continue; }
+                              const updated: SourceVideo = await pollRes.json();
+                              if (updated.status === "ready" || updated.status === "error") {
+                                processingIds.delete(vid);
+                                setSourceVideos((prev) =>
+                                  prev.map((v) => (v.id === updated.id ? updated : v))
+                                );
+                                setSelectedVideo((prev) =>
+                                  prev?.id === updated.id ? updated : prev
+                                );
+                              }
+                            } catch {
+                              processingIds.delete(vid);
+                            }
+                          }
+                          if (processingIds.size === 0 && uploadPollRef.current) {
+                            clearInterval(uploadPollRef.current);
+                            uploadPollRef.current = null;
+                          }
+                        }, 2000);
+                      }
                     }
                   }
                 } catch {
@@ -1422,6 +1484,11 @@ export default function SegmentsPage() {
                         </div>
                       )}
                     </div>
+
+                    {/* Segment indicator */}
+                    {video.segments_count > 0 && (
+                      <span className="w-2.5 h-2.5 rounded-full bg-green-500 flex-shrink-0" />
+                    )}
 
                     {/* Delete button */}
                     <Button

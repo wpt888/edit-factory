@@ -178,15 +178,15 @@ class ScriptGenerator:
         if ai_instructions.strip():
             ai_rules_section = f"\n**Creator's Rules & Guidelines:**\n{ai_instructions.strip()}\n"
 
-        # Compute dynamic word target based on available footage duration
+        # Compute dynamic word target based on desired output duration
         if target_duration and target_duration > 0:
-            # Target 80-95% of available duration to leave breathing room
-            min_duration = target_duration * 0.80
-            max_duration = target_duration * 0.95
+            # Target 85-100% of desired duration
+            min_duration = target_duration * 0.85
+            max_duration = target_duration
             min_words = max(20, int(min_duration * words_per_sec))
             max_words = max(min_words + 10, int(max_duration * words_per_sec))
             duration_target = f"{min_words}-{max_words} words (~{int(min_duration)}-{int(max_duration)} seconds when spoken)"
-            duration_warning = f"\n8. IMPORTANT: The available video footage is approximately {int(target_duration)}s. The script MUST NOT exceed this duration when spoken, or segments will be looped."
+            duration_warning = f"\n8. CRITICAL: The final video must be approximately {int(target_duration)} seconds long. The script MUST fit within this duration when spoken aloud."
         else:
             duration_target = "75-150 words (~30-60 seconds when spoken)"
             duration_warning = ""

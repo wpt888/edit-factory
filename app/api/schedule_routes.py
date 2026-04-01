@@ -532,6 +532,58 @@ async def get_schedule_calendar(
     except Exception as e:
         logger.warning(f"Failed to fetch local schedule items: {e}")
 
+    # 2b. Enrich postiz_posts with local video data from editai_postiz_publications
+    # Posts published via Quick Schedule / direct publish have clip data in publications table
+    try:
+        postiz_ids = [p["id"] for p in result["postiz_posts"] if p.get("id")]
+        # Find which postiz_post_ids already have schedule_items (already linked)
+        linked_postiz_ids = set(
+            item["postiz_post_id"] for item in result["schedule_items"]
+            if item.get("postiz_post_id")
+        )
+        # Only look up unlinked posts
+        unlinked_ids = [pid for pid in postiz_ids if pid not in linked_postiz_ids]
+
+        if unlinked_ids and repo:
+            pubs_resp = repo.table_query("editai_postiz_publications", "select",
+                filters=QueryFilters(
+                    select="postiz_post_id, clip_id",
+                    in_={"postiz_post_id": unlinked_ids},
+                ))
+            if pubs_resp.data:
+                # Get clip details for these publications
+                clip_ids = list(set(p["clip_id"] for p in pubs_resp.data if p.get("clip_id")))
+                if clip_ids:
+                    clips_resp = repo.table_query("editai_clips", "select",
+                        filters=QueryFilters(
+                            select="id, variant_name, thumbnail_path, duration, final_video_path",
+                            in_={"id": clip_ids},
+                        ))
+                    clips_by_id = {c["id"]: c for c in (clips_resp.data or [])}
+
+                    # Build postiz_post_id -> clip data map
+                    pub_clip_map = {}
+                    for pub in pubs_resp.data:
+                        if pub.get("clip_id") and pub["clip_id"] in clips_by_id:
+                            pub_clip_map[pub["postiz_post_id"]] = clips_by_id[pub["clip_id"]]
+
+                    # Inject as synthetic schedule items so frontend can link them
+                    for postiz_post_id, clip in pub_clip_map.items():
+                        result["schedule_items"].append({
+                            "id": f"pub-{postiz_post_id}",
+                            "clip_id": clip["id"],
+                            "clip_name": clip.get("variant_name", ""),
+                            "thumbnail_path": clip.get("thumbnail_path"),
+                            "final_video_path": clip.get("final_video_path"),
+                            "scheduled_date": None,
+                            "scheduled_at": None,
+                            "status": "published",
+                            "postiz_post_id": postiz_post_id,
+                            "error_message": None,
+                        })
+    except Exception as e:
+        logger.warning(f"Failed to enrich posts from publications: {e}")
+
     # 3. Build per-day summary
     from collections import defaultdict
     days = defaultdict(lambda: {"postiz_count": 0, "scheduled_count": 0, "published_count": 0})

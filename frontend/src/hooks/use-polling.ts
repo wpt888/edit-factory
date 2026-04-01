@@ -58,6 +58,7 @@ export function usePolling<T>(options: UsePollingOptions<T>): UsePollingReturn<T
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const isCancelledRef = useRef(false);
   const currentIntervalRef = useRef(interval);
+  const generationRef = useRef(0); // Prevents duplicate poll chains
 
   // Refs for callbacks to avoid stale closures in the poll loop
   const onDataRef = useRef(onData);
@@ -88,13 +89,15 @@ export function usePolling<T>(options: UsePollingOptions<T>): UsePollingReturn<T
     currentIntervalRef.current = interval;
     setIsPolling(true);
     setError(null);
+    // Increment generation to invalidate any in-flight poll from a previous chain
+    const thisGeneration = ++generationRef.current;
 
     const poll = async () => {
-      if (isCancelledRef.current) return;
+      if (isCancelledRef.current || generationRef.current !== thisGeneration) return;
 
       try {
         const response = await apiGet(endpoint);
-        if (isCancelledRef.current) return;
+        if (isCancelledRef.current || generationRef.current !== thisGeneration) return;
         const result: T = await response.json();
         setData(result);
         setError(null);
@@ -115,7 +118,7 @@ export function usePolling<T>(options: UsePollingOptions<T>): UsePollingReturn<T
       }
 
       // Schedule next poll after current one completes (avoids double-poll)
-      if (!isCancelledRef.current) {
+      if (!isCancelledRef.current && generationRef.current === thisGeneration) {
         intervalRef.current = setTimeout(poll, currentIntervalRef.current) as unknown as NodeJS.Timeout;
       }
     };

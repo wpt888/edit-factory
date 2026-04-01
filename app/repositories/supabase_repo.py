@@ -166,6 +166,21 @@ class SupabaseRepository(DataRepository):
     def delete_clip(self, clip_id: str) -> None:
         self._delete("editai_clips", "id", clip_id)
 
+    def bulk_update_clips(
+        self, clip_ids: List[str], profile_id: str, data: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        if not clip_ids:
+            return []
+        sb = get_supabase()
+        result = (
+            sb.table("editai_clips")
+            .update(data)
+            .in_("id", clip_ids)
+            .eq("profile_id", profile_id)
+            .execute()
+        )
+        return result.data or []
+
     def delete_clips_by_ids(self, clip_ids: List[str]) -> None:
         if not clip_ids:
             return

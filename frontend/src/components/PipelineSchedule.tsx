@@ -109,8 +109,6 @@ function clearDraft() {
 /* ---------- Component ---------- */
 
 export function PipelineSchedule({ completedClips, initialCaptions, captionSlot }: PipelineScheduleProps) {
-  const isMountedRef = useRef(true);
-  useEffect(() => () => { isMountedRef.current = false; }, []);
 
   // Load draft on initial render
   const draftRef = useRef(loadDraft());
@@ -199,7 +197,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
     // If another instance is already fetching, wait for it
     if (_integrationsFetchPromise && !forceRefresh) {
       await _integrationsFetchPromise;
-      if (isMountedRef.current && _integrationsCache) {
+      if (_integrationsCache) {
         applyIntegrations(_integrationsCache, !!draft);
       }
       return;
@@ -230,13 +228,11 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
 
     await _integrationsFetchPromise;
 
-    if (isMountedRef.current) {
-      if (_integrationsFetchFailed) {
-        setIntegrationError(true);
-        setLoadingIntegrations(false);
-      } else if (_integrationsCache) {
-        applyIntegrations(_integrationsCache, !!draft);
-      }
+    if (_integrationsFetchFailed) {
+      setIntegrationError(true);
+      setLoadingIntegrations(false);
+    } else if (_integrationsCache) {
+      applyIntegrations(_integrationsCache, !!draft);
     }
   }, [applyIntegrations, draft]);
 
@@ -320,7 +316,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
         : String(err);
       toast.error(`Failed to schedule clips: ${detail}`);
     } finally {
-      if (isMountedRef.current) setScheduling(false);
+      setScheduling(false);
     }
   };
 
@@ -443,8 +439,8 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
 
             {/* Draft restored banner */}
             {draftRestored && (
-              <div className="flex items-center justify-between rounded-md border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30 px-3 py-2">
-                <div className="flex items-center gap-2 text-sm text-blue-700 dark:text-blue-300">
+              <div className="flex items-center justify-between rounded-md border border-border bg-muted/50 px-3 py-2">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Save className="size-4" />
                   Draft restaurat — {(() => {
                     const hasCaptions = draft && Object.values(draft.perVariantCaptions || {}).some(c => c?.trim());
@@ -544,7 +540,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
               <Button
                 onClick={handleSchedule}
                 disabled={scheduling || selectedClipIds.size === 0 || selectedIntegrationIds.size === 0}
-                className="bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
+                className="bg-primary text-primary-foreground hover:bg-primary/90"
               >
                 {scheduling ? (
                   <Loader2 className="size-4 mr-2 animate-spin" />

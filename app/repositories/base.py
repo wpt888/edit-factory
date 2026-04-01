@@ -102,6 +102,13 @@ class DataRepository(ABC):
         ...
 
     @abstractmethod
+    def bulk_update_clips(
+        self, clip_ids: List[str], profile_id: str, data: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Update multiple clips by IDs, filtered by profile ownership. Returns updated rows."""
+        ...
+
+    @abstractmethod
     def delete_clips_by_ids(self, clip_ids: List[str]) -> None:
         """Delete multiple clips by their IDs."""
         ...

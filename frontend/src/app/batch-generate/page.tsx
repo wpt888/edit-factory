@@ -35,7 +35,7 @@ function getStatusBadge(status: ProductJobStatus["status"]) {
       );
     case "processing":
       return (
-        <Badge variant="secondary" className="text-blue-500">
+        <Badge variant="secondary" className="text-amber-500">
           <Loader2 className="h-3 w-3 mr-1 animate-spin" />
           Processing
         </Badge>

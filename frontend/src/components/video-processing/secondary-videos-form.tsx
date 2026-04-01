@@ -177,7 +177,7 @@ export function SecondaryVideosForm({
 
       {/* Info message */}
       {configuredCount > 0 && (
-        <div className="text-xs bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 px-3 py-2 rounded">
+        <div className="text-xs bg-muted/50 text-muted-foreground px-3 py-2 rounded">
           <strong>Note:</strong> An SRT file is required to detect the moments
           when keywords appear. Upload or generate subtitles before processing.
         </div>

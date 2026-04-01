@@ -42,6 +42,7 @@ import {
   ImageIcon,
   Calendar,
   Send,
+  Copy,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, ApiError, handleApiError } from "@/lib/api";
@@ -53,6 +54,12 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { InlineVideoPlayer } from "@/components/inline-video-player";
 import { ClipHoverPreview } from "@/components/clip-hover-preview";
 import { ClipTagEditor } from "@/components/clip-tag-editor";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface GeneratedImage {
   id: string;
@@ -94,9 +101,9 @@ interface ClipWithProject {
   instagram_posted?: boolean;
   youtube_posted?: boolean;
   facebook_posted?: boolean;
+  is_downloaded_posted?: boolean;
   srt_content?: string | null;
   tts_text?: string | null;
-  script_text?: string | null;
 }
 
 
@@ -186,6 +193,7 @@ function LibrarieContent() {
   const [loadingTrash, setLoadingTrash] = useState(false);
   const [restoringClipId, setRestoringClipId] = useState<string | null>(null);
   const [permanentlyDeletingClipId, setPermanentlyDeletingClipId] = useState<string | null>(null);
+  const [emptyingTrash, setEmptyingTrash] = useState(false);
 
   // Images tab state
   const [activeTab, setActiveTab] = useState<"videos" | "images">("videos");
@@ -522,6 +530,24 @@ function LibrarieContent() {
     }
   };
 
+  // Toggle downloaded & posted status
+  const toggleDownloadedPosted = async (clipId: string) => {
+    const clip = clips.find((c) => c.id === clipId);
+    if (!clip) return;
+    const newValue = !clip.is_downloaded_posted;
+    setClips((prev) =>
+      prev.map((c) => (c.id === clipId ? { ...c, is_downloaded_posted: newValue } : c))
+    );
+    try {
+      await apiPatch(`/library/clips/${clipId}`, { is_downloaded_posted: newValue });
+    } catch (error) {
+      handleApiError(error, "Error updating status");
+      setClips((prev) =>
+        prev.map((c) => (c.id === clipId ? { ...c, is_downloaded_posted: !newValue } : c))
+      );
+    }
+  };
+
   // Toggle social media posted status (generic)
   const toggleSocialPosted = async (clipId: string, platform: "instagram_posted" | "youtube_posted" | "facebook_posted") => {
     const clip = clips.find((c) => c.id === clipId);
@@ -544,7 +570,8 @@ function LibrarieContent() {
 
   // Caption expand state
   const [expandedCaptionId, setExpandedCaptionId] = useState<string | null>(null);
-  const [expandedScriptId, setExpandedScriptId] = useState<string | null>(null);
+  const [scriptDialogClip, setScriptDialogClip] = useState<ClipWithProject | null>(null);
+  const [loadingScriptId, setLoadingScriptId] = useState<string | null>(null);
 
   // Get Postiz status badge
   const getPostizBadge = (clip: ClipWithProject) => {
@@ -599,6 +626,51 @@ function LibrarieContent() {
       setRenameClipId(null);
     }
   };
+
+  const loadClipContent = useCallback(async (clipId: string) => {
+    setLoadingScriptId(clipId);
+    try {
+      const res = await apiGet(`/library/clips/${clipId}`);
+      const data = await res.json();
+      const content = data?.content || data?.clip?.editai_clip_content || null;
+      if (!content) return null;
+
+      setClips((prev) =>
+        prev.map((clip) =>
+          clip.id === clipId
+            ? {
+                ...clip,
+                tts_text: content.tts_text ?? clip.tts_text ?? null,
+                srt_content: content.srt_content ?? clip.srt_content ?? null,
+                has_subtitles: Boolean(content.srt_content) || clip.has_subtitles,
+                has_voiceover: Boolean(content.tts_audio_path) || clip.has_voiceover,
+                has_audio: content.tts_audio_path ? true : clip.has_audio,
+              }
+            : clip
+        )
+      );
+
+      return content;
+    } catch (error) {
+      handleApiError(error, "Error loading clip script");
+      return null;
+    } finally {
+      setLoadingScriptId((current) => (current === clipId ? null : current));
+    }
+  }, []);
+
+  const openScriptDialog = useCallback(async (clip: ClipWithProject) => {
+    if (!clip.tts_text) {
+      const content = await loadClipContent(clip.id);
+      if (!content?.tts_text) {
+        toast.error("Script not available for this clip");
+        return;
+      }
+      setScriptDialogClip({ ...clip, tts_text: content.tts_text });
+    } else {
+      setScriptDialogClip(clip);
+    }
+  }, [loadClipContent]);
 
   // Remove audio from clip — opens confirm dialog
   const openRemoveAudioConfirm = (clip: ClipWithProject) => {
@@ -932,6 +1004,31 @@ function LibrarieContent() {
     });
   };
 
+  // Empty all trash — opens confirm dialog
+  const emptyAllTrash = () => {
+    setConfirmDialog({
+      open: true,
+      title: "Empty Trash",
+      description: `Are you sure you want to permanently delete all ${trashClips.length} clip(s) in trash? This will remove all files and cannot be undone.`,
+      confirmLabel: "Empty Trash",
+      variant: "destructive",
+      onConfirm: async () => {
+        setConfirmDialog((prev) => ({ ...prev, loading: true }));
+        setEmptyingTrash(true);
+        try {
+          await apiDelete("/library/trash/empty");
+          setTrashClips([]);
+          toast.success("Trash emptied successfully.");
+        } catch (error) {
+          handleApiError(error, "Error emptying trash");
+        } finally {
+          setEmptyingTrash(false);
+          setConfirmDialog((prev) => ({ ...prev, open: false, loading: false }));
+        }
+      },
+    });
+  };
+
   // Handle no profile selected
   if (!profileLoading && !currentProfile) {
     return (
@@ -954,7 +1051,7 @@ function LibrarieContent() {
 
   return (
     <div className="min-h-screen bg-background">
-      <main className="w-full max-w-[1400px] mx-auto px-6 py-8">
+      <main className={`w-full max-w-[1400px] mx-auto px-6 py-8 ${viewMode === "library" && selectedClipIds.size > 0 ? "pb-24" : ""}`}>
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -1265,10 +1362,25 @@ function LibrarieContent() {
         {/* Trash View */}
         {viewMode === "trash" && (
           <div>
-            <div className="mb-4">
+            <div className="mb-4 flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
                 Clips in trash are permanently deleted after 30 days.
               </p>
+              {trashClips.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={emptyingTrash}
+                  onClick={emptyAllTrash}
+                >
+                  {emptyingTrash ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                  ) : (
+                    <Trash2 className="h-4 w-4 mr-1" />
+                  )}
+                  Empty Trash
+                </Button>
+              )}
             </div>
             {loadingTrash ? (
               <div className="flex items-center justify-center py-20">
@@ -1632,8 +1744,10 @@ function LibrarieContent() {
               return (
                 <Card
                   key={clip.id}
-                  className={`overflow-hidden hover:ring-2 hover:ring-primary/50 transition-all cursor-pointer ${
-                    selectedClipIds.has(clip.id) ? "ring-2 ring-primary" : ""
+                  className={`overflow-hidden transition-all cursor-pointer ${
+                    clip.is_downloaded_posted
+                      ? "border-green-500 bg-green-50/50 dark:bg-green-950/20 hover:ring-2 hover:ring-green-400/50"
+                      : `hover:ring-2 hover:ring-primary/50 ${selectedClipIds.has(clip.id) ? "ring-2 ring-primary" : ""}`
                   }`}
                   onClick={() => toggleClipSelection(clip.id)}
                 >
@@ -1897,48 +2011,80 @@ function LibrarieContent() {
                       className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {([
-                        { key: "tiktok_posted" as const, label: "TikTok", toggle: () => toggleTiktokPosted(clip.id) },
-                        { key: "instagram_posted" as const, label: "IG", toggle: () => toggleSocialPosted(clip.id, "instagram_posted") },
-                        { key: "youtube_posted" as const, label: "YT", toggle: () => toggleSocialPosted(clip.id, "youtube_posted") },
-                        { key: "facebook_posted" as const, label: "FB", toggle: () => toggleSocialPosted(clip.id, "facebook_posted") },
-                      ]).map(({ key, label, toggle }) => (
-                        <div key={key} className="flex items-center gap-1">
-                          <Checkbox
-                            id={`${key}-${clip.id}`}
-                            checked={clip[key] || false}
-                            onCheckedChange={toggle}
-                            className="h-3.5 w-3.5"
-                          />
-                          <label
-                            htmlFor={`${key}-${clip.id}`}
-                            className={`text-xs cursor-pointer select-none ${
-                              clip[key] ? "text-foreground font-medium" : "text-muted-foreground"
-                            }`}
-                          >
-                            {label}
-                          </label>
-                        </div>
-                      ))}
+                      {/* Postiz status (auto-checked when uploaded/scheduled/sent) */}
+                      <div className="flex items-center gap-1.5">
+                        <Checkbox
+                          id={`postiz-${clip.id}`}
+                          checked={clip.postiz_status === "uploaded" || clip.postiz_status === "scheduled" || clip.postiz_status === "sent"}
+                          disabled
+                          className="h-4 w-4 border-2 border-muted-foreground/50 data-[state=checked]:border-purple-500 data-[state=checked]:bg-purple-500 disabled:opacity-100"
+                        />
+                        <label
+                          className={`text-xs select-none ${
+                            clip.postiz_status === "uploaded" || clip.postiz_status === "scheduled" || clip.postiz_status === "sent"
+                              ? "text-purple-600 dark:text-purple-400 font-medium"
+                              : "text-muted-foreground"
+                          }`}
+                        >
+                          Postiz
+                        </label>
+                      </div>
+                      {/* TikTok (manual) */}
+                      <div className="flex items-center gap-1.5">
+                        <Checkbox
+                          id={`tiktok_posted-${clip.id}`}
+                          checked={clip.tiktok_posted || false}
+                          onCheckedChange={() => toggleTiktokPosted(clip.id)}
+                          className="h-4 w-4 border-2 border-muted-foreground/50 data-[state=checked]:border-blue-500 data-[state=checked]:bg-blue-500"
+                        />
+                        <label
+                          htmlFor={`tiktok_posted-${clip.id}`}
+                          className={`text-xs cursor-pointer select-none ${
+                            clip.tiktok_posted ? "text-blue-600 dark:text-blue-400 font-medium" : "text-muted-foreground"
+                          }`}
+                        >
+                          TikTok
+                        </label>
+                      </div>
                     </div>
-                    {/* Script preview */}
-                    {(clip.script_text || clip.tts_text) && (
+                    {/* Downloaded & Posted checkbox */}
+                    <div
+                      className="mt-1.5 flex items-center gap-1.5"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Checkbox
+                        id={`downloaded-posted-${clip.id}`}
+                        checked={clip.is_downloaded_posted || false}
+                        onCheckedChange={() => toggleDownloadedPosted(clip.id)}
+                        className="h-5 w-5 border-2 border-green-500 data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
+                      />
+                      <label
+                        htmlFor={`downloaded-posted-${clip.id}`}
+                        className={`text-xs cursor-pointer select-none ${
+                          clip.is_downloaded_posted ? "text-green-600 dark:text-green-400 font-medium" : "text-muted-foreground"
+                        }`}
+                      >
+                        {clip.is_downloaded_posted ? "Downloaded & Posted" : "Mark as downloaded & posted"}
+                      </label>
+                    </div>
+                    {/* Script preview button */}
+                    {(clip.tts_text || clip.project_name.startsWith("Pipeline:")) && (
                       <div
                         className="mt-1.5"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <button
                           className="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 flex items-center gap-1 transition-colors font-medium"
-                          onClick={() => setExpandedScriptId(expandedScriptId === clip.id ? null : clip.id)}
+                          onClick={() => void openScriptDialog(clip)}
+                          disabled={loadingScriptId === clip.id}
                         >
-                          <FileText className="h-3 w-3" />
-                          {expandedScriptId === clip.id ? "Hide script" : "Show script"}
+                          {loadingScriptId === clip.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <FileText className="h-3 w-3" />
+                          )}
+                          {loadingScriptId === clip.id ? "Loading script..." : "Show script"}
                         </button>
-                        {expandedScriptId === clip.id && (
-                          <div className="mt-1 p-1.5 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded text-xs text-foreground max-h-32 overflow-y-auto whitespace-pre-wrap leading-relaxed">
-                            {clip.script_text || clip.tts_text}
-                          </div>
-                        )}
                       </div>
                     )}
                     {/* Caption preview */}
@@ -2026,6 +2172,37 @@ function LibrarieContent() {
           loading={confirmDialog.loading}
         />
 
+        {/* Script Dialog */}
+        <Dialog open={!!scriptDialogClip} onOpenChange={(open) => { if (!open) setScriptDialogClip(null); }}>
+          <DialogContent className="max-w-lg max-h-[80vh]">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <FileText className="h-5 w-5 text-blue-500" />
+                Script — {scriptDialogClip?.variant_name || `Variant ${(scriptDialogClip?.variant_index ?? 0) + 1}`}
+              </DialogTitle>
+              <p className="text-sm text-muted-foreground">{scriptDialogClip?.project_name}</p>
+            </DialogHeader>
+            <div className="overflow-y-auto max-h-[60vh] p-4 bg-muted/30 rounded-lg border">
+              <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                {scriptDialogClip?.tts_text || "No script available"}
+              </p>
+            </div>
+            {scriptDialogClip?.tts_text && (
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  navigator.clipboard.writeText(scriptDialogClip.tts_text!);
+                  toast.success("Script copied to clipboard");
+                }}
+              >
+                <Copy className="h-4 w-4 mr-2" />
+                Copy script
+              </Button>
+            )}
+          </DialogContent>
+        </Dialog>
+
         {/* Inline Video Player */}
         {playingClip && (
           <InlineVideoPlayer
@@ -2036,6 +2213,68 @@ function LibrarieContent() {
             videoRef={videoRef}
             scriptText={playingClip.tts_text}
           />
+        )}
+
+        {/* Sticky bottom action bar - appears when clips are selected */}
+        {viewMode === "library" && selectedClipIds.size > 0 && (
+          <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 shadow-[0_-4px_20px_rgba(0,0,0,0.15)]">
+            <div className="container mx-auto px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <CheckSquare className="h-5 w-5 text-primary" />
+                  <span className="font-medium">
+                    {selectedClipIds.size} {selectedClipIds.size === 1 ? "clip selected" : "clips selected"}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={clearSelection}
+                  >
+                    <XCircle className="h-4 w-4 mr-1" />
+                    Deselect
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={selectAllVisible}
+                    disabled={selectedClipIds.size === filteredClips.length}
+                  >
+                    <CheckSquare className="h-4 w-4 mr-2" />
+                    Select all ({filteredClips.length})
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    onClick={openBulkUploadConfirm}
+                    disabled={bulkDeleting || bulkUploading || !postizStatus?.connected}
+                    title={postizStatus?.connected ? `Send to ${postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")}` : "Postiz not configured — configure in Settings"}
+                  >
+                    {bulkUploading ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Share2 className="h-4 w-4 mr-2" />
+                    )}
+                    Send to Postiz
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={openBulkDeleteConfirm}
+                    disabled={bulkDeleting || bulkUploading}
+                  >
+                    {bulkDeleting ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4 mr-2" />
+                    )}
+                    Delete selected
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
       </main>
     </div>

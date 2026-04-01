@@ -141,9 +141,11 @@ def cleanup_old_jobs(days: int, dry_run: bool) -> int:
         # Preview: count matching jobs without deleting
         terminal_statuses = {"failed", "completed", "cancelled"}
         count = 0
-        if storage.supabase:
+        repo = storage.supabase
+        raw_client = repo.get_client() if repo else None
+        if raw_client:
             try:
-                result = storage.supabase.table("jobs").select("id,status,created_at")\
+                result = raw_client.table("jobs").select("id,status,created_at")\
                     .lt("created_at", cutoff.isoformat()).execute()
                 matching = [r for r in (result.data or []) if r.get("status") in terminal_statuses]
                 count = len(matching)

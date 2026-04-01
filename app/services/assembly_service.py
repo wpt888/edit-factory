@@ -1005,27 +1005,33 @@ class AssemblyService:
             segment_end = segment.get("end_time", segment_start + needed_duration)
             segment_duration = segment_end - segment_start
 
-            # Trim or extend segment to match needed duration
+            # Trim or use segment at its real duration
             if segment_duration >= needed_duration:
                 # Segment is long enough, trim it
                 use_end = segment_start + needed_duration
+                use_duration = needed_duration
             else:
-                # Segment is too short — use full segment duration.
-                # build_timeline caller should ensure segments are split
-                # rather than relying on FFmpeg looping.
+                # Segment is too short — use it as-is at its real duration
+                # instead of looping it (which produces visible repetition).
+                # The next SRT entry will bring the next segment naturally,
+                # and the end-of-timeline gap code handles any shortfall.
                 use_end = segment_end
+                use_duration = segment_duration
+                logger.info(
+                    f"  timeline[{idx}]: segment short ({segment_duration:.2f}s < "
+                    f"{needed_duration:.2f}s), using real duration — no loop"
+                )
 
             timeline_entry = TimelineEntry(
                 source_video_path=source_video_path,
                 start_time=segment_start,
                 end_time=use_end,
                 timeline_start=current_timeline_pos,
-                timeline_duration=needed_duration,
+                timeline_duration=use_duration,
                 transforms=segment.get("transforms"),
             )
-
             timeline.append(timeline_entry)
-            current_timeline_pos += needed_duration
+            current_timeline_pos += use_duration
 
             # Track single_use segments placed in timeline
             if segment.get("single_use") and segment.get("id"):
@@ -1036,9 +1042,9 @@ class AssemblyService:
                 logger.info(
                     f"  timeline[{idx}]: seg={segment.get('id', '?')!r} "
                     f"src={Path(source_video_path).name if source_video_path else 'NONE'} "
-                    f"clip={segment_start:.2f}-{use_end:.2f}s "
-                    f"@timeline={current_timeline_pos - needed_duration:.2f}s "
-                    f"dur={needed_duration:.2f}s"
+                    f"clip={segment_start:.2f}-{segment.get('end_time', 0):.2f}s "
+                    f"@timeline={current_timeline_pos - use_duration:.2f}s "
+                    f"dur={use_duration:.2f}s"
                 )
 
         # Handle gap between last SRT entry and audio end
@@ -1262,10 +1268,17 @@ class AssemblyService:
                             default=None,
                         )
                         if alt_entry:
+                            # Extend end_time to cover timeline_duration so
+                            # assemble_video reads more source video instead of
+                            # looping a clip shorter than needed.
+                            extended_end = max(
+                                alt_entry.end_time,
+                                alt_entry.start_time + merged[idx].timeline_duration,
+                            )
                             merged[idx] = TimelineEntry(
                                 source_video_path=alt_path,
                                 start_time=alt_entry.start_time,
-                                end_time=alt_entry.end_time,
+                                end_time=extended_end,
                                 timeline_start=merged[idx].timeline_start,
                                 timeline_duration=merged[idx].timeline_duration,
                                 transforms=alt_entry.transforms,
@@ -1302,6 +1315,7 @@ class AssemblyService:
         interstitial_slides: Optional[List[dict]] = None,
         pip_overlays: Optional[Dict[str, dict]] = None,
         match_results: Optional[List] = None,
+        _preview_mode: bool = False,
     ) -> Path:
         """
         Assemble video from timeline using FFmpeg.
@@ -1318,13 +1332,16 @@ class AssemblyService:
         if not timeline:
             raise ValueError("Timeline is empty, cannot assemble video")
 
-        # Target output dimensions (portrait)
-        target_w, target_h = 1080, 1920
+        # Target output dimensions (portrait) — preview uses half-res
+        if _preview_mode:
+            target_w, target_h = 540, 960
+        else:
+            target_w, target_h = 1080, 1920
 
-        # Extract each segment clip in parallel, throttled by the global prep semaphore
-        # to prevent spawning more FFmpeg processes than the system can handle.
+        # Extract each segment clip in parallel, throttled by semaphore.
+        # Preview mode uses a dedicated semaphore so it never queues behind production.
         from app.services.segment_transforms import SegmentTransform
-        from app.services.ffmpeg_semaphore import acquire_prep_slot
+        from app.services.ffmpeg_semaphore import acquire_prep_slot, acquire_preview_prep_slot
         # Pre-allocate ordered results list (None = failed)
         # Thread-safe: asyncio.gather runs coroutines on single thread
         results: List[Optional[Path]] = [None] * len(timeline)
@@ -1367,7 +1384,17 @@ class AssemblyService:
 
             segment_raw = None  # VID-14: track for cleanup
             try:
-                async with await acquire_prep_slot():
+                # Preview mode: dedicated semaphore + shorter timeouts + lighter codec
+                _slot_fn = acquire_preview_prep_slot if _preview_mode else acquire_prep_slot
+                _extract_timeout = 60 if _preview_mode else 120
+                _main_timeout = 120 if _preview_mode else 600
+                _codec_params = (
+                    get_prep_codec_params(preset="ultrafast", crf=28, include_audio=False)
+                    if _preview_mode
+                    else get_prep_codec_params(include_audio=False)
+                )
+
+                async with await _slot_fn():
                     cmd = ["ffmpeg", "-y"]
 
                     if use_loop:
@@ -1379,7 +1406,7 @@ class AssemblyService:
                             "-ss", str(entry.start_time),
                             "-i", entry.source_video_path,
                             "-t", str(segment_duration),
-                            *get_prep_codec_params(preset="ultrafast", crf=18, include_audio=False),
+                            *get_prep_codec_params(preset="ultrafast", crf=18 if not _preview_mode else 28, include_audio=False),
                             "-r", str(TARGET_FPS),
                             "-fps_mode", "cfr",
                             "-video_track_timescale", "15360",
@@ -1387,7 +1414,7 @@ class AssemblyService:
                             str(segment_raw)
                         ]
                         result_extract = await asyncio.to_thread(
-                            safe_ffmpeg_run, extract_cmd, 120, "segment extract loop"
+                            safe_ffmpeg_run, extract_cmd, _extract_timeout, "segment extract loop"
                         )
                         if result_extract.returncode != 0:
                             logger.error(f"Failed to extract raw segment {i}: {result_extract.stderr}")
@@ -1414,7 +1441,7 @@ class AssemblyService:
                         ])
 
                     cmd.extend([
-                        *get_prep_codec_params(include_audio=False),
+                        *_codec_params,
                         "-r", str(TARGET_FPS),
                         "-fps_mode", "cfr",
                         "-video_track_timescale", "15360",
@@ -1425,7 +1452,7 @@ class AssemblyService:
                         str(segment_file)
                     ])
 
-                    result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 600, "segment extract")
+                    result = await asyncio.to_thread(safe_ffmpeg_run, cmd, _main_timeout, "segment extract")
 
                 if result.returncode == 0 and segment_file.exists():
                     results[i] = segment_file
@@ -1543,9 +1570,10 @@ class AssemblyService:
             str(assembled_path)
         ]
 
-        logger.info(f"Concatenating {len(segment_files)} segments")
+        _concat_timeout = 120 if _preview_mode else 600
+        logger.info(f"Concatenating {len(segment_files)} segments{' (preview)' if _preview_mode else ''}")
 
-        result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 600, "assembly concat")
+        result = await asyncio.to_thread(safe_ffmpeg_run, cmd, _concat_timeout, "assembly concat")
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg concatenation failed: {result.stderr}")
 
@@ -1997,6 +2025,7 @@ class AssemblyService:
                 interstitial_slides=interstitial_slides,
                 pip_overlays=pip_overlays,
                 match_results=match_results,
+                _preview_mode=_preview_mode,
             )
 
             # Render with preset and subtitle settings

@@ -11,6 +11,7 @@ Also provides:
 """
 import asyncio
 import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -24,13 +25,13 @@ logger = logging.getLogger(__name__)
 # Max concurrent FINAL FFmpeg render processes (the heavy encode step).
 # Library, Pipeline, and Product routes all share this single gate.
 # Set to 1 to prevent WSL2 OOM crashes — renders queue instead of running in parallel.
-MAX_CONCURRENT_RENDERS = 1
+MAX_CONCURRENT_RENDERS = int(os.environ.get("MAX_CONCURRENT_RENDERS", "1"))
 _ffmpeg_render_semaphore: asyncio.Semaphore | None = None
 
 # Max concurrent PREPARATORY FFmpeg processes (trim, extend, silence removal,
 # segment extraction, loudness measurement). These are lighter but still
 # spawn real FFmpeg/ffprobe subprocesses.
-MAX_CONCURRENT_PREP = 2
+MAX_CONCURRENT_PREP = int(os.environ.get("MAX_CONCURRENT_PREP", "2"))
 _ffmpeg_prep_semaphore: asyncio.Semaphore | None = None
 
 # Threading lock to prevent race condition during lazy semaphore creation.
@@ -48,6 +49,7 @@ async def init_semaphores() -> None:
     await _get_render_semaphore()
     await _get_prep_semaphore()
     await _get_preview_semaphore()
+    await _get_preview_prep_semaphore()
     logger.info("FFmpeg semaphores initialized")
 
 
@@ -71,10 +73,10 @@ async def _get_prep_semaphore() -> asyncio.Semaphore:
     return _ffmpeg_prep_semaphore
 
 # Timeout (seconds) waiting to acquire a semaphore slot before giving up.
-SEMAPHORE_ACQUIRE_TIMEOUT = 600  # 10 minutes
+SEMAPHORE_ACQUIRE_TIMEOUT = int(os.environ.get("SEMAPHORE_ACQUIRE_TIMEOUT", "600"))  # 10 minutes
 
 # Minimum free disk space (bytes) required before starting a render.
-MIN_FREE_DISK_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
+MIN_FREE_DISK_BYTES = int(os.environ.get("MIN_FREE_DISK_BYTES", str(2 * 1024 * 1024 * 1024)))  # 2 GB
 
 
 # =============================================================================
@@ -214,6 +216,11 @@ def is_nvenc_available() -> bool:
 MAX_CONCURRENT_PREVIEW = 2
 _ffmpeg_preview_semaphore: asyncio.Semaphore | None = None
 
+# Dedicated prep semaphore for preview segment extraction — separate from
+# production prep so previews never queue behind heavy production renders.
+MAX_CONCURRENT_PREVIEW_PREP = int(os.environ.get("MAX_CONCURRENT_PREVIEW_PREP", "3"))
+_ffmpeg_preview_prep_semaphore: asyncio.Semaphore | None = None
+
 
 async def _get_preview_semaphore() -> asyncio.Semaphore:
     """Lazily create preview semaphore in the running event loop."""
@@ -223,6 +230,16 @@ async def _get_preview_semaphore() -> asyncio.Semaphore:
             if _ffmpeg_preview_semaphore is None:
                 _ffmpeg_preview_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PREVIEW)
     return _ffmpeg_preview_semaphore
+
+
+async def _get_preview_prep_semaphore() -> asyncio.Semaphore:
+    """Lazily create preview prep semaphore in the running event loop."""
+    global _ffmpeg_preview_prep_semaphore
+    if _ffmpeg_preview_prep_semaphore is None:
+        async with _semaphore_init_lock:
+            if _ffmpeg_preview_prep_semaphore is None:
+                _ffmpeg_preview_prep_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PREVIEW_PREP)
+    return _ffmpeg_preview_prep_semaphore
 
 
 async def acquire_preview_slot(timeout: float = SEMAPHORE_ACQUIRE_TIMEOUT):
@@ -235,6 +252,17 @@ async def acquire_preview_slot(timeout: float = SEMAPHORE_ACQUIRE_TIMEOUT):
     """
     sem = await _get_preview_semaphore()
     return _SemaphoreWithTimeout(sem, timeout, "preview")
+
+
+async def acquire_preview_prep_slot(timeout: float = 120):
+    """Acquire a slot for preview segment extraction.
+
+    Uses a dedicated semaphore (not shared with production prep) so preview
+    segment extractions never queue behind heavy production renders.
+    Shorter default timeout (120s) since previews should be fast.
+    """
+    sem = await _get_preview_prep_semaphore()
+    return _SemaphoreWithTimeout(sem, timeout, "preview-prep")
 
 
 def get_preview_codec_params(use_gpu: bool = False) -> list[str]:

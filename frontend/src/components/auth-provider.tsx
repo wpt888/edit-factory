@@ -77,11 +77,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [supabase, router]);
 
   const isMountedRef = useRef(true);
+  // Track whether initAuth has completed to distinguish real sign-ins from
+  // session-restore/token-refresh events that Supabase fires as SIGNED_IN.
+  // Without this guard, refreshSession() inside initAuth triggers SIGNED_IN →
+  // router.refresh() → full remount → initAuth again → infinite loop that
+  // interrupts video playback and resets all page state.
+  const initCompleteRef = useRef(false);
   useEffect(() => {
     return () => { isMountedRef.current = false; };
   }, []);
 
   useEffect(() => {
+    initCompleteRef.current = false;
+
     // Initial session check
     const initAuth = async () => {
       try {
@@ -109,7 +117,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       } catch (error) {
         console.error("Error in initAuth:", error);
       } finally {
-        if (isMountedRef.current) setLoading(false);
+        if (isMountedRef.current) {
+          setLoading(false);
+          initCompleteRef.current = true;
+        }
       }
     };
 
@@ -131,7 +142,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
         if (pathnameRef.current !== "/login" && pathnameRef.current !== "/signup") {
           router.push("/login");
         }
-      } else if (event === "SIGNED_IN") {
+      } else if (event === "SIGNED_IN" && initCompleteRef.current) {
+        // Only refresh for genuine post-init sign-ins (e.g., login page redirect).
+        // Supabase may fire SIGNED_IN during token refresh / session restore;
+        // calling router.refresh() in those cases remounts the entire page tree.
         router.refresh();
       }
     });

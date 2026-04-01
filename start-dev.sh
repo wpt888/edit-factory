@@ -18,7 +18,13 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_PID_FILE="$PROJECT_DIR/.backend.pid"
 FRONTEND_PID_FILE="$PROJECT_DIR/.frontend.pid"
-VENV_DIR="$PROJECT_DIR/venv_linux"
+if [ -d "$PROJECT_DIR/venv" ]; then
+    VENV_DIR="$PROJECT_DIR/venv"
+elif [ -d "$PROJECT_DIR/venv_linux" ]; then
+    VENV_DIR="$PROJECT_DIR/venv_linux"
+else
+    VENV_DIR="$PROJECT_DIR/venv"
+fi
 FRONTEND_DIR="$PROJECT_DIR/frontend"
 LOGS_DIR="$PROJECT_DIR/logs"
 
@@ -126,8 +132,8 @@ check_prerequisites() {
         echo -e "${RED}[ERROR] Virtual environment not found at $VENV_DIR${NC}"
         echo ""
         echo "  Setup instructions:"
-        echo "    python3 -m venv venv_linux"
-        echo "    source venv_linux/bin/activate"
+        echo "    python3 -m venv venv"
+        echo "    source venv/bin/activate"
         echo "    pip install -r requirements.txt"
         echo ""
         has_error=1

@@ -1566,7 +1566,7 @@ export default function CreateImagePage() {
 
               {/* Publish to Social Media button */}
               <Button
-                className="w-full bg-gradient-to-r from-pink-500 to-purple-500 text-white border-none hover:from-pink-600 hover:to-purple-600"
+                className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
                 onClick={() => {
                   setShowPublishPanel(!showPublishPanel);
                   if (!showPublishPanel) {

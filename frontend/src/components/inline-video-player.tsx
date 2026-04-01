@@ -12,9 +12,10 @@ interface InlineVideoPlayerProps {
   videoUrl: string;
   title?: string;
   videoRef?: RefObject<HTMLVideoElement | null>;
+  scriptText?: string | null;
 }
 
-export function InlineVideoPlayer({ open, onOpenChange, videoUrl, title, videoRef: externalRef }: InlineVideoPlayerProps) {
+export function InlineVideoPlayer({ open, onOpenChange, videoUrl, title, videoRef: externalRef, scriptText }: InlineVideoPlayerProps) {
   const internalRef = useRef<HTMLVideoElement>(null);
   const videoRef = externalRef || internalRef;
 
@@ -52,6 +53,12 @@ export function InlineVideoPlayer({ open, onOpenChange, videoUrl, title, videoRe
             className="w-full max-h-[80vh] object-contain"
             playsInline
           />
+          {scriptText && (
+            <div className="bg-zinc-900 border-t border-zinc-700 px-4 py-3 max-h-[30vh] overflow-y-auto">
+              <p className="text-[11px] text-zinc-400 font-medium mb-1.5 uppercase tracking-wider">Script</p>
+              <p className="text-sm text-zinc-200 leading-relaxed whitespace-pre-wrap">{scriptText}</p>
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>

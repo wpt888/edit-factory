@@ -35,6 +35,10 @@ interface TTSSettings {
     api_key: string
     enabled: boolean
   }
+  buffer?: {
+    api_key: string
+    organization_id: string
+  }
 }
 
 interface DashboardData {
@@ -84,6 +88,10 @@ export default function SettingsPage() {
   const [postizUrl, setPostizUrl] = useState("")
   const [postizKey, setPostizKey] = useState("")
   const [postizEnabled, setPostizEnabled] = useState(false)
+
+  // Buffer settings state
+  const [bufferKey, setBufferKey] = useState("")
+  const [bufferOrgId, setBufferOrgId] = useState("")
   const [testingConnection, setTestingConnection] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "success" | "error">("idle")
   const [showApiKey, setShowApiKey] = useState(false)
@@ -166,6 +174,10 @@ export default function SettingsPage() {
         setPostizUrl(postizSettings.api_url || "")
         setPostizKey(postizSettings.api_key || "")
         setPostizEnabled(postizSettings.enabled || false)
+
+        const bufferSettings = ttsSettings.buffer || {}
+        setBufferKey(bufferSettings.api_key || "")
+        setBufferOrgId(bufferSettings.organization_id || "")
 
         if (data.monthly_quota_usd !== undefined && data.monthly_quota_usd !== null) {
           setMonthlyQuota(data.monthly_quota_usd.toString())
@@ -302,6 +314,10 @@ export default function SettingsPage() {
           api_url: postizUrl,
           api_key: postizKey,
           enabled: postizEnabled,
+        },
+        buffer: {
+          api_key: bufferKey,
+          organization_id: bufferOrgId,
         },
       }
 
@@ -641,7 +657,7 @@ export default function SettingsPage() {
                         </span>
                       )}
                       {account.tier && (
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-muted text-foreground">
                           {account.tier}
                         </span>
                       )}
@@ -931,6 +947,61 @@ export default function SettingsPage() {
                   ? "Credentials configured and verified"
                   : "Credentials configured (not yet verified)"}
               </span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Buffer Publishing</CardTitle>
+          <CardDescription>
+            Publish videos to TikTok and other platforms via Buffer
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Buffer API Key</label>
+            <div className="flex gap-2">
+              <Input
+                type={showApiKey ? "text" : "password"}
+                value={bufferKey}
+                onChange={(e) => setBufferKey(e.target.value)}
+                placeholder="_Prk3..."
+                disabled={saving}
+                className="flex-1"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowApiKey(!showApiKey)}
+              >
+                {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              API key from Buffer Settings &gt; API
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Organization ID</label>
+            <Input
+              value={bufferOrgId}
+              onChange={(e) => setBufferOrgId(e.target.value)}
+              placeholder="68bc238..."
+              disabled={saving}
+            />
+            <p className="text-xs text-muted-foreground">
+              Found in Buffer URL or via API. Example: 68bc238742a5996dc29f1aab
+            </p>
+          </div>
+
+          {bufferKey && bufferOrgId && (
+            <div className="flex items-center gap-2 p-3 bg-muted rounded-md">
+              <div className="w-2 h-2 rounded-full bg-blue-500" />
+              <span className="text-sm">Buffer credentials configured</span>
             </div>
           )}
         </CardContent>

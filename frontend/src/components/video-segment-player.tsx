@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { handleApiError, apiGet } from "@/lib/api";
 import { formatTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -129,8 +129,16 @@ export function VideoSegmentPlayer({
   const [isGroupMarking, setIsGroupMarking] = useState(false);
 
   // Scrubbing state (drag on timeline)
-  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [isScrubbing, setIsScrubbing] = useState(false); // CSS cursor class + scrub useEffect gate
   const wasPlayingBeforeScrub = useRef(false);
+
+  // Scrub optimization refs — bypass React re-renders during scrubbing
+  const isScrubbingRef = useRef(false);
+  const playheadRef = useRef<HTMLDivElement>(null);
+  const pendingSeekRef = useRef<number | null>(null);
+  const seekRafRef = useRef<number | null>(null);
+  const isSeekingRef = useRef(false);
+  const queuedSeekRef = useRef<number | null>(null);
 
   // Segment resize state
   const [resizingInfo, setResizingInfo] = useState<{
@@ -169,6 +177,12 @@ export function VideoSegmentPlayer({
   const visibleStart = scrollOffset * safeDuration;
   const visibleEnd = visibleStart + visibleDuration;
 
+  // Stable refs for scrub callbacks (avoids re-registering window listeners on zoom)
+  const visibleStartRef = useRef(visibleStart);
+  const visibleDurationRef = useRef(visibleDuration);
+  visibleStartRef.current = visibleStart;
+  visibleDurationRef.current = visibleDuration;
+
   // Format time - imported from utils
 
   // Play/Pause toggle
@@ -184,11 +198,45 @@ export function VideoSegmentPlayer({
     }
   }, [isPlaying]);
 
-  // Seek to time
+  // Seek to time (used for non-scrub seeks: clicks, keyboard, segment select)
   const seekTo = useCallback((time: number) => {
     if (!videoRef.current) return;
     videoRef.current.currentTime = Math.max(0, Math.min(time, duration));
   }, [duration]);
+
+  // rAF-gated + seeked-gated seek for scrubbing (prevents decoder queue backlog)
+  const throttledSeek = useCallback((time: number) => {
+    if (!videoRef.current) return;
+    const clamped = Math.max(0, Math.min(time, duration));
+
+    if (isSeekingRef.current) {
+      queuedSeekRef.current = clamped;
+      return;
+    }
+
+    pendingSeekRef.current = clamped;
+    if (seekRafRef.current === null) {
+      seekRafRef.current = requestAnimationFrame(() => {
+        seekRafRef.current = null;
+        if (pendingSeekRef.current !== null && videoRef.current) {
+          isSeekingRef.current = true;
+          videoRef.current.currentTime = pendingSeekRef.current;
+          pendingSeekRef.current = null;
+        }
+      });
+    }
+  }, [duration]);
+
+  // Direct DOM playhead update — zero React re-renders
+  const updatePlayheadDOM = useCallback((time: number) => {
+    currentTimeRef.current = time;
+    if (playheadRef.current) {
+      const pos = ((time - visibleStartRef.current) / visibleDurationRef.current) * 100;
+      const clamped = Math.max(-1, Math.min(101, pos));
+      playheadRef.current.style.left = `${clamped}%`;
+      playheadRef.current.style.display = (clamped >= 0 && clamped <= 100) ? '' : 'none';
+    }
+  }, []);
 
   // Frame navigation (Bug #63: use videoRef.currentTime to avoid deps on state)
   const frameStep = useCallback((direction: number) => {
@@ -340,7 +388,10 @@ export function VideoSegmentPlayer({
 
   // Refs for values used in keyboard handler to avoid re-registering on every frame
   const currentTimeRef = useRef(currentTime);
-  currentTimeRef.current = currentTime;
+  // Only sync from state when NOT scrubbing — during scrub, updatePlayheadDOM owns this ref
+  if (!isScrubbingRef.current) {
+    currentTimeRef.current = currentTime;
+  }
   const markStartRef = useRef(markStart);
   markStartRef.current = markStart;
 
@@ -471,9 +522,25 @@ export function VideoSegmentPlayer({
       setCurrentTime(video.currentTime);
     };
 
-    // Also update on seeking (when user drags slider)
-    const handleSeeking = () => setCurrentTime(video.currentTime);
-    const handleSeeked = () => setCurrentTime(video.currentTime);
+    // During scrubbing, suppress state updates — playhead is driven via DOM ref
+    const handleSeeking = () => {
+      if (isScrubbingRef.current) return;
+      setCurrentTime(video.currentTime);
+    };
+
+    // Seeked: drain the seek queue during scrubbing, else sync state
+    const handleSeeked = () => {
+      isSeekingRef.current = false;
+      if (isScrubbingRef.current) {
+        if (queuedSeekRef.current !== null) {
+          const next = queuedSeekRef.current;
+          queuedSeekRef.current = null;
+          throttledSeek(next);
+        }
+        return;
+      }
+      setCurrentTime(video.currentTime);
+    };
 
     video.addEventListener("play", handlePlay);
     video.addEventListener("pause", handlePause);
@@ -482,6 +549,7 @@ export function VideoSegmentPlayer({
 
     // Initial time sync
     setCurrentTime(video.currentTime);
+    currentTimeRef.current = video.currentTime;
 
     return () => {
       if (animationFrameId) {
@@ -492,7 +560,7 @@ export function VideoSegmentPlayer({
       video.removeEventListener("seeking", handleSeeking);
       video.removeEventListener("seeked", handleSeeked);
     };
-  }, []);
+  }, [throttledSeek]);
 
   // Update playback rate
   useEffect(() => {
@@ -641,19 +709,20 @@ export function VideoSegmentPlayer({
     return pos;
   };
 
-  // Calculate time from mouse position on timeline
+  // Calculate time from mouse position on timeline (stable identity via refs)
   const getTimeFromMouseEvent = useCallback((e: MouseEvent | React.MouseEvent) => {
     const timeline = timelineRef.current;
     if (!timeline) return null;
     const rect = timeline.getBoundingClientRect();
     const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    return visibleStart + (percent * visibleDuration);
-  }, [visibleStart, visibleDuration]);
+    return visibleStartRef.current + (percent * visibleDurationRef.current);
+  }, []);
 
   // Start scrubbing on mousedown
   const handleTimelineMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    setIsScrubbing(true);
+    isScrubbingRef.current = true;
+    setIsScrubbing(true); // CSS cursor class only
     wasPlayingBeforeScrub.current = isPlaying;
 
     // Pause during scrub for smoother experience
@@ -661,10 +730,13 @@ export function VideoSegmentPlayer({
       videoRef.current.pause();
     }
 
-    // Seek to clicked position
+    // Instant visual feedback + throttled video seek
     const time = getTimeFromMouseEvent(e);
-    if (time !== null) seekTo(time);
-  }, [isPlaying, getTimeFromMouseEvent, seekTo]);
+    if (time !== null) {
+      updatePlayheadDOM(time);
+      throttledSeek(time);
+    }
+  }, [isPlaying, getTimeFromMouseEvent, updatePlayheadDOM, throttledSeek]);
 
   // Update position during scrub
   useEffect(() => {
@@ -672,11 +744,29 @@ export function VideoSegmentPlayer({
 
     const handleMouseMove = (e: MouseEvent) => {
       const time = getTimeFromMouseEvent(e);
-      if (time !== null) seekTo(time);
+      if (time !== null) {
+        updatePlayheadDOM(time);
+        throttledSeek(time);
+      }
     };
 
     const handleMouseUp = () => {
+      isScrubbingRef.current = false;
+
+      // Cancel any pending rAF and clear seek queue
+      if (seekRafRef.current) {
+        cancelAnimationFrame(seekRafRef.current);
+        seekRafRef.current = null;
+      }
+      pendingSeekRef.current = null;
+      queuedSeekRef.current = null;
+      isSeekingRef.current = false;
+
+      // Final precise seek + sync React state
+      seekTo(currentTimeRef.current);
+      setCurrentTime(currentTimeRef.current);
       setIsScrubbing(false);
+
       // Resume playback if was playing before scrub
       if (wasPlayingBeforeScrub.current && videoRef.current) {
         videoRef.current.play().catch(() => {
@@ -692,7 +782,7 @@ export function VideoSegmentPlayer({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isScrubbing, getTimeFromMouseEvent, seekTo]);
+  }, [isScrubbing, getTimeFromMouseEvent, throttledSeek, updatePlayheadDOM, seekTo]);
 
   // Segment resize drag logic
   const startResize = useCallback((e: React.MouseEvent, segment: Segment, edge: 'start' | 'end') => {
@@ -906,7 +996,8 @@ export function VideoSegmentPlayer({
   };
 
   // Build video transform style combining active transforms + preview zoom/pan
-  const getVideoStyle = (): React.CSSProperties | undefined => {
+  // All transforms (scale, rotation, pan, flip) use CSS transform inside a clipping resolution frame
+  const videoStyle = useMemo<React.CSSProperties>(() => {
     const transforms: string[] = [];
     if (activeTransforms) {
       if (activeTransforms.flip_h) transforms.push("scaleX(-1)");
@@ -916,22 +1007,24 @@ export function VideoSegmentPlayer({
       if (activeTransforms.pan_x || activeTransforms.pan_y)
         transforms.push(`translate(${activeTransforms.pan_x}px, ${activeTransforms.pan_y}px)`);
     }
+    // Video zoom (preview zoom, separate from segment transforms)
     if (videoZoom !== 1) transforms.push(`scale(${videoZoom})`);
     if (videoPanX || videoPanY) transforms.push(`translate(${videoPanX}px, ${videoPanY}px)`);
 
     return {
       transform: transforms.length > 0 ? transforms.join(" ") : undefined,
+      transformOrigin: 'center center',
       opacity: activeTransforms?.opacity,
       transition: isDraggingVideo ? undefined : "transform 0.15s ease, opacity 0.15s ease",
     };
-  };
+  }, [activeTransforms, videoZoom, videoPanX, videoPanY, isDraggingVideo]);
 
   return (
     <div ref={containerRef} className="flex flex-col h-full gap-1">
       {/* Video Preview - takes remaining space */}
       <div
         ref={videoContainerRef}
-        className={`relative bg-black rounded-lg overflow-hidden flex-1 min-h-0 ${videoZoom > 1 ? (isDraggingVideo ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
+        className={`relative bg-black rounded-lg flex-1 min-h-0 flex items-center justify-center ${videoZoom > 1 ? (isDraggingVideo ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
         onMouseDown={(e) => {
           if (videoZoom > 1) {
             e.preventDefault();
@@ -940,15 +1033,18 @@ export function VideoSegmentPlayer({
           }
         }}
       >
-        <video
-          ref={videoRef}
-          src={videoUrl}
-          className="w-full h-full object-contain"
-          onClick={(e) => {
-            if (!isDraggingVideo) togglePlay();
-          }}
-          style={getVideoStyle()}
-        />
+        {/* Resolution frame - fixed 9:16 aspect ratio, centered, clips all transforms */}
+        <div style={{ aspectRatio: '9/16', height: '100%', maxWidth: '100%', position: 'relative', overflow: 'hidden' }}>
+          <video
+            ref={videoRef}
+            src={videoUrl}
+            className="w-full h-full object-cover"
+            onClick={(e) => {
+              if (!isDraggingVideo) togglePlay();
+            }}
+            style={videoStyle}
+          />
+        </div>
 
         {/* Marking indicator */}
         {isMarking && (
@@ -1083,7 +1179,7 @@ export function VideoSegmentPlayer({
                 isBeingResized ? '' : 'transition-all'
               } ${
                 currentSegment?.id === segment.id
-                  ? "bg-blue-500/70 border-blue-400 ring-1 ring-blue-400/50"
+                  ? "bg-primary/70 border-primary ring-1 ring-primary/50"
                   : "bg-green-500/50 hover:bg-green-500/70 border-green-600"
               }`}
               style={style}
@@ -1155,21 +1251,26 @@ export function VideoSegmentPlayer({
           />
         )}
 
-        {/* Playhead */}
-        {getPlayheadPosition() >= 0 && getPlayheadPosition() <= 100 && (
+        {/* Playhead — always rendered so playheadRef is available during scrubbing.
+            Visibility controlled via style to allow updatePlayheadDOM to work even when
+            the playhead starts off-screen and scrubs into view. */}
+        <div
+          ref={playheadRef}
+          className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-40"
+          style={{
+            left: `${getPlayheadPosition()}%`,
+            pointerEvents: 'none',
+            display: (getPlayheadPosition() >= 0 && getPlayheadPosition() <= 100) ? '' : 'none',
+          }}
+        >
           <div
-            className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-40"
-            style={{ left: `${getPlayheadPosition()}%`, pointerEvents: 'none' }}
-          >
-            <div
-              className="absolute -top-1 -left-2 w-4 h-4 bg-red-500 rounded-full shadow-md cursor-grab active:cursor-grabbing hover:scale-110 transition-transform"
-              style={{ pointerEvents: 'auto' }}
-              onMouseDown={(e) => { e.stopPropagation(); handleTimelineMouseDown(e); }}
-            />
-            <div className="absolute top-3 bottom-0 left-0 w-0.5 bg-red-500" />
-            <div className="absolute -bottom-0.5 -left-1 w-2 h-2 bg-red-500 rotate-45" style={{ pointerEvents: 'none' }} />
-          </div>
-        )}
+            className="absolute -top-1 -left-2 w-4 h-4 bg-red-500 rounded-full shadow-md cursor-grab active:cursor-grabbing hover:scale-110 transition-transform"
+            style={{ pointerEvents: 'auto' }}
+            onMouseDown={(e) => { e.stopPropagation(); handleTimelineMouseDown(e); }}
+          />
+          <div className="absolute top-3 bottom-0 left-0 w-0.5 bg-red-500" />
+          <div className="absolute -bottom-0.5 -left-1 w-2 h-2 bg-red-500 rotate-45" style={{ pointerEvents: 'none' }} />
+        </div>
 
         {/* Zoom indicator + inline zoom controls */}
         {zoomLevel > 1 && (

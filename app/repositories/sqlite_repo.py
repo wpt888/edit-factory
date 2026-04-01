@@ -482,6 +482,28 @@ class SQLiteRepository(DataRepository):
     def delete_clip(self, clip_id: str) -> None:
         self._delete("editai_clips", "id", clip_id)
 
+    def bulk_update_clips(
+        self, clip_ids: List[str], profile_id: str, data: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        if not clip_ids:
+            return []
+        table = self._t("editai_clips")
+        placeholders = ", ".join("?" for _ in clip_ids)
+        set_clauses = ", ".join(f'"{k}" = ?' for k in data.keys())
+        params = list(data.values()) + [profile_id] + clip_ids
+        with self._write_lock:
+            self._conn.execute(
+                f'UPDATE "{table}" SET {set_clauses} WHERE "profile_id" = ? AND "id" IN ({placeholders})',
+                params,
+            )
+            self._conn.commit()
+        # Return updated rows
+        rows = self._conn.execute(
+            f'SELECT * FROM "{table}" WHERE "profile_id" = ? AND "id" IN ({placeholders})',
+            [profile_id] + clip_ids,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def delete_clips_by_ids(self, clip_ids: List[str]) -> None:
         if not clip_ids:
             return

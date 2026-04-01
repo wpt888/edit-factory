@@ -329,7 +329,7 @@ export default function UsagePage() {
           <Card className="bg-card border-border">
             <CardHeader className="pb-2">
               <CardTitle className="text-foreground text-lg flex items-center gap-2">
-                <Video className="h-4 w-4 text-blue-500" />
+                <Video className="h-4 w-4 text-muted-foreground" />
                 Total Jobs
               </CardTitle>
             </CardHeader>
@@ -448,7 +448,7 @@ export default function UsagePage() {
           <Card className="bg-card border-border">
             <CardHeader>
               <CardTitle className="text-foreground flex items-center gap-2">
-                <Video className="h-5 w-5 text-blue-500" />
+                <Video className="h-5 w-5 text-muted-foreground" />
                 Gemini Vision
               </CardTitle>
               <CardDescription className="text-muted-foreground">
@@ -604,7 +604,7 @@ export default function UsagePage() {
                           className={
                             entry.service === "elevenlabs"
                               ? "border-primary text-primary"
-                              : "border-blue-500 text-blue-500"
+                              : "border-muted-foreground text-muted-foreground"
                           }
                         >
                           {entry.service === "elevenlabs" ? (

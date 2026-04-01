@@ -320,13 +320,21 @@ class PostizPublisher:
                     error=f"Postiz returned invalid JSON: {response.text[:200]}"
                 )
 
-            if profile_id:
-                logger.info(f"[Profile {profile_id}] Created Postiz post: {data.get('id')}")
+            # Postiz API may return a list of posts or a single dict
+            if isinstance(data, list):
+                post_data = data[0] if data else {}
             else:
-                logger.info(f"Created Postiz post successfully: {data}")
+                post_data = data if isinstance(data, dict) else {}
+
+            post_id = post_data.get("id") if isinstance(post_data, dict) else None
+
+            if profile_id:
+                logger.info(f"[Profile {profile_id}] Created Postiz post: {post_id}")
+            else:
+                logger.info(f"Created Postiz post successfully: {post_id}")
             return PublishResult(
                 success=True,
-                post_id=data.get("id"),
+                post_id=post_id,
                 scheduled_date=schedule_date.isoformat() if schedule_date else None,
                 platforms=[integrations_info.get(i, "unknown") for i in integration_ids]
             )

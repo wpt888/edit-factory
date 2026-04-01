@@ -41,9 +41,17 @@ export async function apiFetch(
   if (!skipAuth && typeof window !== "undefined") {
     try {
       const supabase = createClient();
-      const { data } = await supabase.auth.getSession();
-      if (data.session?.access_token) {
-        authHeader = { Authorization: `Bearer ${data.session.access_token}` };
+      // Race getSession against a 3-second timeout to prevent hanging requests
+      // when Supabase is unreachable or token refresh stalls
+      const sessionResult = await Promise.race([
+        supabase.auth.getSession(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+      ]);
+      if (sessionResult && "data" in sessionResult) {
+        const { data } = sessionResult;
+        if (data.session?.access_token) {
+          authHeader = { Authorization: `Bearer ${data.session.access_token}` };
+        }
       }
     } catch {
       // If session retrieval fails, proceed without auth header

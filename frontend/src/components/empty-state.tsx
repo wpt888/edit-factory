@@ -36,7 +36,7 @@ export function EmptyState({ icon, title, description, action }: EmptyStateProps
       {action && (
         <Button
           onClick={action.onClick}
-          className="mt-1 bg-blue-600 hover:bg-blue-700 text-white rounded"
+          className="mt-1 rounded"
         >
           {action.label}
         </Button>

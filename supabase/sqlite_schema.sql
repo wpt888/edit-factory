@@ -368,20 +368,26 @@ CREATE INDEX IF NOT EXISTS idx_product_groups_profile_id ON editai_product_group
 
 -- =====================================================
 -- TABLE: editai_pipelines
--- Source: migration 016 + 021
+-- Source: migration 016 + 021 + 033
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS editai_pipelines (
     id              TEXT PRIMARY KEY,
     profile_id      TEXT NOT NULL,
+    name            TEXT DEFAULT '',
     idea            TEXT NOT NULL,
     context         TEXT DEFAULT '',
+    context_products TEXT DEFAULT '[]',
     provider        TEXT NOT NULL DEFAULT 'gemini',
     variant_count   INTEGER NOT NULL DEFAULT 3,
     keyword_count   INTEGER NOT NULL DEFAULT 0,
     scripts         TEXT NOT NULL DEFAULT '[]',
     previews        TEXT NOT NULL DEFAULT '{}',
     render_jobs     TEXT NOT NULL DEFAULT '{}',
+    tts_previews    TEXT NOT NULL DEFAULT '{}',
+    preview_renders TEXT NOT NULL DEFAULT '{}',
+    segment_usage   TEXT NOT NULL DEFAULT '{}',
+    captions        TEXT NOT NULL DEFAULT '{}',
 
     -- Source video IDs (from 021)
     source_video_ids TEXT DEFAULT '[]',
@@ -394,6 +400,26 @@ CREATE TABLE IF NOT EXISTS editai_pipelines (
 );
 
 CREATE INDEX IF NOT EXISTS idx_editai_pipelines_profile_id ON editai_pipelines(profile_id);
+
+-- =====================================================
+-- TABLE: video_caption_templates
+-- Source: migration 028
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS video_caption_templates (
+    id              TEXT PRIMARY KEY,
+    profile_id      TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    prompt_template TEXT NOT NULL,
+    is_default      INTEGER DEFAULT 0,
+
+    created_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+
+    FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_video_caption_templates_profile_id ON video_caption_templates(profile_id);
 
 -- =====================================================
 -- TABLE: editai_assembly_jobs
