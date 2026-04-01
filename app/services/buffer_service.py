@@ -1,8 +1,9 @@
 """
 Buffer Social Media Publishing Service.
 Uses Buffer GraphQL API to publish videos (primarily TikTok).
-Videos are temporarily uploaded to Supabase Storage to provide
-a public URL that Buffer can download from, then cleaned up after posting.
+Videos are uploaded to MinIO via HTTP PUT through the Kong API gateway,
+which provides a public URL that Buffer can download from.
+After Buffer ingests the video, it is deleted from MinIO.
 """
 import os
 import logging
@@ -22,7 +23,16 @@ from app.repositories.factory import get_repository
 logger = logging.getLogger(__name__)
 
 BUFFER_GRAPHQL_URL = "https://api.buffer.com/graphql"
-SUPABASE_BUCKET = "buffer-videos"
+
+
+def _truncate_response_body(body: str, limit: int = 300) -> str:
+    """Keep third-party error payloads short and log-safe."""
+    compact = " ".join((body or "").split())
+    if not compact:
+        return "<empty>"
+    if len(compact) <= limit:
+        return compact
+    return f"{compact[:limit]}..."
 
 
 @dataclass
@@ -53,10 +63,10 @@ class BufferPublisher:
     Buffer GraphQL API client for social media publishing.
 
     Flow:
-        1. Upload video to Supabase Storage (public URL)
+        1. Upload video to MinIO/S3 (public URL)
         2. Create post via Buffer GraphQL with that URL
         3. Poll post status until sent
-        4. Delete video from Supabase Storage
+        4. Delete video from MinIO/S3
     """
 
     def __init__(
@@ -150,56 +160,60 @@ class BufferPublisher:
 
     def upload_to_storage(self, video_path: Path) -> Tuple[str, str]:
         """
-        Upload video to Supabase Storage and return (storage_path, public_url).
+        Upload video to MinIO via HTTP PUT through the Kong gateway.
 
-        Uses a unique filename to avoid collisions.
+        Returns (object_key, public_url).
+        The MinIO bucket has public anonymous access, so no S3 auth is needed.
+        Kong proxies /s3/* → MinIO:9000/* on the same Docker network.
         """
-        sb = get_supabase()
-        if not sb:
-            raise Exception("Supabase client not available")
-
         if not video_path.exists():
             raise FileNotFoundError(f"Video file not found: {video_path}")
 
-        ext = video_path.suffix.lower() or ".mp4"
-        unique_name = f"{uuid.uuid4().hex}{ext}"
-        file_size_mb = video_path.stat().st_size / 1024 / 1024
-
-        logger.info(f"Uploading {video_path.name} ({file_size_mb:.1f}MB) to Supabase Storage as {unique_name}")
-
-        content_types = {
-            ".mp4": "video/mp4",
-            ".mov": "video/quicktime",
-            ".webm": "video/webm",
-        }
-        content_type = content_types.get(ext, "video/mp4")
-
-        with open(video_path, "rb") as f:
-            sb.storage.from_(SUPABASE_BUCKET).upload(
-                path=unique_name,
-                file=f,
-                file_options={"content-type": content_type},
+        settings = get_settings()
+        base_url = settings.minio_public_url.rstrip("/")
+        if not base_url:
+            raise ValueError(
+                "MINIO_PUBLIC_URL not configured. "
+                "Set it to the Kong S3 proxy URL, e.g. https://supabase.nortia.ro/s3/buffer-videos"
             )
 
-        settings = get_settings()
-        public_url = f"{settings.supabase_url}/storage/v1/object/public/{SUPABASE_BUCKET}/{unique_name}"
+        file_size_mb = video_path.stat().st_size / 1024 / 1024
+        object_key = f"{uuid.uuid4().hex}{video_path.suffix.lower() or '.mp4'}"
+        upload_url = f"{base_url}/{object_key}"
 
-        logger.info(f"Uploaded to Storage: {public_url}")
-        return unique_name, public_url
+        logger.info(f"Uploading {video_path.name} ({file_size_mb:.1f}MB) to MinIO: {upload_url}")
+
+        with open(video_path, "rb") as f:
+            resp = httpx.put(
+                upload_url,
+                content=f,
+                headers={"Content-Type": "video/mp4"},
+                timeout=300.0,
+            )
+
+        if resp.status_code not in (200, 201):
+            body_preview = _truncate_response_body(resp.text)
+            raise Exception(f"MinIO upload failed: HTTP {resp.status_code} - {body_preview}")
+
+        logger.info(f"Uploaded to MinIO: {upload_url}")
+        return object_key, upload_url
 
     def delete_from_storage(self, storage_path: str) -> bool:
-        """Delete a video from Supabase Storage after Buffer has processed it."""
-        sb = get_supabase()
-        if not sb:
-            logger.warning("Cannot delete from storage: Supabase not available")
-            return False
-
+        """Delete a video from MinIO via HTTP DELETE through the Kong gateway."""
         try:
-            sb.storage.from_(SUPABASE_BUCKET).remove([storage_path])
-            logger.info(f"Deleted from Storage: {storage_path}")
-            return True
+            settings = get_settings()
+            base_url = settings.minio_public_url.rstrip("/")
+            delete_url = f"{base_url}/{storage_path}"
+
+            resp = httpx.delete(delete_url, timeout=30.0)
+            if resp.status_code in (200, 204):
+                logger.info(f"Deleted from MinIO: {storage_path}")
+                return True
+            else:
+                logger.warning(f"MinIO delete returned {resp.status_code} for {storage_path}")
+                return False
         except Exception as e:
-            logger.warning(f"Failed to delete from Storage: {storage_path} - {e}")
+            logger.warning(f"Failed to delete {storage_path} from MinIO: {e}")
             return False
 
     async def create_post(
@@ -336,9 +350,9 @@ class BufferPublisher:
 
     async def wait_and_cleanup(self, post_id: str, storage_path: str, max_wait: int = 600, poll_interval: int = 15):
         """
-        Poll post status and delete video from Storage once Buffer has processed it.
-
-        Called as a background task after post creation.
+        Best-effort early cleanup: poll post status and delete video once Buffer
+        has ingested it. If the app shuts down before this completes, the MinIO
+        lifecycle policy (7-day auto-expiry) handles cleanup on the server side.
         """
         elapsed = 0
         while elapsed < max_wait:
@@ -347,15 +361,12 @@ class BufferPublisher:
                 post_status = status.get("status", "")
                 is_processing = status.get("is_processing", False)
 
-                # Buffer has downloaded the video once status moves past 'draft'
-                # Safe to delete once it's 'scheduled', 'sending', or 'sent'
                 if post_status in ("sent", "error"):
                     logger.info(f"Post {post_id} reached final status '{post_status}', cleaning up storage")
                     self.delete_from_storage(storage_path)
                     return
 
                 if post_status in ("scheduled", "sending") and not is_processing:
-                    # Video has been ingested by Buffer, safe to delete
                     logger.info(f"Post {post_id} is '{post_status}' and video processed, cleaning up storage")
                     self.delete_from_storage(storage_path)
                     return
@@ -366,9 +377,9 @@ class BufferPublisher:
             await _async_sleep(poll_interval)
             elapsed += poll_interval
 
-        # Timeout: clean up anyway to avoid storage bloat
-        logger.warning(f"Post {post_id} cleanup timeout after {max_wait}s, deleting from storage anyway")
-        self.delete_from_storage(storage_path)
+        # Timeout — don't force-delete; the video might still be needed for a
+        # scheduled post days from now. MinIO lifecycle will clean it up in 7 days.
+        logger.info(f"Post {post_id} cleanup timeout after {max_wait}s — MinIO lifecycle will handle expiry")
 
 
 def _gql_string(s: str) -> str:

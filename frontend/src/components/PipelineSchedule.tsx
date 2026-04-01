@@ -44,6 +44,15 @@ interface Integration {
   picture?: string;
 }
 
+interface BufferChannel {
+  id: string;
+  name: string;
+  service: string;
+  type: string;
+  avatar?: string;
+  is_disconnected: boolean;
+}
+
 interface PipelineScheduleProps {
   completedClips: CompletedClip[];
   initialCaptions?: Record<string, string>;  // clip_id -> AI-generated caption
@@ -60,7 +69,12 @@ const TIMEZONES = [
 
 let _integrationsCache: Integration[] | undefined;
 let _integrationsFetchPromise: Promise<void> | null = null;
-let _integrationsFetchFailed = false; // Track if cache is from a failed fetch
+let _integrationsFetchFailed = false;
+
+/* ---------- Module-level Buffer channels cache ---------- */
+
+let _bufferChannelsCache: BufferChannel[] | undefined;
+let _bufferFetchPromise: Promise<void> | null = null;
 
 /* ---------- Draft persistence ---------- */
 
@@ -120,6 +134,13 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
     if (draft?.selectedIntegrationIds?.length) return new Set(draft.selectedIntegrationIds);
     return new Set((_integrationsCache || []).map(i => i.id));
   });
+
+  // Buffer channels
+  const [bufferChannels, setBufferChannels] = useState<BufferChannel[]>(_bufferChannelsCache || []);
+  const [selectedBufferIds, setSelectedBufferIds] = useState<Set<string>>(
+    new Set((_bufferChannelsCache || []).map(c => c.id))
+  );
+  const [loadingBuffer, setLoadingBuffer] = useState(_bufferChannelsCache === undefined);
   const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
   const [scheduleDate, setScheduleDate] = useState(() => {
     if (draft?.scheduleDate) {
@@ -238,10 +259,61 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
 
   useEffect(() => { fetchIntegrations(); }, [fetchIntegrations]);
 
+  // Fetch Buffer channels
+  const fetchBufferChannels = useCallback(async (forceRefresh = false) => {
+    if (_bufferChannelsCache && !forceRefresh) {
+      setBufferChannels(_bufferChannelsCache);
+      setSelectedBufferIds(new Set(_bufferChannelsCache.map(c => c.id)));
+      setLoadingBuffer(false);
+      return;
+    }
+    if (_bufferFetchPromise && !forceRefresh) {
+      await _bufferFetchPromise;
+      if (_bufferChannelsCache) {
+        setBufferChannels(_bufferChannelsCache);
+        setSelectedBufferIds(new Set(_bufferChannelsCache.map(c => c.id)));
+      }
+      setLoadingBuffer(false);
+      return;
+    }
+
+    setLoadingBuffer(true);
+    if (forceRefresh) _bufferChannelsCache = undefined;
+
+    _bufferFetchPromise = (async () => {
+      try {
+        const res = await apiGetWithRetry("/buffer/channels", { timeout: 15000, retry: 2 });
+        const data = await res.json();
+        _bufferChannelsCache = Array.isArray(data) ? data : [];
+      } catch {
+        _bufferChannelsCache = [];
+      } finally {
+        _bufferFetchPromise = null;
+      }
+    })();
+
+    await _bufferFetchPromise;
+    if (_bufferChannelsCache) {
+      setBufferChannels(_bufferChannelsCache);
+      setSelectedBufferIds(new Set(_bufferChannelsCache.map(c => c.id)));
+    }
+    setLoadingBuffer(false);
+  }, []);
+
+  useEffect(() => { fetchBufferChannels(); }, [fetchBufferChannels]);
+
   /* ---------- Handlers ---------- */
 
   const toggleIntegration = (id: string) => {
     setSelectedIntegrationIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleBuffer = (id: string) => {
+    setSelectedBufferIds(prev => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
@@ -273,12 +345,14 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
 
   const handleSchedule = async () => {
     if (selectedClipIds.size === 0) { toast.error("Select at least one clip"); return; }
-    if (selectedIntegrationIds.size === 0) { toast.error("Select at least one integration"); return; }
+    if (selectedIntegrationIds.size === 0 && selectedBufferIds.size === 0) {
+      toast.error("Select at least one platform");
+      return;
+    }
 
     setScheduling(true);
     try {
       // Build ISO datetime with the correct timezone offset
-      // Use Intl to get the UTC offset for the selected timezone
       const refDate = new Date(`${scheduleDate}T${postTime}:00`);
       const parts = new Intl.DateTimeFormat("en-US", {
         timeZone: timezone,
@@ -295,18 +369,39 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
           .map(c => [c.clip_id, perVariantCaptions[c.clip_id] || ""])
       );
 
-      const res = await apiPost("/postiz/bulk-publish", {
-        clip_ids: [...selectedClipIds],
-        caption: "",
-        captions,
-        integration_ids: [...selectedIntegrationIds],
-        schedule_date: scheduleDatetime,
-        schedule_interval_minutes: 1440, // 24 hours between each variant
-        timezone,
-      });
-      const data = await res.json();
-      toast.success(data.message || `Scheduled ${selectedClipIds.size} clip(s)!`);
-      // Clear draft after successful schedule
+      const results: string[] = [];
+
+      // Schedule via Postiz if any Postiz integrations selected
+      if (selectedIntegrationIds.size > 0) {
+        const res = await apiPost("/postiz/bulk-publish", {
+          clip_ids: [...selectedClipIds],
+          caption: "",
+          captions,
+          integration_ids: [...selectedIntegrationIds],
+          schedule_date: scheduleDatetime,
+          schedule_interval_minutes: 1440,
+          timezone,
+        });
+        const data = await res.json();
+        results.push(data.message || `Postiz: ${selectedClipIds.size} clip(s) scheduled`);
+      }
+
+      // Schedule via Buffer if any Buffer channels selected
+      if (selectedBufferIds.size > 0) {
+        const bufferChannelId = [...selectedBufferIds][0];
+        const clipIds = [...selectedClipIds];
+        const res = await apiPost("/buffer/bulk-publish", {
+          clip_ids: clipIds,
+          captions,
+          channel_id: bufferChannelId,
+          schedule_date: scheduleDatetime,
+          schedule_interval_minutes: 1440,
+        });
+        const data = await res.json();
+        results.push(data.message || `Buffer: ${clipIds.length} clip(s) scheduled`);
+      }
+
+      toast.success(results.join(" | ") || `Scheduled ${selectedClipIds.size} clip(s)!`);
       clearDraft();
       setDraftRestored(false);
     } catch (err: unknown) {
@@ -332,7 +427,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
         <div>
           <h3 className="text-lg font-semibold">Schedule & Publish</h3>
           <p className="text-sm text-muted-foreground">
-            View your Postiz calendar and schedule rendered clips for publishing
+            Schedule rendered clips for publishing on all connected platforms
           </p>
         </div>
       </div>
@@ -355,7 +450,22 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
           <CardContent className="space-y-4">
             {/* Clip selection */}
             <div className="space-y-2">
-              <Label>Clips to schedule</Label>
+              <div className="flex items-center justify-between">
+                <Label>Clips to schedule</Label>
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => {
+                    if (selectedClipIds.size === completedClips.length) {
+                      setSelectedClipIds(new Set());
+                    } else {
+                      setSelectedClipIds(new Set(completedClips.map(c => c.clip_id)));
+                    }
+                  }}
+                >
+                  {selectedClipIds.size === completedClips.length ? "Deselect All" : "Select All"}
+                </button>
+              </div>
               <div className="flex flex-wrap gap-2 border rounded-md p-2">
                 {completedClips.map((clip) => (
                   <label
@@ -487,15 +597,30 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label>Postiz Integrations</Label>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 text-xs gap-1 text-muted-foreground"
-                    onClick={() => fetchIntegrations(true)}
-                  >
-                    <RefreshCw className="size-3" />
-                    Refresh
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                      onClick={() => {
+                        if (selectedIntegrationIds.size === integrations.length) {
+                          setSelectedIntegrationIds(new Set());
+                        } else {
+                          setSelectedIntegrationIds(new Set(integrations.map(i => i.id)));
+                        }
+                      }}
+                    >
+                      {selectedIntegrationIds.size === integrations.length ? "Deselect All" : "Select All"}
+                    </button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-xs gap-1 text-muted-foreground"
+                      onClick={() => fetchIntegrations(true)}
+                    >
+                      <RefreshCw className="size-3" />
+                      Refresh
+                    </Button>
+                  </div>
                 </div>
                 <div className="flex flex-wrap gap-2 border rounded-md p-2">
                   {integrations.map((integ) => (
@@ -533,13 +658,56 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
               </div>
             )}
 
+            {/* Buffer channels */}
+            {loadingBuffer ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                Se încarcă canalele Buffer...
+              </div>
+            ) : bufferChannels.length > 0 ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label>Buffer Channels</Label>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 text-xs gap-1 text-muted-foreground"
+                    onClick={() => fetchBufferChannels(true)}
+                  >
+                    <RefreshCw className="size-3" />
+                    Refresh
+                  </Button>
+                </div>
+                <div className="flex flex-wrap gap-2 border rounded-md p-2">
+                  {bufferChannels.map((ch) => (
+                    <label
+                      key={ch.id}
+                      className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent cursor-pointer text-sm"
+                    >
+                      <Checkbox
+                        checked={selectedBufferIds.has(ch.id)}
+                        onCheckedChange={() => toggleBuffer(ch.id)}
+                      />
+                      {ch.avatar && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={ch.avatar} alt="" className="size-5 rounded-full" />
+                      )}
+                      <span>{ch.name}</span>
+                      <Badge variant="outline" className="text-xs">{ch.service}</Badge>
+                      <Badge variant="outline" className="text-xs text-blue-400 border-blue-400/50">Buffer</Badge>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             {/* Captions are managed in the AI Caption Generator section above */}
 
             {/* Schedule button */}
             <div className="flex justify-end">
               <Button
                 onClick={handleSchedule}
-                disabled={scheduling || selectedClipIds.size === 0 || selectedIntegrationIds.size === 0}
+                disabled={scheduling || selectedClipIds.size === 0 || (selectedIntegrationIds.size === 0 && selectedBufferIds.size === 0)}
                 className="bg-primary text-primary-foreground hover:bg-primary/90"
               >
                 {scheduling ? (

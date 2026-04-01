@@ -54,6 +54,10 @@ class SourceVideoCreate(BaseModel):
     name: str
     description: Optional[str] = None
 
+class SourceVideoUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
 class SourceVideoResponse(BaseModel):
     id: str
     name: str
@@ -85,6 +89,11 @@ class SegmentTransformInput(BaseModel):
     flip_h: bool = False
     flip_v: bool = False
     opacity: float = 1.0
+
+class BulkTransformRequest(BaseModel):
+    segment_ids: List[str]
+    transforms: SegmentTransformInput
+    mode: str = "set"  # "set" = overwrite, "add" = offset on top of existing
 
 class SegmentResponse(BaseModel):
     id: str
@@ -831,6 +840,54 @@ async def get_source_video(
         .eq("id", video_id)\
         .eq("profile_id", profile.profile_id)\
         .limit(1)\
+        .execute()
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Source video not found")
+
+    v = result.data[0]
+    return SourceVideoResponse(
+        id=v["id"],
+        name=v["name"],
+        description=v.get("description"),
+        file_path=v["file_path"],
+        thumbnail_path=v.get("thumbnail_path"),
+        duration=v.get("duration"),
+        width=v.get("width"),
+        height=v.get("height"),
+        fps=v.get("fps"),
+        file_size_bytes=v.get("file_size_bytes"),
+        segments_count=v.get("segments_count", 0),
+        status=v.get("status", "ready"),
+        created_at=v["created_at"]
+    )
+
+
+@router.patch("/source-videos/{video_id}", response_model=SourceVideoResponse)
+async def update_source_video(
+    video_id: str,
+    body: SourceVideoUpdate,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Update source video name or description."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    update_data = body.model_dump(exclude_none=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    if "name" in update_data and not update_data["name"].strip():
+        raise HTTPException(status_code=400, detail="Name cannot be empty")
+
+    result = supabase.table("editai_source_videos")\
+        .update(update_data)\
+        .eq("id", video_id)\
+        .eq("profile_id", profile.profile_id)\
         .execute()
 
     if not result.data:
@@ -1711,6 +1768,67 @@ async def update_segment_transforms(
         raise HTTPException(status_code=404, detail="Segment not found")
 
     return {"id": segment_id, "transforms": transforms.model_dump()}
+
+
+@router.put("/bulk-transforms")
+async def bulk_update_transforms(
+    request: BulkTransformRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Apply transforms to multiple segments at once (set or add mode)."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    if not request.segment_ids:
+        return {"updated": 0, "segments": []}
+
+    new_transforms = request.transforms.model_dump()
+
+    if request.mode == "add":
+        # Fetch current transforms for all segments
+        existing = supabase.table("editai_segments")\
+            .select("id, transforms")\
+            .in_("id", request.segment_ids)\
+            .eq("profile_id", profile.profile_id)\
+            .execute()
+
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="No segments found")
+
+        results = []
+        for seg in existing.data:
+            current = seg.get("transforms") or {}
+            merged = {
+                "rotation": (current.get("rotation", 0) + new_transforms["rotation"]) % 360,
+                "scale": max(0.1, min(5.0, current.get("scale", 1.0) + (new_transforms["scale"] - 1.0))),
+                "pan_x": current.get("pan_x", 0) + new_transforms["pan_x"],
+                "pan_y": current.get("pan_y", 0) + new_transforms["pan_y"],
+                "flip_h": new_transforms["flip_h"] if new_transforms["flip_h"] else current.get("flip_h", False),
+                "flip_v": new_transforms["flip_v"] if new_transforms["flip_v"] else current.get("flip_v", False),
+                "opacity": max(0.0, min(1.0, current.get("opacity", 1.0) + (new_transforms["opacity"] - 1.0))),
+            }
+            supabase.table("editai_segments")\
+                .update({"transforms": merged})\
+                .eq("id", seg["id"])\
+                .eq("profile_id", profile.profile_id)\
+                .execute()
+            results.append({"id": seg["id"], "transforms": merged})
+
+        return {"updated": len(results), "segments": results}
+    else:
+        # "set" mode — apply same transforms to all
+        result = supabase.table("editai_segments")\
+            .update({"transforms": new_transforms})\
+            .in_("id", request.segment_ids)\
+            .eq("profile_id", profile.profile_id)\
+            .execute()
+
+        updated_segments = [{"id": s["id"], "transforms": new_transforms} for s in (result.data or [])]
+        return {"updated": len(updated_segments), "segments": updated_segments}
 
 
 @router.put("/projects/{project_id}/segments/{segment_id}/transforms")

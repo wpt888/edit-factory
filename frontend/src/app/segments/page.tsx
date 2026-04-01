@@ -43,6 +43,7 @@ import Link from "next/link";
 import { VideoSegmentPlayer } from "@/components/video-segment-player";
 import { SimpleSegmentPopup } from "@/components/simple-segment-popup";
 import { SegmentTransformPanel } from "@/components/segment-transform-panel";
+import { GlobalTransformPanel } from "@/components/global-transform-panel";
 import { EditorLayout } from "@/components/editor-layout";
 import { ProductPickerDialog } from "@/components/product-picker-dialog";
 import { ImagePickerDialog } from "@/components/image-picker-dialog";
@@ -110,6 +111,8 @@ export default function SegmentsPage() {
   const [sourceVideos, setSourceVideos] = useState<SourceVideo[]>([]);
   const [selectedVideo, setSelectedVideo] = useState<SourceVideo | null>(null);
   const [uploadingVideo, setUploadingVideo] = useState(false);
+  const [renamingVideoId, setRenamingVideoId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   // Segments state
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -691,6 +694,27 @@ export default function SegmentsPage() {
     }
   };
 
+  // Rename source video
+  const handleRenameVideo = async (videoId: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) {
+      setRenamingVideoId(null);
+      return;
+    }
+    try {
+      const res = await apiPatch(`/segments/source-videos/${videoId}`, { name: trimmed });
+      if (res.ok) {
+        setSourceVideos((prev) => prev.map((v) => v.id === videoId ? { ...v, name: trimmed } : v));
+        if (selectedVideo?.id === videoId) {
+          setSelectedVideo((prev) => prev ? { ...prev, name: trimmed } : prev);
+        }
+      }
+    } catch (error) {
+      handleApiError(error, "Error renaming video");
+    }
+    setRenamingVideoId(null);
+  };
+
   // Create segment (called from player)
   const handleSegmentCreate = (start: number, end: number) => {
     const overlapping = findOverlappingSegments(start, end);
@@ -870,6 +894,45 @@ export default function SegmentsPage() {
       }
     } catch (error) {
       handleApiError(error, "Error saving transformations");
+    }
+  };
+
+  // Bulk transforms state
+  const [applyingBulkTransforms, setApplyingBulkTransforms] = useState(false);
+
+  // Apply transforms to all segments of the selected video
+  const handleBulkTransforms = async (transforms: SegmentTransform, mode: "set" | "add") => {
+    if (segments.length === 0) return;
+    setApplyingBulkTransforms(true);
+    try {
+      const segmentIds = segments.map((s) => s.id);
+      const res = await apiPut("/segments/bulk-transforms", {
+        segment_ids: segmentIds,
+        transforms,
+        mode,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const updatedMap = new Map<string, SegmentTransform>();
+        for (const s of data.segments) {
+          updatedMap.set(s.id, s.transforms);
+        }
+        // Update local state for both segment lists
+        const applyUpdate = (prev: Segment[]) =>
+          prev.map((s) => updatedMap.has(s.id) ? { ...s, transforms: updatedMap.get(s.id)! } : s);
+        setSegments(applyUpdate);
+        setAllSegments(applyUpdate);
+        // If a segment is selected, update its active transforms too
+        if (selectedSegment && updatedMap.has(selectedSegment.id)) {
+          const updated = updatedMap.get(selectedSegment.id)!;
+          setSelectedSegment((prev) => prev ? { ...prev, transforms: updated } : prev);
+          setActiveTransforms(updated);
+        }
+      }
+    } catch (error) {
+      handleApiError(error, "Error applying bulk transforms");
+    } finally {
+      setApplyingBulkTransforms(false);
     }
   };
 
@@ -1118,11 +1181,14 @@ export default function SegmentsPage() {
       )}
 
       <Tabs value={leftTab} onValueChange={setLeftTab} className="flex flex-col h-full">
-        <TabsList className="mx-2 mt-2 grid w-auto grid-cols-2 h-8">
+        <TabsList className="mx-2 mt-2 grid w-auto grid-cols-3 h-8">
           <TabsTrigger value="videos" className="text-xs h-7">Videos</TabsTrigger>
           <TabsTrigger value="transform" className="text-xs h-7">
             Transform
             {selectedSegment && <span className="ml-1 w-1.5 h-1.5 rounded-full bg-primary inline-block" />}
+          </TabsTrigger>
+          <TabsTrigger value="global" className="text-xs h-7">
+            Global
           </TabsTrigger>
         </TabsList>
 
@@ -1463,9 +1529,33 @@ export default function SegmentsPage() {
 
                     {/* Info */}
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium truncate">
-                        {video.name}
-                      </p>
+                      {renamingVideoId === video.id ? (
+                        <input
+                          type="text"
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onBlur={() => handleRenameVideo(video.id, renameValue)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleRenameVideo(video.id, renameValue);
+                            if (e.key === "Escape") setRenamingVideoId(null);
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          autoFocus
+                          className="text-xs font-medium w-full bg-background border border-primary rounded px-1 py-0.5 outline-none"
+                        />
+                      ) : (
+                        <p
+                          className="text-xs font-medium truncate"
+                          onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            setRenamingVideoId(video.id);
+                            setRenameValue(video.name);
+                          }}
+                          title="Double-click to rename"
+                        >
+                          {video.name}
+                        </p>
+                      )}
                       {video.status === "processing" ? (
                         <div className="flex items-center gap-1 text-[10px] text-amber-500">
                           <RefreshCw className="h-3 w-3 animate-spin" />
@@ -1540,6 +1630,33 @@ export default function SegmentsPage() {
               </p>
             </div>
           )}
+        </TabsContent>
+
+        {/* Global transforms tab */}
+        <TabsContent value="global" className="flex-1 flex flex-col min-h-0 mt-0">
+          <div className="p-3 flex-1 overflow-auto">
+            {selectedVideo ? (
+              <GlobalTransformPanel
+                segmentCount={segments.length}
+                segmentsWithCustomTransforms={
+                  segments.filter((s) => {
+                    const t = s.transforms;
+                    if (!t) return false;
+                    return t.rotation !== 0 || t.scale !== 1.0 || t.pan_x !== 0 ||
+                      t.pan_y !== 0 || t.flip_h || t.flip_v || t.opacity !== 1.0;
+                  }).length
+                }
+                onApply={handleBulkTransforms}
+                applying={applyingBulkTransforms}
+              />
+            ) : (
+              <div className="flex-1 flex items-center justify-center py-8">
+                <p className="text-sm text-muted-foreground text-center">
+                  Selectează un video pentru a aplica transformări globale
+                </p>
+              </div>
+            )}
+          </div>
         </TabsContent>
       </Tabs>
     </div>

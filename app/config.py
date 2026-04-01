@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     supabase_jwt_secret: str = ""  # JWT secret for token verification
     supabase_service_role_key: str = ""  # Service role key for admin operations
 
+    # MinIO video storage (Buffer publishing)
+    # Kong proxies /s3/* to MinIO. Bucket has public anonymous access.
+    minio_public_url: str = ""  # e.g. https://supabase.nortia.ro/s3/buffer-videos
+
     # Security
     allowed_origins: str = "http://localhost:3000,http://localhost:3001,https://editai.obsid.ro"
     auth_disabled: bool = False  # Set to True to disable authentication (local development only!)

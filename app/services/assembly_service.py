@@ -1236,56 +1236,93 @@ class AssemblyService:
             )
 
             # --- Post-merge consecutive dedup pass ---
-            # Scan for consecutive entries using the same source_video_path and
+            # Scan for near-consecutive entries using the same clip region and
             # swap duplicates with an alternative from the full segment pool.
-            # Snapshot source paths before dedup loop
+            # Uses a sliding window of DEDUP_WINDOW to catch repetition at
+            # distance 2-3 (not just immediate neighbors).
             all_source_paths = list(_unique_sources)
+            DEDUP_WINDOW = 3  # check last N entries for repetition
+
+            # Build a pool of all available clips per source, sorted by
+            # duration descending so we can rotate through them.
+            _clips_by_source: dict = {}
+            for e in timeline[intro_entry_count:]:
+                if e.timeline_duration <= 0.001:
+                    continue
+                key = e.source_video_path
+                clip_key = (e.source_video_path, round(e.start_time, 2))
+                if key not in _clips_by_source:
+                    _clips_by_source[key] = []
+                # Avoid duplicate clip entries in the pool
+                if not any(round(c.start_time, 2) == round(e.start_time, 2) for c in _clips_by_source[key]):
+                    _clips_by_source[key].append(e)
+            for key in _clips_by_source:
+                _clips_by_source[key].sort(key=lambda e: e.end_time - e.start_time, reverse=True)
+
+            def _clip_key(entry):
+                """Identify a clip region by source + start position."""
+                return (entry.source_video_path, round(entry.start_time, 2))
+
             dedup_swaps = 0
             for idx in range(intro_entry_count + 1, len(merged)):
-                if merged[idx].source_video_path == merged[idx - 1].source_video_path:
-                    # Find an alternative source path not used by neighbors
-                    neighbor_paths = {merged[idx - 1].source_video_path}
-                    if idx + 1 < len(merged):
-                        neighbor_paths.add(merged[idx + 1].source_video_path)
-                    alternatives = [p for p in all_source_paths if p not in neighbor_paths]
-                    if alternatives:
-                        # Pick the alternative least recently used in the timeline
-                        # by scanning backward from current position
-                        alt_path = alternatives[0]
-                        for a in alternatives:
-                            # Simple heuristic: pick first alternative not seen recently
-                            recent_in_merged = [
-                                m.source_video_path for m in merged[max(0, idx - 3):idx]
-                            ]
-                            if a not in recent_in_merged:
-                                alt_path = a
+                # Collect clip keys used in the recent window
+                window_start = max(intro_entry_count, idx - DEDUP_WINDOW)
+                recent_clip_keys = {_clip_key(merged[j]) for j in range(window_start, idx)}
+                recent_paths = {merged[j].source_video_path for j in range(window_start, idx)}
+
+                current_clip_key = _clip_key(merged[idx])
+                same_path_as_prev = merged[idx].source_video_path == merged[idx - 1].source_video_path
+                same_clip_in_window = current_clip_key in recent_clip_keys
+
+                if not same_path_as_prev and not same_clip_in_window:
+                    continue  # No repetition issue
+
+                # Also check next neighbor to avoid creating a new duplicate
+                next_clip_key = _clip_key(merged[idx + 1]) if idx + 1 < len(merged) else None
+
+                # Try to find a replacement clip not in the recent window
+                best_replacement = None
+                # 1. Prefer clips from a source path not in recent window
+                for src_path in all_source_paths:
+                    if src_path in recent_paths and len(all_source_paths) > 1:
+                        continue
+                    clips = _clips_by_source.get(src_path, [])
+                    for clip in clips:
+                        ck = _clip_key(clip)
+                        if ck not in recent_clip_keys and ck != next_clip_key:
+                            best_replacement = clip
+                            break
+                    if best_replacement:
+                        break
+
+                # 2. If no diverse-source clip found, try any clip not in window
+                if not best_replacement:
+                    for src_path in all_source_paths:
+                        clips = _clips_by_source.get(src_path, [])
+                        for clip in clips:
+                            ck = _clip_key(clip)
+                            if ck not in recent_clip_keys and ck != next_clip_key:
+                                best_replacement = clip
                                 break
-                        # Find the timeline entry with the longest clip for this source
-                        # to minimize FFmpeg looping (avoid always picking the first short clip)
-                        alt_entry = max(
-                            (e for e in timeline if e.source_video_path == alt_path),
-                            key=lambda e: e.end_time - e.start_time,
-                            default=None,
-                        )
-                        if alt_entry:
-                            # Extend end_time to cover timeline_duration so
-                            # assemble_video reads more source video instead of
-                            # looping a clip shorter than needed.
-                            extended_end = max(
-                                alt_entry.end_time,
-                                alt_entry.start_time + merged[idx].timeline_duration,
-                            )
-                            merged[idx] = TimelineEntry(
-                                source_video_path=alt_path,
-                                start_time=alt_entry.start_time,
-                                end_time=extended_end,
-                                timeline_start=merged[idx].timeline_start,
-                                timeline_duration=merged[idx].timeline_duration,
-                                transforms=alt_entry.transforms,
-                            )
-                            dedup_swaps += 1
+                        if best_replacement:
+                            break
+
+                if best_replacement:
+                    extended_end = max(
+                        best_replacement.end_time,
+                        best_replacement.start_time + merged[idx].timeline_duration,
+                    )
+                    merged[idx] = TimelineEntry(
+                        source_video_path=best_replacement.source_video_path,
+                        start_time=best_replacement.start_time,
+                        end_time=extended_end,
+                        timeline_start=merged[idx].timeline_start,
+                        timeline_duration=merged[idx].timeline_duration,
+                        transforms=best_replacement.transforms,
+                    )
+                    dedup_swaps += 1
             if dedup_swaps:
-                logger.info(f"Post-merge dedup: swapped {dedup_swaps} consecutive duplicates")
+                logger.info(f"Post-merge dedup: swapped {dedup_swaps} near-consecutive duplicates")
 
             # Recalculate timeline_start cumulatively to avoid gaps after merging
             cumulative = 0.0

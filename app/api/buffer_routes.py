@@ -249,7 +249,7 @@ async def bulk_publish_clips(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """Publish multiple clips via Buffer with staggered scheduling."""
-    logger.info(f"[Profile {profile.profile_id}] Buffer bulk publish {len(request.clip_ids)} clips")
+    logger.info(f"[Profile {profile.profile_id}] Buffer bulk publish {len(request.clip_ids)} clips, schedule_date={request.schedule_date!r}, interval={request.schedule_interval_minutes}")
     repo = get_repository()
     if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -375,7 +375,9 @@ async def _publish_clip_task(
             publisher.upload_to_storage, Path(video_path)
         )
 
-        # Step 2: Create Buffer post
+        # Step 2: Create Buffer post (TikTok has 150 char limit)
+        if caption and len(caption) > 150:
+            caption = caption[:147] + "..."
         update_progress(job_id, "Creating Buffer post...", 50)
         result = await publisher.create_post(
             video_url=public_url,
@@ -399,6 +401,7 @@ async def _publish_clip_task(
                         "scheduled_at": schedule_date.isoformat() if schedule_date else None,
                         "published_at": None if schedule_date else datetime.now(timezone.utc).isoformat(),
                         "status": pub_status,
+                        "storage_path": storage_path,
                     })
                     repo.update_clip(clip_id, {
                         "postiz_status": "sent",
@@ -407,7 +410,7 @@ async def _publish_clip_task(
                 except Exception as e:
                     logger.warning(f"Failed to track Buffer publication: {e}")
 
-            # Step 4: Schedule cleanup (delete from Storage after Buffer processes)
+            # Best-effort early cleanup (MinIO lifecycle handles it if app shuts down)
             if result.post_id and storage_path:
                 asyncio.create_task(
                     publisher.wait_and_cleanup(result.post_id, storage_path)
@@ -453,6 +456,7 @@ async def _bulk_publish_task(
 
     try:
         publisher = get_buffer_publisher(profile_id)
+        logger.info(f"[Job {job_id}] Publisher ready, processing {len(clips)} clips, schedule_start={schedule_start}")
         total = len(clips)
         successful = 0
         failed = 0
@@ -474,6 +478,10 @@ async def _bulk_publish_task(
                     clip_schedule = schedule_start + timedelta(minutes=idx * interval_minutes)
 
                 clip_caption = (captions or {}).get(clip["id"], caption)
+                # TikTok via Buffer has 150 char limit
+                if clip_caption and len(clip_caption) > 150:
+                    clip_caption = clip_caption[:147] + "..."
+                logger.info(f"[Job {job_id}] Calling create_post: url={public_url[:60]}..., schedule={clip_schedule}, caption_len={len(clip_caption or '')}")
 
                 result = await publisher.create_post(
                     video_url=public_url,
@@ -482,6 +490,7 @@ async def _bulk_publish_task(
                     schedule_date=clip_schedule,
                     tiktok_title=tiktok_title,
                 )
+                logger.info(f"[Job {job_id}] create_post result: success={result.success}, post_id={result.post_id}, status={result.status}, error={result.error}")
 
                 if result.success:
                     successful += 1
@@ -498,6 +507,7 @@ async def _bulk_publish_task(
                                 "scheduled_at": clip_schedule.isoformat() if clip_schedule else None,
                                 "published_at": None if clip_schedule else datetime.now(timezone.utc).isoformat(),
                                 "status": pub_status,
+                                "storage_path": storage_path,
                             })
                             repo.update_clip(clip["id"], {
                                 "postiz_status": "sent",
@@ -516,7 +526,8 @@ async def _bulk_publish_task(
                         publisher.delete_from_storage(storage_path)
 
             except Exception as e:
-                logger.error(f"Failed to publish clip {clip['id']} via Buffer: {e}")
+                import traceback
+                logger.error(f"Failed to publish clip {clip['id']} via Buffer: {e}\n{traceback.format_exc()}")
                 failed += 1
                 if storage_path:
                     try:

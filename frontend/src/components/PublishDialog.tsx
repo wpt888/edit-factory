@@ -63,7 +63,7 @@ const PLATFORM_CHAR_LIMITS: Record<string, number> = {
   linkedin: 3000,
   "linkedin-page": 3000,
   facebook: 63206,
-  tiktok: 4000,
+  tiktok: 150,
 };
 
 // Friendly platform names
