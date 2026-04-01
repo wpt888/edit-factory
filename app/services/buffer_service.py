@@ -239,7 +239,10 @@ class BufferPublisher:
         # Build mode and timing
         if schedule_date:
             mode = "customScheduled"
-            due_at = schedule_date.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            # Convert to UTC before formatting — Buffer expects UTC with Z suffix
+            from datetime import timezone as tz
+            utc_date = schedule_date.astimezone(tz.utc)
+            due_at = utc_date.strftime("%Y-%m-%dT%H:%M:%S.000Z")
         else:
             mode = "shareNow"
             due_at = None
