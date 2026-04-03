@@ -84,8 +84,8 @@ class SegmentCreate(BaseModel):
 class SegmentTransformInput(BaseModel):
     rotation: float = 0.0
     scale: float = 1.0
-    pan_x: int = 0
-    pan_y: int = 0
+    pan_x: float = 0.0
+    pan_y: float = 0.0
     flip_h: bool = False
     flip_v: bool = False
     opacity: float = 1.0
@@ -1807,8 +1807,8 @@ async def bulk_update_transforms(
                 "scale": max(0.1, min(5.0, current.get("scale", 1.0) + (new_transforms["scale"] - 1.0))),
                 "pan_x": current.get("pan_x", 0) + new_transforms["pan_x"],
                 "pan_y": current.get("pan_y", 0) + new_transforms["pan_y"],
-                "flip_h": new_transforms["flip_h"] if new_transforms["flip_h"] else current.get("flip_h", False),
-                "flip_v": new_transforms["flip_v"] if new_transforms["flip_v"] else current.get("flip_v", False),
+                "flip_h": current.get("flip_h", False) ^ new_transforms["flip_h"],
+                "flip_v": current.get("flip_v", False) ^ new_transforms["flip_v"],
                 "opacity": max(0.0, min(1.0, current.get("opacity", 1.0) + (new_transforms["opacity"] - 1.0))),
             }
             supabase.table("editai_segments")\

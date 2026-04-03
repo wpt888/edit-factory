@@ -59,6 +59,7 @@ class MatchResult:
     segment_start_time: Optional[float] = None
     segment_end_time: Optional[float] = None
     thumbnail_path: Optional[str] = None
+    transforms: Optional[dict] = None
 
 
 @dataclass
@@ -794,6 +795,7 @@ class AssemblyService:
                     segment_start_time=chosen_segment.get("start_time"),
                     segment_end_time=chosen_segment.get("end_time"),
                     thumbnail_path=chosen_segment.get("thumbnail_path"),
+                    transforms=chosen_segment.get("transforms"),
                 )
                 prev_segment_id = chosen_segment["id"]
                 prev_source_video_id = chosen_segment.get("source_video_id")
@@ -952,7 +954,7 @@ class AssemblyService:
                         "end_time": match.segment_end_time or (match.segment_start_time + 5.0),
                         "source_video_path": sv_path,
                         "keywords": match.segment_keywords,
-                        "transforms": None,
+                        "transforms": match.transforms,
                     }
                 elif fallback_segment:
                     segment = fallback_segment
@@ -1932,6 +1934,7 @@ class AssemblyService:
                         segment_start_time=m.get("segment_start_time"),
                         segment_end_time=m.get("segment_end_time"),
                         thumbnail_path=m.get("thumbnail_path"),
+                        transforms=m.get("transforms"),
                     )
                     for m in match_overrides
                 ]
@@ -1986,6 +1989,7 @@ class AssemblyService:
                             segment_start_time=rep.segment_start_time,
                             segment_end_time=rep.segment_end_time,
                             thumbnail_path=rep.thumbnail_path,
+                            transforms=rep.transforms,
                         ))
                         # Use duration override from first entry in group
                         group_dur_ov = match_overrides[indices[0]].get("duration_override")
@@ -2399,6 +2403,7 @@ class AssemblyService:
                 "segment_start_time": m.segment_start_time,
                 "segment_end_time": m.segment_end_time,
                 "thumbnail_path": m.thumbnail_path,
+                "transforms": m.transforms,
             }
             for m in match_results
         ]

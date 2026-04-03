@@ -13,7 +13,6 @@ import {
   FlipVertical,
   Eye,
   RotateCcw,
-  Save,
 } from "lucide-react";
 import type { SegmentTransform } from "@/types/video-processing";
 import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
@@ -21,14 +20,12 @@ import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
 interface SegmentTransformPanelProps {
   transforms: SegmentTransform;
   onChange: (transforms: SegmentTransform) => void;
-  onSave: (transforms: SegmentTransform) => void;
   isOverride?: boolean;
 }
 
 export function SegmentTransformPanel({
   transforms,
   onChange,
-  onSave,
   isOverride = false,
 }: SegmentTransformPanelProps) {
   const update = (partial: Partial<SegmentTransform>) => {
@@ -204,17 +201,6 @@ export function SegmentTransformPanel({
           onValueChange={([v]) => update({ opacity: v / 100 })}
         />
       </div>
-
-      {/* Save button */}
-      <Button
-        size="sm"
-        className="w-full"
-        onClick={() => onSave(transforms)}
-        disabled={isIdentity && !isOverride}
-      >
-        <Save className="h-3 w-3 mr-1" />
-        Save Transforms
-      </Button>
     </div>
   );
 }

@@ -25,6 +25,7 @@ import {
   Layers,
   Replace,
   Plus,
+  RefreshCw,
 } from "lucide-react";
 import type { SegmentTransform } from "@/types/video-processing";
 import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
@@ -34,6 +35,10 @@ interface GlobalTransformPanelProps {
   segmentsWithCustomTransforms: number;
   onApply: (transforms: SegmentTransform, mode: "set" | "add") => void;
   applying?: boolean;
+  /** When set, shows the video filename; when undefined, shows "Toate videourile" (all videos) */
+  scopeLabel?: string;
+  /** Show loading spinner while segments are being fetched */
+  loading?: boolean;
 }
 
 export function GlobalTransformPanel({
@@ -41,6 +46,8 @@ export function GlobalTransformPanel({
   segmentsWithCustomTransforms,
   onApply,
   applying = false,
+  scopeLabel,
+  loading = false,
 }: GlobalTransformPanelProps) {
   const [transforms, setTransforms] = useState<SegmentTransform>({
     ...DEFAULT_SEGMENT_TRANSFORM,
@@ -85,7 +92,12 @@ export function GlobalTransformPanel({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Layers className="h-4 w-4" />
-          <span className="text-sm font-medium">Global Transforms</span>
+          <div className="flex flex-col">
+            <span className="text-sm font-medium">Global Transforms</span>
+            <span className="text-[10px] text-muted-foreground truncate max-w-[160px]">
+              {scopeLabel || "Toate videourile"}
+            </span>
+          </div>
           <Badge variant="secondary" className="text-[10px]">
             {segmentCount} seg
           </Badge>
@@ -103,7 +115,12 @@ export function GlobalTransformPanel({
         )}
       </div>
 
-      {segmentCount === 0 ? (
+      {loading ? (
+        <div className="flex items-center justify-center py-4 gap-2">
+          <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground" />
+          <p className="text-xs text-muted-foreground">Se încarcă segmentele...</p>
+        </div>
+      ) : segmentCount === 0 ? (
         <p className="text-xs text-muted-foreground text-center py-4">
           No segments to transform. Create segments first.
         </p>
@@ -252,10 +269,10 @@ export function GlobalTransformPanel({
             size="sm"
             className="w-full"
             onClick={handleApplyClick}
-            disabled={isIdentity || applying || segmentCount === 0}
+            disabled={isIdentity || applying || loading || segmentCount === 0}
           >
             <Layers className="h-3 w-3 mr-1" />
-            {applying ? "Se aplică..." : `Aplică la ${segmentCount} segmente`}
+            {applying ? "Se aplică..." : `Aplică la ${segmentCount} segmente${!scopeLabel ? " (toate videourile)" : ""}`}
           </Button>
         </>
       )}

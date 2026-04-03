@@ -1000,12 +1000,13 @@ export function VideoSegmentPlayer({
   const videoStyle = useMemo<React.CSSProperties>(() => {
     const transforms: string[] = [];
     if (activeTransforms) {
-      if (activeTransforms.flip_h) transforms.push("scaleX(-1)");
-      if (activeTransforms.flip_v) transforms.push("scaleY(-1)");
-      if (activeTransforms.rotation) transforms.push(`rotate(${activeTransforms.rotation}deg)`);
-      if (activeTransforms.scale !== 1.0) transforms.push(`scale(${activeTransforms.scale})`);
+      // Order: translate → rotate → scale → flip (pan operates in original coordinate space)
       if (activeTransforms.pan_x || activeTransforms.pan_y)
         transforms.push(`translate(${activeTransforms.pan_x}px, ${activeTransforms.pan_y}px)`);
+      if (activeTransforms.rotation) transforms.push(`rotate(${activeTransforms.rotation}deg)`);
+      if (activeTransforms.scale !== 1.0) transforms.push(`scale(${activeTransforms.scale})`);
+      if (activeTransforms.flip_h) transforms.push("scaleX(-1)");
+      if (activeTransforms.flip_v) transforms.push("scaleY(-1)");
     }
     // Video zoom (preview zoom, separate from segment transforms)
     if (videoZoom !== 1) transforms.push(`scale(${videoZoom})`);
@@ -1015,7 +1016,7 @@ export function VideoSegmentPlayer({
       transform: transforms.length > 0 ? transforms.join(" ") : undefined,
       transformOrigin: 'center center',
       opacity: activeTransforms?.opacity,
-      transition: isDraggingVideo ? undefined : "transform 0.15s ease, opacity 0.15s ease",
+      transition: (isDraggingVideo || activeTransforms) ? undefined : "transform 0.15s ease, opacity 0.15s ease",
     };
   }, [activeTransforms, videoZoom, videoPanX, videoPanY, isDraggingVideo]);
 

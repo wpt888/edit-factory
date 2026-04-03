@@ -1929,6 +1929,45 @@ function PipelinePage() {
     }
   };
 
+  // Remake variant with different segments (same voiceover)
+  const handleRemakeVariant = async (variantIndex: number) => {
+    if (!pipelineId) return;
+
+    // Optimistic UI: set variant back to processing
+    setVariantStatuses(prev =>
+      prev.map(v =>
+        v.variant_index === variantIndex
+          ? { ...v, status: "processing" as const, progress: 0, current_step: "Remaking with new segments...", final_video_path: undefined, render_fingerprint: undefined }
+          : v
+      )
+    );
+
+    try {
+      const payload = buildRenderPayload();
+      // Remove match_overrides — backend will auto-match with different segments
+      delete payload.match_overrides;
+      payload.variant_indices = [variantIndex];
+
+      await apiPost(`/pipeline/remake/${pipelineId}/${variantIndex}`, payload, {
+        timeout: renderSettings.encoding_mode === "vbr_2pass" ? 1_200_000 : 600_000,
+      });
+
+      // Restart polling
+      setIsRendering(true);
+      toast.success(`Variant ${variantIndex + 1} remake started`);
+    } catch (err) {
+      handleApiError(err, "Failed to remake variant");
+      // Revert optimistic update
+      setVariantStatuses(prev =>
+        prev.map(v =>
+          v.variant_index === variantIndex
+            ? { ...v, status: "failed" as const, current_step: "Remake failed", progress: 0 }
+            : v
+        )
+      );
+    }
+  };
+
   // Reset all state
   const resetPipeline = () => {
     // M10: Stop render polling before resetting state
@@ -5136,6 +5175,17 @@ function PipelinePage() {
                           >
                             <X className="h-3 w-3 mr-1" />
                             Stop
+                          </Button>
+                        )}
+                        {status.status === "completed" && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-primary"
+                            title="Remake with different segments"
+                            onClick={() => handleRemakeVariant(status.variant_index)}
+                          >
+                            <RefreshCw className="h-4 w-4" />
                           </Button>
                         )}
                         {(status.status === "completed" || status.status === "failed" || status.status === "cancelled") && (

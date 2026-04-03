@@ -119,6 +119,7 @@ export default function SegmentsPage() {
   const [allSegments, setAllSegments] = useState<Segment[]>([]);
   const [selectedSegment, setSelectedSegment] = useState<Segment | null>(null);
   const [loadingSegments, setLoadingSegments] = useState(false);
+  const [loadingAllSegments, setLoadingAllSegments] = useState(false);
 
   // Filter state
   const [viewMode, setViewMode] = useState<"current" | "all">("current");
@@ -165,6 +166,8 @@ export default function SegmentsPage() {
   const [activeTransforms, setActiveTransforms] = useState<SegmentTransform>({
     ...DEFAULT_SEGMENT_TRANSFORM,
   });
+  const transformAutoSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const skipTransformAutoSave = useRef(true); // skip on initial mount & segment selection
 
   // Overlap detection state
   const [overlapInfo, setOverlapInfo] = useState<{
@@ -277,16 +280,19 @@ export default function SegmentsPage() {
     }
   }, []);
 
-  // Fetch ALL segments (for library view)
+  // Fetch ALL segments (for library view + global transforms)
   const fetchAllSegments = useCallback(async () => {
+    setLoadingAllSegments(true);
     try {
-      const res = await apiGetWithRetry("/segments/");
+      const res = await apiGetWithRetry("/segments/?limit=500");
       if (res.ok) {
         const data = await res.json();
         setAllSegments(data);
       }
     } catch (error) {
       handleApiError(error, "Error loading all segments");
+    } finally {
+      setLoadingAllSegments(false);
     }
   }, []);
 
@@ -878,34 +884,54 @@ export default function SegmentsPage() {
     setDeleteConfirm(null);
   };
 
-  // Save transforms for selected segment
-  const handleSaveTransforms = async (transforms: SegmentTransform) => {
-    if (!selectedSegment) return;
+  // Save transforms for selected segment (uses existing selectedSegmentRef to avoid stale closure)
+  const saveTransforms = useCallback(async (transforms: SegmentTransform) => {
+    const seg = selectedSegmentRef.current;
+    if (!seg) return;
     try {
-      const res = await apiPut(`/segments/${selectedSegment.id}/transforms`, transforms);
+      const res = await apiPut(`/segments/${seg.id}/transforms`, transforms);
       if (res.ok) {
+        const segId = seg.id;
         setSegments((prev) =>
-          prev.map((s) => (s.id === selectedSegment.id ? { ...s, transforms } : s))
+          prev.map((s) => (s.id === segId ? { ...s, transforms } : s))
         );
         setAllSegments((prev) =>
-          prev.map((s) => (s.id === selectedSegment.id ? { ...s, transforms } : s))
+          prev.map((s) => (s.id === segId ? { ...s, transforms } : s))
         );
-        setSelectedSegment((prev) => prev ? { ...prev, transforms } : prev);
+        setSelectedSegment((prev) => prev && prev.id === segId ? { ...prev, transforms } : prev);
       }
     } catch (error) {
       handleApiError(error, "Error saving transformations");
     }
-  };
+  }, []);
+
+  // Single debounced auto-save: onChange from slider → update state → useEffect debounces → save
+  const handleTransformChange = useCallback((transforms: SegmentTransform) => {
+    setActiveTransforms(transforms);
+    skipTransformAutoSave.current = false;
+  }, []);
+
+  useEffect(() => {
+    if (skipTransformAutoSave.current) return;
+    if (transformAutoSaveRef.current) clearTimeout(transformAutoSaveRef.current);
+    transformAutoSaveRef.current = setTimeout(() => {
+      saveTransforms(activeTransforms);
+    }, 500);
+    return () => {
+      if (transformAutoSaveRef.current) clearTimeout(transformAutoSaveRef.current);
+    };
+  }, [activeTransforms, saveTransforms]);
 
   // Bulk transforms state
   const [applyingBulkTransforms, setApplyingBulkTransforms] = useState(false);
 
-  // Apply transforms to all segments of the selected video
+  // Apply transforms to segments — selected video's segments, or ALL segments if no video selected
   const handleBulkTransforms = async (transforms: SegmentTransform, mode: "set" | "add") => {
-    if (segments.length === 0) return;
+    const targetSegments = selectedVideo ? segments : allSegments;
+    if (targetSegments.length === 0) return;
     setApplyingBulkTransforms(true);
     try {
-      const segmentIds = segments.map((s) => s.id);
+      const segmentIds = targetSegments.map((s) => s.id);
       const res = await apiPut("/segments/bulk-transforms", {
         segment_ids: segmentIds,
         transforms,
@@ -937,27 +963,52 @@ export default function SegmentsPage() {
   };
 
   // Handle segment resize (drag edges on timeline)
+  const selectedVideoRef = useRef(selectedVideo);
+  selectedVideoRef.current = selectedVideo;
+
   const handleSegmentResize = async (segmentId: string, newStart: number, newEnd: number) => {
+    const roundedStart = Math.round(newStart * 1000) / 1000;
+    const roundedEnd = Math.round(newEnd * 1000) / 1000;
+    const duration = roundedEnd - roundedStart;
+
+    // Optimistic update — show new size immediately (prevents visual snap-back)
+    const optimistic = { start_time: roundedStart, end_time: roundedEnd, duration };
+    setSegments((prev) =>
+      prev.map((s) => (s.id === segmentId ? { ...s, ...optimistic } : s))
+    );
+    setAllSegments((prev) =>
+      prev.map((s) => (s.id === segmentId ? { ...s, ...optimistic } : s))
+    );
+    setSelectedSegment((prev) => prev?.id === segmentId ? { ...prev, ...optimistic } : prev);
+
     try {
       const res = await apiPatch(`/segments/${segmentId}`, {
-        start_time: Math.round(newStart * 1000) / 1000,
-        end_time: Math.round(newEnd * 1000) / 1000,
+        start_time: roundedStart,
+        end_time: roundedEnd,
       });
       if (!res.ok) throw new Error("Failed to update segment");
       const updated = await res.json();
+      // Reconcile with server response (may include product_group changes)
       setSegments((prev) =>
         prev.map((s) => (s.id === segmentId ? { ...s, ...updated } : s))
       );
-      if (selectedSegment?.id === segmentId) {
-        setSelectedSegment((prev) => prev ? { ...prev, ...updated } : prev);
-      }
+      setAllSegments((prev) =>
+        prev.map((s) => (s.id === segmentId ? { ...s, ...updated } : s))
+      );
+      setSelectedSegment((prev) => prev?.id === segmentId ? { ...prev, ...updated } : prev);
     } catch (error) {
+      // Revert optimistic update on failure — use ref for current video (avoids stale closure)
+      const video = selectedVideoRef.current;
+      if (video) {
+        fetchSegments(video.id);
+      }
       handleApiError(error, "Error resizing segment");
     }
   };
 
   // Sync activeTransforms when selectedSegment changes
   const handleSegmentSelect = (seg: Segment) => {
+    skipTransformAutoSave.current = true; // don't auto-save when loading a segment's existing transforms
     setSelectedSegment(seg);
     setActiveTransforms(seg.transforms || { ...DEFAULT_SEGMENT_TRANSFORM });
     setLeftTab("transform");
@@ -1619,8 +1670,7 @@ export default function SegmentsPage() {
               </div>
               <SegmentTransformPanel
                 transforms={activeTransforms}
-                onChange={setActiveTransforms}
-                onSave={handleSaveTransforms}
+                onChange={handleTransformChange}
               />
             </div>
           ) : (
@@ -1635,27 +1685,26 @@ export default function SegmentsPage() {
         {/* Global transforms tab */}
         <TabsContent value="global" className="flex-1 flex flex-col min-h-0 mt-0">
           <div className="p-3 flex-1 overflow-auto">
-            {selectedVideo ? (
-              <GlobalTransformPanel
-                segmentCount={segments.length}
-                segmentsWithCustomTransforms={
-                  segments.filter((s) => {
-                    const t = s.transforms;
-                    if (!t) return false;
-                    return t.rotation !== 0 || t.scale !== 1.0 || t.pan_x !== 0 ||
-                      t.pan_y !== 0 || t.flip_h || t.flip_v || t.opacity !== 1.0;
-                  }).length
-                }
-                onApply={handleBulkTransforms}
-                applying={applyingBulkTransforms}
-              />
-            ) : (
-              <div className="flex-1 flex items-center justify-center py-8">
-                <p className="text-sm text-muted-foreground text-center">
-                  Selectează un video pentru a aplica transformări globale
-                </p>
-              </div>
-            )}
+            {(() => {
+              const targetSegments = selectedVideo ? segments : allSegments;
+              return (
+                <GlobalTransformPanel
+                  segmentCount={targetSegments.length}
+                  segmentsWithCustomTransforms={
+                    targetSegments.filter((s) => {
+                      const t = s.transforms;
+                      if (!t) return false;
+                      return t.rotation !== 0 || t.scale !== 1.0 || t.pan_x !== 0 ||
+                        t.pan_y !== 0 || t.flip_h || t.flip_v || t.opacity !== 1.0;
+                    }).length
+                  }
+                  onApply={handleBulkTransforms}
+                  applying={applyingBulkTransforms}
+                  scopeLabel={selectedVideo ? selectedVideo.name : undefined}
+                  loading={!selectedVideo && loadingAllSegments}
+                />
+              );
+            })()}
           </div>
         </TabsContent>
       </Tabs>

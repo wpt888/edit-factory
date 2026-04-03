@@ -75,20 +75,21 @@ async def check_duplicates(
     if len(request.texts) > 500:
         raise HTTPException(status_code=400, detail="Too many texts (max 500)")
 
-    # Fetch all ready assets for the profile
+    # Fetch all ready assets for the profile (include mp3_path for existence check)
     result = repo.table_query("editai_tts_assets", "select",
         filters=QueryFilters(
-            select="id, tts_text, audio_duration",
+            select="id, tts_text, audio_duration, mp3_path",
             eq={"profile_id": profile.profile_id, "status": "ready"},
         ))
 
     assets = result.data or []
 
-    # Build lookup: normalized text -> asset info
+    # Build lookup: normalized text -> asset info (only if audio file exists on disk)
     asset_lookup = {}
     for asset in assets:
         normalized = (asset.get("tts_text") or "").strip()
-        if normalized:
+        mp3_path = asset.get("mp3_path")
+        if normalized and mp3_path and Path(mp3_path).exists():
             asset_lookup[normalized] = {
                 "asset_id": asset["id"],
                 "audio_duration": asset.get("audio_duration", 0.0),

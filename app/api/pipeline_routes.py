@@ -427,6 +427,293 @@ def _db_update_render_jobs(pipeline_id: str, render_jobs: dict):
         logger.warning(f"Failed to update render_jobs for {pipeline_id}: {e}")
 
 
+def _fetch_preset_and_settings(render_request) -> tuple:
+    """Fetch export preset from DB and merge encoding overrides + subtitle settings.
+
+    Returns (preset_data, subtitle_settings) tuple.
+    Shared by render_variants and remake_variant to avoid duplication.
+    """
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
+
+    preset_data = {
+        "name": render_request.preset_name,
+        "width": 1080,
+        "height": 1920,
+        "fps": 30,
+        "video_codec": "h264_nvenc" if is_nvenc_available() else "libx264",
+        "audio_codec": "aac",
+        "video_bitrate": "3M",
+        "audio_bitrate": "192k"
+    }
+
+    if supabase:
+        try:
+            preset_result = supabase.table("editai_export_presets")\
+                .select("*")\
+                .eq("name", render_request.preset_name)\
+                .limit(1)\
+                .execute()
+            if preset_result.data:
+                preset_data = preset_result.data[0]
+            else:
+                logger.warning(f"Preset '{render_request.preset_name}' not found, using default")
+        except Exception as e:
+            logger.error(f"Failed to fetch preset: {e}")
+
+    # Merge encoding overrides from request into preset_data
+    if render_request.encoding_mode:
+        preset_data["encoding_mode"] = render_request.encoding_mode
+    if render_request.target_bitrate_kbps:
+        preset_data["target_bitrate_kbps"] = render_request.target_bitrate_kbps
+    if render_request.audio_bitrate_kbps:
+        preset_data["audio_bitrate"] = f"{render_request.audio_bitrate_kbps}k"
+    if render_request.video_profile:
+        preset_data["video_profile"] = render_request.video_profile
+    if render_request.video_level:
+        preset_data["video_level"] = render_request.video_level
+
+    # Build subtitle settings dict (camelCase keys to match SubtitleStyleConfig.from_dict)
+    subtitle_settings = {
+        "fontSize": render_request.font_size,
+        "fontFamily": render_request.font_family,
+        "textColor": render_request.text_color,
+        "outlineColor": render_request.outline_color,
+        "outlineWidth": render_request.outline_width,
+        "positionY": render_request.position_y,
+        "shadowDepth": render_request.shadow_depth,
+        "enableGlow": render_request.enable_glow,
+        "glowBlur": render_request.glow_blur,
+        "adaptiveSizing": render_request.adaptive_sizing,
+        "opacity": render_request.opacity
+    }
+
+    return preset_data, subtitle_settings
+
+
+async def _save_clip_to_library(
+    pipeline: dict,
+    pipeline_id: str,
+    vid: int,
+    final_video_path: Path,
+    profile_id: str,
+    render_fingerprint: str,
+    render_jobs_lock: threading.Lock,
+) -> None:
+    """Save or update a rendered clip in the library.
+
+    Handles: project creation, thumbnail generation, duration probe,
+    clip upsert, clip_content save, segment usage_count increment.
+    Shared by do_render and do_remake to avoid duplication.
+    """
+    job = pipeline["render_jobs"][vid]
+    with render_jobs_lock:
+        job["library_saved"] = False
+    try:
+        repo_lib = get_repository()
+        supabase_lib = repo_lib.get_client() if repo_lib else None
+        if supabase_lib:
+            # Step A: Get or create a library project (locked to prevent duplicates)
+            library_project_id = pipeline.get("library_project_id")
+
+            if not library_project_id:
+                with _library_project_lock:
+                    library_project_id = pipeline.get("library_project_id")
+                    if not library_project_id:
+                        pipeline_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
+                        try:
+                            proj_result = supabase_lib.table("editai_projects").insert({
+                                "profile_id": profile_id,
+                                "name": pipeline_name,
+                                "description": f"Auto-generated from pipeline {pipeline_id}",
+                                "status": "completed",
+                            }).execute()
+                            if proj_result.data:
+                                library_project_id = proj_result.data[0]["id"]
+                        except Exception as insert_err:
+                            logger.debug(
+                                f"Project insert conflict, fetching existing: {insert_err}"
+                            )
+                            existing = supabase_lib.table("editai_projects")\
+                                .select("id")\
+                                .eq("profile_id", profile_id)\
+                                .eq("name", pipeline_name)\
+                                .limit(1)\
+                                .execute()
+                            if existing.data:
+                                library_project_id = existing.data[0]["id"]
+                            else:
+                                raise
+
+                        if library_project_id:
+                            pipeline["library_project_id"] = library_project_id
+
+            if library_project_id:
+                # Step B: Generate thumbnail
+                thumb_path = None
+                try:
+                    thumb_dir = final_video_path.parent / "thumbnails"
+                    thumb_dir.mkdir(parents=True, exist_ok=True)
+                    thumb_path = thumb_dir / f"{final_video_path.stem}_thumb.jpg"
+                    await asyncio.to_thread(safe_ffmpeg_run, [
+                        "ffmpeg", "-y", "-ss", "1", "-i", str(final_video_path),
+                        "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "3",
+                        str(thumb_path)
+                    ], 30, "thumbnail")
+                    if thumb_path.exists():
+                        with render_jobs_lock:
+                            job["thumbnail_path"] = str(thumb_path)
+                    else:
+                        thumb_path = None
+                except Exception as thumb_err:
+                    logger.warning(f"Thumbnail generation failed: {thumb_err}")
+                    thumb_path = None
+
+                # Step C: Get video duration
+                duration = None
+                try:
+                    dur_result = await asyncio.to_thread(safe_ffmpeg_run, [
+                        "ffprobe", "-v", "error", "-show_entries",
+                        "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1",
+                        str(final_video_path)
+                    ], 30, "duration probe")
+                    if dur_result.returncode == 0:
+                        try:
+                            duration = float(dur_result.stdout.strip())
+                        except ValueError:
+                            logger.warning(f"ffprobe returned non-numeric duration: {dur_result.stdout.strip()!r}")
+                except Exception as dur_err:
+                    logger.warning(f"Duration probe failed: {dur_err}")
+
+                # Step D: Upsert clip row (update if already exists for this variant)
+                existing_clip = supabase_lib.table("editai_clips")\
+                    .select("id")\
+                    .eq("project_id", library_project_id)\
+                    .eq("variant_index", vid)\
+                    .eq("is_deleted", False)\
+                    .limit(1)\
+                    .execute()
+                if not existing_clip.data:
+                    insert_payload = {
+                        "project_id": library_project_id,
+                        "profile_id": profile_id,
+                        "variant_index": vid,
+                        "variant_name": f"variant_{vid + 1}",
+                        "raw_video_path": str(final_video_path),
+                        "final_video_path": str(final_video_path),
+                        "thumbnail_path": str(thumb_path) if thumb_path else None,
+                        "duration": duration,
+                        "is_selected": False,
+                        "is_deleted": False,
+                        "final_status": "completed",
+                    }
+                    try:
+                        insert_payload["render_fingerprint"] = render_fingerprint
+                        clip_result = supabase_lib.table("editai_clips").insert(insert_payload).execute()
+                    except Exception as _fp_err:
+                        if "render_fingerprint" in str(_fp_err):
+                            logger.warning("render_fingerprint column missing, retrying INSERT without it")
+                            insert_payload.pop("render_fingerprint", None)
+                            clip_result = supabase_lib.table("editai_clips").insert(insert_payload).execute()
+                        else:
+                            raise
+                    if clip_result.data and len(clip_result.data) > 0:
+                        with render_jobs_lock:
+                            job["clip_id"] = clip_result.data[0].get("id")
+                else:
+                    # Existing clip — UPDATE with new video path and metadata
+                    existing_id = existing_clip.data[0].get("id")
+                    with render_jobs_lock:
+                        job["clip_id"] = existing_id
+                    update_payload = {
+                        "raw_video_path": str(final_video_path),
+                        "final_video_path": str(final_video_path),
+                        "thumbnail_path": str(thumb_path) if thumb_path else None,
+                        "duration": duration,
+                        "final_status": "completed",
+                        "is_deleted": False,
+                    }
+                    try:
+                        update_payload["render_fingerprint"] = render_fingerprint
+                        supabase_lib.table("editai_clips").update(update_payload).eq("id", existing_id).execute()
+                    except Exception as _fp_err:
+                        if "render_fingerprint" in str(_fp_err):
+                            logger.warning("render_fingerprint column missing, retrying UPDATE without it")
+                            update_payload.pop("render_fingerprint", None)
+                            supabase_lib.table("editai_clips").update(update_payload).eq("id", existing_id).execute()
+                        else:
+                            raise
+                    logger.info(
+                        f"Updated existing clip {existing_id} with new video path"
+                    )
+
+                with render_jobs_lock:
+                    job["library_saved"] = True
+
+                # Save script text and SRT to clip_content
+                _clip_id = job.get("clip_id")
+                if _clip_id:
+                    try:
+                        _script_text = pipeline.get("scripts", [])[vid] if vid < len(pipeline.get("scripts", [])) else None
+                        _tts_data = pipeline.get("tts_previews", {}).get(vid) or pipeline.get("tts_previews", {}).get(str(vid), {})
+                        _srt = _tts_data.get("srt_content") if _tts_data else None
+                        _audio_path = _tts_data.get("audio_path") if _tts_data else None
+                        _content_payload = {"clip_id": _clip_id}
+                        if _script_text:
+                            _content_payload["tts_text"] = _script_text
+                        if _srt:
+                            _content_payload["srt_content"] = _srt
+                        if _audio_path:
+                            _content_payload["tts_audio_path"] = _audio_path
+                        if len(_content_payload) > 1:
+                            supabase_lib.table("editai_clip_content").upsert(
+                                _content_payload, on_conflict="clip_id"
+                            ).execute()
+                            logger.info(f"Saved clip_content for clip {_clip_id} (variant {vid})")
+                    except Exception as cc_err:
+                        logger.warning(f"Failed to save clip_content for variant {vid}: {cc_err}")
+
+                logger.info(
+                    f"[Profile {profile_id}] Pipeline {pipeline_id} "
+                    f"variant {vid} saved to library project {library_project_id}"
+                )
+
+                # Increment usage_count for segments used in this variant
+                try:
+                    used_seg_ids = pipeline.get("segment_usage", {}).get(str(vid), [])
+                    if used_seg_ids and supabase_lib and not job.get("usage_incremented"):
+                        _increment_segment_usage(supabase_lib, used_seg_ids)
+                        with render_jobs_lock:
+                            job["usage_incremented"] = True
+                        logger.info(
+                            f"[Profile {profile_id}] Incremented usage_count "
+                            f"for {len(used_seg_ids)} segments (variant {vid})"
+                        )
+                except Exception as usage_err:
+                    logger.warning(
+                        f"[Profile {profile_id}] Failed to increment segment "
+                        f"usage_count for variant {vid}: {usage_err}"
+                    )
+            else:
+                with render_jobs_lock:
+                    job["library_error"] = "Failed to create or find library project"
+        else:
+            with render_jobs_lock:
+                job["library_error"] = "Supabase unavailable"
+    except Exception as lib_err:
+        with render_jobs_lock:
+            job["library_error"] = str(lib_err)
+        logger.error(
+            f"[Profile {profile_id}] Failed to save pipeline variant "
+            f"{vid} to library: {lib_err}",
+            exc_info=True
+        )
+
+    # Persist library_saved/library_error/clip_id to DB after library save attempt
+    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+
+
 def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
     """Load pipeline from DB into _pipelines cache. Returns pipeline dict or None."""
     try:
@@ -466,15 +753,57 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                 continue
 
         tts_previews = {}
+        _missing_audio_texts = {}  # {int_key: script_text} for library restoration
+        scripts = row.get("scripts") or []
         for k, v in (row.get("tts_previews") or {}).items():
             try:
-                tts_previews[int(k)] = v
+                int_k = int(k)
+                tts_previews[int_k] = v
             except (ValueError, TypeError):
                 logger.warning(f"Skipping invalid tts_previews key: {k}")
                 continue
             # Verify audio_path still exists on disk
             if isinstance(v, dict) and v.get("audio_path") and not Path(v["audio_path"]).exists():
                 v["audio_path"] = None
+                # Track for library restoration
+                if int_k < len(scripts) and scripts[int_k]:
+                    _missing_audio_texts[int_k] = strip_product_group_tags(scripts[int_k])
+
+        # Auto-restore missing TTS audio from library (handles temp/ cleanup)
+        if _missing_audio_texts:
+            try:
+                _repo = get_repository()
+                _sb = _repo.get_client() if _repo else None
+                if _sb:
+                    _profile_id = row.get("profile_id", "")
+                    _lib_result = _sb.table("editai_tts_assets")\
+                        .select("id, tts_text, mp3_path, audio_duration, srt_content, tts_timestamps")\
+                        .eq("profile_id", _profile_id).eq("status", "ready")\
+                        .execute()
+                    if _lib_result.data:
+                        _lib_lookup = {}
+                        for _asset in _lib_result.data:
+                            _txt = (_asset.get("tts_text") or "").strip()
+                            if _txt and _asset.get("mp3_path") and Path(_asset["mp3_path"]).exists():
+                                _lib_lookup[_txt] = _asset
+                        _restored = 0
+                        for _idx, _text in _missing_audio_texts.items():
+                            _match = _lib_lookup.get(_text.strip())
+                            if _match:
+                                tts_previews[_idx]["audio_path"] = _match["mp3_path"]
+                                tts_previews[_idx]["library_asset_id"] = _match["id"]
+                                if _match.get("audio_duration"):
+                                    tts_previews[_idx]["audio_duration"] = _match["audio_duration"]
+                                if _match.get("srt_content") and not tts_previews[_idx].get("srt_content"):
+                                    tts_previews[_idx]["srt_content"] = _match["srt_content"]
+                                _restored += 1
+                        if _restored:
+                            logger.info(
+                                f"Pipeline {pipeline_id}: restored {_restored}/{len(_missing_audio_texts)} "
+                                f"TTS audio paths from library"
+                            )
+            except Exception as _lib_err:
+                logger.warning(f"Pipeline {pipeline_id}: TTS library restore failed: {_lib_err}")
 
         # PIP-14: Load preview_renders from DB
         preview_renders = {}
@@ -628,6 +957,7 @@ class MatchPreview(BaseModel):
     thumbnail_path: Optional[str] = None
     merge_group: Optional[int] = None
     merge_group_duration: Optional[float] = None
+    transforms: Optional[dict] = None
 
 
 class PipelinePreviewResponse(BaseModel):
@@ -1916,11 +2246,12 @@ async def generate_variant_tts(
             if "tts_previews" not in pipeline:
                 pipeline["tts_previews"] = {}
 
-            # Clean up old TTS audio files before overwriting
+            # Clean up old TTS audio files before overwriting.
+            # ONLY clean temp/ directories — never touch media/tts/ (library storage).
             old_tts = pipeline["tts_previews"].get(variant_index)
             if old_tts:
                 old_path = Path(old_tts.get("audio_path", ""))
-                if old_path.exists() and old_path != audio_path:
+                if old_path.exists() and old_path != audio_path and "temp" in old_path.parts:
                     old_dir = old_path.parent
                     for f in old_dir.iterdir():
                         try:
@@ -1953,10 +2284,56 @@ async def generate_variant_tts(
                 previews.pop(str(variant_index), None)
                 logger.info(f"Invalidated Step 3 preview cache for variant {variant_index} (TTS regenerated)")
 
+        # Auto-save to TTS Library so audio persists beyond temp/ cleanup.
+        # Same pattern used by assemble_and_render (assembly_service.py:1757).
+        try:
+            from app.services.tts_library_service import get_tts_library_service
+            tts_lib = get_tts_library_service()
+            saved_asset_id = tts_lib.save_from_pipeline(
+                profile_id=profile.profile_id,
+                text=cleaned_text,
+                audio_path=str(audio_path),
+                srt_content=srt_content,
+                timestamps=_timestamps,
+                model=request.elevenlabs_model,
+                duration=audio_duration,
+                voice_id=request.voice_id,
+            )
+            if saved_asset_id:
+                # Update audio_path to persistent library location
+                lib_path = f"media/tts/{profile.profile_id}/{saved_asset_id}.mp3"
+                if Path(lib_path).exists():
+                    with state_lock:
+                        pipeline["tts_previews"][variant_index]["audio_path"] = lib_path
+                        pipeline["tts_previews"][variant_index]["library_asset_id"] = saved_asset_id
+                    logger.info(
+                        f"[Profile {profile.profile_id}] TTS auto-saved to library: "
+                        f"asset {saved_asset_id}, path updated to {lib_path}"
+                    )
+            else:
+                # Dedup hit — asset already exists. Look it up and use its path.
+                _repo = get_repository()
+                _sb = _repo.get_client() if _repo else None
+                if _sb:
+                    _existing = _sb.table("editai_tts_assets").select("id, mp3_path")\
+                        .eq("profile_id", profile.profile_id).eq("status", "ready")\
+                        .eq("tts_text", cleaned_text).limit(1).execute()
+                    if _existing.data and _existing.data[0].get("mp3_path"):
+                        _lib_path = _existing.data[0]["mp3_path"]
+                        if Path(_lib_path).exists():
+                            with state_lock:
+                                pipeline["tts_previews"][variant_index]["audio_path"] = _lib_path
+                                pipeline["tts_previews"][variant_index]["library_asset_id"] = _existing.data[0]["id"]
+                            logger.info(
+                                f"[Profile {profile.profile_id}] TTS dedup: reusing library path {_lib_path}"
+                            )
+        except Exception as lib_err:
+            logger.warning(f"TTS library auto-save failed (non-blocking): {lib_err}")
+
         # Persist to DB (outside lock)
         logger.info(
             f"[Profile {profile.profile_id}] Saving TTS for variant {variant_index}: "
-            f"audio_path={audio_path}, duration={audio_duration:.2f}s"
+            f"audio_path={pipeline['tts_previews'][variant_index].get('audio_path')}, duration={audio_duration:.2f}s"
         )
         _db_save_pipeline(pipeline_id, pipeline)
 
@@ -2246,6 +2623,7 @@ async def preview_variant(
                 thumbnail_path=m.get("thumbnail_path"),
                 merge_group=m.get("merge_group"),
                 merge_group_duration=m.get("merge_group_duration"),
+                transforms=m.get("transforms"),
             )
             for m in preview_data.get("matches", [])
         ]
@@ -2411,72 +2789,8 @@ async def render_variants(
             profile.profile_id, len(render_request.pip_overlays)
         )
 
-    # Fetch preset data
-    repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
-
-    try:
-        preset_result = supabase.table("editai_export_presets")\
-            .select("*")\
-            .eq("name", render_request.preset_name)\
-            .limit(1)\
-            .execute()
-
-        if preset_result.data:
-            preset_data = preset_result.data[0]
-        else:
-            logger.warning(f"Preset '{render_request.preset_name}' not found, using default")
-            preset_data = {
-                "name": render_request.preset_name,
-                "width": 1080,
-                "height": 1920,
-                "fps": 30,
-                "video_codec": "h264_nvenc" if is_nvenc_available() else "libx264",
-                "audio_codec": "aac",
-                "video_bitrate": "3M",
-                "audio_bitrate": "192k"
-            }
-    except Exception as e:
-        logger.error(f"Failed to fetch preset: {e}")
-        preset_data = {
-            "name": render_request.preset_name,
-            "width": 1080,
-            "height": 1920,
-            "fps": 30,
-            "video_codec": "h264_nvenc" if is_nvenc_available() else "libx264",
-            "audio_codec": "aac",
-            "video_bitrate": "3M",
-            "audio_bitrate": "192k"
-        }
-
-    # Merge encoding overrides from request into preset_data
-    if render_request.encoding_mode:
-        preset_data["encoding_mode"] = render_request.encoding_mode
-    if render_request.target_bitrate_kbps:
-        preset_data["target_bitrate_kbps"] = render_request.target_bitrate_kbps
-    if render_request.audio_bitrate_kbps:
-        preset_data["audio_bitrate"] = f"{render_request.audio_bitrate_kbps}k"
-    if render_request.video_profile:
-        preset_data["video_profile"] = render_request.video_profile
-    if render_request.video_level:
-        preset_data["video_level"] = render_request.video_level
-
-    # Build subtitle settings dict (camelCase keys to match SubtitleStyleConfig.from_dict)
-    subtitle_settings = {
-        "fontSize": render_request.font_size,
-        "fontFamily": render_request.font_family,
-        "textColor": render_request.text_color,
-        "outlineColor": render_request.outline_color,
-        "outlineWidth": render_request.outline_width,
-        "positionY": render_request.position_y,
-        "shadowDepth": render_request.shadow_depth,
-        "enableGlow": render_request.enable_glow,
-        "glowBlur": render_request.glow_blur,
-        "adaptiveSizing": render_request.adaptive_sizing,
-        "opacity": render_request.opacity
-    }
+    # Fetch preset data and build subtitle settings
+    preset_data, subtitle_settings = _fetch_preset_and_settings(render_request)
 
     # Clear any previous cancellation flag so re-renders work
     clear_pipeline_cancelled(pipeline_id)
@@ -2812,220 +3126,11 @@ async def render_variants(
             # PIP-01: Persist render result to DB OUTSIDE the lock (I/O should not hold lock)
             _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
-            # Save rendered clip to library
-            with render_jobs_lock:
-                job["library_saved"] = False
-            try:
-                repo_lib = get_repository()
-                supabase_lib = repo_lib.get_client() if repo_lib else None
-                if supabase_lib:
-                    # Step A: Get or create a library project (locked to prevent duplicates)
-                    library_project_id = pipeline.get("library_project_id")
-
-                    if not library_project_id:
-                        with _library_project_lock:
-                            # Re-check after acquiring lock (another variant may have created it)
-                            library_project_id = pipeline.get("library_project_id")
-                            if not library_project_id:
-                                pipeline_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
-
-                                # Insert-or-fetch: attempt insert first, fall back to
-                                # select if a concurrent request already created the row.
-                                # This eliminates the TOCTOU race between SELECT and INSERT.
-                                try:
-                                    proj_result = supabase_lib.table("editai_projects").insert({
-                                        "profile_id": _profile_id,
-                                        "name": pipeline_name,
-                                        "description": f"Auto-generated from pipeline {pipeline_id}",
-                                        "status": "completed",
-                                    }).execute()
-                                    if proj_result.data:
-                                        library_project_id = proj_result.data[0]["id"]
-                                except Exception as insert_err:
-                                    # Likely a unique-constraint violation (duplicate).
-                                    # Fetch the existing project instead.
-                                    logger.debug(
-                                        f"Project insert conflict, fetching existing: {insert_err}"
-                                    )
-                                    existing = supabase_lib.table("editai_projects")\
-                                        .select("id")\
-                                        .eq("profile_id", _profile_id)\
-                                        .eq("name", pipeline_name)\
-                                        .limit(1)\
-                                        .execute()
-                                    if existing.data:
-                                        library_project_id = existing.data[0]["id"]
-                                    else:
-                                        raise
-
-                                if library_project_id:
-                                    pipeline["library_project_id"] = library_project_id
-
-                    if library_project_id:
-                        # Step B: Generate thumbnail
-                        thumb_path = None
-                        try:
-                            thumb_dir = final_video_path.parent / "thumbnails"
-                            thumb_dir.mkdir(parents=True, exist_ok=True)
-                            thumb_path = thumb_dir / f"{final_video_path.stem}_thumb.jpg"
-                            await asyncio.to_thread(safe_ffmpeg_run, [
-                                "ffmpeg", "-y", "-ss", "1", "-i", str(final_video_path),
-                                "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "3",
-                                str(thumb_path)
-                            ], 30, "thumbnail")
-                            if thumb_path.exists():
-                                with render_jobs_lock:
-                                    job["thumbnail_path"] = str(thumb_path)
-                            else:
-                                thumb_path = None
-                        except Exception as thumb_err:
-                            logger.warning(f"Thumbnail generation failed: {thumb_err}")
-                            thumb_path = None
-
-                        # Step C: Get video duration
-                        duration = None
-                        try:
-                            dur_result = await asyncio.to_thread(safe_ffmpeg_run, [
-                                "ffprobe", "-v", "error", "-show_entries",
-                                "format=duration",
-                                "-of", "default=noprint_wrappers=1:nokey=1",
-                                str(final_video_path)
-                            ], 30, "duration probe")
-                            if dur_result.returncode == 0:
-                                try:
-                                    duration = float(dur_result.stdout.strip())
-                                except ValueError:
-                                    logger.warning(f"ffprobe returned non-numeric duration: {dur_result.stdout.strip()!r}")
-                        except Exception as dur_err:
-                            logger.warning(f"Duration probe failed: {dur_err}")
-
-                        # Step D: Upsert clip row (update if already exists for this variant)
-                        existing_clip = supabase_lib.table("editai_clips")\
-                            .select("id")\
-                            .eq("project_id", library_project_id)\
-                            .eq("variant_index", vid)\
-                            .eq("is_deleted", False)\
-                            .limit(1)\
-                            .execute()
-                        if not existing_clip.data:
-                            insert_payload = {
-                                "project_id": library_project_id,
-                                "profile_id": _profile_id,
-                                "variant_index": vid,
-                                "variant_name": f"variant_{vid + 1}",
-                                "raw_video_path": str(final_video_path),
-                                "final_video_path": str(final_video_path),
-                                "thumbnail_path": str(thumb_path) if thumb_path else None,
-                                "duration": duration,
-                                "is_selected": False,
-                                "is_deleted": False,
-                                "final_status": "completed",
-                            }
-                            try:
-                                insert_payload["render_fingerprint"] = _render_fingerprint
-                                clip_result = supabase_lib.table("editai_clips").insert(insert_payload).execute()
-                            except Exception as _fp_err:
-                                if "render_fingerprint" in str(_fp_err):
-                                    logger.warning("render_fingerprint column missing, retrying INSERT without it")
-                                    insert_payload.pop("render_fingerprint", None)
-                                    clip_result = supabase_lib.table("editai_clips").insert(insert_payload).execute()
-                                else:
-                                    raise
-                            if clip_result.data and len(clip_result.data) > 0:
-                                with render_jobs_lock:
-                                    job["clip_id"] = clip_result.data[0].get("id")
-                        else:
-                            # Existing clip — UPDATE with new video path and metadata
-                            existing_id = existing_clip.data[0].get("id")
-                            # Set clip_id early so it's available even if update fails
-                            with render_jobs_lock:
-                                job["clip_id"] = existing_id
-                            update_payload = {
-                                "raw_video_path": str(final_video_path),
-                                "final_video_path": str(final_video_path),
-                                "thumbnail_path": str(thumb_path) if thumb_path else None,
-                                "duration": duration,
-                                "final_status": "completed",
-                                "is_deleted": False,
-                            }
-                            try:
-                                update_payload["render_fingerprint"] = _render_fingerprint
-                                supabase_lib.table("editai_clips").update(update_payload).eq("id", existing_id).execute()
-                            except Exception as _fp_err:
-                                if "render_fingerprint" in str(_fp_err):
-                                    logger.warning("render_fingerprint column missing, retrying UPDATE without it")
-                                    update_payload.pop("render_fingerprint", None)
-                                    supabase_lib.table("editai_clips").update(update_payload).eq("id", existing_id).execute()
-                                else:
-                                    raise
-                            logger.info(
-                                f"Updated existing clip {existing_id} with new video path"
-                            )
-
-                        with render_jobs_lock:
-                            job["library_saved"] = True
-
-                        # Save script text and SRT to clip_content
-                        _clip_id = job.get("clip_id")
-                        if _clip_id:
-                            try:
-                                _script_text = pipeline.get("scripts", [])[vid] if vid < len(pipeline.get("scripts", [])) else None
-                                _tts_data = pipeline.get("tts_previews", {}).get(vid) or pipeline.get("tts_previews", {}).get(str(vid), {})
-                                _srt = _tts_data.get("srt_content") if _tts_data else None
-                                _audio_path = _tts_data.get("audio_path") if _tts_data else None
-                                _content_payload = {"clip_id": _clip_id}
-                                if _script_text:
-                                    _content_payload["tts_text"] = _script_text
-                                if _srt:
-                                    _content_payload["srt_content"] = _srt
-                                if _audio_path:
-                                    _content_payload["tts_audio_path"] = _audio_path
-                                if len(_content_payload) > 1:
-                                    supabase_lib.table("editai_clip_content").upsert(
-                                        _content_payload, on_conflict="clip_id"
-                                    ).execute()
-                                    logger.info(f"Saved clip_content for clip {_clip_id} (variant {vid})")
-                            except Exception as cc_err:
-                                logger.warning(f"Failed to save clip_content for variant {vid}: {cc_err}")
-
-                        logger.info(
-                            f"[Profile {_profile_id}] Pipeline {pipeline_id} "
-                            f"variant {vid} saved to library project {library_project_id}"
-                        )
-
-                        # Increment usage_count for segments used in this variant
-                        try:
-                            used_seg_ids = pipeline.get("segment_usage", {}).get(str(vid), [])
-                            if used_seg_ids and supabase_lib and not job.get("usage_incremented"):
-                                _increment_segment_usage(supabase_lib, used_seg_ids)
-                                with render_jobs_lock:
-                                    job["usage_incremented"] = True
-                                logger.info(
-                                    f"[Profile {_profile_id}] Incremented usage_count "
-                                    f"for {len(used_seg_ids)} segments (variant {vid})"
-                                )
-                        except Exception as usage_err:
-                            logger.warning(
-                                f"[Profile {_profile_id}] Failed to increment segment "
-                                f"usage_count for variant {vid}: {usage_err}"
-                            )
-                    else:
-                        with render_jobs_lock:
-                            job["library_error"] = "Failed to create or find library project"
-                else:
-                    with render_jobs_lock:
-                        job["library_error"] = "Supabase unavailable"
-            except Exception as lib_err:
-                with render_jobs_lock:
-                    job["library_error"] = str(lib_err)
-                logger.error(
-                    f"[Profile {_profile_id}] Failed to save pipeline variant "
-                    f"{vid} to library: {lib_err}",
-                    exc_info=True
-                )
-
-            # Persist library_saved/library_error/clip_id to DB after library save attempt
-            _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+            # Save rendered clip to library (extracted helper)
+            await _save_clip_to_library(
+                pipeline, pipeline_id, vid, final_video_path,
+                _profile_id, _render_fingerprint, render_jobs_lock,
+            )
 
         except Exception as e:
             # Safety net for unexpected errors
@@ -3074,6 +3179,267 @@ async def render_variants(
         total_variants=len(pipeline["scripts"]),
         message="All requested variants are already rendering" if not variant_indices_to_render else None
     )
+
+
+# ── Remake variant with different segments ─────────────────────────────────
+
+@router.post("/remake/{pipeline_id}/{variant_index}")
+@limiter.limit("5/minute")
+async def remake_variant(
+    request: Request,
+    pipeline_id: str,
+    variant_index: int,
+    render_request: PipelineRenderRequest,
+    background_tasks: BackgroundTasks,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Re-render a completed variant with the SAME voiceover but DIFFERENT video segments.
+
+    The frontend sends the current render settings (subtitle, encoding, etc.)
+    but match_overrides are ignored — the backend auto-matches with a strong
+    avoid set containing the variant's previous segments.
+    """
+    # 1. Validate pipeline
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    vid = variant_index
+    scripts = pipeline.get("scripts", [])
+    if vid < 0 or vid >= len(scripts):
+        raise HTTPException(status_code=400, detail=f"Variant index {vid} out of range (0-{len(scripts)-1})")
+
+    # 2. Check variant is not currently processing
+    existing_job = pipeline.get("render_jobs", {}).get(vid)
+    if existing_job and existing_job.get("status") == "processing":
+        raise HTTPException(status_code=409, detail="Variant is currently rendering. Wait or cancel first.")
+
+    # 3. Read TTS data for reuse
+    _tts_previews = pipeline.get("tts_previews", {})
+    existing_tts = _tts_previews.get(vid) or _tts_previews.get(str(vid))
+
+    reuse_audio_path = None
+    reuse_audio_duration = None
+    reuse_srt_content = None
+
+    if existing_tts:
+        audio_path_str = existing_tts.get("audio_path")
+        if audio_path_str and Path(audio_path_str).exists() and Path(audio_path_str).stat().st_size > 100:
+            reuse_audio_path = audio_path_str
+            reuse_audio_duration = existing_tts.get("audio_duration")
+            reuse_srt_content = existing_tts.get("srt_content")
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Voice-over audio no longer available on disk. Please regenerate TTS in Step 2."
+            )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="No TTS data found for this variant. Please generate TTS in Step 2 first."
+        )
+
+    # 4. Build strong avoid set (current variant's segments + cross-variant + DB usage)
+    remake_avoid_ids: set = set()
+
+    # Current variant's previous segments — these are what we want to REPLACE
+    _seg_usage = pipeline.get("segment_usage", {})
+    current_segs = _seg_usage.get(vid) or _seg_usage.get(str(vid)) or []
+    remake_avoid_ids.update(current_segs)
+
+    # Cross-variant segments (diversity)
+    for other_idx, used_set in _seg_usage.items():
+        if str(other_idx) != str(vid):
+            if isinstance(used_set, list):
+                remake_avoid_ids.update(used_set)
+            else:
+                remake_avoid_ids.update(list(used_set))
+
+    # DB segments with usage_count > 0 (persistent diversity)
+    try:
+        _repo = get_repository()
+        _supa = _repo.get_client() if _repo else None
+        if _supa:
+            _usage_q = _supa.table("editai_segments")\
+                .select("id")\
+                .eq("profile_id", profile.profile_id)\
+                .gt("usage_count", 0)
+            if render_request.source_video_ids:
+                _usage_q = _usage_q.in_("source_video_id", render_request.source_video_ids)
+            _used = _usage_q.execute()
+            if _used.data:
+                remake_avoid_ids.update(s["id"] for s in _used.data)
+    except Exception as e:
+        logger.warning(f"Failed to load segment usage for remake: {e}")
+
+    logger.info(
+        f"[Profile {profile.profile_id}] ═══ REMAKE START ═══ "
+        f"pipeline={pipeline_id} variant={vid} "
+        f"avoid_segments={len(remake_avoid_ids)} "
+        f"(current_variant={len(current_segs)})"
+    )
+
+    # 5. Clear cancellation flags
+    clear_pipeline_cancelled(pipeline_id)
+    # Clear per-variant cancellation
+    _cancel_key = f"{pipeline_id}:{vid}"
+    with _cancelled_variants_lock:
+        _cancelled_variants.pop(_cancel_key, None)
+
+    # 6. Fetch preset and settings
+    preset_data, subtitle_settings = _fetch_preset_and_settings(render_request)
+
+    # 7. Acquire render lock and init job
+    pipeline_id_str = str(pipeline_id)
+    _evict_stale_render_locks()
+    with _render_locks_meta_lock:
+        if pipeline_id_str not in _render_locks:
+            _render_locks[pipeline_id_str] = threading.Lock()
+        render_jobs_lock = _render_locks[pipeline_id_str]
+
+    state_lock = _get_pipeline_state_lock(pipeline_id)
+    with state_lock:
+        pipeline["render_jobs"][vid] = {
+            "status": "processing",
+            "progress": 0,
+            "current_step": "Remaking with new segments",
+            "final_video_path": None,
+            "error": None,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+
+    _profile_id = profile.profile_id
+    script_text = scripts[vid]
+
+    # 8. Background remake task
+    async def do_remake():
+        try:
+            assembly_service = get_assembly_service()
+            job = pipeline["render_jobs"][vid]
+
+            # Check for cancellation
+            if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, vid):
+                with render_jobs_lock:
+                    job["status"] = "cancelled"
+                    job["current_step"] = "Cancelled by user"
+                    job["progress"] = 0
+                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                return
+
+            # Disk space check
+            check_disk_space(get_settings().output_dir)
+
+            def on_progress(step_name: str, pct: int):
+                with render_jobs_lock:
+                    job["current_step"] = step_name
+                    job["progress"] = pct
+
+            # Extract overlay params
+            variant_interstitial_slides = None
+            if render_request.interstitial_slides:
+                variant_slides = render_request.interstitial_slides.get(str(vid)) or render_request.interstitial_slides.get(vid) or []
+                if variant_slides:
+                    variant_interstitial_slides = variant_slides
+
+            variant_pip_overlays = render_request.pip_overlays if render_request.pip_overlays else None
+
+            # Render with NO match_overrides → auto-matching with strong avoid set
+            try:
+                final_video_path = await asyncio.wait_for(
+                    assembly_service.assemble_and_render(
+                        script_text=script_text,
+                        profile_id=_profile_id,
+                        preset_data=preset_data,
+                        subtitle_settings=subtitle_settings,
+                        elevenlabs_model=render_request.elevenlabs_model,
+                        voice_id=render_request.voice_id,
+                        source_video_ids=render_request.source_video_ids,
+                        match_overrides=None,  # Force auto-matching with new segments
+                        enable_denoise=render_request.enable_denoise,
+                        denoise_strength=render_request.denoise_strength,
+                        enable_sharpen=render_request.enable_sharpen,
+                        sharpen_amount=render_request.sharpen_amount,
+                        enable_color=render_request.enable_color,
+                        brightness=render_request.brightness,
+                        contrast=render_request.contrast,
+                        saturation=render_request.saturation,
+                        shadow_depth=render_request.shadow_depth,
+                        enable_glow=render_request.enable_glow,
+                        glow_blur=render_request.glow_blur,
+                        adaptive_sizing=render_request.adaptive_sizing,
+                        variant_index=vid,
+                        voice_settings=render_request.voice_settings,
+                        reuse_audio_path=reuse_audio_path,
+                        reuse_audio_duration=reuse_audio_duration,
+                        reuse_srt_content=reuse_srt_content,
+                        on_progress=on_progress,
+                        max_words_per_phrase=render_request.words_per_subtitle,
+                        min_segment_duration=render_request.min_segment_duration,
+                        ultra_rapid_intro=render_request.ultra_rapid_intro,
+                        interstitial_slides=variant_interstitial_slides,
+                        pip_overlays=variant_pip_overlays,
+                        avoid_segment_ids=remake_avoid_ids if remake_avoid_ids else None,
+                    ),
+                    timeout=1800 if preset_data.get("encoding_mode") == "vbr_2pass" else 900
+                )
+            except asyncio.TimeoutError:
+                _timeout_mins = 30 if preset_data.get("encoding_mode") == "vbr_2pass" else 15
+                raise Exception(f"Remake timed out after {_timeout_mins} minutes")
+
+            # Success
+            _remake_fingerprint = hashlib.sha256(
+                f"remake_{vid}_{datetime.now(timezone.utc).isoformat()}".encode()
+            ).hexdigest()[:32]
+
+            with render_jobs_lock:
+                job["status"] = "completed"
+                job["progress"] = 100
+                job["current_step"] = "Remake complete"
+                job["final_video_path"] = str(final_video_path)
+                job["render_fingerprint"] = _remake_fingerprint
+                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+            _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+
+            # Save/update clip in library
+            await _save_clip_to_library(
+                pipeline, pipeline_id, vid, final_video_path,
+                _profile_id, _remake_fingerprint, render_jobs_lock,
+            )
+
+            logger.info(
+                f"[Profile {_profile_id}] ═══ REMAKE COMPLETE ═══ "
+                f"pipeline={pipeline_id} variant={vid} output={final_video_path}"
+            )
+
+        except Exception as e:
+            logger.error(
+                f"[Profile {_profile_id}] Pipeline {pipeline_id} "
+                f"variant {vid} remake failed: {e}"
+            )
+            with render_jobs_lock:
+                job = pipeline["render_jobs"][vid]
+                job["status"] = "failed"
+                job["progress"] = 0
+                job["current_step"] = "Remake failed"
+                job["error"] = str(e)
+                job["failed_at"] = datetime.now(timezone.utc).isoformat()
+            _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+
+    # 9. Launch background task with render slot throttling
+    async def _throttled_remake():
+        async with await acquire_render_slot():
+            await do_remake()
+
+    with _render_locks_meta_lock:
+        _render_locks_timestamps[pipeline_id_str] = _time_mod.monotonic()
+    background_tasks.add_task(_throttled_remake)
+
+    return {"status": "remaking", "pipeline_id": pipeline_id, "variant_index": variant_index}
 
 
 @router.get("/status/{pipeline_id}", response_model=PipelineStatusResponse)

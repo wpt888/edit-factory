@@ -1745,7 +1745,7 @@ function LibrarieContent() {
                 <Card
                   key={clip.id}
                   className={`overflow-hidden transition-all cursor-pointer ${
-                    clip.is_downloaded_posted
+                    clip.is_downloaded_posted || clip.postiz_status === "sent"
                       ? "border-green-500 bg-green-50/50 dark:bg-green-950/20 hover:ring-2 hover:ring-green-400/50"
                       : `hover:ring-2 hover:ring-primary/50 ${selectedClipIds.has(clip.id) ? "ring-2 ring-primary" : ""}`
                   }`}
@@ -1825,7 +1825,7 @@ function LibrarieContent() {
 
                     {/* Hover actions */}
                     <div className="absolute inset-0 bg-background/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center justify-center gap-2 px-2">
                         <Button
                           size="sm"
                           variant="outline"
@@ -2015,13 +2015,13 @@ function LibrarieContent() {
                       <div className="flex items-center gap-1.5">
                         <Checkbox
                           id={`postiz-${clip.id}`}
-                          checked={clip.postiz_status === "uploaded" || clip.postiz_status === "scheduled" || clip.postiz_status === "sent"}
+                          checked={clip.postiz_status === "scheduled" || clip.postiz_status === "sent"}
                           disabled
                           className="h-4 w-4 border-2 border-muted-foreground/50 data-[state=checked]:border-purple-500 data-[state=checked]:bg-purple-500 disabled:opacity-100"
                         />
                         <label
                           className={`text-xs select-none ${
-                            clip.postiz_status === "uploaded" || clip.postiz_status === "scheduled" || clip.postiz_status === "sent"
+                            clip.postiz_status === "scheduled" || clip.postiz_status === "sent"
                               ? "text-purple-600 dark:text-purple-400 font-medium"
                               : "text-muted-foreground"
                           }`}
