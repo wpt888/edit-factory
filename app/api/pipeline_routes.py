@@ -805,6 +805,29 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             except Exception as _lib_err:
                 logger.warning(f"Pipeline {pipeline_id}: TTS library restore failed: {_lib_err}")
 
+        # Fallback: restore from Step 3 preview audio (may survive when Step 2 temp is cleaned)
+        _still_missing = [idx for idx in _missing_audio_texts if not tts_previews.get(idx, {}).get("audio_path")]
+        if _still_missing:
+            _previews_raw = row.get("previews") or {}
+            _preview_restored = 0
+            for _idx in _still_missing:
+                _pv = _previews_raw.get(str(_idx)) or _previews_raw.get(_idx)
+                if isinstance(_pv, dict):
+                    _pd = _pv.get("preview_data", {})
+                    _pa = _pd.get("audio_path")
+                    if _pa and Path(_pa).exists():
+                        tts_previews[_idx]["audio_path"] = _pa
+                        if _pd.get("audio_duration"):
+                            tts_previews[_idx]["audio_duration"] = _pd["audio_duration"]
+                        if _pd.get("srt_content") and not tts_previews[_idx].get("srt_content"):
+                            tts_previews[_idx]["srt_content"] = _pd["srt_content"]
+                        _preview_restored += 1
+            if _preview_restored:
+                logger.info(
+                    f"Pipeline {pipeline_id}: restored {_preview_restored} "
+                    f"TTS audio paths from Step 3 preview data"
+                )
+
         # PIP-14: Load preview_renders from DB
         preview_renders = {}
         for k, v in (row.get("preview_renders") or {}).items():

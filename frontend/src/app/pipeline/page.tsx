@@ -1072,13 +1072,13 @@ function PipelinePage() {
             if (info.approved) restoredApproved.add(Number(key));
           }
         });
-        if (Object.keys(restoredTts).length === 0) {
-          Object.entries(previewInfo).forEach(([key, info]) => {
-            if (info.has_audio) {
-              restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
-            }
-          });
-        }
+        // Per-variant fallback: fill gaps from preview_info (Step 3 audio may
+        // survive temp cleanup even when Step 2 TTS audio was deleted)
+        Object.entries(previewInfo).forEach(([key, info]) => {
+          if (info.has_audio && !restoredTts[Number(key)]) {
+            restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
+          }
+        });
         setTtsResults(restoredTts);
         if (restoredApproved.size > 0) setApprovedScripts(restoredApproved);
 
@@ -2430,13 +2430,12 @@ function PipelinePage() {
         if (info.approved) restoredApproved.add(Number(key));
       }
     });
-    if (Object.keys(restoredTts).length === 0) {
-      Object.entries(previewInfo).forEach(([key, info]) => {
-        if (info.has_audio) {
-          restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
-        }
-      });
-    }
+    // Per-variant fallback: fill gaps from preview_info
+    Object.entries(previewInfo).forEach(([key, info]) => {
+      if (info.has_audio && !restoredTts[Number(key)]) {
+        restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
+      }
+    });
     return { tts: restoredTts, approved: restoredApproved };
   };
 
