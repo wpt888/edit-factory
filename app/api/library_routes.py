@@ -2064,6 +2064,7 @@ async def list_all_clips(
                 "youtube_posted": clip.get("youtube_posted") or False,
                 "facebook_posted": clip.get("facebook_posted") or False,
                 "is_downloaded_posted": clip.get("is_downloaded_posted") or False,
+                "qc_verified": clip.get("qc_verified") or False,
                 "srt_content": content.get("srt_content") or None,
                 "tts_text": content.get("tts_text") or None,
             })
@@ -2141,6 +2142,7 @@ class ClipUpdateRequest(BaseModel):
     youtube_posted: Optional[bool] = None
     facebook_posted: Optional[bool] = None
     is_downloaded_posted: Optional[bool] = None
+    qc_verified: Optional[bool] = None
 
 
 @router.patch("/clips/{clip_id}")
@@ -2184,6 +2186,8 @@ async def update_clip(
             update_data["facebook_posted"] = request.facebook_posted
         if request.is_downloaded_posted is not None:
             update_data["is_downloaded_posted"] = request.is_downloaded_posted
+        if request.qc_verified is not None:
+            update_data["qc_verified"] = request.qc_verified
 
         updated = repo.update_clip(clip_id, update_data)
         if not updated:

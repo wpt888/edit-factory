@@ -44,6 +44,7 @@ import {
   CalendarClock,
   Send,
   Copy,
+  ShieldCheck,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, ApiError, handleApiError } from "@/lib/api";
@@ -104,6 +105,7 @@ interface ClipWithProject {
   youtube_posted?: boolean;
   facebook_posted?: boolean;
   is_downloaded_posted?: boolean;
+  qc_verified?: boolean;
   srt_content?: string | null;
   tts_text?: string | null;
 }
@@ -225,6 +227,7 @@ function LibrarieContent() {
   // Inline video player state
   const [playingClip, setPlayingClip] = useState<ClipWithProject | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [regeneratingVoiceoverId, setRegeneratingVoiceoverId] = useState<string | null>(null);
 
   // Update URL with filters
   const updateURL = useCallback(
@@ -559,6 +562,25 @@ function LibrarieContent() {
     }
   };
 
+  // Toggle QC verified status
+  const toggleQcVerified = async (clipId: string) => {
+    const clip = clips.find((c) => c.id === clipId);
+    if (!clip) return;
+    const newValue = !clip.qc_verified;
+    setClips((prev) =>
+      prev.map((c) => (c.id === clipId ? { ...c, qc_verified: newValue } : c))
+    );
+    try {
+      await apiPatch(`/library/clips/${clipId}`, { qc_verified: newValue });
+      toast.success(newValue ? "Marcat ca verificat QC" : "Verificare QC anulată");
+    } catch (error) {
+      handleApiError(error, "Error updating QC status");
+      setClips((prev) =>
+        prev.map((c) => (c.id === clipId ? { ...c, qc_verified: !newValue } : c))
+      );
+    }
+  };
+
   // Toggle social media posted status (generic)
   const toggleSocialPosted = async (clipId: string, platform: "instagram_posted" | "youtube_posted" | "facebook_posted") => {
     const clip = clips.find((c) => c.id === clipId);
@@ -576,6 +598,25 @@ function LibrarieContent() {
       setClips((prev) =>
         prev.map((c) => (c.id === clipId ? { ...c, [platform]: !newValue } : c))
       );
+    }
+  };
+
+  // Regenerate voice-over (re-render clip with fresh TTS)
+  const regenerateVoiceover = async (clipId: string) => {
+    setRegeneratingVoiceoverId(clipId);
+    try {
+      const formData = new FormData();
+      formData.append("preset_name", "instagram_reels");
+      await apiPost(`/library/clips/${clipId}/render`, formData);
+      toast.success("Regenerare voice-over pornită. Clipul va fi actualizat automat.");
+      // Update clip status to processing
+      setClips((prev) =>
+        prev.map((c) => (c.id === clipId ? { ...c, final_status: "processing" } : c))
+      );
+    } catch (error) {
+      handleApiError(error, "Eroare la regenerarea voice-over");
+    } finally {
+      setRegeneratingVoiceoverId(null);
     }
   };
 
@@ -1781,7 +1822,9 @@ function LibrarieContent() {
                   className={`overflow-hidden transition-all cursor-pointer ${
                     clip.is_downloaded_posted || clip.postiz_status === "sent"
                       ? "border-green-500 bg-green-50/50 dark:bg-green-950/20 hover:ring-2 hover:ring-green-400/50"
-                      : `hover:ring-2 hover:ring-primary/50 ${selectedClipIds.has(clip.id) ? "ring-2 ring-primary" : ""}`
+                      : clip.qc_verified
+                        ? "border-blue-500 bg-blue-50/50 dark:bg-blue-950/20 hover:ring-2 hover:ring-blue-400/50"
+                        : `hover:ring-2 hover:ring-primary/50 ${selectedClipIds.has(clip.id) ? "ring-2 ring-primary" : ""}`
                   }`}
                   onClick={() => toggleClipSelection(clip.id)}
                 >
@@ -1837,6 +1880,14 @@ function LibrarieContent() {
                         <Badge className="bg-blue-600 text-white text-[10px] px-1.5 py-0">Facebook</Badge>
                       )}
                     </div>
+
+                    {/* QC verified badge */}
+                    {clip.qc_verified && !(clip.is_downloaded_posted || clip.postiz_status === "sent") && (
+                      <Badge className="absolute bottom-2 left-2 bg-blue-500 text-white text-[10px] px-1.5 py-0 z-10">
+                        <ShieldCheck className="h-3 w-3 mr-0.5" />
+                        QC
+                      </Badge>
+                    )}
 
                     {/* Feature badges - positioned below checkbox */}
                     <div className="absolute top-10 left-2 flex flex-col gap-1">
@@ -1908,6 +1959,24 @@ function LibrarieContent() {
                             title="Download TTS audio"
                           >
                             <Mic className="h-4 w-4" />
+                          </Button>
+                        )}
+                        {clip.has_voiceover && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={regeneratingVoiceoverId === clip.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              regenerateVoiceover(clip.id);
+                            }}
+                            title="Regenerează voice-over"
+                          >
+                            {regeneratingVoiceoverId === clip.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-4 w-4" />
+                            )}
                           </Button>
                         )}
                         <Button
@@ -2081,25 +2150,45 @@ function LibrarieContent() {
                         </label>
                       </div>
                     </div>
-                    {/* Downloaded & Posted checkbox */}
+                    {/* QC Verified + Downloaded & Posted checkboxes */}
                     <div
-                      className="mt-1.5 flex items-center gap-1.5"
+                      className="mt-1.5 space-y-1"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <Checkbox
-                        id={`downloaded-posted-${clip.id}`}
-                        checked={clip.is_downloaded_posted || false}
-                        onCheckedChange={() => toggleDownloadedPosted(clip.id)}
-                        className="h-5 w-5 border-2 border-green-500 data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
-                      />
-                      <label
-                        htmlFor={`downloaded-posted-${clip.id}`}
-                        className={`text-xs cursor-pointer select-none ${
-                          clip.is_downloaded_posted ? "text-green-600 dark:text-green-400 font-medium" : "text-muted-foreground"
-                        }`}
-                      >
-                        {clip.is_downloaded_posted ? "Downloaded & Posted" : "Mark as downloaded & posted"}
-                      </label>
+                      {/* QC Verified */}
+                      <div className="flex items-center gap-1.5">
+                        <Checkbox
+                          id={`qc-verified-${clip.id}`}
+                          checked={clip.qc_verified || false}
+                          onCheckedChange={() => toggleQcVerified(clip.id)}
+                          className="h-5 w-5 border-2 border-blue-500 data-[state=checked]:border-blue-600 data-[state=checked]:bg-blue-600"
+                        />
+                        <label
+                          htmlFor={`qc-verified-${clip.id}`}
+                          className={`text-xs cursor-pointer select-none ${
+                            clip.qc_verified ? "text-blue-600 dark:text-blue-400 font-medium" : "text-muted-foreground"
+                          }`}
+                        >
+                          {clip.qc_verified ? "Verificat QC ✓" : "Verificare QC"}
+                        </label>
+                      </div>
+                      {/* Downloaded & Posted */}
+                      <div className="flex items-center gap-1.5">
+                        <Checkbox
+                          id={`downloaded-posted-${clip.id}`}
+                          checked={clip.is_downloaded_posted || false}
+                          onCheckedChange={() => toggleDownloadedPosted(clip.id)}
+                          className="h-5 w-5 border-2 border-green-500 data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
+                        />
+                        <label
+                          htmlFor={`downloaded-posted-${clip.id}`}
+                          className={`text-xs cursor-pointer select-none ${
+                            clip.is_downloaded_posted ? "text-green-600 dark:text-green-400 font-medium" : "text-muted-foreground"
+                          }`}
+                        >
+                          {clip.is_downloaded_posted ? "Downloaded & Posted" : "Mark as downloaded & posted"}
+                        </label>
+                      </div>
                     </div>
                     {/* Script preview button */}
                     {(clip.tts_text || clip.project_name.startsWith("Pipeline:")) && (
@@ -2285,6 +2374,15 @@ function LibrarieContent() {
             title={playingClip.variant_name || `Varianta ${playingClip.variant_index}`}
             videoRef={videoRef}
             scriptText={playingClip.tts_text}
+            qcVerified={playingClip.qc_verified}
+            onToggleQc={() => {
+              toggleQcVerified(playingClip.id);
+              // Update playingClip locally so checkbox reflects immediately
+              setPlayingClip((prev) => prev ? { ...prev, qc_verified: !prev.qc_verified } : null);
+            }}
+            hasVoiceover={playingClip.has_voiceover}
+            onRegenerateVoiceover={() => regenerateVoiceover(playingClip.id)}
+            regeneratingVoiceover={regeneratingVoiceoverId === playingClip.id}
           />
         )}
 

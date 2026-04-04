@@ -3,7 +3,8 @@
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { Button } from "@/components/ui/button";
-import { X } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { X, ShieldCheck, RefreshCw, Loader2 } from "lucide-react";
 import { useEffect, useRef, RefObject } from "react";
 
 interface InlineVideoPlayerProps {
@@ -13,9 +14,19 @@ interface InlineVideoPlayerProps {
   title?: string;
   videoRef?: RefObject<HTMLVideoElement | null>;
   scriptText?: string | null;
+  // QC verification
+  qcVerified?: boolean;
+  onToggleQc?: () => void;
+  // Regenerate voice-over
+  hasVoiceover?: boolean;
+  onRegenerateVoiceover?: () => void;
+  regeneratingVoiceover?: boolean;
 }
 
-export function InlineVideoPlayer({ open, onOpenChange, videoUrl, title, videoRef: externalRef, scriptText }: InlineVideoPlayerProps) {
+export function InlineVideoPlayer({
+  open, onOpenChange, videoUrl, title, videoRef: externalRef, scriptText,
+  qcVerified, onToggleQc, hasVoiceover, onRegenerateVoiceover, regeneratingVoiceover,
+}: InlineVideoPlayerProps) {
   const internalRef = useRef<HTMLVideoElement>(null);
   const videoRef = externalRef || internalRef;
 
@@ -29,9 +40,9 @@ export function InlineVideoPlayer({ open, onOpenChange, videoUrl, title, videoRe
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[400px] p-0 overflow-hidden bg-black border-none [&>button]:hidden">
+      <DialogContent className="max-w-[400px] max-h-[85vh] p-0 overflow-hidden bg-black border-none [&>button]:hidden">
         <VisuallyHidden><DialogTitle>{title || "Video player"}</DialogTitle></VisuallyHidden>
-        <div className="relative">
+        <div className="relative flex flex-col max-h-[85vh]">
           <Button
             variant="ghost"
             size="icon"
@@ -50,9 +61,48 @@ export function InlineVideoPlayer({ open, onOpenChange, videoUrl, title, videoRe
             src={videoUrl}
             controls
             autoPlay
-            className="w-full max-h-[80vh] object-contain"
+            className="w-full max-h-[60vh] object-contain flex-shrink"
             playsInline
           />
+          {/* Action bar: QC checkbox + Regenerate voice-over */}
+          {(onToggleQc || (hasVoiceover && onRegenerateVoiceover)) && (
+            <div className="bg-zinc-900 border-t border-zinc-700 px-4 py-2.5 flex items-center justify-between gap-3">
+              {onToggleQc && (
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={qcVerified || false}
+                    onCheckedChange={() => onToggleQc()}
+                    className="h-5 w-5 border-2 border-blue-500 data-[state=checked]:border-blue-500 data-[state=checked]:bg-blue-500"
+                  />
+                  <label
+                    className={`text-sm cursor-pointer select-none flex items-center gap-1.5 ${
+                      qcVerified ? "text-blue-400 font-medium" : "text-zinc-400"
+                    }`}
+                    onClick={() => onToggleQc()}
+                  >
+                    <ShieldCheck className="h-4 w-4" />
+                    {qcVerified ? "Verificat QC ✓" : "Verificare QC"}
+                  </label>
+                </div>
+              )}
+              {hasVoiceover && onRegenerateVoiceover && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-xs border-zinc-600 text-zinc-300 hover:text-white hover:bg-zinc-800"
+                  onClick={() => onRegenerateVoiceover()}
+                  disabled={regeneratingVoiceover}
+                >
+                  {regeneratingVoiceover ? (
+                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3 w-3 mr-1.5" />
+                  )}
+                  {regeneratingVoiceover ? "Regenerare..." : "Regenerează voice-over"}
+                </Button>
+              )}
+            </div>
+          )}
           {scriptText && (
             <div className="bg-zinc-900 border-t border-zinc-700 px-4 py-3 max-h-[30vh] overflow-y-auto">
               <p className="text-[11px] text-zinc-400 font-medium mb-1.5 uppercase tracking-wider">Script</p>
