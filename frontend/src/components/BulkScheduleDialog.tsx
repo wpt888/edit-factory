@@ -19,6 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import {
   CalendarDays,
   Clock,
@@ -42,6 +43,8 @@ interface ClipInfo {
   raw_video_path: string;
   thumbnail_path?: string;
   project_name: string;
+  srt_content?: string | null;
+  tts_text?: string | null;
 }
 
 interface Integration {
@@ -116,9 +119,34 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
   const [timezone, setTimezone] = useState("Europe/Bucharest");
   const [scheduling, setScheduling] = useState(false);
 
-  // Per-clip captions
+  // YouTube title (shared for all clips in batch)
+  const [youtubeTitle, setYoutubeTitle] = useState("");
+
+  // Per-clip captions — pre-populated from SRT content (cleaned up as flowing text)
   const [perClipCaptions, setPerClipCaptions] = useState<Record<string, string>>({});
   const [captionsExpanded, setCaptionsExpanded] = useState(false);
+
+  // Pre-populate captions from tts_text (preferred) or srt_content when dialog opens
+  useEffect(() => {
+    if (!open) return;
+    const initial: Record<string, string> = {};
+    for (const clip of clips) {
+      // Prefer tts_text (clean script text) over srt_content (needs timecode stripping)
+      // Both need newline collapsing — tts_text has \n\n between sentences (for TTS timing)
+      if (clip.tts_text) {
+        initial[clip.id] = clip.tts_text.replace(/\n+/g, " ").replace(/\s{2,}/g, " ").trim();
+      } else if (clip.srt_content) {
+        // Strip SRT timecodes and sequence numbers, collapse into flowing text
+        const text = clip.srt_content
+          .replace(/\d+\n[\d:,\s\->]+\n/g, "")
+          .replace(/\n+/g, " ")
+          .replace(/\s{2,}/g, " ")
+          .trim();
+        if (text) initial[clip.id] = text;
+      }
+    }
+    setPerClipCaptions(initial);
+  }, [open, clips]);
 
   /* ---------- Fetch integrations ---------- */
 
@@ -276,10 +304,13 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
       const offset = offsetPart?.value?.replace("GMT", "") || "+00:00";
       const scheduleDatetime = `${scheduleDate}T${postTime}:00${offset}`;
 
-      // Build per-clip captions
-      const captions: Record<string, string> = Object.fromEntries(
-        clips.map(c => [c.id, perClipCaptions[c.id] || ""])
-      );
+      // Build per-clip captions — only include non-empty entries so
+      // the backend falls back to the shared caption for the rest
+      const captions: Record<string, string> = {};
+      for (const c of clips) {
+        const txt = (perClipCaptions[c.id] || "").trim();
+        if (txt) captions[c.id] = txt;
+      }
 
       const clipIds = clips.map(c => c.id);
       const results: string[] = [];
@@ -294,6 +325,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
           schedule_date: scheduleDatetime,
           schedule_interval_minutes: 1440,
           timezone,
+          ...(hasYoutubeSelected && youtubeTitle.trim() ? { youtube_title: youtubeTitle.trim() } : {}),
         });
         const data: BulkPublishResponse = await res.json();
         results.push(data.message || `Postiz: ${clipIds.length} clip(uri) programate`);
@@ -330,6 +362,11 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
       setScheduling(false);
     }
   };
+
+  const hasYoutubeSelected = useMemo(
+    () => integrations.some(i => selectedIntegrationIds.has(i.id) && i.type.toLowerCase() === "youtube"),
+    [integrations, selectedIntegrationIds]
+  );
 
   const noPlatformsSelected = selectedIntegrationIds.size === 0 && selectedBufferIds.size === 0;
 
@@ -446,6 +483,26 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
               </div>
             )}
           </div>
+
+          {/* YouTube Title — only when YouTube is among selected integrations */}
+          {hasYoutubeSelected && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="bulk-youtube-title">Titlu YouTube</Label>
+                <span className="text-xs text-muted-foreground">(shared, max 100 caractere)</span>
+              </div>
+              <Input
+                id="bulk-youtube-title"
+                placeholder="Titlu SEO pentru YouTube... (gol = auto-derivat din caption)"
+                value={youtubeTitle}
+                onChange={(e) => setYoutubeTitle(e.target.value.slice(0, 100))}
+                maxLength={100}
+              />
+              <div className="text-xs text-muted-foreground text-right">
+                {youtubeTitle.length}/100
+              </div>
+            </div>
+          )}
 
           {/* Postiz Integrations */}
           {loadingIntegrations ? (

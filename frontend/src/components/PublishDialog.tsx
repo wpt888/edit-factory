@@ -720,9 +720,9 @@ export function PublishDialog({
                   <div className="flex items-start gap-2 text-xs text-yellow-600">
                     <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                     <span>
-                      Caption depaseste limita pe:{" "}
+                      Caption va fi trunchiat automat pe:{" "}
                       {charWarnings
-                        .map((w) => `${w.platform} (${w.limit})`)
+                        .map((w) => `${w.platform} (max ${w.limit})`)
                         .join(", ")}
                     </span>
                   </div>

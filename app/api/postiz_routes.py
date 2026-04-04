@@ -3,6 +3,7 @@ Postiz Social Media Publishing Routes.
 Handles video publishing to social media via Postiz API.
 """
 import asyncio
+import re
 import threading
 import uuid
 import logging
@@ -61,6 +62,7 @@ class BulkPublishRequest(BaseModel):
     schedule_date: Optional[str] = None
     schedule_interval_minutes: int = 30  # Interval between posts for bulk
     save_as_draft: bool = False
+    youtube_title: Optional[str] = None  # Shared YouTube title for all clips in batch
 
 
 class BulkDeleteRequest(BaseModel):
@@ -550,7 +552,8 @@ async def bulk_publish_clips(
         integration_ids=request.integration_ids,
         schedule_start=schedule_dt,
         interval_minutes=request.schedule_interval_minutes,
-        save_as_draft=request.save_as_draft
+        save_as_draft=request.save_as_draft,
+        youtube_title=request.youtube_title
     )
 
     return PublishResponse(
@@ -871,22 +874,23 @@ async def _publish_clip_task(
         )
 
         if result.success:
-            # Track in database (optional)
             repo = get_repository()
             if repo:
+                # Track publication (best-effort — don't block success flow)
                 try:
                     pub_status = "draft" if save_as_draft else ("scheduled" if schedule_date else "published")
                     repo.table_query("editai_postiz_publications", "insert", data={
                         "clip_id": clip_id,
+                        "profile_id": profile_id,
                         "postiz_post_id": result.post_id,
                         "platform": ", ".join(result.platforms) if result.platforms else None,
-                        "caption": caption[:500],  # Truncate for storage
+                        "caption": caption[:500],
                         "scheduled_at": schedule_date.isoformat() if schedule_date else None,
                         "published_at": None if (schedule_date or save_as_draft) else datetime.now(timezone.utc).isoformat(),
                         "status": pub_status
                     })
                 except Exception as e:
-                    logger.warning(f"Failed to track publication (table may not exist): {e}")
+                    logger.warning(f"Failed to track publication: {e}")
 
             if save_as_draft:
                 success_msg = "Saved as draft in Postiz!"
@@ -918,7 +922,8 @@ async def _bulk_publish_task(
     integration_ids: List[str],
     schedule_start: Optional[datetime],
     interval_minutes: int,
-    save_as_draft: bool = False
+    save_as_draft: bool = False,
+    youtube_title: Optional[str] = None
 ):
     """Background task to publish multiple clips using profile-specific Postiz."""
     from app.services.postiz_service import get_postiz_publisher
@@ -956,6 +961,27 @@ async def _bulk_publish_task(
 
                 # Use per-clip caption if available, otherwise shared caption
                 clip_caption = (captions or {}).get(clip["id"], caption)
+                # Fallback: fetch caption from DB if frontend didn't supply one
+                if not clip_caption:
+                    try:
+                        repo = get_repository()
+                        if repo:
+                            content_row = repo.table_query(
+                                "editai_clip_content", "select",
+                                filters=QueryFilters(
+                                    select="tts_text, srt_content",
+                                    eq={"clip_id": clip["id"]}, limit=1,
+                                )
+                            )
+                            if content_row.data:
+                                row = content_row.data[0]
+                                raw = row.get("tts_text") or row.get("srt_content") or ""
+                                # Collapse newlines into flowing text — tts_text has \n\n between sentences
+                                clip_caption = re.sub(r'\s+', ' ', raw).strip()
+                                if clip_caption:
+                                    logger.info(f"[Job {job_id}] Resolved caption from DB for clip {clip['id']} (len={len(clip_caption)})")
+                    except Exception as e:
+                        logger.warning(f"[Job {job_id}] Failed to fetch caption from DB for clip {clip['id']}: {e}")
 
                 # Create post
                 result = await publisher.create_post(
@@ -965,18 +991,28 @@ async def _bulk_publish_task(
                     integration_ids=integration_ids,
                     schedule_date=clip_schedule,
                     integrations_info=integrations_info,
-                    profile_id=profile_id
+                    profile_id=profile_id,
+                    youtube_title=youtube_title
                 )
 
                 if result.success:
                     successful += 1
-                    # Track publication in database (same as single publish)
-                    try:
-                        repo = get_repository()
-                        if repo:
+                    repo = get_repository()
+                    if repo:
+                        # Always update clip status first
+                        try:
+                            repo.update_clip(clip["id"], {
+                                "postiz_status": "sent",
+                                "updated_at": datetime.now(timezone.utc).isoformat()
+                            })
+                        except Exception as e:
+                            logger.warning(f"Failed to update clip status for {clip['id']}: {e}")
+                        # Track publication (best-effort)
+                        try:
                             pub_status = "draft" if save_as_draft else ("scheduled" if clip_schedule else "published")
                             repo.table_query("editai_postiz_publications", "insert", data={
                                 "clip_id": clip["id"],
+                                "profile_id": profile_id,
                                 "postiz_post_id": result.post_id,
                                 "platform": ", ".join(result.platforms) if result.platforms else None,
                                 "caption": (clip_caption or "")[:500],
@@ -984,13 +1020,8 @@ async def _bulk_publish_task(
                                 "published_at": None if (clip_schedule or save_as_draft) else datetime.now(timezone.utc).isoformat(),
                                 "status": pub_status
                             })
-                            # Update clip postiz_status to "sent" on actual publish
-                            repo.update_clip(clip["id"], {
-                                "postiz_status": "sent",
-                                "updated_at": datetime.now(timezone.utc).isoformat()
-                            })
-                    except Exception as pub_err:
-                        logger.warning(f"Failed to track bulk publication for clip {clip['id']}: {pub_err}")
+                        except Exception as e:
+                            logger.warning(f"Failed to track publication for clip {clip['id']}: {e}")
                 else:
                     failed += 1
                     logger.error(f"Failed to publish clip {clip['id']}: {result.error}")

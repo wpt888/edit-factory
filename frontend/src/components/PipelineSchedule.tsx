@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -155,6 +156,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
   const [postTime, setPostTime] = useState(draft?.postTime || "09:00");
   const [timezone, setTimezone] = useState(draft?.timezone || "Europe/Bucharest");
   const [perVariantCaptions, setPerVariantCaptions] = useState<Record<string, string>>(draft?.perVariantCaptions || {});
+  const [youtubeTitle, setYoutubeTitle] = useState("");
   const [scheduling, setScheduling] = useState(false);
   const [loadingIntegrations, setLoadingIntegrations] = useState(_integrationsCache === undefined);
   const [integrationError, setIntegrationError] = useState(false);
@@ -381,6 +383,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
           schedule_date: scheduleDatetime,
           schedule_interval_minutes: 1440,
           timezone,
+          ...(hasYoutubeSelected && youtubeTitle.trim() ? { youtube_title: youtubeTitle.trim() } : {}),
         });
         const data = await res.json();
         results.push(data.message || `Postiz: ${selectedClipIds.size} clip(s) scheduled`);
@@ -414,6 +417,11 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
       setScheduling(false);
     }
   };
+
+  const hasYoutubeSelected = useMemo(
+    () => integrations.some(i => selectedIntegrationIds.has(i.id) && i.type.toLowerCase() === "youtube"),
+    [integrations, selectedIntegrationIds]
+  );
 
   const hasCompletedClips = completedClips.length > 0;
 
@@ -656,6 +664,26 @@ export function PipelineSchedule({ completedClips, initialCaptions, captionSlot 
                   <RefreshCw className="size-3" />
                   Refresh
                 </Button>
+              </div>
+            )}
+
+            {/* YouTube Title — only when YouTube is among selected integrations */}
+            {hasYoutubeSelected && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="pipeline-youtube-title">Titlu YouTube</Label>
+                  <span className="text-xs text-muted-foreground">(shared, max 100 caractere)</span>
+                </div>
+                <Input
+                  id="pipeline-youtube-title"
+                  placeholder="Titlu SEO pentru YouTube... (gol = auto-derivat din caption)"
+                  value={youtubeTitle}
+                  onChange={(e) => setYoutubeTitle(e.target.value.slice(0, 100))}
+                  maxLength={100}
+                />
+                <div className="text-xs text-muted-foreground text-right">
+                  {youtubeTitle.length}/100
+                </div>
               </div>
             )}
 

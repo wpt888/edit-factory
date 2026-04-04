@@ -3,6 +3,7 @@ Postiz Social Media Publishing Service.
 Handles video uploads and post scheduling via Postiz API.
 """
 import os
+import re
 import logging
 import threading
 import time
@@ -209,6 +210,73 @@ class PostizPublisher:
                 logger.info(f"Uploaded video to Postiz: id={media.id}, path={media.path}")
             return media
 
+    @staticmethod
+    def _derive_youtube_title(caption: str, max_length: int = 100) -> str:
+        """Derive a YouTube title from a caption string.
+
+        Strips SRT timecodes if present, then truncates at the last sentence
+        boundary that fits within *max_length* characters.  Falls back to
+        word-boundary truncation with ellipsis when no sentence break is found.
+        """
+        if not caption or not caption.strip():
+            return "Video"
+
+        # Strip SRT timecodes (e.g. "1\n00:00:01,000 --> 00:00:03,000\n")
+        text = re.sub(r'\d+\n[\d:,\s\-]+>[\d:,\s\-]+\n', '', caption)
+        # Collapse whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
+
+        if not text:
+            return "Video"
+
+        if len(text) <= max_length:
+            return text
+
+        # Try to cut at the last sentence boundary within max_length
+        truncated = text[:max_length]
+        # Look for sentence-ending punctuation followed by space
+        last_sentence = max(
+            truncated.rfind('. '),
+            truncated.rfind('! '),
+            truncated.rfind('? '),
+        )
+        if last_sentence > max_length // 3:
+            return truncated[:last_sentence + 1].strip()
+
+        # Fall back to word boundary
+        last_space = truncated.rfind(' ')
+        if last_space > max_length // 3:
+            return truncated[:last_space].strip() + '...'
+
+        # Last resort: hard truncate
+        return truncated.strip() + '...'
+
+    # Caption character limits per platform (enforced by the networks themselves)
+    PLATFORM_CHAR_LIMITS: Dict[str, int] = {
+        "x": 280,
+        "twitter": 280,
+        "bluesky": 300,
+        "threads": 500,
+        "tiktok": 150,
+        "instagram": 2200,
+        "instagram-standalone": 2200,
+        "youtube": 5000,
+        "linkedin": 3000,
+        "linkedin-page": 3000,
+        "facebook": 63206,
+    }
+
+    @classmethod
+    def _truncate_caption(cls, caption: str, platform_type: str) -> str:
+        """Truncate caption to platform character limit, appending '...' if needed."""
+        limit = cls.PLATFORM_CHAR_LIMITS.get(platform_type.lower())
+        if limit is None or len(caption) <= limit:
+            return caption
+        # Cut at (limit - 3) to leave room for ellipsis
+        truncated = caption[: max(limit - 3, 0)] + "..."
+        logger.info(f"Caption truncated for {platform_type}: {len(caption)} -> {len(truncated)} chars (limit {limit})")
+        return truncated
+
     def _get_platform_settings(self, platform_type: str) -> Dict[str, Any]:
         """Get platform-specific settings for post creation."""
         settings_map = {
@@ -270,12 +338,15 @@ class PostizPublisher:
             # Use platform-specific caption if provided, otherwise fall back to default
             post_caption = captions_per_platform.get(int_id, caption)
 
+            # Enforce platform character limits (truncate with ellipsis)
+            post_caption = self._truncate_caption(post_caption, platform_type)
+
             # YouTube requires a non-empty title (min 2 chars)
             if platform_type.lower() == "youtube":
                 if youtube_title:
                     settings["title"] = youtube_title[:100]
-                elif not settings.get("title"):
-                    settings["title"] = (post_caption or "Video")[:100]
+                else:
+                    settings["title"] = self._derive_youtube_title(post_caption)
 
             posts.append({
                 "integration": {"id": int_id},

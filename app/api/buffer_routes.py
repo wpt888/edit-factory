@@ -4,6 +4,7 @@ Publishes videos to TikTok (and other platforms) via Buffer GraphQL API.
 Videos are temporarily uploaded to Supabase Storage for public URL access.
 """
 import asyncio
+import re
 import threading
 import uuid
 import logging
@@ -483,6 +484,7 @@ async def _bulk_publish_task(
 
     try:
         publisher = get_buffer_publisher(profile_id)
+        repo = get_repository()
         logger.info(f"[Job {job_id}] Publisher ready, processing {len(clips)} clips, schedule_start={schedule_start}")
         total = len(clips)
         successful = 0
@@ -505,8 +507,27 @@ async def _bulk_publish_task(
                     clip_schedule = schedule_start + timedelta(minutes=idx * interval_minutes)
 
                 clip_caption = (captions or {}).get(clip["id"], caption)
+                # Fallback: fetch caption from DB if frontend didn't supply one
+                if not clip_caption and repo:
+                    try:
+                        content_row = repo.table_query(
+                            "editai_clip_content", "select",
+                            filters=QueryFilters(
+                                select="tts_text, srt_content",
+                                eq={"clip_id": clip["id"]}, limit=1,
+                            )
+                        )
+                        if content_row.data:
+                            row = content_row.data[0]
+                            raw = row.get("tts_text") or row.get("srt_content") or ""
+                            # Collapse newlines into flowing text — tts_text has \n\n between sentences
+                            clip_caption = re.sub(r'\s+', ' ', raw).strip()
+                            if clip_caption:
+                                logger.info(f"[Job {job_id}] Resolved caption from DB for clip {clip['id']} (len={len(clip_caption)})")
+                    except Exception as e:
+                        logger.warning(f"[Job {job_id}] Failed to fetch caption from DB for clip {clip['id']}: {e}")
                 # TikTok via Buffer has 150 char limit
-                clip_caption = smart_truncate(clip_caption, 150)
+                clip_caption = smart_truncate(clip_caption or "", 150)
                 logger.info(f"[Job {job_id}] Calling create_post: url={public_url[:60]}..., schedule={clip_schedule}, caption_len={len(clip_caption or '')}")
 
                 result = await publisher.create_post(
@@ -520,7 +541,6 @@ async def _bulk_publish_task(
 
                 if result.success:
                     successful += 1
-                    repo = get_repository()
                     if repo:
                         # Always update clip status (even if publication tracking fails)
                         try:
