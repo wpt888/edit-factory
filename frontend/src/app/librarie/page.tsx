@@ -41,6 +41,7 @@ import {
   Tag as TagIcon,
   ImageIcon,
   Calendar,
+  CalendarClock,
   Send,
   Copy,
 } from "lucide-react";
@@ -54,6 +55,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { InlineVideoPlayer } from "@/components/inline-video-player";
 import { ClipHoverPreview } from "@/components/clip-hover-preview";
 import { ClipTagEditor } from "@/components/clip-tag-editor";
+import { BulkScheduleDialog } from "@/components/BulkScheduleDialog";
 import {
   Dialog,
   DialogContent,
@@ -186,6 +188,7 @@ function LibrarieContent() {
   useEffect(() => { selectedClipIdsRef.current = selectedClipIds; }, [selectedClipIds]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkScheduleOpen, setBulkScheduleOpen] = useState(false);
 
   // View mode (library vs trash)
   const [viewMode, setViewMode] = useState<"library" | "trash">("library");
@@ -410,6 +413,14 @@ function LibrarieContent() {
     return result;
   }, [clips, searchQuery, filterSubtitles, filterVoiceover, filterPostiz, filterTiktok, filterSocialPosted, filterTag]);
 
+  // Ordered selected clips for bulk schedule dialog (preserves selection order from Set)
+  const orderedSelectedClips = useMemo(() => {
+    const clipMap = new Map(clips.map(c => [c.id, c]));
+    return Array.from(selectedClipIds)
+      .map(id => clipMap.get(id))
+      .filter((c): c is ClipWithProject => !!c);
+  }, [clips, selectedClipIds]);
+
   // Fetch Postiz connection status
   const fetchPostizStatus = async () => {
     try {
@@ -568,10 +579,9 @@ function LibrarieContent() {
     }
   };
 
-  // Caption expand state
-  const [expandedCaptionId, setExpandedCaptionId] = useState<string | null>(null);
   const [scriptDialogClip, setScriptDialogClip] = useState<ClipWithProject | null>(null);
   const [loadingScriptId, setLoadingScriptId] = useState<string | null>(null);
+  const [captionDialogClip, setCaptionDialogClip] = useState<ClipWithProject | null>(null);
 
   // Get Postiz status badge
   const getPostizBadge = (clip: ClipWithProject) => {
@@ -669,6 +679,19 @@ function LibrarieContent() {
       setScriptDialogClip({ ...clip, tts_text: content.tts_text });
     } else {
       setScriptDialogClip(clip);
+    }
+  }, [loadClipContent]);
+
+  const openCaptionDialog = useCallback(async (clip: ClipWithProject) => {
+    if (!clip.srt_content) {
+      const content = await loadClipContent(clip.id);
+      if (!content?.srt_content) {
+        toast.error("Caption not available for this clip");
+        return;
+      }
+      setCaptionDialogClip({ ...clip, srt_content: content.srt_content });
+    } else {
+      setCaptionDialogClip(clip);
     }
   }, [loadClipContent]);
 
@@ -1714,6 +1737,17 @@ function LibrarieContent() {
                     )}
                     Send to Postiz
                   </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-primary text-primary hover:bg-primary/10 disabled:opacity-50"
+                    onClick={() => setBulkScheduleOpen(true)}
+                    disabled={bulkDeleting || bulkUploading}
+                    title="Programează clipurile selectate în cascadă (1 post/zi)"
+                  >
+                    <CalendarClock className="h-4 w-4 mr-2" />
+                    Schedule
+                  </Button>
                 </div>
               </div>
             </CardContent>
@@ -2087,24 +2121,24 @@ function LibrarieContent() {
                         </button>
                       </div>
                     )}
-                    {/* Caption preview */}
-                    {clip.srt_content && (
+                    {/* Caption preview button */}
+                    {(clip.srt_content || clip.project_name.startsWith("Pipeline:")) && (
                       <div
                         className="mt-1.5"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <button
-                          className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
-                          onClick={() => setExpandedCaptionId(expandedCaptionId === clip.id ? null : clip.id)}
+                          className="text-xs text-emerald-500 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300 flex items-center gap-1 transition-colors font-medium"
+                          onClick={() => void openCaptionDialog(clip)}
+                          disabled={loadingScriptId === clip.id}
                         >
-                          <FileText className="h-3 w-3" />
-                          {expandedCaptionId === clip.id ? "Hide caption" : "Show caption"}
+                          {loadingScriptId === clip.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <FileText className="h-3 w-3" />
+                          )}
+                          {loadingScriptId === clip.id ? "Loading caption..." : "Show caption"}
                         </button>
-                        {expandedCaptionId === clip.id && (
-                          <div className="mt-1 p-1.5 bg-muted/50 rounded text-xs text-muted-foreground max-h-24 overflow-y-auto whitespace-pre-wrap leading-relaxed">
-                            {clip.srt_content.replace(/\d+\n[\d:,\s->]+\n/g, "").trim()}
-                          </div>
-                        )}
                       </div>
                     )}
                   </CardContent>
@@ -2144,6 +2178,11 @@ function LibrarieContent() {
             videoPath={publishDialogClip.final_video_path || publishDialogClip.raw_video_path}
             contextText={publishDialogClip.context_text || undefined}
             projectName={publishDialogClip.project_name}
+            initialCaption={
+              publishDialogClip.srt_content
+                ? publishDialogClip.srt_content.replace(/\d+\n[\d:,\s->]+\n/g, "").replace(/\n+/g, " ").replace(/\s{2,}/g, " ").trim()
+                : undefined
+            }
             open={!!publishDialogClip}
             onOpenChange={(open) => {
               if (!open) setPublishDialogClip(null);
@@ -2198,6 +2237,40 @@ function LibrarieContent() {
               >
                 <Copy className="h-4 w-4 mr-2" />
                 Copy script
+              </Button>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Caption Dialog */}
+        <Dialog open={!!captionDialogClip} onOpenChange={(open) => { if (!open) setCaptionDialogClip(null); }}>
+          <DialogContent className="max-w-lg max-h-[80vh]">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <FileText className="h-5 w-5 text-emerald-500" />
+                Caption — {captionDialogClip?.variant_name || `Variant ${(captionDialogClip?.variant_index ?? 0) + 1}`}
+              </DialogTitle>
+              <p className="text-sm text-muted-foreground">{captionDialogClip?.project_name}</p>
+            </DialogHeader>
+            <div className="overflow-y-auto max-h-[60vh] p-4 bg-muted/30 rounded-lg border">
+              <p className="text-sm leading-relaxed">
+                {captionDialogClip?.srt_content
+                  ? captionDialogClip.srt_content.replace(/\d+\n[\d:,\s->]+\n/g, "").replace(/\n+/g, " ").replace(/\s{2,}/g, " ").trim()
+                  : "No caption available"}
+              </p>
+            </div>
+            {captionDialogClip?.srt_content && (
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  const cleanCaption = captionDialogClip.srt_content!.replace(/\d+\n[\d:,\s->]+\n/g, "").replace(/\n+/g, " ").replace(/\s{2,}/g, " ").trim();
+                  navigator.clipboard.writeText(cleanCaption);
+                  toast.success("Caption copied to clipboard");
+                }}
+              >
+                <Copy className="h-4 w-4 mr-2" />
+                Copy caption
               </Button>
             )}
           </DialogContent>
@@ -2259,6 +2332,17 @@ function LibrarieContent() {
                     Send to Postiz
                   </Button>
                   <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-primary text-primary hover:bg-primary/10 disabled:opacity-50"
+                    onClick={() => setBulkScheduleOpen(true)}
+                    disabled={bulkDeleting || bulkUploading}
+                    title="Programează clipurile selectate în cascadă (1 post/zi)"
+                  >
+                    <CalendarClock className="h-4 w-4 mr-2" />
+                    Schedule
+                  </Button>
+                  <Button
                     variant="destructive"
                     size="sm"
                     onClick={openBulkDeleteConfirm}
@@ -2276,6 +2360,16 @@ function LibrarieContent() {
             </div>
           </div>
         )}
+
+        {/* Bulk Schedule Dialog */}
+        <BulkScheduleDialog
+          open={bulkScheduleOpen}
+          onOpenChange={setBulkScheduleOpen}
+          clips={orderedSelectedClips}
+          onScheduled={() => {
+            setSelectedClipIds(new Set());
+          }}
+        />
       </main>
     </div>
   );
