@@ -97,7 +97,7 @@ const PLATFORM_CHAR_LIMITS: Record<string, number> = {
   linkedin: 3000,
   "linkedin-page": 3000,
   facebook: 63206,
-  tiktok: 4000,
+  tiktok: 150,
 };
 
 const PLATFORM_NAMES: Record<string, string> = {
@@ -1678,8 +1678,8 @@ export default function CreateImagePage() {
                         <div className="flex items-start gap-2 text-xs text-yellow-600">
                           <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                           <span>
-                            Caption exceeds limit on:{" "}
-                            {charWarnings.map((w) => `${w.platform} (${w.limit})`).join(", ")}
+                            Caption va fi trunchiat automat pe:{" "}
+                            {charWarnings.map((w) => `${w.platform} (max ${w.limit})`).join(", ")}
                           </span>
                         </div>
                       )}
@@ -1712,8 +1712,7 @@ export default function CreateImagePage() {
                           publishing ||
                           selectedIntegrationIds.size === 0 ||
                           !caption.trim() ||
-                          (scheduleEnabled && !scheduleDate) ||
-                          (caption.length > minCharLimit)
+                          (scheduleEnabled && !scheduleDate)
                         }
                       >
                         {scheduleEnabled ? (
