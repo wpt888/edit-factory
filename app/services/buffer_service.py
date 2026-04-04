@@ -10,6 +10,7 @@ import logging
 import threading
 import time
 import uuid
+import asyncio
 import httpx
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
@@ -187,7 +188,12 @@ class BufferPublisher:
             resp = httpx.put(
                 upload_url,
                 content=f,
-                headers={"Content-Type": "video/mp4"},
+                headers={
+                    "Content-Type": "video/mp4",
+                    "Content-Length": str(video_path.stat().st_size),
+                    "Content-Disposition": f'inline; filename="{video_path.name}"',
+                    "Cache-Control": "public, max-age=86400",
+                },
                 timeout=300.0,
             )
 
@@ -195,8 +201,52 @@ class BufferPublisher:
             body_preview = _truncate_response_body(resp.text)
             raise Exception(f"MinIO upload failed: HTTP {resp.status_code} - {body_preview}")
 
+        diagnostics = self.verify_public_video_url(
+            upload_url,
+            expected_size=video_path.stat().st_size,
+        )
         logger.info(f"Uploaded to MinIO: {upload_url}")
+        logger.info(
+            "Verified Buffer video URL: status=%s, content_type=%s, content_length=%s, accept_ranges=%s",
+            diagnostics.get("status_code"),
+            diagnostics.get("content_type"),
+            diagnostics.get("content_length"),
+            diagnostics.get("accept_ranges"),
+        )
         return object_key, upload_url
+
+    def verify_public_video_url(self, public_url: str, expected_size: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Verify that the uploaded object is reachable as a public video URL.
+
+        Some storage proxies do not respond correctly to HEAD, so we fall back to
+        a ranged GET to confirm third-party fetchability before asking Buffer to
+        ingest the asset.
+        """
+        timeout = httpx.Timeout(30.0, connect=10.0)
+        last_error: Optional[str] = None
+
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            try:
+                response = client.head(public_url)
+                if response.status_code == 200:
+                    return _validate_public_video_response(response, expected_size)
+                last_error = f"HEAD returned HTTP {response.status_code}"
+            except Exception as exc:
+                last_error = f"HEAD failed: {exc}"
+
+            try:
+                response = client.get(
+                    public_url,
+                    headers={"Range": "bytes=0-0"},
+                )
+                if response.status_code in (200, 206):
+                    return _validate_public_video_response(response, expected_size)
+                last_error = f"Range GET returned HTTP {response.status_code}"
+            except Exception as exc:
+                last_error = f"Range GET failed: {exc}"
+
+        raise Exception(f"Public video URL verification failed for {public_url}: {last_error}")
 
     def delete_from_storage(self, storage_path: str) -> bool:
         """Delete a video from MinIO via HTTP DELETE through the Kong gateway."""
@@ -385,6 +435,34 @@ class BufferPublisher:
         logger.info(f"Post {post_id} cleanup timeout after {max_wait}s — MinIO lifecycle will handle expiry")
 
 
+    def schedule_cleanup_monitor(self, post_id: str, storage_path: str, max_wait: int = 7200, poll_interval: int = 30):
+        """
+        Start a best-effort monitor that deletes the storage object only after
+        Buffer indicates the media finished processing.
+        """
+        if not post_id or not storage_path:
+            return
+
+        def _runner():
+            try:
+                asyncio.run(self.wait_and_cleanup(
+                    post_id=post_id,
+                    storage_path=storage_path,
+                    max_wait=max_wait,
+                    poll_interval=poll_interval,
+                ))
+            except Exception as exc:
+                logger.warning(f"Cleanup monitor failed for post {post_id}: {exc}")
+
+        thread = threading.Thread(
+            target=_runner,
+            name=f"buffer-cleanup-{post_id[:8]}",
+            daemon=True,
+        )
+        thread.start()
+        logger.info(f"Started Buffer cleanup monitor for post {post_id}")
+
+
 def _gql_string(s: str) -> str:
     """Escape a string for inline GraphQL."""
     escaped = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "")
@@ -393,8 +471,39 @@ def _gql_string(s: str) -> str:
 
 async def _async_sleep(seconds: int):
     """Async sleep helper."""
-    import asyncio
     await asyncio.sleep(seconds)
+
+
+def _validate_public_video_response(response: httpx.Response, expected_size: Optional[int] = None) -> Dict[str, Any]:
+    """Validate the key response headers on the public video URL."""
+    headers = response.headers
+    content_type = (headers.get("content-type") or "").split(";")[0].strip().lower()
+    content_length = headers.get("content-length")
+    accept_ranges = headers.get("accept-ranges")
+
+    if content_type and not (content_type.startswith("video/") or content_type == "application/octet-stream"):
+        raise Exception(f"Unexpected Content-Type for public video URL: {content_type}")
+
+    if expected_size is not None and content_length:
+        try:
+            actual_size = int(content_length)
+            if actual_size <= 0:
+                raise Exception("Content-Length is zero")
+            if response.status_code == 200 and actual_size != expected_size:
+                logger.warning(
+                    "Public video URL size mismatch: expected=%s actual=%s",
+                    expected_size,
+                    actual_size,
+                )
+        except ValueError:
+            logger.warning(f"Invalid Content-Length header on public video URL: {content_length}")
+
+    return {
+        "status_code": response.status_code,
+        "content_type": content_type or None,
+        "content_length": content_length,
+        "accept_ranges": accept_ranges,
+    }
 
 
 # ── Profile-aware factory with instance caching ──

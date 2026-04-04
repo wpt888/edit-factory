@@ -406,13 +406,22 @@ async def _publish_clip_task(
         )
 
         if result.success:
-            # Step 3: Track in database
             repo = get_repository()
             if repo:
+                # Always update clip status (even if publication tracking fails)
+                try:
+                    repo.update_clip(clip_id, {
+                        "postiz_status": "sent",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to update clip status: {e}")
+                # Track publication (best-effort)
                 try:
                     pub_status = "scheduled" if schedule_date else "published"
                     repo.table_query("editai_postiz_publications", "insert", data={
                         "clip_id": clip_id,
+                        "profile_id": profile_id,
                         "postiz_post_id": f"buffer:{result.post_id}",
                         "platform": "tiktok (buffer)",
                         "caption": caption[:500],
@@ -421,12 +430,14 @@ async def _publish_clip_task(
                         "status": pub_status,
                         "storage_path": storage_path,
                     })
-                    repo.update_clip(clip_id, {
-                        "postiz_status": "sent",
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
-                    })
                 except Exception as e:
                     logger.warning(f"Failed to track Buffer publication: {e}")
+
+            if result.post_id and storage_path:
+                publisher.schedule_cleanup_monitor(
+                    post_id=result.post_id,
+                    storage_path=storage_path,
+                )
 
             # Cleanup is handled by the server-side cron job (minio-cleanup.sh)
             # which deletes videos 20 min after scheduled_at. No eager deletion —
@@ -509,13 +520,22 @@ async def _bulk_publish_task(
 
                 if result.success:
                     successful += 1
-                    # Track and schedule cleanup
                     repo = get_repository()
                     if repo:
+                        # Always update clip status (even if publication tracking fails)
+                        try:
+                            repo.update_clip(clip["id"], {
+                                "postiz_status": "sent",
+                                "updated_at": datetime.now(timezone.utc).isoformat(),
+                            })
+                        except Exception as e:
+                            logger.warning(f"Failed to update clip status for {clip['id']}: {e}")
+                        # Track publication (best-effort)
                         try:
                             pub_status = "scheduled" if clip_schedule else "published"
                             repo.table_query("editai_postiz_publications", "insert", data={
                                 "clip_id": clip["id"],
+                                "profile_id": profile_id,
                                 "postiz_post_id": f"buffer:{result.post_id}",
                                 "platform": "tiktok (buffer)",
                                 "caption": (clip_caption or "")[:500],
@@ -524,12 +544,14 @@ async def _bulk_publish_task(
                                 "status": pub_status,
                                 "storage_path": storage_path,
                             })
-                            repo.update_clip(clip["id"], {
-                                "postiz_status": "sent",
-                                "updated_at": datetime.now(timezone.utc).isoformat(),
-                            })
                         except Exception as e:
                             logger.warning(f"Failed to track Buffer publication for clip {clip['id']}: {e}")
+
+                    if result.post_id and storage_path:
+                        publisher.schedule_cleanup_monitor(
+                            post_id=result.post_id,
+                            storage_path=storage_path,
+                        )
 
                     # Cleanup handled by server-side cron (minio-cleanup.sh)
                 else:
