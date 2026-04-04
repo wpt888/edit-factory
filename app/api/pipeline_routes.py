@@ -127,6 +127,154 @@ def _build_effective_pipeline_context(
             product_blocks.append(f"[Product: {title}]")
 
     return "\n\n".join(part for part in [manual_context, *product_blocks] if part).strip()
+
+
+def _restore_missing_tts_audio_paths(
+    pipeline_id: str,
+    pipeline: dict,
+    *,
+    persist: bool = True,
+) -> int:
+    """Repair missing Step 2 TTS audio paths for an already-loaded pipeline.
+
+    TTS previews are first generated in temp directories that may be cleaned up
+    hours later. The persistent copy lives in the TTS library (`media/tts/...`),
+    but older in-memory pipeline objects may still point at the now-deleted temp
+    file. This helper reattaches missing variants to the durable library asset
+    and falls back to Step 3 preview audio when available.
+    """
+    scripts = pipeline.get("scripts") or []
+    if not scripts:
+        return 0
+
+    state_lock = _get_pipeline_state_lock(pipeline_id)
+    with state_lock:
+        tts_previews = pipeline.setdefault("tts_previews", {})
+        previews = pipeline.get("previews", {})
+        missing_audio_texts: Dict[int, str] = {}
+
+        for raw_key, raw_value in list(tts_previews.items()):
+            if not isinstance(raw_value, dict):
+                continue
+            try:
+                idx = int(str(raw_key))
+            except (ValueError, TypeError):
+                continue
+            if idx < 0 or idx >= len(scripts):
+                continue
+
+            audio_path_str = raw_value.get("audio_path")
+            if audio_path_str and Path(audio_path_str).exists():
+                continue
+
+            raw_value["audio_path"] = None
+            cleaned_text = strip_product_group_tags(scripts[idx]).strip()
+            if cleaned_text:
+                missing_audio_texts[idx] = cleaned_text
+
+    if not missing_audio_texts:
+        return 0
+
+    restored_entries: Dict[int, Dict[str, Any]] = {}
+    profile_id = pipeline.get("profile_id", "")
+
+    try:
+        repo = get_repository()
+        supabase = repo.get_client() if repo else None
+        if supabase and profile_id:
+            lib_result = (
+                supabase.table("editai_tts_assets")
+                .select("id, tts_text, mp3_path, audio_duration, srt_content, tts_timestamps")
+                .eq("profile_id", profile_id)
+                .eq("status", "ready")
+                .execute()
+            )
+            if lib_result.data:
+                lib_lookup = {}
+                for asset in lib_result.data:
+                    text = (asset.get("tts_text") or "").strip()
+                    path = asset.get("mp3_path")
+                    if text and path:
+                        if Path(path).exists():
+                            lib_lookup[text] = asset
+                        else:
+                            # DB record exists but file missing — check fallback
+                            # location (direct copy from previous generation)
+                            _fb_dir = Path(f"media/tts/{profile_id}")
+                            if _fb_dir.exists():
+                                for _fb_file in _fb_dir.glob("*.mp3"):
+                                    if _fb_file.name.startswith(asset["id"]):
+                                        asset["mp3_path"] = str(_fb_file)
+                                        lib_lookup[text] = asset
+                                        break
+                            if text not in lib_lookup:
+                                logger.warning(
+                                    f"Pipeline {pipeline_id}: library asset {asset['id']} "
+                                    f"mp3 missing on disk: {path}"
+                                )
+
+                for idx, text in missing_audio_texts.items():
+                    match = lib_lookup.get(text)
+                    if not match:
+                        continue
+                    restored_entries[idx] = {
+                        "audio_path": match["mp3_path"],
+                        "library_asset_id": match["id"],
+                    }
+                    if match.get("audio_duration"):
+                        restored_entries[idx]["audio_duration"] = match["audio_duration"]
+                    if match.get("srt_content"):
+                        restored_entries[idx]["srt_content"] = match["srt_content"]
+    except Exception as lib_err:
+        logger.warning(f"Pipeline {pipeline_id}: TTS library restore failed: {lib_err}")
+
+    for idx in missing_audio_texts:
+        if idx in restored_entries:
+            continue
+        preview = previews.get(idx) or previews.get(str(idx))
+        if not isinstance(preview, dict):
+            continue
+        preview_data = preview.get("preview_data", {})
+        preview_audio_path = preview_data.get("audio_path")
+        if not preview_audio_path or not Path(preview_audio_path).exists():
+            continue
+        restored_entries[idx] = {
+            "audio_path": preview_audio_path,
+        }
+        if preview_data.get("audio_duration"):
+            restored_entries[idx]["audio_duration"] = preview_data["audio_duration"]
+        if preview_data.get("srt_content"):
+            restored_entries[idx]["srt_content"] = preview_data["srt_content"]
+
+    if not restored_entries:
+        return 0
+
+    with state_lock:
+        tts_previews = pipeline.setdefault("tts_previews", {})
+        for idx, restored in restored_entries.items():
+            entry = tts_previews.get(idx) or tts_previews.get(str(idx))
+            if not isinstance(entry, dict):
+                continue
+            entry.update(restored)
+            tts_previews[idx] = entry
+            if str(idx) in tts_previews and str(idx) != idx:
+                tts_previews.pop(str(idx), None)
+
+    restored_count = len(restored_entries)
+    logger.info(
+        f"Pipeline {pipeline_id}: restored {restored_count}/{len(missing_audio_texts)} "
+        f"missing TTS audio paths"
+    )
+
+    if persist:
+        try:
+            _db_save_pipeline(pipeline_id, pipeline)
+        except Exception as persist_err:
+            logger.warning(f"Pipeline {pipeline_id}: failed to persist restored TTS paths: {persist_err}")
+
+    return restored_count
+
+
 router = APIRouter(prefix="/pipeline", tags=["Multi-Variant Pipeline"])
 
 # In-memory pipeline state storage
@@ -237,10 +385,12 @@ def _compute_render_fingerprint(render_request, variant_index: int, script_text:
     are identical to the last successful render.
     """
     mo_segment_ids = []
+    mo_transforms = {}
     if render_request.match_overrides:
         mo_variant = render_request.match_overrides.get(variant_index) or render_request.match_overrides.get(str(variant_index))
         if mo_variant:
             mo_segment_ids = sorted(str(m.get("segment_id", "")) for m in mo_variant)
+            mo_transforms = {str(i): m.get("transforms") or {} for i, m in enumerate(mo_variant)}
 
     interstitial = []
     if render_request.interstitial_slides:
@@ -281,6 +431,7 @@ def _compute_render_fingerprint(render_request, variant_index: int, script_text:
         "video_level": render_request.video_level,
         "force_cpu": render_request.force_cpu,
         "match_override_segments": mo_segment_ids,
+        "match_override_transforms": mo_transforms,
         "interstitial_slides": interstitial,
         "pip_overlays": render_request.pip_overlays or {},
         "source_video_ids": sorted(render_request.source_video_ids or []),
@@ -753,8 +904,6 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                 continue
 
         tts_previews = {}
-        _missing_audio_texts = {}  # {int_key: script_text} for library restoration
-        scripts = row.get("scripts") or []
         for k, v in (row.get("tts_previews") or {}).items():
             try:
                 int_k = int(k)
@@ -765,68 +914,6 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             # Verify audio_path still exists on disk
             if isinstance(v, dict) and v.get("audio_path") and not Path(v["audio_path"]).exists():
                 v["audio_path"] = None
-                # Track for library restoration
-                if int_k < len(scripts) and scripts[int_k]:
-                    _missing_audio_texts[int_k] = strip_product_group_tags(scripts[int_k])
-
-        # Auto-restore missing TTS audio from library (handles temp/ cleanup)
-        if _missing_audio_texts:
-            try:
-                _repo = get_repository()
-                _sb = _repo.get_client() if _repo else None
-                if _sb:
-                    _profile_id = row.get("profile_id", "")
-                    _lib_result = _sb.table("editai_tts_assets")\
-                        .select("id, tts_text, mp3_path, audio_duration, srt_content, tts_timestamps")\
-                        .eq("profile_id", _profile_id).eq("status", "ready")\
-                        .execute()
-                    if _lib_result.data:
-                        _lib_lookup = {}
-                        for _asset in _lib_result.data:
-                            _txt = (_asset.get("tts_text") or "").strip()
-                            if _txt and _asset.get("mp3_path") and Path(_asset["mp3_path"]).exists():
-                                _lib_lookup[_txt] = _asset
-                        _restored = 0
-                        for _idx, _text in _missing_audio_texts.items():
-                            _match = _lib_lookup.get(_text.strip())
-                            if _match:
-                                tts_previews[_idx]["audio_path"] = _match["mp3_path"]
-                                tts_previews[_idx]["library_asset_id"] = _match["id"]
-                                if _match.get("audio_duration"):
-                                    tts_previews[_idx]["audio_duration"] = _match["audio_duration"]
-                                if _match.get("srt_content") and not tts_previews[_idx].get("srt_content"):
-                                    tts_previews[_idx]["srt_content"] = _match["srt_content"]
-                                _restored += 1
-                        if _restored:
-                            logger.info(
-                                f"Pipeline {pipeline_id}: restored {_restored}/{len(_missing_audio_texts)} "
-                                f"TTS audio paths from library"
-                            )
-            except Exception as _lib_err:
-                logger.warning(f"Pipeline {pipeline_id}: TTS library restore failed: {_lib_err}")
-
-        # Fallback: restore from Step 3 preview audio (may survive when Step 2 temp is cleaned)
-        _still_missing = [idx for idx in _missing_audio_texts if not tts_previews.get(idx, {}).get("audio_path")]
-        if _still_missing:
-            _previews_raw = row.get("previews") or {}
-            _preview_restored = 0
-            for _idx in _still_missing:
-                _pv = _previews_raw.get(str(_idx)) or _previews_raw.get(_idx)
-                if isinstance(_pv, dict):
-                    _pd = _pv.get("preview_data", {})
-                    _pa = _pd.get("audio_path")
-                    if _pa and Path(_pa).exists():
-                        tts_previews[_idx]["audio_path"] = _pa
-                        if _pd.get("audio_duration"):
-                            tts_previews[_idx]["audio_duration"] = _pd["audio_duration"]
-                        if _pd.get("srt_content") and not tts_previews[_idx].get("srt_content"):
-                            tts_previews[_idx]["srt_content"] = _pd["srt_content"]
-                        _preview_restored += 1
-            if _preview_restored:
-                logger.info(
-                    f"Pipeline {pipeline_id}: restored {_preview_restored} "
-                    f"TTS audio paths from Step 3 preview data"
-                )
 
         # PIP-14: Load preview_renders from DB
         preview_renders = {}
@@ -867,6 +954,8 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "selected_captions": row.get("selected_captions") or {},
             "created_at": row.get("created_at", ""),
         }
+
+        _restore_missing_tts_audio_paths(pipeline_id, pipeline, persist=False)
 
         # Cache in memory
         with _pipelines_lock:
@@ -2309,6 +2398,7 @@ async def generate_variant_tts(
 
         # Auto-save to TTS Library so audio persists beyond temp/ cleanup.
         # Same pattern used by assemble_and_render (assembly_service.py:1757).
+        _persisted = False
         try:
             from app.services.tts_library_service import get_tts_library_service
             tts_lib = get_tts_library_service()
@@ -2329,6 +2419,7 @@ async def generate_variant_tts(
                     with state_lock:
                         pipeline["tts_previews"][variant_index]["audio_path"] = lib_path
                         pipeline["tts_previews"][variant_index]["library_asset_id"] = saved_asset_id
+                    _persisted = True
                     logger.info(
                         f"[Profile {profile.profile_id}] TTS auto-saved to library: "
                         f"asset {saved_asset_id}, path updated to {lib_path}"
@@ -2343,15 +2434,48 @@ async def generate_variant_tts(
                         .eq("tts_text", cleaned_text).limit(1).execute()
                     if _existing.data and _existing.data[0].get("mp3_path"):
                         _lib_path = _existing.data[0]["mp3_path"]
+                        _lib_asset_id = _existing.data[0]["id"]
                         if Path(_lib_path).exists():
                             with state_lock:
                                 pipeline["tts_previews"][variant_index]["audio_path"] = _lib_path
-                                pipeline["tts_previews"][variant_index]["library_asset_id"] = _existing.data[0]["id"]
+                                pipeline["tts_previews"][variant_index]["library_asset_id"] = _lib_asset_id
+                            _persisted = True
                             logger.info(
                                 f"[Profile {profile.profile_id}] TTS dedup: reusing library path {_lib_path}"
                             )
+                        elif Path(str(audio_path)).exists():
+                            # Library file missing on disk — re-copy from temp source
+                            Path(_lib_path).parent.mkdir(parents=True, exist_ok=True)
+                            import shutil
+                            shutil.copy2(str(audio_path), _lib_path)
+                            with state_lock:
+                                pipeline["tts_previews"][variant_index]["audio_path"] = _lib_path
+                                pipeline["tts_previews"][variant_index]["library_asset_id"] = _lib_asset_id
+                            _persisted = True
+                            logger.info(
+                                f"[Profile {profile.profile_id}] TTS dedup: re-copied to library path {_lib_path}"
+                            )
         except Exception as lib_err:
             logger.warning(f"TTS library auto-save failed (non-blocking): {lib_err}")
+
+        # Final fallback: if library save didn't persist the file, copy directly
+        # to media/tts/ so audio survives temp/ cleanup on server restart.
+        if not _persisted and Path(str(audio_path)).exists():
+            try:
+                import shutil
+                _fallback_dir = Path(f"media/tts/{profile.profile_id}")
+                _fallback_dir.mkdir(parents=True, exist_ok=True)
+                _fallback_name = Path(str(audio_path)).name
+                _fallback_path = _fallback_dir / _fallback_name
+                shutil.copy2(str(audio_path), str(_fallback_path))
+                with state_lock:
+                    pipeline["tts_previews"][variant_index]["audio_path"] = str(_fallback_path)
+                logger.info(
+                    f"[Profile {profile.profile_id}] TTS fallback: copied to {_fallback_path} "
+                    f"(library save did not persist)"
+                )
+            except Exception as _fb_err:
+                logger.warning(f"TTS fallback copy failed: {_fb_err}")
 
         # Persist to DB (outside lock)
         logger.info(
@@ -2391,6 +2515,7 @@ async def get_variant_tts_audio(
         pipeline = await asyncio.to_thread(_get_pipeline_or_load, pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
+    _restore_missing_tts_audio_paths(pipeline_id, pipeline)
 
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
@@ -3481,6 +3606,7 @@ async def get_pipeline_status(pipeline_id: str):
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
+    _restore_missing_tts_audio_paths(pipeline_id, pipeline)
 
     # Enforce 30-day TTL
     created_at = pipeline.get("created_at", "")
@@ -3622,6 +3748,7 @@ async def get_pipeline_scripts(pipeline_id: str):
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
+    _restore_missing_tts_audio_paths(pipeline_id, pipeline)
 
     # Build preview_info from stored previews (needed for history restore)
     preview_info: Dict[str, dict] = {}
@@ -3923,6 +4050,7 @@ async def restore_previews(
                 "thumbnail_path": Path(m["thumbnail_path"]).name if m.get("thumbnail_path") else None,
                 "merge_group": m.get("merge_group"),
                 "merge_group_duration": m.get("merge_group_duration"),
+                "transforms": m.get("transforms"),
             }
             for m in pd.get("matches", [])
         ]
@@ -3962,6 +4090,7 @@ async def get_pipeline_audio(
         pipeline = await asyncio.to_thread(_get_pipeline_or_load, pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
+    _restore_missing_tts_audio_paths(pipeline_id, pipeline)
 
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
@@ -4076,10 +4205,16 @@ async def render_preview(
         audio_mtime = str(Path(audio_path_str).stat().st_mtime)
     except OSError:
         audio_mtime = "0"
+    # Include per-segment transforms in fingerprint so changed transforms invalidate cache
+    transforms_hash = hashlib.md5(_json.dumps(
+        {str(i): m.get("transforms") or {} for i, m in enumerate(render_request.match_overrides)},
+        sort_keys=True,
+    ).encode()).hexdigest()[:8]
     fp_parts = seg_parts + [
         f"uri={render_request.ultra_rapid_intro}",
         f"isl={hashlib.md5(_json.dumps([{'url': s.get('imageUrl',''), 'dur': s.get('duration',0), 'anim': s.get('animation',''), 'after': s.get('afterMatchIndex',0)} for s in (render_request.interstitial_slides or [])], sort_keys=True).encode()).hexdigest()[:8]}",
         f"tts={audio_mtime}",
+        f"tfm={transforms_hash}",
     ]
     matches_fingerprint = hashlib.md5("|".join(fp_parts).encode()).hexdigest()[:12]
 
