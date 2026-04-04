@@ -108,6 +108,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
               merge_group: m.merge_group,
               merge_group_duration: m.merge_group_duration,
               duration_override: m.duration_override,
+              transforms: m.transforms,
             })),
             source_video_ids: sourceVideoIds,
             min_segment_duration: minSegmentDuration,

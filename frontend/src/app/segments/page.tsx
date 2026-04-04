@@ -323,6 +323,19 @@ export default function SegmentsPage() {
     )
   ).sort();
 
+  // Sync selected video to URL (?video=<id>)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (selectedVideo) {
+      params.set("video", selectedVideo.id);
+    } else {
+      params.delete("video");
+    }
+    const qs = params.toString();
+    const newUrl = qs ? `/segments?${qs}` : "/segments";
+    window.history.replaceState(null, "", newUrl);
+  }, [selectedVideo]);
+
   // Initial load — re-fetch when profile changes
   const profileId = currentProfile?.id;
   useEffect(() => {
@@ -338,6 +351,21 @@ export default function SegmentsPage() {
     fetchSourceVideos();
     fetchAllSegments();
   }, [profileId, profileLoading, fetchSourceVideos, fetchAllSegments]);
+
+  // Restore video selection from URL on initial load
+  const restoredFromUrl = useRef(false);
+  useEffect(() => {
+    if (restoredFromUrl.current || sourceVideos.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const videoId = params.get("video");
+    if (videoId && !selectedVideo) {
+      const match = sourceVideos.find((v) => v.id === videoId);
+      if (match && match.status !== "processing") {
+        setSelectedVideo(match);
+      }
+    }
+    restoredFromUrl.current = true;
+  }, [sourceVideos, selectedVideo]);
 
   // Actually delete segment (pushes to undo stack)
   const handleDeleteSegment = useCallback(async (segmentId: string) => {

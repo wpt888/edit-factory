@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -16,6 +17,76 @@ import {
 } from "lucide-react";
 import type { SegmentTransform } from "@/types/video-processing";
 import { DEFAULT_SEGMENT_TRANSFORM } from "@/types/video-processing";
+
+/** Click-to-edit numeric value display */
+function EditableValue({
+  value,
+  suffix,
+  min,
+  max,
+  step = 1,
+  onChange,
+}: {
+  value: number;
+  suffix: string;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (v: number) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  const commit = useCallback(() => {
+    setEditing(false);
+    const parsed = parseFloat(draft);
+    if (isNaN(parsed)) return;
+    const clamped = Math.min(max, Math.max(min, parsed));
+    // Round to step precision
+    const rounded = Math.round(clamped / step) * step;
+    onChange(rounded);
+  }, [draft, min, max, step, onChange]);
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        inputMode="decimal"
+        className="w-14 h-5 text-xs text-right font-mono bg-muted border border-border rounded px-1 outline-none focus:ring-1 focus:ring-ring"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") setEditing(false);
+        }}
+      />
+    );
+  }
+
+  return (
+    <span
+      className="text-xs text-muted-foreground font-mono cursor-text hover:text-foreground hover:bg-muted rounded px-1 -mr-1 transition-colors"
+      title="Click to edit"
+      onClick={() => {
+        setDraft(String(value));
+        setEditing(true);
+      }}
+    >
+      {step < 1 ? value.toFixed(2) : value.toFixed(0)}
+      {suffix}
+    </span>
+  );
+}
 
 interface SegmentTransformPanelProps {
   transforms: SegmentTransform;
@@ -78,9 +149,14 @@ export function SegmentTransformPanel({
             <RotateCw className="h-3 w-3" />
             Rotation
           </Label>
-          <span className="text-xs text-muted-foreground font-mono">
-            {transforms.rotation.toFixed(0)}°
-          </span>
+          <EditableValue
+            value={transforms.rotation}
+            suffix="°"
+            min={0}
+            max={360}
+            step={1}
+            onChange={(v) => update({ rotation: v })}
+          />
         </div>
         <Slider
           value={[transforms.rotation]}
@@ -111,9 +187,14 @@ export function SegmentTransformPanel({
             <ZoomIn className="h-3 w-3" />
             Scale
           </Label>
-          <span className="text-xs text-muted-foreground font-mono">
-            {transforms.scale.toFixed(2)}x
-          </span>
+          <EditableValue
+            value={transforms.scale}
+            suffix="x"
+            min={0.1}
+            max={3.0}
+            step={0.01}
+            onChange={(v) => update({ scale: v })}
+          />
         </div>
         <Slider
           value={[transforms.scale * 100]}
@@ -128,9 +209,14 @@ export function SegmentTransformPanel({
       <div className="space-y-1">
         <div className="flex items-center justify-between">
           <Label className="text-xs">Pan X</Label>
-          <span className="text-xs text-muted-foreground font-mono">
-            {transforms.pan_x}px
-          </span>
+          <EditableValue
+            value={transforms.pan_x}
+            suffix="px"
+            min={-500}
+            max={500}
+            step={1}
+            onChange={(v) => update({ pan_x: v })}
+          />
         </div>
         <Slider
           value={[transforms.pan_x]}
@@ -145,9 +231,14 @@ export function SegmentTransformPanel({
       <div className="space-y-1">
         <div className="flex items-center justify-between">
           <Label className="text-xs">Pan Y</Label>
-          <span className="text-xs text-muted-foreground font-mono">
-            {transforms.pan_y}px
-          </span>
+          <EditableValue
+            value={transforms.pan_y}
+            suffix="px"
+            min={-500}
+            max={500}
+            step={1}
+            onChange={(v) => update({ pan_y: v })}
+          />
         </div>
         <Slider
           value={[transforms.pan_y]}
@@ -189,9 +280,14 @@ export function SegmentTransformPanel({
             <Eye className="h-3 w-3" />
             Opacity
           </Label>
-          <span className="text-xs text-muted-foreground font-mono">
-            {Math.round(transforms.opacity * 100)}%
-          </span>
+          <EditableValue
+            value={transforms.opacity * 100}
+            suffix="%"
+            min={0}
+            max={100}
+            step={1}
+            onChange={(v) => update({ opacity: v / 100 })}
+          />
         </div>
         <Slider
           value={[transforms.opacity * 100]}

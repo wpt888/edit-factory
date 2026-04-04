@@ -10,7 +10,7 @@ import httpx
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.repositories.factory import get_repository
 
@@ -222,7 +222,7 @@ class PostizPublisher:
             "threads": {"title": ""},
             "facebook": {"title": "", "post_as_story": False},
             "tiktok": {},
-            "youtube": {"title": "", "visibility": "public"}
+            "youtube": {"title": "", "type": "public"}
         }
         return settings_map.get(platform_type.lower(), {})
 
@@ -236,7 +236,8 @@ class PostizPublisher:
         integrations_info: Optional[Dict[str, str]] = None,
         profile_id: Optional[str] = None,
         captions_per_platform: Optional[Dict[str, str]] = None,
-        save_as_draft: bool = False
+        save_as_draft: bool = False,
+        youtube_title: Optional[str] = None
     ) -> PublishResult:
         """
         Create a post on selected platforms.
@@ -269,6 +270,13 @@ class PostizPublisher:
             # Use platform-specific caption if provided, otherwise fall back to default
             post_caption = captions_per_platform.get(int_id, caption)
 
+            # YouTube requires a non-empty title (min 2 chars)
+            if platform_type.lower() == "youtube":
+                if youtube_title:
+                    settings["title"] = youtube_title[:100]
+                elif not settings.get("title"):
+                    settings["title"] = (post_caption or "Video")[:100]
+
             posts.append({
                 "integration": {"id": int_id},
                 "value": [{
@@ -278,16 +286,17 @@ class PostizPublisher:
                 "settings": settings
             })
 
+        # Postiz API requires a date even for immediate posts
+        publish_date = schedule_date or datetime.now(timezone.utc)
+
         # Build request body
         body: Dict[str, Any] = {
             "type": "draft" if save_as_draft else ("schedule" if schedule_date else "now"),
+            "date": publish_date.isoformat(),
             "tags": [],
             "shortLink": False,
             "posts": posts
         }
-
-        if schedule_date:
-            body["date"] = schedule_date.isoformat()
 
         if profile_id:
             logger.info(f"[Profile {profile_id}] Creating Postiz post for {len(integration_ids)} platforms")

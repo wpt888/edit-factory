@@ -2440,6 +2440,7 @@ class AssemblyService:
                 "start_time": seg.get("start_time"),
                 "end_time": seg.get("end_time"),
                 "thumbnail_path": seg.get("thumbnail_path"),
+                "transforms": seg.get("transforms"),
             }
             for seg in segments_data
         ]

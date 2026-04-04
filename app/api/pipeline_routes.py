@@ -4430,6 +4430,7 @@ class GenerateVideoCaptionsRequest(BaseModel):
     template_id: Optional[str] = None
     custom_instructions: Optional[str] = None
     variants_per_clip: int = Field(default=3, ge=1, le=5)
+    generate_youtube_titles: bool = False  # Also generate YouTube titles per variant
 
 
 class VideoCaptionTemplateCreate(BaseModel):
@@ -4488,6 +4489,7 @@ async def generate_video_captions(
 
     # Generate captions per variant
     results: Dict[int, List[str]] = {}
+    yt_titles: Dict[int, List[str]] = {}
     errors: Dict[int, str] = {}
 
     try:
@@ -4546,11 +4548,19 @@ async def generate_video_captions(
         if req.custom_instructions:
             prompt_parts.append(f"Additional instructions: {req.custom_instructions}")
 
-        prompt_parts.append(
-            f"\nReturn ONLY a JSON array of exactly {req.variants_per_clip} caption strings. "
-            "Each caption should be distinct in style/angle while keeping the same message. "
-            "No explanations, no markdown, just the JSON array."
-        )
+        if req.generate_youtube_titles:
+            prompt_parts.append(
+                f"\nReturn ONLY a JSON array of exactly {req.variants_per_clip} objects, "
+                'each with "caption" (string) and "youtube_title" (string, max 100 chars, SEO-optimized, concise). '
+                "The YouTube title must be DIFFERENT from the caption — short, direct, with relevant keywords. "
+                "No explanations, no markdown, just the JSON array."
+            )
+        else:
+            prompt_parts.append(
+                f"\nReturn ONLY a JSON array of exactly {req.variants_per_clip} caption strings. "
+                "Each caption should be distinct in style/angle while keeping the same message. "
+                "No explanations, no markdown, just the JSON array."
+            )
 
         full_prompt = "\n\n".join(prompt_parts)
 
@@ -4567,7 +4577,11 @@ async def generate_video_captions(
                     raw = raw[:raw.rfind("```")].strip()
             captions = _json.loads(raw)
             if isinstance(captions, list):
-                results[variant_idx] = [str(c) for c in captions[:req.variants_per_clip]]
+                if req.generate_youtube_titles and captions and isinstance(captions[0], dict):
+                    results[variant_idx] = [c.get("caption", str(c)) for c in captions[:req.variants_per_clip]]
+                    yt_titles[variant_idx] = [c.get("youtube_title", "")[:100] for c in captions[:req.variants_per_clip]]
+                else:
+                    results[variant_idx] = [str(c) for c in captions[:req.variants_per_clip]]
             else:
                 # Gemini returned non-array — wrap single response
                 results[variant_idx] = [str(captions)]
@@ -4580,12 +4594,21 @@ async def generate_video_captions(
         existing_captions = pipeline.get("captions", {})
         merged_captions = {**existing_captions, **{str(k): v for k, v in results.items()}}
         pipeline["captions"] = merged_captions
+
+        if yt_titles:
+            existing_yt = pipeline.get("youtube_titles", {})
+            merged_yt = {**existing_yt, **{str(k): v for k, v in yt_titles.items()}}
+            pipeline["youtube_titles"] = merged_yt
+
         _db_save_pipeline(req.pipeline_id, pipeline)
 
-    return {
+    response_data: Dict[str, Any] = {
         "captions": {str(k): v for k, v in results.items()},
         "errors": {str(k): v for k, v in errors.items()},
     }
+    if yt_titles:
+        response_data["youtube_titles"] = {str(k): v for k, v in yt_titles.items()}
+    return response_data
 
 
 # ============== SAVE SELECTED/EDITED CAPTIONS ==============

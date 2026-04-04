@@ -4,11 +4,13 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 
@@ -46,6 +48,8 @@ interface PublishDialogProps {
   videoPath: string;
   contextText?: string;
   projectName?: string;
+  initialCaption?: string;
+  initialYoutubeTitle?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onPublished?: () => void;
@@ -93,6 +97,8 @@ export function PublishDialog({
   videoPath,
   contextText,
   projectName,
+  initialCaption,
+  initialYoutubeTitle,
   open,
   onOpenChange,
   onPublished,
@@ -104,6 +110,7 @@ export function PublishDialog({
 
   // Caption
   const [caption, setCaption] = useState("");
+  const [youtubeTitle, setYoutubeTitle] = useState("");
   const [generatingCaption, setGeneratingCaption] = useState(false);
 
   // Publish mode: now, schedule, draft, or upload
@@ -133,7 +140,8 @@ export function PublishDialog({
     setProgressStep("");
     setErrorMessage("");
     setPublishJobId(null);
-    setCaption("");
+    setCaption(initialCaption || "");
+    setYoutubeTitle(initialYoutubeTitle || "");
     setPublishMode("now");
     setScheduleDate("");
     setSelectedIds(new Set());
@@ -238,6 +246,15 @@ export function PublishDialog({
   const hasPostizSelected = selectedPostizIds.length > 0;
   const hasBufferSelected = selectedBufferChannels.length > 0;
 
+  // Check if YouTube is among selected platforms
+  const hasYoutubeSelected = useMemo(
+    () => Array.from(selectedIds).some((id) => {
+      const p = platforms.find((pl) => pl.id === id);
+      return p && p.platformType === "youtube";
+    }),
+    [selectedIds, platforms]
+  );
+
   // Draft and Upload modes only work with Postiz
   const hasDraftUpload = hasPostizSelected && !hasBufferSelected;
 
@@ -275,11 +292,15 @@ export function PublishDialog({
       const res = await apiPost("/postiz/generate-caption", {
         clip_id: clipId,
         language: "ro",
+        generate_youtube_title: hasYoutubeSelected,
       });
       const data = await res.json();
       if (data.caption) {
         setCaption(data.caption);
-        toast.success("Caption generat cu AI!");
+        if (data.youtube_title) {
+          setYoutubeTitle(data.youtube_title);
+        }
+        toast.success(data.youtube_title ? "Caption + titlu YouTube generat cu AI!" : "Caption generat cu AI!");
       }
     } catch (err) {
       if (err && typeof err === "object" && "detail" in err) {
@@ -292,16 +313,18 @@ export function PublishDialog({
     }
   };
 
-  // Poll a single job
-  const pollJob = useCallback(async (jobId: string, endpoint: string): Promise<"completed" | "failed" | "pending"> => {
+  // Poll a single job — returns status + error detail if failed
+  const pollJob = useCallback(async (jobId: string, endpoint: string): Promise<{ status: "completed" | "failed" | "pending"; errorDetail?: string }> => {
     try {
       const res = await apiGet(endpoint);
       const data = await res.json();
-      if (data.status === "completed") return "completed";
-      if (data.status === "failed" || data.status === "completed_with_errors") return "failed";
-      return "pending";
+      if (data.status === "completed") return { status: "completed" };
+      if (data.status === "failed" || data.status === "completed_with_errors") {
+        return { status: "failed", errorDetail: data.error_detail || data.step || undefined };
+      }
+      return { status: "pending" };
     } catch {
-      return "pending";
+      return { status: "pending" };
     }
   }, []);
 
@@ -315,6 +338,7 @@ export function PublishDialog({
     const totalJobs = (jobs.postiz ? 1 : 0) + (jobs.buffer ? 1 : 0);
     let completedCount = 0;
     let failedCount = 0;
+    const errorDetails: string[] = [];
 
     const pollOnce = async () => {
       pollCountRef.current++;
@@ -327,12 +351,13 @@ export function PublishDialog({
 
       // Poll Postiz job
       if (jobs.postiz && !completedJobsRef.current.postiz) {
-        const status = await pollJob(jobs.postiz, `/postiz/publish/${jobs.postiz}/progress`);
-        if (status === "completed") {
+        const result = await pollJob(jobs.postiz, `/postiz/publish/${jobs.postiz}/progress`);
+        if (result.status === "completed") {
           completedJobsRef.current.postiz = "done";
           completedCount++;
-        } else if (status === "failed") {
+        } else if (result.status === "failed") {
           completedJobsRef.current.postiz = "failed";
+          if (result.errorDetail) errorDetails.push(`Postiz: ${result.errorDetail}`);
           failedCount++;
           completedCount++;
         }
@@ -340,12 +365,13 @@ export function PublishDialog({
 
       // Poll Buffer job
       if (jobs.buffer && !completedJobsRef.current.buffer) {
-        const status = await pollJob(jobs.buffer, `/buffer/publish/${jobs.buffer}/progress`);
-        if (status === "completed") {
+        const result = await pollJob(jobs.buffer, `/buffer/publish/${jobs.buffer}/progress`);
+        if (result.status === "completed") {
           completedJobsRef.current.buffer = "done";
           completedCount++;
-        } else if (status === "failed") {
+        } else if (result.status === "failed") {
           completedJobsRef.current.buffer = "failed";
+          if (result.errorDetail) errorDetails.push(`Buffer: ${result.errorDetail}`);
           failedCount++;
           completedCount++;
         }
@@ -362,12 +388,15 @@ export function PublishDialog({
 
       if (completedCount >= totalJobs) {
         pollRef.current = null;
-        if (failedCount > 0 && failedCount < totalJobs) {
+        if (failedCount > 0) {
           setDialogState("error");
-          setErrorMessage("Unele platforme au esuat. Verifica logurile.");
-        } else if (failedCount >= totalJobs) {
-          setDialogState("error");
-          setErrorMessage("Publicarea a esuat pe toate platformele.");
+          setErrorMessage(
+            errorDetails.length > 0
+              ? errorDetails.join("\n")
+              : failedCount < totalJobs
+                ? "Unele platforme au esuat."
+                : "Publicarea a esuat."
+          );
         } else {
           setDialogState("success");
           onPublished?.();
@@ -443,6 +472,9 @@ export function PublishDialog({
         }
         if (publishMode === "draft") {
           body.save_as_draft = true;
+        }
+        if (hasYoutubeSelected && youtubeTitle.trim()) {
+          body.youtube_title = youtubeTitle.trim();
         }
 
         const res = await apiPost("/postiz/publish", body);
@@ -528,6 +560,9 @@ export function PublishDialog({
             <Share2 className="h-5 w-5" />
             Publica pe Social Media
           </DialogTitle>
+          <DialogDescription>
+            Selecteaza platformele si configureaza postarea.
+          </DialogDescription>
         </DialogHeader>
 
         {/* Form state */}
@@ -695,6 +730,26 @@ export function PublishDialog({
               </div>
             )}
 
+            {/* YouTube Title — only when YouTube is selected */}
+            {publishMode !== "upload" && hasYoutubeSelected && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="youtube-title">Titlu YouTube</Label>
+                  <span className="text-xs text-muted-foreground">(max 100 caractere)</span>
+                </div>
+                <Input
+                  id="youtube-title"
+                  placeholder="Titlu SEO pentru YouTube..."
+                  value={youtubeTitle}
+                  onChange={(e) => setYoutubeTitle(e.target.value.slice(0, 100))}
+                  maxLength={100}
+                />
+                <div className="text-xs text-muted-foreground text-right">
+                  {youtubeTitle.length}/100
+                </div>
+              </div>
+            )}
+
             {/* Publish mode */}
             <div className="space-y-3">
               <Label>Mod publicare</Label>
@@ -817,11 +872,15 @@ export function PublishDialog({
         {dialogState === "error" && (
           <div className="flex flex-col items-center gap-4 py-8">
             <XCircle className="h-14 w-14 text-red-500" />
-            <div className="text-center">
+            <div className="text-center max-w-lg">
               <p className="text-lg font-semibold">Publicare esuata</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                {errorMessage}
-              </p>
+              <div className="mt-2 space-y-1">
+                {errorMessage.split("\n").map((line, i) => (
+                  <p key={i} className="text-sm text-muted-foreground break-words text-left">
+                    {line}
+                  </p>
+                ))}
+              </div>
             </div>
           </div>
         )}

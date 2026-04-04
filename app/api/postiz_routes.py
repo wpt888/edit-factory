@@ -50,6 +50,7 @@ class PublishRequest(BaseModel):
     schedule_date: Optional[str] = None  # ISO format datetime
     captions_per_platform: Optional[Dict[str, str]] = None  # integration_id → caption
     save_as_draft: bool = False  # Save as draft in Postiz instead of publishing
+    youtube_title: Optional[str] = None  # Separate YouTube title (max 100 chars)
 
 
 class BulkPublishRequest(BaseModel):
@@ -70,6 +71,7 @@ class GenerateCaptionRequest(BaseModel):
     clip_id: str
     platform: Optional[str] = None  # Optional platform hint for tone/length
     language: str = "ro"  # Default Romanian
+    generate_youtube_title: bool = False  # Also generate a YouTube title
 
 
 class BulkDeleteResponse(BaseModel):
@@ -467,7 +469,8 @@ async def publish_clip(
         integration_ids=request.integration_ids,
         schedule_date=schedule_dt,
         captions_per_platform=request.captions_per_platform,
-        save_as_draft=request.save_as_draft
+        save_as_draft=request.save_as_draft,
+        youtube_title=request.youtube_title
     )
 
     return PublishResponse(
@@ -563,12 +566,17 @@ async def get_publish_job_progress(job_id: str, profile: ProfileContext = Depend
     progress = get_publish_progress(job_id)
     if not progress:
         return {"status": "not_found", "percentage": 0}
-    # Sanitize error details for public endpoint
     result = dict(progress)
-    if result.get("status") == "failed" and result.get("step", "").startswith("Error:"):
-        result["step"] = "Publishing failed. Check server logs for details."
-    if result.get("status") == "failed" and result.get("step", "").startswith("Failed:"):
-        result["step"] = "Publishing failed. Check server logs for details."
+    # Expose error details so the frontend can display them
+    if result.get("status") == "failed":
+        raw_step = result.get("step", "")
+        # Extract the meaningful error message
+        error_detail = raw_step
+        for prefix in ("Error: ", "Failed: "):
+            if raw_step.startswith(prefix):
+                error_detail = raw_step[len(prefix):]
+                break
+        result["error_detail"] = error_detail
     return result
 
 
@@ -712,6 +720,17 @@ async def generate_caption(
     lang_map = {"ro": "romana", "en": "engleza"}
     lang_name = lang_map.get(request.language, request.language)
 
+    youtube_title_instruction = ""
+    if request.generate_youtube_title:
+        youtube_title_instruction = """
+- Genereaza si un titlu YouTube separat (max 100 caractere, optimizat SEO, concis si atractiv)
+- Titlul YouTube trebuie sa fie DIFERIT de caption — scurt, direct, cu cuvinte cheie relevante
+
+Returneaza DOAR un JSON valid (fara markdown, fara code blocks) in formatul:
+{"caption": "textul caption-ului", "youtube_title": "titlul pentru YouTube"}"""
+    else:
+        youtube_title_instruction = "\nReturneaza DOAR textul caption-ului, fara alte explicatii."
+
     prompt = f"""Genereaza un caption captivant pentru social media bazat pe informatiile produsului de mai jos.
 
 Produs/Proiect: {project_name}
@@ -728,12 +747,12 @@ Cerinte:
 - NU include ghilimele in jurul textului
 - Fii concis si la obiect
 - Daca ai informatii despre produs, mentioneaza beneficiile cheie
-
-Returneaza DOAR textul caption-ului, fara alte explicatii."""
+{youtube_title_instruction}"""
 
     try:
         from google import genai
         import os
+        import json as _json
 
         # Get API key
         api_key = None
@@ -755,14 +774,36 @@ Returneaza DOAR textul caption-ului, fara alte explicatii."""
         model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
         response = await asyncio.to_thread(client.models.generate_content, model=model_name, contents=[prompt])
-        caption = response.text.strip()
+        raw_text = response.text.strip()
+
+        # Parse response based on mode
+        youtube_title = None
+        if request.generate_youtube_title:
+            # Strip markdown code block wrappers if present
+            cleaned = raw_text
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3].rstrip()
+
+            try:
+                data = _json.loads(cleaned)
+                caption = data.get("caption", cleaned)
+                youtube_title = data.get("youtube_title", "")[:100]
+            except _json.JSONDecodeError:
+                # Fallback: use raw text as caption, derive title
+                caption = raw_text
+                youtube_title = raw_text[:100]
+        else:
+            caption = raw_text
 
         # Remove surrounding quotes if Gemini adds them
         if caption.startswith('"') and caption.endswith('"'):
             caption = caption[1:-1]
 
-        logger.info(f"[Profile {profile.profile_id}] Generated caption ({len(caption)} chars)")
-        return {
+        logger.info(f"[Profile {profile.profile_id}] Generated caption ({len(caption)} chars)" +
+                     (f" + YouTube title ({len(youtube_title)} chars)" if youtube_title else ""))
+        result = {
             "caption": caption,
             "context_used": {
                 "project_name": project_name,
@@ -770,6 +811,9 @@ Returneaza DOAR textul caption-ului, fara alte explicatii."""
                 "has_description": bool(project_description),
             }
         }
+        if youtube_title is not None:
+            result["youtube_title"] = youtube_title
+        return result
 
     except HTTPException:
         raise
@@ -789,7 +833,8 @@ async def _publish_clip_task(
     integration_ids: List[str],
     schedule_date: Optional[datetime],
     captions_per_platform: Optional[Dict[str, str]] = None,
-    save_as_draft: bool = False
+    save_as_draft: bool = False,
+    youtube_title: Optional[str] = None
 ):
     """Background task to publish a single clip using profile-specific Postiz."""
     from app.services.postiz_service import get_postiz_publisher
@@ -821,7 +866,8 @@ async def _publish_clip_task(
             integrations_info=integrations_info,
             profile_id=profile_id,
             captions_per_platform=captions_per_platform,
-            save_as_draft=save_as_draft
+            save_as_draft=save_as_draft,
+            youtube_title=youtube_title
         )
 
         if result.success:

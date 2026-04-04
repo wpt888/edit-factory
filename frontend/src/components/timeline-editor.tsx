@@ -67,6 +67,7 @@ export interface SegmentOption {
   start_time?: number;
   end_time?: number;
   thumbnail_path?: string;
+  transforms?: Record<string, unknown> | null;
 }
 
 export interface InterstitialSlide {
@@ -757,6 +758,7 @@ export function TimelineEditor({
       segment_end_time: segment.end_time,
       thumbnail_path: segment.thumbnail_path,
       product_group: segment.product_group,
+      transforms: segment.transforms,
       is_auto_filled: false,
     };
 
@@ -822,6 +824,7 @@ export function TimelineEditor({
       segment_start_time: updated[dragIndex].segment_start_time,
       segment_end_time: updated[dragIndex].segment_end_time,
       thumbnail_path: updated[dragIndex].thumbnail_path,
+      transforms: updated[dragIndex].transforms,
     };
     const dropSegment = {
       segment_id: updated[dropIndex].segment_id,
@@ -834,6 +837,7 @@ export function TimelineEditor({
       segment_start_time: updated[dropIndex].segment_start_time,
       segment_end_time: updated[dropIndex].segment_end_time,
       thumbnail_path: updated[dropIndex].thumbnail_path,
+      transforms: updated[dropIndex].transforms,
     };
 
     updated[dragIndex] = { ...updated[dragIndex], ...dropSegment };

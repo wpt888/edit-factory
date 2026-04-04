@@ -99,6 +99,7 @@ export interface MatchPreview {
   thumbnail_path?: string;
   merge_group?: number;
   merge_group_duration?: number;
+  transforms?: Record<string, unknown> | null;
 }
 
 interface PreviewData {
@@ -844,6 +845,7 @@ function PipelinePage() {
   const [renderSettings, setRenderSettings] = useState<RenderSettings>({ ...DEFAULT_RENDER_SETTINGS });
   const [publishVariant, setPublishVariant] = useState<VariantStatus | null>(null);
   const [generatedCaptions, setGeneratedCaptions] = useState<Record<string, string>>({});
+  const [generatedYoutubeTitles, setGeneratedYoutubeTitles] = useState<Record<string, string>>({});
 
   // History sidebar
   const [historyPipelines, setHistoryPipelines] = useState<PipelineListItem[]>([]);
@@ -5349,7 +5351,9 @@ function PipelinePage() {
                 contextProducts={contextProducts}
                 onProductsChange={setContextProducts}
                 onCaptionsGenerated={setGeneratedCaptions}
+                onYoutubeTitlesGenerated={setGeneratedYoutubeTitles}
                 initialCaptions={generatedCaptions}
+                initialYoutubeTitles={generatedYoutubeTitles}
               />
             )}
 
@@ -5645,6 +5649,8 @@ function PipelinePage() {
         <PublishDialog
           clipId={publishVariant.clip_id}
           videoPath={publishVariant.final_video_path}
+          initialCaption={generatedCaptions[publishVariant.clip_id] || undefined}
+          initialYoutubeTitle={generatedYoutubeTitles[publishVariant.clip_id] || undefined}
           open={!!publishVariant}
           onOpenChange={(open) => { if (!open) setPublishVariant(null); }}
           onPublished={() => {

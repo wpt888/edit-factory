@@ -96,7 +96,9 @@ interface PipelineCaptionGeneratorProps {
   contextProducts?: ContextProduct[];
   onProductsChange?: (products: ContextProduct[]) => void;
   onCaptionsGenerated: (captions: Record<string, string>) => void;
+  onYoutubeTitlesGenerated?: (titles: Record<string, string>) => void;
   initialCaptions?: Record<string, string>;  // clip_id -> caption text (from DB restore)
+  initialYoutubeTitles?: Record<string, string>;  // clip_id -> youtube title (from DB restore)
 }
 
 const TONES = [
@@ -125,7 +127,9 @@ export function PipelineCaptionGenerator({
   contextProducts = [],
   onProductsChange,
   onCaptionsGenerated,
+  onYoutubeTitlesGenerated,
   initialCaptions,
+  initialYoutubeTitles,
 }: PipelineCaptionGeneratorProps) {
   const isMountedRef = useRef(true);
   useEffect(() => () => { isMountedRef.current = false; }, []);
@@ -168,6 +172,7 @@ export function PipelineCaptionGenerator({
   );
   const [includeHashtags, setIncludeHashtags] = useState(true);
   const [includeCta, setIncludeCta] = useState(true);
+  const [generateYoutubeTitles, setGenerateYoutubeTitles] = useState(false);
   const [customInstructions, setCustomInstructions] = useState("");
 
   // AI generation collapsible — open by default
@@ -200,6 +205,10 @@ export function PipelineCaptionGenerator({
   const [generating, setGenerating] = useState(false);
   // variant_index -> string[] (multiple AI caption options)
   const [generatedCaptions, setGeneratedCaptions] = useState<Record<number, string[]>>({});
+  // variant_index -> string[] (YouTube titles per variant)
+  const [generatedYoutubeTitles, setGeneratedYoutubeTitles] = useState<Record<number, string[]>>({});
+  // variant_index -> manually edited YouTube title
+  const [manualYoutubeTitles, setManualYoutubeTitles] = useState<Record<number, string>>({});
   // variant_index -> selected AI caption index
   const [selectedCaptionIdx, setSelectedCaptionIdx] = useState<Record<number, number>>({});
 
@@ -253,6 +262,22 @@ export function PipelineCaptionGenerator({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clipIdsKey]);
+
+  // Propagate YouTube titles to parent when they change
+  useEffect(() => {
+    if (!onYoutubeTitlesGenerated) return;
+    const titleMap: Record<string, string> = {};
+    for (const clip of completedClips) {
+      const title = manualYoutubeTitles[clip.variant_index];
+      if (title?.trim()) {
+        titleMap[clip.clip_id] = title;
+      }
+    }
+    if (Object.keys(titleMap).length > 0) {
+      onYoutubeTitlesGenerated(titleMap);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manualYoutubeTitles, clipIdsKey]);
 
   /* ---------- Debounced save to backend ---------- */
 
@@ -517,6 +542,7 @@ export function PipelineCaptionGenerator({
         template_id: selectedTemplateId || undefined,
         custom_instructions: customInstructions.trim() || undefined,
         variants_per_clip: 3,
+        generate_youtube_titles: generateYoutubeTitles,
       }, { timeout: 120_000 });
       console.log("[CaptionGenerator] Response status:", res.status);
       const data = await res.json();
@@ -532,6 +558,24 @@ export function PipelineCaptionGenerator({
       }
       console.log("[CaptionGenerator] Parsed captions:", Object.keys(captions).length, "variants");
       setGeneratedCaptions(captions);
+
+      // Parse YouTube titles if generated
+      if (data.youtube_titles) {
+        const ytTitles: Record<number, string[]> = {};
+        for (const [key, val] of Object.entries(data.youtube_titles)) {
+          ytTitles[parseInt(key)] = val as string[];
+        }
+        setGeneratedYoutubeTitles(ytTitles);
+        // Auto-fill manual YouTube title fields with first option
+        const updatedYt: Record<number, string> = { ...manualYoutubeTitles };
+        for (const [varIdx, titles] of Object.entries(ytTitles)) {
+          const idx = Number(varIdx);
+          if (titles && titles.length > 0 && !updatedYt[idx]?.trim()) {
+            updatedYt[idx] = titles[0];
+          }
+        }
+        setManualYoutubeTitles(updatedYt);
+      }
 
       // Auto-select first AI caption for each variant (only if no manual caption)
       const selections: Record<number, number> = {};
@@ -922,6 +966,10 @@ export function PipelineCaptionGenerator({
                   <Checkbox checked={includeCta} onCheckedChange={(v) => setIncludeCta(v === true)} />
                   Include CTA
                 </label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <Checkbox checked={generateYoutubeTitles} onCheckedChange={(v) => setGenerateYoutubeTitles(v === true)} />
+                  YouTube titles
+                </label>
               </div>
 
               {/* Custom instructions */}
@@ -1031,6 +1079,43 @@ export function PipelineCaptionGenerator({
                 <p className="text-xs text-muted-foreground mt-1">
                   {manualCaptions[clip.variant_index].length} characters
                 </p>
+              )}
+
+              {/* YouTube Title — shown when generated or toggle is on */}
+              {(generateYoutubeTitles || manualYoutubeTitles[clip.variant_index]?.trim()) && (
+                <div className="mt-3 space-y-1">
+                  <Label className="text-xs text-muted-foreground">Titlu YouTube (max 100)</Label>
+                  <Input
+                    placeholder="Titlu SEO pentru YouTube..."
+                    value={manualYoutubeTitles[clip.variant_index] || ""}
+                    onChange={(e) => {
+                      setManualYoutubeTitles(prev => ({
+                        ...prev,
+                        [clip.variant_index]: e.target.value.slice(0, 100)
+                      }));
+                    }}
+                    maxLength={100}
+                  />
+                  {/* AI-generated title alternatives */}
+                  {generatedYoutubeTitles[clip.variant_index]?.length > 1 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {generatedYoutubeTitles[clip.variant_index].map((title, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => setManualYoutubeTitles(prev => ({ ...prev, [clip.variant_index]: title }))}
+                          className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                            manualYoutubeTitles[clip.variant_index] === title
+                              ? "border-primary bg-primary/10"
+                              : "border-border hover:bg-accent/50"
+                          }`}
+                        >
+                          {title.length > 50 ? title.slice(0, 50) + "..." : title}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
             </CardContent>
           </Card>

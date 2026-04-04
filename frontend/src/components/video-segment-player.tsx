@@ -24,6 +24,7 @@ import {
   ZoomIn,
   ZoomOut,
   Locate,
+  ChevronsLeft,
 } from "lucide-react";
 import {
   Popover,
@@ -237,6 +238,13 @@ export function VideoSegmentPlayer({
       playheadRef.current.style.display = (clamped >= 0 && clamped <= 100) ? '' : 'none';
     }
   }, []);
+
+  // Go to beginning — seek to 0 and reset zoom/scroll
+  const goToBeginning = useCallback(() => {
+    seekTo(0);
+    setZoomLevel(1);
+    setScrollOffset(0);
+  }, [seekTo]);
 
   // Frame navigation (Bug #63: use videoRef.currentTime to avoid deps on state)
   const frameStep = useCallback((direction: number) => {
@@ -484,12 +492,16 @@ export function VideoSegmentPlayer({
           e.preventDefault();
           videoZoomFit();
           break;
+        case "home": // Go to beginning
+          e.preventDefault();
+          goToBeginning();
+          break;
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [togglePlay, toggleMark, toggleGroupMark, cancelMark, seekTo, frameStep, onSegmentCreate, toggleFullscreen, videoZoomIn, videoZoomOut, videoZoomFit]);
+  }, [togglePlay, toggleMark, toggleGroupMark, cancelMark, seekTo, frameStep, onSegmentCreate, toggleFullscreen, videoZoomIn, videoZoomOut, videoZoomFit, goToBeginning]);
 
   // Video event handlers with smooth playhead updates
   useEffect(() => {
@@ -561,6 +573,18 @@ export function VideoSegmentPlayer({
       video.removeEventListener("seeked", handleSeeked);
     };
   }, [throttledSeek]);
+
+  // Auto-scroll timeline to follow the playhead when zoomed in during playback
+  useEffect(() => {
+    if (zoomLevel <= 1 || !isPlaying) return;
+    // If playhead is outside visible range, scroll to keep it visible
+    if (currentTime > visibleEnd || currentTime < visibleStart) {
+      // Place playhead at ~10% from the left edge for look-ahead
+      const targetStart = currentTime - (visibleDuration * 0.1);
+      const newOffset = Math.max(0, Math.min(maxOffset, targetStart / safeDuration));
+      setScrollOffset(newOffset);
+    }
+  }, [currentTime, zoomLevel, isPlaying, visibleStart, visibleEnd, visibleDuration, maxOffset, safeDuration]);
 
   // Update playback rate
   useEffect(() => {
@@ -1298,6 +1322,11 @@ export function VideoSegmentPlayer({
 
       {/* Controls - single compact row */}
       <div className="flex items-center gap-1 px-1 h-8 flex-shrink-0">
+        {/* Go to beginning */}
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={goToBeginning} title="Go to beginning (Home)">
+          <ChevronsLeft className="h-4 w-4" />
+        </Button>
+
         {/* Play/Pause */}
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={togglePlay}>
           {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
