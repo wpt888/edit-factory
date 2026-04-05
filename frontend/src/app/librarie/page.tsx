@@ -608,14 +608,53 @@ function LibrarieContent() {
       const formData = new FormData();
       formData.append("preset_name", "instagram_reels");
       await apiPost(`/library/clips/${clipId}/render`, formData);
-      toast.success("Regenerare voice-over pornită. Clipul va fi actualizat automat.");
+      toast.info("Regenerare voice-over în curs... Videoclipul se randează.", { duration: 5000 });
       // Update clip status to processing
       setClips((prev) =>
         prev.map((c) => (c.id === clipId ? { ...c, final_status: "processing" } : c))
       );
+      if (playingClip?.id === clipId) {
+        setPlayingClip((prev) => prev ? { ...prev, final_status: "processing" } : null);
+      }
+      // Poll for completion
+      const pollInterval = setInterval(async () => {
+        try {
+          const res = await apiGet(`/library/clips/${clipId}`);
+          const data = await res.json();
+          const clip = data.clip;
+          if (clip && clip.final_status !== "processing") {
+            clearInterval(pollInterval);
+            setRegeneratingVoiceoverId((prev) => prev === clipId ? null : prev);
+            // Update clip in list with new data
+            setClips((prev) =>
+              prev.map((c) => c.id === clipId ? {
+                ...c,
+                final_status: clip.final_status,
+                final_video_path: clip.final_video_path,
+              } : c)
+            );
+            if (clip.final_status === "completed" || clip.final_video_path) {
+              toast.success("Voice-over regenerat cu succes! Videoclipul a fost actualizat.");
+              // Update playing clip if it's still open
+              setPlayingClip((prev) => {
+                if (!prev || prev.id !== clipId) return prev;
+                return { ...prev, final_status: clip.final_status, final_video_path: clip.final_video_path };
+              });
+            } else {
+              toast.error("Regenerarea voice-over a eșuat.");
+            }
+          }
+        } catch {
+          // Ignore poll errors, keep polling
+        }
+      }, 3000);
+      // Safety: stop polling after 5 minutes
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        setRegeneratingVoiceoverId((prev) => prev === clipId ? null : prev);
+      }, 300000);
     } catch (error) {
       handleApiError(error, "Eroare la regenerarea voice-over");
-    } finally {
       setRegeneratingVoiceoverId(null);
     }
   };

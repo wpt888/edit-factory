@@ -3032,7 +3032,6 @@ async def _render_final_clip_task(
         if content_data and content_data.get("tts_text"):
             # Use new TTS service with timestamps support
             from app.services.tts.elevenlabs import ElevenLabsTTSService
-            from app.config import get_settings
 
             audio_path = temp_dir / f"tts_{clip_id}.mp3"
             tts_timestamps = None
