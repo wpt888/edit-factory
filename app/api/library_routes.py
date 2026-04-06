@@ -2896,6 +2896,264 @@ async def render_final_clip(
         raise HTTPException(status_code=500, detail="Internal error starting render")
 
 
+# ============== REGENERATE VOICE-OVER (audio-only replacement) ==============
+
+@router.post("/clips/{clip_id}/regenerate-voiceover")
+@limiter.limit("5/minute")
+async def regenerate_voiceover(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    clip_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Regenerează doar voice-over-ul unui clip deja randat.
+    Înlocuiește audio-ul cu TTS nou, ajustat la durata video-ului existent.
+    Video stream-ul (cu subtitrări arse) rămâne intact via stream-copy.
+    """
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
+        if not clip.data:
+            raise HTTPException(status_code=404, detail="Clip not found")
+
+        clip_row = clip.data[0]
+
+        if clip_row.get("final_status") == "processing":
+            raise HTTPException(status_code=409, detail="Clip is already being processed.")
+
+        if not clip_row.get("final_video_path"):
+            raise HTTPException(status_code=400, detail="Clip has no rendered video. Use full render first.")
+
+        settings = get_settings()
+        final_video = Path(clip_row["final_video_path"])
+        if not final_video.is_absolute():
+            candidate = settings.output_dir / final_video
+            if candidate.exists():
+                final_video = candidate
+            elif hasattr(settings, "media_dir") and settings.media_dir:
+                candidate = Path(settings.media_dir) / final_video
+                if candidate.exists():
+                    final_video = candidate
+        if not final_video.exists():
+            raise HTTPException(status_code=400, detail="Rendered video file not found on disk. Use full render.")
+        # Pass the resolved absolute path to the background task
+        clip_row = {**clip_row, "final_video_path": str(final_video)}
+
+        content = supabase.table("editai_clip_content").select("*").eq("clip_id", clip_id).execute()
+        content_data = content.data[0] if content.data else None
+        if not content_data or not content_data.get("tts_text"):
+            raise HTTPException(status_code=400, detail="No TTS text found for this clip.")
+
+        background_tasks.add_task(
+            _regenerate_voiceover_task,
+            clip_id=clip_id,
+            profile_id=profile.profile_id,
+            clip_data=clip_row,
+            content_data=content_data,
+        )
+
+        return {
+            "status": "processing",
+            "clip_id": clip_id,
+            "message": "Regenerating voice-over (audio-only replacement)..."
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting voiceover regeneration: {e}")
+        raise HTTPException(status_code=500, detail="Internal error starting voiceover regeneration")
+
+
+async def _regenerate_voiceover_task(
+    clip_id: str,
+    profile_id: str,
+    clip_data: dict,
+    content_data: dict,
+):
+    """
+    Background task: regenerează TTS cu speed-match și înlocuiește audio-ul
+    în videoul existent via FFmpeg stream-copy (video intact, audio nou).
+    """
+    from app.services.tts.elevenlabs import ElevenLabsTTSService
+
+    logger.info(f"[Profile {profile_id}] Starting voiceover regeneration for clip {clip_id}")
+
+    repo = get_repository()
+    supabase = repo.get_client() if repo else None
+    if not supabase:
+        logger.critical(f"Clip {clip_id} voiceover regen abandoned: no DB connection.")
+        return
+
+    # Mark as processing
+    try:
+        supabase.table("editai_clips").update({
+            "final_status": "processing",
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to set processing status: {e}")
+
+    temp_dir = Path(get_settings().output_dir) / "temp" / f"vo_regen_{clip_id}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        final_video_path = Path(clip_data["final_video_path"])
+
+        # 1. Get video duration
+        video_duration = await asyncio.to_thread(_get_video_duration, final_video_path)
+        if video_duration <= 0:
+            raise RuntimeError(f"Could not determine video duration for {final_video_path}")
+
+        # 2. Generate TTS at natural speed to measure duration
+        tts_voice_id = content_data.get("tts_voice_id") or content_data.get("voice_id")
+        voice_settings = content_data.get("voice_settings", {})
+        tts_model = content_data.get("tts_model", "eleven_flash_v2_5")
+
+        tts_service = ElevenLabsTTSService(
+            output_dir=temp_dir,
+            model_id=tts_model,
+            voice_id=tts_voice_id,
+            profile_id=profile_id
+        )
+
+        # Build voice_settings kwargs (without speed — we control it)
+        _tts_kwargs = {}
+        if voice_settings:
+            for _key in ("stability", "similarity_boost", "style", "use_speaker_boost"):
+                if _key in voice_settings:
+                    _tts_kwargs[_key] = voice_settings[_key]
+
+        natural_audio_path = temp_dir / f"tts_natural_{clip_id}.mp3"
+        tts_result, _ = await tts_service.generate_audio_with_timestamps(
+            text=content_data["tts_text"],
+            voice_id=tts_voice_id or tts_service._voice_id,
+            output_path=natural_audio_path,
+            model_id=tts_model,
+            speed=1.0,
+            **_tts_kwargs
+        )
+        natural_duration = await asyncio.to_thread(_get_audio_duration, tts_result.audio_path)
+
+        if natural_duration <= 0:
+            raise RuntimeError("TTS generated empty audio")
+
+        # 3. Calculate speed adjustment
+        speed = natural_duration / video_duration
+        speed = max(0.25, min(4.0, speed))  # Clamp to ElevenLabs range
+
+        logger.info(
+            f"Voiceover regen clip {clip_id}: video={video_duration:.1f}s, "
+            f"natural_tts={natural_duration:.1f}s, speed={speed:.2f}"
+        )
+
+        # 4. Regenerate TTS with adjusted speed (if needed)
+        if abs(speed - 1.0) > 0.02:
+            adjusted_audio_path = temp_dir / f"tts_adjusted_{clip_id}.mp3"
+            tts_result_adj, _ = await tts_service.generate_audio_with_timestamps(
+                text=content_data["tts_text"],
+                voice_id=tts_voice_id or tts_service._voice_id,
+                output_path=adjusted_audio_path,
+                model_id=tts_model,
+                speed=speed,
+                **_tts_kwargs
+            )
+            audio_path = tts_result_adj.audio_path
+        else:
+            audio_path = tts_result.audio_path
+
+        # 5. Normalize audio (2-pass loudnorm → AAC)
+        normalized_path = temp_dir / f"normalized_{clip_id}.aac"
+        loudness = await measure_loudness(audio_path)
+
+        if loudness:
+            loudnorm_filter = build_loudnorm_filter(loudness)
+            norm_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(audio_path),
+                "-af", loudnorm_filter,
+                "-c:a", "aac", "-b:a", "192k",
+                "-ar", "44100",
+                str(normalized_path)
+            ]
+            norm_result = await asyncio.to_thread(safe_ffmpeg_run, norm_cmd, 120, "loudnorm")
+            if norm_result.returncode != 0:
+                logger.warning(f"Loudnorm failed, using raw audio: {norm_result.stderr[:200]}")
+                # Fallback: just convert to AAC without normalization
+                fallback_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", str(audio_path),
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-ar", "44100",
+                    str(normalized_path)
+                ]
+                await asyncio.to_thread(safe_ffmpeg_run, fallback_cmd, 120, "aac convert")
+        else:
+            # No loudness data — just convert to AAC
+            fallback_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(audio_path),
+                "-c:a", "aac", "-b:a", "192k",
+                "-ar", "44100",
+                str(normalized_path)
+            ]
+            await asyncio.to_thread(safe_ffmpeg_run, fallback_cmd, 120, "aac convert")
+
+        if not normalized_path.exists():
+            raise RuntimeError("Audio normalization produced no output")
+
+        # 6. Mux: stream-copy video + new audio
+        output_path = temp_dir / f"final_{clip_id}.mp4"
+        mux_cmd = [
+            "ffmpeg", "-y",
+            "-i", str(final_video_path),
+            "-i", str(normalized_path),
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy", "-c:a", "copy",
+            "-shortest",
+            "-movflags", "+faststart",
+            str(output_path)
+        ]
+        mux_result = await asyncio.to_thread(safe_ffmpeg_run, mux_cmd, 120, "voiceover mux")
+        if mux_result.returncode != 0:
+            raise RuntimeError(f"FFmpeg mux failed: {mux_result.stderr[:300]}")
+
+        if not output_path.exists() or output_path.stat().st_size < 1000:
+            raise RuntimeError("Mux produced empty or tiny output")
+
+        # 7. Replace original file
+        shutil.move(str(output_path), str(final_video_path))
+        logger.info(f"Voiceover replaced for clip {clip_id}: {final_video_path}")
+
+        # 8. Mark completed
+        supabase.table("editai_clips").update({
+            "final_status": "completed",
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+
+        logger.info(f"Voiceover regeneration completed for clip {clip_id}")
+
+    except Exception as e:
+        logger.error(f"Voiceover regeneration failed for clip {clip_id}: {e}")
+        try:
+            supabase.table("editai_clips").update({
+                "final_status": "failed",
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+        except Exception:
+            logger.critical(f"Clip {clip_id} stuck in processing — DB update for failed status also failed.")
+    finally:
+        # Cleanup temp files
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
 async def _render_final_clip_task(
     clip_id: str,
     project_id: str,

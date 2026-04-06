@@ -108,6 +108,7 @@ interface ClipWithProject {
   qc_verified?: boolean;
   srt_content?: string | null;
   tts_text?: string | null;
+  _videoVersion?: number;
 }
 
 
@@ -605,10 +606,8 @@ function LibrarieContent() {
   const regenerateVoiceover = async (clipId: string) => {
     setRegeneratingVoiceoverId(clipId);
     try {
-      const formData = new FormData();
-      formData.append("preset_name", "instagram_reels");
-      await apiPost(`/library/clips/${clipId}/render`, formData);
-      toast.info("Regenerare voice-over în curs... Videoclipul se randează.", { duration: 5000 });
+      await apiPost(`/library/clips/${clipId}/regenerate-voiceover`);
+      toast.info("Regenerare voice-over în curs...", { duration: 5000 });
       // Update clip status to processing
       setClips((prev) =>
         prev.map((c) => (c.id === clipId ? { ...c, final_status: "processing" } : c))
@@ -631,6 +630,7 @@ function LibrarieContent() {
                 ...c,
                 final_status: clip.final_status,
                 final_video_path: clip.final_video_path,
+                _videoVersion: Date.now(),
               } : c)
             );
             if (clip.final_status === "completed" || clip.final_video_path) {
@@ -638,7 +638,7 @@ function LibrarieContent() {
               // Update playing clip if it's still open
               setPlayingClip((prev) => {
                 if (!prev || prev.id !== clipId) return prev;
-                return { ...prev, final_status: clip.final_status, final_video_path: clip.final_video_path };
+                return { ...prev, final_status: clip.final_status, final_video_path: clip.final_video_path, _videoVersion: Date.now() };
               });
             } else {
               toast.error("Regenerarea voice-over a eșuat.");
@@ -2409,7 +2409,7 @@ function LibrarieContent() {
           <InlineVideoPlayer
             open={!!playingClip}
             onOpenChange={(open) => { if (!open) setPlayingClip(null); }}
-            videoUrl={`${API_URL}/library/files/${encodeURIComponent(playingClip.final_video_path || playingClip.raw_video_path)}?v=${playingClip.id}`}
+            videoUrl={`${API_URL}/library/files/${encodeURIComponent(playingClip.final_video_path || playingClip.raw_video_path)}?v=${playingClip.id}${playingClip._videoVersion ? `&t=${playingClip._videoVersion}` : ''}`}
             title={playingClip.variant_name || `Varianta ${playingClip.variant_index}`}
             videoRef={videoRef}
             scriptText={playingClip.tts_text}
