@@ -1684,6 +1684,18 @@ function PipelinePage() {
           if (!isMountedRef.current) return;
           newPreviews[i] = data;
           setPreviews(prev => ({ ...prev, [i]: data }));
+          // Sync ttsResults from preview response — TTS is generated as part of preview
+          if (data.audio_duration > 0) {
+            setTtsResults(prev => ({
+              ...prev,
+              [i]: {
+                audio_duration: data.audio_duration,
+                generating: false,
+                stale: false,
+                srt_content: data.srt_content,
+              }
+            }));
+          }
         } catch (err) {
           if (abortController.signal.aborted) { setPreviewingIndex(null); return; }
           handleApiError(err, "Error previewing variants");
