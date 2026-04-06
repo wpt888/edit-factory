@@ -2998,11 +2998,13 @@ async def _regenerate_voiceover_task(
     except Exception as e:
         logger.error(f"Failed to set processing status: {e}")
 
-    temp_dir = Path(get_settings().output_dir) / "temp" / f"vo_regen_{clip_id}"
+    settings = get_settings()
+    temp_dir = Path(settings.output_dir) / "temp" / f"vo_regen_{clip_id}"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         final_video_path = Path(clip_data["final_video_path"])
+        media_manager = get_media_manager()
 
         # 1. Get video duration
         video_duration = await asyncio.to_thread(_get_video_duration, final_video_path)
@@ -3066,6 +3068,26 @@ async def _regenerate_voiceover_task(
         else:
             audio_path = tts_result.audio_path
 
+        # Match the full render pipeline: remove long artificial pauses before muxing.
+        try:
+            from app.services.silence_remover import SilenceRemover
+
+            trimmed_audio_path = temp_dir / f"tts_trimmed_{clip_id}.mp3"
+            remover = SilenceRemover(
+                min_silence_duration=0.25,
+                padding=0.06,
+                target_pause_duration=0.1,
+            )
+            silence_result = await asyncio.to_thread(remover.remove_silence, audio_path, trimmed_audio_path)
+            if trimmed_audio_path.exists() and trimmed_audio_path.stat().st_size > 0:
+                logger.info(
+                    f"Voiceover regen clip {clip_id}: silence removal "
+                    f"{silence_result.original_duration:.1f}s -> {silence_result.new_duration:.1f}s"
+                )
+                audio_path = trimmed_audio_path
+        except Exception as silence_err:
+            logger.warning(f"Voiceover regen clip {clip_id}: silence removal skipped: {silence_err}")
+
         # 5. Normalize audio (2-pass loudnorm → AAC)
         normalized_path = temp_dir / f"normalized_{clip_id}.aac"
         loudness = await measure_loudness(audio_path)
@@ -3105,6 +3127,18 @@ async def _regenerate_voiceover_task(
 
         if not normalized_path.exists():
             raise RuntimeError("Audio normalization produced no output")
+
+        # Keep the downloadable TTS asset in sync with the regenerated voice-over.
+        try:
+            tts_persist_path = media_manager.tts_path(clip_data["project_id"], clip_id)
+            shutil.copy2(str(audio_path), str(tts_persist_path))
+            supabase.table("editai_clip_content").upsert({
+                "clip_id": clip_id,
+                "tts_audio_path": str(tts_persist_path),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }, on_conflict="clip_id").execute()
+        except Exception as persist_err:
+            logger.warning(f"Failed to persist regenerated TTS for clip {clip_id}: {persist_err}")
 
         # 6. Mux: stream-copy video + new audio
         output_path = temp_dir / f"final_{clip_id}.mp4"
