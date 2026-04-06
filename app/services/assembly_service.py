@@ -2077,6 +2077,12 @@ class AssemblyService:
             safe_preset_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', preset_data['name'])
             final_output_path = output_dir / f"assembly_{uuid.uuid4().hex[:8]}_{safe_preset_name}.mp4"
 
+            # Save pre-subtitle assembly for voiceover regeneration
+            raw_assembly_path = output_dir / f"{final_output_path.stem}_raw.mp4"
+            import shutil as _shutil
+            _shutil.copy2(str(assembled_video_path), str(raw_assembly_path))
+            logger.info(f"Saved raw assembly (no subtitles): {raw_assembly_path}")
+
             # BUG-2 fix: Always sync shadow/glow/adaptive into subtitle_settings
             # (write both True and False to prevent stale values from DB)
             if subtitle_settings is None:
@@ -2106,7 +2112,7 @@ class AssemblyService:
 
             logger.info(f"Assembly complete: {final_output_path}")
 
-            return final_output_path
+            return final_output_path, raw_assembly_path
 
         except Exception as e:
             logger.error(f"Assembly failed: {e}")
@@ -2176,7 +2182,7 @@ class AssemblyService:
         # (assemble_and_render overwrites these keys in subtitle_settings
         # with function-parameter values, so we must pass them explicitly)
         _ss = subtitle_settings or {}
-        return await self.assemble_and_render(
+        final_path, _raw_path = await self.assemble_and_render(
             script_text=script_text,
             profile_id=profile_id,
             preset_data=preview_preset,
@@ -2208,6 +2214,13 @@ class AssemblyService:
             variant_index=variant_index,
             _preview_mode=True,
         )
+        # Preview doesn't need the raw assembly — clean it up
+        try:
+            if _raw_path and _raw_path.exists():
+                _raw_path.unlink()
+        except Exception:
+            pass
+        return final_path
 
     async def preview_matches(
         self,

@@ -38,6 +38,19 @@ export function InlineVideoPlayer({
   // Bug #170: videoRef is intentionally omitted — it's a stable ref that doesn't change
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !open) return;
+
+    // Force a fresh media load when the regenerated file URL changes while the dialog stays open.
+    el.pause();
+    el.load();
+    void el.play().catch(() => {
+      // Ignore autoplay rejections; user can press play manually.
+    });
+  // videoRef is a stable ref object; reloading depends on the URL and dialog state only.
+  }, [videoUrl, open]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[400px] max-h-[85vh] p-0 overflow-hidden bg-black border-none [&>button]:hidden">
@@ -57,6 +70,7 @@ export function InlineVideoPlayer({
             </div>
           )}
           <video
+            key={videoUrl}
             ref={videoRef}
             src={videoUrl}
             controls

@@ -3006,10 +3006,33 @@ async def _regenerate_voiceover_task(
         final_video_path = Path(clip_data["final_video_path"])
         media_manager = get_media_manager()
 
+        raw_video_path: Optional[Path] = None
+        raw_video_str = clip_data.get("raw_video_path")
+        if raw_video_str:
+            raw_candidate = Path(raw_video_str)
+            if not raw_candidate.is_absolute():
+                output_candidate = settings.output_dir / raw_candidate
+                if output_candidate.exists():
+                    raw_candidate = output_candidate
+                elif getattr(settings, "media_dir", None):
+                    media_candidate = Path(settings.media_dir) / raw_candidate
+                    if media_candidate.exists():
+                        raw_candidate = media_candidate
+            if raw_candidate.exists():
+                raw_video_path = raw_candidate
+
+        use_raw_visual_base = raw_video_path is not None
+        visual_base_path = raw_video_path if use_raw_visual_base else final_video_path
+        if use_raw_visual_base:
+            logger.info(
+                f"Voiceover regen clip {clip_id}: using raw visual base to avoid reburning default subtitles "
+                f"({visual_base_path})"
+            )
+
         # 1. Get video duration
-        video_duration = await asyncio.to_thread(_get_video_duration, final_video_path)
+        video_duration = await asyncio.to_thread(_get_video_duration, visual_base_path)
         if video_duration <= 0:
-            raise RuntimeError(f"Could not determine video duration for {final_video_path}")
+            raise RuntimeError(f"Could not determine video duration for {visual_base_path}")
 
         # 2. Generate TTS at natural speed to measure duration
         tts_voice_id = content_data.get("tts_voice_id") or content_data.get("voice_id")
@@ -3030,8 +3053,11 @@ async def _regenerate_voiceover_task(
                 if _key in voice_settings:
                     _tts_kwargs[_key] = voice_settings[_key]
 
+        tts_timestamps = None
+        new_srt_content = None
+
         natural_audio_path = temp_dir / f"tts_natural_{clip_id}.mp3"
-        tts_result, _ = await tts_service.generate_audio_with_timestamps(
+        tts_result, tts_timestamps = await tts_service.generate_audio_with_timestamps(
             text=content_data["tts_text"],
             voice_id=tts_voice_id or tts_service._voice_id,
             output_path=natural_audio_path,
@@ -3056,7 +3082,7 @@ async def _regenerate_voiceover_task(
         # 4. Regenerate TTS with adjusted speed (if needed)
         if abs(speed - 1.0) > 0.02:
             adjusted_audio_path = temp_dir / f"tts_adjusted_{clip_id}.mp3"
-            tts_result_adj, _ = await tts_service.generate_audio_with_timestamps(
+            tts_result_adj, tts_timestamps = await tts_service.generate_audio_with_timestamps(
                 text=content_data["tts_text"],
                 voice_id=tts_voice_id or tts_service._voice_id,
                 output_path=adjusted_audio_path,
@@ -3067,6 +3093,14 @@ async def _regenerate_voiceover_task(
             audio_path = tts_result_adj.audio_path
         else:
             audio_path = tts_result.audio_path
+
+        # Generate SRT from new TTS timestamps
+        if tts_timestamps:
+            _max_wpf = content_data.get("max_words_per_phrase", content_data.get("words_per_subtitle", 2)) or 7
+            new_srt_content = generate_srt_from_timestamps(tts_timestamps, max_words_per_phrase=_max_wpf)
+            if new_srt_content:
+                new_srt_content = sanitize_srt_full(new_srt_content)
+                logger.info(f"Voiceover regen clip {clip_id}: generated new SRT from TTS timestamps")
 
         # Match the full render pipeline: remove long artificial pauses before muxing.
         try:
@@ -3087,6 +3121,10 @@ async def _regenerate_voiceover_task(
                 audio_path = trimmed_audio_path
         except Exception as silence_err:
             logger.warning(f"Voiceover regen clip {clip_id}: silence removal skipped: {silence_err}")
+
+        processed_audio_duration = await asyncio.to_thread(_get_audio_duration, audio_path)
+        if processed_audio_duration <= 0:
+            processed_audio_duration = natural_duration
 
         # 5. Normalize audio (2-pass loudnorm → AAC)
         normalized_path = temp_dir / f"normalized_{clip_id}.aac"
@@ -3132,38 +3170,147 @@ async def _regenerate_voiceover_task(
         try:
             tts_persist_path = media_manager.tts_path(clip_data["project_id"], clip_id)
             shutil.copy2(str(audio_path), str(tts_persist_path))
-            supabase.table("editai_clip_content").upsert({
+            upsert_data = {
                 "clip_id": clip_id,
                 "tts_audio_path": str(tts_persist_path),
                 "updated_at": datetime.now(timezone.utc).isoformat()
-            }, on_conflict="clip_id").execute()
+            }
+            if new_srt_content:
+                upsert_data["srt_content"] = new_srt_content
+            if tts_timestamps:
+                upsert_data["tts_timestamps"] = json.dumps(tts_timestamps)
+            supabase.table("editai_clip_content").upsert(upsert_data, on_conflict="clip_id").execute()
         except Exception as persist_err:
             logger.warning(f"Failed to persist regenerated TTS for clip {clip_id}: {persist_err}")
 
-        # 6. Mux: stream-copy video + new audio
+        # 6. Sync the visual base to the regenerated audio duration when we rebuild from raw video.
+        mux_video_path = visual_base_path
+        if use_raw_visual_base and processed_audio_duration > 0:
+            duration_diff = video_duration - processed_audio_duration
+            if abs(duration_diff) < 0.2:
+                logger.info(
+                    f"Voiceover regen clip {clip_id}: visual sync OK "
+                    f"(video={video_duration:.1f}s, audio={processed_audio_duration:.1f}s)"
+                )
+            elif duration_diff > 0:
+                trimmed_video_path = temp_dir / f"trimmed_visual_{clip_id}.mp4"
+                async with await acquire_prep_slot():
+                    trim_ok = await asyncio.to_thread(
+                        _trim_video_to_duration,
+                        visual_base_path,
+                        trimmed_video_path,
+                        processed_audio_duration,
+                    )
+                if trim_ok and trimmed_video_path.exists():
+                    mux_video_path = trimmed_video_path
+                else:
+                    logger.warning(f"Voiceover regen clip {clip_id}: trim failed, using raw visual base unchanged")
+            else:
+                extended_video_path = temp_dir / f"extended_visual_{clip_id}.mp4"
+                async with await acquire_prep_slot():
+                    extended = await asyncio.to_thread(
+                        _extend_video_with_segments,
+                        base_video=visual_base_path,
+                        target_duration=processed_audio_duration,
+                        project_id=clip_data["project_id"],
+                        output_path=extended_video_path,
+                        supabase=supabase,
+                        profile_id=profile_id,
+                    )
+                if extended and extended_video_path.exists():
+                    mux_video_path = extended_video_path
+                else:
+                    logger.warning(
+                        f"Voiceover regen clip {clip_id}: segment extension failed, falling back to looped visual"
+                    )
+                    async with await acquire_prep_slot():
+                        await asyncio.to_thread(
+                            _loop_video_to_duration,
+                            visual_base_path,
+                            extended_video_path,
+                            processed_audio_duration,
+                        )
+                    if extended_video_path.exists():
+                        mux_video_path = extended_video_path
+
+        # 7. Mux: video + new audio (re-encode if burning subtitles, stream-copy otherwise)
         output_path = temp_dir / f"final_{clip_id}.mp4"
-        mux_cmd = [
-            "ffmpeg", "-y",
-            "-i", str(final_video_path),
-            "-i", str(normalized_path),
-            "-map", "0:v:0", "-map", "1:a:0",
-            "-c:v", "copy", "-c:a", "copy",
-            "-shortest",
-            "-movflags", "+faststart",
-            str(output_path)
-        ]
-        mux_result = await asyncio.to_thread(safe_ffmpeg_run, mux_cmd, 120, "voiceover mux")
+        srt_path_for_burn = None
+        subtitle_settings_for_burn = None
+        if new_srt_content and use_raw_visual_base:
+            srt_path_for_burn = temp_dir / f"srt_{clip_id}.srt"
+            with open(srt_path_for_burn, "w", encoding="utf-8") as f:
+                f.write(new_srt_content)
+            subtitle_settings_for_burn = content_data.get("subtitle_settings")
+            if not subtitle_settings_for_burn:
+                # Fallback: try profile-level subtitle settings
+                try:
+                    _profile_row = supabase.table("editai_profiles")\
+                        .select("subtitle_settings")\
+                        .eq("id", profile_id)\
+                        .limit(1)\
+                        .execute()
+                    if _profile_row.data and _profile_row.data[0].get("subtitle_settings"):
+                        subtitle_settings_for_burn = _profile_row.data[0]["subtitle_settings"]
+                        logger.info(f"Voiceover regen clip {clip_id}: using profile-level subtitle settings")
+                except Exception as _prof_err:
+                    logger.warning(f"Voiceover regen clip {clip_id}: failed to load profile subtitle settings: {_prof_err}")
+            if not subtitle_settings_for_burn:
+                subtitle_settings_for_burn = {
+                    "fontSize": 48,
+                    "fontFamily": "Montserrat",
+                    "textColor": "#FFFFFF",
+                    "outlineColor": "#000000",
+                    "outlineWidth": 3,
+                    "positionY": 85,
+                }
+                logger.warning(f"Voiceover regen clip {clip_id}: no saved subtitle settings found, using defaults")
+            else:
+                logger.info(f"Voiceover regen clip {clip_id}: using saved subtitle settings from clip content")
+            logger.info(f"Voiceover regen clip {clip_id}: will burn subtitles from new SRT")
+
+        if srt_path_for_burn and srt_path_for_burn.exists():
+            subtitles_filter = build_subtitle_filter(
+                srt_path=srt_path_for_burn,
+                subtitle_settings=subtitle_settings_for_burn,
+                video_width=1080,
+                video_height=1920
+            )
+            mux_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(mux_video_path),
+                "-i", str(normalized_path),
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-vf", subtitles_filter,
+                "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                "-c:a", "copy",
+                "-shortest",
+                "-movflags", "+faststart",
+                str(output_path)
+            ]
+        else:
+            mux_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(mux_video_path),
+                "-i", str(normalized_path),
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-c:v", "copy", "-c:a", "copy",
+                "-shortest",
+                "-movflags", "+faststart",
+                str(output_path)
+            ]
+        mux_result = await asyncio.to_thread(safe_ffmpeg_run, mux_cmd, 300, "voiceover mux")
         if mux_result.returncode != 0:
             raise RuntimeError(f"FFmpeg mux failed: {mux_result.stderr[:300]}")
 
         if not output_path.exists() or output_path.stat().st_size < 1000:
             raise RuntimeError("Mux produced empty or tiny output")
 
-        # 7. Replace original file
+        # 8. Replace original file
         shutil.move(str(output_path), str(final_video_path))
         logger.info(f"Voiceover replaced for clip {clip_id}: {final_video_path}")
 
-        # 8. Mark completed
+        # 9. Mark completed
         supabase.table("editai_clips").update({
             "final_status": "completed",
             "updated_at": datetime.now(timezone.utc).isoformat()

@@ -650,6 +650,8 @@ async def _save_clip_to_library(
     profile_id: str,
     render_fingerprint: str,
     render_jobs_lock: threading.Lock,
+    raw_assembly_path: Optional[Path] = None,
+    subtitle_settings: Optional[dict] = None,
 ) -> None:
     """Save or update a rendered clip in the library.
 
@@ -751,7 +753,7 @@ async def _save_clip_to_library(
                         "profile_id": profile_id,
                         "variant_index": vid,
                         "variant_name": f"variant_{vid + 1}",
-                        "raw_video_path": str(final_video_path),
+                        "raw_video_path": str(raw_assembly_path) if raw_assembly_path else str(final_video_path),
                         "final_video_path": str(final_video_path),
                         "thumbnail_path": str(thumb_path) if thumb_path else None,
                         "duration": duration,
@@ -778,7 +780,7 @@ async def _save_clip_to_library(
                     with render_jobs_lock:
                         job["clip_id"] = existing_id
                     update_payload = {
-                        "raw_video_path": str(final_video_path),
+                        "raw_video_path": str(raw_assembly_path) if raw_assembly_path else str(final_video_path),
                         "final_video_path": str(final_video_path),
                         "thumbnail_path": str(thumb_path) if thumb_path else None,
                         "duration": duration,
@@ -817,6 +819,8 @@ async def _save_clip_to_library(
                             _content_payload["srt_content"] = _srt
                         if _audio_path:
                             _content_payload["tts_audio_path"] = _audio_path
+                        if subtitle_settings:
+                            _content_payload["subtitle_settings"] = subtitle_settings
                         if len(_content_payload) > 1:
                             supabase_lib.table("editai_clip_content").upsert(
                                 _content_payload, on_conflict="clip_id"
@@ -3189,7 +3193,7 @@ async def render_variants(
 
             # Run full assembly (with 15-minute timeout)
             try:
-                final_video_path = await asyncio.wait_for(
+                final_video_path, raw_assembly_path = await asyncio.wait_for(
                     assembly_service.assemble_and_render(
                         script_text=script_text,
                         profile_id=_profile_id,
@@ -3252,6 +3256,7 @@ async def render_variants(
                 job["progress"] = 100
                 job["current_step"] = "Render complete"
                 job["final_video_path"] = str(final_video_path)
+                job["raw_video_path"] = str(raw_assembly_path)
                 job["render_fingerprint"] = _render_fingerprint
                 job["completed_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -3278,6 +3283,8 @@ async def render_variants(
             await _save_clip_to_library(
                 pipeline, pipeline_id, vid, final_video_path,
                 _profile_id, _render_fingerprint, render_jobs_lock,
+                raw_assembly_path=raw_assembly_path,
+                subtitle_settings=subtitle_settings,
             )
 
         except Exception as e:
@@ -3497,7 +3504,7 @@ async def remake_variant(
 
             # Render with NO match_overrides → auto-matching with strong avoid set
             try:
-                final_video_path = await asyncio.wait_for(
+                final_video_path, raw_assembly_path = await asyncio.wait_for(
                     assembly_service.assemble_and_render(
                         script_text=script_text,
                         profile_id=_profile_id,
@@ -3548,6 +3555,7 @@ async def remake_variant(
                 job["progress"] = 100
                 job["current_step"] = "Remake complete"
                 job["final_video_path"] = str(final_video_path)
+                job["raw_video_path"] = str(raw_assembly_path)
                 job["render_fingerprint"] = _remake_fingerprint
                 job["completed_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -3557,6 +3565,8 @@ async def remake_variant(
             await _save_clip_to_library(
                 pipeline, pipeline_id, vid, final_video_path,
                 _profile_id, _remake_fingerprint, render_jobs_lock,
+                raw_assembly_path=raw_assembly_path,
+                subtitle_settings=subtitle_settings,
             )
 
             logger.info(
@@ -3865,6 +3875,10 @@ async def sync_pipeline_to_library(
             logger.warning(f"Pipeline {pipeline_id} variant {vid}: video file not found at {final_video_path}")
             continue
 
+        # Resolve raw assembly path (no subtitles) for voiceover regeneration
+        _raw_path_str = job.get("raw_video_path")
+        _raw_assembly_path = Path(_raw_path_str) if _raw_path_str and Path(_raw_path_str).exists() else None
+
         # Thumbnail
         thumb_path = None
         try:
@@ -3903,7 +3917,7 @@ async def sync_pipeline_to_library(
         if vid in existing_map:
             existing_id = existing_map[vid]
             supabase.table("editai_clips").update({
-                "raw_video_path": str(final_video_path),
+                "raw_video_path": str(_raw_assembly_path) if _raw_assembly_path else str(final_video_path),
                 "final_video_path": str(final_video_path),
                 "thumbnail_path": str(thumb_path) if thumb_path else None,
                 "duration": duration,
@@ -3918,7 +3932,7 @@ async def sync_pipeline_to_library(
                 "profile_id": profile.profile_id,
                 "variant_index": vid,
                 "variant_name": f"variant_{vid + 1}",
-                "raw_video_path": str(final_video_path),
+                "raw_video_path": str(_raw_assembly_path) if _raw_assembly_path else str(final_video_path),
                 "final_video_path": str(final_video_path),
                 "thumbnail_path": str(thumb_path) if thumb_path else None,
                 "duration": duration,
