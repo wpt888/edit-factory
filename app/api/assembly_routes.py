@@ -364,7 +364,7 @@ async def render_assembly(
             assembly_service = get_assembly_service()
 
             # Run full assembly
-            final_video_path, _raw_assembly_path = await assembly_service.assemble_and_render(
+            final_video_path, _raw_assembly_path, _seg_comp = await assembly_service.assemble_and_render(
                 script_text=request.script_text,
                 profile_id=profile.profile_id,
                 preset_data=preset_data,

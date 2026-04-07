@@ -2112,7 +2112,29 @@ class AssemblyService:
 
             logger.info(f"Assembly complete: {final_output_path}")
 
-            return final_output_path, raw_assembly_path
+            # Serialize match_results for persistence (segment composition)
+            segment_composition = [
+                {
+                    "srt_index": mr.srt_index,
+                    "srt_text": mr.srt_text,
+                    "srt_start": mr.srt_start,
+                    "srt_end": mr.srt_end,
+                    "segment_id": mr.segment_id,
+                    "segment_keywords": mr.segment_keywords,
+                    "matched_keyword": mr.matched_keyword,
+                    "confidence": mr.confidence,
+                    "is_auto_filled": mr.is_auto_filled,
+                    "product_group": mr.product_group,
+                    "source_video_id": mr.source_video_id,
+                    "segment_start_time": mr.segment_start_time,
+                    "segment_end_time": mr.segment_end_time,
+                    "thumbnail_path": mr.thumbnail_path,
+                    "transforms": mr.transforms,
+                }
+                for mr in match_results
+            ]
+
+            return final_output_path, raw_assembly_path, segment_composition
 
         except Exception as e:
             logger.error(f"Assembly failed: {e}")
@@ -2182,7 +2204,7 @@ class AssemblyService:
         # (assemble_and_render overwrites these keys in subtitle_settings
         # with function-parameter values, so we must pass them explicitly)
         _ss = subtitle_settings or {}
-        final_path, _raw_path = await self.assemble_and_render(
+        final_path, _raw_path, _seg_comp = await self.assemble_and_render(
             script_text=script_text,
             profile_id=profile_id,
             preset_data=preview_preset,

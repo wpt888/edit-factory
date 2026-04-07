@@ -2907,9 +2907,9 @@ async def regenerate_voiceover(
     profile: ProfileContext = Depends(get_profile_context)
 ):
     """
-    Regenerează doar voice-over-ul unui clip deja randat.
-    Înlocuiește audio-ul cu TTS nou, ajustat la durata video-ului existent.
-    Video stream-ul (cu subtitrări arse) rămâne intact via stream-copy.
+    Regenerează voice-over-ul unui clip: generează TTS nou la viteza naturală
+    și reconstruiește tot videoclipul de la zero (segmente noi + render complet).
+    Scriptul rămâne același.
     """
     repo = get_repository()
     supabase = repo.get_client() if repo else None
@@ -2960,7 +2960,7 @@ async def regenerate_voiceover(
         return {
             "status": "processing",
             "clip_id": clip_id,
-            "message": "Regenerating voice-over (audio-only replacement)..."
+            "message": "Regenerating voice-over (full re-render from scratch)..."
         }
     except HTTPException:
         raise
@@ -2976,8 +2976,9 @@ async def _regenerate_voiceover_task(
     content_data: dict,
 ):
     """
-    Background task: regenerează TTS cu speed-match și înlocuiește audio-ul
-    în videoul existent via FFmpeg stream-copy (video intact, audio nou).
+    Background task: generează TTS nou la viteza naturală și reconstruiește
+    tot videoclipul de la zero via assemble_and_render (selectare segmente +
+    render complet cu subtitrări).  Scriptul rămâne același, totul altceva e nou.
     """
     from app.services.tts.elevenlabs import ElevenLabsTTSService
 
@@ -3006,38 +3007,19 @@ async def _regenerate_voiceover_task(
         final_video_path = Path(clip_data["final_video_path"])
         media_manager = get_media_manager()
 
-        raw_video_path: Optional[Path] = None
-        raw_video_str = clip_data.get("raw_video_path")
-        if raw_video_str:
-            raw_candidate = Path(raw_video_str)
-            if not raw_candidate.is_absolute():
-                output_candidate = settings.output_dir / raw_candidate
-                if output_candidate.exists():
-                    raw_candidate = output_candidate
-                elif getattr(settings, "media_dir", None):
-                    media_candidate = Path(settings.media_dir) / raw_candidate
-                    if media_candidate.exists():
-                        raw_candidate = media_candidate
-            if raw_candidate.exists():
-                raw_video_path = raw_candidate
-
-        use_raw_visual_base = raw_video_path is not None
-        visual_base_path = raw_video_path if use_raw_visual_base else final_video_path
-        if use_raw_visual_base:
-            logger.info(
-                f"Voiceover regen clip {clip_id}: using raw visual base to avoid reburning default subtitles "
-                f"({visual_base_path})"
-            )
-
-        # 1. Get video duration
-        video_duration = await asyncio.to_thread(_get_video_duration, visual_base_path)
-        if video_duration <= 0:
-            raise RuntimeError(f"Could not determine video duration for {visual_base_path}")
-
-        # 2. Generate TTS at natural speed to measure duration
+        # 1. Generate TTS with original voice settings (assembly pipeline adapts video to audio)
         tts_voice_id = content_data.get("tts_voice_id") or content_data.get("voice_id")
-        voice_settings = content_data.get("voice_settings", {})
         tts_model = content_data.get("tts_model", "eleven_flash_v2_5")
+
+        # Default voice settings — used when clip has no saved voice_settings
+        DEFAULT_VOICE_SETTINGS = {
+            "speed": 1.18,
+            "stability": 0.50,
+            "similarity_boost": 0.73,
+            "style": 0.22,
+            "use_speaker_boost": True,
+        }
+        voice_settings = content_data.get("voice_settings") or DEFAULT_VOICE_SETTINGS
 
         tts_service = ElevenLabsTTSService(
             output_dir=temp_dir,
@@ -3046,15 +3028,12 @@ async def _regenerate_voiceover_task(
             profile_id=profile_id
         )
 
-        # Build voice_settings kwargs (without speed — we control it)
         _tts_kwargs = {}
-        if voice_settings:
-            for _key in ("stability", "similarity_boost", "style", "use_speaker_boost"):
-                if _key in voice_settings:
-                    _tts_kwargs[_key] = voice_settings[_key]
+        for _key in ("stability", "similarity_boost", "style", "use_speaker_boost"):
+            if _key in voice_settings:
+                _tts_kwargs[_key] = voice_settings[_key]
 
-        tts_timestamps = None
-        new_srt_content = None
+        original_speed = float(voice_settings.get("speed", 1.18))
 
         natural_audio_path = temp_dir / f"tts_natural_{clip_id}.mp3"
         tts_result, tts_timestamps = await tts_service.generate_audio_with_timestamps(
@@ -3062,39 +3041,19 @@ async def _regenerate_voiceover_task(
             voice_id=tts_voice_id or tts_service._voice_id,
             output_path=natural_audio_path,
             model_id=tts_model,
-            speed=1.0,
+            speed=original_speed,
             **_tts_kwargs
         )
-        natural_duration = await asyncio.to_thread(_get_audio_duration, tts_result.audio_path)
+        audio_path = tts_result.audio_path
+        natural_duration = await asyncio.to_thread(_get_audio_duration, audio_path)
 
         if natural_duration <= 0:
             raise RuntimeError("TTS generated empty audio")
 
-        # 3. Calculate speed adjustment
-        speed = natural_duration / video_duration
-        speed = max(0.25, min(4.0, speed))  # Clamp to ElevenLabs range
+        logger.info(f"Voiceover regen clip {clip_id}: TTS generated at speed={original_speed:.2f}, duration={natural_duration:.1f}s")
 
-        logger.info(
-            f"Voiceover regen clip {clip_id}: video={video_duration:.1f}s, "
-            f"natural_tts={natural_duration:.1f}s, speed={speed:.2f}"
-        )
-
-        # 4. Regenerate TTS with adjusted speed (if needed)
-        if abs(speed - 1.0) > 0.02:
-            adjusted_audio_path = temp_dir / f"tts_adjusted_{clip_id}.mp3"
-            tts_result_adj, tts_timestamps = await tts_service.generate_audio_with_timestamps(
-                text=content_data["tts_text"],
-                voice_id=tts_voice_id or tts_service._voice_id,
-                output_path=adjusted_audio_path,
-                model_id=tts_model,
-                speed=speed,
-                **_tts_kwargs
-            )
-            audio_path = tts_result_adj.audio_path
-        else:
-            audio_path = tts_result.audio_path
-
-        # Generate SRT from new TTS timestamps
+        # 2. Generate SRT from TTS timestamps
+        new_srt_content = None
         if tts_timestamps:
             _max_wpf = content_data.get("max_words_per_phrase", content_data.get("words_per_subtitle", 2)) or 7
             new_srt_content = generate_srt_from_timestamps(tts_timestamps, max_words_per_phrase=_max_wpf)
@@ -3102,7 +3061,7 @@ async def _regenerate_voiceover_task(
                 new_srt_content = sanitize_srt_full(new_srt_content)
                 logger.info(f"Voiceover regen clip {clip_id}: generated new SRT from TTS timestamps")
 
-        # Match the full render pipeline: remove long artificial pauses before muxing.
+        # 3. Remove long artificial pauses (assembly pipeline handles normalization)
         try:
             from app.services.silence_remover import SilenceRemover
 
@@ -3126,47 +3085,7 @@ async def _regenerate_voiceover_task(
         if processed_audio_duration <= 0:
             processed_audio_duration = natural_duration
 
-        # 5. Normalize audio (2-pass loudnorm → AAC)
-        normalized_path = temp_dir / f"normalized_{clip_id}.aac"
-        loudness = await measure_loudness(audio_path)
-
-        if loudness:
-            loudnorm_filter = build_loudnorm_filter(loudness)
-            norm_cmd = [
-                "ffmpeg", "-y",
-                "-i", str(audio_path),
-                "-af", loudnorm_filter,
-                "-c:a", "aac", "-b:a", "192k",
-                "-ar", "44100",
-                str(normalized_path)
-            ]
-            norm_result = await asyncio.to_thread(safe_ffmpeg_run, norm_cmd, 120, "loudnorm")
-            if norm_result.returncode != 0:
-                logger.warning(f"Loudnorm failed, using raw audio: {norm_result.stderr[:200]}")
-                # Fallback: just convert to AAC without normalization
-                fallback_cmd = [
-                    "ffmpeg", "-y",
-                    "-i", str(audio_path),
-                    "-c:a", "aac", "-b:a", "192k",
-                    "-ar", "44100",
-                    str(normalized_path)
-                ]
-                await asyncio.to_thread(safe_ffmpeg_run, fallback_cmd, 120, "aac convert")
-        else:
-            # No loudness data — just convert to AAC
-            fallback_cmd = [
-                "ffmpeg", "-y",
-                "-i", str(audio_path),
-                "-c:a", "aac", "-b:a", "192k",
-                "-ar", "44100",
-                str(normalized_path)
-            ]
-            await asyncio.to_thread(safe_ffmpeg_run, fallback_cmd, 120, "aac convert")
-
-        if not normalized_path.exists():
-            raise RuntimeError("Audio normalization produced no output")
-
-        # Keep the downloadable TTS asset in sync with the regenerated voice-over.
+        # 4. Persist TTS asset and metadata to DB before re-render
         try:
             tts_persist_path = media_manager.tts_path(clip_data["project_id"], clip_id)
             shutil.copy2(str(audio_path), str(tts_persist_path))
@@ -3179,138 +3098,115 @@ async def _regenerate_voiceover_task(
                 upsert_data["srt_content"] = new_srt_content
             if tts_timestamps:
                 upsert_data["tts_timestamps"] = json.dumps(tts_timestamps)
+            upsert_data["voice_settings"] = voice_settings
             supabase.table("editai_clip_content").upsert(upsert_data, on_conflict="clip_id").execute()
         except Exception as persist_err:
             logger.warning(f"Failed to persist regenerated TTS for clip {clip_id}: {persist_err}")
 
-        # 6. Sync the visual base to the regenerated audio duration when we rebuild from raw video.
-        mux_video_path = visual_base_path
-        if use_raw_visual_base and processed_audio_duration > 0:
-            duration_diff = video_duration - processed_audio_duration
-            if abs(duration_diff) < 0.2:
-                logger.info(
-                    f"Voiceover regen clip {clip_id}: visual sync OK "
-                    f"(video={video_duration:.1f}s, audio={processed_audio_duration:.1f}s)"
-                )
-            elif duration_diff > 0:
-                trimmed_video_path = temp_dir / f"trimmed_visual_{clip_id}.mp4"
-                async with await acquire_prep_slot():
-                    trim_ok = await asyncio.to_thread(
-                        _trim_video_to_duration,
-                        visual_base_path,
-                        trimmed_video_path,
-                        processed_audio_duration,
-                    )
-                if trim_ok and trimmed_video_path.exists():
-                    mux_video_path = trimmed_video_path
-                else:
-                    logger.warning(f"Voiceover regen clip {clip_id}: trim failed, using raw visual base unchanged")
-            else:
-                extended_video_path = temp_dir / f"extended_visual_{clip_id}.mp4"
-                async with await acquire_prep_slot():
-                    extended = await asyncio.to_thread(
-                        _extend_video_with_segments,
-                        base_video=visual_base_path,
-                        target_duration=processed_audio_duration,
-                        project_id=clip_data["project_id"],
-                        output_path=extended_video_path,
-                        supabase=supabase,
-                        profile_id=profile_id,
-                    )
-                if extended and extended_video_path.exists():
-                    mux_video_path = extended_video_path
-                else:
-                    logger.warning(
-                        f"Voiceover regen clip {clip_id}: segment extension failed, falling back to looped visual"
-                    )
-                    async with await acquire_prep_slot():
-                        await asyncio.to_thread(
-                            _loop_video_to_duration,
-                            visual_base_path,
-                            extended_video_path,
-                            processed_audio_duration,
-                        )
-                    if extended_video_path.exists():
-                        mux_video_path = extended_video_path
+        # 5. Full re-render via assembly service
+        from app.services.assembly_service import get_assembly_service
 
-        # 7. Mux: video + new audio (re-encode if burning subtitles, stream-copy otherwise)
-        output_path = temp_dir / f"final_{clip_id}.mp4"
-        srt_path_for_burn = None
-        subtitle_settings_for_burn = None
-        if new_srt_content and use_raw_visual_base:
-            srt_path_for_burn = temp_dir / f"srt_{clip_id}.srt"
-            with open(srt_path_for_burn, "w", encoding="utf-8") as f:
-                f.write(new_srt_content)
-            subtitle_settings_for_burn = content_data.get("subtitle_settings")
-            if not subtitle_settings_for_burn:
-                # Fallback: try profile-level subtitle settings
-                try:
-                    _profile_row = supabase.table("editai_profiles")\
-                        .select("subtitle_settings")\
-                        .eq("id", profile_id)\
-                        .limit(1)\
-                        .execute()
-                    if _profile_row.data and _profile_row.data[0].get("subtitle_settings"):
-                        subtitle_settings_for_burn = _profile_row.data[0]["subtitle_settings"]
-                        logger.info(f"Voiceover regen clip {clip_id}: using profile-level subtitle settings")
-                except Exception as _prof_err:
-                    logger.warning(f"Voiceover regen clip {clip_id}: failed to load profile subtitle settings: {_prof_err}")
-            if not subtitle_settings_for_burn:
-                subtitle_settings_for_burn = {
-                    "fontSize": 48,
-                    "fontFamily": "Montserrat",
-                    "textColor": "#FFFFFF",
-                    "outlineColor": "#000000",
-                    "outlineWidth": 3,
-                    "positionY": 85,
-                }
-                logger.warning(f"Voiceover regen clip {clip_id}: no saved subtitle settings found, using defaults")
-            else:
-                logger.info(f"Voiceover regen clip {clip_id}: using saved subtitle settings from clip content")
-            logger.info(f"Voiceover regen clip {clip_id}: will burn subtitles from new SRT")
+        assembly_service = get_assembly_service()
 
-        if srt_path_for_burn and srt_path_for_burn.exists():
-            subtitles_filter = build_subtitle_filter(
-                srt_path=srt_path_for_burn,
-                subtitle_settings=subtitle_settings_for_burn,
-                video_width=1080,
-                video_height=1920
+        # Determine preset from final_video_path filename
+        preset_name = "TikTok"  # default
+        _fp_stem = final_video_path.stem.lower()
+        if "instagram_reels" in _fp_stem or "reels" in _fp_stem:
+            preset_name = "Instagram Reels"
+        elif "youtube_shorts" in _fp_stem:
+            preset_name = "YouTube Shorts"
+        elif "tiktok" in _fp_stem:
+            preset_name = "TikTok"
+
+        preset_data = {
+            "name": preset_name,
+            "width": 1080,
+            "height": 1920,
+            "fps": 30,
+            "video_codec": "h264_nvenc" if is_nvenc_available() else "libx264",
+        }
+
+        # Resolve subtitle settings (3-tier fallback: clip content → profile → assembly defaults)
+        sub_settings = content_data.get("subtitle_settings")
+        if not sub_settings:
+            try:
+                _profile_row = supabase.table("profiles")\
+                    .select("subtitle_settings")\
+                    .eq("id", profile_id)\
+                    .limit(1)\
+                    .execute()
+                if _profile_row.data and _profile_row.data[0].get("subtitle_settings"):
+                    sub_settings = _profile_row.data[0]["subtitle_settings"]
+            except Exception:
+                pass
+        # Don't set defaults here — assemble_and_render will handle default subtitle_settings
+
+        # Get voice settings
+        voice_id = content_data.get("tts_voice_id") or content_data.get("voice_id")
+        voice_settings_dict = content_data.get("voice_settings")
+
+        # Get words per phrase setting
+        max_wpf = content_data.get("max_words_per_phrase", content_data.get("words_per_subtitle", 2)) or 7
+
+        # Load stored segment composition to preserve original segments
+        stored_composition = content_data.get("segment_composition")
+        if stored_composition and isinstance(stored_composition, list) and len(stored_composition) > 0:
+            logger.info(
+                f"Voiceover regen clip {clip_id}: reusing {len(stored_composition)} "
+                f"stored segment selections from original render"
             )
-            mux_cmd = [
-                "ffmpeg", "-y",
-                "-i", str(mux_video_path),
-                "-i", str(normalized_path),
-                "-map", "0:v:0", "-map", "1:a:0",
-                "-vf", subtitles_filter,
-                "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-                "-c:a", "copy",
-                "-shortest",
-                "-movflags", "+faststart",
-                str(output_path)
-            ]
         else:
-            mux_cmd = [
-                "ffmpeg", "-y",
-                "-i", str(mux_video_path),
-                "-i", str(normalized_path),
-                "-map", "0:v:0", "-map", "1:a:0",
-                "-c:v", "copy", "-c:a", "copy",
-                "-shortest",
-                "-movflags", "+faststart",
-                str(output_path)
-            ]
-        mux_result = await asyncio.to_thread(safe_ffmpeg_run, mux_cmd, 300, "voiceover mux")
-        if mux_result.returncode != 0:
-            raise RuntimeError(f"FFmpeg mux failed: {mux_result.stderr[:300]}")
+            stored_composition = None
+            logger.warning(
+                f"Voiceover regen clip {clip_id}: no stored segment_composition found, "
+                f"will use fresh keyword matching (legacy clip)"
+            )
 
-        if not output_path.exists() or output_path.stat().st_size < 1000:
-            raise RuntimeError("Mux produced empty or tiny output")
+        # Call full assembly pipeline with reused audio (audio_path is silence-removed,
+        # the assembly render pipeline handles its own normalization)
+        new_final_path, new_raw_path, new_seg_composition = await asyncio.wait_for(
+            assembly_service.assemble_and_render(
+                script_text=content_data["tts_text"],
+                profile_id=profile_id,
+                preset_data=preset_data,
+                subtitle_settings=sub_settings,
+                elevenlabs_model=content_data.get("tts_model", "eleven_flash_v2_5"),
+                voice_id=voice_id,
+                source_video_ids=None,
+                match_overrides=stored_composition,
+                reuse_audio_path=str(audio_path),
+                reuse_audio_duration=processed_audio_duration,
+                reuse_srt_content=new_srt_content,
+                max_words_per_phrase=max_wpf,
+                voice_settings=voice_settings_dict,
+            ),
+            timeout=600  # 10 minutes for full re-render
+        )
 
-        # 8. Replace original file
-        shutil.move(str(output_path), str(final_video_path))
-        logger.info(f"Voiceover replaced for clip {clip_id}: {final_video_path}")
+        # 6. Replace the original final video with the new render
+        shutil.move(str(new_final_path), str(final_video_path))
+        logger.info(f"Voiceover re-rendered for clip {clip_id}: {final_video_path}")
 
-        # 9. Mark completed
+        # Update raw_video_path to the new truly raw assembly (subtitle-free)
+        if new_raw_path and Path(new_raw_path).exists():
+            raw_dest = final_video_path.parent / f"{final_video_path.stem}_raw.mp4"
+            shutil.move(str(new_raw_path), str(raw_dest))
+            supabase.table("editai_clips").update({
+                "raw_video_path": str(raw_dest),
+            }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+
+        # 7. Persist updated segment composition for future regenerations
+        if new_seg_composition:
+            try:
+                supabase.table("editai_clip_content").update({
+                    "segment_composition": new_seg_composition,
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }).eq("clip_id", clip_id).execute()
+                logger.info(f"Updated segment_composition for clip {clip_id} ({len(new_seg_composition)} segments)")
+            except Exception as comp_err:
+                logger.warning(f"Failed to update segment_composition for clip {clip_id}: {comp_err}")
+
+        # 8. Mark completed
         supabase.table("editai_clips").update({
             "final_status": "completed",
             "updated_at": datetime.now(timezone.utc).isoformat()

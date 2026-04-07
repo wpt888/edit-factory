@@ -652,6 +652,7 @@ async def _save_clip_to_library(
     render_jobs_lock: threading.Lock,
     raw_assembly_path: Optional[Path] = None,
     subtitle_settings: Optional[dict] = None,
+    segment_composition: Optional[list] = None,
 ) -> None:
     """Save or update a rendered clip in the library.
 
@@ -821,6 +822,10 @@ async def _save_clip_to_library(
                             _content_payload["tts_audio_path"] = _audio_path
                         if subtitle_settings:
                             _content_payload["subtitle_settings"] = subtitle_settings
+                        if render_request.voice_settings:
+                            _content_payload["voice_settings"] = render_request.voice_settings
+                        if segment_composition:
+                            _content_payload["segment_composition"] = segment_composition
                         if len(_content_payload) > 1:
                             supabase_lib.table("editai_clip_content").upsert(
                                 _content_payload, on_conflict="clip_id"
@@ -3193,7 +3198,7 @@ async def render_variants(
 
             # Run full assembly (with 15-minute timeout)
             try:
-                final_video_path, raw_assembly_path = await asyncio.wait_for(
+                final_video_path, raw_assembly_path, _seg_composition = await asyncio.wait_for(
                     assembly_service.assemble_and_render(
                         script_text=script_text,
                         profile_id=_profile_id,
@@ -3285,6 +3290,7 @@ async def render_variants(
                 _profile_id, _render_fingerprint, render_jobs_lock,
                 raw_assembly_path=raw_assembly_path,
                 subtitle_settings=subtitle_settings,
+                segment_composition=_seg_composition,
             )
 
         except Exception as e:
@@ -3504,7 +3510,7 @@ async def remake_variant(
 
             # Render with NO match_overrides → auto-matching with strong avoid set
             try:
-                final_video_path, raw_assembly_path = await asyncio.wait_for(
+                final_video_path, raw_assembly_path, _seg_composition = await asyncio.wait_for(
                     assembly_service.assemble_and_render(
                         script_text=script_text,
                         profile_id=_profile_id,
@@ -3567,6 +3573,7 @@ async def remake_variant(
                 _profile_id, _remake_fingerprint, render_jobs_lock,
                 raw_assembly_path=raw_assembly_path,
                 subtitle_settings=subtitle_settings,
+                segment_composition=_seg_composition,
             )
 
             logger.info(
@@ -3965,6 +3972,8 @@ async def sync_pipeline_to_library(
                     _content_payload["srt_content"] = _srt
                 if _audio_path:
                     _content_payload["tts_audio_path"] = _audio_path
+                if render_request.voice_settings:
+                    _content_payload["voice_settings"] = render_request.voice_settings
                 if len(_content_payload) > 1:
                     supabase.table("editai_clip_content").upsert(
                         _content_payload, on_conflict="clip_id"

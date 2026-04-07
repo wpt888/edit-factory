@@ -406,21 +406,39 @@ class BufferPublisher:
         Best-effort early cleanup: poll post status and delete video once Buffer
         has ingested it. If the app shuts down before this completes, the MinIO
         lifecycle policy (7-day auto-expiry) handles cleanup on the server side.
+
+        Waits at least INITIAL_GRACE_PERIOD seconds before considering cleanup,
+        giving Buffer time to download the video from the public URL.
         """
+        INITIAL_GRACE_PERIOD = 180  # 3 minutes — Buffer needs time to download
+        saw_processing = False
         elapsed = 0
+
+        # Wait the grace period before polling — Buffer needs to download the
+        # video before we can safely delete it from MinIO.
+        logger.info(f"Post {post_id}: waiting {INITIAL_GRACE_PERIOD}s grace period before cleanup polling")
+        await _async_sleep(INITIAL_GRACE_PERIOD)
+        elapsed += INITIAL_GRACE_PERIOD
+
         while elapsed < max_wait:
             try:
                 status = await self.get_post_status(post_id)
                 post_status = status.get("status", "")
                 is_processing = status.get("is_processing", False)
 
+                if is_processing:
+                    saw_processing = True
+
                 if post_status in ("sent", "error"):
                     logger.info(f"Post {post_id} reached final status '{post_status}', cleaning up storage")
                     self.delete_from_storage(storage_path)
                     return
 
-                if post_status in ("scheduled", "sending") and not is_processing:
-                    logger.info(f"Post {post_id} is '{post_status}' and video processed, cleaning up storage")
+                # Only treat "scheduled + not processing" as safe to clean up if
+                # we actually saw is_processing=True at some point (meaning Buffer
+                # downloaded and finished processing the video).
+                if post_status in ("scheduled", "sending") and not is_processing and saw_processing:
+                    logger.info(f"Post {post_id} is '{post_status}' and video processed (confirmed), cleaning up storage")
                     self.delete_from_storage(storage_path)
                     return
 
@@ -432,7 +450,7 @@ class BufferPublisher:
 
         # Timeout — don't force-delete; the video might still be needed for a
         # scheduled post days from now. MinIO lifecycle will clean it up in 7 days.
-        logger.info(f"Post {post_id} cleanup timeout after {max_wait}s — MinIO lifecycle will handle expiry")
+        logger.info(f"Post {post_id} cleanup timeout after {max_wait}s (saw_processing={saw_processing}) — MinIO lifecycle will handle expiry")
 
 
     def schedule_cleanup_monitor(self, post_id: str, storage_path: str, max_wait: int = 7200, poll_interval: int = 30):
