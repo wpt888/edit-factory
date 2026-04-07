@@ -3150,17 +3150,83 @@ async def _regenerate_voiceover_task(
 
         # Load stored segment composition to preserve original segments
         stored_composition = content_data.get("segment_composition")
+        source_video_ids_filter = None
+
         if stored_composition and isinstance(stored_composition, list) and len(stored_composition) > 0:
             logger.info(
                 f"Voiceover regen clip {clip_id}: reusing {len(stored_composition)} "
                 f"stored segment selections from original render"
             )
+            # Extract source_video_ids from composition for segment filtering
+            source_video_ids_filter = list({
+                seg.get("source_video_id")
+                for seg in stored_composition
+                if seg.get("source_video_id")
+            })
         else:
             stored_composition = None
-            logger.warning(
-                f"Voiceover regen clip {clip_id}: no stored segment_composition found, "
-                f"will use fresh keyword matching (legacy clip)"
+            # Fallback for legacy clips: trace clip → project → pipeline → previews/source_video_ids
+            logger.info(
+                f"Voiceover regen clip {clip_id}: no stored segment_composition, "
+                f"attempting to recover from pipeline data..."
             )
+            try:
+                project_id = clip_data.get("project_id")
+                if project_id:
+                    proj_row = supabase.table("editai_projects")\
+                        .select("pipeline_id")\
+                        .eq("id", project_id)\
+                        .limit(1)\
+                        .execute()
+                    pipeline_id = proj_row.data[0].get("pipeline_id") if proj_row.data else None
+
+                    if pipeline_id:
+                        pipe_row = supabase.table("editai_pipelines")\
+                            .select("previews, source_video_ids")\
+                            .eq("id", pipeline_id)\
+                            .limit(1)\
+                            .execute()
+                        if pipe_row.data:
+                            pipe_data = pipe_row.data[0]
+
+                            # Try to recover match data from pipeline previews
+                            variant_idx = clip_data.get("variant_index", 0)
+                            previews = pipe_data.get("previews") or {}
+                            preview_entry = previews.get(str(variant_idx)) or previews.get(variant_idx)
+                            if preview_entry and isinstance(preview_entry, dict):
+                                preview_data = preview_entry.get("preview_data") or {}
+                                matches = preview_data.get("matches")
+                                if matches and isinstance(matches, list) and len(matches) > 0:
+                                    stored_composition = matches
+                                    source_video_ids_filter = list({
+                                        m.get("source_video_id")
+                                        for m in matches
+                                        if m.get("source_video_id")
+                                    })
+                                    logger.info(
+                                        f"Voiceover regen clip {clip_id}: recovered {len(matches)} "
+                                        f"match entries from pipeline {pipeline_id} preview data"
+                                    )
+
+                            # Fallback: at least filter by pipeline's source_video_ids
+                            if not stored_composition:
+                                pipe_sv_ids = pipe_data.get("source_video_ids")
+                                if pipe_sv_ids and isinstance(pipe_sv_ids, list):
+                                    source_video_ids_filter = pipe_sv_ids
+                                    logger.info(
+                                        f"Voiceover regen clip {clip_id}: using {len(pipe_sv_ids)} "
+                                        f"source_video_ids from pipeline {pipeline_id} as filter"
+                                    )
+            except Exception as fallback_err:
+                logger.warning(
+                    f"Voiceover regen clip {clip_id}: fallback recovery failed: {fallback_err}"
+                )
+
+            if not stored_composition and not source_video_ids_filter:
+                logger.warning(
+                    f"Voiceover regen clip {clip_id}: no composition or pipeline data found, "
+                    f"will use fresh keyword matching across entire library"
+                )
 
         # Call full assembly pipeline with reused audio (audio_path is silence-removed,
         # the assembly render pipeline handles its own normalization)
@@ -3172,7 +3238,7 @@ async def _regenerate_voiceover_task(
                 subtitle_settings=sub_settings,
                 elevenlabs_model=content_data.get("tts_model", "eleven_flash_v2_5"),
                 voice_id=voice_id,
-                source_video_ids=None,
+                source_video_ids=source_video_ids_filter,
                 match_overrides=stored_composition,
                 reuse_audio_path=str(audio_path),
                 reuse_audio_duration=processed_audio_duration,
