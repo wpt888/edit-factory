@@ -681,6 +681,7 @@ async def _save_clip_to_library(
                                 "name": pipeline_name,
                                 "description": f"Auto-generated from pipeline {pipeline_id}",
                                 "status": "completed",
+                                "pipeline_id": pipeline_id,
                             }).execute()
                             if proj_result.data:
                                 library_project_id = proj_result.data[0]["id"]
