@@ -32,6 +32,7 @@ from app.utils import normalize_path
 from app.rate_limit import limiter
 from app.services.script_generator import get_script_generator
 from app.services.assembly_service import get_assembly_service, strip_product_group_tags
+from app.services.meta_visual_profiles import META_PROFILES, get_version_label
 from app.config import get_settings
 
 # Global FFmpeg concurrency — shared across ALL routes (library, pipeline, product)
@@ -540,6 +541,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "captions": captions_json,
                 "selected_captions": selected_captions_json,
                 "target_script_duration": pipeline_dict.get("target_script_duration"),
+                "meta_multiplication": pipeline_dict.get("meta_multiplication", False),
             }
             try:
                 supabase.table("editai_pipelines").upsert(row).execute()
@@ -653,6 +655,8 @@ async def _save_clip_to_library(
     raw_assembly_path: Optional[Path] = None,
     subtitle_settings: Optional[dict] = None,
     segment_composition: Optional[list] = None,
+    job_key=None,
+    visual_version: Optional[str] = None,
 ) -> None:
     """Save or update a rendered clip in the library.
 
@@ -660,7 +664,8 @@ async def _save_clip_to_library(
     clip upsert, clip_content save, segment usage_count increment.
     Shared by do_render and do_remake to avoid duplication.
     """
-    job = pipeline["render_jobs"][vid]
+    _jk = job_key if job_key is not None else vid
+    job = pipeline["render_jobs"][_jk]
     with render_jobs_lock:
         job["library_saved"] = False
     try:
@@ -742,19 +747,22 @@ async def _save_clip_to_library(
                     logger.warning(f"Duration probe failed: {dur_err}")
 
                 # Step D: Upsert clip row (update if already exists for this variant)
-                existing_clip = supabase_lib.table("editai_clips")\
+                _clip_query = supabase_lib.table("editai_clips")\
                     .select("id")\
                     .eq("project_id", library_project_id)\
                     .eq("variant_index", vid)\
-                    .eq("is_deleted", False)\
-                    .limit(1)\
-                    .execute()
+                    .eq("is_deleted", False)
+                if visual_version:
+                    _clip_query = _clip_query.eq("visual_version", visual_version)
+                else:
+                    _clip_query = _clip_query.is_("visual_version", "null")
+                existing_clip = _clip_query.limit(1).execute()
                 if not existing_clip.data:
                     insert_payload = {
                         "project_id": library_project_id,
                         "profile_id": profile_id,
                         "variant_index": vid,
-                        "variant_name": f"variant_{vid + 1}",
+                        "variant_name": f"variant_{vid + 1}" + (f"_{visual_version}" if visual_version else ""),
                         "raw_video_path": str(raw_assembly_path) if raw_assembly_path else str(final_video_path),
                         "final_video_path": str(final_video_path),
                         "thumbnail_path": str(thumb_path) if thumb_path else None,
@@ -762,6 +770,7 @@ async def _save_clip_to_library(
                         "is_selected": False,
                         "is_deleted": False,
                         "final_status": "completed",
+                        "visual_version": visual_version,
                     }
                     try:
                         insert_payload["render_fingerprint"] = render_fingerprint
@@ -806,7 +815,7 @@ async def _save_clip_to_library(
                 with render_jobs_lock:
                     job["library_saved"] = True
 
-                # Save script text and SRT to clip_content
+                # Save script text, SRT, and caption to clip_content
                 _clip_id = job.get("clip_id")
                 if _clip_id:
                     try:
@@ -814,6 +823,7 @@ async def _save_clip_to_library(
                         _tts_data = pipeline.get("tts_previews", {}).get(vid) or pipeline.get("tts_previews", {}).get(str(vid), {})
                         _srt = _tts_data.get("srt_content") if _tts_data else None
                         _audio_path = _tts_data.get("audio_path") if _tts_data else None
+                        _caption = pipeline.get("selected_captions", {}).get(str(vid))
                         _content_payload = {"clip_id": _clip_id}
                         if _script_text:
                             _content_payload["tts_text"] = _script_text
@@ -821,6 +831,8 @@ async def _save_clip_to_library(
                             _content_payload["srt_content"] = _srt
                         if _audio_path:
                             _content_payload["tts_audio_path"] = _audio_path
+                        if str(vid) in pipeline.get("selected_captions", {}):
+                            _content_payload["caption"] = _caption or ""
                         if subtitle_settings:
                             _content_payload["subtitle_settings"] = subtitle_settings
                         if render_request.voice_settings:
@@ -907,11 +919,15 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
 
         render_jobs = {}
         for k, v in (row.get("render_jobs") or {}).items():
-            try:
-                render_jobs[int(k)] = v
-            except (ValueError, TypeError):
-                logger.warning(f"Skipping invalid render_jobs key: {k}")
-                continue
+            # Meta multiplication keys are strings like "0_A", "0_B"
+            if isinstance(k, str) and "_" in k and any(k.endswith(f"_{c}") for c in "ABCDEFGHIJ"):
+                render_jobs[k] = v
+            else:
+                try:
+                    render_jobs[int(k)] = v
+                except (ValueError, TypeError):
+                    logger.warning(f"Skipping invalid render_jobs key: {k}")
+                    continue
 
         tts_previews = {}
         for k, v in (row.get("tts_previews") or {}).items():
@@ -963,6 +979,7 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "captions": row.get("captions") or {},
             "selected_captions": row.get("selected_captions") or {},
             "created_at": row.get("created_at", ""),
+            "meta_multiplication": row.get("meta_multiplication", False),
         }
 
         _restore_missing_tts_audio_paths(pipeline_id, pipeline, persist=False)
@@ -1158,6 +1175,9 @@ class PipelineRenderRequest(BaseModel):
     # Skip re-render: variants that already have a valid render with matching fingerprint
     skip_variants: Optional[List[int]] = None
 
+    # Meta render multiplication: render each variant twice for Instagram/Facebook
+    meta_multiplication: bool = False
+
 
 class PipelineRenderResponse(BaseModel):
     """Response model for render endpoint."""
@@ -1165,6 +1185,8 @@ class PipelineRenderResponse(BaseModel):
     rendering_variants: List[int]       # Which variants are being rendered
     total_variants: int                 # Total variants in pipeline
     message: Optional[str] = None       # Informational message (e.g. all already rendering)
+    meta_multiplication: bool = False
+    visual_versions: Optional[List[str]] = None  # ["A", "B"] when meta_multiplication is active
 
 
 class VariantStatus(BaseModel):
@@ -1180,6 +1202,8 @@ class VariantStatus(BaseModel):
     library_saved: Optional[bool] = None
     library_error: Optional[str] = None
     render_fingerprint: Optional[str] = None
+    visual_version: Optional[str] = None    # "A", "B" when meta_multiplication active
+    meta_platform: Optional[str] = None     # "instagram", "facebook"
 
 
 class RenderCheckResult(BaseModel):
@@ -1219,8 +1243,10 @@ class PipelineStatusResponse(BaseModel):
     provider: str
     variant_count: int = 0
     variants: List[VariantStatus]
+    meta_variants: Optional[List[VariantStatus]] = None
     preview_info: Dict[str, VariantPreviewInfo] = {}
     tts_info: Dict[str, VariantTtsInfo] = {}
+    library_project_id: Optional[str] = None
 
 
 class PipelineImportRequest(BaseModel):
@@ -1440,11 +1466,20 @@ async def cancel_variant_render(
             _render_locks[pipeline_id_str] = render_lock
 
     with render_lock:
+        # Cancel the standard job (integer key)
         job = pipeline.get("render_jobs", {}).get(variant_index)
         if job and job.get("status") == "processing":
             job["status"] = "cancelled"
             job["current_step"] = "Cancelled by user"
             job["progress"] = 0
+        # Also cancel meta multiplication versions (string keys like "0_A", "0_B")
+        for suffix in ("_A", "_B", "_C", "_D", "_E"):
+            meta_key = f"{variant_index}{suffix}"
+            meta_job = pipeline.get("render_jobs", {}).get(meta_key)
+            if meta_job and meta_job.get("status") == "processing":
+                meta_job["status"] = "cancelled"
+                meta_job["current_step"] = "Cancelled by user"
+                meta_job["progress"] = 0
 
     with _pipelines_lock:
         if pipeline_id not in _pipelines:
@@ -2836,6 +2871,41 @@ async def check_render_skip(
         script_text = pipeline["scripts"][vid]
         new_fingerprint = _compute_render_fingerprint(render_request, vid, script_text)
 
+        # For meta multiplication, check ALL versions (A and B must both exist and match)
+        if render_request.meta_multiplication:
+            _all_meta_ok = True
+            for _chk_ver_idx in range(len(META_PROFILES)):
+                _chk_key = f"{vid}_{get_version_label(_chk_ver_idx)}"
+                _chk_job = pipeline.get("render_jobs", {}).get(_chk_key)
+                if not _chk_job or _chk_job.get("status") != "completed":
+                    _all_meta_ok = False
+                    break
+                _chk_video = _chk_job.get("final_video_path")
+                if not _chk_video or not Path(_chk_video).exists():
+                    _all_meta_ok = False
+                    break
+                # Recompute the meta-derived fingerprint for comparison
+                _chk_fp_base = new_fingerprint
+                _chk_fp = hashlib.sha256(
+                    f"{_chk_fp_base}:meta_ver={get_version_label(_chk_ver_idx)}:offset={META_PROFILES[_chk_ver_idx].segment_offset}".encode()
+                ).hexdigest()[:32]
+                if _chk_job.get("render_fingerprint") != _chk_fp:
+                    _all_meta_ok = False
+                    break
+            if _all_meta_ok:
+                results.append(RenderCheckResult(
+                    variant_index=vid, can_skip=True, reason="fingerprint_match",
+                    existing_video_path=_safe_relative_path(
+                        pipeline["render_jobs"][f"{vid}_A"]["final_video_path"]
+                    )
+                ))
+            else:
+                results.append(RenderCheckResult(
+                    variant_index=vid, can_skip=False, reason="meta_version_incomplete"
+                ))
+            continue
+
+        # Standard (non-meta) flow: check integer key
         existing_job = pipeline.get("render_jobs", {}).get(vid)
         if not existing_job:
             results.append(RenderCheckResult(
@@ -2965,24 +3035,38 @@ async def render_variants(
     # PIP-12: Snapshot script count for bound checks inside do_render
     _script_count_snapshot = len(pipeline["scripts"])
 
+    # Meta render multiplication: expand variant list to include visual versions
+    _meta_mul = render_request.meta_multiplication
+    # Persist meta_multiplication flag in pipeline state so it survives reload/sync
+    pipeline["meta_multiplication"] = bool(_meta_mul)
+    _render_tasks = []  # List of (variant_index, version_index, job_key)
+
+    for vid in render_request.variant_indices:
+        if _meta_mul:
+            for ver_idx in range(len(META_PROFILES)):
+                job_key = f"{vid}_{get_version_label(ver_idx)}"
+                _render_tasks.append((vid, ver_idx, job_key))
+        else:
+            _render_tasks.append((vid, None, vid))
+
     # Initialize render jobs for each variant and collect which ones to render
     state_lock = _get_pipeline_state_lock(pipeline_id)
-    variant_indices_to_render = []
+    _render_tasks_to_run = []
     with state_lock:
         # Store source_video_ids in pipeline state for reference
         if render_request.source_video_ids:
             pipeline["source_video_ids"] = render_request.source_video_ids
         _skip_set = set(render_request.skip_variants or [])
-        for variant_index in render_request.variant_indices:
+        for vid, ver_idx, job_key in _render_tasks:
             # Skip variants that user chose to keep from previous render
-            if variant_index in _skip_set:
+            if vid in _skip_set:
                 continue
 
-            existing_job = pipeline["render_jobs"].get(variant_index)
+            existing_job = pipeline["render_jobs"].get(job_key)
             if existing_job and existing_job.get("status") == "processing":
-                continue  # Skip — already rendering this variant
+                continue  # Skip — already rendering this variant/version
 
-            pipeline["render_jobs"][variant_index] = {
+            pipeline["render_jobs"][job_key] = {
                 "status": "processing",
                 "progress": 0,
                 "current_step": "Initializing render",
@@ -2990,13 +3074,16 @@ async def render_variants(
                 "error": None,
                 "started_at": datetime.now(timezone.utc).isoformat()
             }
-            variant_indices_to_render.append(variant_index)
+            _render_tasks_to_run.append((vid, ver_idx, job_key))
 
     # Capture profile_id by value so the closure doesn't hold a mutable reference
     _profile_id = profile.profile_id
 
-    # Define render function for a single variant
-    async def do_render(vid):
+    # Define render function for a single variant (or variant+version when meta_multiplication is active)
+    async def do_render(vid, version_index=None, job_key=None):
+        # When not using meta multiplication, job_key defaults to vid
+        if job_key is None:
+            job_key = vid
         try:
             # PIP-12: Bound check — ensure variant index is still valid
             if vid >= _script_count_snapshot:
@@ -3014,16 +3101,24 @@ async def render_variants(
             # ── Render fingerprint: SHA-256 hash of ALL render-affecting parameters ──
             script_text = pipeline["scripts"][vid]
             _render_fingerprint = _compute_render_fingerprint(render_request, vid, script_text)
+            # Include visual version in fingerprint when meta multiplication is active
+            if version_index is not None:
+                _ver_label = get_version_label(version_index)
+                _fp_extra = hashlib.sha256(
+                    f"{_render_fingerprint}:meta_ver={_ver_label}:offset={META_PROFILES[version_index].segment_offset}".encode()
+                ).hexdigest()[:32]
+                _render_fingerprint = _fp_extra
 
+            _ver_tag = f" version={get_version_label(version_index)}" if version_index is not None else ""
             logger.info(
                 f"[Profile {_profile_id}] ═══ RENDER START ═══ "
-                f"pipeline={pipeline_id} variant={vid} fingerprint={_render_fingerprint}"
+                f"pipeline={pipeline_id} variant={vid}{_ver_tag} fingerprint={_render_fingerprint}"
             )
 
             # PIP-04: pipeline is a mutable dict reference from _pipelines — all access
             # through pipeline[...] sees the latest state. Cancellation checks use
             # is_pipeline_cancelled() which reads from the separate _cancelled_pipelines dict.
-            job = pipeline["render_jobs"][vid]
+            job = pipeline["render_jobs"][job_key]
 
             # Check for cancellation before starting
             if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, vid):
@@ -3197,6 +3292,33 @@ async def render_variants(
                 logger.info(f"Pipeline {pipeline_id} variant {vid} cancelled before render")
                 return
 
+            # ── Meta multiplication: compute effective variant_index and subtitle override ──
+            _effective_vid = vid
+            _subtitle_override = None
+            if version_index is not None:
+                _meta_profile = META_PROFILES[version_index]
+                _effective_vid = vid + _meta_profile.segment_offset
+                _subtitle_override = _meta_profile.subtitle_style
+                logger.info(
+                    f"[RENDER {_render_fingerprint}] Meta version {get_version_label(version_index)} "
+                    f"({_meta_profile.name}): effective_vid={_effective_vid}, "
+                    f"segment_offset={_meta_profile.segment_offset}"
+                )
+                # Cross-version diversity: for version B, avoid segments used by version A
+                if version_index > 0:
+                    _ver_a_key = f"{vid}_{get_version_label(0)}"
+                    _ver_a_job = pipeline["render_jobs"].get(_ver_a_key)
+                    if _ver_a_job and _ver_a_job.get("segment_composition"):
+                        _ver_a_seg_ids = [
+                            s.get("segment_id") for s in _ver_a_job["segment_composition"]
+                            if s.get("segment_id")
+                        ]
+                        render_avoid_ids.update(_ver_a_seg_ids)
+                        logger.info(
+                            f"[RENDER {_render_fingerprint}] Cross-version diversity: "
+                            f"avoiding {len(_ver_a_seg_ids)} segments from version A"
+                        )
+
             # Run full assembly (with 15-minute timeout)
             try:
                 final_video_path, raw_assembly_path, _seg_composition = await asyncio.wait_for(
@@ -3221,7 +3343,7 @@ async def render_variants(
                         enable_glow=render_request.enable_glow,
                         glow_blur=render_request.glow_blur,
                         adaptive_sizing=render_request.adaptive_sizing,
-                        variant_index=vid,
+                        variant_index=_effective_vid,
                         voice_settings=render_request.voice_settings,
                         reuse_audio_path=reuse_audio_path,
                         reuse_audio_duration=reuse_audio_duration,
@@ -3233,6 +3355,8 @@ async def render_variants(
                         interstitial_slides=variant_interstitial_slides,
                         pip_overlays=variant_pip_overlays,
                         avoid_segment_ids=render_avoid_ids if render_avoid_ids else None,
+                        subtitle_style_override=_subtitle_override,
+                        visual_version_label=get_version_label(version_index) if version_index is not None else None,
                     ),
                     timeout=1800 if preset_data.get("encoding_mode") == "vbr_2pass" else 900
                 )
@@ -3265,6 +3389,12 @@ async def render_variants(
                 job["raw_video_path"] = str(raw_assembly_path)
                 job["render_fingerprint"] = _render_fingerprint
                 job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                # Store visual version label and segment composition for cross-version diversity
+                if version_index is not None:
+                    job["visual_version"] = get_version_label(version_index)
+                    job["meta_platform"] = META_PROFILES[version_index].name
+                if _seg_composition:
+                    job["segment_composition"] = _seg_composition
 
             # Log final output for debugging stale-video reports
             _file_size_mb = 0
@@ -3272,26 +3402,30 @@ async def render_variants(
                 _file_size_mb = final_video_path.stat().st_size / (1024 * 1024)
             except Exception:
                 pass
+            _ver_tag = f" version={get_version_label(version_index)}" if version_index is not None else ""
             logger.info(
                 f"[RENDER {_render_fingerprint}] ═══ RENDER COMPLETE ═══ "
-                f"output={final_video_path.name} size={_file_size_mb:.1f}MB"
+                f"output={final_video_path.name} size={_file_size_mb:.1f}MB{_ver_tag}"
             )
 
             logger.info(
                 f"[Profile {_profile_id}] Pipeline {pipeline_id} "
-                f"variant {vid} completed: {final_video_path}"
+                f"variant {vid}{_ver_tag} completed: {final_video_path}"
             )
 
             # PIP-01: Persist render result to DB OUTSIDE the lock (I/O should not hold lock)
             _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
             # Save rendered clip to library (extracted helper)
+            _visual_ver = get_version_label(version_index) if version_index is not None else None
             await _save_clip_to_library(
                 pipeline, pipeline_id, vid, final_video_path,
                 _profile_id, _render_fingerprint, render_jobs_lock,
                 raw_assembly_path=raw_assembly_path,
                 subtitle_settings=subtitle_settings,
                 segment_composition=_seg_composition,
+                job_key=job_key,
+                visual_version=_visual_ver,
             )
 
         except Exception as e:
@@ -3313,19 +3447,37 @@ async def render_variants(
 
     # Run all variant renders in parallel via asyncio.gather (throttled by semaphore)
     async def _render_all_variants():
-        async def _throttled_render(vid):
-            async with await acquire_render_slot():
-                await do_render(vid)
-        tasks = [_throttled_render(vid) for vid in variant_indices_to_render]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"Render variant {variant_indices_to_render[i]} failed: {result}")
+        if _meta_mul:
+            # Sequential per version (A then B), parallel across variants within each version.
+            # Version B needs version A's segment data for cross-version diversity,
+            # so all A renders must complete before B renders start.
+            for ver_idx in range(len(META_PROFILES)):
+                ver_tasks = [(v, vi, jk) for v, vi, jk in _render_tasks_to_run if vi == ver_idx]
+                if not ver_tasks:
+                    continue
+                async def _throttled_meta_render(_vid, _ver_idx, _job_key):
+                    async with await acquire_render_slot():
+                        await do_render(_vid, version_index=_ver_idx, job_key=_job_key)
+                tasks = [_throttled_meta_render(v, vi, jk) for v, vi, jk in ver_tasks]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.error(f"Render {ver_tasks[i][2]} failed: {result}")
+        else:
+            # Original flow: parallel across variants
+            async def _throttled_render(vid):
+                async with await acquire_render_slot():
+                    await do_render(vid)
+            tasks = [_throttled_render(v) for v, _, _ in _render_tasks_to_run]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.error(f"Render variant {_render_tasks_to_run[i][0]} failed: {result}")
         # PIP-08: Cancellation flag is now cleared per-variant at render start,
         # not globally here, to prevent a stale flag from cancelling a new render
         # that starts while a previous one's gather is still wrapping up.
 
-    if variant_indices_to_render:
+    if _render_tasks_to_run:
         # PIP-18: Only update render lock timestamp when we actually have variants to render
         # M4: Protect _render_locks_timestamps write with its meta lock
         with _render_locks_meta_lock:
@@ -3334,12 +3486,15 @@ async def render_variants(
     else:
         logger.info(f"Pipeline {pipeline_id}: all requested variants already rendering, nothing new to start")
 
-    # PIP-16: Return actual variant_indices_to_render, not the original request list
+    # PIP-16: Return actual rendering tasks, not the original request list
+    _rendering_variant_indices = list(set(v for v, _, _ in _render_tasks_to_run))
     return PipelineRenderResponse(
         pipeline_id=pipeline_id,
-        rendering_variants=variant_indices_to_render,
+        rendering_variants=_rendering_variant_indices,
         total_variants=len(pipeline["scripts"]),
-        message="All requested variants are already rendering" if not variant_indices_to_render else None
+        meta_multiplication=_meta_mul,
+        visual_versions=[get_version_label(i) for i in range(len(META_PROFILES))] if _meta_mul else None,
+        message="All requested variants are already rendering" if not _render_tasks_to_run else None
     )
 
 
@@ -3681,6 +3836,39 @@ async def get_pipeline_status(pipeline_id: str):
                 error=None
             ))
 
+    # Meta multiplication: also include version-specific render entries (e.g. "0_A", "0_B")
+    meta_variants = []
+    for jk, job in pipeline.get("render_jobs", {}).items():
+        if isinstance(jk, str) and "_" in jk:
+            # Parse "0_A" → variant_index=0, visual_version="A"
+            parts = str(jk).rsplit("_", 1)
+            try:
+                _meta_vid = int(parts[0])
+            except (ValueError, TypeError):
+                continue
+            _meta_ver = parts[1] if len(parts) > 1 else None
+            sanitized_error = "Processing failed. Check server logs for details." if job.get("error") else None
+            sanitized_lib_error = "Library save failed. Check server logs for details." if job.get("library_error") else None
+            raw_video_path = job.get("final_video_path")
+            raw_thumb_path = job.get("thumbnail_path")
+            safe_video_path = _safe_relative_path(raw_video_path)
+            safe_thumb_path = _safe_relative_path(raw_thumb_path)
+            meta_variants.append(VariantStatus(
+                variant_index=_meta_vid,
+                status=job["status"],
+                progress=job["progress"],
+                current_step=job["current_step"],
+                final_video_path=safe_video_path,
+                thumbnail_path=safe_thumb_path,
+                clip_id=job.get("clip_id"),
+                error=sanitized_error,
+                library_saved=job.get("library_saved"),
+                library_error=sanitized_lib_error,
+                render_fingerprint=job.get("render_fingerprint"),
+                visual_version=job.get("visual_version"),
+                meta_platform=job.get("meta_platform"),
+            ))
+
     # Recovery: look up missing clip_ids from editai_clips for completed variants
     if _clip_id_recovery_needed:
         library_project_id = pipeline.get("library_project_id")
@@ -3691,10 +3879,12 @@ async def get_pipeline_status(pipeline_id: str):
                 if supabase_lib:
                     for vid in _clip_id_recovery_needed:
                         try:
+                            # Query with visual_version=NULL for standard (non-meta) clips
                             clip_result = supabase_lib.table("editai_clips")\
                                 .select("id")\
                                 .eq("project_id", library_project_id)\
                                 .eq("variant_index", vid)\
+                                .is_("visual_version", "null")\
                                 .eq("is_deleted", False)\
                                 .limit(1)\
                                 .execute()
@@ -3702,7 +3892,7 @@ async def get_pipeline_status(pipeline_id: str):
                                 recovered_id = clip_result.data[0]["id"]
                                 # Update the variant in the response
                                 for v in variants:
-                                    if v.variant_index == vid:
+                                    if v.variant_index == vid and not v.visual_version:
                                         v.clip_id = recovered_id
                                         break
                                 # Persist recovery to render_jobs so future calls don't need lookup
@@ -3711,6 +3901,29 @@ async def get_pipeline_status(pipeline_id: str):
                                 logger.info(f"Recovered clip_id {recovered_id} for variant {vid}")
                         except Exception as clip_err:
                             logger.warning(f"clip_id recovery failed for variant {vid}: {clip_err}")
+
+                    # Also recover meta multiplication clip_ids
+                    for mv in meta_variants:
+                        if mv.status == "completed" and not mv.clip_id and mv.visual_version:
+                            try:
+                                meta_clip_result = supabase_lib.table("editai_clips")\
+                                    .select("id")\
+                                    .eq("project_id", library_project_id)\
+                                    .eq("variant_index", mv.variant_index)\
+                                    .eq("visual_version", mv.visual_version)\
+                                    .eq("is_deleted", False)\
+                                    .limit(1)\
+                                    .execute()
+                                if meta_clip_result.data and len(meta_clip_result.data) > 0:
+                                    _recovered_meta_id = meta_clip_result.data[0]["id"]
+                                    mv.clip_id = _recovered_meta_id
+                                    _meta_jk = f"{mv.variant_index}_{mv.visual_version}"
+                                    if _meta_jk in pipeline.get("render_jobs", {}):
+                                        pipeline["render_jobs"][_meta_jk]["clip_id"] = _recovered_meta_id
+                                    logger.info(f"Recovered meta clip_id {_recovered_meta_id} for variant {mv.variant_index} ver={mv.visual_version}")
+                            except Exception as meta_clip_err:
+                                logger.warning(f"Meta clip_id recovery failed for {mv.variant_index}_{mv.visual_version}: {meta_clip_err}")
+
                     # Persist recovered clip_ids to DB
                     _db_update_render_jobs(pipeline_id, pipeline.get("render_jobs", {}))
             except Exception as recovery_err:
@@ -3749,8 +3962,10 @@ async def get_pipeline_status(pipeline_id: str):
         provider=pipeline["provider"],
         variant_count=len(pipeline["scripts"]),
         variants=variants,
+        meta_variants=meta_variants if meta_variants else None,
         preview_info=preview_info,
         tts_info=tts_info,
+        library_project_id=pipeline.get("library_project_id"),
     )
 
 
@@ -3808,6 +4023,7 @@ async def get_pipeline_scripts(pipeline_id: str):
         "context": _strip_embedded_product_blocks(pipeline.get("context", "")),
         "provider": pipeline.get("provider", "gemini"),
         "variant_count": pipeline.get("variant_count", len(pipeline.get("scripts", []))),
+        "library_project_id": pipeline.get("library_project_id"),
     }
 
 
@@ -3837,10 +4053,18 @@ async def sync_pipeline_to_library(
         raise HTTPException(status_code=503, detail="Database not available")
 
     render_jobs: dict = pipeline.get("render_jobs", {})
-    completed_variants = {
-        int(k): v for k, v in render_jobs.items()
-        if isinstance(v, dict) and v.get("status") == "completed" and v.get("final_video_path")
-    }
+    completed_variants = {}
+    for k, v in render_jobs.items():
+        if not (isinstance(v, dict) and v.get("status") == "completed" and v.get("final_video_path")):
+            continue
+        # Meta multiplication keys are strings like "0_A"; standard keys are ints
+        if isinstance(k, str) and "_" in k:
+            completed_variants[k] = v
+        else:
+            try:
+                completed_variants[int(k)] = v
+            except (ValueError, TypeError):
+                continue
 
     if not completed_variants:
         return {"synced": 0, "message": "No completed variants to sync"}
@@ -3868,16 +4092,33 @@ async def sync_pipeline_to_library(
                 raise HTTPException(status_code=500, detail="Failed to create library project")
             library_project_id = proj_result.data[0]["id"]
 
-    # Check which clips already exist (fetch id + variant_index for update)
+    # Check which clips already exist (fetch id + variant_index + visual_version for update)
     existing_clips = supabase.table("editai_clips")\
-        .select("id, variant_index")\
+        .select("id, variant_index, visual_version")\
         .eq("project_id", library_project_id)\
         .eq("is_deleted", False)\
         .execute()
-    existing_map = {c["variant_index"]: c["id"] for c in (existing_clips.data or [])}
+    # Key by (variant_index, visual_version) to differentiate A/B versions
+    existing_map = {}
+    for c in (existing_clips.data or []):
+        _em_key = (c["variant_index"], c.get("visual_version"))
+        existing_map[_em_key] = c["id"]
 
     synced = 0
-    for vid, job in sorted(completed_variants.items()):
+    for job_key, job in sorted(completed_variants.items(), key=lambda x: str(x[0])):
+        # Parse job_key: integer for standard, "N_X" for meta multiplication
+        _visual_ver = job.get("visual_version")  # "A", "B", or None
+        if isinstance(job_key, str) and "_" in str(job_key):
+            parts = str(job_key).rsplit("_", 1)
+            try:
+                vid = int(parts[0])
+            except (ValueError, TypeError):
+                continue
+            if not _visual_ver:
+                _visual_ver = parts[1] if len(parts) > 1 else None
+        else:
+            vid = int(job_key) if not isinstance(job_key, int) else job_key
+
         final_video_path = Path(job["final_video_path"])
         if not final_video_path.exists():
             logger.warning(f"Pipeline {pipeline_id} variant {vid}: video file not found at {final_video_path}")
@@ -3920,10 +4161,11 @@ async def sync_pipeline_to_library(
         except Exception:
             pass
 
-        # Upsert clip (update if exists, insert if new)
+        # Upsert clip keyed by (variant_index, visual_version) to prevent A overwriting B
         clip_id_to_set = None
-        if vid in existing_map:
-            existing_id = existing_map[vid]
+        _em_lookup = (vid, _visual_ver)
+        if _em_lookup in existing_map:
+            existing_id = existing_map[_em_lookup]
             supabase.table("editai_clips").update({
                 "raw_video_path": str(_raw_assembly_path) if _raw_assembly_path else str(final_video_path),
                 "final_video_path": str(final_video_path),
@@ -3933,13 +4175,14 @@ async def sync_pipeline_to_library(
                 "is_deleted": False,
             }).eq("id", existing_id).execute()
             clip_id_to_set = existing_id
-            logger.info(f"Pipeline {pipeline_id} variant {vid}: updated existing clip {existing_id}")
+            logger.info(f"Pipeline {pipeline_id} variant {vid} ver={_visual_ver}: updated existing clip {existing_id}")
         else:
             clip_result = supabase.table("editai_clips").insert({
                 "project_id": library_project_id,
                 "profile_id": profile.profile_id,
                 "variant_index": vid,
-                "variant_name": f"variant_{vid + 1}",
+                "variant_name": f"variant_{vid + 1}" + (f"_{_visual_ver}" if _visual_ver else ""),
+                "visual_version": _visual_ver,
                 "raw_video_path": str(_raw_assembly_path) if _raw_assembly_path else str(final_video_path),
                 "final_video_path": str(final_video_path),
                 "thumbnail_path": str(thumb_path) if thumb_path else None,
@@ -3959,13 +4202,14 @@ async def sync_pipeline_to_library(
             job["library_saved"] = True
             job.pop("library_error", None)
 
-        # Save script text and SRT to clip_content
+        # Save script text, SRT, and caption to clip_content
         if clip_id_to_set:
             try:
                 _script_text = pipeline.get("scripts", [])[vid] if vid < len(pipeline.get("scripts", [])) else None
                 _tts_data = pipeline.get("tts_previews", {}).get(vid) or pipeline.get("tts_previews", {}).get(str(vid), {})
                 _srt = _tts_data.get("srt_content") if _tts_data else None
                 _audio_path = _tts_data.get("audio_path") if _tts_data else None
+                _caption = pipeline.get("selected_captions", {}).get(str(vid))
                 _content_payload = {"clip_id": clip_id_to_set}
                 if _script_text:
                     _content_payload["tts_text"] = _script_text
@@ -3973,6 +4217,8 @@ async def sync_pipeline_to_library(
                     _content_payload["srt_content"] = _srt
                 if _audio_path:
                     _content_payload["tts_audio_path"] = _audio_path
+                if str(vid) in pipeline.get("selected_captions", {}):
+                    _content_payload["caption"] = _caption or ""
                 if render_request.voice_settings:
                     _content_payload["voice_settings"] = render_request.voice_settings
                 if len(_content_payload) > 1:
@@ -4658,6 +4904,39 @@ async def save_selected_captions(
 
     pipeline["selected_captions"] = req.selected_captions
     _db_save_pipeline(req.pipeline_id, pipeline)
+
+    # Keep existing library clips in sync so Smart Schedule V2 uses the latest
+    # user-edited caption even when the clip was saved before this edit.
+    try:
+        repo = get_repository()
+        supabase = repo.get_client() if repo else None
+        if supabase:
+            render_jobs = pipeline.get("render_jobs", {})
+            for variant_key, caption_text in req.selected_captions.items():
+                try:
+                    variant_index = int(str(variant_key))
+                except (TypeError, ValueError):
+                    continue
+
+                clip_ids_to_update = set()
+                standard_job = render_jobs.get(variant_index)
+                if standard_job and standard_job.get("clip_id"):
+                    clip_ids_to_update.add(standard_job["clip_id"])
+
+                for job_key, job in render_jobs.items():
+                    if not isinstance(job_key, str) or not job_key.startswith(f"{variant_index}_"):
+                        continue
+                    if job.get("clip_id"):
+                        clip_ids_to_update.add(job["clip_id"])
+
+                for clip_id in clip_ids_to_update:
+                    supabase.table("editai_clip_content").upsert(
+                        {"clip_id": clip_id, "caption": caption_text or ""},
+                        on_conflict="clip_id"
+                    ).execute()
+    except Exception as e:
+        logger.warning(f"Failed to sync selected captions to clip_content for pipeline {req.pipeline_id}: {e}")
+
     return {"ok": True}
 
 

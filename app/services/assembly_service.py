@@ -1655,6 +1655,8 @@ class AssemblyService:
         pip_overlays: Optional[Dict[str, dict]] = None,
         avoid_segment_ids: Optional[set] = None,
         _preview_mode: bool = False,
+        subtitle_style_override: Optional[Dict[str, object]] = None,
+        visual_version_label: Optional[str] = None,
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
@@ -2075,7 +2077,8 @@ class AssemblyService:
             output_dir.mkdir(parents=True, exist_ok=True)
 
             safe_preset_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', preset_data['name'])
-            final_output_path = output_dir / f"assembly_{uuid.uuid4().hex[:8]}_{safe_preset_name}.mp4"
+            _ver_suffix = f"_v{visual_version_label}" if visual_version_label else ""
+            final_output_path = output_dir / f"variant_{variant_index + 1}{_ver_suffix}_{uuid.uuid4().hex[:8]}_{safe_preset_name}.mp4"
 
             # Save pre-subtitle assembly for voiceover regeneration
             raw_assembly_path = output_dir / f"{final_output_path.stem}_raw.mp4"
@@ -2091,6 +2094,10 @@ class AssemblyService:
             subtitle_settings["enableGlow"] = enable_glow
             subtitle_settings["glowBlur"] = glow_blur if enable_glow else 0
             subtitle_settings["adaptiveSizing"] = adaptive_sizing
+
+            # Meta render multiplication: override subtitle style per visual version
+            if subtitle_style_override:
+                subtitle_settings.update(subtitle_style_override)
 
             await _render_with_preset(
                 video_path=assembled_video_path,

@@ -114,7 +114,7 @@ CREATE INDEX IF NOT EXISTS idx_projects_profile_id ON editai_projects(profile_id
 
 -- =====================================================
 -- TABLE: editai_clips
--- Source: original schema + migrations 001, 012, 015, 024, 025
+-- Source: original schema + migrations 001, 012, 015, 024, 025, 040, 041
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS editai_clips (
@@ -144,6 +144,12 @@ CREATE TABLE IF NOT EXISTS editai_clips (
     -- Tags (from 025) - stored as JSON array string
     tags              TEXT DEFAULT '[]',
 
+    -- Visual version for Meta multiplication (from 040)
+    visual_version    TEXT,
+
+    -- Caption for smart schedule (from 041)
+    caption           TEXT,
+
     created_at        TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at        TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
 
@@ -157,7 +163,7 @@ CREATE INDEX IF NOT EXISTS idx_editai_clips_deleted_at ON editai_clips(deleted_a
 
 -- =====================================================
 -- TABLE: editai_clip_content
--- Source: original schema + migrations 009, 015
+-- Source: original schema + migrations 009, 015, 041
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS editai_clip_content (
@@ -176,6 +182,9 @@ CREATE TABLE IF NOT EXISTS editai_clip_content (
     updated_at      TEXT,
     subtitle_settings TEXT,
     tts_voice_id    TEXT,
+
+    -- Caption for smart schedule (from 041)
+    caption         TEXT,
 
     created_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
 
@@ -301,7 +310,7 @@ CREATE TABLE IF NOT EXISTS editai_export_presets (
 
 -- =====================================================
 -- TABLE: editai_exports
--- Source: original schema
+-- Source: original schema + 040
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS editai_exports (
@@ -312,6 +321,9 @@ CREATE TABLE IF NOT EXISTS editai_exports (
     file_size       INTEGER,
     status          TEXT DEFAULT 'pending',
     error           TEXT,
+
+    -- Visual version for Meta multiplication (from 040)
+    visual_version  TEXT,
 
     created_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -368,7 +380,7 @@ CREATE INDEX IF NOT EXISTS idx_product_groups_profile_id ON editai_product_group
 
 -- =====================================================
 -- TABLE: editai_pipelines
--- Source: migration 016 + 021 + 033
+-- Source: migration 016 + 021 + 033 + 040
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS editai_pipelines (
@@ -391,6 +403,9 @@ CREATE TABLE IF NOT EXISTS editai_pipelines (
 
     -- Source video IDs (from 021)
     source_video_ids TEXT DEFAULT '[]',
+
+    -- Meta multiplication (from 040)
+    meta_multiplication INTEGER DEFAULT 0,
 
     created_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -510,6 +525,12 @@ CREATE TABLE IF NOT EXISTS editai_schedule_plans (
     scheduled_count INTEGER NOT NULL DEFAULT 0,
     failed_count    INTEGER NOT NULL DEFAULT 0,
     summary         TEXT,
+    -- V2 smart schedule columns (migration 039)
+    platform_times  TEXT DEFAULT NULL,
+    jitter_minutes  INTEGER DEFAULT 0,
+    jitter_seed     INTEGER DEFAULT NULL,
+    variant_routing TEXT DEFAULT NULL,
+    plan_version    INTEGER NOT NULL DEFAULT 1,
 
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -536,6 +557,11 @@ CREATE TABLE IF NOT EXISTS editai_schedule_items (
     postiz_post_id  TEXT,
     error_message   TEXT,
     caption         TEXT,
+    -- V2 smart schedule columns (migration 039)
+    integration_id  TEXT DEFAULT NULL,
+    platform_type   TEXT DEFAULT NULL,
+    jitter_offset_minutes INTEGER DEFAULT 0,
+    variant_index   INTEGER DEFAULT NULL,
 
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -548,6 +574,7 @@ CREATE INDEX IF NOT EXISTS idx_schedule_items_plan ON editai_schedule_items(plan
 CREATE INDEX IF NOT EXISTS idx_schedule_items_clip ON editai_schedule_items(clip_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_items_date ON editai_schedule_items(scheduled_date);
 CREATE INDEX IF NOT EXISTS idx_schedule_items_status ON editai_schedule_items(status);
+CREATE INDEX IF NOT EXISTS idx_schedule_items_integration ON editai_schedule_items(integration_id);
 
 -- =====================================================
 -- TABLE: jobs (background processing)

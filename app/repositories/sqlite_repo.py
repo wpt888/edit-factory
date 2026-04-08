@@ -29,6 +29,8 @@ _JSON_COLUMNS = frozenset({
     "metadata", "selected_image_urls", "pip_config", "slide_config",
     "tts_timestamps", "tags", "product_ids", "integration_ids",
     "collection_ids", "summary",
+    # V2 smart schedule
+    "platform_times", "variant_routing",
 })
 
 
@@ -1812,6 +1814,14 @@ class SQLiteRepository(DataRepository):
         elif operation == "insert":
             if data is None:
                 raise ValueError("data is required for insert operation")
+            # Support bulk insert when data is a list of dicts
+            if isinstance(data, list):
+                rows = []
+                for item in data:
+                    row = self._insert_raw(table, item)
+                    if row:
+                        rows.append(row)
+                return QueryResult(data=rows, count=len(rows))
             row = self._insert_raw(table, data)
             return QueryResult(data=[row] if row else [], count=1 if row else 0)
 

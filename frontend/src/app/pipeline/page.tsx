@@ -135,6 +135,8 @@ interface VariantStatus {
   library_saved?: boolean;
   library_error?: string;
   render_fingerprint?: string;
+  visual_version?: string;
+  meta_platform?: string;
 }
 
 interface VariantPreviewInfo {
@@ -843,9 +845,11 @@ function PipelinePage() {
   const [existingRenderCount, setExistingRenderCount] = useState(0);
   const [presetName, setPresetName] = useState("TikTok");
   const [renderSettings, setRenderSettings] = useState<RenderSettings>({ ...DEFAULT_RENDER_SETTINGS });
+  const [metaMultiplication, setMetaMultiplication] = useState(false);
   const [publishVariant, setPublishVariant] = useState<VariantStatus | null>(null);
   const [generatedCaptions, setGeneratedCaptions] = useState<Record<string, string>>({});
   const [generatedYoutubeTitles, setGeneratedYoutubeTitles] = useState<Record<string, string>>({});
+  const [libraryProjectId, setLibraryProjectId] = useState<string | null>(null);
 
   // History sidebar
   const [historyPipelines, setHistoryPipelines] = useState<PipelineListItem[]>([]);
@@ -1062,6 +1066,7 @@ function PipelinePage() {
         if (data.context) setContext(stripEmbeddedProductBlocks(data.context));
         if (data.provider) setProvider(data.provider);
         if (data.variant_count) setVariantCount(data.variant_count);
+        if (data.library_project_id) setLibraryProjectId(data.library_project_id);
 
         // Restore TTS results from history info (inline to avoid hoisting issues)
         const ttsInfo: Record<string, { has_audio: boolean; audio_duration: number; approved?: boolean }> = data.tts_info || {};
@@ -1444,17 +1449,22 @@ function PipelinePage() {
 
   const { startPolling: startRenderPolling, stopPolling: stopRenderPolling } = usePolling<{
     variants: VariantStatus[];
+    meta_variants?: VariantStatus[];
+    library_project_id?: string | null;
   }>({
     endpoint: renderStatusEndpoint,
     interval: 2000,
     enabled: false,
     onData: (data) => {
       const allVariants = data.variants || [];
+      const metaVariants = data.meta_variants || [];
       // Only show variants that have been submitted for rendering (not "not_started")
-      const renderedVariants = allVariants.filter(
-        (v) => v.status !== "not_started"
-      );
+      // When meta_variants exist, replace the base variants with meta versions
+      const renderedVariants = metaVariants.length > 0
+        ? metaVariants.filter((v) => v.status !== "not_started")
+        : allVariants.filter((v) => v.status !== "not_started");
       setVariantStatuses(renderedVariants);
+      if (data.library_project_id) setLibraryProjectId(data.library_project_id);
       // Stop polling only when every rendered variant is done (ignore not_started ones)
       // AND library save has resolved (true or error) for all completed variants.
       // Without this, polling stops while library_saved is still false (race condition).
@@ -1494,7 +1504,8 @@ function PipelinePage() {
         .then(data => {
           if (!data?.variants) return;
           const currentScriptCount = scripts.length;
-          const completed = data.variants.filter(
+          const allVars = (data.meta_variants?.length > 0 ? data.meta_variants : data.variants) || [];
+          const completed = allVars.filter(
             (v: { status: string; variant_index: number; final_video_path?: string }) =>
               v.status === "completed" &&
               v.final_video_path &&
@@ -1519,7 +1530,9 @@ function PipelinePage() {
         .then(data => {
           if (!data?.variants) return [];
           // Filter out not_started variants (same logic as polling onData)
-          const rendered = data.variants.filter(
+          // When meta_variants exist, use those instead (meta multiplication renders)
+          const sourceVars = (data.meta_variants?.length > 0 ? data.meta_variants : data.variants) || [];
+          const rendered = sourceVars.filter(
             (v: { status: string }) => v.status !== "not_started"
           );
           setVariantStatuses(rendered);
@@ -1807,6 +1820,7 @@ function PipelinePage() {
       words_per_subtitle: wordsPerSubtitle,
       min_segment_duration: minSegmentDuration,
       ultra_rapid_intro: ultraRapidIntro,
+      meta_multiplication: metaMultiplication,
       font_size: subtitleSettings.fontSize,
       font_family: subtitleSettings.fontFamily,
       text_color: subtitleSettings.textColor,
@@ -5005,6 +5019,25 @@ function PipelinePage() {
               onChange={setRenderSettings}
             />
 
+            {/* Meta render multiplication toggle */}
+            <div className="border rounded-lg p-3 space-y-1">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="meta-multiplication"
+                  checked={metaMultiplication}
+                  onCheckedChange={(checked) => setMetaMultiplication(checked === true)}
+                />
+                <Label htmlFor="meta-multiplication" className="text-sm cursor-pointer font-medium">
+                  Meta Multiplication (2x variante)
+                </Label>
+              </div>
+              <p className="text-xs text-muted-foreground ml-6">
+                {metaMultiplication
+                  ? `Fiecare variantă se va randa de 2 ori cu stiluri vizuale diferite (Instagram + Facebook), pentru a evita penalizarea Meta pentru conținut duplicat. Total rendări: ${selectedVariants.size * 2}.`
+                  : "Activează pentru a genera câte 2 versiuni vizual diferite per variantă (segmente și subtitrări diferite), optimizate pentru Instagram și Facebook."}
+              </p>
+            </div>
+
             {/* Continue to existing renders (same pattern as Step 2's "already generated") */}
             {existingRenderCount > 0 && (
               <Button
@@ -5015,7 +5048,8 @@ function PipelinePage() {
                     const data = await res.json();
                     if (!data?.variants) return;
                     const currentScriptCount = scripts.length;
-                    let rendered = data.variants.filter(
+                    const allVars = (data.meta_variants?.length > 0 ? data.meta_variants : data.variants) || [];
+                    let rendered = allVars.filter(
                       (v: { status: string; variant_index: number; final_video_path?: string }) =>
                         v.status === "completed" &&
                         v.final_video_path &&
@@ -5029,7 +5063,8 @@ function PipelinePage() {
                         const res2 = await apiGet(`/pipeline/status/${pipelineId}`);
                         const data2 = await res2.json();
                         if (data2?.variants) {
-                          rendered = data2.variants.filter(
+                          const allVars2 = (data2.meta_variants?.length > 0 ? data2.meta_variants : data2.variants) || [];
+                          rendered = allVars2.filter(
                             (v: { status: string; variant_index: number; final_video_path?: string }) =>
                               v.status === "completed" &&
                               v.final_video_path &&
@@ -5067,7 +5102,7 @@ function PipelinePage() {
               ) : (
                 <Play className="h-4 w-4 mr-2" />
               )}
-              {isCheckingRender ? "Se verifica..." : isRendering ? "Rendering..." : `Render Selected (${selectedVariants.size})`}
+              {isCheckingRender ? "Se verifica..." : isRendering ? "Rendering..." : `Render Selected (${selectedVariants.size}${metaMultiplication ? ` × 2 = ${selectedVariants.size * 2}` : ""})`}
             </Button>
 
             {/* Skip render dialog */}
@@ -5128,11 +5163,16 @@ function PipelinePage() {
             ) : null}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {variantStatuses.map((status) => (
-                <Card key={status.variant_index}>
+                <Card key={status.visual_version ? `${status.variant_index}_${status.visual_version}` : status.variant_index}>
                   <CardHeader>
                     <div className="flex items-center justify-between">
                       <CardTitle className="text-lg">
                         Variant {status.variant_index + 1}
+                        {status.visual_version && (
+                          <Badge variant="outline" className="ml-2 text-xs">
+                            {status.visual_version} — {status.meta_platform === "instagram" ? "Instagram" : status.meta_platform === "facebook" ? "Facebook" : status.meta_platform}
+                          </Badge>
+                        )}
                       </CardTitle>
                       <div className="flex items-center gap-2">
                         {status.current_step === "Render existent folosit" ? (
@@ -5323,7 +5363,8 @@ function PipelinePage() {
                                 const res = await apiGet(`/pipeline/status/${pipelineId}`);
                                 const data = await res.json();
                                 if (data?.variants) {
-                                  const renderedVariants = (data.variants || []).filter((v: VariantStatus) => v.status !== "not_started");
+                                  const srcVars = (data.meta_variants?.length > 0 ? data.meta_variants : data.variants) || [];
+                                  const renderedVariants = srcVars.filter((v: VariantStatus) => v.status !== "not_started");
                                   setVariantStatuses(renderedVariants);
                                 }
                               } catch {
@@ -5380,6 +5421,13 @@ function PipelinePage() {
                   thumbnail_path: v.thumbnail_path,
                 }))}
               initialCaptions={generatedCaptions}
+              projectId={libraryProjectId ?? undefined}
+              allLibrarySaved={
+                variantStatuses.filter(v => v.status === "completed").length > 0 &&
+                variantStatuses
+                  .filter(v => v.status === "completed")
+                  .every(v => v.library_saved === true)
+              }
             />
           </div>
         )}

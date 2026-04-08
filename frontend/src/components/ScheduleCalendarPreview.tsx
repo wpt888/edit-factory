@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { Badge } from "@/components/ui/badge";
 
 /** A clip entry within the schedule preview */
 export interface ScheduleEntry {
@@ -9,6 +10,11 @@ export interface ScheduleEntry {
   clip_name: string;
   collection_name: string;
   thumbnail_path?: string;
+  // V2 smart schedule fields
+  integration_id?: string;
+  platform_type?: string;
+  variant_index?: number;
+  jitter_offset_minutes?: number;
 }
 
 interface ScheduleCalendarPreviewProps {
@@ -39,11 +45,38 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
+/** Friendly platform label */
+function platformLabel(type: string): string {
+  const labels: Record<string, string> = {
+    "tiktok": "TikTok",
+    "instagram-standalone": "Instagram",
+    "instagram": "Instagram",
+    "youtube": "YouTube",
+    "facebook": "Facebook",
+    "threads": "Threads",
+    "x": "X",
+    "twitter": "Twitter",
+    "bluesky": "Bluesky",
+    "linkedin": "LinkedIn",
+    "linkedin-page": "LinkedIn",
+  };
+  return labels[type] || type;
+}
+
+/** Format jitter offset for display */
+function formatJitter(offset: number): string {
+  if (offset === 0) return "";
+  return offset > 0 ? `+${offset}m` : `${offset}m`;
+}
+
 /**
  * Calendar-style grid preview of scheduled clips.
  * Rows = days, columns = clips for that day.
+ * V2: Shows platform badges, variant indices, and jitter offsets.
  */
 export function ScheduleCalendarPreview({ entries }: ScheduleCalendarPreviewProps) {
+  const isV2 = entries.some((e) => e.platform_type);
+
   // Build colour map keyed by collection name (stable across renders for same input)
   const collectionColorMap = useMemo(() => {
     const names = [...new Set(entries.map((e) => e.collection_name))];
@@ -100,11 +133,12 @@ export function ScheduleCalendarPreview({ entries }: ScheduleCalendarPreviewProp
 
             {/* Clip cells */}
             <div className="flex-1 flex flex-wrap gap-2 p-2">
-              {clips.map((clip) => {
+              {clips.map((clip, idx) => {
                 const color = collectionColorMap[clip.collection_name];
+                const jitterStr = clip.jitter_offset_minutes != null ? formatJitter(clip.jitter_offset_minutes) : "";
                 return (
                   <div
-                    key={clip.clip_id}
+                    key={`${clip.clip_id}-${clip.integration_id ?? idx}`}
                     className={`flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs ${color.bg} ${color.border}`}
                   >
                     {clip.thumbnail_path ? (
@@ -119,12 +153,30 @@ export function ScheduleCalendarPreview({ entries }: ScheduleCalendarPreviewProp
                       </div>
                     )}
                     <div className="min-w-0">
-                      <div className={`font-medium truncate max-w-[140px] ${color.text}`}>
+                      <div className={`font-medium truncate max-w-[160px] ${color.text}`}>
                         {clip.clip_name}
                       </div>
-                      <div className="text-muted-foreground truncate max-w-[140px]">
+                      <div className="text-muted-foreground truncate max-w-[160px]">
                         {clip.collection_name}
                       </div>
+                      {/* V2: platform + variant + jitter info */}
+                      {isV2 && clip.platform_type && (
+                        <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                          <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
+                            {platformLabel(clip.platform_type)}
+                          </Badge>
+                          {clip.variant_index != null && (
+                            <Badge variant="secondary" className="text-[10px] px-1 py-0 h-4">
+                              V{clip.variant_index + 1}
+                            </Badge>
+                          )}
+                          {jitterStr && (
+                            <span className="text-[10px] text-muted-foreground tabular-nums">
+                              {jitterStr}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
