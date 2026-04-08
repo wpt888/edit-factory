@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
 import {
   CalendarClock,
   Loader2,
@@ -23,6 +24,7 @@ import {
   Pause,
   XCircle,
   RefreshCw,
+  ShieldCheck,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiGet, apiPost } from "@/lib/api";
@@ -57,6 +59,7 @@ interface PreviewData {
   collections_used: number;
   excluded_collections: string[];
   clips_per_day: Record<string, number>;
+  variant_routing?: Record<string, number>;
 }
 
 interface SchedulePlan {
@@ -94,6 +97,27 @@ const TIMEZONES = [
   "Asia/Shanghai",
   "Australia/Sydney",
 ];
+
+const DEFAULT_PLATFORM_TIMES: Record<string, string> = {
+  "tiktok": "09:00",
+  "instagram-standalone": "12:00",
+  "instagram": "12:00",
+  "youtube": "15:00",
+  "facebook": "18:00",
+  "threads": "14:00",
+  "x": "10:00",
+  "twitter": "10:00",
+  "bluesky": "11:00",
+  "linkedin": "08:00",
+  "linkedin-page": "08:00",
+};
+
+const META_PLATFORM_TYPES = new Set([
+  "instagram-standalone",
+  "instagram",
+  "facebook",
+  "threads",
+]);
 
 /* ---------- Helpers ---------- */
 
@@ -140,9 +164,12 @@ export default function SchedulePage() {
     d.setDate(d.getDate() + 1);
     return d.toISOString().split("T")[0];
   });
-  const [postTime, setPostTime] = useState("09:00");
+  const [postTime, setPostTime] = useState("09:00"); // V1 fallback
   const [timezone, setTimezone] = useState("Europe/Bucharest");
   const [captionTemplate, setCaptionTemplate] = useState("");
+  // V2 smart schedule state
+  const [integrationTimes, setIntegrationTimes] = useState<Record<string, string>>({});
+  const [jitterMinutes, setJitterMinutes] = useState(15);
   const [loadingConfig, setLoadingConfig] = useState(true);
 
   // --- Preview state ---
@@ -280,11 +307,28 @@ export default function SchedulePage() {
   const toggleIntegration = (id: string) => {
     setSelectedIntegrationIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+        setIntegrationTimes((prev) => {
+          const copy = { ...prev };
+          delete copy[id];
+          return copy;
+        });
+      } else {
+        next.add(id);
+        const integ = integrations.find((i) => i.id === id);
+        const defaultTime = DEFAULT_PLATFORM_TIMES[integ?.type ?? ""] ?? "09:00";
+        setIntegrationTimes((prev) => ({ ...prev, [id]: defaultTime }));
+      }
       return next;
     });
   };
+
+  const selectedMetaCount = useMemo(() => {
+    return integrations.filter(
+      (i) => selectedIntegrationIds.has(i.id) && META_PLATFORM_TYPES.has(i.type)
+    ).length;
+  }, [integrations, selectedIntegrationIds]);
 
   const handlePreview = async () => {
     if (selectedProjectIds.size === 0) {
@@ -296,12 +340,23 @@ export default function SchedulePage() {
     setPreview(null);
 
     try {
-      const res = await apiPost("/schedule/preview", {
+      // Build V2 payload if integrations are selected with times
+      const hasV2 = selectedIntegrationIds.size > 0 && Object.keys(integrationTimes).length > 0;
+      const payload: Record<string, unknown> = {
         collection_ids: [...selectedProjectIds],
         start_date: startDate,
         post_time: postTime,
         timezone,
-      });
+      };
+      if (hasV2) {
+        payload.integration_ids = [...selectedIntegrationIds];
+        payload.platform_times = Object.fromEntries(
+          Object.entries(integrationTimes).filter(([id]) => selectedIntegrationIds.has(id))
+        );
+        payload.jitter_minutes = jitterMinutes;
+      }
+
+      const res = await apiPost("/schedule/preview", payload);
       const raw = await res.json();
       // Transform backend response to match frontend interface
       const data: PreviewData = {
@@ -311,12 +366,17 @@ export default function SchedulePage() {
           clip_name: a.clip_name as string,
           collection_name: a.project_name as string,
           thumbnail_path: a.thumbnail_path as string | undefined,
+          integration_id: a.integration_id as string | undefined,
+          platform_type: a.platform_type as string | undefined,
+          variant_index: a.variant_index as number | undefined,
+          jitter_offset_minutes: a.jitter_offset_minutes as number | undefined,
         })),
         total_clips: raw.total_clips,
         total_days: raw.days_used,
         collections_used: raw.collections_count,
         excluded_collections: (raw.excluded_collections || []).map((e: Record<string, string>) => e.name || "Unknown"),
         clips_per_day: raw.clips_per_day || {},
+        variant_routing: raw.variant_routing ?? undefined,
       };
       if (isMountedRef.current) setPreview(data);
     } catch (err) {
@@ -332,14 +392,22 @@ export default function SchedulePage() {
 
     setConfirming(true);
     try {
-      const res = await apiPost("/schedule/plans", {
+      const hasV2 = Object.keys(integrationTimes).length > 0;
+      const payload: Record<string, unknown> = {
         collection_ids: [...selectedProjectIds],
         start_date: startDate,
         post_time: postTime,
         timezone,
         integration_ids: [...selectedIntegrationIds],
         caption_template: captionTemplate,
-      });
+      };
+      if (hasV2) {
+        payload.platform_times = Object.fromEntries(
+          Object.entries(integrationTimes).filter(([id]) => selectedIntegrationIds.has(id))
+        );
+        payload.jitter_minutes = jitterMinutes;
+      }
+      const res = await apiPost("/schedule/plans", payload);
       const data = await res.json();
       toast.success(data.message || "Schedule confirmed! Publishing plan created.");
       setPreview(null);
@@ -428,8 +496,8 @@ export default function SchedulePage() {
             )}
           </div>
 
-          {/* Date / Time / Timezone row */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* Date / Timezone row */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="start-date">Start Date</Label>
               <input
@@ -440,17 +508,6 @@ export default function SchedulePage() {
                   setStartDate(e.target.value);
                   setPreview(null);
                 }}
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="post-time">Post Time</Label>
-              <input
-                id="post-time"
-                type="time"
-                value={postTime}
-                onChange={(e) => setPostTime(e.target.value)}
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
             </div>
@@ -472,30 +529,85 @@ export default function SchedulePage() {
             </div>
           </div>
 
-          {/* Integrations multi-select */}
+          {/* Integrations with per-platform time slots */}
           {integrations.length > 0 && (
-            <div className="space-y-2">
-              <Label>Postiz Integrations</Label>
-              <div className="flex flex-wrap gap-2 border rounded-md p-2">
-                {integrations.map((integ) => (
-                  <label
-                    key={integ.id}
-                    className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent cursor-pointer text-sm"
-                  >
-                    <Checkbox
-                      checked={selectedIntegrationIds.has(integ.id)}
-                      onCheckedChange={() => toggleIntegration(integ.id)}
-                    />
-                    {integ.picture && (
-                      <img src={integ.picture} alt="" className="size-5 rounded-full" />
-                    )}
-                    <span>{integ.name}</span>
-                    <Badge variant="outline" className="text-xs">
-                      {integ.type}
-                    </Badge>
-                  </label>
-                ))}
+            <div className="space-y-3">
+              <Label>Platforms & Post Times</Label>
+              <div className="border rounded-md divide-y">
+                {integrations.map((integ) => {
+                  const isSelected = selectedIntegrationIds.has(integ.id);
+                  const isMeta = META_PLATFORM_TYPES.has(integ.type);
+                  return (
+                    <div
+                      key={integ.id}
+                      className={`flex items-center gap-3 px-3 py-2.5 hover:bg-accent/50 transition-colors ${isSelected ? "bg-accent/30" : ""}`}
+                    >
+                      <Checkbox
+                        checked={isSelected}
+                        onCheckedChange={() => toggleIntegration(integ.id)}
+                      />
+                      {integ.picture && (
+                        <img src={integ.picture} alt="" className="size-6 rounded-full shrink-0" />
+                      )}
+                      <span className="flex-1 min-w-0 truncate text-sm font-medium">{integ.name}</span>
+                      <Badge variant={isMeta ? "default" : "outline"} className="text-xs shrink-0">
+                        {integ.type}
+                      </Badge>
+                      {isSelected && (
+                        <input
+                          type="time"
+                          value={integrationTimes[integ.id] ?? "09:00"}
+                          onChange={(e) =>
+                            setIntegrationTimes((prev) => ({ ...prev, [integ.id]: e.target.value }))
+                          }
+                          className="h-8 w-24 rounded-md border border-input bg-transparent px-2 text-sm shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
+
+              {/* Meta safety indicator — only confirmed after successful preview */}
+              {selectedMetaCount >= 2 && preview?.variant_routing && (
+                <div className="flex items-center gap-2 rounded-md border border-green-300 bg-green-50 dark:bg-green-950/30 dark:border-green-800 p-2.5 text-sm">
+                  <ShieldCheck className="size-4 text-green-600 dark:text-green-400 shrink-0" />
+                  <span className="text-green-800 dark:text-green-300">
+                    Distinct video versions confirmed for the selected Meta platforms
+                  </span>
+                </div>
+              )}
+              {selectedMetaCount >= 2 && !preview && (
+                <div className="flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-2.5 text-sm">
+                  <ShieldCheck className="size-4 text-blue-600 dark:text-blue-400 shrink-0" />
+                  <span className="text-blue-800 dark:text-blue-300">
+                    {selectedMetaCount} Meta platforms selected — preview will verify correct routing to Meta video versions
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Jitter slider */}
+          {selectedIntegrationIds.size > 0 && (
+            <div className="space-y-3">
+              <Label>Random Jitter</Label>
+              <div className="flex items-center gap-4">
+                <Slider
+                  value={[jitterMinutes]}
+                  onValueChange={([val]) => setJitterMinutes(val)}
+                  min={0}
+                  max={30}
+                  step={1}
+                  className="flex-1"
+                />
+                <span className="text-sm font-medium w-16 text-right tabular-nums">{jitterMinutes} min</span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {jitterMinutes > 0
+                  ? `\u00b1${jitterMinutes} min random offset will be applied to each post to avoid bot detection`
+                  : "No jitter \u2014 all posts at exact configured times"}
+              </p>
             </div>
           )}
 

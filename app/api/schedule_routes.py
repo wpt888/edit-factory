@@ -58,8 +58,13 @@ def _update_progress(job_id: str, percentage: int, step: str, status: str = "run
 class SchedulePreviewRequest(BaseModel):
     collection_ids: List[str]
     start_date: str  # ISO date string YYYY-MM-DD
-    post_time: str = "09:00"  # HH:MM
+    post_time: str = "09:00"  # HH:MM (fallback when platform_times not set)
     timezone: str = "Europe/Bucharest"
+    # V2 smart schedule fields
+    integration_ids: Optional[List[str]] = None
+    platform_times: Optional[Dict[str, str]] = None  # {integration_id: "HH:MM"}
+    jitter_minutes: int = Field(default=0, ge=0, le=60)
+    clip_ids: Optional[List[str]] = None  # Filter to specific clips (from pipeline selection)
 
 
 class ScheduleAssignmentResponse(BaseModel):
@@ -71,6 +76,11 @@ class ScheduleAssignmentResponse(BaseModel):
     scheduled_at: str
     thumbnail_path: Optional[str] = None
     duration: Optional[float] = None
+    # V2 smart schedule fields
+    integration_id: Optional[str] = None
+    platform_type: Optional[str] = None
+    jitter_offset_minutes: int = 0
+    variant_index: Optional[int] = None
 
 
 class SchedulePreviewResponse(BaseModel):
@@ -80,6 +90,8 @@ class SchedulePreviewResponse(BaseModel):
     collections_count: int
     assignments: List[ScheduleAssignmentResponse]
     excluded_collections: List[dict] = []
+    variant_routing: Optional[Dict[str, int]] = None
+    jitter_seed: Optional[int] = None
 
 
 class CreateSchedulePlanRequest(BaseModel):
@@ -90,6 +102,10 @@ class CreateSchedulePlanRequest(BaseModel):
     integration_ids: List[str]
     caption_template: str = ""
     name: str = ""
+    # V2 smart schedule fields
+    platform_times: Optional[Dict[str, str]] = None  # {integration_id: "HH:MM"}
+    jitter_minutes: int = Field(default=15, ge=0, le=60)
+    clip_ids: Optional[List[str]] = None  # Filter to specific clips (from pipeline selection)
 
 
 class SchedulePlanResponse(BaseModel):
@@ -109,9 +125,10 @@ class ScheduleProgressResponse(BaseModel):
 
 # --- Helper: fetch collection clips from DB ---
 
-def _fetch_collection_clips(collection_ids: List[str], profile_id: str):
+def _fetch_collection_clips(collection_ids: List[str], profile_id: str, clip_ids: Optional[List[str]] = None):
     """
     Fetch rendered clips grouped by project, with ownership verification.
+    When clip_ids is provided, only those clips are included (respects pipeline UI selection).
     Returns (collection_clips, collection_names) tuple.
     """
     repo = get_repository()
@@ -138,7 +155,7 @@ def _fetch_collection_clips(collection_ids: List[str], profile_id: str):
     # Fetch rendered clips for all valid projects
     clips_resp = repo.table_query("editai_clips", "select",
         filters=QueryFilters(
-            select="id, project_id, variant_index, variant_name, thumbnail_path, duration, final_video_path, final_status, postiz_status, is_deleted",
+            select="id, project_id, variant_index, variant_name, visual_version, thumbnail_path, duration, final_video_path, final_status, postiz_status, is_deleted",
             in_={"project_id": valid_project_ids},
             eq={"final_status": "completed"},
             or_="is_deleted.is.null,is_deleted.eq.false",
@@ -146,6 +163,24 @@ def _fetch_collection_clips(collection_ids: List[str], profile_id: str):
         ))
 
     clips = clips_resp.data if clips_resp.data else []
+
+    # Filter to specific clip IDs if provided (respects pipeline UI selection).
+    # When meta multiplication exists, pipeline Step 4 selects base variant clip IDs
+    # while the scheduler still needs the paired A/B renders for platform-specific routing.
+    if clip_ids:
+        clip_id_set = set(clip_ids)
+        selected_variants_by_project: Dict[str, set] = {}
+        for clip in clips:
+            if clip["id"] in clip_id_set:
+                selected_variants_by_project.setdefault(clip["project_id"], set()).add(
+                    clip.get("variant_index", 0)
+                )
+
+        clips = [
+            c for c in clips
+            if c["id"] in clip_id_set
+            or c.get("variant_index", 0) in selected_variants_by_project.get(c["project_id"], set())
+        ]
 
     # Group by project
     collection_clips: Dict[str, List[dict]] = {pid: [] for pid in valid_project_ids}
@@ -180,8 +215,23 @@ async def preview_schedule(
         raise HTTPException(status_code=400, detail="Invalid post_time format. Use HH:MM")
 
     collection_clips, collection_names = _fetch_collection_clips(
-        request.collection_ids, profile.profile_id
+        request.collection_ids, profile.profile_id, clip_ids=request.clip_ids
     )
+
+    # Resolve integration platform types for V2
+    integrations_info: Dict[str, str] = {}
+    if request.integration_ids:
+        try:
+            from app.services.postiz_service import get_postiz_publisher
+            publisher = get_postiz_publisher(profile.profile_id)
+            integrations = await publisher.get_integrations()
+            integrations_info = {i.id: i.type for i in integrations}
+        except Exception as e:
+            # V2 REQUIRES integration info for Meta safety — fail hard
+            raise HTTPException(
+                status_code=502,
+                detail=f"Could not fetch Postiz integrations (required for smart schedule): {e}"
+            )
 
     try:
         plan = build_schedule_plan(
@@ -190,6 +240,10 @@ async def preview_schedule(
             start_date=start_dt,
             post_time=post_tm,
             user_timezone=request.timezone,
+            integration_ids=request.integration_ids,
+            integrations_info=integrations_info,
+            platform_times=request.platform_times,
+            jitter_minutes=request.jitter_minutes,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -209,10 +263,16 @@ async def preview_schedule(
                 scheduled_at=a.scheduled_at.isoformat(),
                 thumbnail_path=a.thumbnail_path,
                 duration=a.duration,
+                integration_id=a.integration_id,
+                platform_type=a.platform_type,
+                jitter_offset_minutes=a.jitter_offset_minutes,
+                variant_index=a.variant_index,
             )
             for a in plan.assignments
         ],
         excluded_collections=plan.excluded_collections,
+        variant_routing=plan.variant_routing,
+        jitter_seed=plan.jitter_seed,
     )
 
 
@@ -241,8 +301,25 @@ async def create_schedule_plan(
 
     # Build the plan (re-computed server-side, not trusting client)
     collection_clips, collection_names = _fetch_collection_clips(
-        request.collection_ids, profile.profile_id
+        request.collection_ids, profile.profile_id, clip_ids=request.clip_ids
     )
+
+    # V2 activates when platform_times OR integration_ids with 2+ entries are provided
+    # (smart routing needs integration info to classify Meta vs non-Meta)
+    is_v2 = bool(request.platform_times) or len(request.integration_ids) >= 2
+    integrations_info: Dict[str, str] = {}
+    if is_v2:
+        try:
+            from app.services.postiz_service import get_postiz_publisher
+            publisher = get_postiz_publisher(profile.profile_id)
+            integrations = await publisher.get_integrations()
+            integrations_info = {i.id: i.type for i in integrations}
+        except Exception as e:
+            # V2 REQUIRES integration info for Meta safety — fail hard
+            raise HTTPException(
+                status_code=502,
+                detail=f"Could not fetch Postiz integrations (required for smart schedule): {e}"
+            )
 
     try:
         plan = build_schedule_plan(
@@ -251,6 +328,10 @@ async def create_schedule_plan(
             start_date=start_dt,
             post_time=post_tm,
             user_timezone=request.timezone,
+            integration_ids=request.integration_ids if is_v2 else None,
+            integrations_info=integrations_info if is_v2 else None,
+            platform_times=request.platform_times,
+            jitter_minutes=request.jitter_minutes if is_v2 else 0,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -259,11 +340,12 @@ async def create_schedule_plan(
     plan_id = str(uuid.uuid4())
     job_id = str(uuid.uuid4())
     plan_name = request.name or f"Schedule {start_dt.isoformat()}"
+    plan_version = 2 if is_v2 else 1
 
     repo = get_repository()
 
     # Insert plan record
-    repo.create_schedule_plan({
+    plan_record = {
         "id": plan_id,
         "profile_id": profile.profile_id,
         "name": plan_name,
@@ -282,19 +364,33 @@ async def create_schedule_plan(
             "clips_per_day": plan.clips_per_day,
             "collections_count": plan.collections_count,
         },
-    })
+        "plan_version": plan_version,
+    }
+    if is_v2:
+        plan_record["platform_times"] = request.platform_times
+        plan_record["jitter_minutes"] = request.jitter_minutes
+        plan_record["jitter_seed"] = plan.jitter_seed
+        plan_record["variant_routing"] = plan.variant_routing
+
+    repo.create_schedule_plan(plan_record)
 
     # Insert schedule items
     items_to_insert = []
     for a in plan.assignments:
-        items_to_insert.append({
+        item = {
             "plan_id": plan_id,
             "clip_id": a.clip_id,
             "project_id": a.project_id,
             "scheduled_date": a.scheduled_date.isoformat(),
             "scheduled_at": a.scheduled_at.isoformat(),
             "status": "pending",
-        })
+        }
+        if is_v2:
+            item["integration_id"] = a.integration_id
+            item["platform_type"] = a.platform_type
+            item["jitter_offset_minutes"] = a.jitter_offset_minutes
+            item["variant_index"] = a.variant_index
+        items_to_insert.append(item)
 
     if items_to_insert:
         # Insert in batches of 50
@@ -528,6 +624,11 @@ async def get_schedule_calendar(
                         "status": item["status"],
                         "postiz_post_id": item.get("postiz_post_id"),
                         "error_message": item.get("error_message"),
+                        # V2 fields
+                        "integration_id": item.get("integration_id"),
+                        "platform_type": item.get("platform_type"),
+                        "jitter_offset_minutes": item.get("jitter_offset_minutes", 0),
+                        "variant_index": item.get("variant_index"),
                     })
     except Exception as e:
         logger.warning(f"Failed to fetch local schedule items: {e}")
