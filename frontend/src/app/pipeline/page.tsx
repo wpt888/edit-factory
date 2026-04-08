@@ -145,6 +145,23 @@ interface VariantPreviewInfo {
   has_srt: boolean;
 }
 
+interface PipelineScriptsResponse {
+  pipeline_id: string;
+  scripts: string[];
+  context_products?: ContextProduct[];
+  preview_info?: Record<string, { has_audio: boolean; audio_duration: number; has_srt?: boolean }>;
+  tts_info?: Record<string, { has_audio: boolean; audio_duration: number; approved?: boolean }>;
+  captions?: Record<string, string[]>;
+  selected_captions?: Record<string, string>;
+  name?: string;
+  idea?: string;
+  context?: string;
+  provider?: string;
+  variant_count?: number;
+  meta_multiplication?: boolean;
+  library_project_id?: string | null;
+}
+
 interface CatalogProduct {
   id: string;
   title: string;
@@ -1044,7 +1061,7 @@ function PipelinePage() {
     (async () => {
       try {
         const res = await apiGet(`/pipeline/scripts/${urlPipelineId}`);
-        const data = await res.json();
+        const data = await res.json() as PipelineScriptsResponse;
         if (!isMountedRef.current) return;
 
         setPipelineId(data.pipeline_id);
@@ -1066,6 +1083,7 @@ function PipelinePage() {
         if (data.context) setContext(stripEmbeddedProductBlocks(data.context));
         if (data.provider) setProvider(data.provider);
         if (data.variant_count) setVariantCount(data.variant_count);
+        setMetaMultiplication(Boolean(data.meta_multiplication));
         if (data.library_project_id) setLibraryProjectId(data.library_project_id);
 
         // Restore TTS results from history info (inline to avoid hoisting issues)
@@ -1450,6 +1468,7 @@ function PipelinePage() {
   const { startPolling: startRenderPolling, stopPolling: stopRenderPolling } = usePolling<{
     variants: VariantStatus[];
     meta_variants?: VariantStatus[];
+    meta_multiplication?: boolean;
     library_project_id?: string | null;
   }>({
     endpoint: renderStatusEndpoint,
@@ -1463,6 +1482,7 @@ function PipelinePage() {
       const renderedVariants = metaVariants.length > 0
         ? metaVariants.filter((v) => v.status !== "not_started")
         : allVariants.filter((v) => v.status !== "not_started");
+      setMetaMultiplication(Boolean(data.meta_multiplication || metaVariants.length > 0));
       setVariantStatuses(renderedVariants);
       if (data.library_project_id) setLibraryProjectId(data.library_project_id);
       // Stop polling only when every rendered variant is done (ignore not_started ones)
@@ -1503,6 +1523,7 @@ function PipelinePage() {
         .then(res => res.json())
         .then(data => {
           if (!data?.variants) return;
+          setMetaMultiplication(Boolean(data.meta_multiplication || (data.meta_variants?.length ?? 0) > 0));
           const currentScriptCount = scripts.length;
           const allVars = (data.meta_variants?.length > 0 ? data.meta_variants : data.variants) || [];
           const completed = allVars.filter(
@@ -1529,6 +1550,7 @@ function PipelinePage() {
         .then(res => res.json())
         .then(data => {
           if (!data?.variants) return [];
+          setMetaMultiplication(Boolean(data.meta_multiplication || (data.meta_variants?.length ?? 0) > 0));
           // Filter out not_started variants (same logic as polling onData)
           // When meta_variants exist, use those instead (meta multiplication renders)
           const sourceVars = (data.meta_variants?.length > 0 ? data.meta_variants : data.variants) || [];
@@ -1752,6 +1774,18 @@ function PipelinePage() {
       if (isMountedRef.current) setPreviewingIndex(null);
     }
   };
+
+  const handleMetaMultiplicationChange = useCallback(async (checked: boolean) => {
+    setMetaMultiplication(checked);
+    if (!pipelineId) return;
+    try {
+      await apiPut(`/pipeline/${pipelineId}/meta-multiplication`, {
+        enabled: checked,
+      });
+    } catch (err) {
+      console.warn("[Pipeline] Failed to persist meta_multiplication:", err);
+    }
+  }, [pipelineId]);
 
   // Build the render payload (shared between check-render and render calls)
   const buildRenderPayload = () => {
@@ -2013,6 +2047,7 @@ function PipelinePage() {
     setPreviews({});
     setPreviewError(null);
     setSelectedVariants(new Set());
+    setMetaMultiplication(false);
     setIsRendering(false);
     setVariantStatuses([]);
     setVoiceId("");
@@ -2492,6 +2527,15 @@ function PipelinePage() {
         if (histItem.variant_count) setVariantCount(histItem.variant_count);
         if (histItem.target_script_duration) setTargetScriptDuration(histItem.target_script_duration);
       }
+      apiGet(`/pipeline/${pid}/meta-multiplication`)
+        .then(async (res) => {
+          if (!isMountedRef.current) return;
+          const data = await res.json();
+          setMetaMultiplication(Boolean(data.meta_multiplication));
+        })
+        .catch(() => {
+          setMetaMultiplication(false);
+        });
       setSelectedHistoryId(null);
       setHistoryScripts([]);
       setHistorySelectedScripts(new Set());
@@ -5025,7 +5069,7 @@ function PipelinePage() {
                 <Checkbox
                   id="meta-multiplication"
                   checked={metaMultiplication}
-                  onCheckedChange={(checked) => setMetaMultiplication(checked === true)}
+                  onCheckedChange={(checked) => void handleMetaMultiplicationChange(checked === true)}
                 />
                 <Label htmlFor="meta-multiplication" className="text-sm cursor-pointer font-medium">
                   Meta Multiplication (2x variante)
@@ -5047,6 +5091,7 @@ function PipelinePage() {
                     const res = await apiGet(`/pipeline/status/${pipelineId}`);
                     const data = await res.json();
                     if (!data?.variants) return;
+                    setMetaMultiplication(Boolean(data.meta_multiplication || (data.meta_variants?.length ?? 0) > 0));
                     const currentScriptCount = scripts.length;
                     const allVars = (data.meta_variants?.length > 0 ? data.meta_variants : data.variants) || [];
                     let rendered = allVars.filter(

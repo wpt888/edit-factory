@@ -1244,6 +1244,7 @@ class PipelineStatusResponse(BaseModel):
     variant_count: int = 0
     variants: List[VariantStatus]
     meta_variants: Optional[List[VariantStatus]] = None
+    meta_multiplication: bool = False
     preview_info: Dict[str, VariantPreviewInfo] = {}
     tts_info: Dict[str, VariantTtsInfo] = {}
     library_project_id: Optional[str] = None
@@ -1552,6 +1553,46 @@ async def update_source_selection(
 class PipelineUpdateScriptsRequest(BaseModel):
     """Request model for updating scripts in an existing pipeline."""
     scripts: List[str]
+
+
+class MetaMultiplicationRequest(BaseModel):
+    """Request model for persisting the Meta multiplication toggle."""
+    enabled: bool
+
+
+@router.get("/{pipeline_id}/meta-multiplication")
+async def get_meta_multiplication(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Return the stored Meta multiplication flag for a pipeline."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+    return {"meta_multiplication": bool(pipeline.get("meta_multiplication", False))}
+
+
+@router.put("/{pipeline_id}/meta-multiplication")
+async def update_meta_multiplication(
+    pipeline_id: str,
+    request: MetaMultiplicationRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Persist the Meta multiplication toggle before render starts."""
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    with _pipelines_lock:
+        pipeline["meta_multiplication"] = bool(request.enabled)
+        _pipelines[pipeline_id] = pipeline
+
+    _db_save_pipeline(pipeline_id, pipeline)
+    return {"meta_multiplication": bool(request.enabled)}
 
 
 @router.put("/{pipeline_id}/scripts")
@@ -1957,6 +1998,7 @@ async def import_pipeline(
             "tts_previews": {},
             "preview_renders": {},
             "source_video_ids": [],
+            "meta_multiplication": False,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "profile_id": profile.profile_id
         }
@@ -2129,6 +2171,7 @@ async def generate_pipeline(
                 "segment_usage": {},
                 "preview_renders": {},
                 "render_jobs": {},
+                "meta_multiplication": False,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "profile_id": profile.profile_id,
                 "target_script_duration": body.target_script_duration
@@ -3963,6 +4006,7 @@ async def get_pipeline_status(pipeline_id: str):
         variant_count=len(pipeline["scripts"]),
         variants=variants,
         meta_variants=meta_variants if meta_variants else None,
+        meta_multiplication=bool(pipeline.get("meta_multiplication", False)),
         preview_info=preview_info,
         tts_info=tts_info,
         library_project_id=pipeline.get("library_project_id"),
@@ -4023,6 +4067,7 @@ async def get_pipeline_scripts(pipeline_id: str):
         "context": _strip_embedded_product_blocks(pipeline.get("context", "")),
         "provider": pipeline.get("provider", "gemini"),
         "variant_count": pipeline.get("variant_count", len(pipeline.get("scripts", []))),
+        "meta_multiplication": bool(pipeline.get("meta_multiplication", False)),
         "library_project_id": pipeline.get("library_project_id"),
     }
 
