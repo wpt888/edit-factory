@@ -112,6 +112,17 @@ interface PreviewData {
   available_segments?: SegmentOption[];
 }
 
+type PreviewKey = string;
+
+interface PreviewCard {
+  key: PreviewKey;
+  baseIndex: number;
+  label: string;
+  visualVersion?: string;
+  metaPlatform?: string;
+  script: string;
+}
+
 interface PipelineListItem {
   pipeline_id: string;
   name: string;
@@ -828,9 +839,9 @@ function PipelinePage() {
   const [totalSegmentDuration, setTotalSegmentDuration] = useState<number>(0);
 
   // Step 3: Preview
-  const [previewVariant, setPreviewVariant] = useState<number | null>(null);
+  const [previewVariant, setPreviewVariant] = useState<PreviewKey | null>(null);
   const [previewingIndex, setPreviewingIndex] = useState<number | null>(null);
-  const [previews, setPreviews] = useState<Record<number, PreviewData>>({});
+  const [previews, setPreviews] = useState<Record<PreviewKey, PreviewData>>({});
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [elevenlabsModel, setElevenlabsModel] = useState("eleven_flash_v2_5");
   const [voices, setVoices] = useState<Voice[]>([]);
@@ -993,7 +1004,7 @@ function PipelinePage() {
   const [availableSegments, setAvailableSegments] = useState<SegmentOption[]>([]);
 
   // Interstitial slides: keyed by variant index
-  const [interstitialSlides, setInterstitialSlides] = useState<Record<number, InterstitialSlide[]>>({});
+  const [interstitialSlides, setInterstitialSlides] = useState<Record<PreviewKey, InterstitialSlide[]>>({});
 
   // Subtitle settings state
   const [subtitleSettings, setSubtitleSettings] = useState<SubtitleSettings>({ ...DEFAULT_SUBTITLE_SETTINGS });
@@ -1005,15 +1016,15 @@ function PipelinePage() {
   const EMPTY_SLIDES: InterstitialSlide[] = useMemo(() => [], []);
 
   // Stable per-index callback refs for TimelineEditor props
-  const matchesChangeHandlers = useRef<Record<number, (matches: MatchPreview[]) => void>>({});
-  const getMatchesChangeHandler = useCallback((index: number) => {
-    if (!matchesChangeHandlers.current[index]) {
-      matchesChangeHandlers.current[index] = (updatedMatches: MatchPreview[]) => {
+  const matchesChangeHandlers = useRef<Record<string, (matches: MatchPreview[]) => void>>({});
+  const getMatchesChangeHandler = useCallback((previewKey: string) => {
+    if (!matchesChangeHandlers.current[previewKey]) {
+      matchesChangeHandlers.current[previewKey] = (updatedMatches: MatchPreview[]) => {
         setPreviews(prev => {
-          const current = prev[index] || {} as PreviewData;
+          const current = prev[previewKey] || {} as PreviewData;
           return {
             ...prev,
-            [index]: {
+            [previewKey]: {
               ...current,
               matches: updatedMatches,
               matched_count: updatedMatches.filter(m => m.segment_id !== null).length,
@@ -1023,17 +1034,17 @@ function PipelinePage() {
         });
       };
     }
-    return matchesChangeHandlers.current[index];
+    return matchesChangeHandlers.current[previewKey];
   }, []);
 
-  const interstitialSlidesChangeHandlers = useRef<Record<number, (slides: InterstitialSlide[]) => void>>({});
-  const getInterstitialSlidesChangeHandler = useCallback((index: number) => {
-    if (!interstitialSlidesChangeHandlers.current[index]) {
-      interstitialSlidesChangeHandlers.current[index] = (slides: InterstitialSlide[]) => {
-        setInterstitialSlides(prev => ({ ...prev, [index]: slides }));
+  const interstitialSlidesChangeHandlers = useRef<Record<string, (slides: InterstitialSlide[]) => void>>({});
+  const getInterstitialSlidesChangeHandler = useCallback((previewKey: string) => {
+    if (!interstitialSlidesChangeHandlers.current[previewKey]) {
+      interstitialSlidesChangeHandlers.current[previewKey] = (slides: InterstitialSlide[]) => {
+        setInterstitialSlides(prev => ({ ...prev, [previewKey]: slides }));
       };
     }
-    return interstitialSlidesChangeHandlers.current[index];
+    return interstitialSlidesChangeHandlers.current[previewKey];
   }, []);
 
   // Keep pipelineIdRef in sync with state + URL
@@ -1317,6 +1328,40 @@ function PipelinePage() {
     () => Array.from(selectedSourceIds),
     [selectedSourceIdsKey]
   );
+
+  const buildPreviewKey = useCallback((baseIndex: number, visualVersion?: string) => {
+    return visualVersion ? `${baseIndex}_${visualVersion}` : String(baseIndex);
+  }, []);
+
+  const previewCards = useMemo<PreviewCard[]>(() => {
+    if (!metaMultiplication) {
+      return scripts.map((script, index) => ({
+        key: buildPreviewKey(index),
+        baseIndex: index,
+        label: `Variant ${index + 1}`,
+        script,
+      }));
+    }
+
+    return scripts.flatMap((script, index) => ([
+      {
+        key: buildPreviewKey(index, "A"),
+        baseIndex: index,
+        label: `Variant ${index + 1} A`,
+        visualVersion: "A",
+        metaPlatform: "instagram",
+        script,
+      },
+      {
+        key: buildPreviewKey(index, "B"),
+        baseIndex: index,
+        label: `Variant ${index + 1} B`,
+        visualVersion: "B",
+        metaPlatform: "facebook",
+        script,
+      },
+    ]));
+  }, [buildPreviewKey, metaMultiplication, scripts]);
 
   // Fetch product groups when source video selection changes
   useEffect(() => {
@@ -1688,15 +1733,17 @@ function PipelinePage() {
     previewAbortRef.current = abortController;
 
     setPreviewError(null);
-    const newPreviews: Record<number, PreviewData> = {};
+    const newPreviews: Record<PreviewKey, PreviewData> = {};
+    const cardsToPreview = previewCards;
 
     // FE-05: Wrap in try/finally to guarantee setPreviewingIndex(null) is always called
     try {
-      for (let i = 0; i < scripts.length; i++) {
+      for (let i = 0; i < cardsToPreview.length; i++) {
         if (abortController.signal.aborted) { setPreviewingIndex(null); return; }
         setPreviewingIndex(i);
+        const previewCard = cardsToPreview[i];
         try {
-          const res = await apiPost(`/pipeline/preview/${pipelineId}/${i}`, {
+          const res = await apiPost(`/pipeline/preview/${pipelineId}/${previewCard.baseIndex}`, {
             elevenlabs_model: elevenlabsModel,
             voice_id: voiceId && voiceId !== "default" ? voiceId : undefined,
             source_video_ids: selectedSourceIdsRef.current.size > 0 ? Array.from(selectedSourceIdsRef.current) : undefined, // Bug #120: use ref
@@ -1710,6 +1757,7 @@ function PipelinePage() {
             words_per_subtitle: wordsPerSubtitle,
             min_segment_duration: minSegmentDuration,
             ultra_rapid_intro: ultraRapidIntro,
+            visual_version: previewCard.visualVersion,
           }, { timeout: 300_000, signal: abortController.signal }); // 5 min — TTS generation + SRT can be slow
 
           if (abortController.signal.aborted || !isMountedRef.current) { setPreviewingIndex(null); return; }
@@ -1717,13 +1765,13 @@ function PipelinePage() {
           // apiPost throws on non-OK responses — no need for res.ok check (FE-01)
           const data = await res.json();
           if (!isMountedRef.current) return;
-          newPreviews[i] = data;
-          setPreviews(prev => ({ ...prev, [i]: data }));
+          newPreviews[previewCard.key] = data;
+          setPreviews(prev => ({ ...prev, [previewCard.key]: data }));
           // Sync ttsResults from preview response — TTS is generated as part of preview
           if (data.audio_duration > 0) {
             setTtsResults(prev => ({
               ...prev,
-              [i]: {
+              [previewCard.baseIndex]: {
                 audio_duration: data.audio_duration,
                 generating: false,
                 stale: false,
@@ -1737,7 +1785,7 @@ function PipelinePage() {
           // M11: Only clear the failed variant's preview, not all previews
           setPreviews(prev => {
             const updated = { ...prev };
-            delete updated[i];
+            delete updated[previewCard.key];
             return updated;
           });
           setPreviewingIndex(null);
@@ -1745,7 +1793,7 @@ function PipelinePage() {
             if (err.isTimeout) {
               setPreviewError("Preview timed out. Please try again.");
             } else {
-              setPreviewError(err.detail || err.message || `Failed to preview variant ${i + 1}.`);
+              setPreviewError(err.detail || err.message || `Failed to preview ${previewCard.label}.`);
             }
           } else {
             setPreviewError("Network error. Please check if the backend is running.");
@@ -1777,6 +1825,53 @@ function PipelinePage() {
 
   const handleMetaMultiplicationChange = useCallback(async (checked: boolean) => {
     setMetaMultiplication(checked);
+    setPreviews(prev => {
+      const next = { ...prev };
+      if (checked) {
+        for (let i = 0; i < scripts.length; i++) {
+          const baseKey = buildPreviewKey(i);
+          const metaAKey = buildPreviewKey(i, "A");
+          if (next[baseKey] && !next[metaAKey]) {
+            next[metaAKey] = next[baseKey];
+          }
+        }
+      } else {
+        for (let i = 0; i < scripts.length; i++) {
+          const baseKey = buildPreviewKey(i);
+          const metaAKey = buildPreviewKey(i, "A");
+          if (!next[baseKey] && next[metaAKey]) {
+            next[baseKey] = next[metaAKey];
+          }
+        }
+      }
+      return next;
+    });
+    setInterstitialSlides(prev => {
+      const next = { ...prev };
+      if (checked) {
+        for (let i = 0; i < scripts.length; i++) {
+          const baseKey = buildPreviewKey(i);
+          const metaAKey = buildPreviewKey(i, "A");
+          if (next[baseKey] && !next[metaAKey]) {
+            next[metaAKey] = next[baseKey];
+          }
+        }
+      } else {
+        for (let i = 0; i < scripts.length; i++) {
+          const baseKey = buildPreviewKey(i);
+          const metaAKey = buildPreviewKey(i, "A");
+          if (!next[baseKey] && next[metaAKey]) {
+            next[baseKey] = next[metaAKey];
+          }
+        }
+      }
+      return next;
+    });
+    if (checked) {
+      setPreviewError("Meta Multiplication activată. Rulează din nou Generate Previews pentru a crea și preview-urile B/Facebook.");
+    } else {
+      setPreviewError(null);
+    }
     if (!pipelineId) return;
     try {
       await apiPut(`/pipeline/${pipelineId}/meta-multiplication`, {
@@ -1785,18 +1880,19 @@ function PipelinePage() {
     } catch (err) {
       console.warn("[Pipeline] Failed to persist meta_multiplication:", err);
     }
-  }, [pipelineId]);
+  }, [buildPreviewKey, pipelineId, scripts.length]);
 
   // Build the render payload (shared between check-render and render calls)
   const buildRenderPayload = () => {
-    const matchOverrides: Record<number, MatchPreview[]> = {};
-    for (const idx of Array.from(selectedVariants)) {
-      if (previews[idx]?.matches && previews[idx].matches.length > 0) {
-        matchOverrides[idx] = previews[idx].matches;
+    const matchOverrides: Record<string, MatchPreview[]> = {};
+    const selectedPreviewCards = previewCards.filter(card => selectedVariants.has(card.baseIndex));
+    for (const card of selectedPreviewCards) {
+      if (previews[card.key]?.matches && previews[card.key].matches.length > 0) {
+        matchOverrides[card.key] = previews[card.key].matches;
       } else {
         console.warn(
-          `[Render] Variant ${idx}: no match_overrides available — render will use auto-matching (may differ from preview!). ` +
-          `previews[${idx}] exists: ${!!previews[idx]}, matches count: ${previews[idx]?.matches?.length ?? 0}`
+          `[Render] Variant ${card.key}: no match_overrides available — render will use auto-matching (may differ from preview!). ` +
+          `previews[${card.key}] exists: ${!!previews[card.key]}, matches count: ${previews[card.key]?.matches?.length ?? 0}`
         );
       }
     }
@@ -1804,15 +1900,15 @@ function PipelinePage() {
     const filteredInterstitialSlides = Object.keys(interstitialSlides).length > 0
       ? Object.fromEntries(
           Object.entries(interstitialSlides)
-            .filter(([k]) => selectedVariants.has(Number(k)))
+            .filter(([k]) => selectedPreviewCards.some(card => card.key === k))
             .map(([k, v]) => [k, v.filter((s) => s.imageUrl)])
             .filter(([, v]) => (v as InterstitialSlide[]).length > 0)
         )
       : undefined;
 
     const pipOverlays: Record<string, { image_url: string; position: string; size: string; animation: string }> = {};
-    for (const idx of Array.from(selectedVariants)) {
-      const preview = previews[idx];
+    for (const card of selectedPreviewCards) {
+      const preview = previews[card.key];
       if (!preview?.matches) continue;
       for (const match of preview.matches) {
         if (!match.segment_id) continue;
@@ -1874,9 +1970,10 @@ function PipelinePage() {
     if (!pipelineId || selectedVariants.size === 0) return;
 
     // Warn if any selected variant has no preview (match_overrides will be missing)
-    const unpreviewedVariants = Array.from(selectedVariants).filter(
-      idx => !previews[idx]?.matches || previews[idx].matches.length === 0
-    );
+    const unpreviewedVariants = previewCards
+      .filter(card => selectedVariants.has(card.baseIndex))
+      .filter(card => !previews[card.key]?.matches || previews[card.key].matches.length === 0)
+      .map(card => card.label);
     if (unpreviewedVariants.length > 0) {
       const proceed = window.confirm(
         `Variant(s) ${unpreviewedVariants.join(", ")} have not been previewed. ` +
@@ -1891,7 +1988,8 @@ function PipelinePage() {
     try {
       setIsCheckingRender(true);
       const payload = buildRenderPayload();
-      const checkRes = (await apiPost(`/pipeline/check-render/${pipelineId}`, payload, { timeout: 10_000 })) as unknown as { results: RenderCheckResult[]; any_skippable: boolean } | null;
+      const checkResponse = await apiPost(`/pipeline/check-render/${pipelineId}`, payload, { timeout: 10_000 });
+      const checkRes = await checkResponse.json() as { results: RenderCheckResult[]; any_skippable: boolean } | null;
       if (checkRes?.any_skippable) {
         setSkipCheckResults(checkRes.results);
         setShowSkipDialog(true);
@@ -2557,9 +2655,9 @@ function PipelinePage() {
             if (!isMountedRef.current) return;
             const previewData = await previewRes.json();
             if (previewData.previews && Object.keys(previewData.previews).length > 0) {
-              const restoredPreviews: Record<number, PreviewData> = {};
+              const restoredPreviews: Record<PreviewKey, PreviewData> = {};
               for (const [key, val] of Object.entries(previewData.previews)) {
-                restoredPreviews[Number(key)] = val as PreviewData;
+                restoredPreviews[key] = val as PreviewData;
               }
               setPreviews(restoredPreviews);
               if (previewData.available_segments?.length > 0) {
@@ -3076,7 +3174,7 @@ function PipelinePage() {
   };
 
   // Step 3: Regenerate audio for a single variant (force TTS regeneration + re-match)
-  const handleRegenerateVariantAudio = async (variantIndex: number) => {
+  const handleRegenerateVariantAudio = async (variantIndex: number, previewKey?: string, visualVersion?: string) => {
     if (!pipelineId) return;
     if (regeneratingVariantAudio[variantIndex]) return;
 
@@ -3097,12 +3195,13 @@ function PipelinePage() {
         words_per_subtitle: wordsPerSubtitle,
         min_segment_duration: minSegmentDuration,
         ultra_rapid_intro: ultraRapidIntro,
+        visual_version: visualVersion,
         force_regenerate_tts: true,
       }, { timeout: 300_000 });
 
       const data = await res.json();
       if (!isMountedRef.current) return;
-      setPreviews(prev => ({ ...prev, [variantIndex]: data }));
+      setPreviews(prev => ({ ...prev, [previewKey ?? buildPreviewKey(variantIndex)]: data }));
     } catch (err) {
       handleApiError(err, "Audio regeneration error");
       if (err instanceof ApiError && err.isTimeout) {
@@ -4764,8 +4863,26 @@ function PipelinePage() {
             {(() => {
               const readyTtsCount = Object.values(ttsResults).filter(r => !r.generating && !r.stale).length;
               const allTtsReady = readyTtsCount === scripts.length && scripts.length > 0;
+              const previewTargetCount = allTtsReady ? previewCards.length : scripts.length;
               return (
                 <div className="space-y-2">
+                  <div className="border rounded-lg p-3 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="meta-multiplication-step2"
+                        checked={metaMultiplication}
+                        onCheckedChange={(checked) => void handleMetaMultiplicationChange(checked === true)}
+                      />
+                      <Label htmlFor="meta-multiplication-step2" className="text-sm cursor-pointer font-medium">
+                        Meta Multiplication before preview
+                      </Label>
+                    </div>
+                    <p className="text-xs text-muted-foreground ml-6">
+                      {metaMultiplication
+                        ? `Preview-ul va genera ${previewCards.length} variante (${scripts.length} scripturi × 2 versiuni Meta).`
+                        : "Activează dacă vrei să vezi separat preview-urile Instagram și Facebook înainte de render."}
+                    </p>
+                  </div>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -4809,8 +4926,8 @@ function PipelinePage() {
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                         {allTtsReady
-                          ? `Generating preview ${previewingIndex + 1} of ${scripts.length}...`
-                          : `Generating voice-over ${previewingIndex + 1} of ${scripts.length}...`}
+                          ? `Generating preview ${previewingIndex + 1} of ${previewTargetCount}...`
+                          : `Generating voice-over ${previewingIndex + 1} of ${previewTargetCount}...`}
                       </>
                     ) : (
                       <>
@@ -4866,7 +4983,7 @@ function PipelinePage() {
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-semibold">
-                Preview & Select Variants ({selectedVariants.size} selected)
+                Preview & Select Variants ({previewCards.filter(card => selectedVariants.has(card.baseIndex)).length} previews shown)
               </h2>
               <Button variant="outline" onClick={() => { setStep(2); setPreviewError(null); }}>
                 <ArrowLeft className="h-4 w-4 mr-2" />
@@ -4927,30 +5044,37 @@ function PipelinePage() {
 
             {/* Variant preview grid */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {scripts.map((script, index) => {
-                const preview = previews[index];
+              {previewCards.map((card) => {
+                const preview = previews[card.key];
                 if (!preview) return null;
 
                 return (
-                  <Card key={index} className="overflow-hidden">
+                  <Card key={card.key} className="overflow-hidden">
                     <CardHeader>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <Checkbox
-                            checked={selectedVariants.has(index)}
-                            onCheckedChange={() => toggleVariant(index)}
+                            checked={selectedVariants.has(card.baseIndex)}
+                            onCheckedChange={() => toggleVariant(card.baseIndex)}
                           />
-                          <CardTitle className="text-lg">Variant {index + 1}</CardTitle>
+                          <CardTitle className="text-lg">
+                            {card.label}
+                            {card.metaPlatform && (
+                              <Badge variant="outline" className="ml-2 text-xs">
+                                {card.metaPlatform === "instagram" ? "Instagram" : "Facebook"}
+                              </Badge>
+                            )}
+                          </CardTitle>
                         </div>
                         <div className="flex items-center gap-2">
                           <Button
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8"
-                            onClick={() => pipelineId && handlePlayAudio(pipelineId, index)}
-                            title={playingAudio === `${pipelineId}-${index}` ? "Stop audio" : "Play voiceover"}
+                            onClick={() => pipelineId && handlePlayAudio(pipelineId, card.baseIndex)}
+                            title={playingAudio === `${pipelineId}-${card.baseIndex}` ? "Stop audio" : "Play voiceover"}
                           >
-                            {playingAudio === `${pipelineId}-${index}` ? (
+                            {playingAudio === `${pipelineId}-${card.baseIndex}` ? (
                               <Pause className="h-4 w-4" />
                             ) : (
                               <Volume2 className="h-4 w-4" />
@@ -4967,7 +5091,7 @@ function PipelinePage() {
                                 audioRef.current = null;
                               }
                               setPlayingAudio(null);
-                              setPreviewVariant(index);
+                              setPreviewVariant(card.key);
                             }}
                             title="Preview variant with video"
                           >
@@ -4977,11 +5101,11 @@ function PipelinePage() {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8"
-                            onClick={() => handleRegenerateVariantAudio(index)}
-                            disabled={regeneratingVariantAudio[index]}
+                            onClick={() => handleRegenerateVariantAudio(card.baseIndex, card.key, card.visualVersion)}
+                            disabled={regeneratingVariantAudio[card.baseIndex]}
                             title="Regenerate voiceover"
                           >
-                            {regeneratingVariantAudio[index] ? (
+                            {regeneratingVariantAudio[card.baseIndex] ? (
                               <Loader2 className="h-4 w-4 animate-spin" />
                             ) : (
                               <RefreshCw className="h-4 w-4" />
@@ -5019,11 +5143,11 @@ function PipelinePage() {
                         availableSegments={availableSegments}
                         profileId={currentProfile?.id}
                         pipelineId={pipelineId ?? undefined}
-                        variantIndex={index}
+                        variantIndex={card.baseIndex}
                         subtitleSettings={subtitleSettings}
-                        interstitialSlides={interstitialSlides[index] ?? EMPTY_SLIDES}
-                        onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(index)}
-                        onMatchesChange={getMatchesChangeHandler(index)}
+                        interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
+                        onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(card.key)}
+                        onMatchesChange={getMatchesChangeHandler(card.key)}
                       />
                     </CardContent>
                   </Card>
@@ -5032,22 +5156,28 @@ function PipelinePage() {
             </div>
 
             {/* Variant preview player dialog */}
-            {previewVariant !== null && pipelineId && currentProfile && (
-              <VariantPreviewPlayer
-                open={true}
-                onOpenChange={handlePreviewPlayerClose}
-                matches={previews[previewVariant]?.matches ?? []}
-                pipelineId={pipelineId}
-                variantIndex={previewVariant}
-                profileId={currentProfile.id}
-                subtitleSettings={subtitleSettings}
-                sourceVideoIds={selectedSourceIdsArray}
-                minSegmentDuration={minSegmentDuration}
-                wordsPerSubtitle={wordsPerSubtitle}
-                ultraRapidIntro={ultraRapidIntro}
-                interstitialSlides={interstitialSlides[previewVariant]}
-              />
-            )}
+            {previewVariant !== null && pipelineId && currentProfile && (() => {
+              const activeCard = previewCards.find(card => card.key === previewVariant);
+              if (!activeCard) return null;
+              return (
+                <VariantPreviewPlayer
+                  open={true}
+                  onOpenChange={handlePreviewPlayerClose}
+                  matches={previews[previewVariant]?.matches ?? []}
+                  pipelineId={pipelineId}
+                  variantIndex={activeCard.baseIndex}
+                  visualVersion={activeCard.visualVersion}
+                  title={activeCard.label}
+                  profileId={currentProfile.id}
+                  subtitleSettings={subtitleSettings}
+                  sourceVideoIds={selectedSourceIdsArray}
+                  minSegmentDuration={minSegmentDuration}
+                  wordsPerSubtitle={wordsPerSubtitle}
+                  ultraRapidIntro={ultraRapidIntro}
+                  interstitialSlides={interstitialSlides[previewVariant]}
+                />
+              );
+            })()}
 
             {/* Error display */}
             {previewError && (

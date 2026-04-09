@@ -18,6 +18,8 @@ interface VariantPreviewPlayerProps {
   matches: MatchPreview[];
   pipelineId: string;
   variantIndex: number;
+  visualVersion?: string;
+  title?: string;
   profileId: string;
   subtitleSettings?: SubtitleSettings;
   sourceVideoIds?: string[];
@@ -33,6 +35,8 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   matches,
   pipelineId,
   variantIndex,
+  visualVersion,
+  title,
   profileId,
   subtitleSettings,
   sourceVideoIds,
@@ -130,6 +134,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
             words_per_subtitle: wordsPerSubtitle,
             ultra_rapid_intro: ultraRapidIntro,
             interstitial_slides: interstitialSlides?.filter((s) => s.imageUrl) ?? undefined,
+            visual_version: visualVersion,
           }
         );
 
@@ -161,6 +166,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
           try {
             const statusResp = await apiGet(
               `/pipeline/preview-status/${pipelineId}/${variantIndex}`
+              + (visualVersion ? `?visual_version=${encodeURIComponent(visualVersion)}` : "")
             );
             const statusData = await statusResp.json();
             setProgress(statusData.progress ?? 0);
@@ -228,14 +234,14 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
 
   const previewVideoUrl =
     status === "completed" && matchesFingerprint
-      ? `${API_URL}/pipeline/preview-video/${pipelineId}/${variantIndex}?fp=${encodeURIComponent(matchesFingerprint)}`
+      ? `${API_URL}/pipeline/preview-video/${pipelineId}/${variantIndex}?fp=${encodeURIComponent(matchesFingerprint)}${visualVersion ? `&visual_version=${encodeURIComponent(visualVersion)}` : ""}`
       : null;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
-          <DialogTitle>Variant {variantIndex + 1} Preview</DialogTitle>
+          <DialogTitle>{title ?? `Variant ${variantIndex + 1} Preview`}</DialogTitle>
         </DialogHeader>
 
         <div

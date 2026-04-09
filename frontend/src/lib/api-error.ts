@@ -17,6 +17,31 @@ export class ApiError extends Error {
   }
 }
 
+function stringifyApiDetail(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          const record = item as Record<string, unknown>;
+          const loc = Array.isArray(record.loc) ? record.loc.join(".") : "";
+          const msg = typeof record.msg === "string" ? record.msg : JSON.stringify(item);
+          return loc ? `${loc}: ${msg}` : msg;
+        }
+        return String(item);
+      })
+      .join(" | ");
+  }
+  if (detail && typeof detail === "object") {
+    const record = detail as Record<string, unknown>;
+    if (typeof record.message === "string") return record.message;
+    if (typeof record.msg === "string") return record.msg;
+    return JSON.stringify(detail);
+  }
+  return detail == null ? "" : String(detail);
+}
+
 /**
  * Centralized API error handler — converts any error type into a sonner toast.
  *
@@ -50,7 +75,7 @@ export function handleApiError(error: unknown, context?: string): void {
       return;
     }
     if (error.detail) {
-      toast.error(error.detail);
+      toast.error(stringifyApiDetail(error.detail));
       return;
     }
   }

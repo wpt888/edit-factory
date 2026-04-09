@@ -2179,6 +2179,8 @@ class AssemblyService:
         voice_id: Optional[str] = None,
         elevenlabs_model: str = "eleven_flash_v2_5",
         interstitial_slides: Optional[List[dict]] = None,
+        subtitle_style_override: Optional[Dict[str, object]] = None,
+        visual_version_label: Optional[str] = None,
     ) -> Path:
         """
         Fast preview render using assemble_and_render() with preview-mode settings.
@@ -2242,6 +2244,8 @@ class AssemblyService:
             pip_overlays=None,
             variant_index=variant_index,
             _preview_mode=True,
+            subtitle_style_override=subtitle_style_override,
+            visual_version_label=visual_version_label,
         )
         # Preview doesn't need the raw assembly — clean it up
         try:

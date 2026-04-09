@@ -26,6 +26,8 @@ import {
   Sparkles,
   RotateCcw,
 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { apiPost, apiGet, apiFetch, API_URL } from "@/lib/api";
 import { STYLE_PRESETS } from "@/types/pipeline-presets";
 import type { StylePreset } from "@/types/pipeline-presets";
@@ -77,6 +79,7 @@ export function SimplePipeline({ onSwitchToAdvanced }: SimplePipelineProps) {
   const [pipelineId, setPipelineId] = useState<string | null>(null);
   const [completedVariants, setCompletedVariants] = useState<VariantResult[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [metaMultiplication, setMetaMultiplication] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isMountedRef = useRef(true);
@@ -136,7 +139,9 @@ export function SimplePipeline({ onSwitchToAdvanced }: SimplePipelineProps) {
       try {
         const res = await apiGet(`/pipeline/status/${pipId}`);
         const data = await res.json();
-        const variants: VariantResult[] = data.variants || [];
+        const metaVars: VariantResult[] = data.meta_variants || [];
+        const baseVars: VariantResult[] = data.variants || [];
+        const variants = metaVars.length > 0 ? metaVars : baseVars;
         const rendered = variants.filter((v) => v.status !== "not_started");
 
         if (!isMountedRef.current) return;
@@ -222,6 +227,7 @@ export function SimplePipeline({ onSwitchToAdvanced }: SimplePipelineProps) {
         words_per_subtitle: preset.params.words_per_subtitle,
         min_segment_duration: preset.params.min_segment_duration,
         ultra_rapid_intro: preset.params.ultra_rapid_intro,
+        meta_multiplication: metaMultiplication,
       }, { timeout: 600_000 });
 
       if (!isMountedRef.current) return;
@@ -236,7 +242,7 @@ export function SimplePipeline({ onSwitchToAdvanced }: SimplePipelineProps) {
       setError(message);
       toast.error("Generation failed", { description: message });
     }
-  }, [uploadedFile, selectedPreset, startPolling]);
+  }, [uploadedFile, selectedPreset, startPolling, metaMultiplication]);
 
   // Download a single variant
   const handleDownload = useCallback((variant: VariantResult) => {
@@ -442,6 +448,23 @@ export function SimplePipeline({ onSwitchToAdvanced }: SimplePipelineProps) {
                   </div>
                 );
               })}
+            </div>
+
+            {/* Meta render multiplication */}
+            <div className="border rounded-lg p-3 space-y-1">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="simple-meta-multiplication"
+                  checked={metaMultiplication}
+                  onCheckedChange={(checked) => setMetaMultiplication(checked === true)}
+                />
+                <Label htmlFor="simple-meta-multiplication" className="text-sm cursor-pointer font-medium">
+                  Meta Multiplication (2x variante)
+                </Label>
+              </div>
+              <p className="text-xs text-muted-foreground ml-6">
+                Generează câte 2 versiuni vizual diferite per variantă (Instagram + Facebook), pentru a evita penalizarea Meta pentru conținut duplicat.
+              </p>
             </div>
 
             <div className="flex justify-between">

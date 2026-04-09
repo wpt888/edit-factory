@@ -56,6 +56,7 @@ export interface MatchPreview {
   thumbnail_path?: string;
   merge_group?: number;
   merge_group_duration?: number;
+  transforms?: Record<string, unknown> | null;
 }
 
 export interface SegmentOption {

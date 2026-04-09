@@ -388,7 +388,7 @@ def _compute_render_fingerprint(render_request, variant_index: int, script_text:
     mo_segment_ids = []
     mo_transforms = {}
     if render_request.match_overrides:
-        mo_variant = render_request.match_overrides.get(variant_index) or render_request.match_overrides.get(str(variant_index))
+        mo_variant = render_request.match_overrides.get(str(variant_index))
         if mo_variant:
             mo_segment_ids = sorted(str(m.get("segment_id", "")) for m in mo_variant)
             mo_transforms = {str(i): m.get("transforms") or {} for i, m in enumerate(mo_variant)}
@@ -1115,8 +1115,9 @@ class PipelineRenderRequest(BaseModel):
     variant_indices: List[int] = Field(..., min_length=1, max_length=10)  # Which variants to render (BUG-PR-13)
     preset_name: str = "TikTok"
     source_video_ids: Optional[List[str]] = None  # Filter segments to these source videos
-    # Timeline editor overrides: variant_index -> list of match dicts (with optional duration_override)
-    match_overrides: Optional[Dict[int, List[dict]]] = None
+    # Timeline editor overrides: preview key -> list of match dicts (with optional duration_override)
+    # Keys are either "0" for standard previews or "0_A"/"0_B" for Meta preview versions.
+    match_overrides: Optional[Dict[str, List[dict]]] = None
 
     # BUG-PR-14: Validate source_video_ids are valid UUIDs
     @validator("source_video_ids", each_item=True, pre=True)
@@ -2640,6 +2641,7 @@ async def preview_variant(
     words_per_subtitle: int = Body(2, embed=True),
     min_segment_duration: float = Body(3.0, embed=True),
     ultra_rapid_intro: bool = Body(True, embed=True),
+    visual_version: Optional[str] = Body(None, embed=True),
     force_regenerate_tts: bool = Body(False, embed=True)
 ):
     """
@@ -2664,11 +2666,16 @@ async def preview_variant(
             detail=f"Invalid variant_index: {variant_index}. Must be between 0 and {len(pipeline['scripts']) - 1}"
         )
 
+    preview_key, effective_variant_index, _subtitle_override, normalized_visual_version, meta_platform = _resolve_meta_preview_variant(
+        variant_index,
+        visual_version,
+    )
     script_text = pipeline["scripts"][variant_index]
     cleaned_text = strip_product_group_tags(script_text)
 
     logger.info(
         f"[Profile {profile.profile_id}] Previewing pipeline {pipeline_id} variant {variant_index}"
+        f"{f' version {normalized_visual_version}/{meta_platform}' if normalized_visual_version and meta_platform else ''}"
     )
 
     # Check if TTS audio already exists from Step 2 preview
@@ -2757,8 +2764,19 @@ async def preview_variant(
         with state_lock:
             segment_usage_snapshot = dict(pipeline.get("segment_usage", {}))
         for other_idx, used_set in segment_usage_snapshot.items():
-            if str(other_idx) != str(variant_index):
+            if str(other_idx) != preview_key:
                 avoid_ids.update(used_set)
+
+        if normalized_visual_version:
+            current_meta_idx = next(
+                (i for i in range(len(META_PROFILES)) if get_version_label(i) == normalized_visual_version),
+                None,
+            )
+            if current_meta_idx and current_meta_idx > 0:
+                for prev_idx in range(current_meta_idx):
+                    previous_key = _build_preview_key(variant_index, get_version_label(prev_idx))
+                    previous_used = segment_usage_snapshot.get(previous_key) or []
+                    avoid_ids.update(previous_used)
 
         # Persistent diversity: deprioritize segments with usage_count > 0
         try:
@@ -2776,7 +2794,7 @@ async def preview_variant(
                     previously_used = {s["id"] for s in _used_before.data}
                     avoid_ids.update(previously_used)
                     logger.info(
-                        f"[Profile {profile.profile_id}] Variant {variant_index}: "
+                        f"[Profile {profile.profile_id}] Variant {preview_key}: "
                         f"deprioritizing {len(previously_used)} previously-used segments"
                     )
         except Exception as e:
@@ -2784,7 +2802,7 @@ async def preview_variant(
 
         if avoid_ids:
             logger.info(
-                f"[Profile {profile.profile_id}] Variant {variant_index}: "
+                f"[Profile {profile.profile_id}] Variant {preview_key}: "
                 f"total deprioritized segments: {len(avoid_ids)}"
             )
 
@@ -2794,7 +2812,7 @@ async def preview_variant(
             elevenlabs_model=elevenlabs_model,
             voice_id=voice_id,
             source_video_ids=source_video_ids,
-            variant_index=variant_index,
+            variant_index=effective_variant_index,
             reuse_audio_path=reuse_audio_path,
             reuse_audio_duration=reuse_audio_duration,
             voice_settings=voice_settings,
@@ -2813,12 +2831,14 @@ async def preview_variant(
 
         # BUG-PR-20: Reuse state_lock from above (already obtained), single acquisition for all writes
         with state_lock:
-            pipeline.setdefault("segment_usage", {})[str(variant_index)] = used_segment_ids
+            pipeline.setdefault("segment_usage", {})[preview_key] = used_segment_ids
 
             # Store preview result in pipeline state
-            pipeline["previews"][variant_index] = {
+            pipeline["previews"][preview_key] = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "elevenlabs_model": elevenlabs_model,
+                "visual_version": normalized_visual_version,
+                "meta_platform": meta_platform,
                 "preview_data": preview_data
             }
 
@@ -3185,11 +3205,15 @@ async def render_variants(
             # Extract match overrides for this variant (from timeline editor)
             variant_match_overrides = None
             if render_request.match_overrides:
-                variant_match_overrides = render_request.match_overrides.get(vid) or render_request.match_overrides.get(str(vid))
+                _override_key = str(job_key) if job_key is not None else str(vid)
+                variant_match_overrides = (
+                    render_request.match_overrides.get(_override_key)
+                    or render_request.match_overrides.get(str(vid))
+                )
                 if variant_match_overrides:
                     logger.info(
                         f"[RENDER {_render_fingerprint}] Using {len(variant_match_overrides)} "
-                        f"match overrides for variant {vid}"
+                        f"match overrides for variant {_override_key}"
                     )
                     # Log each match override for debugging
                     for _mi, _mo_entry in enumerate(variant_match_overrides[:10]):  # first 10
@@ -3203,7 +3227,7 @@ async def render_variants(
                 else:
                     logger.warning(
                         f"[RENDER {_render_fingerprint}] match_overrides present but EMPTY "
-                        f"for variant {vid} (keys: {list(render_request.match_overrides.keys())})"
+                        f"for variant {_override_key} (keys: {list(render_request.match_overrides.keys())})"
                     )
             else:
                 logger.warning(
@@ -3291,10 +3315,15 @@ async def render_variants(
             # PIP-07: interstitial_slides may be keyed by str(vid) or int(vid) — try both with `or` fallback
             variant_interstitial_slides = None
             if render_request.interstitial_slides:
-                variant_slides = render_request.interstitial_slides.get(str(vid)) or render_request.interstitial_slides.get(vid) or []
+                _slides_key = str(job_key) if job_key is not None else str(vid)
+                variant_slides = (
+                    render_request.interstitial_slides.get(_slides_key)
+                    or render_request.interstitial_slides.get(str(vid))
+                    or []
+                )
                 if variant_slides:
                     variant_interstitial_slides = variant_slides
-                    logger.info(f"[Pipeline {pipeline_id}] Variant {vid}: {len(variant_slides)} interstitial slides")
+                    logger.info(f"[Pipeline {pipeline_id}] Variant {_slides_key}: {len(variant_slides)} interstitial slides")
 
             variant_pip_overlays = render_request.pip_overlays if render_request.pip_overlays else None
             if variant_pip_overlays:
@@ -4455,6 +4484,7 @@ class PreviewRenderRequest(BaseModel):
     words_per_subtitle: int = Field(default=2, ge=1, le=20)  # BUG-PR-19
     ultra_rapid_intro: bool = True  # Match PipelineRenderRequest default
     interstitial_slides: Optional[List[dict]] = None
+    visual_version: Optional[str] = None
 
     # BUG-PR-14: Validate source_video_ids are valid UUIDs
     @validator("source_video_ids", each_item=True, pre=True)
@@ -4473,6 +4503,43 @@ class PreviewRenderStatusResponse(BaseModel):
     matches_fingerprint: Optional[str] = None
     error: Optional[str] = None
     preview_limitations: Optional[List[str]] = None
+
+
+def _normalize_meta_version_label(visual_version: Optional[str]) -> Optional[str]:
+    if visual_version is None:
+        return None
+    normalized = str(visual_version).strip().upper()
+    if not normalized:
+        return None
+    if normalized not in {get_version_label(i) for i in range(len(META_PROFILES))}:
+        raise HTTPException(status_code=400, detail=f"Invalid visual_version: {visual_version}")
+    return normalized
+
+
+def _build_preview_key(variant_index: int, visual_version: Optional[str] = None) -> str:
+    normalized = _normalize_meta_version_label(visual_version)
+    return f"{variant_index}_{normalized}" if normalized else str(variant_index)
+
+
+def _resolve_meta_preview_variant(
+    variant_index: int,
+    visual_version: Optional[str] = None,
+) -> tuple[str, int, Optional[Dict[str, object]], Optional[str], Optional[str]]:
+    normalized = _normalize_meta_version_label(visual_version)
+    if not normalized:
+        return str(variant_index), variant_index, None, None, None
+
+    version_index = next(
+        (i for i in range(len(META_PROFILES)) if get_version_label(i) == normalized),
+        None,
+    )
+    if version_index is None:
+        raise HTTPException(status_code=400, detail=f"Invalid visual_version: {visual_version}")
+
+    profile = META_PROFILES[version_index]
+    preview_key = f"{variant_index}_{normalized}"
+    effective_variant_index = variant_index + profile.segment_offset
+    return preview_key, effective_variant_index, profile.subtitle_style, normalized, profile.name
 
 
 @router.post("/render-preview/{pipeline_id}/{variant_index}")
@@ -4501,6 +4568,11 @@ async def render_preview(
 
     if variant_index < 0 or variant_index >= len(pipeline["scripts"]):
         raise HTTPException(status_code=400, detail=f"Invalid variant_index: {variant_index}")
+
+    preview_key, effective_variant_index, subtitle_style_override, normalized_visual_version, _meta_platform = _resolve_meta_preview_variant(
+        variant_index,
+        render_request.visual_version,
+    )
 
     # Validate TTS audio exists
     _tts = pipeline.get("tts_previews", {})
@@ -4538,7 +4610,7 @@ async def render_preview(
         pipeline["preview_renders"] = {}
 
     # Cache hit: if fingerprint matches + file exists, return completed immediately
-    existing = pipeline["preview_renders"].get(variant_index)
+    existing = pipeline["preview_renders"].get(preview_key)
     if existing:
         if (existing.get("matches_fingerprint") == matches_fingerprint
                 and existing.get("status") == "completed"
@@ -4555,7 +4627,7 @@ async def render_preview(
                 pass
 
     # PIP-05: Per-pipeline preview lock to prevent concurrent preview renders from racing
-    preview_lock_key = f"{pipeline_id}:{variant_index}"
+    preview_lock_key = f"{pipeline_id}:{preview_key}"
     with _preview_locks_meta_lock:
         if preview_lock_key not in _preview_locks:
             _preview_locks[preview_lock_key] = asyncio.Lock()
@@ -4563,7 +4635,7 @@ async def render_preview(
 
     # Try to acquire preview lock non-blocking — if another preview is in progress, skip
     if preview_lock.locked():
-        existing_state = pipeline.get("preview_renders", {}).get(variant_index)
+        existing_state = pipeline.get("preview_renders", {}).get(preview_key)
         if existing_state and existing_state.get("status") == "processing":
             return {"status": "processing", "matches_fingerprint": existing_state.get("matches_fingerprint")}
         # Lock held but no processing state — force acquire
@@ -4572,13 +4644,14 @@ async def render_preview(
         await preview_lock.acquire()
 
     # Initialize render state (we hold the lock — released inside background task)
-    pipeline["preview_renders"][variant_index] = {
+    pipeline["preview_renders"][preview_key] = {
         "status": "processing",
         "progress": 0,
         "current_step": "Starting preview render",
         "preview_video_path": None,
         "matches_fingerprint": matches_fingerprint,
         "error": None,
+        "visual_version": normalized_visual_version,
     }
 
     script_text = pipeline["scripts"][variant_index]
@@ -4599,7 +4672,7 @@ async def render_preview(
     _profile_id = profile.profile_id
 
     async def _do_preview_render():
-        render_state = pipeline["preview_renders"][variant_index]
+        render_state = pipeline["preview_renders"][preview_key]
         _pr_state_lock = _get_pipeline_state_lock(pipeline_id)
         try:
             async with await acquire_preview_slot():
@@ -4614,7 +4687,7 @@ async def render_preview(
                         script_text=script_text,
                         profile_id=_profile_id,
                         pipeline_id=pipeline_id,
-                        variant_index=variant_index,
+                        variant_index=effective_variant_index,
                         match_overrides=render_request.match_overrides,
                         source_video_ids=render_request.source_video_ids,
                         reuse_audio_path=audio_path_str,
@@ -4626,6 +4699,8 @@ async def render_preview(
                         max_words_per_phrase=render_request.words_per_subtitle,
                         ultra_rapid_intro=render_request.ultra_rapid_intro,
                         interstitial_slides=render_request.interstitial_slides,
+                        subtitle_style_override=subtitle_style_override,
+                        visual_version_label=normalized_visual_version,
                     ),
                     timeout=300  # 5-minute timeout for preview
                 )
@@ -4649,13 +4724,13 @@ async def render_preview(
                 render_state["status"] = "failed"
                 render_state["error"] = "Preview render timed out after 5 minutes"
                 render_state["current_step"] = "Failed"
-            logger.error(f"Preview render timeout for pipeline {pipeline_id} variant {variant_index}")
+            logger.error(f"Preview render timeout for pipeline {pipeline_id} variant {preview_key}")
         except Exception as e:
             with _pr_state_lock:
                 render_state["status"] = "failed"
                 render_state["error"] = str(e)
                 render_state["current_step"] = "Failed"
-            logger.error(f"Preview render failed for pipeline {pipeline_id} variant {variant_index}: {e}")
+            logger.error(f"Preview render failed for pipeline {pipeline_id} variant {preview_key}: {e}")
         finally:
             preview_lock.release()
 
@@ -4668,6 +4743,7 @@ async def render_preview(
 async def get_preview_status(
     pipeline_id: str,
     variant_index: int,
+    visual_version: Optional[str] = None,
 ):
     """
     Get status of a server-side preview render.
@@ -4679,7 +4755,8 @@ async def get_preview_status(
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
-    render_state = pipeline.get("preview_renders", {}).get(variant_index)
+    preview_key = _build_preview_key(variant_index, visual_version)
+    render_state = pipeline.get("preview_renders", {}).get(preview_key)
     if not render_state:
         return PreviewRenderStatusResponse(
             status="not_started",
@@ -4702,6 +4779,7 @@ async def get_preview_video(
     pipeline_id: str,
     variant_index: int,
     request: Request,
+    visual_version: Optional[str] = None,
 ):
     """
     Stream the preview MP4 video for a variant.
@@ -4713,7 +4791,8 @@ async def get_preview_video(
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
-    render_state = pipeline.get("preview_renders", {}).get(variant_index)
+    preview_key = _build_preview_key(variant_index, visual_version)
+    render_state = pipeline.get("preview_renders", {}).get(preview_key)
     if not render_state or render_state.get("status") != "completed":
         raise HTTPException(status_code=404, detail="Preview not ready")
 

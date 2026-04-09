@@ -111,14 +111,18 @@ export async function apiFetch(
   }
 
   if (!response.ok) {
-    let detail = "";
+    let detail: unknown = "";
     try {
       const body = await response.clone().json();
       detail = body?.detail ?? body?.message ?? "";
     } catch {
       // If body is not JSON, leave detail empty
     }
-    throw new ApiError(response.status, detail, false);
+    throw new ApiError(
+      response.status,
+      typeof detail === "string" ? detail : JSON.stringify(detail),
+      false
+    );
   }
 
   return response;
