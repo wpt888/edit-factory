@@ -22,8 +22,12 @@ export async function middleware(request: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   if (!url || !key) {
-    // If env vars missing, allow request through (dev/build safety)
-    return response
+    if (process.env.NODE_ENV !== "production") {
+      return response
+    }
+    return new NextResponse("Supabase auth middleware is misconfigured.", {
+      status: 503,
+    })
   }
 
   const supabase = createServerClient(url, key, {

@@ -24,6 +24,10 @@ ALLOWED_AUDIO_MIMES = {
     "audio/flac", "audio/aac", "audio/mp4", "audio/x-m4a", "audio/webm",
 }
 
+ALLOWED_IMAGE_MIMES = {
+    "image/png", "image/jpeg", "image/webp", "image/svg+xml", "image/gif",
+}
+
 # Allowed MIME types for SRT/subtitle uploads.
 # SRT files are plain text; libmagic often detects them as "text/plain" or
 # "application/octet-stream" depending on content, so we accept both.

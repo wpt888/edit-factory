@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     # Security
     allowed_origins: str = "http://localhost:3000,http://localhost:3001,https://editai.obsid.ro"
     auth_disabled: bool = False  # Set to True to disable authentication (local development only!)
+    trusted_proxy_ips: str = "127.0.0.1,::1"  # Only trusted proxies may supply X-Forwarded-For
 
     # Desktop mode
     desktop_mode: bool = False  # Set to True when running as Electron desktop app
