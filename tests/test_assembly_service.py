@@ -241,11 +241,15 @@ def test_parse_srt_multiline_text(assembly_service):
 
 
 def test_parse_srt_block_with_no_text(assembly_service):
-    """SRT block with only index + timestamp (no text) → empty string text."""
+    """SRT block with only index + timestamp (no text) is skipped deliberately.
+
+    The parser drops text-less entries on purpose so downstream subtitle burn-in
+    never receives empty cues (which would produce zero-width overlays and throw
+    off timing). See assembly_service._parse_srt line ~291.
+    """
     srt = "1\n00:00:01,000 --> 00:00:02,000\n\n"
     entries = assembly_service._parse_srt(srt)
-    assert len(entries) == 1
-    assert entries[0]["text"] == ""
+    assert entries == []
 
 
 # ---------------------------------------------------------------------------
