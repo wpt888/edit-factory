@@ -1900,6 +1900,15 @@ def _get_or_create_sync_project(supabase, profile_id: str) -> str:
     return result.data[0]["id"]
 
 
+def _is_syncable_orphan_video(video_file: Path) -> bool:
+    """Return True only for final rendered videos that should appear in library."""
+    if video_file.suffix.lower() != ".mp4":
+        return False
+    if video_file.name.endswith("_raw.mp4"):
+        return False
+    return True
+
+
 async def _sync_orphan_clips(profile_id: str, supabase) -> int:
     """Scan output/{profile_id}/ for .mp4 files not in DB and insert them."""
     settings = get_settings()
@@ -1907,7 +1916,7 @@ async def _sync_orphan_clips(profile_id: str, supabase) -> int:
     if not profile_dir.is_dir():
         return 0
 
-    mp4_files = list(profile_dir.glob("*.mp4"))
+    mp4_files = [f for f in profile_dir.glob("*.mp4") if _is_syncable_orphan_video(f)]
     if not mp4_files:
         return 0
 
@@ -1959,7 +1968,7 @@ async def list_all_clips(
     offset: int = Query(default=0, ge=0),
     cursor: Optional[str] = Query(default=None, description="ISO 8601 timestamp — return clips older than this value (cursor-based pagination)"),
     tag: Optional[str] = Query(default=None, description="Filter clips by tag"),
-    sync_orphans: bool = Query(default=False, description="Explicitly sync orphaned videos from disk before listing clips"),
+    sync_orphans: bool = Query(default=True, description="Sync orphaned rendered videos from disk before listing clips"),
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Listează toate clipurile pentru librărie cu suport cursor-based pagination."""
@@ -1968,8 +1977,6 @@ async def list_all_clips(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    # Only sync orphan clips on explicit opt-in.
-    # Listing the library should not mutate it.
     if sync_orphans and not cursor:
         import time as _time
         _now = _time.monotonic()
@@ -2003,8 +2010,9 @@ async def list_all_clips(
             query = query.contains("tags", [tag])
 
         if cursor:
-            # Cursor-based: return clips created before the cursor timestamp
-            query = query.lt("created_at", cursor)
+            # Cursor-based: use lte + fetch one extra to avoid dropping clips
+            # that share the exact same created_at timestamp as the cursor boundary
+            query = query.lte("created_at", cursor)
         else:
             # Offset-based fallback for backward compatibility
             query = query.offset(offset)
@@ -2363,7 +2371,7 @@ async def delete_clip(
     clip_id: str,
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Permanently delete a clip (files + DB)."""
+    """Permanently delete a clip (files + DB record)."""
     repo = get_repository()
     supabase = repo.get_client() if repo else None
     if not supabase:
@@ -2374,18 +2382,12 @@ async def delete_clip(
         if not clip_result.data:
             raise HTTPException(status_code=404, detail="Clip not found")
         clip = clip_result.data[0]
-        # Soft-delete: mark as deleted so orphan-sync won't re-import the file
-        supabase.table("editai_clips").update({
-            "is_deleted": True,
-            "deleted_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
-        # Remove the thumbnail immediately; it can be regenerated if the clip is restored.
-        if clip.get("thumbnail_path"):
-            try:
-                Path(clip["thumbnail_path"]).unlink(missing_ok=True)
-            except Exception as thumb_err:
-                logger.warning(f"Failed to delete thumbnail for clip {clip_id}: {thumb_err}")
-        logger.info(f"Soft-deleted clip {clip_id}")
+        # Hard-delete: remove files from disk
+        _delete_clip_files(clip)
+        # Delete content row (child) then clip row (parent)
+        supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
+        supabase.table("editai_clips").delete().eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
+        logger.info(f"Hard-deleted clip {clip_id} (files + DB)")
         return {"status": "deleted", "clip_id": clip_id}
     except HTTPException:
         raise
@@ -2403,7 +2405,7 @@ async def bulk_delete_clips(
     request: BulkDeleteRequest,
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Permanently delete multiple clips simultaneously (files + DB)."""
+    """Permanently delete multiple clips (files + DB records)."""
     repo = get_repository()
     supabase = repo.get_client() if repo else None
     if not supabase:
@@ -2432,23 +2434,16 @@ async def bulk_delete_clips(
 
         if found_clips:
             found_id_list = list(found_ids)
-            # Soft-delete: mark as deleted so orphan-sync won't re-import the files
-            supabase.table("editai_clips").update({
-                "is_deleted": True,
-                "deleted_at": datetime.now(timezone.utc).isoformat(),
-            }).in_("id", found_id_list).eq("profile_id", profile.profile_id).execute()
+            # Hard-delete: remove files from disk
             for clip in found_clips:
-                thumb_path = clip.get("thumbnail_path")
-                if not thumb_path:
-                    continue
-                try:
-                    Path(thumb_path).unlink(missing_ok=True)
-                except Exception as thumb_err:
-                    logger.warning(f"Failed to delete thumbnail for clip {clip.get('id')}: {thumb_err}")
+                _delete_clip_files(clip)
+            # Delete content rows (child) then clip rows (parent)
+            supabase.table("editai_clip_content").delete().in_("clip_id", found_id_list).execute()
+            supabase.table("editai_clips").delete().in_("id", found_id_list).eq("profile_id", profile.profile_id).execute()
 
         deleted = list(found_ids)
         for clip_id in deleted:
-            logger.info(f"Soft-deleted clip {clip_id}")
+            logger.info(f"Hard-deleted clip {clip_id} (files + DB)")
 
     except Exception as e:
         logger.error(f"Error in bulk delete: {e}")

@@ -265,12 +265,15 @@ function LibrarieContent() {
       if (signal?.aborted) return;
       const data = await res.json();
       if (cursor) {
-        // Append to existing clips (subsequent pages)
-        setClips((prev) => [...prev, ...(data.clips || [])]);
+        // Append to existing clips — deduplicate by id (lte cursor may overlap)
+        setClips((prev) => {
+          const existingIds = new Set(prev.map((c) => c.id));
+          const newClips = (data.clips || []).filter((c: ClipWithProject) => !existingIds.has(c.id));
+          return [...prev, ...newClips];
+        });
       } else {
         // Replace clips (first page load or refresh) — reset pagination
         setClips(data.clips || []);
-        setHasMore(true);
       }
       setNextCursor(data.next_cursor ?? null);
       setHasMore(data.has_more ?? false);
@@ -299,21 +302,28 @@ function LibrarieContent() {
   const fetchNextPageRef = useRef(fetchNextPage);
   useEffect(() => { fetchNextPageRef.current = fetchNextPage; }, [fetchNextPage]);
 
-  // IntersectionObserver — trigger fetchNextPage when sentinel enters viewport
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-    if (!sentinel) return;
+  // IntersectionObserver — callback ref so it reconnects when sentinel mounts/unmounts
+  const sentinelObserverRef = useRef<IntersectionObserver | null>(null);
+  const sentinelCallbackRef = useCallback((node: HTMLDivElement | null) => {
+    // Disconnect previous observer
+    if (sentinelObserverRef.current) {
+      sentinelObserverRef.current.disconnect();
+      sentinelObserverRef.current = null;
+    }
+    if (!node) return;
+    // Also store in sentinelRef for any other usage
+    (sentinelRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting) {
           fetchNextPageRef.current();
         }
       },
-      { threshold: 0.1 }
+      { threshold: 0.01, rootMargin: "0px 0px 400px 0px" }
     );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, []); // stable - created once
+    observer.observe(node);
+    sentinelObserverRef.current = observer;
+  }, []);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -2294,7 +2304,7 @@ function LibrarieContent() {
                 </p>
               </div>
             )}
-            <div ref={sentinelRef} className="h-4" aria-hidden="true" />
+            <div ref={sentinelCallbackRef} className="h-4" aria-hidden="true" />
           </>
         )}
         </>)}
