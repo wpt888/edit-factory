@@ -22,8 +22,7 @@ from unittest.mock import patch, MagicMock
 def assembly_service(mock_settings):
     """Return an AssemblyService with settings patched to use tmp_path."""
     # Patch get_supabase to return None (no DB calls)
-    with patch("app.db.get_supabase", return_value=None), \
-         patch("app.services.assembly_service.get_supabase", return_value=None):
+    with patch("app.db.get_supabase", return_value=None):
         from app.services.assembly_service import AssemblyService
         service = AssemblyService()
         return service
@@ -165,6 +164,19 @@ def test_assign_groups_empty_srt():
     from app.services.assembly_service import assign_groups_to_srt
     groups = assign_groups_to_srt("[Tag] word1 word2", [])
     assert groups == []
+
+
+# ---------------------------------------------------------------------------
+# Meta subtitle profile behavior
+# ---------------------------------------------------------------------------
+
+def test_meta_profiles_do_not_override_user_typography():
+    """Meta profiles must not carry font overrides; typography stays user-controlled."""
+    from app.services.meta_visual_profiles import META_PROFILES
+
+    for profile in META_PROFILES:
+        assert "fontFamily" not in profile.subtitle_style
+        assert "fontSize" not in profile.subtitle_style
 
 
 # ---------------------------------------------------------------------------

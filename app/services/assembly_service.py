@@ -27,6 +27,7 @@ import tempfile
 import threading
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict
 
@@ -76,6 +77,45 @@ class TimelineEntry:
 def strip_product_group_tags(text: str) -> str:
     """Remove [ProductGroup] tags from script text, leaving only speakable content."""
     return re.sub(r'\[([^\[\]]+)\]', '', text).strip()
+
+
+def _slugify_output_component(value: Optional[str], *, fallback: str, max_words: int = 8, max_length: int = 48) -> str:
+    """Convert free text into a short filesystem-safe label."""
+    if not value:
+        return fallback
+    tokens = re.findall(r"[A-Za-z0-9]+", value.strip())
+    if not tokens:
+        return fallback
+    slug = "_".join(tokens[:max_words]).lower()
+    slug = re.sub(r"_+", "_", slug).strip("_")
+    return slug[:max_length].strip("_") or fallback
+
+
+def build_output_basename(
+    *,
+    variant_index: int,
+    visual_version_label: Optional[str] = None,
+    preset_name: Optional[str] = None,
+    project_label: Optional[str] = None,
+    script_label: Optional[str] = None,
+    created_at: Optional[datetime] = None,
+) -> str:
+    """Build a human-readable output filename stem for rendered videos."""
+    project_slug = _slugify_output_component(project_label, fallback="pipeline")
+    script_slug = _slugify_output_component(script_label, fallback=f"variant_{variant_index + 1}", max_words=6)
+    variant_suffix = f"{variant_index + 1}{str(visual_version_label).lower()}" if visual_version_label else f"{variant_index + 1}"
+    timestamp = (created_at or datetime.now()).strftime("%Y%m%d_%H%M%S")
+    preset_slug = _slugify_output_component(preset_name, fallback="", max_words=4, max_length=24) if preset_name else ""
+
+    parts = [project_slug]
+    if script_slug != project_slug:
+        parts.append(script_slug)
+    parts.append(f"v{variant_suffix}")
+    parts.append(timestamp)
+    if preset_slug and preset_slug != "tiktok":
+        parts.append(preset_slug)
+
+    return "_".join(part for part in parts if part)
 
 
 def build_word_to_group_map(text: str) -> List[Optional[str]]:
@@ -509,7 +549,11 @@ class AssemblyService:
         _used_single_use_ids: set = set()
 
         for g, ids in group_seg_ids.items():
-            rr_pointer[g] = variant_index % len(ids) if ids else 0
+            # Prime-scatter to avoid modulo collisions between meta visual versions.
+            # segment_offset=100 with 10 segments: plain 100%10=0 == 0%10 (same start).
+            # With scatter: (100*7 + 1*3)%10=3, (0*7 + 0*3)%10=0 → different starts.
+            n = len(ids) if ids else 1
+            rr_pointer[g] = (variant_index * 7 + variant_index // 100 * 3) % n if ids else 0
             last_used_at[g] = {}
 
         def _rr_next(group: Optional[str], current_srt_idx: int,
@@ -1657,6 +1701,9 @@ class AssemblyService:
         _preview_mode: bool = False,
         subtitle_style_override: Optional[Dict[str, object]] = None,
         visual_version_label: Optional[str] = None,
+        output_project_label: Optional[str] = None,
+        output_script_label: Optional[str] = None,
+        output_created_at: Optional[datetime] = None,
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
@@ -2076,9 +2123,19 @@ class AssemblyService:
             output_dir = self.settings.output_dir / profile_id
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            safe_preset_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', preset_data['name'])
-            _ver_suffix = f"_v{visual_version_label}" if visual_version_label else ""
-            final_output_path = output_dir / f"variant_{variant_index + 1}{_ver_suffix}_{uuid.uuid4().hex[:8]}_{safe_preset_name}.mp4"
+            output_stem = build_output_basename(
+                variant_index=variant_index,
+                visual_version_label=visual_version_label,
+                preset_name=preset_data.get("name"),
+                project_label=output_project_label,
+                script_label=output_script_label or script_text,
+                created_at=output_created_at,
+            )
+            final_output_path = output_dir / f"{output_stem}.mp4"
+            dedupe_index = 2
+            while final_output_path.exists():
+                final_output_path = output_dir / f"{output_stem}_{dedupe_index}.mp4"
+                dedupe_index += 1
 
             # Save pre-subtitle assembly for voiceover regeneration
             raw_assembly_path = output_dir / f"{final_output_path.stem}_raw.mp4"
