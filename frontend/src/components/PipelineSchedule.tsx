@@ -40,6 +40,7 @@ interface CompletedClip {
   variant_index: number;
   final_video_path: string;
   thumbnail_path?: string;
+  visual_version?: string;
 }
 
 interface Integration {
@@ -277,7 +278,12 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
     }
     if (_integrationsFetchPromise && !forceRefresh) {
       await _integrationsFetchPromise;
-      if (_integrationsCache) applyIntegrations(_integrationsCache, !!draft);
+      if (_integrationsFetchFailed) {
+        setIntegrationError(true);
+        setLoadingIntegrations(false);
+      } else if (_integrationsCache) {
+        applyIntegrations(_integrationsCache, !!draft);
+      }
       return;
     }
 
@@ -290,12 +296,12 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
 
     _integrationsFetchPromise = (async () => {
       try {
-        const res = await apiGetWithRetry("/postiz/integrations", { timeout: 15000, retry: 2 });
+        const res = await apiGetWithRetry("/postiz/integrations", { timeout: 30000, retry: 3 });
         const data = await res.json();
         _integrationsCache = Array.isArray(data) ? data : data.integrations || [];
         _integrationsFetchFailed = false;
       } catch {
-        _integrationsCache = [];
+        _integrationsCache = undefined;
         _integrationsFetchFailed = true;
       } finally {
         _integrationsFetchPromise = null;
@@ -313,6 +319,22 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
   }, [applyIntegrations, draft]);
 
   useEffect(() => { fetchIntegrations(); }, [fetchIntegrations]);
+
+  // Auto-retry with exponential backoff if integrations failed to load (max 3 retries)
+  const integrationRetryCountRef = useRef(0);
+  useEffect(() => {
+    if (!integrationError) {
+      integrationRetryCountRef.current = 0; // reset on success
+      return;
+    }
+    if (integrationRetryCountRef.current >= 3) return; // give up after 3 retries
+    const delay = 2000 * Math.pow(2, integrationRetryCountRef.current); // 2s, 4s, 8s
+    const timer = setTimeout(() => {
+      integrationRetryCountRef.current += 1;
+      fetchIntegrations(true);
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [integrationError, fetchIntegrations]);
 
   // Fetch Buffer channels
   const fetchBufferChannels = useCallback(async (forceRefresh = false) => {
@@ -600,16 +622,24 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
                 </button>
               </div>
               <div className="flex flex-wrap gap-2 border rounded-md p-2">
-                {completedClips.map((clip) => (
+                {completedClips.map((clip, clipIdx) => (
                   <label
-                    key={clip.clip_id}
+                    key={`${clip.clip_id}-${clipIdx}`}
                     className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent cursor-pointer text-sm"
                   >
                     <Checkbox
                       checked={selectedClipIds.has(clip.clip_id)}
                       onCheckedChange={() => toggleClip(clip.clip_id)}
                     />
-                    <span>Variant {clip.variant_index + 1}</span>
+                    <span className="truncate max-w-[220px]" title={clip.final_video_path?.split(/[/\\]/).pop() || ""}>
+                      Variant {clip.variant_index + 1}
+                      {clip.visual_version && ` ${clip.visual_version}`}
+                      {clip.final_video_path && (
+                        <span className="ml-1 text-muted-foreground text-xs">
+                          ({clip.final_video_path.split(/[/\\]/).pop()?.replace(/\.(mp4|mov|webm)$/i, "")})
+                        </span>
+                      )}
+                    </span>
                   </label>
                 ))}
               </div>
@@ -747,7 +777,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
                             onChange={(e) =>
                               setIntegrationTimes(prev => ({ ...prev, [integ.id]: e.target.value }))
                             }
-                            className="h-8 w-24 rounded-md border border-input bg-transparent px-2 text-sm shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            className="h-8 w-28 rounded-md border border-input bg-transparent px-2 text-sm shrink-0 text-foreground [color-scheme:dark] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                           />
                         )}
                       </div>
@@ -856,12 +886,12 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
               </div>
             ) : null}
 
-            {/* Library save in progress warning */}
-            {(!projectId || allLibrarySaved === false) && completedClips.length > 0 && (
+            {/* Library save in progress warning — only show when save genuinely incomplete */}
+            {allLibrarySaved === false && completedClips.length > 0 && (
               <div className="flex items-center gap-2 rounded-md border border-yellow-300 bg-yellow-50 dark:bg-yellow-950/30 dark:border-yellow-800 p-2.5 text-sm">
                 <AlertCircle className="size-4 text-yellow-600 dark:text-yellow-400 shrink-0" />
                 <span className="text-yellow-800 dark:text-yellow-300">
-                  Se salvează clipurile în librărie... Smart Schedule va fi disponibil imediat ce procesul se finalizează.
+                  Unele clipuri nu au fost salvate încă în librărie. Smart Schedule va fi disponibil după finalizare.
                 </span>
               </div>
             )}

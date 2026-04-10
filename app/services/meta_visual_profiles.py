@@ -9,8 +9,9 @@ The segment_offset is added to variant_index when calling match_srt_to_segments(
 causing the round-robin pointer to start at a different position and select
 entirely different video segments from the library.
 
-The subtitle_style_override replaces the user's subtitle settings for that
-render pass, producing visually distinct text overlays.
+Profiles may override only color/outline/glow/shadow/opacity attributes.
+User-controlled typography attributes like fontFamily and fontSize are never
+overridden by profiles.
 """
 
 from dataclasses import dataclass, field
@@ -36,8 +37,6 @@ PROFILE_A = MetaVisualProfile(
     label="Instagram",
     segment_offset=0,       # Normal variant_index (original segments)
     subtitle_style={
-        "fontFamily": "Montserrat",
-        "fontSize": 48,
         "textColor": "#FF0000",       # Red text
         "outlineColor": "#FFFFFF",    # White outline
         "outlineWidth": 3,
@@ -53,8 +52,6 @@ PROFILE_B = MetaVisualProfile(
     label="Facebook",
     segment_offset=100,     # +100 to variant_index → completely different segments
     subtitle_style={
-        "fontFamily": "Oswald",
-        "fontSize": 50,
         "textColor": "#FFFFFF",       # White text
         "outlineColor": "#FF0000",    # Red outline
         "outlineWidth": 4,

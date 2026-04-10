@@ -541,7 +541,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "captions": captions_json,
                 "selected_captions": selected_captions_json,
                 "target_script_duration": pipeline_dict.get("target_script_duration"),
-                "meta_multiplication": pipeline_dict.get("meta_multiplication", False),
+                "meta_multiplication": pipeline_dict.get("meta_multiplication", True),
             }
             try:
                 supabase.table("editai_pipelines").upsert(row).execute()
@@ -559,7 +559,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
         except Exception as e:
             if attempt == 0:
                 logger.warning(f"Pipeline {pipeline_id} DB save failed (attempt 1, retrying): {e}")
-                import time; time.sleep(0.3)
+                continue
             else:
                 logger.error(f"Pipeline {pipeline_id} DB save FAILED after 2 attempts: {e}")
 
@@ -644,6 +644,17 @@ def _fetch_preset_and_settings(render_request) -> tuple:
     return preset_data, subtitle_settings
 
 
+def _is_missing_column_error(exc: Exception, column_name: str) -> bool:
+    """Best-effort detection for Supabase/PostgREST missing-column errors."""
+    err = str(exc).lower()
+    col = column_name.lower()
+    return col in err and (
+        "column" in err
+        or "could not find" in err
+        or "schema cache" in err
+    )
+
+
 async def _save_clip_to_library(
     pipeline: dict,
     pipeline_id: str,
@@ -657,6 +668,7 @@ async def _save_clip_to_library(
     segment_composition: Optional[list] = None,
     job_key=None,
     visual_version: Optional[str] = None,
+    voice_settings: Optional[dict] = None,
 ) -> None:
     """Save or update a rendered clip in the library.
 
@@ -680,30 +692,41 @@ async def _save_clip_to_library(
                     library_project_id = pipeline.get("library_project_id")
                     if not library_project_id:
                         pipeline_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
+                        project_payload = {
+                            "profile_id": profile_id,
+                            "name": pipeline_name,
+                            "description": f"Auto-generated from pipeline {pipeline_id}",
+                            "status": "completed",
+                            "pipeline_id": pipeline_id,
+                        }
                         try:
-                            proj_result = supabase_lib.table("editai_projects").insert({
-                                "profile_id": profile_id,
-                                "name": pipeline_name,
-                                "description": f"Auto-generated from pipeline {pipeline_id}",
-                                "status": "completed",
-                                "pipeline_id": pipeline_id,
-                            }).execute()
+                            proj_result = supabase_lib.table("editai_projects").insert(project_payload).execute()
                             if proj_result.data:
                                 library_project_id = proj_result.data[0]["id"]
                         except Exception as insert_err:
-                            logger.debug(
-                                f"Project insert conflict, fetching existing: {insert_err}"
-                            )
-                            existing = supabase_lib.table("editai_projects")\
-                                .select("id")\
-                                .eq("profile_id", profile_id)\
-                                .eq("name", pipeline_name)\
-                                .limit(1)\
-                                .execute()
-                            if existing.data:
-                                library_project_id = existing.data[0]["id"]
-                            else:
-                                raise
+                            insert_err_str = str(insert_err)
+                            if "pipeline_id" in insert_err_str:
+                                logger.warning(
+                                    "editai_projects insert rejected pipeline_id; retrying without pipeline linkage"
+                                )
+                                project_payload.pop("pipeline_id", None)
+                                proj_result = supabase_lib.table("editai_projects").insert(project_payload).execute()
+                                if proj_result.data:
+                                    library_project_id = proj_result.data[0]["id"]
+                            if not library_project_id:
+                                logger.debug(
+                                    f"Project insert conflict, fetching existing: {insert_err}"
+                                )
+                                existing = supabase_lib.table("editai_projects")\
+                                    .select("id")\
+                                    .eq("profile_id", profile_id)\
+                                    .eq("name", pipeline_name)\
+                                    .limit(1)\
+                                    .execute()
+                                if existing.data:
+                                    library_project_id = existing.data[0]["id"]
+                                else:
+                                    raise
 
                         if library_project_id:
                             pipeline["library_project_id"] = library_project_id
@@ -747,16 +770,31 @@ async def _save_clip_to_library(
                     logger.warning(f"Duration probe failed: {dur_err}")
 
                 # Step D: Upsert clip row (update if already exists for this variant)
-                _clip_query = supabase_lib.table("editai_clips")\
-                    .select("id")\
-                    .eq("project_id", library_project_id)\
-                    .eq("variant_index", vid)\
-                    .eq("is_deleted", False)
-                if visual_version:
-                    _clip_query = _clip_query.eq("visual_version", visual_version)
-                else:
-                    _clip_query = _clip_query.is_("visual_version", "null")
-                existing_clip = _clip_query.limit(1).execute()
+                clip_supports_visual_version = True
+                try:
+                    _clip_query = supabase_lib.table("editai_clips")\
+                        .select("id")\
+                        .eq("project_id", library_project_id)\
+                        .eq("variant_index", vid)\
+                        .eq("is_deleted", False)
+                    if visual_version:
+                        _clip_query = _clip_query.eq("visual_version", visual_version)
+                    else:
+                        _clip_query = _clip_query.is_("visual_version", "null")
+                    existing_clip = _clip_query.limit(1).execute()
+                except Exception as clip_query_err:
+                    if _is_missing_column_error(clip_query_err, "visual_version"):
+                        clip_supports_visual_version = False
+                        logger.warning("visual_version column missing, retrying clip lookup without it")
+                        existing_clip = supabase_lib.table("editai_clips")\
+                            .select("id")\
+                            .eq("project_id", library_project_id)\
+                            .eq("variant_index", vid)\
+                            .eq("is_deleted", False)\
+                            .limit(1)\
+                            .execute()
+                    else:
+                        raise
                 if not existing_clip.data:
                     insert_payload = {
                         "project_id": library_project_id,
@@ -770,15 +808,20 @@ async def _save_clip_to_library(
                         "is_selected": False,
                         "is_deleted": False,
                         "final_status": "completed",
-                        "visual_version": visual_version,
                     }
+                    if clip_supports_visual_version:
+                        insert_payload["visual_version"] = visual_version
                     try:
                         insert_payload["render_fingerprint"] = render_fingerprint
                         clip_result = supabase_lib.table("editai_clips").insert(insert_payload).execute()
                     except Exception as _fp_err:
-                        if "render_fingerprint" in str(_fp_err):
+                        if _is_missing_column_error(_fp_err, "render_fingerprint"):
                             logger.warning("render_fingerprint column missing, retrying INSERT without it")
                             insert_payload.pop("render_fingerprint", None)
+                            clip_result = supabase_lib.table("editai_clips").insert(insert_payload).execute()
+                        elif _is_missing_column_error(_fp_err, "visual_version"):
+                            logger.warning("visual_version column missing, retrying INSERT without it")
+                            insert_payload.pop("visual_version", None)
                             clip_result = supabase_lib.table("editai_clips").insert(insert_payload).execute()
                         else:
                             raise
@@ -802,7 +845,7 @@ async def _save_clip_to_library(
                         update_payload["render_fingerprint"] = render_fingerprint
                         supabase_lib.table("editai_clips").update(update_payload).eq("id", existing_id).execute()
                     except Exception as _fp_err:
-                        if "render_fingerprint" in str(_fp_err):
+                        if _is_missing_column_error(_fp_err, "render_fingerprint"):
                             logger.warning("render_fingerprint column missing, retrying UPDATE without it")
                             update_payload.pop("render_fingerprint", None)
                             supabase_lib.table("editai_clips").update(update_payload).eq("id", existing_id).execute()
@@ -835,8 +878,8 @@ async def _save_clip_to_library(
                             _content_payload["caption"] = _caption or ""
                         if subtitle_settings:
                             _content_payload["subtitle_settings"] = subtitle_settings
-                        if render_request.voice_settings:
-                            _content_payload["voice_settings"] = render_request.voice_settings
+                        if voice_settings:
+                            _content_payload["voice_settings"] = voice_settings
                         if segment_composition:
                             _content_payload["segment_composition"] = segment_composition
                         if len(_content_payload) > 1:
@@ -979,7 +1022,7 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "captions": row.get("captions") or {},
             "selected_captions": row.get("selected_captions") or {},
             "created_at": row.get("created_at", ""),
-            "meta_multiplication": row.get("meta_multiplication", False),
+            "meta_multiplication": row.get("meta_multiplication", True),
         }
 
         _restore_missing_tts_audio_paths(pipeline_id, pipeline, persist=False)
@@ -1572,7 +1615,7 @@ async def get_meta_multiplication(
         raise HTTPException(status_code=404, detail="Pipeline not found")
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
-    return {"meta_multiplication": bool(pipeline.get("meta_multiplication", False))}
+    return {"meta_multiplication": bool(pipeline.get("meta_multiplication", True))}
 
 
 @router.put("/{pipeline_id}/meta-multiplication")
@@ -1999,7 +2042,7 @@ async def import_pipeline(
             "tts_previews": {},
             "preview_renders": {},
             "source_video_ids": [],
-            "meta_multiplication": False,
+            "meta_multiplication": True,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "profile_id": profile.profile_id
         }
@@ -2172,7 +2215,7 @@ async def generate_pipeline(
                 "segment_usage": {},
                 "preview_renders": {},
                 "render_jobs": {},
-                "meta_multiplication": False,
+                "meta_multiplication": True,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "profile_id": profile.profile_id,
                 "target_script_duration": body.target_script_duration
@@ -2923,6 +2966,23 @@ async def check_render_skip(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    # Build a set of soft-deleted clip IDs so we don't offer skip for deleted clips
+    _deleted_clip_ids: set = set()
+    repo_chk = get_repository()
+    supabase_chk = repo_chk.get_client() if repo_chk else None
+    if supabase_chk:
+        _render_jobs = pipeline.get("render_jobs", {})
+        _clip_ids_to_check = [
+            j.get("clip_id") for j in _render_jobs.values()
+            if isinstance(j, dict) and j.get("clip_id")
+        ]
+        if _clip_ids_to_check:
+            try:
+                _del_result = supabase_chk.table("editai_clips").select("id").in_("id", _clip_ids_to_check).eq("is_deleted", True).execute()
+                _deleted_clip_ids = {r["id"] for r in (_del_result.data or [])}
+            except Exception as _del_err:
+                logger.warning(f"Failed to check deleted clips: {_del_err}")
+
     results: List[RenderCheckResult] = []
     for vid in render_request.variant_indices:
         if vid < 0 or vid >= len(pipeline["scripts"]):
@@ -2945,6 +3005,11 @@ async def check_render_skip(
                     break
                 _chk_video = _chk_job.get("final_video_path")
                 if not _chk_video or not Path(_chk_video).exists():
+                    _all_meta_ok = False
+                    break
+                # BUG-FIX: Check if the library clip was soft-deleted
+                _chk_clip_id = _chk_job.get("clip_id")
+                if _chk_clip_id and _chk_clip_id in _deleted_clip_ids:
                     _all_meta_ok = False
                     break
                 # Recompute the meta-derived fingerprint for comparison
@@ -2993,6 +3058,14 @@ async def check_render_skip(
         if not video_path or not Path(video_path).exists():
             results.append(RenderCheckResult(
                 variant_index=vid, can_skip=False, reason="file_missing"
+            ))
+            continue
+
+        # BUG-FIX: Check if the library clip was soft-deleted by the user
+        _job_clip_id = existing_job.get("clip_id")
+        if _job_clip_id and _job_clip_id in _deleted_clip_ids:
+            results.append(RenderCheckResult(
+                variant_index=vid, can_skip=False, reason="clip_deleted"
             ))
             continue
 
@@ -3129,7 +3202,7 @@ async def render_variants(
             if existing_job and existing_job.get("status") == "processing":
                 continue  # Skip — already rendering this variant/version
 
-            pipeline["render_jobs"][job_key] = {
+            _init_job: dict = {
                 "status": "processing",
                 "progress": 0,
                 "current_step": "Initializing render",
@@ -3137,6 +3210,10 @@ async def render_variants(
                 "error": None,
                 "started_at": datetime.now(timezone.utc).isoformat()
             }
+            if ver_idx is not None:
+                _init_job["visual_version"] = get_version_label(ver_idx)
+                _init_job["meta_platform"] = META_PROFILES[ver_idx].name
+            pipeline["render_jobs"][job_key] = _init_job
             _render_tasks_to_run.append((vid, ver_idx, job_key))
 
     # Capture profile_id by value so the closure doesn't hold a mutable reference
@@ -3429,6 +3506,9 @@ async def render_variants(
                         avoid_segment_ids=render_avoid_ids if render_avoid_ids else None,
                         subtitle_style_override=_subtitle_override,
                         visual_version_label=get_version_label(version_index) if version_index is not None else None,
+                        output_project_label=(pipeline.get("name") or pipeline.get("idea") or "").strip(),
+                        output_script_label=script_text,
+                        output_created_at=datetime.now(timezone.utc),
                     ),
                     timeout=1800 if preset_data.get("encoding_mode") == "vbr_2pass" else 900
                 )
@@ -3498,6 +3578,7 @@ async def render_variants(
                 segment_composition=_seg_composition,
                 job_key=job_key,
                 visual_version=_visual_ver,
+                voice_settings=render_request.voice_settings,
             )
 
         except Exception as e:
@@ -3772,6 +3853,9 @@ async def remake_variant(
                         interstitial_slides=variant_interstitial_slides,
                         pip_overlays=variant_pip_overlays,
                         avoid_segment_ids=remake_avoid_ids if remake_avoid_ids else None,
+                        output_project_label=(pipeline.get("name") or pipeline.get("idea") or "").strip(),
+                        output_script_label=script_text,
+                        output_created_at=datetime.now(timezone.utc),
                     ),
                     timeout=1800 if preset_data.get("encoding_mode") == "vbr_2pass" else 900
                 )
@@ -3802,6 +3886,7 @@ async def remake_variant(
                 raw_assembly_path=raw_assembly_path,
                 subtitle_settings=subtitle_settings,
                 segment_composition=_seg_composition,
+                voice_settings=render_request.voice_settings,
             )
 
             logger.info(
@@ -4035,7 +4120,7 @@ async def get_pipeline_status(pipeline_id: str):
         variant_count=len(pipeline["scripts"]),
         variants=variants,
         meta_variants=meta_variants if meta_variants else None,
-        meta_multiplication=bool(pipeline.get("meta_multiplication", False)),
+        meta_multiplication=bool(pipeline.get("meta_multiplication", True)),
         preview_info=preview_info,
         tts_info=tts_info,
         library_project_id=pipeline.get("library_project_id"),
@@ -4096,7 +4181,7 @@ async def get_pipeline_scripts(pipeline_id: str):
         "context": _strip_embedded_product_blocks(pipeline.get("context", "")),
         "provider": pipeline.get("provider", "gemini"),
         "variant_count": pipeline.get("variant_count", len(pipeline.get("scripts", []))),
-        "meta_multiplication": bool(pipeline.get("meta_multiplication", False)),
+        "meta_multiplication": bool(pipeline.get("meta_multiplication", True)),
         "library_project_id": pipeline.get("library_project_id"),
     }
 
@@ -4167,15 +4252,28 @@ async def sync_pipeline_to_library(
             library_project_id = proj_result.data[0]["id"]
 
     # Check which clips already exist (fetch id + variant_index + visual_version for update)
-    existing_clips = supabase.table("editai_clips")\
-        .select("id, variant_index, visual_version")\
-        .eq("project_id", library_project_id)\
-        .eq("is_deleted", False)\
-        .execute()
+    clip_supports_visual_version = True
+    try:
+        existing_clips = supabase.table("editai_clips")\
+            .select("id, variant_index, visual_version")\
+            .eq("project_id", library_project_id)\
+            .eq("is_deleted", False)\
+            .execute()
+    except Exception as existing_clips_err:
+        if _is_missing_column_error(existing_clips_err, "visual_version"):
+            clip_supports_visual_version = False
+            logger.warning("visual_version column missing, retrying sync lookup without it")
+            existing_clips = supabase.table("editai_clips")\
+                .select("id, variant_index")\
+                .eq("project_id", library_project_id)\
+                .eq("is_deleted", False)\
+                .execute()
+        else:
+            raise
     # Key by (variant_index, visual_version) to differentiate A/B versions
     existing_map = {}
     for c in (existing_clips.data or []):
-        _em_key = (c["variant_index"], c.get("visual_version"))
+        _em_key = (c["variant_index"], c.get("visual_version") if clip_supports_visual_version else None)
         existing_map[_em_key] = c["id"]
 
     synced = 0
@@ -4251,12 +4349,11 @@ async def sync_pipeline_to_library(
             clip_id_to_set = existing_id
             logger.info(f"Pipeline {pipeline_id} variant {vid} ver={_visual_ver}: updated existing clip {existing_id}")
         else:
-            clip_result = supabase.table("editai_clips").insert({
+            clip_insert_payload = {
                 "project_id": library_project_id,
                 "profile_id": profile.profile_id,
                 "variant_index": vid,
                 "variant_name": f"variant_{vid + 1}" + (f"_{_visual_ver}" if _visual_ver else ""),
-                "visual_version": _visual_ver,
                 "raw_video_path": str(_raw_assembly_path) if _raw_assembly_path else str(final_video_path),
                 "final_video_path": str(final_video_path),
                 "thumbnail_path": str(thumb_path) if thumb_path else None,
@@ -4264,7 +4361,19 @@ async def sync_pipeline_to_library(
                 "is_selected": False,
                 "is_deleted": False,
                 "final_status": "completed"
-            }).execute()
+            }
+            if clip_supports_visual_version:
+                clip_insert_payload["visual_version"] = _visual_ver
+            try:
+                clip_result = supabase.table("editai_clips").insert(clip_insert_payload).execute()
+            except Exception as clip_insert_err:
+                if _is_missing_column_error(clip_insert_err, "visual_version"):
+                    clip_supports_visual_version = False
+                    logger.warning("visual_version column missing, retrying sync INSERT without it")
+                    clip_insert_payload.pop("visual_version", None)
+                    clip_result = supabase.table("editai_clips").insert(clip_insert_payload).execute()
+                else:
+                    raise
             if clip_result.data and len(clip_result.data) > 0:
                 clip_id_to_set = clip_result.data[0].get("id")
 
@@ -4293,8 +4402,6 @@ async def sync_pipeline_to_library(
                     _content_payload["tts_audio_path"] = _audio_path
                 if str(vid) in pipeline.get("selected_captions", {}):
                     _content_payload["caption"] = _caption or ""
-                if render_request.voice_settings:
-                    _content_payload["voice_settings"] = render_request.voice_settings
                 if len(_content_payload) > 1:
                     supabase.table("editai_clip_content").upsert(
                         _content_payload, on_conflict="clip_id"
@@ -4600,6 +4707,7 @@ async def render_preview(
     fp_parts = seg_parts + [
         f"uri={render_request.ultra_rapid_intro}",
         f"isl={hashlib.md5(_json.dumps([{'url': s.get('imageUrl',''), 'dur': s.get('duration',0), 'anim': s.get('animation',''), 'after': s.get('afterMatchIndex',0)} for s in (render_request.interstitial_slides or [])], sort_keys=True).encode()).hexdigest()[:8]}",
+        f"subs={hashlib.md5(_json.dumps(render_request.subtitle_settings or {}, sort_keys=True).encode()).hexdigest()[:8]}",
         f"tts={audio_mtime}",
         f"tfm={transforms_hash}",
     ]

@@ -1003,13 +1003,13 @@ export function PipelineCaptionGenerator({
                   <p className="text-sm text-muted-foreground">
                     Click an AI caption to use it. It will be copied to the caption field below.
                   </p>
-                  {completedClips.map((clip) => {
+                  {completedClips.map((clip, clipIdx) => {
                     const varCaptions = generatedCaptions[clip.variant_index];
                     if (!varCaptions || varCaptions.length === 0) return null;
                     const selectedIdx = selectedCaptionIdx[clip.variant_index] ?? 0;
 
                     return (
-                      <div key={clip.clip_id} className="space-y-2">
+                      <div key={`${clip.clip_id}-${clipIdx}`} className="space-y-2">
                         <p className="text-sm font-medium">Variant {clip.variant_index + 1} — AI Options</p>
                         {varCaptions.map((caption, idx) => (
                           <div
@@ -1056,8 +1056,8 @@ export function PipelineCaptionGenerator({
 
       {/* Manual caption fields per variant — always visible, below AI generator */}
       <div className="space-y-3">
-        {completedClips.map((clip) => (
-          <Card key={clip.clip_id}>
+        {completedClips.map((clip, clipIdx) => (
+          <Card key={`${clip.clip_id}-${clipIdx}`}>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center gap-2">
                 <Pencil className="size-3.5" />

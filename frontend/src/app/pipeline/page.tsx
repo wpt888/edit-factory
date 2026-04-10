@@ -873,7 +873,7 @@ function PipelinePage() {
   const [existingRenderCount, setExistingRenderCount] = useState(0);
   const [presetName, setPresetName] = useState("TikTok");
   const [renderSettings, setRenderSettings] = useState<RenderSettings>({ ...DEFAULT_RENDER_SETTINGS });
-  const [metaMultiplication, setMetaMultiplication] = useState(false);
+  const [metaMultiplication, setMetaMultiplication] = useState(true);
   const [publishVariant, setPublishVariant] = useState<VariantStatus | null>(null);
   const [generatedCaptions, setGeneratedCaptions] = useState<Record<string, string>>({});
   const [generatedYoutubeTitles, setGeneratedYoutubeTitles] = useState<Record<string, string>>({});
@@ -1094,7 +1094,7 @@ function PipelinePage() {
         if (data.context) setContext(stripEmbeddedProductBlocks(data.context));
         if (data.provider) setProvider(data.provider);
         if (data.variant_count) setVariantCount(data.variant_count);
-        setMetaMultiplication(Boolean(data.meta_multiplication));
+        setMetaMultiplication(data.meta_multiplication !== undefined ? Boolean(data.meta_multiplication) : true);
         if (data.library_project_id) setLibraryProjectId(data.library_project_id);
 
         // Restore TTS results from history info (inline to avoid hoisting issues)
@@ -1494,7 +1494,7 @@ function PipelinePage() {
   // does NOT cause variant M's video to reload and interrupt playback.
   const videoCacheBustRef = useRef<Record<number, number>>({});
   const completedFingerprint = useMemo(
-    () => variantStatuses.filter(v => v.status === "completed").map(v => v.variant_index).join(","),
+    () => variantStatuses.filter(v => v.status === "completed").map(v => `${v.variant_index}${v.visual_version ? `_${v.visual_version}` : ""}`).join(","),
     [variantStatuses]
   );
   useEffect(() => {
@@ -2145,7 +2145,7 @@ function PipelinePage() {
     setPreviews({});
     setPreviewError(null);
     setSelectedVariants(new Set());
-    setMetaMultiplication(false);
+    setMetaMultiplication(true);
     setIsRendering(false);
     setVariantStatuses([]);
     setVoiceId("");
@@ -2629,10 +2629,10 @@ function PipelinePage() {
         .then(async (res) => {
           if (!isMountedRef.current) return;
           const data = await res.json();
-          setMetaMultiplication(Boolean(data.meta_multiplication));
+          setMetaMultiplication(data.meta_multiplication !== undefined ? Boolean(data.meta_multiplication) : true);
         })
         .catch(() => {
-          setMetaMultiplication(false);
+          setMetaMultiplication(true);
         });
       setSelectedHistoryId(null);
       setHistoryScripts([]);
@@ -5193,25 +5193,6 @@ function PipelinePage() {
               onChange={setRenderSettings}
             />
 
-            {/* Meta render multiplication toggle */}
-            <div className="border rounded-lg p-3 space-y-1">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="meta-multiplication"
-                  checked={metaMultiplication}
-                  onCheckedChange={(checked) => void handleMetaMultiplicationChange(checked === true)}
-                />
-                <Label htmlFor="meta-multiplication" className="text-sm cursor-pointer font-medium">
-                  Meta Multiplication (2x variante)
-                </Label>
-              </div>
-              <p className="text-xs text-muted-foreground ml-6">
-                {metaMultiplication
-                  ? `Fiecare variantă se va randa de 2 ori cu stiluri vizuale diferite (Instagram + Facebook), pentru a evita penalizarea Meta pentru conținut duplicat. Total rendări: ${selectedVariants.size * 2}.`
-                  : "Activează pentru a genera câte 2 versiuni vizual diferite per variantă (segmente și subtitrări diferite), optimizate pentru Instagram și Facebook."}
-              </p>
-            </div>
-
             {/* Continue to existing renders (same pattern as Step 2's "already generated") */}
             {existingRenderCount > 0 && (
               <Button
@@ -5337,8 +5318,8 @@ function PipelinePage() {
               />
             ) : null}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {variantStatuses.map((status) => (
-                <Card key={status.visual_version ? `${status.variant_index}_${status.visual_version}` : status.variant_index}>
+              {variantStatuses.map((status, statusIdx) => (
+                <Card key={status.visual_version ? `${status.variant_index}_${status.visual_version}` : `${status.variant_index}_${statusIdx}`}>
                   <CardHeader>
                     <div className="flex items-center justify-between">
                       <CardTitle className="text-lg">
@@ -5485,7 +5466,7 @@ function PipelinePage() {
                     {status.status === "completed" && status.final_video_path && (
                       <div className="space-y-3">
                         <video
-                          key={`video-${status.variant_index}-${getVideoCacheBust(status.variant_index)}`}
+                          key={`video-${status.variant_index}${status.visual_version ? `_${status.visual_version}` : ""}-${getVideoCacheBust(status.variant_index)}`}
                           controls
                           className="w-full rounded-md bg-black max-h-64 object-contain"
                           poster={
@@ -5570,10 +5551,11 @@ function PipelinePage() {
               <PipelineCaptionGenerator
                 pipelineId={pipelineId}
                 completedClips={variantStatuses.map(v => ({
-                  clip_id: v.clip_id || `pending-${v.variant_index}`,
+                  clip_id: v.clip_id || `pending-${v.variant_index}${v.visual_version ? `_${v.visual_version}` : ""}`,
                   variant_index: v.variant_index,
                   final_video_path: v.final_video_path || "",
                   thumbnail_path: v.thumbnail_path,
+                  visual_version: v.visual_version,
                 }))}
                 scripts={scripts}
                 contextProducts={contextProducts}
@@ -5594,6 +5576,7 @@ function PipelinePage() {
                   variant_index: v.variant_index,
                   final_video_path: v.final_video_path || "",
                   thumbnail_path: v.thumbnail_path,
+                  visual_version: v.visual_version,
                 }))}
               initialCaptions={generatedCaptions}
               projectId={libraryProjectId ?? undefined}
