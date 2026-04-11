@@ -72,7 +72,22 @@ import { ProductPickerDialog } from "@/components/product-picker-dialog";
 import { ImagePickerDialog } from "@/components/image-picker-dialog";
 import type { AssociationResponse } from "@/components/product-picker-dialog";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
-import { SubtitleSettings, DEFAULT_SUBTITLE_SETTINGS } from "@/types/video-processing";
+import { SubtitleSettings, DEFAULT_SUBTITLE_SETTINGS, UserSubtitlePreset } from "@/types/video-processing";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { TimelineEditor, SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
 import { VariantPreviewPlayer } from "@/components/variant-preview-player";
 import { SimplePipeline } from "@/components/simple-mode-pipeline";
@@ -204,6 +219,27 @@ interface ContextProduct {
   title: string;
   description: string;
 }
+
+const META_SUBTITLE_STYLE_BY_VERSION: Record<string, Partial<SubtitleSettings>> = {
+  A: {
+    textColor: "#FF0000",
+    outlineColor: "#FFFFFF",
+    outlineWidth: 3,
+    shadowDepth: 2,
+    enableGlow: false,
+    glowBlur: 0,
+    opacity: 100,
+  },
+  B: {
+    textColor: "#FFFFFF",
+    outlineColor: "#FF0000",
+    outlineWidth: 4,
+    shadowDepth: 0,
+    enableGlow: true,
+    glowBlur: 3,
+    opacity: 100,
+  },
+};
 
 // Error boundary prevents the entire page from going white on unexpected render errors.
 interface PipelineErrorBoundaryState {
@@ -1006,11 +1042,96 @@ function PipelinePage() {
   // Interstitial slides: keyed by variant index
   const [interstitialSlides, setInterstitialSlides] = useState<Record<PreviewKey, InterstitialSlide[]>>({});
 
-  // Subtitle settings state
+  // ── Subtitle settings state ───────────────────────────────────────────────
+  // `subtitleSettings` is the DEFAULT style for this pipeline (loaded from the
+  // user's profile, used as fallback for any variant that doesn't have an
+  // explicit override).
   const [subtitleSettings, setSubtitleSettings] = useState<SubtitleSettings>({ ...DEFAULT_SUBTITLE_SETTINGS });
   const [subtitleSettingsLoaded, setSubtitleSettingsLoaded] = useState(false);
   const subtitleSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceSettingsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Per-variant subtitle style overrides. Keyed by PreviewKey ("0", "0_A"...).
+  // When a key is present, that variant renders with the override instead of
+  // the default. See `getSubtitleSettingsFor` below for the precedence rule.
+  const [subtitleOverrides, setSubtitleOverrides] = useState<Record<PreviewKey, SubtitleSettings>>({});
+
+  // Which preview key is currently being edited in the SubtitleEditor.
+  // Starts null until Step 3 mounts — then defaults to the first preview card.
+  const [activeStyleKey, setActiveStyleKey] = useState<PreviewKey | null>(null);
+
+  // User-saved named presets loaded from the profile (distinct from the
+  // hardcoded CAPTION_PRESETS built into SubtitleEditor).
+  const [userSubtitlePresets, setUserSubtitlePresets] = useState<UserSubtitlePreset[]>([]);
+
+  // Debounced-save timer for per-variant overrides → PUT /pipeline/{id}/subtitle-overrides
+  const overridesSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // "Save as preset" dialog state
+  const [savePresetDialogOpen, setSavePresetDialogOpen] = useState(false);
+  const [savePresetName, setSavePresetName] = useState("");
+  const [savePresetSubmitting, setSavePresetSubmitting] = useState(false);
+  const [savePresetError, setSavePresetError] = useState<string | null>(null);
+
+  // ── getSubtitleSettingsFor ─────────────────────────────────────────────────
+  // SINGLE SOURCE OF TRUTH for "what style does variant X use right now?".
+  // Called by the SubtitleEditor (for the active tab), by every TimelineEditor
+  // card (to render the per-variant preview), and by VariantPreviewPlayer.
+  //
+  // Precedence rule (TODO — see comment):
+  //   1. If `subtitleOverrides[key]` exists and is non-empty → return a
+  //      shallow merge (default ⊕ override) so override fields win but any
+  //      missing fields fall through to the default.
+  //   2. Otherwise → return the default (`subtitleSettings`).
+  //
+  // Meta profile overlay (Instagram red / Facebook white) is NOT applied here.
+  // It's handled backend-side at render time only when there is NO user
+  // override for the key (matching the backend rule in pipeline_routes.py).
+  //
+  // ★ TODO (user implementation — 5-10 lines):
+  // Decide exactly how merge works. Trade-offs to consider:
+  //   - Shallow merge (default ⊕ override) is robust to partial overrides,
+  //     but means a future new field added to SubtitleSettings will fall back
+  //     to default for all existing overrides — is that desired?
+  //   - Full replacement requires overrides to always be complete, which is
+  //     strict but predictable.
+  //   - Null-safety: when `key` is null (pipeline empty), what do you return?
+  //     The default, or throw? The default keeps the editor happy.
+  //   - Should a freshly-empty override (`{}`) count as "no override"? The
+  //     current read below treats missing / empty-dict identically via the
+  //     `Object.keys(...).length === 0` check.
+  const getSubtitleSettingsFor = useCallback(
+    (key: PreviewKey | null): SubtitleSettings => {
+      // ★ USER IMPLEMENTATION GOES HERE ★
+      // Replace the placeholder below with the merge logic you want.
+      if (key === null) return subtitleSettings;
+      const override = subtitleOverrides[key];
+      if (!override || Object.keys(override).length === 0) {
+        return subtitleSettings;
+      }
+      return { ...subtitleSettings, ...override };
+    },
+    [subtitleSettings, subtitleOverrides]
+  );
+
+  const getPreviewSubtitleSettingsFor = useCallback(
+    (key: PreviewKey | null, visualVersion?: string): SubtitleSettings => {
+      const effective = getSubtitleSettingsFor(key);
+      if (key === null || !visualVersion) {
+        return effective;
+      }
+
+      const explicitOverride = subtitleOverrides[key];
+      const hasExplicitOverride = !!explicitOverride && Object.keys(explicitOverride).length > 0;
+      if (hasExplicitOverride) {
+        return effective;
+      }
+
+      const metaStyle = META_SUBTITLE_STYLE_BY_VERSION[visualVersion];
+      return metaStyle ? { ...effective, ...metaStyle } : effective;
+    },
+    [getSubtitleSettingsFor, subtitleOverrides]
+  );
 
   // Stable empty slides constant to avoid new array reference on every render
   const EMPTY_SLIDES: InterstitialSlide[] = useMemo(() => [], []);
@@ -1128,6 +1249,17 @@ function PipelinePage() {
           }
         } catch {
           // No saved selection — user selects manually
+        }
+
+        // Restore per-variant subtitle overrides for this pipeline.
+        try {
+          const ovRes = await apiGet(`/pipeline/${data.pipeline_id}/subtitle-overrides`);
+          const ovData = await ovRes.json();
+          if (isMountedRef.current && ovData && typeof ovData.overrides === "object" && ovData.overrides !== null) {
+            setSubtitleOverrides(ovData.overrides as Record<PreviewKey, SubtitleSettings>);
+          }
+        } catch {
+          // Old pipeline or no overrides — silent fallback
         }
 
         // Navigate to step 2 if on step 1 (scripts are loaded)
@@ -1362,6 +1494,33 @@ function PipelinePage() {
       },
     ]));
   }, [buildPreviewKey, metaMultiplication, scripts]);
+
+  // Initialize / re-validate the active style key as previewCards changes.
+  // Cases handled:
+  //   - First mount with cards: pick the first key.
+  //   - User toggled Meta Multiplication: previous key may no longer exist
+  //     (e.g. "0" → "0_A"/"0_B"). Fall back to the first available key.
+  //   - All variants removed: clear the active key.
+  useEffect(() => {
+    if (previewCards.length === 0) {
+      if (activeStyleKey !== null) setActiveStyleKey(null);
+      return;
+    }
+    if (activeStyleKey === null || !previewCards.some(c => c.key === activeStyleKey)) {
+      setActiveStyleKey(previewCards[0].key);
+    }
+  }, [previewCards, activeStyleKey]);
+
+  // Helpers used by the SubtitleEditor card UI.
+  // Named distinctly to avoid shadowing the inner `activeCard` IIFE local
+  // used by VariantPreviewPlayer further down in the JSX.
+  const activeStyleCard = useMemo(
+    () => previewCards.find(c => c.key === activeStyleKey) ?? null,
+    [previewCards, activeStyleKey]
+  );
+  const activeStyleHasOverride = activeStyleKey !== null
+    && activeStyleKey in subtitleOverrides
+    && Object.keys(subtitleOverrides[activeStyleKey] || {}).length > 0;
 
   // Fetch product groups when source video selection changes
   useEffect(() => {
@@ -1951,6 +2110,8 @@ function PipelinePage() {
       min_segment_duration: minSegmentDuration,
       ultra_rapid_intro: ultraRapidIntro,
       meta_multiplication: metaMultiplication,
+      // Flat fields = DEFAULT subtitle style. Backend uses these for any
+      // variant key that has no entry in subtitle_settings_by_key.
       font_size: subtitleSettings.fontSize,
       font_family: subtitleSettings.fontFamily,
       text_color: subtitleSettings.textColor,
@@ -1958,10 +2119,17 @@ function PipelinePage() {
       outline_width: subtitleSettings.outlineWidth,
       position_y: subtitleSettings.positionY,
       shadow_depth: subtitleSettings.shadowDepth ?? 0,
+      shadow_color: subtitleSettings.shadowColor ?? "#000000",
+      border_style: subtitleSettings.borderStyle ?? 1,
       enable_glow: subtitleSettings.enableGlow ?? false,
       glow_blur: subtitleSettings.glowBlur ?? 0,
       adaptive_sizing: subtitleSettings.adaptiveSizing ?? false,
       opacity: subtitleSettings.opacity ?? 100,
+      // Per-variant overrides. Sent only when at least one key has been
+      // customized — otherwise omit so the backend takes the simpler code path.
+      subtitle_settings_by_key: Object.keys(subtitleOverrides).length > 0
+        ? subtitleOverrides
+        : undefined,
     };
   };
 
@@ -2422,8 +2590,10 @@ function PipelinePage() {
     loadSubtitleSettings();
   }, [currentProfile?.id]);
 
-  // Debounced save subtitle settings to profile
-  const handleSubtitleSettingsChange = useCallback((newSettings: SubtitleSettings) => {
+  // Debounced save for the DEFAULT subtitle settings (persisted on the profile
+  // so they propagate to future pipelines). Per-variant overrides use a
+  // different endpoint (see `handleVariantSubtitleChange` below).
+  const handleDefaultSubtitleChange = useCallback((newSettings: SubtitleSettings) => {
     setSubtitleSettings(newSettings);
     if (!currentProfileIdRef.current) return;
     if (subtitleSaveTimer.current) clearTimeout(subtitleSaveTimer.current);
@@ -2437,6 +2607,155 @@ function PipelinePage() {
       }
     }, 1000);
   }, []);
+
+  // Debounced save for per-variant overrides. Scoped to the pipeline, not
+  // the profile — these are creative choices specific to this content.
+  //
+  // SAFETY: Capture the active pipeline id at edit time, not at timer fire
+  // time. If the user switches pipelines before the 800 ms timer elapses, we
+  // would otherwise PUT pipeline A's overrides into pipeline B. Mirrors the
+  // savedPid pattern used by the voice-settings auto-save further down.
+  const scheduleOverridesSave = useCallback((nextOverrides: Record<PreviewKey, SubtitleSettings>) => {
+    const savedPid = pipelineIdRef.current;
+    if (!savedPid) return;
+    if (overridesSaveTimer.current) clearTimeout(overridesSaveTimer.current);
+    // Snapshot the dict so concurrent state mutations after this call don't
+    // alter what we end up sending.
+    const snapshot = { ...nextOverrides };
+    overridesSaveTimer.current = setTimeout(async () => {
+      // Bail out if the user navigated to a different pipeline meanwhile.
+      if (pipelineIdRef.current !== savedPid) return;
+      try {
+        await apiPut(`/pipeline/${savedPid}/subtitle-overrides`, { overrides: snapshot });
+      } catch {
+        // Silent — overrides still work locally for this session
+      }
+    }, 800);
+  }, []);
+
+  // Cancel any pending override save when the active pipeline changes, so a
+  // late-firing timer for the previous pipeline can never write into the new
+  // one. The savedPid guard above is the primary defense; this is belt+braces.
+  useEffect(() => {
+    return () => {
+      if (overridesSaveTimer.current) {
+        clearTimeout(overridesSaveTimer.current);
+        overridesSaveTimer.current = null;
+      }
+    };
+  }, [pipelineId]);
+
+  // Editor onSettingsChange when a specific variant tab is active. Writes to
+  // the override map for that key and schedules a debounced save.
+  const handleVariantSubtitleChange = useCallback(
+    (key: PreviewKey, newSettings: SubtitleSettings) => {
+      setSubtitleOverrides(prev => {
+        const next = { ...prev, [key]: newSettings };
+        scheduleOverridesSave(next);
+        return next;
+      });
+    },
+    [scheduleOverridesSave]
+  );
+
+  // Remove an override for a key (Reset to default).
+  const handleResetVariantSubtitle = useCallback(
+    (key: PreviewKey) => {
+      setSubtitleOverrides(prev => {
+        if (!(key in prev)) return prev;
+        const next = { ...prev };
+        delete next[key];
+        scheduleOverridesSave(next);
+        return next;
+      });
+    },
+    [scheduleOverridesSave]
+  );
+
+  // Copy the effective style from one key to another (Copy from A → B button).
+  const handleCopyVariantSubtitle = useCallback(
+    (sourceKey: PreviewKey, targetKey: PreviewKey) => {
+      if (sourceKey === targetKey) return;
+      setSubtitleOverrides(prev => {
+        // Resolve the source's effective style inline (mirrors getSubtitleSettingsFor)
+        const sourceOverride = prev[sourceKey];
+        const sourceEffective: SubtitleSettings =
+          sourceOverride && Object.keys(sourceOverride).length > 0
+            ? { ...subtitleSettings, ...sourceOverride }
+            : { ...subtitleSettings };
+        const next = { ...prev, [targetKey]: sourceEffective };
+        scheduleOverridesSave(next);
+        return next;
+      });
+    },
+    [scheduleOverridesSave, subtitleSettings]
+  );
+
+  // Submit a "Save as preset" — POSTs the active key's effective settings to
+  // /profiles/{id}/subtitle-presets and refreshes the list on success.
+  const handleSubmitSavePreset = useCallback(async () => {
+    const profileId = currentProfileIdRef.current;
+    if (!profileId) {
+      setSavePresetError("No active profile");
+      return;
+    }
+    const trimmedName = savePresetName.trim();
+    if (!trimmedName) {
+      setSavePresetError("Preset name cannot be empty");
+      return;
+    }
+    if (activeStyleKey === null) {
+      setSavePresetError("No variant selected");
+      return;
+    }
+    // Resolve effective settings for the active key (inline to avoid stale closure)
+    const override = subtitleOverrides[activeStyleKey];
+    const effective: SubtitleSettings = override && Object.keys(override).length > 0
+      ? { ...subtitleSettings, ...override }
+      : { ...subtitleSettings };
+
+    setSavePresetSubmitting(true);
+    setSavePresetError(null);
+    try {
+      await apiPost(`/profiles/${profileId}/subtitle-presets`, {
+        name: trimmedName,
+        settings: effective,
+      });
+      // Refresh the dropdown list
+      const res = await apiGetWithRetry(`/profiles/${profileId}/subtitle-presets`);
+      const data = await res.json();
+      if (Array.isArray(data?.presets)) {
+        setUserSubtitlePresets(data.presets);
+      }
+      setSavePresetDialogOpen(false);
+      setSavePresetName("");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to save preset";
+      setSavePresetError(msg);
+    } finally {
+      setSavePresetSubmitting(false);
+    }
+  }, [savePresetName, activeStyleKey, subtitleOverrides, subtitleSettings]);
+
+  // Load/refresh user-saved subtitle presets from the profile.
+  const refreshUserSubtitlePresets = useCallback(async () => {
+    const profileId = currentProfileIdRef.current;
+    if (!profileId) return;
+    try {
+      const res = await apiGetWithRetry(`/profiles/${profileId}/subtitle-presets`);
+      const data = await res.json();
+      if (Array.isArray(data?.presets)) {
+        setUserSubtitlePresets(data.presets);
+      }
+    } catch {
+      // Silent — presets are optional convenience
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!currentProfile?.id) return;
+    refreshUserSubtitlePresets();
+  }, [currentProfile?.id, refreshUserSubtitlePresets]);
 
   // Debounced auto-save scripts to backend
   const saveScriptsToBackend = useCallback((pId: string, updatedScripts: string[]) => {
@@ -2633,6 +2952,21 @@ function PipelinePage() {
         })
         .catch(() => {
           setMetaMultiplication(true);
+        });
+
+      // Restore per-variant subtitle overrides for this pipeline.
+      apiGet(`/pipeline/${pid}/subtitle-overrides`)
+        .then(async (res) => {
+          if (!isMountedRef.current) return;
+          const data = await res.json();
+          if (data && typeof data.overrides === "object" && data.overrides !== null) {
+            setSubtitleOverrides(data.overrides as Record<PreviewKey, SubtitleSettings>);
+          } else {
+            setSubtitleOverrides({});
+          }
+        })
+        .catch(() => {
+          setSubtitleOverrides({});
         });
       setSelectedHistoryId(null);
       setHistoryScripts([]);
@@ -5017,7 +5351,7 @@ function PipelinePage() {
               </CardContent>
             </Card>
 
-            {/* Subtitle Style */}
+            {/* Subtitle Style — per-variant editor with tab selector */}
             <Card className={!subtitleSettingsLoaded ? "opacity-60 pointer-events-none" : ""}>
               <CardHeader>
                 <CardTitle className="text-lg flex items-center gap-2">
@@ -5026,18 +5360,135 @@ function PipelinePage() {
                   {!subtitleSettingsLoaded && <Loader2 className="h-3 w-3 animate-spin" />}
                 </CardTitle>
                 <CardDescription>
-                  Configure font, colors, and position for subtitles
+                  Pick a variant tab to customize its subtitles independently. Each variant
+                  can have its own font, colors, and position.
                 </CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-4">
+                {previewCards.length > 0 && activeStyleKey !== null && (
+                  <Tabs
+                    value={activeStyleKey}
+                    onValueChange={(value) => setActiveStyleKey(value as PreviewKey)}
+                  >
+                    <TabsList className="flex flex-wrap gap-1 h-auto">
+                      {previewCards.map((card) => {
+                        const hasOverride = card.key in subtitleOverrides
+                          && Object.keys(subtitleOverrides[card.key] || {}).length > 0;
+                        return (
+                          <TabsTrigger
+                            key={card.key}
+                            value={card.key}
+                            className="text-xs gap-1.5"
+                          >
+                            <span>{card.label}</span>
+                            {hasOverride ? (
+                              <Badge variant="secondary" className="h-4 px-1 text-[9px]">custom</Badge>
+                            ) : (
+                              <Badge variant="outline" className="h-4 px-1 text-[9px] text-muted-foreground">default</Badge>
+                            )}
+                          </TabsTrigger>
+                        );
+                      })}
+                    </TabsList>
+                  </Tabs>
+                )}
+
+                {/* Auxiliary controls for the active tab */}
+                {activeStyleKey !== null && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Copy from another variant */}
+                    {previewCards.length > 1 && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="outline" size="sm" className="h-8 text-xs">
+                            Copy style from…
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          {previewCards
+                            .filter(c => c.key !== activeStyleKey)
+                            .map(c => (
+                              <DropdownMenuItem
+                                key={c.key}
+                                onClick={() => handleCopyVariantSubtitle(c.key, activeStyleKey)}
+                              >
+                                {c.label}
+                              </DropdownMenuItem>
+                            ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+
+                    {/* Reset to default — only meaningful when override exists */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs"
+                      disabled={!activeStyleHasOverride}
+                      onClick={() => handleResetVariantSubtitle(activeStyleKey)}
+                    >
+                      Reset to default
+                    </Button>
+
+                    {/* Save current as named preset */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs"
+                      onClick={() => setSavePresetDialogOpen(true)}
+                    >
+                      Save as preset
+                    </Button>
+
+                    {/* Apply existing preset */}
+                    {userSubtitlePresets.length > 0 && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="outline" size="sm" className="h-8 text-xs">
+                            Apply preset…
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="max-h-72 overflow-auto">
+                          {userSubtitlePresets.map(preset => (
+                            <DropdownMenuItem
+                              key={preset.id}
+                              onClick={() => handleVariantSubtitleChange(activeStyleKey, preset.settings)}
+                            >
+                              {preset.name}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+
+                    {/* Status hint */}
+                    <span className="text-xs text-muted-foreground ml-auto">
+                      Editing: <span className="font-medium text-foreground">{activeStyleCard?.label ?? "—"}</span>
+                    </span>
+                  </div>
+                )}
+
+                {/* Editor itself — wired to the active variant key */}
                 <SubtitleEditor
-                  settings={subtitleSettings}
-                  onSettingsChange={handleSubtitleSettingsChange}
+                  settings={getSubtitleSettingsFor(activeStyleKey)}
+                  onSettingsChange={(newSettings) => {
+                    if (activeStyleKey === null) {
+                      // No active key (pipeline empty) — fall back to default save
+                      handleDefaultSubtitleChange(newSettings);
+                    } else {
+                      handleVariantSubtitleChange(activeStyleKey, newSettings);
+                    }
+                  }}
                   showPreview={true}
                   previewHeight={350}
                   compact={false}
                   pipelineId={pipelineId ?? undefined}
-                  variantIndex={0}
+                  variantIndex={activeStyleCard?.baseIndex ?? 0}
+                  // Only apply Meta overlay in the preview when there is no
+                  // explicit user override for this key (mirrors render rule).
+                  visualVersion={
+                    activeStyleHasOverride ? undefined : activeStyleCard?.visualVersion
+                  }
                 />
               </CardContent>
             </Card>
@@ -5135,7 +5586,7 @@ function PipelinePage() {
                         </span>
                       </div>
 
-                      {/* Full timeline editor */}
+                      {/* Full timeline editor — uses this variant's effective subtitle style */}
                       <TimelineEditor
                         matches={preview.matches}
                         audioDuration={preview.audio_duration}
@@ -5144,7 +5595,7 @@ function PipelinePage() {
                         profileId={currentProfile?.id}
                         pipelineId={pipelineId ?? undefined}
                         variantIndex={card.baseIndex}
-                        subtitleSettings={subtitleSettings}
+                        subtitleSettings={getPreviewSubtitleSettingsFor(card.key, card.visualVersion)}
                         interstitialSlides={interstitialSlides[card.key] ?? EMPTY_SLIDES}
                         onInterstitialSlidesChange={getInterstitialSlidesChangeHandler(card.key)}
                         onMatchesChange={getMatchesChangeHandler(card.key)}
@@ -5159,6 +5610,13 @@ function PipelinePage() {
             {previewVariant !== null && pipelineId && currentProfile && (() => {
               const activeCard = previewCards.find(card => card.key === previewVariant);
               if (!activeCard) return null;
+              // Match the render-time precedence rule: when the user has set
+              // an explicit subtitle override for this Meta key, suppress the
+              // visualVersion so the preview backend does NOT layer the Meta
+              // profile on top. Otherwise the preview would show the Meta
+              // overlay while the final render does not — visible divergence.
+              const _activeOverride = subtitleOverrides[activeCard.key];
+              const _hasOverride = !!_activeOverride && Object.keys(_activeOverride).length > 0;
               return (
                 <VariantPreviewPlayer
                   open={true}
@@ -5166,10 +5624,10 @@ function PipelinePage() {
                   matches={previews[previewVariant]?.matches ?? []}
                   pipelineId={pipelineId}
                   variantIndex={activeCard.baseIndex}
-                  visualVersion={activeCard.visualVersion}
+                  visualVersion={_hasOverride ? undefined : activeCard.visualVersion}
                   title={activeCard.label}
                   profileId={currentProfile.id}
-                  subtitleSettings={subtitleSettings}
+                  subtitleSettings={getSubtitleSettingsFor(activeCard.key)}
                   sourceVideoIds={selectedSourceIdsArray}
                   minSegmentDuration={minSegmentDuration}
                   wordsPerSubtitle={wordsPerSubtitle}
@@ -5178,6 +5636,68 @@ function PipelinePage() {
                 />
               );
             })()}
+
+            {/* "Save as preset" dialog — captures the active variant's effective style */}
+            <Dialog
+              open={savePresetDialogOpen}
+              onOpenChange={(open) => {
+                setSavePresetDialogOpen(open);
+                if (!open) {
+                  setSavePresetName("");
+                  setSavePresetError(null);
+                }
+              }}
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Save subtitle preset</DialogTitle>
+                  <DialogDescription>
+                    Save the current style of <span className="font-medium">{activeStyleCard?.label ?? "this variant"}</span>{" "}
+                    as a named preset. You can apply it to other variants later.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3 py-2">
+                  <div>
+                    <Label htmlFor="preset-name-input" className="text-sm">Preset name</Label>
+                    <Input
+                      id="preset-name-input"
+                      value={savePresetName}
+                      onChange={(e) => {
+                        setSavePresetName(e.target.value);
+                        if (savePresetError) setSavePresetError(null);
+                      }}
+                      placeholder="e.g. Aggressive Red"
+                      maxLength={80}
+                      disabled={savePresetSubmitting}
+                      className="mt-1"
+                      autoFocus
+                    />
+                  </div>
+                  {savePresetError && (
+                    <Alert variant="destructive">
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertDescription>{savePresetError}</AlertDescription>
+                    </Alert>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setSavePresetDialogOpen(false)}
+                    disabled={savePresetSubmitting}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleSubmitSavePreset}
+                    disabled={savePresetSubmitting || !savePresetName.trim()}
+                  >
+                    {savePresetSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    Save preset
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             {/* Error display */}
             {previewError && (
