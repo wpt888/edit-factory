@@ -32,7 +32,7 @@ from app.utils import normalize_path
 from app.rate_limit import limiter
 from app.services.script_generator import get_script_generator
 from app.services.assembly_service import get_assembly_service, strip_product_group_tags
-from app.services.meta_visual_profiles import META_PROFILES, get_version_label
+from app.services.meta_visual_profiles import META_PROFILES, META_PROFILES_BY_NAME, get_version_label
 from app.config import get_settings
 
 # Global FFmpeg concurrency — shared across ALL routes (library, pipeline, product)
@@ -379,23 +379,69 @@ def clear_pipeline_cancelled(pipeline_id: str):
         _cancelled_pipelines.pop(pipeline_id, None)
 
 
-def _compute_render_fingerprint(render_request, variant_index: int, script_text: str) -> str:
+def _compute_render_fingerprint(
+    render_request,
+    variant_index: int,
+    script_text: str,
+    job_key: Optional[Any] = None,
+    visual_version: Optional[str] = None,
+) -> str:
     """Compute a stable SHA-256 fingerprint from ALL render-affecting parameters.
 
     Used to detect when a variant can skip re-rendering because all parameters
     are identical to the last successful render.
+
+    `job_key` is the same key used by the render dispatch path: an int variant
+    index for the standard flow, or a string like "0_A" / "0_B" for Meta
+    multiplication versions. When provided, match_overrides and per-key
+    subtitle settings are looked up using this key (matching the lookup the
+    actual render does), so that A and B can have distinct fingerprints.
+    `visual_version` is included as well so flipping Meta on/off invalidates
+    the cache even when no other field changed.
     """
+    # Match-overrides lookup must use the same key the render uses. Fall back
+    # to str(variant_index) for backwards compat with callers that don't pass
+    # job_key (e.g. old code paths that haven't been updated yet).
+    lookup_key = str(job_key) if job_key is not None else str(variant_index)
     mo_segment_ids = []
     mo_transforms = {}
     if render_request.match_overrides:
-        mo_variant = render_request.match_overrides.get(str(variant_index))
+        mo_variant = render_request.match_overrides.get(lookup_key)
+        # Backwards compat: fall back to bare variant index if Meta key absent
+        if not mo_variant and lookup_key != str(variant_index):
+            mo_variant = render_request.match_overrides.get(str(variant_index))
         if mo_variant:
             mo_segment_ids = sorted(str(m.get("segment_id", "")) for m in mo_variant)
             mo_transforms = {str(i): m.get("transforms") or {} for i, m in enumerate(mo_variant)}
 
     interstitial = []
     if render_request.interstitial_slides:
+        # Interstitials are still keyed by base variant index (no per-version split)
         interstitial = render_request.interstitial_slides.get(str(variant_index), [])
+
+    # Resolve per-key subtitle override if any. This makes A vs B have distinct
+    # fingerprints when only their subtitle styles differ. The render path uses
+    # the same _get_subtitle_settings_for_key helper. Mirror the field set
+    # produced by _fetch_preset_and_settings so the fingerprint and the actual
+    # render see the same settings.
+    _default_subtitle = {
+        "fontSize": render_request.font_size,
+        "fontFamily": render_request.font_family,
+        "textColor": render_request.text_color,
+        "outlineColor": render_request.outline_color,
+        "outlineWidth": render_request.outline_width,
+        "positionY": render_request.position_y,
+        "shadowDepth": render_request.shadow_depth,
+        "shadowColor": render_request.shadow_color,
+        "borderStyle": render_request.border_style,
+        "enableGlow": render_request.enable_glow,
+        "glowBlur": render_request.glow_blur,
+        "adaptiveSizing": render_request.adaptive_sizing,
+        "opacity": render_request.opacity,
+    }
+    effective_subtitle, _ = _get_subtitle_settings_for_key(
+        render_request, lookup_key, _default_subtitle
+    )
 
     key_data = {
         "script_text": script_text or "",
@@ -406,17 +452,10 @@ def _compute_render_fingerprint(render_request, variant_index: int, script_text:
         "words_per_subtitle": render_request.words_per_subtitle,
         "min_segment_duration": render_request.min_segment_duration,
         "ultra_rapid_intro": render_request.ultra_rapid_intro,
-        "font_size": render_request.font_size,
-        "font_family": render_request.font_family,
-        "text_color": render_request.text_color,
-        "outline_color": render_request.outline_color,
-        "outline_width": render_request.outline_width,
-        "position_y": render_request.position_y,
-        "shadow_depth": render_request.shadow_depth,
-        "enable_glow": render_request.enable_glow,
-        "glow_blur": render_request.glow_blur,
-        "adaptive_sizing": render_request.adaptive_sizing,
-        "opacity": render_request.opacity,
+        # Effective subtitle settings for THIS specific job_key — captures both
+        # the default flat fields AND any per-key override that's in effect.
+        "effective_subtitle": effective_subtitle,
+        "visual_version": visual_version or "",
         "enable_denoise": render_request.enable_denoise,
         "denoise_strength": render_request.denoise_strength,
         "enable_sharpen": render_request.enable_sharpen,
@@ -520,6 +559,13 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
             segment_usage_json = {str(k): v for k, v in dict(pipeline_dict.get("segment_usage", {})).items()}
             captions_json = {str(k): v for k, v in dict(pipeline_dict.get("captions", {})).items()}
             selected_captions_json = dict(pipeline_dict.get("selected_captions", {}))
+            # Per-variant subtitle overrides: keyed by PreviewKey ("0", "0_A"...)
+            subtitle_overrides_raw = pipeline_dict.get("subtitle_settings_by_key")
+            subtitle_overrides_json = (
+                {str(k): v for k, v in dict(subtitle_overrides_raw).items()}
+                if subtitle_overrides_raw
+                else None
+            )
 
             row = {
                 "id": pipeline_id,
@@ -542,12 +588,21 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "selected_captions": selected_captions_json,
                 "target_script_duration": pipeline_dict.get("target_script_duration"),
                 "meta_multiplication": pipeline_dict.get("meta_multiplication", True),
+                "subtitle_settings_by_key": subtitle_overrides_json,
             }
             try:
                 supabase.table("editai_pipelines").upsert(row).execute()
             except Exception as upsert_err:
                 err_str = str(upsert_err)
-                if "selected_captions" in err_str or "target_script_duration" in err_str:
+                # Graceful degradation for pre-migration databases
+                if "subtitle_settings_by_key" in err_str:
+                    logger.warning(
+                        "subtitle_settings_by_key column missing — run migration 042. "
+                        "Retrying without it."
+                    )
+                    row.pop("subtitle_settings_by_key", None)
+                    supabase.table("editai_pipelines").upsert(row).execute()
+                elif "selected_captions" in err_str or "target_script_duration" in err_str:
                     logger.warning(f"Column missing, retrying without it: {err_str[:100]}")
                     row.pop("selected_captions", None)
                     row.pop("target_script_duration", None)
@@ -626,8 +681,12 @@ def _fetch_preset_and_settings(render_request) -> tuple:
     if render_request.video_level:
         preset_data["video_level"] = render_request.video_level
 
-    # Build subtitle settings dict (camelCase keys to match SubtitleStyleConfig.from_dict)
-    subtitle_settings = {
+    # Build default subtitle settings dict (camelCase keys to match
+    # SubtitleStyleConfig.from_dict). Used as fallback for any variant that
+    # doesn't have an explicit override in render_request.subtitle_settings_by_key.
+    # Includes the full set of fields the backend's from_dict actually reads,
+    # so partial overrides can fall through to defaults for any field.
+    default_subtitle_settings = {
         "fontSize": render_request.font_size,
         "fontFamily": render_request.font_family,
         "textColor": render_request.text_color,
@@ -635,13 +694,117 @@ def _fetch_preset_and_settings(render_request) -> tuple:
         "outlineWidth": render_request.outline_width,
         "positionY": render_request.position_y,
         "shadowDepth": render_request.shadow_depth,
+        "shadowColor": render_request.shadow_color,
+        "borderStyle": render_request.border_style,
         "enableGlow": render_request.enable_glow,
         "glowBlur": render_request.glow_blur,
         "adaptiveSizing": render_request.adaptive_sizing,
         "opacity": render_request.opacity
     }
 
-    return preset_data, subtitle_settings
+    return preset_data, default_subtitle_settings
+
+
+def _style_key_for_lookup(key: str) -> str:
+    """Extract the StyleKey ("A" | "B" | "default") from a render-time PreviewKey.
+
+    PreviewKeys arriving from the render pipeline look like "0", "1", "0_A",
+    "1_B" — i.e. "<script_index>" optionally suffixed with "_<version>". The
+    subtitle style is now stored per Meta version, not per script, so we map:
+      "N_A" → "A"
+      "N_B" → "B"
+      "N"   → "default"
+    """
+    if not isinstance(key, str):
+        return "default"
+    if "_" in key:
+        _, version = key.rsplit("_", 1)
+        if version in ("A", "B"):
+            return version
+    return "default"
+
+
+def _normalize_overrides(raw: Any) -> Dict[str, Any]:
+    """Collapse legacy per-script override keys ("0_A", "1_B") to per-Meta-version
+    keys ("A", "B", "default"). Idempotent on already-canonical data.
+
+    Sort order: legacy keys are processed before canonical ones so that if the
+    dict already contains a canonical "A" alongside legacy "0_A", the canonical
+    value wins (last-wins via sorted iteration — "0_A" < "A" alphabetically).
+
+    Logs a WARNING when two legacy keys would map to the same target with
+    different values, so operators have forensic evidence of the collapse when
+    a user reports "my script-3 A style disappeared".
+    """
+    if not isinstance(raw, dict) or not raw:
+        return {}
+
+    normalized: Dict[str, Any] = {}
+    sources: Dict[str, str] = {}  # tracks which legacy key produced each target
+    for k in sorted(raw.keys()):
+        v = raw[k]
+        if not isinstance(v, dict):
+            continue
+        if k in ("A", "B", "default"):
+            target = k
+        elif k.endswith("_A"):
+            target = "A"
+        elif k.endswith("_B"):
+            target = "B"
+        elif k.isdigit():
+            target = "default"
+        else:
+            # Unknown shape — ignore silently; the PUT regex rejects these,
+            # and the resolver's fallback handles any in-flight weirdness.
+            continue
+        if target in normalized and normalized[target] != v:
+            logger.warning(
+                "_normalize_overrides: collapsing %r over %r into key %r — "
+                "values differ, last-wins (forensic note for user reports).",
+                k, sources.get(target), target
+            )
+        normalized[target] = v
+        sources[target] = k
+    return normalized
+
+
+def _get_subtitle_settings_for_key(
+    render_request,
+    key: str,
+    default_subtitle_settings: Dict[str, Any],
+) -> tuple:
+    """Resolve effective subtitle settings for a single preview key.
+
+    Precedence: explicit override from render_request.subtitle_settings_by_key
+    wins completely over default_subtitle_settings (shallow merge — override
+    fields replace default fields, unknown fields fall through to default).
+
+    Lookup order: the override dict is now keyed by StyleKey ("A"/"B"/"default").
+    We map the incoming render-time `key` ("N_A", "N_B", "N") to its StyleKey
+    and look up there. A legacy fallback tries the raw `key` as-is, to protect
+    in-flight pipelines whose stored overrides haven't yet been normalized on
+    load (e.g. stale cached dicts from before this refactor shipped).
+
+    Returns (effective_settings, has_user_override). The boolean flag lets the
+    caller decide whether to still apply a Meta profile override on top:
+    - has_user_override=True  → user set something explicit; Meta is suppressed
+    - has_user_override=False → Meta fallback still applies as today
+    """
+    overrides = render_request.subtitle_settings_by_key or {}
+    style_key = _style_key_for_lookup(key)
+    raw_override = overrides.get(style_key)
+    if not isinstance(raw_override, dict) or not raw_override:
+        # Legacy fallback: older stored shapes may still have the full key.
+        raw_override = overrides.get(key)
+    if not isinstance(raw_override, dict) or not raw_override:
+        return dict(default_subtitle_settings), False
+
+    # Shallow merge: start from default, then let override replace matching
+    # keys. This is robust against override dicts that only contain a subset
+    # of fields (e.g. only textColor changed).
+    merged = dict(default_subtitle_settings)
+    merged.update(raw_override)
+    return merged, True
 
 
 def _is_missing_column_error(exc: Exception, column_name: str) -> bool:
@@ -1002,6 +1165,15 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                 logger.warning(f"Skipping invalid segment_usage key: {k}")
                 continue
 
+        # Load per-Meta-version subtitle overrides (keyed by StyleKey: "A",
+        # "B", or "default"). Legacy data may contain per-script-variant keys
+        # like "0_A"/"1_B" — _normalize_overrides collapses these to the
+        # canonical shape (last-wins). Tolerant: non-dict entries are dropped.
+        raw_overrides = row.get("subtitle_settings_by_key") or {}
+        subtitle_settings_by_key = _normalize_overrides(
+            {str(k): v for k, v in raw_overrides.items()}
+        )
+
         pipeline = {
             "pipeline_id": pipeline_id,
             "profile_id": row["profile_id"],
@@ -1023,6 +1195,7 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             "selected_captions": row.get("selected_captions") or {},
             "created_at": row.get("created_at", ""),
             "meta_multiplication": row.get("meta_multiplication", True),
+            "subtitle_settings_by_key": subtitle_settings_by_key,
         }
 
         _restore_missing_tts_audio_paths(pipeline_id, pipeline, persist=False)
@@ -1177,6 +1350,8 @@ class PipelineRenderRequest(BaseModel):
     outline_width: int = 3
     position_y: int = 85
     shadow_depth: int = 0
+    shadow_color: str = "#000000"
+    border_style: int = 1
     enable_glow: bool = False
     glow_blur: int = 0
     adaptive_sizing: bool = False
@@ -1221,6 +1396,16 @@ class PipelineRenderRequest(BaseModel):
 
     # Meta render multiplication: render each variant twice for Instagram/Facebook
     meta_multiplication: bool = False
+
+    # Per-variant subtitle style overrides. Keys are PreviewKey strings used
+    # frontend-side: "0", "1", "0_A", "0_B". Values are SubtitleSettings-shaped
+    # dicts in camelCase (fontSize, textColor, outlineColor, outlineWidth,
+    # positionY, shadowDepth, enableGlow, glowBlur, adaptiveSizing, opacity,
+    # fontFamily). When a key is present, it REPLACES the flat subtitle fields
+    # for that variant and SUPPRESSES any Meta profile override. When absent,
+    # the flat fields above are used as default, and Meta profile overrides
+    # (if meta_multiplication) apply on top as today.
+    subtitle_settings_by_key: Optional[Dict[str, Dict[str, Any]]] = None
 
 
 class PipelineRenderResponse(BaseModel):
@@ -1604,6 +1789,16 @@ class MetaMultiplicationRequest(BaseModel):
     enabled: bool
 
 
+class SubtitleOverridesRequest(BaseModel):
+    """Request model for persisting per-variant subtitle overrides.
+
+    Keys are PreviewKey strings used frontend-side: "0", "1", "0_A", "0_B".
+    Values are SubtitleSettings-shaped dicts in camelCase. An empty dict clears
+    all overrides for this pipeline.
+    """
+    overrides: Dict[str, Dict[str, Any]]
+
+
 @router.get("/{pipeline_id}/meta-multiplication")
 async def get_meta_multiplication(
     pipeline_id: str,
@@ -1637,6 +1832,65 @@ async def update_meta_multiplication(
 
     _db_save_pipeline(pipeline_id, pipeline)
     return {"meta_multiplication": bool(request.enabled)}
+
+
+@router.get("/{pipeline_id}/subtitle-overrides")
+async def get_subtitle_overrides(
+    pipeline_id: str,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Return per-Meta-version subtitle style overrides for a pipeline.
+
+    Response shape: {"A": {...}, "B": {...}, "default": {...}} — only keys
+    with actual overrides are present. Legacy data is normalized on read so
+    the frontend always receives the canonical shape.
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+    # Normalize on read: protects against pipelines touched directly in DB,
+    # or racing legacy writes that bypassed _get_pipeline_or_load's path.
+    normalized = _normalize_overrides(pipeline.get("subtitle_settings_by_key") or {})
+    return {"overrides": normalized}
+
+
+@router.put("/{pipeline_id}/subtitle-overrides")
+async def update_subtitle_overrides(
+    pipeline_id: str,
+    request: SubtitleOverridesRequest,
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Persist per-variant subtitle overrides before render starts.
+
+    The frontend calls this (debounced) whenever the user changes a subtitle
+    style for a specific variant key. Storage is per-pipeline (not per-profile)
+    because per-variant styling is a creative decision specific to this
+    pipeline's content.
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    # Validate key shape — after the per-Meta-version refactor, the only
+    # legal keys are "A", "B", and "default". Reject anything else so stale
+    # browser tabs sending legacy "0_A"/"1_B" keys fail loudly instead of
+    # silently poisoning the stored shape.
+    _key_pattern = _re.compile(r"^(A|B|default)$")
+    for key in request.overrides.keys():
+        if not isinstance(key, str) or not _key_pattern.match(key):
+            raise HTTPException(status_code=400, detail=f"Invalid override key: {key!r}")
+
+    with _pipelines_lock:
+        # Empty dict from the client means "clear all overrides"
+        pipeline["subtitle_settings_by_key"] = dict(request.overrides) if request.overrides else {}
+        _pipelines[pipeline_id] = pipeline
+
+    _db_save_pipeline(pipeline_id, pipeline)
+    return {"overrides": pipeline["subtitle_settings_by_key"]}
 
 
 @router.put("/{pipeline_id}/scripts")
@@ -2992,7 +3246,11 @@ async def check_render_skip(
             continue
 
         script_text = pipeline["scripts"][vid]
-        new_fingerprint = _compute_render_fingerprint(render_request, vid, script_text)
+        # Standard (non-meta) flow: fingerprint includes the bare variant key
+        # so per-key subtitle overrides for "0" are picked up.
+        new_fingerprint = _compute_render_fingerprint(
+            render_request, vid, script_text, job_key=vid
+        )
 
         # For meta multiplication, check ALL versions (A and B must both exist and match)
         if render_request.meta_multiplication:
@@ -3012,10 +3270,19 @@ async def check_render_skip(
                 if _chk_clip_id and _chk_clip_id in _deleted_clip_ids:
                     _all_meta_ok = False
                     break
-                # Recompute the meta-derived fingerprint for comparison
-                _chk_fp_base = new_fingerprint
+                # Recompute the meta-derived fingerprint per version-specific
+                # key so per-key subtitle overrides AND match-overrides for
+                # "0_A" / "0_B" are factored in. Then apply the same offset
+                # suffix the render path uses, so the comparison matches.
+                _chk_meta_fingerprint = _compute_render_fingerprint(
+                    render_request,
+                    vid,
+                    script_text,
+                    job_key=_chk_key,
+                    visual_version=get_version_label(_chk_ver_idx),
+                )
                 _chk_fp = hashlib.sha256(
-                    f"{_chk_fp_base}:meta_ver={get_version_label(_chk_ver_idx)}:offset={META_PROFILES[_chk_ver_idx].segment_offset}".encode()
+                    f"{_chk_meta_fingerprint}:meta_ver={get_version_label(_chk_ver_idx)}:offset={META_PROFILES[_chk_ver_idx].segment_offset}".encode()
                 ).hexdigest()[:32]
                 if _chk_job.get("render_fingerprint") != _chk_fp:
                     _all_meta_ok = False
@@ -3153,8 +3420,22 @@ async def render_variants(
             profile.profile_id, len(render_request.pip_overlays)
         )
 
-    # Fetch preset data and build subtitle settings
-    preset_data, subtitle_settings = _fetch_preset_and_settings(render_request)
+    # Fetch preset data and build DEFAULT subtitle settings.
+    # Per-variant overrides (render_request.subtitle_settings_by_key) are
+    # resolved inside do_render via _get_subtitle_settings_for_key().
+    preset_data, default_subtitle_settings = _fetch_preset_and_settings(render_request)
+
+    # Persist subtitle overrides to the pipeline dict so reloads see them.
+    # This mirrors how meta_multiplication is persisted a few lines below.
+    # Defensive normalize: a stale browser tab from before this refactor
+    # could still send legacy "0_A"/"1_B" keys. Normalize here so the
+    # stored shape is always canonical — otherwise the first stale render
+    # would poison the pipeline with keys the read path can't reach via
+    # the primary lookup.
+    if render_request.subtitle_settings_by_key is not None:
+        pipeline["subtitle_settings_by_key"] = _normalize_overrides(
+            dict(render_request.subtitle_settings_by_key)
+        )
 
     # Clear any previous cancellation flag so re-renders work
     clear_pipeline_cancelled(pipeline_id)
@@ -3239,8 +3520,17 @@ async def render_variants(
                 return
 
             # ── Render fingerprint: SHA-256 hash of ALL render-affecting parameters ──
+            # Pass job_key so per-key subtitle overrides AND per-key match-overrides
+            # are factored in (otherwise A and B would share a fingerprint).
             script_text = pipeline["scripts"][vid]
-            _render_fingerprint = _compute_render_fingerprint(render_request, vid, script_text)
+            _ver_label_for_fp = get_version_label(version_index) if version_index is not None else None
+            _render_fingerprint = _compute_render_fingerprint(
+                render_request,
+                vid,
+                script_text,
+                job_key=job_key,
+                visual_version=_ver_label_for_fp,
+            )
             # Include visual version in fingerprint when meta multiplication is active
             if version_index is not None:
                 _ver_label = get_version_label(version_index)
@@ -3441,18 +3731,36 @@ async def render_variants(
                 logger.info(f"Pipeline {pipeline_id} variant {vid} cancelled before render")
                 return
 
+            # ── Resolve per-variant subtitle settings ──
+            # job_key matches the PreviewKey the frontend uses ("0", "0_A"...).
+            _job_key_str = str(job_key)
+            _effective_subtitle_settings, _has_user_override = _get_subtitle_settings_for_key(
+                render_request, _job_key_str, default_subtitle_settings
+            )
+
             # ── Meta multiplication: compute effective variant_index and subtitle override ──
             _effective_vid = vid
             _subtitle_override = None
             if version_index is not None:
                 _meta_profile = META_PROFILES[version_index]
                 _effective_vid = vid + _meta_profile.segment_offset
-                _subtitle_override = _meta_profile.subtitle_style
-                logger.info(
-                    f"[RENDER {_render_fingerprint}] Meta version {get_version_label(version_index)} "
-                    f"({_meta_profile.name}): effective_vid={_effective_vid}, "
-                    f"segment_offset={_meta_profile.segment_offset}"
-                )
+                # User override wins: when the frontend set an explicit style
+                # for this key, the Meta profile overlay is suppressed entirely.
+                if _has_user_override:
+                    _subtitle_override = None
+                    logger.info(
+                        f"[RENDER {_render_fingerprint}] Meta version {get_version_label(version_index)} "
+                        f"({_meta_profile.name}): user override present for key {_job_key_str!r} — "
+                        f"Meta subtitle profile suppressed. effective_vid={_effective_vid}, "
+                        f"segment_offset={_meta_profile.segment_offset}"
+                    )
+                else:
+                    _subtitle_override = _meta_profile.subtitle_style
+                    logger.info(
+                        f"[RENDER {_render_fingerprint}] Meta version {get_version_label(version_index)} "
+                        f"({_meta_profile.name}): effective_vid={_effective_vid}, "
+                        f"segment_offset={_meta_profile.segment_offset}"
+                    )
                 # Cross-version diversity: for version B, avoid segments used by version A
                 if version_index > 0:
                     _ver_a_key = f"{vid}_{get_version_label(0)}"
@@ -3475,7 +3783,7 @@ async def render_variants(
                         script_text=script_text,
                         profile_id=_profile_id,
                         preset_data=preset_data,
-                        subtitle_settings=subtitle_settings,
+                        subtitle_settings=_effective_subtitle_settings,
                         elevenlabs_model=render_request.elevenlabs_model,
                         voice_id=render_request.voice_id,
                         source_video_ids=render_request.source_video_ids,
@@ -3570,11 +3878,13 @@ async def render_variants(
 
             # Save rendered clip to library (extracted helper)
             _visual_ver = get_version_label(version_index) if version_index is not None else None
+            # Use the per-variant effective settings so editai_clip_content
+            # records the actual style rendered (not the global default).
             await _save_clip_to_library(
                 pipeline, pipeline_id, vid, final_video_path,
                 _profile_id, _render_fingerprint, render_jobs_lock,
                 raw_assembly_path=raw_assembly_path,
-                subtitle_settings=subtitle_settings,
+                subtitle_settings=_effective_subtitle_settings,
                 segment_composition=_seg_composition,
                 job_key=job_key,
                 visual_version=_visual_ver,
@@ -3758,8 +4068,16 @@ async def remake_variant(
     with _cancelled_variants_lock:
         _cancelled_variants.pop(_cancel_key, None)
 
-    # 6. Fetch preset and settings
-    preset_data, subtitle_settings = _fetch_preset_and_settings(render_request)
+    # 6. Fetch preset and DEFAULT subtitle settings. Per-Meta-version override
+    # for this single remake is resolved inside do_remake below.
+    preset_data, default_subtitle_settings = _fetch_preset_and_settings(render_request)
+    # Persist override into the pipeline so subsequent reloads see it.
+    # Defensive normalize (see the matching block in /render above) — stale
+    # browser tabs sending legacy keys get canonicalized before storage.
+    if render_request.subtitle_settings_by_key is not None:
+        pipeline["subtitle_settings_by_key"] = _normalize_overrides(
+            dict(render_request.subtitle_settings_by_key)
+        )
 
     # 7. Acquire render lock and init job
     pipeline_id_str = str(pipeline_id)
@@ -3784,6 +4102,12 @@ async def remake_variant(
 
     _profile_id = profile.profile_id
     script_text = scripts[vid]
+
+    # Resolve effective subtitle settings for this remake (single variant, no
+    # Meta). Key is just str(vid) because remake never goes through meta mul.
+    _remake_effective_subtitle_settings, _ = _get_subtitle_settings_for_key(
+        render_request, str(vid), default_subtitle_settings
+    )
 
     # 8. Background remake task
     async def do_remake():
@@ -3824,7 +4148,7 @@ async def remake_variant(
                         script_text=script_text,
                         profile_id=_profile_id,
                         preset_data=preset_data,
-                        subtitle_settings=subtitle_settings,
+                        subtitle_settings=_remake_effective_subtitle_settings,
                         elevenlabs_model=render_request.elevenlabs_model,
                         voice_id=render_request.voice_id,
                         source_video_ids=render_request.source_video_ids,
@@ -3884,7 +4208,7 @@ async def remake_variant(
                 pipeline, pipeline_id, vid, final_video_path,
                 _profile_id, _remake_fingerprint, render_jobs_lock,
                 raw_assembly_path=raw_assembly_path,
-                subtitle_settings=subtitle_settings,
+                subtitle_settings=_remake_effective_subtitle_settings,
                 segment_composition=_seg_composition,
                 voice_settings=render_request.voice_settings,
             )
@@ -4211,6 +4535,50 @@ async def sync_pipeline_to_library(
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available")
 
+    # Load profile defaults so we can reconstruct the effective subtitle style
+    # for clips that have no explicit per-key override. This mirrors what
+    # do_render writes via _save_clip_to_library so recovery sync produces
+    # the same clip_content shape as a fresh render.
+    try:
+        _profile_row = repo.get_profile(profile.profile_id) or {}
+    except Exception as _prof_err:
+        logger.warning(f"sync-to-library: failed to load profile defaults: {_prof_err}")
+        _profile_row = {}
+    _sync_default_subtitle: Dict[str, Any] = dict(_profile_row.get("subtitle_settings") or {})
+    _sync_overrides_by_key: Dict[str, Any] = pipeline.get("subtitle_settings_by_key") or {}
+
+    def _resolve_sync_subtitle_settings(_vid: int, _ver_label: Optional[str]) -> Optional[dict]:
+        """Best-effort reconstruction of the effective subtitle_settings used at
+        render time, for sync-to-library recovery. Precedence (mirrors do_render):
+          1. user override for this Meta version (Meta overlay suppressed)
+          2. profile default + Meta overlay (when version label present)
+          3. profile default
+        Returns None when no defaults are available at all (preserves whatever
+        is already in editai_clip_content via the upsert merge semantics).
+
+        Lookup key is the StyleKey ("A" / "B" / "default"), not the per-script
+        PreviewKey — subtitle style is now shared across all scripts under
+        the same Meta version.
+        """
+        _sync_key = _ver_label or "default"
+        _override = _sync_overrides_by_key.get(_sync_key)
+        if isinstance(_override, dict) and _override:
+            # User override wins completely; Meta overlay suppressed.
+            if not _sync_default_subtitle:
+                return dict(_override)
+            return {**_sync_default_subtitle, **_override}
+        if not _sync_default_subtitle:
+            return None
+        # No override → start from profile default and apply Meta overlay if applicable.
+        _resolved = dict(_sync_default_subtitle)
+        if _ver_label:
+            _meta_profile = META_PROFILES_BY_NAME.get(
+                {"A": "instagram", "B": "facebook"}.get(_ver_label, "")
+            )
+            if _meta_profile is not None:
+                _resolved.update(_meta_profile.subtitle_style)
+        return _resolved
+
     render_jobs: dict = pipeline.get("render_jobs", {})
     completed_variants = {}
     for k, v in render_jobs.items():
@@ -4385,7 +4753,7 @@ async def sync_pipeline_to_library(
             job["library_saved"] = True
             job.pop("library_error", None)
 
-        # Save script text, SRT, and caption to clip_content
+        # Save script text, SRT, caption, and subtitle_settings to clip_content
         if clip_id_to_set:
             try:
                 _script_text = pipeline.get("scripts", [])[vid] if vid < len(pipeline.get("scripts", [])) else None
@@ -4402,6 +4770,13 @@ async def sync_pipeline_to_library(
                     _content_payload["tts_audio_path"] = _audio_path
                 if str(vid) in pipeline.get("selected_captions", {}):
                     _content_payload["caption"] = _caption or ""
+                # Per-variant subtitle settings: reconstruct the effective
+                # style that the render produced (override > profile default
+                # + Meta overlay > profile default). Mirrors the do_render
+                # path so recovery sync writes the same clip_content shape.
+                _ss_value = _resolve_sync_subtitle_settings(vid, _visual_ver)
+                if isinstance(_ss_value, dict) and _ss_value:
+                    _content_payload["subtitle_settings"] = _ss_value
                 if len(_content_payload) > 1:
                     supabase.table("editai_clip_content").upsert(
                         _content_payload, on_conflict="clip_id"
@@ -5304,15 +5679,44 @@ async def subtitle_frame_preview(
     pipeline_id: str,
     variant_index: int,
     request: SubtitleFrameRequest,
+    visual_version: Optional[str] = None,
     ctx: ProfileContext = Depends(get_profile_context),
 ):
-    """Render a single FFmpeg frame with subtitle overlay for WYSIWYG preview."""
+    """Render a single FFmpeg frame with subtitle overlay for WYSIWYG preview.
+
+    Optional query param `visual_version=A|B` applies the corresponding Meta
+    profile subtitle overlay on top of request.subtitle_settings. The frontend
+    should only pass this when there is NO explicit user override for that
+    key — matching the render-time rule that user overrides suppress Meta.
+    Invalid `visual_version` values raise 400 (matches /render-preview).
+    """
     from app.services.subtitle_styler import build_subtitle_filter
     import tempfile
 
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
+    # Ownership check — match the pattern used by other authenticated pipeline
+    # routes. Without this any authenticated user can request preview frames
+    # for someone else's pipeline by guessing the UUID.
+    if pipeline.get("profile_id") != ctx.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    # Apply Meta overlay if requested. Shallow merge so the user-visible fields
+    # (font/size) still come from request.subtitle_settings; only color/outline/
+    # glow/shadow/opacity are replaced. Validation is shared with /render-preview
+    # via _normalize_meta_version_label, which raises 400 on invalid values
+    # instead of silently ignoring them.
+    effective_subtitle_settings = dict(request.subtitle_settings or {})
+    normalized_version = _normalize_meta_version_label(visual_version)
+    if normalized_version:
+        meta_profile = next(
+            (META_PROFILES[i] for i in range(len(META_PROFILES))
+             if get_version_label(i) == normalized_version),
+            None,
+        )
+        if meta_profile is not None:
+            effective_subtitle_settings.update(meta_profile.subtitle_style)
 
     # --- Find source video file path ---
     source_video_path: Optional[Path] = None
@@ -5355,9 +5759,9 @@ async def subtitle_frame_preview(
         end_tc = f"00:00:{int(end_ts):02d},000"
         srt_content = f"1\n{start_tc} --> {end_tc}\n{request.sample_text}\n"
 
-    # --- Compute cache fingerprint ---
-    settings_json = _json.dumps(request.subtitle_settings, sort_keys=True)
-    fingerprint_input = f"{settings_json}|{source_video_path}|{request.timestamp}"
+    # --- Compute cache fingerprint (include visual_version so A vs B differ) ---
+    settings_json = _json.dumps(effective_subtitle_settings, sort_keys=True)
+    fingerprint_input = f"{settings_json}|{source_video_path}|{request.timestamp}|{visual_version or ''}"
     fingerprint = hashlib.md5(fingerprint_input.encode()).hexdigest()[:16]
     output_path = preview_dir / f"{fingerprint}.jpg"
 
@@ -5374,7 +5778,7 @@ async def subtitle_frame_preview(
         # Use PlayRes 1080x1920 so subtitles match final render proportionally
         subtitle_filter = build_subtitle_filter(
             srt_path=srt_tmp,
-            subtitle_settings=request.subtitle_settings,
+            subtitle_settings=effective_subtitle_settings,
             video_width=1080,
             video_height=1920,
         )
