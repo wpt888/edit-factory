@@ -117,6 +117,7 @@ export function SubtitleEditor({
   // FFmpeg frame preview state
   const [ffmpegPreviewUrl, setFfmpegPreviewUrl] = useState<string | null>(null);
   const [ffmpegLoading, setFfmpegLoading] = useState(false);
+  const [showCssPreview, setShowCssPreview] = useState(true);
   const ffmpegTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const abortRef = useRef<AbortController>(undefined);
   const prevFingerprint = useRef("");
@@ -129,6 +130,7 @@ export function SubtitleEditor({
     // versions triggers a new preview render even when settings are identical.
     const fingerprint = JSON.stringify(settings) + "|v=" + (visualVersion || "");
     if (fingerprint === prevFingerprint.current) return;
+    setShowCssPreview(true);
 
     // Clear previous timer and abort in-flight request
     if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
@@ -156,6 +158,7 @@ export function SubtitleEditor({
           if (prev) URL.revokeObjectURL(prev);
           return URL.createObjectURL(blob);
         });
+        setShowCssPreview(false);
       } catch (err: unknown) {
         // Silently keep CSS preview on error
         if (err instanceof Error && err.name !== "AbortError") {
@@ -164,7 +167,7 @@ export function SubtitleEditor({
       } finally {
         if (!controller.signal.aborted) setFfmpegLoading(false);
       }
-    }, 2000);
+    }, 300);
 
     return () => {
       if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
@@ -188,10 +191,18 @@ export function SubtitleEditor({
     onSettingsChange({ ...settings, [key]: value });
   };
 
+  const mergePresetSettings = (presetSettings: SubtitleSettings): SubtitleSettings => ({
+    ...settings,
+    ...presetSettings,
+    positionY: settings.positionY,
+    position: settings.position,
+    marginV: settings.marginV,
+  });
+
   // Apply a preset's settings all at once
   const applyPreset = (preset: CaptionPreset) => {
     setSelectedPresetId(preset.id);
-    onSettingsChange({ ...settings, ...preset.settings });
+    onSettingsChange(mergePresetSettings(preset.settings));
   };
 
   // Update a subtitle line
@@ -272,37 +283,38 @@ export function SubtitleEditor({
               {/* Gradient background simulating video */}
               <div className="absolute inset-0 bg-gradient-to-br from-gray-700 via-gray-800 to-gray-900" />
 
-              {/* Subtitle text (CSS fallback) */}
-              <div
-                className="absolute left-0 right-0 text-center px-4 transition-all duration-100"
-                style={{
-                  fontFamily: settings.fontFamily,
-                  fontSize: `${scaledFontSize}px`,
-                  color: settings.textColor,
-                  opacity: (settings.opacity ?? 100) / 100,
-                  WebkitTextStroke: `${scaledOutline}px ${settings.outlineColor}`,
-                  paintOrder: 'stroke fill',
-                  textShadow: [
-                    scaledShadowDepth > 0
-                      ? `0 ${scaledShadowDepth}px ${scaledShadowDepth * 2}px ${settings.shadowColor ?? "rgba(0,0,0,0.8)"}`
-                      : '0 1px 3px rgba(0,0,0,0.85)',
-                    settings.enableGlow && scaledGlowBlur > 0
-                      ? `0 0 ${scaledGlowBlur}px ${settings.outlineColor}`
-                      : '',
-                  ].filter(Boolean).join(', '),
-                  fontWeight: 700,
-                  top: `${settings.positionY}%`,
-                  transform: "translateY(-50%)",
-                  ...(settings.borderStyle === 3 ? {
-                    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                    padding: '4px 8px',
-                    borderRadius: '4px',
-                  } : {}),
-                }}
-              >
-                {subtitleLines.length > 0 ? subtitleLines[0].text : "Sample subtitle text"}
-              </div>
             </>
+          )}
+          {showCssPreview && (
+            <div
+              className="absolute left-0 right-0 text-center px-4 transition-all duration-100 pointer-events-none"
+              style={{
+                fontFamily: settings.fontFamily,
+                fontSize: `${scaledFontSize}px`,
+                color: settings.textColor,
+                opacity: (settings.opacity ?? 100) / 100,
+                WebkitTextStroke: `${scaledOutline}px ${settings.outlineColor}`,
+                paintOrder: "stroke fill",
+                textShadow: [
+                  scaledShadowDepth > 0
+                    ? `0 ${scaledShadowDepth}px ${scaledShadowDepth * 2}px ${settings.shadowColor ?? "rgba(0,0,0,0.8)"}`
+                    : "0 1px 3px rgba(0,0,0,0.85)",
+                  settings.enableGlow && scaledGlowBlur > 0
+                    ? `0 0 ${scaledGlowBlur}px ${settings.outlineColor}`
+                    : "",
+                ].filter(Boolean).join(", "),
+                fontWeight: 700,
+                top: `${settings.positionY}%`,
+                transform: "translateY(-50%)",
+                ...(settings.borderStyle === 3 ? {
+                  backgroundColor: "rgba(0, 0, 0, 0.7)",
+                  padding: "4px 8px",
+                  borderRadius: "4px",
+                } : {}),
+              }}
+            >
+              {subtitleLines.length > 0 ? subtitleLines[0].text : "Sample subtitle text"}
+            </div>
           )}
           {ffmpegLoading && (
             <div className="absolute top-2 right-2">

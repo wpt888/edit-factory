@@ -73,7 +73,6 @@ import { ImagePickerDialog } from "@/components/image-picker-dialog";
 import type { AssociationResponse } from "@/components/product-picker-dialog";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { SubtitleSettings, DEFAULT_SUBTITLE_SETTINGS, UserSubtitlePreset } from "@/types/video-processing";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -1071,7 +1070,9 @@ function PipelinePage() {
   // explicit override).
   const [subtitleSettings, setSubtitleSettings] = useState<SubtitleSettings>({ ...DEFAULT_SUBTITLE_SETTINGS });
   const [subtitleSettingsLoaded, setSubtitleSettingsLoaded] = useState(false);
+  const [subtitleSaveState, setSubtitleSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const subtitleSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const subtitleSavedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceSettingsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Per-Meta-version subtitle style overrides. Keyed by StyleKey ("A", "B",
@@ -1099,6 +1100,30 @@ function PipelinePage() {
   const [savePresetName, setSavePresetName] = useState("");
   const [savePresetSubmitting, setSavePresetSubmitting] = useState(false);
   const [savePresetError, setSavePresetError] = useState<string | null>(null);
+
+  const markSubtitleSaveSuccess = useCallback(() => {
+    setSubtitleSaveState("saved");
+    if (subtitleSavedResetTimer.current) clearTimeout(subtitleSavedResetTimer.current);
+    subtitleSavedResetTimer.current = setTimeout(() => {
+      setSubtitleSaveState("idle");
+    }, 2000);
+  }, []);
+
+  const scheduleProfileSubtitleSave = useCallback((newSettings: SubtitleSettings) => {
+    if (!currentProfileIdRef.current) return;
+    setSubtitleSaveState("saving");
+    if (subtitleSaveTimer.current) clearTimeout(subtitleSaveTimer.current);
+    subtitleSaveTimer.current = setTimeout(async () => {
+      try {
+        const profileId = currentProfileIdRef.current;
+        if (!profileId) return;
+        await apiPut(`/profiles/${profileId}/subtitle-settings`, newSettings);
+        markSubtitleSaveSuccess();
+      } catch {
+        setSubtitleSaveState("error");
+      }
+    }, 1000);
+  }, [markSubtitleSaveSuccess]);
 
   // ── getSubtitleSettingsFor ─────────────────────────────────────────────────
   // SINGLE SOURCE OF TRUTH for "what style does this Meta version use?".
@@ -2640,6 +2665,7 @@ function PipelinePage() {
   const scheduleOverridesSave = useCallback((nextOverrides: Partial<Record<StyleKey, SubtitleSettings>>) => {
     const savedPid = pipelineIdRef.current;
     if (!savedPid) return;
+    setSubtitleSaveState("saving");
     if (overridesSaveTimer.current) clearTimeout(overridesSaveTimer.current);
     // Snapshot the dict so concurrent state mutations after this call don't
     // alter what we end up sending. Also strip empty-object entries: the
@@ -2656,11 +2682,13 @@ function PipelinePage() {
       if (pipelineIdRef.current !== savedPid) return;
       try {
         await apiPut(`/pipeline/${savedPid}/subtitle-overrides`, { overrides: snapshot });
+        markSubtitleSaveSuccess();
       } catch {
+        setSubtitleSaveState("error");
         // Silent — overrides still work locally for this session
       }
     }, 800);
-  }, []);
+  }, [markSubtitleSaveSuccess]);
 
   // Cancel any pending override save when the active pipeline changes, so a
   // late-firing timer for the previous pipeline can never write into the new
@@ -2679,13 +2707,17 @@ function PipelinePage() {
   // debounced save.
   const handleVariantSubtitleChange = useCallback(
     (styleKey: StyleKey, newSettings: SubtitleSettings) => {
+      if (styleKey === "default") {
+        setSubtitleSettings(newSettings);
+      }
       setSubtitleOverrides(prev => {
         const next = { ...prev, [styleKey]: newSettings };
         scheduleOverridesSave(next);
         return next;
       });
+      scheduleProfileSubtitleSave(newSettings);
     },
-    [scheduleOverridesSave]
+    [scheduleOverridesSave, scheduleProfileSubtitleSave]
   );
 
   // Remove an override for a Meta version (Reset to default).
@@ -2715,10 +2747,11 @@ function PipelinePage() {
             : { ...subtitleSettings };
         const next = { ...prev, [targetKey]: sourceEffective };
         scheduleOverridesSave(next);
+        scheduleProfileSubtitleSave(sourceEffective);
         return next;
       });
     },
-    [scheduleOverridesSave, subtitleSettings]
+    [scheduleOverridesSave, scheduleProfileSubtitleSave, subtitleSettings]
   );
 
   // Submit a "Save as preset" — POSTs the active key's effective settings to
@@ -3157,6 +3190,7 @@ function PipelinePage() {
       if (catalogSearchTimer.current) { clearTimeout(catalogSearchTimer.current); catalogSearchTimer.current = null; }
       if (voiceSettingsSaveTimer.current) { clearTimeout(voiceSettingsSaveTimer.current); voiceSettingsSaveTimer.current = null; }
       if (subtitleSaveTimer.current) { clearTimeout(subtitleSaveTimer.current); subtitleSaveTimer.current = null; }
+      if (subtitleSavedResetTimer.current) { clearTimeout(subtitleSavedResetTimer.current); subtitleSavedResetTimer.current = null; }
       previewAbortRef.current?.abort();
       scriptAbortRef.current?.abort();
       regenerateAbortRef.current?.abort();
@@ -5392,40 +5426,31 @@ function PipelinePage() {
                     ? "Pick A or B — each Meta version has its own style, shared across all scripts. Both live previews stay visible so you can compare A and B as you edit."
                     : "Customize subtitles once — the style applies to every variant in this pipeline."}
                 </CardDescription>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  {subtitleSaveState === "saving" && (
+                    <>
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      <span>Saving automatically…</span>
+                    </>
+                  )}
+                  {subtitleSaveState === "saved" && (
+                    <>
+                      <CheckCircle className="h-3 w-3 text-green-600" />
+                      <span>Saved automatically. This style will remain available for the next pipeline too.</span>
+                    </>
+                  )}
+                  {subtitleSaveState === "error" && (
+                    <>
+                      <AlertCircle className="h-3 w-3 text-red-600" />
+                      <span>Save failed. The changes are still visible here, but they were not confirmed on the server yet.</span>
+                    </>
+                  )}
+                  {subtitleSaveState === "idle" && (
+                    <span>Every subtitle edit is saved automatically. No manual save is required.</span>
+                  )}
+                </div>
               </CardHeader>
               <CardContent className="space-y-4">
-                {/* Tabs appear ONLY when Meta Multiplication is ON. */}
-                {metaMultiplication && (
-                  <Tabs
-                    value={activeStyleKey}
-                    onValueChange={(value) => setActiveStyleKey(value as StyleKey)}
-                  >
-                    <TabsList className="flex gap-1 h-auto">
-                      {(["A", "B"] as const).map((sk) => {
-                        const override = subtitleOverrides[sk];
-                        const hasOverride = !!override && Object.keys(override).length > 0;
-                        return (
-                          <TabsTrigger
-                            key={sk}
-                            value={sk}
-                            className="text-xs gap-1.5"
-                          >
-                            <span className="font-semibold">{sk}</span>
-                            <Badge variant="outline" className="h-4 px-1 text-[9px]">
-                              {sk === "A" ? "Instagram" : "Facebook"}
-                            </Badge>
-                            {hasOverride ? (
-                              <Badge variant="secondary" className="h-4 px-1 text-[9px]">custom</Badge>
-                            ) : (
-                              <Badge variant="outline" className="h-4 px-1 text-[9px] text-muted-foreground">default</Badge>
-                            )}
-                          </TabsTrigger>
-                        );
-                      })}
-                    </TabsList>
-                  </Tabs>
-                )}
-
                 {/* Auxiliary controls for the active tab */}
                 <div className="flex flex-wrap items-center gap-2">
                   {/* Copy from the other Meta version (only when Meta ON) */}
@@ -5476,7 +5501,15 @@ function PipelinePage() {
                         {userSubtitlePresets.map(preset => (
                           <DropdownMenuItem
                             key={preset.id}
-                            onClick={() => handleVariantSubtitleChange(activeStyleKey, preset.settings)}
+                            onClick={() =>
+                              handleVariantSubtitleChange(
+                                activeStyleKey,
+                                mergeSubtitleStylePreservingPlacement(
+                                  getSubtitleSettingsFor(activeStyleKey),
+                                  preset.settings
+                                )
+                              )
+                            }
                           >
                             {preset.name}
                           </DropdownMenuItem>
@@ -5511,6 +5544,7 @@ function PipelinePage() {
                         pipelineId={pipelineId ?? undefined}
                         previewCards={previewCards}
                         isActive={activeStyleKey === "A"}
+                        onSelect={() => setActiveStyleKey("A")}
                       />
                       <SubtitleStylePreviewPanel
                         styleKey="B"
@@ -5521,6 +5555,7 @@ function PipelinePage() {
                         pipelineId={pipelineId ?? undefined}
                         previewCards={previewCards}
                         isActive={activeStyleKey === "B"}
+                        onSelect={() => setActiveStyleKey("B")}
                       />
                     </>
                   ) : (
@@ -5531,6 +5566,7 @@ function PipelinePage() {
                       pipelineId={pipelineId ?? undefined}
                       previewCards={previewCards}
                       isActive={true}
+                      onSelect={() => setActiveStyleKey("default")}
                     />
                   )}
 
@@ -6494,6 +6530,7 @@ function SubtitleStylePreviewPanel({
   pipelineId,
   previewCards,
   isActive,
+  onSelect,
 }: {
   styleKey: StyleKey;
   settings: SubtitleSettings;
@@ -6501,6 +6538,7 @@ function SubtitleStylePreviewPanel({
   pipelineId: string | undefined;
   previewCards: PreviewCard[];
   isActive: boolean;
+  onSelect: () => void;
 }) {
   // Pick an arbitrary script variant that has the matching visualVersion so
   // the FFmpeg frame preview has a background frame to sample. Since the
@@ -6526,11 +6564,24 @@ function SubtitleStylePreviewPanel({
 
   return (
     <div
-      className={`flex flex-col gap-2 flex-shrink-0 ${
-        isActive ? "ring-2 ring-primary/40 rounded-lg p-2" : "p-2"
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      className={`flex flex-col gap-2 flex-shrink-0 rounded-lg border p-2 cursor-pointer transition-all ${
+        isActive
+          ? "border-primary ring-2 ring-primary/40 bg-primary/5 shadow-sm"
+          : "border-border hover:border-primary/50 hover:bg-muted/30"
       }`}
     >
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <span className={`text-xs font-medium ${isActive ? "text-foreground" : "text-muted-foreground"}`}>
+        {label}
+      </span>
       <SubtitleEditor
         renderMode="preview-only"
         settings={settings}
@@ -6546,5 +6597,18 @@ function SubtitleStylePreviewPanel({
       />
     </div>
   );
+}
+
+function mergeSubtitleStylePreservingPlacement(
+  currentSettings: SubtitleSettings,
+  nextSettings: SubtitleSettings
+): SubtitleSettings {
+  return {
+    ...currentSettings,
+    ...nextSettings,
+    positionY: currentSettings.positionY,
+    position: currentSettings.position,
+    marginV: currentSettings.marginV,
+  };
 }
 
