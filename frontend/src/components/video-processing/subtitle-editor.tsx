@@ -70,6 +70,29 @@ interface SubtitleEditorProps {
   pipelineId?: string;
   /** Variant index for FFmpeg frame preview */
   variantIndex?: number;
+  /**
+   * Optional Meta visual version label ("A" or "B"). When set and the active
+   * variant has NO explicit user override, the FFmpeg preview endpoint will
+   * apply the corresponding Meta profile overlay (Instagram/Facebook). The
+   * caller decides whether to pass this — typically only when there is no
+   * override for the current key, to mirror the render-time precedence rule.
+   */
+  visualVersion?: string;
+  /**
+   * Controls which sub-panels the component renders.
+   *   "full"          — preview + settings side-by-side (current default).
+   *   "preview-only"  — just the live preview panel, no settings controls.
+   *                     Used by the pipeline page to show an always-on B
+   *                     preview while the user edits A (and vice-versa).
+   *   "settings-only" — just the style controls, no preview. The pipeline
+   *                     page uses this for the active-tab editor; the
+   *                     preview is rendered separately via two
+   *                     "preview-only" instances so both Meta versions
+   *                     stay visible simultaneously.
+   *
+   * Defaults to "full" so existing call sites keep working unchanged.
+   */
+  renderMode?: "full" | "preview-only" | "settings-only";
 }
 
 export function SubtitleEditor({
@@ -85,6 +108,8 @@ export function SubtitleEditor({
   compact = false,
   pipelineId,
   variantIndex = 0,
+  visualVersion,
+  renderMode = "full",
 }: SubtitleEditorProps) {
   // Track which preset is currently selected (null = manual/custom)
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
@@ -100,7 +125,9 @@ export function SubtitleEditor({
   useEffect(() => {
     if (!pipelineId) return;
 
-    const fingerprint = JSON.stringify(settings);
+    // Include visualVersion in the fingerprint so toggling between Meta
+    // versions triggers a new preview render even when settings are identical.
+    const fingerprint = JSON.stringify(settings) + "|v=" + (visualVersion || "");
     if (fingerprint === prevFingerprint.current) return;
 
     // Clear previous timer and abort in-flight request
@@ -115,8 +142,9 @@ export function SubtitleEditor({
       abortRef.current = controller;
 
       try {
+        const versionQuery = visualVersion ? `?visual_version=${encodeURIComponent(visualVersion)}` : "";
         const resp = await apiPost(
-          `/pipeline/subtitle-frame-preview/${pipelineId}/${variantIndex}`,
+          `/pipeline/subtitle-frame-preview/${pipelineId}/${variantIndex}${versionQuery}`,
           { subtitle_settings: settings },
           { signal: controller.signal, timeout: 20000 }
         );
@@ -141,7 +169,7 @@ export function SubtitleEditor({
     return () => {
       if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
     };
-  }, [settings, pipelineId, variantIndex]);
+  }, [settings, pipelineId, variantIndex, visualVersion]);
 
   // Cleanup blob URL on unmount
   useEffect(() => {
@@ -565,6 +593,52 @@ export function SubtitleEditor({
     </div>
   );
 
+  // ── Render mode branching ─────────────────────────────────────────────
+  // "preview-only" — just the live preview, no settings controls or lines
+  // editor. Used by the pipeline page to stack two always-on previews (A/B)
+  // side-by-side without duplicating the settings panel.
+  if (renderMode === "preview-only") {
+    return (
+      <div className={className}>
+        {previewPanel}
+      </div>
+    );
+  }
+
+  // "settings-only" — just the style controls (and the subtitle lines editor
+  // if the caller provides one). No preview. The pipeline page uses this for
+  // the active-tab editor; the preview(s) are rendered separately via
+  // "preview-only" instances so both A and B stay visible.
+  if (renderMode === "settings-only") {
+    return (
+      <div className={className}>
+        <div className={`space-y-${compact ? "3" : "6"}`}>
+          {settingsPanel}
+        </div>
+
+        {onLinesChange && (
+          <>
+            <Separator />
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <h3 className="font-semibold">Subtitle Editor</h3>
+                {subtitleLines.length > 0 && (
+                  <Badge variant="secondary">{subtitleLines.length} lines</Badge>
+                )}
+              </div>
+
+              <SubtitleLinesEditor
+                subtitleLines={subtitleLines}
+                onUpdateLine={updateSubtitleLine}
+              />
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // "full" (default) — preserves the exact layout from before this refactor.
   return (
     <div className={className}>
       {/* Side-by-side layout: Preview (left, sticky) + Settings (right, scrollable) */}
