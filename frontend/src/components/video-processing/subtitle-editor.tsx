@@ -70,6 +70,8 @@ interface SubtitleEditorProps {
   pipelineId?: string;
   /** Variant index for FFmpeg frame preview */
   variantIndex?: number;
+  /** Text to use for the fast CSS overlay when subtitle lines are not available */
+  previewText?: string;
   /**
    * Optional Meta visual version label ("A" or "B"). When set and the active
    * variant has NO explicit user override, the FFmpeg preview endpoint will
@@ -108,6 +110,7 @@ export function SubtitleEditor({
   compact = false,
   pipelineId,
   variantIndex = 0,
+  previewText,
   visualVersion,
   renderMode = "full",
 }: SubtitleEditorProps) {
@@ -130,7 +133,6 @@ export function SubtitleEditor({
     // versions triggers a new preview render even when settings are identical.
     const fingerprint = JSON.stringify(settings) + "|v=" + (visualVersion || "");
     if (fingerprint === prevFingerprint.current) return;
-    setShowCssPreview(true);
 
     // Clear previous timer and abort in-flight request
     if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
@@ -254,6 +256,10 @@ export function SubtitleEditor({
     return ((settings.glowBlur ?? 0) / ASS_REF_HEIGHT) * previewHeight;
   }, [settings.glowBlur, previewHeight]);
 
+  const previewOverlayText = previewText?.trim()
+    || (subtitleLines.length > 0 ? subtitleLines[0].text : "")
+    || "Sample subtitle text";
+
   // The preview panel rendered as a standalone block
   const previewPanel = showPreview ? (
     <div className="space-y-3">
@@ -285,7 +291,7 @@ export function SubtitleEditor({
 
             </>
           )}
-          {showCssPreview && (
+          {showCssPreview && !ffmpegPreviewUrl && (
             <div
               className="absolute left-0 right-0 text-center px-4 transition-all duration-100 pointer-events-none"
               style={{
@@ -313,7 +319,7 @@ export function SubtitleEditor({
                 } : {}),
               }}
             >
-              {subtitleLines.length > 0 ? subtitleLines[0].text : "Sample subtitle text"}
+              {previewOverlayText}
             </div>
           )}
           {ffmpegLoading && (
