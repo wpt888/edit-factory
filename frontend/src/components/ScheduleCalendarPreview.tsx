@@ -165,7 +165,7 @@ export function ScheduleCalendarPreview({ entries }: ScheduleCalendarPreviewProp
                     <div className="relative shrink-0">
                       {clip.thumbnail_path ? (
                         <img
-                          src={clip.thumbnail_path}
+                          src={`${API_URL}/library/files/${encodeURIComponent(clip.thumbnail_path)}?v=${clip.clip_id}`}
                           alt=""
                           className="size-8 rounded object-cover"
                         />
