@@ -134,6 +134,9 @@ export function SubtitleEditor({
     const fingerprint = JSON.stringify(settings) + "|v=" + (visualVersion || "");
     if (fingerprint === prevFingerprint.current) return;
 
+    // Keep the preview responsive while the debounced FFmpeg frame catches up.
+    setShowCssPreview(true);
+
     // Clear previous timer and abort in-flight request
     if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
     if (abortRef.current) abortRef.current.abort();
@@ -291,7 +294,7 @@ export function SubtitleEditor({
 
             </>
           )}
-          {showCssPreview && !ffmpegPreviewUrl && (
+          {showCssPreview && (
             <div
               className="absolute left-0 right-0 text-center px-4 transition-all duration-100 pointer-events-none"
               style={{
