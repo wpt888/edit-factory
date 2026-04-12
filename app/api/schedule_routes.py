@@ -76,6 +76,7 @@ class ScheduleAssignmentResponse(BaseModel):
     scheduled_at: str
     thumbnail_path: Optional[str] = None
     duration: Optional[float] = None
+    final_video_path: Optional[str] = None
     # V2 smart schedule fields
     integration_id: Optional[str] = None
     platform_type: Optional[str] = None
@@ -263,6 +264,7 @@ async def preview_schedule(
                 scheduled_at=a.scheduled_at.isoformat(),
                 thumbnail_path=a.thumbnail_path,
                 duration=a.duration,
+                final_video_path=a.final_video_path,
                 integration_id=a.integration_id,
                 platform_type=a.platform_type,
                 jitter_offset_minutes=a.jitter_offset_minutes,

@@ -5,7 +5,8 @@ Distributes clips from multiple collections (projects) across days
 with per-platform variant routing, time slots, and random jitter.
 
 V2 features:
-- Each platform gets a different variant (Meta platforms get unique variants)
+- All platforms get the SAME variant per day (1 variant = 1 day)
+- Instagram gets visual version B, all others get version A
 - Per-platform posting times
 - Random jitter (±N minutes) for anti-bot detection
 - Upload caching to avoid duplicate Postiz uploads
@@ -24,10 +25,10 @@ logger = logging.getLogger(__name__)
 
 META_PLATFORMS: Set[str] = {"instagram-standalone", "instagram", "facebook", "threads"}
 META_VISUAL_VERSION_BY_PLATFORM: Dict[str, str] = {
-    "instagram": "A",
-    "instagram-standalone": "A",
+    "instagram": "B",
+    "instagram-standalone": "B",
     "threads": "A",
-    "facebook": "B",
+    "facebook": "A",
 }
 
 
@@ -41,6 +42,7 @@ class ScheduleAssignment:
     scheduled_at: datetime  # UTC (includes jitter)
     thumbnail_path: Optional[str] = None
     duration: Optional[float] = None
+    final_video_path: Optional[str] = None
     integration_id: Optional[str] = None
     platform_type: Optional[str] = None
     jitter_offset_minutes: int = 0
@@ -67,9 +69,9 @@ def compute_variant_routing(
     """
     Assign base variant indices to integrations.
 
-    Meta platforms may still resolve to different rendered assets through
-    visual_version routing (A/B), so they are not hard-blocked on distinct
-    base variants.
+    All platforms receive the SAME base variant index (0). Differentiation
+    between platforms happens only through visual_version routing (A/B):
+    Instagram gets version B, all others get version A.
 
     Args:
         integration_ids: All selected integration IDs
@@ -77,28 +79,9 @@ def compute_variant_routing(
         variant_count: Number of available variants per project
 
     Returns:
-        {integration_id: variant_index}
+        {integration_id: variant_index}  — all mapped to 0
     """
-    meta_ids = sorted(
-        [iid for iid in integration_ids if integrations_info.get(iid, "") in META_PLATFORMS]
-    )
-    non_meta_ids = sorted(
-        [iid for iid in integration_ids if integrations_info.get(iid, "") not in META_PLATFORMS]
-    )
-
-    routing: Dict[str, int] = {}
-
-    # Meta platforms consume base variants first. The final rendered asset is
-    # refined later using platform-specific visual_version routing.
-    for i, iid in enumerate(meta_ids):
-        routing[iid] = i % variant_count
-
-    # Non-Meta platforms use the remaining slots, wrapping as needed.
-    offset = len(meta_ids)
-    for i, iid in enumerate(non_meta_ids):
-        routing[iid] = (offset + i) % variant_count
-
-    return routing
+    return {iid: 0 for iid in integration_ids}
 
 
 def get_required_visual_version(platform_type: str) -> Optional[str]:
@@ -120,25 +103,33 @@ def _pick_clip_for_platform(
     platform_type: str,
 ) -> Optional[dict]:
     """
-    Pick the best clip for a platform, preferring the required Meta visual version
-    when available and otherwise falling back deterministically.
+    Pick the best clip for a platform, using visual version routing:
+    - Instagram → version B
+    - All other platforms (Meta and non-Meta) → version A, then base fallback
     """
     preferred_visual_version = get_required_visual_version(platform_type)
     variant_candidates = available_variants.get(target_variant, [])
 
+    # 1. Try preferred visual version (B for Instagram, A for others)
     if preferred_visual_version:
         for clip in variant_candidates:
             if clip.get("visual_version") == preferred_visual_version:
                 return clip
 
+    # 2. Non-Meta platforms: prefer version A, then base (no visual_version)
     if not preferred_visual_version:
+        for clip in variant_candidates:
+            if clip.get("visual_version") == "A":
+                return clip
         for clip in variant_candidates:
             if not clip.get("visual_version"):
                 return clip
 
+    # 3. Any clip from target variant
     if variant_candidates:
         return variant_candidates[0]
 
+    # 4. Fallback: try other variant indices
     all_variant_indices = sorted(available_variants.keys())
     if not all_variant_indices:
         return None
@@ -152,6 +143,9 @@ def _pick_clip_for_platform(
                 return clip
 
     if not preferred_visual_version:
+        for clip in fallback_candidates:
+            if clip.get("visual_version") == "A":
+                return clip
         for clip in fallback_candidates:
             if not clip.get("visual_version"):
                 return clip
@@ -224,63 +218,8 @@ def build_schedule_plan(
     platform_times = platform_times or {}
 
     required_visual_versions = list_required_visual_versions(integration_ids, integrations_info)
-    insufficient_collections = []
-    for cid, clips in active_collections.items():
-        unique_variants = len({c.get("variant_index", 0) for c in clips})
-        missing_visual_versions = [
-            version for version in required_visual_versions
-            if not any(c.get("visual_version") == version for c in clips)
-        ]
 
-        if required_visual_versions and missing_visual_versions:
-            insufficient_collections.append({
-                "id": cid,
-                "name": collection_names.get(cid, "Unknown"),
-                "missing_visual_versions": missing_visual_versions,
-            })
-            continue
-
-        non_meta_count = sum(
-            1 for iid in integration_ids
-            if integrations_info.get(iid, "") not in META_PLATFORMS
-        )
-        if non_meta_count > 0 and unique_variants < non_meta_count:
-            insufficient_collections.append({
-                "id": cid,
-                "name": collection_names.get(cid, "Unknown"),
-                "variants": unique_variants,
-                "non_meta_needed": non_meta_count,
-            })
-
-    if insufficient_collections:
-        visual_issues = [
-            f'"{c["name"]}" (missing visual versions: {", ".join(c["missing_visual_versions"])})'
-            for c in insufficient_collections
-            if c.get("missing_visual_versions")
-        ]
-        variant_issues = [
-            f'"{c["name"]}" ({c["variants"]} variants)'
-            for c in insufficient_collections
-            if c.get("non_meta_needed")
-        ]
-        if visual_issues:
-            raise ValueError(
-                "Collections missing required Meta render versions: "
-                + ", ".join(visual_issues)
-                + ". Re-render with Meta multiplication enabled or deselect the affected Meta platforms."
-            )
-        raise ValueError(
-            f"Collections with too few base variants for {non_meta_count} non-Meta platforms: "
-            + ", ".join(variant_issues)
-            + ". Generate more variants or deselect some non-Meta platforms."
-        )
-
-    # Use the MINIMUM unique base variant count across collections for safe routing.
-    # Meta A/B renders share the same variant_index and are chosen later by visual_version.
-    min_variants = min(len({c.get("variant_index", 0) for c in clips}) for clips in active_collections.values())
-    variant_routing = compute_variant_routing(integration_ids, integrations_info, min_variants)
-
-    # Build clip index per collection: {project_id: {variant_index: [clip_dicts...]}}
+    # Build clip index per collection FIRST so we can validate per variant_index
     clip_by_variant: Dict[str, Dict[int, List[dict]]] = {}
     for cid, clips in active_collections.items():
         clip_by_variant[cid] = {}
@@ -297,82 +236,100 @@ def build_schedule_plan(
             vi = clip.get("variant_index", 0)
             clip_by_variant[cid].setdefault(vi, []).append(clip)
 
+    # Validate per variant_index: each variant that will become a scheduled day
+    # must have ALL required visual versions (A and B)
+    incomplete_variants: List[str] = []
+    for cid, variants in clip_by_variant.items():
+        cname = collection_names.get(cid, "Unknown")
+        for vi, vi_clips in variants.items():
+            vi_versions = {c.get("visual_version") for c in vi_clips}
+            missing = [v for v in required_visual_versions if v not in vi_versions]
+            if missing:
+                incomplete_variants.append(
+                    f'"{cname}" variant {vi + 1} (missing: {", ".join(missing)})'
+                )
+
+    if incomplete_variants:
+        raise ValueError(
+            "Some variants are missing required Meta render versions: "
+            + "; ".join(incomplete_variants)
+            + ". Re-render with Meta multiplication enabled or deselect the affected Meta platforms."
+        )
+
+    variant_routing = compute_variant_routing(integration_ids, integrations_info, 1)
+
     # Initialize jitter RNG
     seed = jitter_seed if jitter_seed is not None else random.randint(0, 2**31)
     rng = random.Random(seed)
 
-    # V2 algorithm: each collection = 1 day of content (all variants go to platforms)
-    # Round-robin across collections: collection A on day 1, collection B on day 2, etc.
+    # V2 algorithm: each variant = 1 day. All platforms receive the SAME
+    # variant, differentiated only by visual version (A for most, B for Instagram).
+    # Collections are interleaved: variant 0 of collection A, variant 0 of collection B,
+    # then variant 1 of collection A, etc.
     collection_ids = sorted(active_collections.keys())
-    scheduled_collections: Set[str] = set()
+
+    # Gather all (collection, variant_index) pairs spread across days
+    day_units: List[Tuple[str, int]] = []
+    max_variants = max(len(variants) for variants in clip_by_variant.values())
+    for vi_offset in range(max_variants):
+        for cid in collection_ids:
+            variant_indices = sorted(clip_by_variant.get(cid, {}).keys())
+            if vi_offset < len(variant_indices):
+                day_units.append((cid, variant_indices[vi_offset]))
 
     assignments: List[ScheduleAssignment] = []
-    day_offset = 0
 
-    while len(scheduled_collections) < len(collection_ids):
+    for day_offset, (cid, target_vi) in enumerate(day_units):
         current_date = start_date + timedelta(days=day_offset)
+        available_variants = clip_by_variant.get(cid, {})
+        first_variant_clips = available_variants.get(target_vi, [])
+        first_clip = first_variant_clips[0] if first_variant_clips else None
 
-        for cid in collection_ids:
-            if cid in scheduled_collections:
+        # Create one assignment per platform — all use the same variant
+        for iid in integration_ids:
+            platform_type = integrations_info.get(iid, "")
+            clip = _pick_clip_for_platform(available_variants, target_vi, platform_type)
+            if clip is None and first_clip is not None:
+                logger.warning(
+                    "Platform %s missing clip for variant %s in collection %s",
+                    iid, target_vi, cid,
+                )
+                clip = first_clip
+            if clip is None:
                 continue
 
-            # Mark this collection as consumed — all its variants go out today
-            scheduled_collections.add(cid)
+            # Determine posting time for this platform
+            time_str = platform_times.get(iid)
+            if time_str:
+                parts = time_str.split(":")
+                platform_post_time = time(int(parts[0]), int(parts[1]))
+            else:
+                platform_post_time = post_time
 
-            available_variants = clip_by_variant.get(cid, {})
-            first_variant_clips = next(iter(available_variants.values())) if available_variants else []
-            first_clip = first_variant_clips[0] if first_variant_clips else None
+            # Apply jitter
+            jitter = rng.randint(-jitter_minutes, jitter_minutes) if jitter_minutes > 0 else 0
 
-            # Create one assignment per platform
-            for iid in integration_ids:
-                target_variant = variant_routing.get(iid, 0)
-                platform_type = integrations_info.get(iid, "")
-                clip = _pick_clip_for_platform(available_variants, target_variant, platform_type)
-                if clip is None and first_clip is not None:
-                    logger.warning(
-                        "Platform %s missing schedulable clip for variant %s in collection %s",
-                        iid, target_variant, cid,
-                    )
-                    clip = first_clip
-                if clip is None:
-                    continue
+            # Build UTC datetime
+            naive_dt = datetime.combine(current_date, platform_post_time)
+            naive_dt = naive_dt + timedelta(minutes=jitter)
+            local_dt = naive_dt.replace(tzinfo=tz)
+            utc_dt = local_dt.astimezone(timezone.utc)
 
-                # Determine posting time for this platform
-                time_str = platform_times.get(iid)
-                if time_str:
-                    parts = time_str.split(":")
-                    platform_post_time = time(int(parts[0]), int(parts[1]))
-                else:
-                    platform_post_time = post_time
-
-                # Apply jitter
-                jitter = rng.randint(-jitter_minutes, jitter_minutes) if jitter_minutes > 0 else 0
-
-                # Build UTC datetime
-                naive_dt = datetime.combine(current_date, platform_post_time)
-                naive_dt = naive_dt + timedelta(minutes=jitter)
-                local_dt = naive_dt.replace(tzinfo=tz)
-                utc_dt = local_dt.astimezone(timezone.utc)
-
-                assignments.append(ScheduleAssignment(
-                    clip_id=clip["id"],
-                    project_id=cid,
-                    project_name=collection_names.get(cid, "Unknown"),
-                    clip_name=clip.get("variant_name", f"Clip {clip.get('variant_index', '?')}"),
-                    scheduled_date=current_date,
-                    scheduled_at=utc_dt,
-                    thumbnail_path=clip.get("thumbnail_path"),
-                    duration=clip.get("duration"),
-                    integration_id=iid,
-                    platform_type=platform_type,
-                    jitter_offset_minutes=jitter,
-                    variant_index=clip.get("variant_index", 0),
-                ))
-
-            # Only 1 collection per day (round-robin)
-            break
-
-        day_offset += 1
+            assignments.append(ScheduleAssignment(
+                clip_id=clip["id"],
+                project_id=cid,
+                project_name=collection_names.get(cid, "Unknown"),
+                clip_name=clip.get("variant_name", f"Clip {clip.get('variant_index', '?')}"),
+                scheduled_date=current_date,
+                scheduled_at=utc_dt,
+                thumbnail_path=clip.get("thumbnail_path"),
+                duration=clip.get("duration"),
+                final_video_path=clip.get("final_video_path"),
+                integration_id=iid,
+                platform_type=platform_type,
+                jitter_offset_minutes=jitter,
+                variant_index=clip.get("variant_index", 0),
+            ))
 
     # Build clips_per_day summary
     clips_per_day: Dict[str, int] = {}
@@ -382,7 +339,7 @@ def build_schedule_plan(
 
     return SchedulePlan(
         assignments=assignments,
-        days_used=day_offset,
+        days_used=len(day_units),
         clips_per_day=clips_per_day,
         collections_count=len(active_collections),
         total_clips=len(assignments),
@@ -430,6 +387,7 @@ def _build_schedule_plan_v1(
                 scheduled_at=utc_dt,
                 thumbnail_path=clip.get("thumbnail_path"),
                 duration=clip.get("duration"),
+                final_video_path=clip.get("final_video_path"),
             ))
 
         day_offset += 1

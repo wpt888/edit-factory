@@ -1,7 +1,14 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { API_URL } from "@/lib/api";
 
 /** A clip entry within the schedule preview */
 export interface ScheduleEntry {
@@ -10,6 +17,7 @@ export interface ScheduleEntry {
   clip_name: string;
   collection_name: string;
   thumbnail_path?: string;
+  final_video_path?: string;
   // V2 smart schedule fields
   integration_id?: string;
   platform_type?: string;
@@ -69,13 +77,21 @@ function formatJitter(offset: number): string {
   return offset > 0 ? `+${offset}m` : `${offset}m`;
 }
 
+/** Build playable video URL from final_video_path */
+function buildVideoUrl(entry: ScheduleEntry): string | null {
+  if (!entry.final_video_path) return null;
+  return `${API_URL}/library/files/${encodeURIComponent(entry.final_video_path)}?v=${entry.clip_id}`;
+}
+
 /**
  * Calendar-style grid preview of scheduled clips.
  * Rows = days, columns = clips for that day.
  * V2: Shows platform badges, variant indices, and jitter offsets.
+ * Clicking a clip card opens video playback dialog.
  */
 export function ScheduleCalendarPreview({ entries }: ScheduleCalendarPreviewProps) {
   const isV2 = entries.some((e) => e.platform_type);
+  const [selectedEntry, setSelectedEntry] = useState<ScheduleEntry | null>(null);
 
   // Build colour map keyed by collection name (stable across renders for same input)
   const collectionColorMap = useMemo(() => {
@@ -107,6 +123,8 @@ export function ScheduleCalendarPreview({ entries }: ScheduleCalendarPreviewProp
     );
   }
 
+  const videoUrl = selectedEntry ? buildVideoUrl(selectedEntry) : null;
+
   return (
     <div className="space-y-2">
       {/* Legend */}
@@ -136,22 +154,34 @@ export function ScheduleCalendarPreview({ entries }: ScheduleCalendarPreviewProp
               {clips.map((clip, idx) => {
                 const color = collectionColorMap[clip.collection_name];
                 const jitterStr = clip.jitter_offset_minutes != null ? formatJitter(clip.jitter_offset_minutes) : "";
+                const hasVideo = !!clip.final_video_path;
                 return (
                   <div
                     key={`${clip.clip_id}-${clip.integration_id ?? idx}`}
-                    className={`flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs ${color.bg} ${color.border}`}
+                    className={`flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs ${color.bg} ${color.border} ${hasVideo ? "cursor-pointer hover:ring-2 hover:ring-primary/50 transition-shadow" : ""}`}
+                    onClick={hasVideo ? () => setSelectedEntry(clip) : undefined}
                   >
-                    {clip.thumbnail_path ? (
-                      <img
-                        src={clip.thumbnail_path}
-                        alt=""
-                        className="size-8 rounded object-cover shrink-0"
-                      />
-                    ) : (
-                      <div className="size-8 rounded bg-muted flex items-center justify-center shrink-0">
-                        <span className="text-[10px] text-muted-foreground">N/A</span>
-                      </div>
-                    )}
+                    {/* Thumbnail with play overlay */}
+                    <div className="relative shrink-0">
+                      {clip.thumbnail_path ? (
+                        <img
+                          src={clip.thumbnail_path}
+                          alt=""
+                          className="size-8 rounded object-cover"
+                        />
+                      ) : (
+                        <div className="size-8 rounded bg-muted flex items-center justify-center">
+                          <span className="text-[10px] text-muted-foreground">N/A</span>
+                        </div>
+                      )}
+                      {hasVideo && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/30 rounded">
+                          <svg className="size-3.5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M8 5v14l11-7z" />
+                          </svg>
+                        </div>
+                      )}
+                    </div>
                     <div className="min-w-0">
                       <div className={`font-medium truncate max-w-[160px] ${color.text}`}>
                         {clip.clip_name}
@@ -185,6 +215,37 @@ export function ScheduleCalendarPreview({ entries }: ScheduleCalendarPreviewProp
           </div>
         ))}
       </div>
+
+      {/* Video playback dialog */}
+      <Dialog open={!!selectedEntry} onOpenChange={(open) => { if (!open) setSelectedEntry(null); }}>
+        <DialogContent className="max-w-md p-0 overflow-hidden">
+          <DialogHeader className="px-4 pt-4 pb-2">
+            <DialogTitle className="text-sm font-medium">
+              {selectedEntry?.clip_name}
+              {selectedEntry?.platform_type && (
+                <Badge variant="outline" className="ml-2 text-[10px]">
+                  {platformLabel(selectedEntry.platform_type)}
+                </Badge>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          {videoUrl ? (
+            <div className="aspect-[9/16] bg-black">
+              <video
+                key={videoUrl}
+                src={videoUrl}
+                controls
+                autoPlay
+                className="w-full h-full object-contain"
+              />
+            </div>
+          ) : (
+            <div className="aspect-[9/16] bg-muted flex items-center justify-center text-muted-foreground text-sm">
+              Video not available
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

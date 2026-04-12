@@ -471,6 +471,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
           platform_type: a.platform_type as string | undefined,
           variant_index: a.variant_index as number | undefined,
           jitter_offset_minutes: a.jitter_offset_minutes as number | undefined,
+          final_video_path: a.final_video_path as string | undefined,
         })),
         total_clips: raw.total_clips,
         total_days: raw.days_used,
