@@ -213,6 +213,35 @@ class ElevenLabsAccountManager:
 
         return None
 
+    def get_account_secret(self, profile_id: str, account_id: str) -> str:
+        """
+        Return the decrypted API key for a specific ElevenLabs account.
+
+        Supports the synthetic ``__env__`` account shown in Settings.
+
+        Raises:
+            ValueError: If the account is missing or does not belong to the profile.
+        """
+        if account_id == "__env__":
+            env_key = self.settings.elevenlabs_api_key
+            if not env_key:
+                raise ValueError("No .env API key configured")
+            return env_key
+
+        repo = self._get_repo()
+        if not repo:
+            raise ValueError("Database not available")
+
+        account = repo.get_elevenlabs_account(account_id)
+        if not account or account.get("profile_id") != profile_id:
+            raise ValueError("Account not found")
+
+        encrypted = account.get("api_key_encrypted")
+        if not encrypted:
+            raise ValueError("Stored API key is empty")
+
+        return _decrypt_api_key(encrypted)
+
     def record_error(self, profile_id: str, api_key: str, error_msg: str):
         """Record an error against the account that owns this API key."""
         repo = self._get_repo()

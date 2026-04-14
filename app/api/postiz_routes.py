@@ -105,6 +105,13 @@ class PostizStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+class PostizCredentialsResponse(BaseModel):
+    configured: bool
+    api_url: str = ""
+    api_key: str = ""
+    source: Optional[str] = None
+
+
 # ============== PROGRESS TRACKING ==============
 _publish_progress: Dict[str, dict] = {}
 _publish_progress_lock = threading.Lock()
@@ -195,6 +202,50 @@ async def get_postiz_status(
         logger.error(f"[Profile {profile.profile_id}] Failed to connect to Postiz: {e}")
 
     return result
+
+
+@router.get("/credentials", response_model=PostizCredentialsResponse)
+async def get_postiz_credentials(
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """
+    Return the effective Postiz credentials for the active profile.
+
+    Priority:
+    1. profile.tts_settings.postiz
+    2. global env fallback
+    """
+    repo = get_repository()
+    api_url = ""
+    api_key = ""
+    source: Optional[str] = None
+
+    if repo:
+        try:
+            profile_row = repo.get_profile(profile.profile_id)
+            if profile_row:
+                tts_settings = profile_row.get("tts_settings") or {}
+                postiz_config = tts_settings.get("postiz") or {}
+                api_url = postiz_config.get("api_url") or ""
+                api_key = postiz_config.get("api_key") or ""
+                if api_url or api_key:
+                    source = "profile"
+        except Exception as e:
+            logger.warning(f"[Profile {profile.profile_id}] Failed to load Postiz credentials from profile: {e}")
+
+    if not api_url and not api_key:
+        settings = get_settings()
+        api_url = settings.postiz_api_url or ""
+        api_key = settings.postiz_api_key or ""
+        if api_url or api_key:
+            source = "env"
+
+    return PostizCredentialsResponse(
+        configured=bool(api_url and api_key),
+        api_url=api_url,
+        api_key=api_key,
+        source=source,
+    )
 
 
 @router.get("/integrations", response_model=List[PostizIntegrationResponse])
@@ -757,17 +808,9 @@ Cerinte:
         import os
         import json as _json
 
-        # Get API key
-        api_key = None
-        try:
-            from app.services.key_vault import get_key_vault
-            vault = get_key_vault()
-            api_key = vault.get_key("gemini_api_key")
-        except Exception:
-            pass
-        if not api_key:
-            settings = get_settings()
-            api_key = settings.gemini_api_key
+        # Get API key — vault (per-profile) → env fallback
+        from app.services.api_key_vault import get_vault_manager
+        api_key = get_vault_manager().get_api_key_or_default(profile.profile_id, "gemini")
         if not api_key:
             api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:

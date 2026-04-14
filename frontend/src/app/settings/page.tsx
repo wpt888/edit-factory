@@ -18,6 +18,7 @@ import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import { useProfile } from "@/contexts/profile-context"
 import { ConfirmDialog } from "@/components/confirm-dialog"
+import { ApiKeyManager } from "@/components/api-key-manager"
 
 interface Voice {
   voice_id: string
@@ -80,7 +81,7 @@ export default function SettingsPage() {
   const voiceIdRef = useRef(voiceId); // Bug #60: stable ref for async callbacks
   voiceIdRef.current = voiceId;
   const [voices, setVoices] = useState<Voice[]>([])
-  const [loadingVoices, setLoadingVoices] = useState(false)
+  const [, setLoadingVoices] = useState(false)
   const [saving, setSaving] = useState(false)
   const [initialLoad, setInitialLoad] = useState(true)
 
@@ -88,13 +89,15 @@ export default function SettingsPage() {
   const [postizUrl, setPostizUrl] = useState("")
   const [postizKey, setPostizKey] = useState("")
   const [postizEnabled, setPostizEnabled] = useState(false)
+  const [postizSource, setPostizSource] = useState<"profile" | "env" | null>(null)
 
   // Buffer settings state
   const [bufferKey, setBufferKey] = useState("")
   const [bufferOrgId, setBufferOrgId] = useState("")
   const [testingConnection, setTestingConnection] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "success" | "error">("idle")
-  const [showApiKey, setShowApiKey] = useState(false)
+  const [showPostizKey, setShowPostizKey] = useState(false)
+  const [showBufferKey, setShowBufferKey] = useState(false)
 
   // Dashboard state
   const [dashboard, setDashboard] = useState<DashboardData | null>(null)
@@ -118,6 +121,8 @@ export default function SettingsPage() {
   const [showNewAccountKey, setShowNewAccountKey] = useState(false)
   const [addingAccount, setAddingAccount] = useState(false)
   const [accountActionLoading, setAccountActionLoading] = useState<string | null>(null)
+  const [visibleElSecrets, setVisibleElSecrets] = useState<Record<string, string>>({})
+  const [elSecretLoading, setElSecretLoading] = useState<string | null>(null)
 
   // Confirm dialog state
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -145,6 +150,7 @@ export default function SettingsPage() {
       const response = await apiGetWithRetry("/elevenlabs-accounts/")
       const data = await response.json()
       setElAccounts(data.accounts || [])
+      setVisibleElSecrets({})
     } catch (error) {
       handleApiError(error, "Error loading ElevenLabs accounts")
     } finally {
@@ -174,6 +180,7 @@ export default function SettingsPage() {
         setPostizUrl(postizSettings.api_url || "")
         setPostizKey(postizSettings.api_key || "")
         setPostizEnabled(postizSettings.enabled || false)
+        setPostizSource((postizSettings.api_url || postizSettings.api_key) ? "profile" : null)
 
         const bufferSettings = ttsSettings.buffer || {}
         setBufferKey(bufferSettings.api_key || "")
@@ -188,6 +195,32 @@ export default function SettingsPage() {
         setPrimaryColor(videoSettings.primary_color || "#FF0000")
         setAccentColor(videoSettings.accent_color || "#FFFF00")
         setTemplateCta(videoSettings.cta_text || "Comanda acum!")
+
+        const shouldCheckPostizFallback =
+          !(postizSettings.api_url || "").trim() && !(postizSettings.api_key || "").trim()
+
+        if (shouldCheckPostizFallback) {
+          try {
+            const credentialsResponse = await apiGetWithRetry("/postiz/credentials", { signal: controller.signal })
+            if (controller.signal.aborted) return
+            const credentialsData = await credentialsResponse.json()
+            if (credentialsData.source === "profile") {
+              if (credentialsData.api_url) {
+                setPostizUrl(credentialsData.api_url)
+              }
+              if (credentialsData.api_key) {
+                setPostizKey(credentialsData.api_key)
+              }
+              setPostizSource("profile")
+            } else if (credentialsData.source === "env") {
+              setPostizSource("env")
+            }
+          } catch (credentialsError) {
+            if (!controller.signal.aborted) {
+              console.warn("Failed to load effective Postiz credentials:", credentialsError)
+            }
+          }
+        }
       } catch (error) {
         if (controller.signal.aborted) return
         handleApiError(error, "Error loading settings")
@@ -266,7 +299,6 @@ export default function SettingsPage() {
     }
 
     loadVoices()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- voiceId intentionally excluded: adding it would cause infinite refetch loop since loadVoices may call setVoiceId("")
   }, [provider, initialLoad])
 
   // Fetch app version and crash reporting state when running in desktop mode
@@ -462,6 +494,28 @@ export default function SettingsPage() {
       handleApiError(error, "Failed to refresh account")
     } finally {
       setAccountActionLoading(null)
+    }
+  }
+
+  const handleToggleElSecret = async (accountId: string) => {
+    if (visibleElSecrets[accountId]) {
+      setVisibleElSecrets((prev) => {
+        const next = { ...prev }
+        delete next[accountId]
+        return next
+      })
+      return
+    }
+
+    setElSecretLoading(accountId)
+    try {
+      const response = await apiGetWithRetry(`/elevenlabs-accounts/${accountId}/secret`)
+      const data = await response.json()
+      setVisibleElSecrets((prev) => ({ ...prev, [accountId]: data.api_key || "" }))
+    } catch (error) {
+      handleApiError(error, "Failed to reveal ElevenLabs key")
+    } finally {
+      setElSecretLoading(null)
     }
   }
 
@@ -664,7 +718,7 @@ export default function SettingsPage() {
                     </div>
                     <div className="flex items-center gap-3 mt-1">
                       <span className="text-xs text-muted-foreground font-mono">
-                        {account.api_key_hint}
+                        {visibleElSecrets[account.id] || account.api_key_hint}
                       </span>
                       {account.character_limit && account.characters_used !== null && (
                         <div className="flex items-center gap-1.5 flex-1 max-w-[200px]">
@@ -684,6 +738,9 @@ export default function SettingsPage() {
                           </div>
                           <span className="text-xs text-muted-foreground whitespace-nowrap">
                             {Math.round((account.characters_used! / account.character_limit) * 100)}%
+                          </span>
+                          <span className="text-xs text-muted-foreground whitespace-nowrap">
+                            {account.characters_used!.toLocaleString()} / {account.character_limit.toLocaleString()}
                           </span>
                         </div>
                       )}
@@ -711,6 +768,22 @@ export default function SettingsPage() {
                         Foloseste
                       </Button>
                     )}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => handleToggleElSecret(account.id)}
+                      disabled={elSecretLoading === account.id}
+                      title={visibleElSecrets[account.id] ? "Hide key" : "Show key"}
+                    >
+                      {elSecretLoading === account.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : visibleElSecrets[account.id] ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -810,74 +883,46 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card key={`elevenlabs-accounts-${currentProfile.id}`}>
         <CardHeader>
-          <CardTitle>ElevenLabs Voice</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <Key className="h-5 w-5" />
+            API Keys
+          </CardTitle>
           <CardDescription>
-            Select the ElevenLabs voice for video generation
+            Per-profile API keys for AI services. Falls back to .env defaults if empty.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Voice Selection</label>
-            <Select
-              value={voiceId}
-              onValueChange={setVoiceId}
-              disabled={loadingVoices || saving || voices.length === 0}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder={loadingVoices ? "Loading voices..." : "Select a voice"} />
-              </SelectTrigger>
-              <SelectContent>
-                {(() => {
-                  const custom = voices.filter(v => v.category && v.category !== "premade");
-                  const premade = voices.filter(v => !v.category || v.category === "premade");
-                  return (
-                    <>
-                      {custom.length > 0 && (
-                        <>
-                          <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">My Voices</div>
-                          {custom.map((voice) => (
-                            <SelectItem key={voice.voice_id} value={voice.voice_id}>
-                              {voice.name}
-                              {voice.language && ` (${voice.language})`}
-                            </SelectItem>
-                          ))}
-                        </>
-                      )}
-                      {premade.length > 0 && (
-                        <>
-                          <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">Library</div>
-                          {premade.map((voice) => (
-                            <SelectItem key={voice.voice_id} value={voice.voice_id}>
-                              {voice.name}
-                              {voice.language && ` (${voice.language})`}
-                            </SelectItem>
-                          ))}
-                        </>
-                      )}
-                    </>
-                  );
-                })()}
-              </SelectContent>
-            </Select>
-            {voices.length === 0 && !loadingVoices && (
-              <p className="text-sm text-muted-foreground">
-                No voices available. Check your ElevenLabs API key.
-              </p>
-            )}
-          </div>
+          <ApiKeyManager key={`gemini-${currentProfile.id}`} service="gemini" label="Gemini AI" description="Google Gemini for script generation and image analysis" />
+          <div className="border-t" />
+          <ApiKeyManager key={`fal-${currentProfile.id}`} service="fal" label="fal.ai" description="Image generation service" />
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Postiz Publishing</CardTitle>
+          <CardTitle className="flex items-center gap-3">
+            <span className="inline-flex items-center rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-sm font-semibold tracking-wide text-foreground">
+              Postiz
+            </span>
+            <span>Publishing</span>
+          </CardTitle>
           <CardDescription>
             Configure social media publishing credentials for {currentProfile.name}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {postizSource === "env" && !postizUrl && !postizKey && (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+              <p className="text-sm font-medium text-foreground">
+                This profile has no Postiz credentials saved.
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Backend fallback to global `.env` credentials is currently active. In a multi-tenant setup, save profile-specific Postiz credentials here to keep Nortea and Obsid separate.
+              </p>
+            </div>
+          )}
           <div className="space-y-2">
             <label className="text-sm font-medium">Postiz API URL</label>
             <Input
@@ -895,7 +940,7 @@ export default function SettingsPage() {
             <label className="text-sm font-medium">Postiz API Key</label>
             <div className="flex gap-2">
               <Input
-                type={showApiKey ? "text" : "password"}
+                type={showPostizKey ? "text" : "password"}
                 value={postizKey}
                 onChange={(e) => setPostizKey(e.target.value)}
                 placeholder="pk_live_..."
@@ -906,9 +951,9 @@ export default function SettingsPage() {
                 type="button"
                 variant="ghost"
                 size="icon"
-                onClick={() => setShowApiKey(!showApiKey)}
+                onClick={() => setShowPostizKey(!showPostizKey)}
               >
-                {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {showPostizKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
@@ -954,7 +999,12 @@ export default function SettingsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Buffer Publishing</CardTitle>
+          <CardTitle className="flex items-center gap-3">
+            <span className="inline-flex items-center rounded-md border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-sm font-semibold tracking-wide text-foreground">
+              Buffer
+            </span>
+            <span>Publishing</span>
+          </CardTitle>
           <CardDescription>
             Publish videos to TikTok and other platforms via Buffer
           </CardDescription>
@@ -964,7 +1014,7 @@ export default function SettingsPage() {
             <label className="text-sm font-medium">Buffer API Key</label>
             <div className="flex gap-2">
               <Input
-                type={showApiKey ? "text" : "password"}
+                type={showBufferKey ? "text" : "password"}
                 value={bufferKey}
                 onChange={(e) => setBufferKey(e.target.value)}
                 placeholder="_Prk3..."
@@ -975,9 +1025,9 @@ export default function SettingsPage() {
                 type="button"
                 variant="ghost"
                 size="icon"
-                onClick={() => setShowApiKey(!showApiKey)}
+                onClick={() => setShowBufferKey(!showBufferKey)}
               >
-                {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {showBufferKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
@@ -1111,7 +1161,7 @@ export default function SettingsPage() {
       <div className="flex justify-end">
         <Button
           onClick={handleSave}
-          disabled={saving || !voiceId}
+          disabled={saving}
         >
           {saving ? (
             <>

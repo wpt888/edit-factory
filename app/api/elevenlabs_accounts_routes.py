@@ -179,3 +179,19 @@ async def refresh_subscription(
         raise HTTPException(status_code=400, detail=str(e))
 
     return {"account": account}
+
+
+@router.get("/{account_id}/secret")
+async def get_account_secret(
+    account_id: str,
+    ctx: ProfileContext = Depends(get_profile_context)
+):
+    """Return the decrypted ElevenLabs API key for the active profile."""
+    manager = get_account_manager()
+
+    try:
+        api_key = manager.get_account_secret(ctx.profile_id, account_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {"api_key": api_key}
