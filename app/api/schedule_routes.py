@@ -107,6 +107,9 @@ class CreateSchedulePlanRequest(BaseModel):
     platform_times: Optional[Dict[str, str]] = None  # {integration_id: "HH:MM"}
     jitter_minutes: int = Field(default=15, ge=0, le=60)
     clip_ids: Optional[List[str]] = None  # Filter to specific clips (from pipeline selection)
+    # Per-clip captions (from Library BulkScheduleDialog)
+    captions: Optional[Dict[str, str]] = None  # {clip_id: "caption text"}
+    youtube_title: Optional[str] = None
 
 
 class SchedulePlanResponse(BaseModel):
@@ -399,6 +402,18 @@ async def create_schedule_plan(
         for i in range(0, len(items_to_insert), 50):
             batch = items_to_insert[i:i+50]
             repo.table_query("editai_schedule_items", "insert", data=batch)
+
+    # Persist per-clip captions to editai_clip_content (for V2 executor to read)
+    if request.captions:
+        for clip_id, caption_text in request.captions.items():
+            try:
+                repo.table_query(
+                    "editai_clip_content", "upsert",
+                    data={"clip_id": clip_id, "caption": caption_text},
+                    filters=QueryFilters(on_conflict="clip_id"),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to upsert caption for clip {clip_id}: {e}")
 
     # Launch background task
     _update_progress(job_id, 0, "Initializing schedule...", "running", 0, plan.total_clips)
