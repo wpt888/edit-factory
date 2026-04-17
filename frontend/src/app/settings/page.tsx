@@ -213,6 +213,12 @@ export default function SettingsPage() {
               }
               setPostizSource("profile")
             } else if (credentialsData.source === "env") {
+              if (credentialsData.api_url) {
+                setPostizUrl(credentialsData.api_url)
+              }
+              if (credentialsData.api_key) {
+                setPostizKey(credentialsData.api_key)
+              }
               setPostizSource("env")
             }
           } catch (credentialsError) {
@@ -913,13 +919,13 @@ export default function SettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {postizSource === "env" && !postizUrl && !postizKey && (
+          {postizSource === "env" && (
             <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3">
               <p className="text-sm font-medium text-foreground">
-                This profile has no Postiz credentials saved.
+                Postiz credentials are currently loaded from global `.env`.
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Backend fallback to global `.env` credentials is currently active. In a multi-tenant setup, save profile-specific Postiz credentials here to keep Nortea and Obsid separate.
+                These values are active for this profile right now. Save this form to store profile-specific Postiz credentials and stop relying on the shared fallback.
               </p>
             </div>
           )}
