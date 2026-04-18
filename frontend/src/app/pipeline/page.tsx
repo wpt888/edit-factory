@@ -59,6 +59,7 @@ import {
   RefreshCw,
   LayoutGrid,
   List,
+  Pencil,
 } from "lucide-react";
 import { usePolling } from "@/hooks";
 import { useProfile } from "@/contexts/profile-context";
@@ -2133,6 +2134,41 @@ function PipelinePage() {
     scriptAbortRef.current?.abort();
     scriptAbortRef.current = null;
     setIsGenerating(false);
+  };
+
+  // Create a pipeline with empty script slots so the user can author them by hand
+  // in Step 2 (each DebouncedTextarea is already editable). Reuses /pipeline/import
+  // which is the same endpoint the history sidebar uses to restore prior scripts.
+  const handleCreateManual = async () => {
+    if (isGenerating) return;
+    setError(null);
+    setIsGenerating(true);
+    try {
+      const emptyScripts = Array.from({ length: variantCount }, () => "");
+      const res = await apiPost("/pipeline/import", {
+        name: pipelineName.trim() || "Manual pipeline",
+        idea: idea.trim() || "Manual scripts",
+        context: stripEmbeddedProductBlocks(context) || "",
+        context_products: contextProducts,
+        scripts: emptyScripts,
+      }, { timeout: 60_000 });
+      const data = await res.json();
+      if (!isMountedRef.current) return;
+      setPipelineId(data.pipeline_id);
+      setScripts(emptyScripts);
+      setTotalSegmentDuration(0);
+      setStep(2);
+      fetchHistory();
+    } catch (err) {
+      handleApiError(err, "Error creating manual pipeline");
+      if (err instanceof ApiError) {
+        setError(err.detail || err.message || "Failed to create manual pipeline.");
+      } else {
+        setError("Network error. Please check if the backend is running.");
+      }
+    } finally {
+      if (isMountedRef.current) setIsGenerating(false);
+    }
   };
 
   // Step 2: Preview all matches
@@ -4564,15 +4600,27 @@ function PipelinePage() {
                     </Button>
                   </div>
                 ) : (
-                  <Button
-                    onClick={handleGenerate}
-                    disabled={!idea.trim()}
-                    className="w-full"
-                    size="lg"
-                  >
-                    <Sparkles className="h-4 w-4 mr-2" />
-                    Generate Scripts
-                  </Button>
+                  <div className="space-y-2">
+                    <Button
+                      onClick={handleGenerate}
+                      disabled={!idea.trim()}
+                      className="w-full"
+                      size="lg"
+                    >
+                      <Sparkles className="h-4 w-4 mr-2" />
+                      Generate Scripts
+                    </Button>
+                    <Button
+                      onClick={handleCreateManual}
+                      variant="outline"
+                      className="w-full"
+                      size="lg"
+                      title="Skip AI generation — create blank script slots to fill in yourself"
+                    >
+                      <Pencil className="h-4 w-4 mr-2" />
+                      Create Script Manually
+                    </Button>
+                  </div>
                 )}
               </CardContent>
             </Card>
