@@ -25,6 +25,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import { Progress } from "@/components/ui/progress";
 import { apiGet, apiGetWithRetry, apiPost, apiPut, apiPatch, apiDelete, API_URL, handleApiError, ApiError } from "@/lib/api";
 import {
   Loader2,
@@ -88,6 +89,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TimelineEditor, SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
+import { ThumbnailPicker, ThumbnailSelection } from "@/components/thumbnail-picker";
 import { VariantPreviewPlayer } from "@/components/variant-preview-player";
 import { SimplePipeline } from "@/components/simple-mode-pipeline";
 import type { PipelineMode } from "@/types/pipeline-presets";
@@ -819,6 +821,83 @@ export default function PipelinePageWrapper() {
   );
 }
 
+type ElevenCreditsProps = {
+  credits: {
+    label: string;
+    api_key_hint: string;
+    is_env_default: boolean;
+    tier: string;
+    characters_used: number;
+    character_limit: number;
+    characters_remaining: number;
+    usage_percent: number;
+    last_error: string | null;
+    last_checked_at: string | null;
+  } | null;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+};
+
+function ElevenCreditsBadge({ credits, loading, error, onRefresh }: ElevenCreditsProps) {
+  if (loading && !credits) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Loading credits...
+      </div>
+    );
+  }
+  if (error || !credits) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-muted-foreground">
+          {error || "No ElevenLabs account"}
+        </span>
+        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onRefresh} title="Retry">
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+        </Button>
+      </div>
+    );
+  }
+
+  const pct = credits.usage_percent;
+  const remainingPct = credits.character_limit > 0 ? 100 - pct : 0;
+  // green >25% remaining, amber 10-25%, red <10%
+  const color = remainingPct > 25 ? "text-emerald-500" : remainingPct > 10 ? "text-amber-500" : "text-red-500";
+
+  return (
+    <div className="flex items-center gap-3">
+      <div className="flex flex-col items-end gap-1">
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="text-[10px] uppercase">
+            {credits.tier}
+          </Badge>
+          <span className={`text-xs font-medium ${color}`}>
+            {credits.characters_remaining.toLocaleString()} chars left
+          </span>
+        </div>
+        <div className="w-40">
+          <Progress value={pct} className="h-1.5" />
+          <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
+            <span>{credits.characters_used.toLocaleString()}</span>
+            <span>{credits.character_limit.toLocaleString()}</span>
+          </div>
+        </div>
+      </div>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-6 w-6"
+        onClick={onRefresh}
+        title={`Refresh credits${credits.api_key_hint ? ` (${credits.api_key_hint})` : ""}`}
+      >
+        <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+      </Button>
+    </div>
+  );
+}
+
 function PipelinePage() {
   const { currentProfile } = useProfile();
   // Ref to avoid stale closure in debounced setTimeout callbacks
@@ -895,6 +974,49 @@ function PipelinePage() {
   const [scripts, setScripts] = useState<string[]>([]);
   const [approvedScripts, setApprovedScripts] = useState<Set<number>>(new Set());
   const [totalSegmentDuration, setTotalSegmentDuration] = useState<number>(0);
+
+  // ElevenLabs active-account credits (shown in Step 2)
+  type ElevenCredits = {
+    label: string;
+    api_key_hint: string;
+    is_env_default: boolean;
+    tier: string;
+    characters_used: number;
+    character_limit: number;
+    characters_remaining: number;
+    usage_percent: number;
+    last_error: string | null;
+    last_checked_at: string | null;
+  };
+  const [elevenCredits, setElevenCredits] = useState<ElevenCredits | null>(null);
+  const [elevenCreditsLoading, setElevenCreditsLoading] = useState(false);
+  const [elevenCreditsError, setElevenCreditsError] = useState<string | null>(null);
+
+  const fetchElevenCredits = useCallback(async () => {
+    setElevenCreditsLoading(true);
+    setElevenCreditsError(null);
+    try {
+      const res = await apiGet("/elevenlabs-accounts/credits");
+      const data = await res.json();
+      if (data.account) {
+        setElevenCredits(data.account);
+      } else {
+        setElevenCredits(null);
+        setElevenCreditsError(data.error || "No ElevenLabs account configured");
+      }
+    } catch (err) {
+      setElevenCredits(null);
+      setElevenCreditsError(err instanceof Error ? err.message : "Failed to load credits");
+    } finally {
+      setElevenCreditsLoading(false);
+    }
+  }, []);
+
+  // Auto-fetch ElevenLabs credits when the TTS step becomes active
+  useEffect(() => {
+    if (step === 2) fetchElevenCredits();
+  }, [step, fetchElevenCredits]);
+
 
   // Step 3: Preview
   const [previewVariant, setPreviewVariant] = useState<PreviewKey | null>(null);
@@ -1063,6 +1185,10 @@ function PipelinePage() {
 
   // Interstitial slides: keyed by variant index
   const [interstitialSlides, setInterstitialSlides] = useState<Record<PreviewKey, InterstitialSlide[]>>({});
+
+  // Per-variant thumbnail selection (becomes first frame of rendered video)
+  const [variantThumbnails, setVariantThumbnails] = useState<Record<PreviewKey, ThumbnailSelection>>({});
+  const [thumbnailPickerKey, setThumbnailPickerKey] = useState<PreviewKey | null>(null);
 
   // ── Subtitle settings state ───────────────────────────────────────────────
   // `subtitleSettings` is the DEFAULT style for this pipeline (loaded from the
@@ -1308,6 +1434,28 @@ function PipelinePage() {
           }
         } catch {
           // Old pipeline or no overrides — silent fallback
+        }
+
+        // Restore previews when landing on step 3+ (so variant cards are visible)
+        if (step >= 3) {
+          try {
+            const previewRes = await apiGet(`/pipeline/${data.pipeline_id}/restore-previews`);
+            const previewData = await previewRes.json();
+            if (isMountedRef.current && previewData.previews && Object.keys(previewData.previews).length > 0) {
+              const restoredPreviews: Record<string, PreviewData> = {};
+              for (const [key, val] of Object.entries(previewData.previews)) {
+                restoredPreviews[key] = val as PreviewData;
+              }
+              setPreviews(restoredPreviews);
+              if (previewData.available_segments?.length > 0) {
+                setAvailableSegments(previewData.available_segments);
+              }
+              // Auto-select all variants so user can render immediately
+              setSelectedVariants(new Set((data.scripts || []).map((_: string, i: number) => i)));
+            }
+          } catch {
+            // Previews not available — user can re-generate from step 2
+          }
         }
 
         // Navigate to step 2 if on step 1 (scripts are loaded)
@@ -1561,6 +1709,74 @@ function PipelinePage() {
     const override = subtitleOverrides[activeStyleKey];
     return !!override && Object.keys(override).length > 0;
   }, [subtitleOverrides, activeStyleKey]);
+
+  const getStylePreviewText = useCallback((styleKey: StyleKey): string | undefined => {
+    const targetVersion =
+      styleKey === "A" ? "A" : styleKey === "B" ? "B" : undefined;
+    const card =
+      previewCards.find((candidate) => candidate.visualVersion === targetVersion)
+      ?? previewCards[0];
+
+    if (!card) return undefined;
+
+    return (
+      extractPreviewSubtitleText(previews[card.key]?.srt_content)
+      ?? extractPreviewSubtitleText(ttsResults[card.baseIndex]?.srt_content)
+      ?? card.script?.trim()
+      ?? undefined
+    );
+  }, [previewCards, previews, ttsResults]);
+
+  // Auto-select a distinctive thumbnail per variant when previews change
+  useEffect(() => {
+    if (previewCards.length === 0) return;
+    const usedSegmentIds = new Set<string>();
+    const newThumbnails: Record<PreviewKey, ThumbnailSelection> = {};
+
+    for (const card of previewCards) {
+      // Skip if user manually selected a thumbnail for this variant
+      const existing = variantThumbnails[card.key];
+      if (existing && !existing.isAutoSelected) {
+        newThumbnails[card.key] = existing;
+        usedSegmentIds.add(existing.segmentId);
+        continue;
+      }
+
+      const preview = previews[card.key];
+      if (!preview?.matches) continue;
+
+      // Collect unique segments with thumbnails
+      const segsWithThumbs = preview.matches
+        .filter((m) => m.segment_id && m.thumbnail_path)
+        .reduce<{ id: string; thumb: string }[]>((acc, m) => {
+          if (!acc.some((s) => s.id === m.segment_id)) {
+            acc.push({ id: m.segment_id!, thumb: m.thumbnail_path! });
+          }
+          return acc;
+        }, []);
+
+      if (segsWithThumbs.length === 0) continue;
+
+      // Pick a segment not yet used by another variant (diversity)
+      const unused = segsWithThumbs.find((s) => !usedSegmentIds.has(s.id));
+      const picked = unused ?? segsWithThumbs[card.baseIndex % segsWithThumbs.length];
+
+      newThumbnails[card.key] = {
+        segmentId: picked.id,
+        imageUrl: picked.thumb,
+        isAutoSelected: true,
+      };
+      usedSegmentIds.add(picked.id);
+    }
+
+    // Only update if something changed
+    const changed = previewCards.some(
+      (card) =>
+        newThumbnails[card.key]?.segmentId !== variantThumbnails[card.key]?.segmentId ||
+        newThumbnails[card.key]?.imageUrl !== variantThumbnails[card.key]?.imageUrl
+    );
+    if (changed) setVariantThumbnails(newThumbnails);
+  }, [previews, previewCards]); // eslint-disable-line react-hooks/exhaustive-deps — variantThumbnails read intentionally from current value
 
   // Fetch product groups when source video selection changes
   useEffect(() => {
@@ -2096,13 +2312,28 @@ function PipelinePage() {
       }
     }
 
-    const filteredInterstitialSlides = Object.keys(interstitialSlides).length > 0
-      ? Object.fromEntries(
-          Object.entries(interstitialSlides)
-            .filter(([k]) => selectedPreviewCards.some(card => card.key === k))
-            .map(([k, v]) => [k, v.filter((s) => s.imageUrl)])
-            .filter(([, v]) => (v as InterstitialSlide[]).length > 0)
-        )
+    // Merge user interstitial slides with thumbnail slides (thumbnail = first frame)
+    const mergedInterstitialSlides: Record<string, InterstitialSlide[]> = {};
+    for (const card of selectedPreviewCards) {
+      const userSlides = (interstitialSlides[card.key] ?? []).filter((s) => s.imageUrl);
+      const thumb = variantThumbnails[card.key];
+      const thumbSlide: InterstitialSlide[] = thumb
+        ? [{
+            id: `thumb_${card.key}`,
+            afterMatchIndex: -1,
+            imageUrl: `${API_URL}/segments/files/${encodeURIComponent(thumb.imageUrl.split("/").pop() || thumb.imageUrl)}`,
+            duration: 0.75,
+            animation: "kenburns" as const,
+            kenBurnsDirection: "zoom-in" as const,
+          }]
+        : [];
+      const combined = [...thumbSlide, ...userSlides];
+      if (combined.length > 0) {
+        mergedInterstitialSlides[card.key] = combined;
+      }
+    }
+    const filteredInterstitialSlides = Object.keys(mergedInterstitialSlides).length > 0
+      ? mergedInterstitialSlides
       : undefined;
 
     const pipOverlays: Record<string, { image_url: string; position: string; size: string; animation: string }> = {};
@@ -2767,11 +2998,8 @@ function PipelinePage() {
       setSavePresetError("Preset name cannot be empty");
       return;
     }
-    // Resolve effective settings for the active Meta version (inline to avoid stale closure)
-    const override = subtitleOverrides[activeStyleKey];
-    const effective: SubtitleSettings = override && Object.keys(override).length > 0
-      ? { ...subtitleSettings, ...override }
-      : { ...subtitleSettings };
+    // Save the shared base subtitle settings (common to all variants).
+    const effective: SubtitleSettings = { ...subtitleSettings };
 
     setSavePresetSubmitting(true);
     setSavePresetError(null);
@@ -2794,7 +3022,7 @@ function PipelinePage() {
     } finally {
       setSavePresetSubmitting(false);
     }
-  }, [savePresetName, activeStyleKey, subtitleOverrides, subtitleSettings]);
+  }, [savePresetName, subtitleSettings]);
 
   // Load/refresh user-saved subtitle presets from the profile.
   const refreshUserSubtitlePresets = useCallback(async () => {
@@ -3454,6 +3682,8 @@ function PipelinePage() {
           srt_word_count: data.srt_word_count,
         }
       }));
+      // Credits consumed — refresh badge
+      fetchElevenCredits();
     } catch (err) {
       handleApiError(err, "TTS generation error");
       if (err instanceof ApiError && err.isTimeout) {
@@ -4403,10 +4633,23 @@ function PipelinePage() {
 
             {/* ElevenLabs model selector */}
             <Card>
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0">
                 <CardTitle className="text-lg">TTS Configuration</CardTitle>
+                <ElevenCreditsBadge
+                  credits={elevenCredits}
+                  loading={elevenCreditsLoading}
+                  error={elevenCreditsError}
+                  onRefresh={fetchElevenCredits}
+                />
               </CardHeader>
               <CardContent className="space-y-4">
+                {elevenCredits?.last_error && (
+                  <Alert variant="destructive">
+                    <AlertDescription className="text-xs">
+                      ElevenLabs error: {elevenCredits.last_error}
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <div className="space-y-2">
                   <Label htmlFor="tts-model">ElevenLabs Model</Label>
                   <Select value={elevenlabsModel} onValueChange={setElevenlabsModel}>
@@ -5501,17 +5744,36 @@ function PipelinePage() {
                         {userSubtitlePresets.map(preset => (
                           <DropdownMenuItem
                             key={preset.id}
-                            onClick={() =>
-                              handleVariantSubtitleChange(
-                                activeStyleKey,
-                                mergeSubtitleStylePreservingPlacement(
-                                  getSubtitleSettingsFor(activeStyleKey),
-                                  preset.settings
-                                )
-                              )
-                            }
+                            className="flex items-center justify-between gap-2"
+                            onClick={() => {
+                              // Apply preset to the shared base and clear per-variant overrides
+                              const merged = mergeSubtitleStylePreservingPlacement(
+                                subtitleSettings,
+                                preset.settings
+                              );
+                              setSubtitleSettings(merged);
+                              setSubtitleOverrides({});
+                              scheduleProfileSubtitleSave(merged);
+                              scheduleOverridesSave({});
+                            }}
                           >
-                            {preset.name}
+                            <span className="truncate">{preset.name}</span>
+                            <button
+                              className="ml-2 p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive shrink-0"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                const profileId = currentProfileIdRef.current;
+                                if (!profileId) return;
+                                try {
+                                  await apiDelete(`/profiles/${profileId}/subtitle-presets/${preset.id}`);
+                                  setUserSubtitlePresets(prev => prev.filter(p => p.id !== preset.id));
+                                } catch (err) {
+                                  console.error("Failed to delete preset:", err);
+                                }
+                              }}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
                           </DropdownMenuItem>
                         ))}
                       </DropdownMenuContent>
@@ -5545,6 +5807,7 @@ function PipelinePage() {
                         previewCards={previewCards}
                         isActive={activeStyleKey === "A"}
                         onSelect={() => setActiveStyleKey("A")}
+                        previewText={getStylePreviewText("A")}
                       />
                       <SubtitleStylePreviewPanel
                         styleKey="B"
@@ -5556,6 +5819,7 @@ function PipelinePage() {
                         previewCards={previewCards}
                         isActive={activeStyleKey === "B"}
                         onSelect={() => setActiveStyleKey("B")}
+                        previewText={getStylePreviewText("B")}
                       />
                     </>
                   ) : (
@@ -5567,6 +5831,7 @@ function PipelinePage() {
                       previewCards={previewCards}
                       isActive={true}
                       onSelect={() => setActiveStyleKey("default")}
+                      previewText={getStylePreviewText("default")}
                     />
                   )}
 
@@ -5679,6 +5944,50 @@ function PipelinePage() {
                         </span>
                       </div>
 
+                      {/* Thumbnail selector (becomes first frame of rendered video) */}
+                      {(() => {
+                        const thumb = variantThumbnails[card.key];
+                        const thumbUrl = thumb
+                          ? `${API_URL}/segments/files/${encodeURIComponent(thumb.imageUrl.split("/").pop() || thumb.imageUrl)}`
+                          : null;
+                        return (
+                          <div className="flex items-center gap-3 pb-2 border-b">
+                            {thumbUrl ? (
+                              <button
+                                onClick={() => setThumbnailPickerKey(card.key)}
+                                className={`w-[54px] h-[96px] rounded overflow-hidden border-2 flex-shrink-0 hover:opacity-80 transition-opacity ${
+                                  thumb?.isAutoSelected ? "border-green-500/50" : "border-blue-500"
+                                }`}
+                                title="Click to change thumbnail"
+                              >
+                                <img src={thumbUrl} alt="Thumbnail" className="w-full h-full object-cover" />
+                              </button>
+                            ) : (
+                              <div
+                                onClick={() => setThumbnailPickerKey(card.key)}
+                                className="w-[54px] h-[96px] rounded bg-muted border-2 border-dashed border-muted-foreground/30 flex items-center justify-center cursor-pointer hover:border-muted-foreground/50 flex-shrink-0"
+                              >
+                                <Film className="h-4 w-4 text-muted-foreground" />
+                              </div>
+                            )}
+                            <div className="flex flex-col gap-1">
+                              <span className="text-xs font-medium">Thumbnail</span>
+                              <span className="text-xs text-muted-foreground">
+                                {thumb ? (thumb.isAutoSelected ? "auto-selected" : "manual") : "none"}
+                              </span>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-6 text-xs px-2 w-fit"
+                                onClick={() => setThumbnailPickerKey(card.key)}
+                              >
+                                Change
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
                       {/* Full timeline editor — uses this variant's effective subtitle style */}
                       <TimelineEditor
                         matches={preview.matches}
@@ -5698,6 +6007,30 @@ function PipelinePage() {
                 );
               })}
             </div>
+
+            {/* Thumbnail picker dialog */}
+            <ThumbnailPicker
+              open={thumbnailPickerKey !== null}
+              onOpenChange={(open) => { if (!open) setThumbnailPickerKey(null); }}
+              currentThumbnail={thumbnailPickerKey ? variantThumbnails[thumbnailPickerKey] ?? null : null}
+              matchedSegments={thumbnailPickerKey ? (previews[thumbnailPickerKey]?.matches ?? []) : []}
+              onSelect={(segmentId, imageUrl) => {
+                if (!thumbnailPickerKey) return;
+                setVariantThumbnails(prev => ({
+                  ...prev,
+                  [thumbnailPickerKey]: { segmentId, imageUrl, isAutoSelected: false },
+                }));
+              }}
+              onResetAuto={() => {
+                if (!thumbnailPickerKey) return;
+                // Clear manual selection — useEffect will re-auto-select
+                setVariantThumbnails(prev => {
+                  const next = { ...prev };
+                  delete next[thumbnailPickerKey];
+                  return next;
+                });
+              }}
+            />
 
             {/* Variant preview player dialog */}
             {previewVariant !== null && pipelineId && currentProfile && (() => {
@@ -5746,13 +6079,8 @@ function PipelinePage() {
                 <DialogHeader>
                   <DialogTitle>Save subtitle preset</DialogTitle>
                   <DialogDescription>
-                    Save the current style of{" "}
-                    <span className="font-medium">
-                      {activeStyleKey === "default"
-                        ? "this pipeline"
-                        : `variant ${activeStyleKey} (${activeStyleKey === "A" ? "Instagram" : "Facebook"})`}
-                    </span>{" "}
-                    as a named preset. You can apply it to other variants later.
+                    Save the current shared subtitle style as a named preset.
+                    Applying a preset updates all variants at once.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-3 py-2">
@@ -6531,6 +6859,7 @@ function SubtitleStylePreviewPanel({
   previewCards,
   isActive,
   onSelect,
+  previewText,
 }: {
   styleKey: StyleKey;
   settings: SubtitleSettings;
@@ -6539,6 +6868,7 @@ function SubtitleStylePreviewPanel({
   previewCards: PreviewCard[];
   isActive: boolean;
   onSelect: () => void;
+  previewText?: string;
 }) {
   // Pick an arbitrary script variant that has the matching visualVersion so
   // the FFmpeg frame preview has a background frame to sample. Since the
@@ -6593,6 +6923,7 @@ function SubtitleStylePreviewPanel({
         compact={false}
         pipelineId={pipelineId}
         variantIndex={variantIndex}
+        previewText={previewText}
         visualVersion={visualVersion}
       />
     </div>
@@ -6610,5 +6941,27 @@ function mergeSubtitleStylePreservingPlacement(
     position: currentSettings.position,
     marginV: currentSettings.marginV,
   };
+}
+
+function extractPreviewSubtitleText(srtContent?: string): string | undefined {
+  if (!srtContent) return undefined;
+  const blocks = srtContent
+    .split(/\r?\n\r?\n/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+
+  for (const block of blocks) {
+    const lines = block
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .filter((line) => !/^\d+$/.test(line))
+      .filter((line) => !/^\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->/.test(line));
+    if (lines.length > 0) {
+      return lines.join(" ");
+    }
+  }
+
+  return undefined;
 }
 

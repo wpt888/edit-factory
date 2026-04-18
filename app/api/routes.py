@@ -123,8 +123,9 @@ async def get_usage_stats(
     }
 
     # ElevenLabs Usage — fetch from all accounts via account manager
+    # Auto-refreshes stale DB accounts (>5 min old) so credits always show
     try:
-        accounts = manager.list_accounts(profile.profile_id)
+        accounts = manager.list_accounts_with_refresh(profile.profile_id)
         all_accounts = []
         primary_account = None
 
@@ -171,7 +172,9 @@ async def get_usage_stats(
         result["errors"].append("No ElevenLabs API keys configured")
 
     # Gemini
-    if settings.gemini_api_key:
+    from app.services.api_key_vault import get_vault_manager
+    gemini_key = get_vault_manager().get_api_key_or_default(profile.profile_id, "gemini")
+    if gemini_key:
         result["gemini"] = {
             "configured": True,
             "model": settings.gemini_model,
@@ -200,7 +203,9 @@ async def get_gemini_status(profile: ProfileContext = Depends(get_profile_contex
         "billing_url": "https://console.cloud.google.com/billing"
     }
 
-    if not settings.gemini_api_key:
+    from app.services.api_key_vault import get_vault_manager
+    gemini_key = get_vault_manager().get_api_key_or_default(profile.profile_id, "gemini")
+    if not gemini_key:
         result["error"] = "Gemini API key not configured"
         return result
 
@@ -212,7 +217,7 @@ async def get_gemini_status(profile: ProfileContext = Depends(get_profile_contex
         from google import genai
         import asyncio
 
-        client = genai.Client(api_key=settings.gemini_api_key)
+        client = genai.Client(api_key=gemini_key)
         response = await asyncio.to_thread(
             client.models.generate_content,
             model=settings.gemini_model,
@@ -1320,6 +1325,7 @@ async def serve_file(file_path: str, download: bool = False, profile: ProfileCon
     from urllib.parse import unquote
     import os
     decoded_path = unquote(file_path)
+    decoded_path = decoded_path.replace("\\", "/")
 
     # Security: only allow files from output directory
     full_path = Path(decoded_path)

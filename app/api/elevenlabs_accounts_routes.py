@@ -22,9 +22,35 @@ class AddAccountRequest(BaseModel):
     api_key: str
 
 
+class ValidateAccountRequest(BaseModel):
+    api_key: str
+
+
 class UpdateAccountRequest(BaseModel):
     label: Optional[str] = None
     is_active: Optional[bool] = None
+
+
+@router.post("/validate")
+async def validate_elevenlabs_key(
+    body: ValidateAccountRequest,
+    ctx: ProfileContext = Depends(get_profile_context),
+):
+    """Validate an ElevenLabs API key without persisting it. Auth required."""
+    manager = get_account_manager()
+    try:
+        sub_info = await manager.check_subscription_async(body.api_key)
+        return {
+            "connected": True,
+            "tier": sub_info.get("tier"),
+            "character_limit": sub_info.get("character_limit"),
+            "character_count": sub_info.get("character_count"),
+        }
+    except ValueError as e:
+        return {"connected": False, "error": str(e)}
+    except Exception as e:
+        logger.warning(f"ElevenLabs validation error: {e}")
+        return {"connected": False, "error": str(e)[:200]}
 
 
 @router.get("/")
@@ -33,6 +59,47 @@ async def list_accounts(ctx: ProfileContext = Depends(get_profile_context)):
     manager = get_account_manager()
     accounts = manager.list_accounts(ctx.profile_id)
     return {"accounts": accounts}
+
+
+@router.get("/credits")
+async def get_active_credits(ctx: ProfileContext = Depends(get_profile_context)):
+    """
+    Return credits for the active (primary) ElevenLabs account.
+
+    Lightweight endpoint intended for the pipeline TTS step — callers get
+    just the primary account's quota without loading the full /usage
+    summary. Auto-refreshes stale DB rows via the 5-minute TTL cache.
+    """
+    manager = get_account_manager()
+    try:
+        accounts = manager.list_accounts_with_refresh(ctx.profile_id)
+    except Exception as e:
+        logger.warning(f"Failed to list accounts for credits endpoint: {e}")
+        return {"account": None, "error": str(e)[:200]}
+
+    if not accounts:
+        return {"account": None, "error": "No ElevenLabs accounts configured"}
+
+    primary = next((a for a in accounts if a.get("is_primary")), None) or accounts[0]
+
+    chars_used = primary.get("characters_used") or 0
+    chars_limit = primary.get("character_limit") or 0
+    chars_remaining = chars_limit - chars_used if chars_limit else 0
+    usage_pct = round((chars_used / chars_limit * 100), 1) if chars_limit > 0 else 0
+
+    return {"account": {
+        "id": primary.get("id"),
+        "label": primary.get("label", "Unknown"),
+        "api_key_hint": primary.get("api_key_hint", ""),
+        "is_env_default": primary.get("is_env_default", False),
+        "tier": primary.get("tier") or "unknown",
+        "characters_used": chars_used,
+        "character_limit": chars_limit,
+        "characters_remaining": chars_remaining,
+        "usage_percent": usage_pct,
+        "last_error": primary.get("last_error"),
+        "last_checked_at": primary.get("last_checked_at"),
+    }}
 
 
 @router.post("/", status_code=201)

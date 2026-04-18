@@ -325,6 +325,58 @@ class ElevenLabsAccountManager:
             entry.pop("api_key_encrypted", None)
             masked.append(entry)
 
+        masked = self._append_env_account(accounts, masked)
+        return masked
+
+    def list_accounts_with_refresh(self, profile_id: str, ttl_seconds: int = 300) -> List[dict]:
+        """
+        Like list_accounts, but auto-refreshes any DB account whose
+        last_checked_at is missing or older than ttl_seconds.
+
+        Mirrors the 5-minute TTL pattern already used for the .env synthetic
+        account so credits stay fresh on /usage without requiring a manual
+        refresh click.
+        """
+        import time
+        from datetime import datetime
+
+        accounts = self._fetch_accounts_from_db(profile_id)
+        self._set_cached_accounts(profile_id, accounts)
+
+        now = time.time()
+        masked = []
+        for a in accounts:
+            entry = {**a}
+            entry.pop("api_key_encrypted", None)
+
+            needs_refresh = True
+            last_checked = entry.get("last_checked_at")
+            if last_checked:
+                try:
+                    # last_checked_at is an ISO8601 string
+                    ts = datetime.fromisoformat(str(last_checked).replace("Z", "+00:00")).timestamp()
+                    if (now - ts) < ttl_seconds:
+                        needs_refresh = False
+                except Exception:
+                    needs_refresh = True
+
+            if needs_refresh and entry.get("id") and entry.get("is_active", True):
+                try:
+                    refreshed = self.update_subscription_info(profile_id, entry["id"])
+                    refreshed.pop("api_key_encrypted", None)
+                    entry = refreshed
+                except Exception as e:
+                    logger.warning(f"Auto-refresh failed for account {entry.get('id')}: {e}")
+                    entry["last_error"] = str(e)[:200]
+
+            masked.append(entry)
+
+        masked = self._append_env_account(accounts, masked)
+        return masked
+
+    def _append_env_account(self, db_accounts: List[dict], masked: List[dict]) -> List[dict]:
+        """Append synthetic .env account entry (shared by list_accounts variants)."""
+
         # Append synthetic entry for .env key so the UI always shows it
         env_key = self.settings.elevenlabs_api_key
         if env_key:
@@ -334,7 +386,7 @@ class ElevenLabsAccountManager:
                 "id": "__env__",
                 "label": ".env default",
                 "api_key_hint": f"...{env_key[-4:]}" if len(env_key) >= 4 else "....",
-                "is_primary": len(accounts) == 0,
+                "is_primary": len(db_accounts) == 0,
                 "is_active": True,
                 "is_env_default": True,
                 "sort_order": 999,
