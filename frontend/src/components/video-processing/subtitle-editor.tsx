@@ -30,7 +30,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
-import { Type, Loader2, CheckCircle2 } from "lucide-react";
+import { Type, Loader2, CheckCircle2, Maximize2 } from "lucide-react";
 import {
   SubtitleSettings,
   SubtitleLine,
@@ -121,9 +121,13 @@ export function SubtitleEditor({
   const [ffmpegPreviewUrl, setFfmpegPreviewUrl] = useState<string | null>(null);
   const [ffmpegLoading, setFfmpegLoading] = useState(false);
   const [showCssPreview, setShowCssPreview] = useState(true);
+  const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const ffmpegTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const abortRef = useRef<AbortController>(undefined);
   const prevFingerprint = useRef("");
+  const previewOverlayText = previewText?.trim()
+    || (subtitleLines.length > 0 ? subtitleLines[0].text : "")
+    || "Sample subtitle text";
 
   // Debounced FFmpeg frame preview fetch
   useEffect(() => {
@@ -135,6 +139,10 @@ export function SubtitleEditor({
     if (fingerprint === prevFingerprint.current) return;
 
     // Keep the preview responsive while the debounced FFmpeg frame catches up.
+    // We intentionally retain the previous FFmpeg frame as a background so the
+    // video thumbnail stays visible; the live CSS overlay (same text, new size)
+    // sits on top and largely covers the stale burned-in text until the new
+    // frame arrives.
     setShowCssPreview(true);
 
     // Clear previous timer and abort in-flight request
@@ -152,7 +160,10 @@ export function SubtitleEditor({
         const versionQuery = visualVersion ? `?visual_version=${encodeURIComponent(visualVersion)}` : "";
         const resp = await apiPost(
           `/pipeline/subtitle-frame-preview/${pipelineId}/${variantIndex}${versionQuery}`,
-          { subtitle_settings: settings },
+          {
+            subtitle_settings: settings,
+            sample_text: previewOverlayText,
+          },
           { signal: controller.signal, timeout: 20000 }
         );
         const blob = await resp.blob();
@@ -177,14 +188,21 @@ export function SubtitleEditor({
     return () => {
       if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
     };
-  }, [settings, pipelineId, variantIndex, visualVersion]);
+  }, [settings, pipelineId, previewOverlayText, variantIndex, visualVersion]);
+
+  // Mirror the active blob URL into a ref so the unmount cleanup below can
+  // read the *latest* value — a plain state capture with [] deps would freeze
+  // at the initial null and leak the final URL.
+  const ffmpegPreviewUrlRef = useRef<string | null>(null);
+  useEffect(() => {
+    ffmpegPreviewUrlRef.current = ffmpegPreviewUrl;
+  }, [ffmpegPreviewUrl]);
 
   // Cleanup blob URL on unmount
   useEffect(() => {
     return () => {
-      if (ffmpegPreviewUrl) URL.revokeObjectURL(ffmpegPreviewUrl);
+      if (ffmpegPreviewUrlRef.current) URL.revokeObjectURL(ffmpegPreviewUrlRef.current);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Update a single setting (manual change clears preset selection)
@@ -259,10 +277,6 @@ export function SubtitleEditor({
     return ((settings.glowBlur ?? 0) / ASS_REF_HEIGHT) * previewHeight;
   }, [settings.glowBlur, previewHeight]);
 
-  const previewOverlayText = previewText?.trim()
-    || (subtitleLines.length > 0 ? subtitleLines[0].text : "")
-    || "Sample subtitle text";
-
   // The preview panel rendered as a standalone block
   const previewPanel = showPreview ? (
     <div className="space-y-3">
@@ -330,8 +344,75 @@ export function SubtitleEditor({
               <Loader2 className="h-4 w-4 animate-spin text-white/60" />
             </div>
           )}
+          <button
+            type="button"
+            onClick={() => setFullscreenOpen(true)}
+            className="absolute top-2 left-2 z-10 rounded bg-black/60 hover:bg-black/80 p-1.5 text-white/80 hover:text-white transition"
+            title="Expand preview"
+            aria-label="Expand preview"
+          >
+            <Maximize2 className="h-4 w-4" />
+          </button>
         </div>
       </div>
+
+      <Dialog open={fullscreenOpen} onOpenChange={setFullscreenOpen}>
+        <DialogContent className="max-w-[min(95vw,900px)] p-0 bg-black border-0">
+          <DialogHeader className="sr-only">
+            <DialogTitle>Subtitle Preview (Fullscreen)</DialogTitle>
+            <DialogDescription>Enlarged subtitle preview view</DialogDescription>
+          </DialogHeader>
+          <div
+            className="relative bg-black rounded-lg overflow-hidden mx-auto"
+            style={{
+              aspectRatio: `${videoInfo.width || 1080} / ${videoInfo.height || 1920}`,
+              height: "min(85vh, 900px)",
+              containerType: "size",
+            }}
+          >
+            {ffmpegPreviewUrl ? (
+              <img
+                src={ffmpegPreviewUrl}
+                alt="Subtitle preview"
+                className="absolute inset-0 w-full h-full object-contain"
+              />
+            ) : (
+              <div className="absolute inset-0 bg-gradient-to-br from-gray-700 via-gray-800 to-gray-900" />
+            )}
+            {showCssPreview && (
+              <div
+                className="absolute left-0 right-0 text-center px-6 pointer-events-none"
+                style={{
+                  fontFamily: settings.fontFamily,
+                  fontSize: `${(settings.fontSize / ASS_REF_HEIGHT) * 100}cqh`,
+                  color: settings.textColor,
+                  opacity: (settings.opacity ?? 100) / 100,
+                  WebkitTextStroke: `${(settings.outlineWidth / ASS_REF_HEIGHT) * 100}cqh ${settings.outlineColor}`,
+                  paintOrder: "stroke fill",
+                  textShadow: [
+                    (settings.shadowDepth ?? 0) > 0
+                      ? `0 ${((settings.shadowDepth ?? 0) / ASS_REF_HEIGHT) * 100}cqh ${(((settings.shadowDepth ?? 0) * 2) / ASS_REF_HEIGHT) * 100}cqh ${settings.shadowColor ?? "rgba(0,0,0,0.8)"}`
+                      : "0 1px 3px rgba(0,0,0,0.85)",
+                    settings.enableGlow && (settings.glowBlur ?? 0) > 0
+                      ? `0 0 ${((settings.glowBlur ?? 0) / ASS_REF_HEIGHT) * 100}cqh ${settings.outlineColor}`
+                      : "",
+                  ].filter(Boolean).join(", "),
+                  fontWeight: 700,
+                  top: `${settings.positionY}%`,
+                  transform: "translateY(-50%)",
+                  ...(settings.borderStyle === 3 ? {
+                    backgroundColor: "rgba(0, 0, 0, 0.7)",
+                    padding: "0.5cqh 1cqh",
+                    borderRadius: "4px",
+                  } : {}),
+                }}
+              >
+                {previewOverlayText}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Info */}
       <div className="text-center space-y-1">
