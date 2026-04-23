@@ -1024,6 +1024,8 @@ function PipelinePage() {
   const [previewingIndex, setPreviewingIndex] = useState<number | null>(null);
   const [previews, setPreviews] = useState<Record<PreviewKey, PreviewData>>({});
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // Scroll target: after voice-over generation, bring user back to top of Step 2 for review
+  const step2HeaderRef = useRef<HTMLHeadingElement>(null);
   const [elevenlabsModel, setElevenlabsModel] = useState("eleven_flash_v2_5");
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voiceId, setVoiceId] = useState("");
@@ -2187,6 +2189,12 @@ function PipelinePage() {
     const newPreviews: Record<PreviewKey, PreviewData> = {};
     const cardsToPreview = previewCards;
 
+    // Snapshot ready-count BEFORE the loop. ttsResultsRef is mutated during the loop
+    // (setTtsResults triggers re-renders that update the ref), so evaluating this after
+    // the loop would always be "all ready" and trigger auto-advance incorrectly.
+    const initialReadyCount = Object.values(ttsResultsRef.current).filter(r => !r.generating && !r.stale).length;
+    const skipReview = initialReadyCount === scripts.length && scripts.length > 0;
+
     // FE-05: Wrap in try/finally to guarantee setPreviewingIndex(null) is always called
     try {
       for (let i = 0; i < cardsToPreview.length; i++) {
@@ -2263,12 +2271,14 @@ function PipelinePage() {
       const allIndices = new Set(scripts.map((_, i) => i));
       setSelectedVariants(allIndices);
 
-      // Auto-advance to Step 3 when all TTS was already ready (user clicked "Generate Previews", not "Generate Voice-Overs")
-      const readyCount = Object.values(ttsResultsRef.current).filter(r => !r.generating && !r.stale).length;
-      if (readyCount === scripts.length && scripts.length > 0 && Object.keys(newPreviews).length > 0) {
+      // Auto-advance to Step 3 only when the user clicked "Generate Previews" (TTS was
+      // already ready at start). When the user clicked "Generate Voice-Overs", stay on
+      // Step 2 and scroll back to the top so they can review the newly-generated audio.
+      if (skipReview && Object.keys(newPreviews).length > 0) {
         setStep(3);
+      } else if (Object.keys(newPreviews).length > 0) {
+        step2HeaderRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       }
-      // Otherwise stay on Step 2 so user can review voice-overs before proceeding
     } finally {
       if (isMountedRef.current) setPreviewingIndex(null);
     }
@@ -4632,7 +4642,7 @@ function PipelinePage() {
         {step === 2 && (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-semibold">Review Scripts ({scripts.length})</h2>
+              <h2 ref={step2HeaderRef} className="text-2xl font-semibold scroll-mt-20">Review Scripts ({scripts.length})</h2>
               <div className="flex items-center gap-2">
                 {regeneratingAllScripts ? (
                   <Button
@@ -5648,13 +5658,13 @@ function PipelinePage() {
             )}
             {Object.keys(previews).length > 0 && (
               <Button
-                variant="outline"
+                variant="default"
                 onClick={() => { setStep(3); setPreviewError(null); }}
-                className="w-full"
+                className="w-full bg-green-600 hover:bg-green-700 text-white"
                 size="lg"
               >
-                <ArrowRight className="h-4 w-4 mr-2" />
-                Continue to Preview (already generated)
+                <CheckCircle className="h-4 w-4 mr-2" />
+                Voice-overs ready — Continue to Preview
               </Button>
             )}
             {sourceVideos.length > 0 && selectedSourceIds.size === 0 && (
