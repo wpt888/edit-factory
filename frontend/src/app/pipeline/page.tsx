@@ -5612,7 +5612,7 @@ function PipelinePage() {
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                         {allTtsReady
                           ? `Generating preview ${previewingIndex + 1} of ${previewTargetCount}...`
-                          : `Generating voice-over ${previewingIndex + 1} of ${previewTargetCount}...`}
+                          : `Generating voice-over ${(previewCards[previewingIndex]?.baseIndex ?? previewingIndex) + 1} of ${previewTargetCount}...`}
                       </>
                     ) : (
                       <>
