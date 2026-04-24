@@ -38,6 +38,18 @@ import { API_URL } from "@/lib/api";
 import { formatTimeShort as formatTime } from "@/lib/utils";
 import type { SubtitleSettings } from "@/types/video-processing";
 
+const compactPreviewFrameStyle: React.CSSProperties = {
+  aspectRatio: "9 / 16",
+  width: "min(180px, 100%)",
+  maxWidth: "100%",
+};
+
+const expandedPreviewFrameStyle: React.CSSProperties = {
+  aspectRatio: "9 / 16",
+  width: "min(421.875px, 100%)",
+  maxWidth: "100%",
+};
+
 // MatchPreview interface (mirrors pipeline/page.tsx)
 export interface MatchPreview {
   srt_index: number;
@@ -1066,7 +1078,7 @@ export function TimelineEditor({
               <div
                 ref={previewContainerRef}
                 className="relative mx-auto bg-black flex items-center justify-center"
-                style={{ aspectRatio: "9/16", maxHeight: "360px" }}
+                style={compactPreviewFrameStyle}
               >
                 {uniqueSourceVideoIds.map((sourceVideoId) => (
                   <video
@@ -1108,32 +1120,37 @@ export function TimelineEditor({
                   // Use same proportional scaling as subtitle-editor.tsx
                   // ASS PlayRes reference height = 1920; scale to actual preview container height
                   const ASS_REF_HEIGHT = 1920;
-                  const containerH = previewContainerRef.current?.clientHeight ?? 360;
+                  const containerH = previewContainerRef.current?.clientHeight ?? 320;
                   const scale = containerH / ASS_REF_HEIGHT;
                   const fontSize = Math.max(8, (subtitleSettings?.fontSize ?? 48) * scale);
                   const outlineW = (subtitleSettings?.outlineWidth ?? 3) * scale;
                   const shadowDepth = ((subtitleSettings?.shadowDepth ?? 0)) * scale;
                   const glowBlur = ((subtitleSettings?.glowBlur ?? 0)) * scale;
+                  const opacity = Math.max(0, Math.min(100, subtitleSettings?.opacity ?? 100)) / 100;
+                  const baseShadow = shadowDepth > 0
+                    ? `0 ${shadowDepth}px ${Math.max(1, shadowDepth * 2)}px ${subtitleSettings?.shadowColor ?? "#000000"}`
+                    : "0 1px 3px rgba(0,0,0,0.85)";
+                  const glowShadow = subtitleSettings?.enableGlow && glowBlur > 0
+                    ? `, 0 0 ${glowBlur}px ${subtitleSettings?.outlineColor ?? "#000000"}`
+                    : "";
+                  const positionY = subtitleSettings?.positionY ?? 85;
+                  const positionStyle: React.CSSProperties = positionY <= 20
+                    ? { top: `${positionY}%` }
+                    : { top: `${positionY}%`, transform: "translateY(-50%)" };
 
                   return (
                     <div
-                      className="absolute left-2 right-2 text-center pointer-events-none"
-                      style={{
-                        top: `${subtitleSettings?.positionY ?? 85}%`,
-                        transform: "translateY(-50%)",
-                      }}
+                      className="absolute left-2 right-2 z-[2] text-center pointer-events-none"
+                      style={positionStyle}
                     >
                       <p
-                        className="font-semibold px-2 py-1 inline-block"
+                        className="inline-block px-2 py-1 font-semibold leading-tight"
                         style={{
                           fontFamily: subtitleSettings?.fontFamily ?? "var(--font-montserrat), Montserrat, sans-serif",
                           fontSize: `${fontSize}px`,
                           color: subtitleSettings?.textColor ?? "#FFFFFF",
-                          textShadow: subtitleSettings?.enableGlow && glowBlur > 0
-                            ? `0 ${Math.max(1, shadowDepth)}px ${Math.max(3, shadowDepth * 2)}px rgba(0,0,0,0.85), 0 0 ${glowBlur}px rgba(0,0,0,0.7)`
-                            : shadowDepth > 0
-                              ? `0 ${shadowDepth}px ${shadowDepth * 2}px rgba(0,0,0,0.85)`
-                              : "0 1px 3px rgba(0,0,0,0.85)",
+                          opacity,
+                          textShadow: `${baseShadow}${glowShadow}`,
                           WebkitTextStroke: outlineW > 0
                             ? `${outlineW}px ${subtitleSettings?.outlineColor ?? "#000000"}`
                             : undefined,
@@ -1229,7 +1246,7 @@ export function TimelineEditor({
                   <div
                     ref={previewContainerRef}
                     className="relative mx-auto bg-black flex items-center justify-center"
-                    style={{ aspectRatio: "9/16", maxHeight: "75vh" }}
+                    style={expandedPreviewFrameStyle}
                   >
                     {uniqueSourceVideoIds.map((sourceVideoId) => (
                       <video
@@ -1272,26 +1289,31 @@ export function TimelineEditor({
                       const outlineW = (subtitleSettings?.outlineWidth ?? 3) * scale;
                       const shadowDepth = ((subtitleSettings?.shadowDepth ?? 0)) * scale;
                       const glowBlur = ((subtitleSettings?.glowBlur ?? 0)) * scale;
+                      const opacity = Math.max(0, Math.min(100, subtitleSettings?.opacity ?? 100)) / 100;
+                      const baseShadow = shadowDepth > 0
+                        ? `0 ${shadowDepth}px ${Math.max(1, shadowDepth * 2)}px ${subtitleSettings?.shadowColor ?? "#000000"}`
+                        : "0 1px 3px rgba(0,0,0,0.85)";
+                      const glowShadow = subtitleSettings?.enableGlow && glowBlur > 0
+                        ? `, 0 0 ${glowBlur}px ${subtitleSettings?.outlineColor ?? "#000000"}`
+                        : "";
+                      const positionY = subtitleSettings?.positionY ?? 85;
+                      const positionStyle: React.CSSProperties = positionY <= 20
+                        ? { top: `${positionY}%` }
+                        : { top: `${positionY}%`, transform: "translateY(-50%)" };
 
                       return (
                         <div
-                          className="absolute left-4 right-4 text-center pointer-events-none"
-                          style={{
-                            top: `${subtitleSettings?.positionY ?? 85}%`,
-                            transform: "translateY(-50%)",
-                          }}
+                          className="absolute left-2 right-2 z-[2] text-center pointer-events-none"
+                          style={positionStyle}
                         >
                           <p
-                            className="font-semibold px-3 py-1.5 inline-block"
+                            className="inline-block px-2 py-1 font-semibold leading-tight"
                             style={{
                               fontFamily: subtitleSettings?.fontFamily ?? "var(--font-montserrat), Montserrat, sans-serif",
                               fontSize: `${fontSize}px`,
                               color: subtitleSettings?.textColor ?? "#FFFFFF",
-                              textShadow: subtitleSettings?.enableGlow && glowBlur > 0
-                                ? `0 ${Math.max(1, shadowDepth)}px ${Math.max(3, shadowDepth * 2)}px rgba(0,0,0,0.85), 0 0 ${glowBlur}px rgba(0,0,0,0.7)`
-                                : shadowDepth > 0
-                                  ? `0 ${shadowDepth}px ${shadowDepth * 2}px rgba(0,0,0,0.85)`
-                                  : "0 1px 3px rgba(0,0,0,0.85)",
+                              opacity,
+                              textShadow: `${baseShadow}${glowShadow}`,
                               WebkitTextStroke: outlineW > 0
                                 ? `${outlineW}px ${subtitleSettings?.outlineColor ?? "#000000"}`
                                 : undefined,

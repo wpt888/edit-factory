@@ -591,9 +591,16 @@ async def update_subtitle_settings(
 # materializing a known style into a variant quickly.
 
 class UserSubtitlePresetCreate(BaseModel):
-    """Payload for creating a new user-saved subtitle preset."""
+    """Payload for creating a new user-saved subtitle preset.
+
+    `settings` is the shared/default style. `settingsA` and `settingsB` are
+    optional per-Meta-variant overrides, included only when the user had an
+    explicit override for that tab at save time.
+    """
     name: str
     settings: Dict[str, Any]
+    settingsA: Optional[Dict[str, Any]] = None
+    settingsB: Optional[Dict[str, Any]] = None
 
 
 @router.get("/{profile_id}/subtitle-presets")
@@ -657,6 +664,10 @@ async def create_user_subtitle_preset(
             "created_at": datetime.now(timezone.utc).isoformat(),
             "settings": body.settings,
         }
+        if body.settingsA:
+            new_preset["settingsA"] = body.settingsA
+        if body.settingsB:
+            new_preset["settingsB"] = body.settingsB
         existing.append(new_preset)
 
         try:

@@ -3042,8 +3042,10 @@ function PipelinePage() {
     [scheduleOverridesSave, scheduleProfileSubtitleSave, subtitleSettings]
   );
 
-  // Submit a "Save as preset" — POSTs the active key's effective settings to
-  // /profiles/{id}/subtitle-presets and refreshes the list on success.
+  // Submit a "Save as preset" — POSTs the shared style plus any explicit A/B
+  // overrides to /profiles/{id}/subtitle-presets and refreshes the list on
+  // success. A/B overrides are included only when they have real content, so
+  // tabs the user never touched don't freeze the default into the preset.
   const handleSubmitSavePreset = useCallback(async () => {
     const profileId = currentProfileIdRef.current;
     if (!profileId) {
@@ -3055,18 +3057,32 @@ function PipelinePage() {
       setSavePresetError("Preset name cannot be empty");
       return;
     }
-    // Save what the user sees: base ⊕ active-tab override. If they've been
-    // editing the A or B tab, that tab's overrides must be captured or the
-    // preset won't reflect the on-screen styling when reapplied.
-    const effective: SubtitleSettings = getSubtitleSettingsFor(activeStyleKey);
+
+    const overrideA = subtitleOverrides["A"];
+    const overrideB = subtitleOverrides["B"];
+    const hasOverrideA = !!overrideA && Object.keys(overrideA).length > 0;
+    const hasOverrideB = !!overrideB && Object.keys(overrideB).length > 0;
+
+    const payload: {
+      name: string;
+      settings: SubtitleSettings;
+      settingsA?: SubtitleSettings;
+      settingsB?: SubtitleSettings;
+    } = {
+      name: trimmedName,
+      settings: subtitleSettings,
+    };
+    if (hasOverrideA) {
+      payload.settingsA = { ...subtitleSettings, ...overrideA };
+    }
+    if (hasOverrideB) {
+      payload.settingsB = { ...subtitleSettings, ...overrideB };
+    }
 
     setSavePresetSubmitting(true);
     setSavePresetError(null);
     try {
-      await apiPost(`/profiles/${profileId}/subtitle-presets`, {
-        name: trimmedName,
-        settings: effective,
-      });
+      await apiPost(`/profiles/${profileId}/subtitle-presets`, payload);
       // Refresh the dropdown list
       const res = await apiGetWithRetry(`/profiles/${profileId}/subtitle-presets`);
       const data = await res.json();
@@ -3081,7 +3097,7 @@ function PipelinePage() {
     } finally {
       setSavePresetSubmitting(false);
     }
-  }, [savePresetName, activeStyleKey, getSubtitleSettingsFor]);
+  }, [savePresetName, subtitleSettings, subtitleOverrides]);
 
   // Load/refresh user-saved subtitle presets from the profile.
   const refreshUserSubtitlePresets = useCallback(async () => {
@@ -5817,15 +5833,34 @@ function PipelinePage() {
                             key={preset.id}
                             className="flex items-center justify-between gap-2"
                             onClick={() => {
-                              // Apply preset to the shared base and clear per-variant overrides
-                              const merged = mergeSubtitleStylePreservingPlacement(
+                              // Apply the whole preset: shared default plus any
+                              // per-Meta-variant overrides stored at save time.
+                              // Tabs the preset doesn't specify get their
+                              // override cleared so they fall back to default.
+                              const mergedDefault = mergeSubtitleStylePreservingPlacement(
                                 subtitleSettings,
                                 preset.settings
                               );
-                              setSubtitleSettings(merged);
-                              setSubtitleOverrides({});
-                              scheduleProfileSubtitleSave(merged);
-                              scheduleOverridesSave({});
+                              setSubtitleSettings(mergedDefault);
+                              scheduleProfileSubtitleSave(mergedDefault);
+
+                              setSubtitleOverrides(prev => {
+                                const next: typeof prev = {};
+                                if (preset.settingsA) {
+                                  next["A"] = mergeSubtitleStylePreservingPlacement(
+                                    prev["A"] ? { ...subtitleSettings, ...prev["A"] } : subtitleSettings,
+                                    preset.settingsA
+                                  );
+                                }
+                                if (preset.settingsB) {
+                                  next["B"] = mergeSubtitleStylePreservingPlacement(
+                                    prev["B"] ? { ...subtitleSettings, ...prev["B"] } : subtitleSettings,
+                                    preset.settingsB
+                                  );
+                                }
+                                scheduleOverridesSave(next);
+                                return next;
+                              });
                             }}
                           >
                             <span className="truncate">{preset.name}</span>
@@ -6135,7 +6170,7 @@ function PipelinePage() {
               );
             })()}
 
-            {/* "Save as preset" dialog — captures the active variant's effective style */}
+            {/* "Save as preset" dialog — captures shared default + any A/B overrides. */}
             <Dialog
               open={savePresetDialogOpen}
               onOpenChange={(open) => {
@@ -6150,8 +6185,8 @@ function PipelinePage() {
                 <DialogHeader>
                   <DialogTitle>Save subtitle preset</DialogTitle>
                   <DialogDescription>
-                    Save the current shared subtitle style as a named preset.
-                    Applying a preset updates all variants at once.
+                    Saves the shared default plus any explicit Meta A / Meta B
+                    overrides. Applying the preset restores all of them at once.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-3 py-2">
@@ -6744,51 +6779,7 @@ function PipelinePage() {
                             </div>
                           ) : (
                             <>
-                              {historyScripts.map((script, idx) => {
-                                const previewInf = historyPreviewInfo[String(idx)];
-                                const hasAudio = previewInf?.has_audio;
-                                const audioKey = `${item.pipeline_id}-${idx}`;
-                                const isPlaying = playingAudio === audioKey;
-
-                                return (
-                                  <div key={idx} className="flex items-start gap-2">
-                                    <Checkbox
-                                      checked={historySelectedScripts.has(idx)}
-                                      onCheckedChange={() => {
-                                        setHistorySelectedScripts(prev => {
-                                          const next = new Set(prev);
-                                          if (next.has(idx)) next.delete(idx);
-                                          else next.add(idx);
-                                          return next;
-                                        });
-                                      }}
-                                      className="mt-0.5"
-                                    />
-                                    <p className="text-xs text-muted-foreground line-clamp-3 flex-1">
-                                      {script}
-                                    </p>
-                                    {hasAudio && (
-                                      <button
-                                        onClick={(e) => { e.stopPropagation(); handlePlayAudio(item.pipeline_id, idx); }}
-                                        className={`flex items-center gap-1 flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                                          isPlaying
-                                            ? "bg-primary text-primary-foreground"
-                                            : "bg-primary/90 text-primary-foreground hover:bg-primary"
-                                        }`}
-                                        title={isPlaying ? "Pause audio" : "Play audio preview"}
-                                      >
-                                        {isPlaying ? (
-                                          <Pause className="h-3 w-3" />
-                                        ) : (
-                                          <Volume2 className="h-3 w-3" />
-                                        )}
-                                        <span>{previewInf.audio_duration.toFixed(1)}s</span>
-                                      </button>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                              <div className="flex gap-2 pt-1">
+                              <div className="flex gap-2 pb-1 sticky top-0 bg-background z-10">
                                 <Button
                                   size="sm"
                                   className="flex-1"
@@ -6840,6 +6831,50 @@ function PipelinePage() {
                                   Load Selected ({historySelectedScripts.size})
                                 </Button>
                               </div>
+                              {historyScripts.map((script, idx) => {
+                                const previewInf = historyPreviewInfo[String(idx)];
+                                const hasAudio = previewInf?.has_audio;
+                                const audioKey = `${item.pipeline_id}-${idx}`;
+                                const isPlaying = playingAudio === audioKey;
+
+                                return (
+                                  <div key={idx} className="flex items-start gap-2">
+                                    <Checkbox
+                                      checked={historySelectedScripts.has(idx)}
+                                      onCheckedChange={() => {
+                                        setHistorySelectedScripts(prev => {
+                                          const next = new Set(prev);
+                                          if (next.has(idx)) next.delete(idx);
+                                          else next.add(idx);
+                                          return next;
+                                        });
+                                      }}
+                                      className="mt-0.5"
+                                    />
+                                    <p className="text-xs text-muted-foreground line-clamp-3 flex-1">
+                                      {script}
+                                    </p>
+                                    {hasAudio && (
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); handlePlayAudio(item.pipeline_id, idx); }}
+                                        className={`flex items-center gap-1 flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                                          isPlaying
+                                            ? "bg-primary text-primary-foreground"
+                                            : "bg-primary/90 text-primary-foreground hover:bg-primary"
+                                        }`}
+                                        title={isPlaying ? "Pause audio" : "Play audio preview"}
+                                      >
+                                        {isPlaying ? (
+                                          <Pause className="h-3 w-3" />
+                                        ) : (
+                                          <Volume2 className="h-3 w-3" />
+                                        )}
+                                        <span>{previewInf.audio_duration.toFixed(1)}s</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </>
                           )}
                         </div>

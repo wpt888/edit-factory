@@ -5708,6 +5708,7 @@ class SubtitleFrameRequest(BaseModel):
     subtitle_settings: dict
     timestamp: float = 2.0
     sample_text: str = "Sample subtitle text"
+    include_subtitles: bool = True
 
 
 @router.post("/subtitle-frame-preview/{pipeline_id}/{variant_index}")
@@ -5718,7 +5719,7 @@ async def subtitle_frame_preview(
     visual_version: Optional[str] = None,
     ctx: ProfileContext = Depends(get_profile_context),
 ):
-    """Render a single FFmpeg frame with subtitle overlay for WYSIWYG preview.
+    """Render a single FFmpeg frame with optional subtitle overlay for preview.
 
     Optional query param `visual_version=A|B` applies the corresponding Meta
     profile subtitle overlay on top of request.subtitle_settings. The frontend
@@ -5774,7 +5775,6 @@ async def subtitle_frame_preview(
     if not source_video_path or not source_video_path.exists():
         raise HTTPException(status_code=400, detail="No source video available for preview")
 
-    # --- Build SRT content directly from the editor sample text ---
     settings = get_settings()
     output_dir = settings.output_dir
     preview_dir = output_dir / "subtitle_previews"
@@ -5782,7 +5782,9 @@ async def subtitle_frame_preview(
 
     sample_text = (request.sample_text or "").strip() or "Sample subtitle text"
     ts = max(float(request.timestamp or 0), 0.0)
+    include_subtitles = bool(request.include_subtitles)
 
+    # --- Build SRT content directly from the editor sample text ---
     # `-ss ts` is placed BEFORE `-i` (fast input seek), which resets output
     # PTS to 0. The `subtitles` filter compares SRT times against frame PTS,
     # so the SRT must be anchored at 00:00:00 — otherwise the single captured
@@ -5794,7 +5796,7 @@ async def subtitle_frame_preview(
     # --- Compute cache fingerprint (include visual_version so A vs B differ) ---
     settings_json = _json.dumps(effective_subtitle_settings, sort_keys=True)
     fingerprint_input = (
-        f"{settings_json}|{source_video_path}|{ts:.3f}|{visual_version or ''}|{sample_text}"
+        f"{settings_json}|{source_video_path}|{ts:.3f}|{visual_version or ''}|{sample_text}|subs={include_subtitles}"
     )
     fingerprint = hashlib.md5(fingerprint_input.encode()).hexdigest()[:16]
     output_path = preview_dir / f"{fingerprint}.jpg"
@@ -5809,15 +5811,16 @@ async def subtitle_frame_preview(
         srt_tmp.write_text(srt_content, encoding="utf-8")
 
         # --- Build FFmpeg command ---
-        # Use PlayRes 1080x1920 so subtitles match final render proportionally
-        subtitle_filter = build_subtitle_filter(
-            srt_path=srt_tmp,
-            subtitle_settings=effective_subtitle_settings,
-            video_width=1080,
-            video_height=1920,
-        )
-
-        vf = f"scale=540:960:force_original_aspect_ratio=increase,crop=540:960,{subtitle_filter}"
+        vf = "scale=540:960:force_original_aspect_ratio=increase,crop=540:960"
+        if include_subtitles:
+            # Use PlayRes 1080x1920 so subtitles match final render proportionally
+            subtitle_filter = build_subtitle_filter(
+                srt_path=srt_tmp,
+                subtitle_settings=effective_subtitle_settings,
+                video_width=1080,
+                video_height=1920,
+            )
+            vf = f"{vf},{subtitle_filter}"
 
         cmd = [
             "ffmpeg", "-y",

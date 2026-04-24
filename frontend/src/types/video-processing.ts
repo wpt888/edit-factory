@@ -28,11 +28,18 @@ export interface SubtitleSettings {
 
 // User-saved named preset (distinct from hardcoded CAPTION_PRESETS).
 // Persisted at profile level via /profiles/{id}/subtitle-presets.
+//
+// `settings` captures the shared/default style. `settingsA` / `settingsB` are
+// optional per-Meta-variant overrides — present only if the user had an
+// explicit override for that tab when the preset was saved. Old presets (pre
+// multi-variant support) have only `settings` and apply as shared-only.
 export interface UserSubtitlePreset {
   id: string;
   name: string;
   created_at: string;
   settings: SubtitleSettings;
+  settingsA?: SubtitleSettings;
+  settingsB?: SubtitleSettings;
 }
 
 export interface SubtitleLine {

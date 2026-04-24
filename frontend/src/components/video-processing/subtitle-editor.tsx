@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -44,6 +44,7 @@ import { apiPost } from "@/lib/api";
 
 // Bug #126: stable default to avoid invalidating useMemo on every render
 const DEFAULT_VIDEO_INFO: VideoInfo = { width: 1080, height: 1920, duration: 0, fps: 30, aspect_ratio: "9:16", is_vertical: true };
+const ASS_REFERENCE_HEIGHT = 1920;
 
 interface SubtitleEditorProps {
   /** Current subtitle settings */
@@ -119,16 +120,25 @@ export function SubtitleEditor({
 
   // FFmpeg frame preview state
   const [ffmpegPreviewUrl, setFfmpegPreviewUrl] = useState<string | null>(null);
+  const [ffmpegBackgroundUrl, setFfmpegBackgroundUrl] = useState<string | null>(null);
   const [ffmpegLoading, setFfmpegLoading] = useState(false);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const ffmpegTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const abortRef = useRef<AbortController>(undefined);
   const prevFingerprint = useRef("");
+  const latestSettingsRef = useRef(settings);
+  // Monotonic request id — any response whose id is not the latest is
+  // discarded so a slow earlier render can't overwrite a newer one.
+  const requestSeq = useRef(0);
+  const latestAppliedSeq = useRef(0);
   const previewOverlayText = previewText?.trim()
     || (subtitleLines.length > 0 ? subtitleLines[0].text : "")
     || "Sample subtitle text";
 
-  // Debounced FFmpeg frame preview fetch
+  // Debounced FFmpeg frame preview fetch.
+  //
+  // Radix slider fires onValueChange continuously during drag. The CSS
+  // overlay below updates immediately, while this effect refreshes the
+  // expensive FFmpeg preview shortly after the user stops moving.
   useEffect(() => {
     if (!pipelineId) return;
 
@@ -140,16 +150,12 @@ export function SubtitleEditor({
       "|t=" + previewOverlayText;
     if (fingerprint === prevFingerprint.current) return;
 
-    // Clear previous timer and abort in-flight request
     if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
-    if (abortRef.current) abortRef.current.abort();
+    setFfmpegLoading(true);
 
     ffmpegTimer.current = setTimeout(async () => {
       prevFingerprint.current = fingerprint;
-      setFfmpegLoading(true);
-
-      const controller = new AbortController();
-      abortRef.current = controller;
+      const mySeq = ++requestSeq.current;
 
       try {
         const versionQuery = visualVersion ? `?visual_version=${encodeURIComponent(visualVersion)}` : "";
@@ -158,13 +164,18 @@ export function SubtitleEditor({
           {
             subtitle_settings: settings,
             sample_text: previewOverlayText,
+            include_subtitles: true,
           },
-          { signal: controller.signal, timeout: 20000 }
+          { timeout: 20000 }
         );
         const blob = await resp.blob();
-        if (controller.signal.aborted) return;
 
-        // Revoke old URL
+        // Out-of-order guard: a newer request has superseded this one.
+        if (mySeq < latestAppliedSeq.current) {
+          return;
+        }
+        latestAppliedSeq.current = mySeq;
+
         setFfmpegPreviewUrl((prev) => {
           if (prev) URL.revokeObjectURL(prev);
           return URL.createObjectURL(blob);
@@ -174,29 +185,82 @@ export function SubtitleEditor({
           console.warn("FFmpeg frame preview failed:", err);
         }
       } finally {
-        if (!controller.signal.aborted) setFfmpegLoading(false);
+        // Only clear the spinner when the latest-seen request has resolved.
+        if (mySeq >= requestSeq.current) setFfmpegLoading(false);
       }
-    }, 300);
+    }, 50);
 
     return () => {
       if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
     };
   }, [settings, pipelineId, previewOverlayText, variantIndex, visualVersion]);
 
+  // Stable clean frame used as the live-edit background. The accurate FFmpeg
+  // preview image already contains text, so overlaying local text on it causes
+  // duplicate subtitles while dragging sliders.
+  useEffect(() => {
+    if (!pipelineId) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const resp = await apiPost(
+          `/pipeline/subtitle-frame-preview/${pipelineId}/${variantIndex}`,
+          {
+            subtitle_settings: {},
+            sample_text: "",
+            include_subtitles: false,
+          },
+          { timeout: 20000 }
+        );
+        const blob = await resp.blob();
+        if (cancelled) return;
+
+        setFfmpegBackgroundUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(blob);
+        });
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name !== "AbortError") {
+          console.warn("FFmpeg clean preview frame failed:", err);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pipelineId, variantIndex]);
+
   // Mirror the active blob URL into a ref so the unmount cleanup below can
   // read the *latest* value — a plain state capture with [] deps would freeze
   // at the initial null and leak the final URL.
   const ffmpegPreviewUrlRef = useRef<string | null>(null);
+  const ffmpegBackgroundUrlRef = useRef<string | null>(null);
   useEffect(() => {
     ffmpegPreviewUrlRef.current = ffmpegPreviewUrl;
   }, [ffmpegPreviewUrl]);
+  useEffect(() => {
+    ffmpegBackgroundUrlRef.current = ffmpegBackgroundUrl;
+  }, [ffmpegBackgroundUrl]);
 
   // Cleanup blob URL on unmount
   useEffect(() => {
     return () => {
       if (ffmpegPreviewUrlRef.current) URL.revokeObjectURL(ffmpegPreviewUrlRef.current);
+      if (ffmpegBackgroundUrlRef.current) URL.revokeObjectURL(ffmpegBackgroundUrlRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    latestSettingsRef.current = settings;
+  }, [settings]);
+
+  const emitSettingsChange = (nextSettings: SubtitleSettings) => {
+    latestSettingsRef.current = nextSettings;
+    onSettingsChange(nextSettings);
+  };
 
   // Update a single setting (manual change clears preset selection)
   const updateSetting = <K extends keyof SubtitleSettings>(
@@ -204,21 +268,24 @@ export function SubtitleEditor({
     value: SubtitleSettings[K]
   ) => {
     setSelectedPresetId(null);
-    onSettingsChange({ ...settings, [key]: value });
+    emitSettingsChange({ ...latestSettingsRef.current, [key]: value });
   };
 
-  const mergePresetSettings = (presetSettings: SubtitleSettings): SubtitleSettings => ({
-    ...settings,
+  const mergePresetSettings = (
+    currentSettings: SubtitleSettings,
+    presetSettings: SubtitleSettings
+  ): SubtitleSettings => ({
+    ...currentSettings,
     ...presetSettings,
-    positionY: settings.positionY,
-    position: settings.position,
-    marginV: settings.marginV,
+    positionY: currentSettings.positionY,
+    position: currentSettings.position,
+    marginV: currentSettings.marginV,
   });
 
   // Apply a preset's settings all at once
   const applyPreset = (preset: CaptionPreset) => {
     setSelectedPresetId(preset.id);
-    onSettingsChange(mergePresetSettings(preset.settings));
+    emitSettingsChange(mergePresetSettings(latestSettingsRef.current, preset.settings));
   };
 
   // Update a subtitle line
@@ -248,6 +315,51 @@ export function SubtitleEditor({
     };
   }, [videoInfo, previewHeight]);
 
+  const renderLocalSubtitleOverlay = (
+    dimensions: { height: number },
+    className = ""
+  ) => {
+    const scale = dimensions.height / ASS_REFERENCE_HEIGHT;
+    const fontSize = Math.max(8, settings.fontSize * scale);
+    const outlineWidth = Math.max(0, settings.outlineWidth * scale);
+    const shadowDepth = Math.max(0, (settings.shadowDepth ?? 0) * scale);
+    const glowBlur = Math.max(0, (settings.glowBlur ?? 0) * scale);
+    const opacity = Math.max(0, Math.min(100, settings.opacity ?? 100)) / 100;
+    const baseShadow =
+      shadowDepth > 0
+        ? `0 ${shadowDepth}px ${Math.max(1, shadowDepth * 2)}px ${settings.shadowColor ?? "#000000"}`
+        : "0 1px 3px rgba(0,0,0,0.85)";
+    const glowShadow =
+      settings.enableGlow && glowBlur > 0
+        ? `, 0 0 ${glowBlur}px ${settings.outlineColor}`
+        : "";
+    const textStyle: CSSProperties = {
+      fontFamily: settings.fontFamily,
+      fontSize: `${fontSize}px`,
+      color: settings.textColor,
+      opacity,
+      textShadow: `${baseShadow}${glowShadow}`,
+      WebkitTextStroke:
+        outlineWidth > 0 ? `${outlineWidth}px ${settings.outlineColor}` : undefined,
+      paintOrder: "stroke fill",
+    };
+    const positionStyle: CSSProperties =
+      settings.positionY <= 20
+        ? { top: `${settings.positionY}%` }
+        : { top: `${settings.positionY}%`, transform: "translateY(-50%)" };
+
+    return (
+      <div
+        className={`absolute left-2 right-2 z-[2] text-center pointer-events-none ${className}`}
+        style={positionStyle}
+      >
+        <p className="inline-block px-2 py-1 font-semibold leading-tight" style={textStyle}>
+          {previewOverlayText}
+        </p>
+      </div>
+    );
+  };
+
   // The preview panel rendered as a standalone block
   const previewPanel = showPreview ? (
     <div className="space-y-3">
@@ -266,7 +378,16 @@ export function SubtitleEditor({
             height: `${previewDimensions.height}px`,
           }}
         >
-          {ffmpegPreviewUrl ? (
+          {ffmpegBackgroundUrl ? (
+            <>
+              <img
+                src={ffmpegBackgroundUrl}
+                alt="Subtitle preview"
+                className="absolute inset-0 w-full h-full object-contain rounded-lg"
+              />
+              {renderLocalSubtitleOverlay(previewDimensions)}
+            </>
+          ) : !ffmpegLoading && ffmpegPreviewUrl ? (
             <img
               src={ffmpegPreviewUrl}
               alt="Subtitle preview"
@@ -276,7 +397,7 @@ export function SubtitleEditor({
             <>
               {/* Gradient background simulating video */}
               <div className="absolute inset-0 bg-gradient-to-br from-gray-700 via-gray-800 to-gray-900" />
-
+              {renderLocalSubtitleOverlay(previewDimensions)}
             </>
           )}
           {ffmpegLoading && (
@@ -310,14 +431,26 @@ export function SubtitleEditor({
               containerType: "size",
             }}
           >
-            {ffmpegPreviewUrl ? (
+            {ffmpegBackgroundUrl ? (
+              <>
+                <img
+                  src={ffmpegBackgroundUrl}
+                  alt="Subtitle preview"
+                  className="absolute inset-0 w-full h-full object-contain"
+                />
+                {renderLocalSubtitleOverlay({ height: 900 })}
+              </>
+            ) : !ffmpegLoading && ffmpegPreviewUrl ? (
               <img
                 src={ffmpegPreviewUrl}
                 alt="Subtitle preview"
                 className="absolute inset-0 w-full h-full object-contain"
               />
             ) : (
-              <div className="absolute inset-0 bg-gradient-to-br from-gray-700 via-gray-800 to-gray-900" />
+              <>
+                <div className="absolute inset-0 bg-gradient-to-br from-gray-700 via-gray-800 to-gray-900" />
+                {renderLocalSubtitleOverlay({ height: 900 })}
+              </>
             )}
           </div>
         </DialogContent>
