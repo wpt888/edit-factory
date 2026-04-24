@@ -156,27 +156,44 @@ def safe_ffmpeg_run(
     Raises:
         RuntimeError: On timeout (process is killed first).
     """
+    from app.services.ffmpeg_registry import (
+        register_process,
+        unregister_process,
+        was_killed_by_cancel,
+    )
+
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
+    register_process(proc)
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
         try:
-            proc.communicate(timeout=10)  # Drain pipes & reap zombie (bounded wait)
+            stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            logger.warning(f"{operation}: process did not exit within 10s after kill")
-        raise RuntimeError(f"{operation} timed out after {timeout}s")
-    return subprocess.CompletedProcess(
-        args=cmd,
-        returncode=proc.returncode,
-        stdout=stdout,
-        stderr=stderr,
-    )
+            proc.kill()
+            try:
+                proc.communicate(timeout=10)  # Drain pipes & reap zombie (bounded wait)
+            except subprocess.TimeoutExpired:
+                logger.warning(f"{operation}: process did not exit within 10s after kill")
+            raise RuntimeError(f"{operation} timed out after {timeout}s")
+        # External user-cancel (via ffmpeg_registry.kill_job) shows up as a
+        # non-zero exit — on POSIX the returncode is negative (signal), on
+        # Windows TerminateProcess yields a positive code (e.g. 1).  We rely
+        # on the explicit tag set by kill_job so the signal heuristic isn't
+        # needed, making the check cross-platform.
+        if was_killed_by_cancel(proc):
+            raise RuntimeError(f"{operation} was cancelled by user")
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=proc.returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    finally:
+        unregister_process(proc)
 
 
 # =============================================================================

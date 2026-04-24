@@ -6402,28 +6402,46 @@ function PipelinePage() {
                             {status.status}
                           </Badge>
                         )}
-                        {status.status === "processing" && (
+                        {(status.status === "processing" || status.status === "not_started") && isRendering && (
                           <Button
                             variant="destructive"
                             size="sm"
                             className="h-7 px-2 text-xs"
                             onClick={async () => {
+                              // Build job_key matching the backend render_jobs dict key:
+                              //   - "N_A" / "N_B" when this card is a Meta visual version
+                              //   - "N" for standard (non-Meta) renders
+                              // Sending the full job_key ensures Stop targets THIS card
+                              // only, not the paired A/B version of the same script.
+                              const jobKey = status.visual_version
+                                ? `${status.variant_index}_${status.visual_version}`
+                                : `${status.variant_index}`;
                               try {
-                                await apiPost(`/pipeline/${pipelineId}/cancel/${status.variant_index}`, {});
+                                await apiPost(`/pipeline/${pipelineId}/cancel/${encodeURIComponent(jobKey)}`, {});
                                 setVariantStatuses(prev =>
-                                  prev.map(v =>
-                                    v.variant_index === status.variant_index
+                                  prev.map(v => {
+                                    const matches = status.visual_version
+                                      ? v.variant_index === status.variant_index && v.visual_version === status.visual_version
+                                      : v.variant_index === status.variant_index && !v.visual_version;
+                                    return matches
                                       ? { ...v, status: "cancelled" as const, current_step: "Cancelled by user", progress: 0 }
-                                      : v
-                                  )
+                                      : v;
+                                  })
                                 );
-                                toast.success(`Variant ${status.variant_index + 1} cancelled`);
+                                toast.success(
+                                  status.visual_version
+                                    ? `Variant ${status.variant_index + 1} (${status.visual_version}) cancelled`
+                                    : `Variant ${status.variant_index + 1} cancelled`
+                                );
                                 // If all variants are now done, stop polling
-                                const updatedStatuses = variantStatuses.map(v =>
-                                  v.variant_index === status.variant_index
+                                const updatedStatuses = variantStatuses.map(v => {
+                                  const matches = status.visual_version
+                                    ? v.variant_index === status.variant_index && v.visual_version === status.visual_version
+                                    : v.variant_index === status.variant_index && !v.visual_version;
+                                  return matches
                                     ? { ...v, status: "cancelled" as const }
-                                    : v
-                                );
+                                    : v;
+                                });
                                 const allDone = updatedStatuses.every(
                                   v => v.status === "completed" || v.status === "failed" || v.status === "cancelled"
                                 );

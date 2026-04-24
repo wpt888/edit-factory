@@ -338,7 +338,11 @@ _cancelled_pipelines: Dict[str, float] = {}  # pipeline_id -> monotonic timestam
 _cancelled_pipelines_lock = threading.Lock()
 _MAX_CANCELLED_PIPELINES = 200
 
-# Per-variant cancellation: "pipeline_id:variant_index" -> monotonic timestamp
+# Per-job cancellation: "pipeline_id:job_key" -> monotonic timestamp
+# job_key is a string form of either the integer variant_index ("0") for
+# standard renders, or "{vid}_{version}" ("0_A") when Meta multiplication is
+# active. Keying by the exact job_key lets Stop target a single A/B card
+# instead of cancelling both versions at once.
 _cancelled_variants: Dict[str, float] = {}
 _cancelled_variants_lock = threading.Lock()
 
@@ -349,9 +353,9 @@ def is_pipeline_cancelled(pipeline_id: str) -> bool:
         return pipeline_id in _cancelled_pipelines
 
 
-def is_variant_cancelled(pipeline_id: str, variant_index: int) -> bool:
-    """Check if a specific variant has been flagged for cancellation."""
-    key = f"{pipeline_id}:{variant_index}"
+def is_variant_cancelled(pipeline_id: str, job_key) -> bool:
+    """Check if a specific job (variant or variant+version) has been cancelled."""
+    key = f"{pipeline_id}:{job_key}"
     with _cancelled_variants_lock:
         return key in _cancelled_variants
 
@@ -366,9 +370,9 @@ def mark_pipeline_cancelled(pipeline_id: str):
                 _cancelled_pipelines.pop(pid, None)
 
 
-def mark_variant_cancelled(pipeline_id: str, variant_index: int):
-    """Flag a specific variant for cancellation."""
-    key = f"{pipeline_id}:{variant_index}"
+def mark_variant_cancelled(pipeline_id: str, job_key):
+    """Flag a specific job (variant or variant+version) for cancellation."""
+    key = f"{pipeline_id}:{job_key}"
     with _cancelled_variants_lock:
         _cancelled_variants[key] = _time_mod.monotonic()
         # Evict old entries to prevent unbounded growth
@@ -376,6 +380,13 @@ def mark_variant_cancelled(pipeline_id: str, variant_index: int):
             sorted_keys = sorted(_cancelled_variants, key=_cancelled_variants.get)
             for k in sorted_keys[:len(_cancelled_variants) - _MAX_CANCELLED_PIPELINES * 5]:
                 _cancelled_variants.pop(k, None)
+
+
+def clear_variant_cancelled(pipeline_id: str, job_key):
+    """Clear the cancellation flag for a specific job_key."""
+    key = f"{pipeline_id}:{job_key}"
+    with _cancelled_variants_lock:
+        _cancelled_variants.pop(key, None)
 
 
 def clear_pipeline_cancelled(pipeline_id: str):
@@ -1689,13 +1700,52 @@ async def cancel_pipeline_render(
     return {"status": "cancelled", "pipeline_id": pipeline_id}
 
 
-@router.post("/{pipeline_id}/cancel/{variant_index}")
+def _cancel_single_job(pipeline: dict, pipeline_id: str, job_key, render_lock: threading.Lock) -> bool:
+    """Mark one render_jobs entry cancelled and kill any live ffmpeg process.
+
+    Returns True if a job with that key existed and was not already in a
+    terminal state, False otherwise.  Caller is responsible for persisting
+    render_jobs to the DB afterwards.
+    """
+    from app.services.ffmpeg_registry import kill_job
+    render_jobs = pipeline.get("render_jobs", {})
+    # Try exact key first, then fall back to int() for back-compat (old
+    # clients may still send "0" as a string for a job stored under 0).
+    job = render_jobs.get(job_key)
+    if job is None and isinstance(job_key, str):
+        try:
+            job = render_jobs.get(int(job_key))
+        except (ValueError, TypeError):
+            job = None
+    if not job:
+        return False
+    mark_variant_cancelled(pipeline_id, job_key)
+    kill_job(str(job_key))
+    with render_lock:
+        if job.get("status") in ("processing", "not_started", "pending", None):
+            job["status"] = "cancelled"
+            job["current_step"] = "Cancelled by user"
+            job["progress"] = 0
+            job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+    return True
+
+
+@router.post("/{pipeline_id}/cancel/{job_key}")
 async def cancel_variant_render(
     pipeline_id: str,
-    variant_index: int,
+    job_key: str,
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Cancel a single variant's render while letting others continue."""
+    """Cancel a single render job while letting others continue.
+
+    ``job_key`` is the render_jobs dict key, as a string:
+      - "0", "1", ... for standard (non-Meta) renders
+      - "0_A", "0_B" for Meta-multiplication A/B versions
+
+    Sending just "0" when Meta multiplication is active cancels BOTH A and B
+    (back-compat with older frontend that didn't know about per-version keys).
+    Sending "0_A" cancels only that specific version.
+    """
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
@@ -1703,10 +1753,6 @@ async def cancel_variant_render(
     if pipeline.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    # Set per-variant cancellation flag (checked in do_render loop)
-    mark_variant_cancelled(pipeline_id, variant_index)
-
-    # Immediately update the job status so polling reflects it
     pipeline_id_str = str(pipeline_id)
     with _render_locks_meta_lock:
         render_lock = _render_locks.get(pipeline_id_str)
@@ -1715,21 +1761,30 @@ async def cancel_variant_render(
             render_lock = threading.Lock()
             _render_locks[pipeline_id_str] = render_lock
 
-    with render_lock:
-        # Cancel the standard job (integer key)
-        job = pipeline.get("render_jobs", {}).get(variant_index)
-        if job and job.get("status") == "processing":
-            job["status"] = "cancelled"
-            job["current_step"] = "Cancelled by user"
-            job["progress"] = 0
-        # Also cancel meta multiplication versions (string keys like "0_A", "0_B")
+    cancelled_keys: list = []
+
+    # Decide scope: a plain integer-looking key cancels variant N and (for
+    # back-compat) any "N_X" meta version.  A key with an underscore targets
+    # exactly that version.
+    is_bare_variant = "_" not in job_key
+    if is_bare_variant:
+        # Cancel the standard job and every meta version of this variant
+        for candidate_key in [job_key]:
+            if _cancel_single_job(pipeline, pipeline_id, candidate_key, render_lock):
+                cancelled_keys.append(candidate_key)
+        try:
+            _int_key = int(job_key)
+            if _cancel_single_job(pipeline, pipeline_id, _int_key, render_lock):
+                cancelled_keys.append(_int_key)
+        except (ValueError, TypeError):
+            pass
         for suffix in ("_A", "_B", "_C", "_D", "_E"):
-            meta_key = f"{variant_index}{suffix}"
-            meta_job = pipeline.get("render_jobs", {}).get(meta_key)
-            if meta_job and meta_job.get("status") == "processing":
-                meta_job["status"] = "cancelled"
-                meta_job["current_step"] = "Cancelled by user"
-                meta_job["progress"] = 0
+            meta_key = f"{job_key}{suffix}"
+            if _cancel_single_job(pipeline, pipeline_id, meta_key, render_lock):
+                cancelled_keys.append(meta_key)
+    else:
+        if _cancel_single_job(pipeline, pipeline_id, job_key, render_lock):
+            cancelled_keys.append(job_key)
 
     with _pipelines_lock:
         if pipeline_id not in _pipelines:
@@ -1737,9 +1792,17 @@ async def cancel_variant_render(
 
     _db_update_render_jobs(pipeline_id, pipeline.get("render_jobs", {}))
 
-    logger.info(f"[Profile {profile.profile_id}] Cancelled variant {variant_index} of pipeline {pipeline_id}")
+    logger.info(
+        f"[Profile {profile.profile_id}] Cancelled pipeline={pipeline_id} "
+        f"job_key={job_key!r} affected={cancelled_keys!r}"
+    )
 
-    return {"status": "cancelled", "pipeline_id": pipeline_id, "variant_index": variant_index}
+    return {
+        "status": "cancelled",
+        "pipeline_id": pipeline_id,
+        "job_key": job_key,
+        "cancelled_keys": [str(k) for k in cancelled_keys],
+    }
 
 
 @router.get("/{pipeline_id}/source-selection")
@@ -3515,6 +3578,14 @@ async def render_variants(
                 _init_job["visual_version"] = get_version_label(ver_idx)
                 _init_job["meta_platform"] = META_PROFILES[ver_idx].name
             pipeline["render_jobs"][job_key] = _init_job
+            # Clear any stale cancel flag from a previous render of this key, so
+            # re-submitting the same variant after a Stop doesn't immediately
+            # abort via the leftover flag.  Clears both the exact key form and
+            # a bare-int fallback (for legacy clients that cancelled via "0").
+            clear_variant_cancelled(pipeline_id, job_key)
+            clear_variant_cancelled(pipeline_id, str(job_key))
+            if isinstance(job_key, int):
+                clear_variant_cancelled(pipeline_id, str(job_key))
             _render_tasks_to_run.append((vid, ver_idx, job_key))
 
     # Capture profile_id by value so the closure doesn't hold a mutable reference
@@ -3522,9 +3593,15 @@ async def render_variants(
 
     # Define render function for a single variant (or variant+version when meta_multiplication is active)
     async def do_render(vid, version_index=None, job_key=None):
+        # Import here to avoid module-load cycles
+        from app.services.ffmpeg_registry import active_job_key as _active_job_key_ctx
         # When not using meta multiplication, job_key defaults to vid
         if job_key is None:
             job_key = vid
+        # Cancellation is keyed by job_key (str form). Any "0_A" Stop targets
+        # only that A/B version; a "0" Stop targets the bare variant.
+        _cancel_scope = str(job_key)
+        _ctx_token = _active_job_key_ctx.set(_cancel_scope)
         try:
             # PIP-12: Bound check — ensure variant index is still valid
             if vid >= _script_count_snapshot:
@@ -3535,8 +3612,8 @@ async def render_variants(
                 return
 
             # PIP-04: Check cancellation before starting render
-            if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, vid):
-                logger.info(f"Pipeline {pipeline_id} variant {vid} skipped: cancelled")
+            if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, _cancel_scope):
+                logger.info(f"Pipeline {pipeline_id} job {_cancel_scope} skipped: cancelled")
                 return
 
             # ── Render fingerprint: SHA-256 hash of ALL render-affecting parameters ──
@@ -3571,12 +3648,12 @@ async def render_variants(
             job = pipeline["render_jobs"][job_key]
 
             # Check for cancellation before starting
-            if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, vid):
+            if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, _cancel_scope):
                 with render_jobs_lock:
                     job["status"] = "cancelled"
                     job["current_step"] = "Cancelled by user"
                     job["progress"] = 0
-                logger.info(f"Pipeline {pipeline_id} variant {vid} cancelled before start")
+                logger.info(f"Pipeline {pipeline_id} job {_cancel_scope} cancelled before start")
                 return
 
             # Update progress
@@ -3743,12 +3820,12 @@ async def render_variants(
                 logger.warning(f"Failed to load segment usage for render: {e}")
 
             # Check for cancellation before heavy render
-            if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, vid):
+            if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, _cancel_scope):
                 with render_jobs_lock:
                     job["status"] = "cancelled"
                     job["current_step"] = "Cancelled by user"
                     job["progress"] = 0
-                logger.info(f"Pipeline {pipeline_id} variant {vid} cancelled before render")
+                logger.info(f"Pipeline {pipeline_id} job {_cancel_scope} cancelled before render")
                 return
 
             # ── Resolve per-variant subtitle settings ──
@@ -3846,6 +3923,26 @@ async def render_variants(
             except RuntimeError as rt_err:
                 # Catch specific assembly errors (e.g., "No segments found in library.")
                 # so the job is marked failed with a clear message instead of stuck in "processing"
+                # A RuntimeError here is also how safe_ffmpeg_run surfaces an external
+                # kill (triggered by the cancel endpoint).  If the flag was set in the
+                # meantime, honor the cancel and skip marking it "failed".
+                _was_cancelled = (
+                    is_pipeline_cancelled(pipeline_id)
+                    or is_variant_cancelled(pipeline_id, _cancel_scope)
+                    or job.get("status") == "cancelled"
+                )
+                if _was_cancelled:
+                    with render_jobs_lock:
+                        job["status"] = "cancelled"
+                        job["progress"] = 0
+                        job["current_step"] = "Cancelled by user"
+                        job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                    logger.info(
+                        f"[Profile {_profile_id}] Pipeline {pipeline_id} "
+                        f"job {_cancel_scope} cancelled during render ({rt_err})"
+                    )
+                    return
                 logger.error(
                     f"[Profile {_profile_id}] Pipeline {pipeline_id} "
                     f"variant {vid} assembly error: {rt_err}"
@@ -3860,7 +3957,34 @@ async def render_variants(
                 _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
                 return
 
-            # Success — acquire lock before writing shared render_jobs dict
+            # Success — acquire lock before writing shared render_jobs dict.
+            # Guard: if the job was cancelled while the long ffmpeg pipeline was
+            # running, do NOT overwrite the "cancelled" status with "completed".
+            # Without this, a Stop click during the final encode would appear to
+            # fail when the render returned a video file a few seconds later.
+            if (
+                is_pipeline_cancelled(pipeline_id)
+                or is_variant_cancelled(pipeline_id, _cancel_scope)
+                or job.get("status") == "cancelled"
+            ):
+                logger.info(
+                    f"[Profile {_profile_id}] Pipeline {pipeline_id} "
+                    f"job {_cancel_scope} finished but was cancelled — keeping cancelled state"
+                )
+                with render_jobs_lock:
+                    job["status"] = "cancelled"
+                    job["progress"] = 0
+                    job["current_step"] = "Cancelled by user"
+                    if "cancelled_at" not in job:
+                        job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                # Attempt to clean up the stale output file produced after cancel
+                try:
+                    if final_video_path and Path(final_video_path).exists():
+                        Path(final_video_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                return
             with render_jobs_lock:
                 job["status"] = "completed"
                 job["progress"] = 100
@@ -3912,7 +4036,33 @@ async def render_variants(
             )
 
         except Exception as e:
-            # Safety net for unexpected errors
+            # Safety net for unexpected errors.  If the user cancelled mid-flight
+            # we may land here because safe_ffmpeg_run raised after being killed;
+            # keep the "cancelled" label instead of overwriting with "failed".
+            _job_for_status = None
+            try:
+                _job_for_status = pipeline.get("render_jobs", {}).get(job_key)
+            except Exception:
+                _job_for_status = None
+            _was_cancelled_now = (
+                is_pipeline_cancelled(pipeline_id)
+                or is_variant_cancelled(pipeline_id, _cancel_scope)
+                or (isinstance(_job_for_status, dict) and _job_for_status.get("status") == "cancelled")
+            )
+            if _was_cancelled_now:
+                logger.info(
+                    f"[Profile {_profile_id}] Pipeline {pipeline_id} "
+                    f"job {_cancel_scope} raised after cancel: {e}"
+                )
+                if isinstance(_job_for_status, dict):
+                    with render_jobs_lock:
+                        _job_for_status["status"] = "cancelled"
+                        _job_for_status["progress"] = 0
+                        _job_for_status["current_step"] = "Cancelled by user"
+                        if "cancelled_at" not in _job_for_status:
+                            _job_for_status["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                return
             logger.error(
                 f"[Profile {_profile_id}] Pipeline {pipeline_id} "
                 f"variant {vid} failed: {e}"
@@ -3927,6 +4077,13 @@ async def render_variants(
 
             # PIP-06: Persist failure to DB OUTSIDE the lock
             _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+        finally:
+            # Clear the per-task job_key so follow-up cleanup (outside do_render)
+            # does not inherit a stale association for this task's context.
+            try:
+                _active_job_key_ctx.reset(_ctx_token)
+            except Exception:
+                pass
 
     # Run all variant renders in parallel via asyncio.gather (throttled by semaphore)
     async def _render_all_variants():
@@ -3939,6 +4096,19 @@ async def render_variants(
                 if not ver_tasks:
                     continue
                 async def _throttled_meta_render(_vid, _ver_idx, _job_key):
+                    # Short-circuit queued cancels BEFORE waiting for the render slot,
+                    # so a user Stop on a not_started card doesn't need to wait for
+                    # a semaphore slot to release before taking effect.
+                    if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, str(_job_key)):
+                        _queued_job = pipeline.get("render_jobs", {}).get(_job_key)
+                        if isinstance(_queued_job, dict) and _queued_job.get("status") != "cancelled":
+                            with render_jobs_lock:
+                                _queued_job["status"] = "cancelled"
+                                _queued_job["progress"] = 0
+                                _queued_job["current_step"] = "Cancelled by user"
+                                _queued_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                            _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                        return
                     async with await acquire_render_slot():
                         await do_render(_vid, version_index=_ver_idx, job_key=_job_key)
                 tasks = [_throttled_meta_render(v, vi, jk) for v, vi, jk in ver_tasks]
@@ -3949,6 +4119,16 @@ async def render_variants(
         else:
             # Original flow: parallel across variants
             async def _throttled_render(vid):
+                if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, str(vid)):
+                    _queued_job = pipeline.get("render_jobs", {}).get(vid)
+                    if isinstance(_queued_job, dict) and _queued_job.get("status") != "cancelled":
+                        with render_jobs_lock:
+                            _queued_job["status"] = "cancelled"
+                            _queued_job["progress"] = 0
+                            _queued_job["current_step"] = "Cancelled by user"
+                            _queued_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                        _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                    return
                 async with await acquire_render_slot():
                     await do_render(vid)
             tasks = [_throttled_render(v) for v, _, _ in _render_tasks_to_run]
@@ -4131,12 +4311,15 @@ async def remake_variant(
 
     # 8. Background remake task
     async def do_remake():
+        from app.services.ffmpeg_registry import active_job_key as _active_job_key_ctx
+        _remake_scope = str(vid)
+        _ctx_token = _active_job_key_ctx.set(_remake_scope)
         try:
             assembly_service = get_assembly_service()
             job = pipeline["render_jobs"][vid]
 
             # Check for cancellation
-            if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, vid):
+            if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, _remake_scope):
                 with render_jobs_lock:
                     job["status"] = "cancelled"
                     job["current_step"] = "Cancelled by user"
@@ -4207,6 +4390,27 @@ async def remake_variant(
                 _timeout_mins = 30 if preset_data.get("encoding_mode") == "vbr_2pass" else 15
                 raise Exception(f"Remake timed out after {_timeout_mins} minutes")
 
+            # Guard: if the job was cancelled during the remake render, keep
+            # the cancelled status instead of overwriting with "completed".
+            if (
+                is_pipeline_cancelled(pipeline_id)
+                or is_variant_cancelled(pipeline_id, _remake_scope)
+                or job.get("status") == "cancelled"
+            ):
+                with render_jobs_lock:
+                    job["status"] = "cancelled"
+                    job["progress"] = 0
+                    job["current_step"] = "Cancelled by user"
+                    if "cancelled_at" not in job:
+                        job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                try:
+                    if final_video_path and Path(final_video_path).exists():
+                        Path(final_video_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                return
+
             # Success
             _remake_fingerprint = hashlib.sha256(
                 f"remake_{vid}_{datetime.now(timezone.utc).isoformat()}".encode()
@@ -4239,6 +4443,26 @@ async def remake_variant(
             )
 
         except Exception as e:
+            _remake_job = pipeline.get("render_jobs", {}).get(vid)
+            _was_cancelled_remake = (
+                is_pipeline_cancelled(pipeline_id)
+                or is_variant_cancelled(pipeline_id, _remake_scope)
+                or (isinstance(_remake_job, dict) and _remake_job.get("status") == "cancelled")
+            )
+            if _was_cancelled_remake:
+                logger.info(
+                    f"[Profile {_profile_id}] Pipeline {pipeline_id} "
+                    f"remake {_remake_scope} raised after cancel: {e}"
+                )
+                if isinstance(_remake_job, dict):
+                    with render_jobs_lock:
+                        _remake_job["status"] = "cancelled"
+                        _remake_job["progress"] = 0
+                        _remake_job["current_step"] = "Cancelled by user"
+                        if "cancelled_at" not in _remake_job:
+                            _remake_job["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                    _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+                return
             logger.error(
                 f"[Profile {_profile_id}] Pipeline {pipeline_id} "
                 f"variant {vid} remake failed: {e}"
@@ -4251,6 +4475,11 @@ async def remake_variant(
                 job["error"] = str(e)
                 job["failed_at"] = datetime.now(timezone.utc).isoformat()
             _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+        finally:
+            try:
+                _active_job_key_ctx.reset(_ctx_token)
+            except Exception:
+                pass
 
     # 9. Launch background task with render slot throttling
     async def _throttled_remake():
