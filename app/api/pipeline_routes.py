@@ -17,7 +17,7 @@ import subprocess
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Any, List, Literal, Optional, Dict
+from typing import Any, List, Literal, Optional, Dict, Tuple
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body, Query, Request
@@ -214,8 +214,14 @@ def _restore_missing_tts_audio_paths(
                                     f"mp3 missing on disk: {path}"
                                 )
 
+                # Build a normalized lookup as a fallback so minor whitespace /
+                # case differences don't prevent restore.
+                def _norm_text(t: str) -> str:
+                    return " ".join((t or "").split()).casefold()
+                norm_lookup = {_norm_text(t): a for t, a in lib_lookup.items()}
+
                 for idx, text in missing_audio_texts.items():
-                    match = lib_lookup.get(text)
+                    match = lib_lookup.get(text) or norm_lookup.get(_norm_text(text))
                     if not match:
                         continue
                     restored_entries[idx] = {
@@ -337,6 +343,10 @@ def _safe_relative_path(raw_path: Optional[str]) -> Optional[str]:
 _cancelled_pipelines: Dict[str, float] = {}  # pipeline_id -> monotonic timestamp
 _cancelled_pipelines_lock = threading.Lock()
 _MAX_CANCELLED_PIPELINES = 200
+
+# Render jobs stuck in "processing" older than this are treated as orphans
+# from a crashed/restarted run and eligible to be re-queued.
+STALE_PROCESSING_THRESHOLD_SEC = 30 * 60  # 30 minutes
 
 # Per-job cancellation: "pipeline_id:job_key" -> monotonic timestamp
 # job_key is a string form of either the integer variant_index ("0") for
@@ -557,8 +567,167 @@ def _evict_old_pipelines():
 
 # ============== DB PERSISTENCE HELPERS ==============
 
+
+def _get_data_repository():
+    """Indirection for code paths that should not be affected by local imports."""
+    return get_repository()
+
+
+def _path_is_in_temp(p: Optional[str]) -> bool:
+    """True if p is an audio path that lives under the temp/ tree (not a durable asset)."""
+    if not p:
+        return False
+    norm = str(p).replace("\\", "/").lower()
+    if "/temp/" in norm or norm.startswith("temp/"):
+        return True
+    try:
+        base_temp = (get_settings().base_dir / "temp").resolve()
+        Path(p).resolve().relative_to(base_temp)
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _promote_temp_audio_paths_to_library(pipeline_id: str, pipeline_dict: dict) -> None:
+    """Pre-persistence guard: copy any temp/ audio referenced by tts_previews or
+    previews.preview_data into the durable TTS library, then rewrite the path.
+
+    Invariant after this runs: no audio_path persisted to DB points into temp/.
+    Files already missing are zeroed out so the restore helper can reattach them
+    on the next GET (instead of leaving a dangling temp/ pointer).
+    """
+    profile_id = pipeline_dict.get("profile_id")
+    if not profile_id:
+        return
+    scripts = pipeline_dict.get("scripts") or []
+
+    try:
+        from app.services.tts_library_service import get_tts_library_service
+        tts_lib = get_tts_library_service()
+    except Exception as imp_err:
+        logger.warning(f"Pipeline {pipeline_id}: tts_library_service unavailable for promotion: {imp_err}")
+        tts_lib = None
+
+    def _persist_one(audio_path_str: Optional[str], srt_content: Optional[str],
+                     duration: Optional[float], text_for_asset: Optional[str]) -> Optional[Tuple[str, Optional[str]]]:
+        """Copy a temp audio into the library. Returns (new_rel_path, asset_id) or None."""
+        if not audio_path_str:
+            return None
+        src = Path(audio_path_str)
+        if not src.exists() or not tts_lib:
+            return None
+        try:
+            asset_id = tts_lib.save_from_pipeline(
+                profile_id=profile_id,
+                text=(text_for_asset or "").strip(),
+                audio_path=str(src),
+                srt_content=srt_content,
+                timestamps=None,
+                model="eleven_flash_v2_5",
+                duration=duration or 0.0,
+                voice_id=None,
+            )
+            if asset_id:
+                rel = f"media/tts/{profile_id}/{asset_id}.mp3"
+                if (get_settings().base_dir / rel).exists():
+                    return (rel, asset_id)
+            # Dedup hit — try to look up the existing asset's path
+            try:
+                from app.repositories.factory import get_repository as _gr
+                _r = _gr()
+                _sb = _r.get_client() if _r else None
+                if _sb and text_for_asset:
+                    _ex = _sb.table("editai_tts_assets").select("id, mp3_path")\
+                        .eq("profile_id", profile_id).eq("status", "ready")\
+                        .eq("tts_text", text_for_asset.strip()).limit(1).execute()
+                    if _ex.data and _ex.data[0].get("mp3_path"):
+                        return (_ex.data[0]["mp3_path"], _ex.data[0]["id"])
+            except Exception:
+                pass
+            # Last-ditch: copy verbatim into media/tts/ with a UUID name so audio
+            # at least survives temp cleanup, even if no DB row gets written.
+            import shutil as _shutil
+            from uuid import uuid4 as _uuid4
+            _dest_dir = get_settings().base_dir / "media" / "tts" / profile_id
+            _dest_dir.mkdir(parents=True, exist_ok=True)
+            _name = f"{_uuid4()}.mp3"
+            _dest = _dest_dir / _name
+            _shutil.copy2(str(src), str(_dest))
+            return (f"media/tts/{profile_id}/{_name}", None)
+        except Exception as save_err:
+            logger.warning(f"Pipeline {pipeline_id}: temp->library promotion failed for {src}: {save_err}")
+            return None
+
+    # Promote tts_previews
+    tts_previews = pipeline_dict.get("tts_previews") or {}
+    for raw_key, entry in list(tts_previews.items()):
+        if not isinstance(entry, dict):
+            continue
+        ap = entry.get("audio_path")
+        if not _path_is_in_temp(ap):
+            continue
+        try:
+            idx = int(str(raw_key))
+        except (ValueError, TypeError):
+            idx = None
+        text = scripts[idx] if (idx is not None and 0 <= idx < len(scripts)) else None
+        if text:
+            text = strip_product_group_tags(text)
+        promoted = _persist_one(ap, entry.get("srt_content"), entry.get("audio_duration"), text)
+        if promoted:
+            new_rel, asset_id = promoted
+            entry["audio_path"] = new_rel
+            if asset_id:
+                entry["library_asset_id"] = asset_id
+            logger.info(f"Pipeline {pipeline_id}: promoted tts_previews[{raw_key}] {ap} -> {new_rel}")
+        else:
+            # File missing or save failed — null the path so restore can reattach
+            entry["audio_path"] = None
+            logger.info(
+                f"Pipeline {pipeline_id}: nulled stale temp tts_previews[{raw_key}] (was {ap})"
+            )
+
+    # Promote previews.preview_data
+    previews = pipeline_dict.get("previews") or {}
+    for raw_key, preview in list(previews.items()):
+        if not isinstance(preview, dict):
+            continue
+        pd = preview.get("preview_data")
+        if not isinstance(pd, dict):
+            continue
+        ap = pd.get("audio_path")
+        if not _path_is_in_temp(ap):
+            continue
+        try:
+            idx = int(str(raw_key))
+        except (ValueError, TypeError):
+            idx = None
+        text = scripts[idx] if (idx is not None and 0 <= idx < len(scripts)) else None
+        if text:
+            text = strip_product_group_tags(text)
+        promoted = _persist_one(ap, pd.get("srt_content"), pd.get("audio_duration"), text)
+        if promoted:
+            new_rel, _asset_id = promoted
+            pd["audio_path"] = new_rel
+            logger.info(f"Pipeline {pipeline_id}: promoted previews[{raw_key}].audio_path {ap} -> {new_rel}")
+        else:
+            pd["audio_path"] = None
+            logger.info(
+                f"Pipeline {pipeline_id}: nulled stale temp previews[{raw_key}].audio_path (was {ap})"
+            )
+
+
 def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
     """Upsert full pipeline state to editai_pipelines. Graceful degradation with retry."""
+    # PRE-PERSIST INVARIANT: no audio_path under temp/ may be persisted in DB.
+    # This is a safety net on top of upstream fixes (assembly_service persists
+    # newly generated TTS to the library before returning), so older code paths,
+    # caches, or future regressions cannot reintroduce dangling temp pointers.
+    try:
+        _promote_temp_audio_paths_to_library(pipeline_id, pipeline_dict)
+    except Exception as promote_err:
+        logger.warning(f"Pipeline {pipeline_id}: temp-path promotion failed (non-blocking): {promote_err}")
+
     for attempt in range(2):
         try:
             repo = get_repository()
@@ -2831,8 +3000,9 @@ async def generate_variant_tts(
             # ONLY clean temp/ directories — never touch media/tts/ (library storage).
             old_tts = pipeline["tts_previews"].get(variant_index)
             if old_tts:
-                old_path = Path(old_tts.get("audio_path", ""))
-                if old_path.exists() and old_path != audio_path and "temp" in old_path.parts:
+                old_path_str = old_tts.get("audio_path") or ""
+                old_path = Path(old_path_str) if old_path_str else None
+                if old_path and old_path.exists() and old_path != audio_path and "temp" in old_path.parts:
                     old_dir = old_path.parent
                     for f in old_dir.iterdir():
                         try:
@@ -3160,7 +3330,7 @@ async def preview_variant(
 
         # Persistent diversity: deprioritize segments with usage_count > 0
         try:
-            repo = get_repository()
+            repo = _get_data_repository()
             _supa = repo.get_client() if repo else None
             if _supa:
                 _usage_filter = _supa.table("editai_segments")\
@@ -3564,7 +3734,32 @@ async def render_variants(
 
             existing_job = pipeline["render_jobs"].get(job_key)
             if existing_job and existing_job.get("status") == "processing":
-                continue  # Skip — already rendering this variant/version
+                # Treat as stale (orphan from a crashed/restarted run) when
+                # started_at is older than STALE_PROCESSING_THRESHOLD_SEC and
+                # no completed_at is recorded. Without this, any in-flight job
+                # that died without cleanup blocks the key forever — silently,
+                # since this continue used to log nothing.
+                _stale = False
+                _started_at = existing_job.get("started_at")
+                if _started_at:
+                    try:
+                        _started_dt = datetime.fromisoformat(_started_at.replace("Z", "+00:00"))
+                        _age = (datetime.now(timezone.utc) - _started_dt).total_seconds()
+                        if _age > STALE_PROCESSING_THRESHOLD_SEC and not existing_job.get("completed_at"):
+                            _stale = True
+                    except (ValueError, TypeError):
+                        _stale = True  # Unparseable timestamp → treat as stale
+                else:
+                    _stale = True  # No timestamp → treat as stale
+                if not _stale:
+                    logger.info(
+                        f"Pipeline {pipeline_id}: skipping {job_key} — already rendering"
+                    )
+                    continue
+                logger.warning(
+                    f"Pipeline {pipeline_id}: overriding stale processing job "
+                    f"{job_key} (started_at={_started_at}, no completed_at)"
+                )
 
             _init_job: dict = {
                 "status": "processing",
