@@ -31,6 +31,7 @@ import {
 import { apiGet, apiPost } from "@/lib/api";
 import { toast } from "sonner";
 import { PostizMonthlyCalendar } from "@/components/PostizMonthlyCalendar";
+import { PLATFORM_CHAR_LIMITS, PLATFORM_NAMES } from "@/lib/platforms";
 
 // Unified platform item — can be a Postiz integration or a Buffer channel
 interface UnifiedPlatform {
@@ -54,36 +55,6 @@ interface PublishDialogProps {
   onOpenChange: (open: boolean) => void;
   onPublished?: () => void;
 }
-
-// Character limits per platform type
-const PLATFORM_CHAR_LIMITS: Record<string, number> = {
-  x: 280,
-  twitter: 280,
-  bluesky: 300,
-  threads: 500,
-  instagram: 2200,
-  "instagram-standalone": 2200,
-  youtube: 5000,
-  linkedin: 3000,
-  "linkedin-page": 3000,
-  facebook: 63206,
-  tiktok: 150,
-};
-
-// Friendly platform names
-const PLATFORM_NAMES: Record<string, string> = {
-  x: "X",
-  twitter: "X",
-  bluesky: "Bluesky",
-  threads: "Threads",
-  instagram: "Instagram",
-  "instagram-standalone": "Instagram",
-  youtube: "YouTube",
-  linkedin: "LinkedIn",
-  "linkedin-page": "LinkedIn Page",
-  facebook: "Facebook",
-  tiktok: "TikTok",
-};
 
 // Unified green for all selected platforms
 const SELECTED_BORDER = "border-green-500";

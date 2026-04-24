@@ -484,8 +484,6 @@ def get_script_generator() -> ScriptGenerator:
                 from app.config import get_settings
                 settings = get_settings()
 
-                # BUG-SG-10: Validate that at least one API key is present
-                # before persisting the singleton
                 gemini_key = settings.gemini_api_key or ""
                 anthropic_key = settings.anthropic_api_key or ""
                 if not gemini_key.strip() and not anthropic_key.strip():
@@ -503,6 +501,34 @@ def get_script_generator() -> ScriptGenerator:
                 )
 
     return _script_generator
+
+
+def get_script_generator_for_profile(profile_id: str) -> "ScriptGenerator":
+    """Create a ScriptGenerator with per-profile API keys from the vault.
+
+    Falls back to env-var keys if vault is empty for this profile.
+    """
+    from app.config import get_settings
+    from app.services.api_key_vault import get_vault_manager
+
+    settings = get_settings()
+    vault = get_vault_manager()
+
+    gemini_key = vault.get_api_key_or_default(profile_id, "gemini") or settings.gemini_api_key
+    anthropic_key = vault.get_api_key_or_default(profile_id, "anthropic") or settings.anthropic_api_key
+
+    if not (gemini_key or "").strip() and not (anthropic_key or "").strip():
+        raise ValueError(
+            "ScriptGenerator requires at least one API key "
+            "(gemini_api_key or anthropic_api_key)."
+        )
+
+    return ScriptGenerator(
+        gemini_api_key=gemini_key,
+        anthropic_api_key=anthropic_key,
+        gemini_model=settings.gemini_model,
+        anthropic_model=settings.anthropic_model,
+    )
 
 
 def reset_script_generator() -> None:

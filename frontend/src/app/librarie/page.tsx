@@ -52,6 +52,7 @@ import { toast } from "sonner";
 import { useProfile } from "@/contexts/profile-context";
 import { EmptyState } from "@/components/empty-state";
 import { PublishDialog } from "@/components/PublishDialog";
+import { ImageBulkPublishDialog } from "@/components/ImageBulkPublishDialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { InlineVideoPlayer } from "@/components/inline-video-player";
 import { ClipHoverPreview } from "@/components/clip-hover-preview";
@@ -116,6 +117,8 @@ function LibrarieContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { currentProfile, isLoading: profileLoading } = useProfile();
+  const initialTab = searchParams.get("tab") === "images" ? "images" : "videos";
+  const initialViewMode = searchParams.get("view") === "trash" ? "trash" : "library";
 
   // State
   const [clips, setClips] = useState<ClipWithProject[]>([]);
@@ -194,7 +197,7 @@ function LibrarieContent() {
   const [bulkScheduleOpen, setBulkScheduleOpen] = useState(false);
 
   // View mode (library vs trash)
-  const [viewMode, setViewMode] = useState<"library" | "trash">("library");
+  const [viewMode, setViewMode] = useState<"library" | "trash">(initialViewMode);
   const [trashClips, setTrashClips] = useState<(ClipWithProject & { days_remaining?: number; deleted_at?: string })[]>([]);
   const [loadingTrash, setLoadingTrash] = useState(false);
   const [restoringClipId, setRestoringClipId] = useState<string | null>(null);
@@ -202,9 +205,12 @@ function LibrarieContent() {
   const [emptyingTrash, setEmptyingTrash] = useState(false);
 
   // Images tab state
-  const [activeTab, setActiveTab] = useState<"videos" | "images">("videos");
+  const [activeTab, setActiveTab] = useState<"videos" | "images">(initialTab);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [loadingImages, setLoadingImages] = useState(false);
+  const [selectedImageIds, setSelectedImageIds] = useState<Set<string>>(new Set());
+  const [bulkImageDialogOpen, setBulkImageDialogOpen] = useState(false);
+  const [bulkDeletingImages, setBulkDeletingImages] = useState(false);
   const [imagePublishId, setImagePublishId] = useState<string | null>(null);
   const [imagePublishCaption, setImagePublishCaption] = useState("");
   const [imagePublishIntegrations, setImagePublishIntegrations] = useState<string[]>([]);
@@ -235,16 +241,34 @@ function LibrarieContent() {
     (params: Record<string, string>) => {
       const newParams = new URLSearchParams(searchParams.toString());
       Object.entries(params).forEach(([key, value]) => {
-        if (value && value !== "all") {
+        const isDefaultValue =
+          !value ||
+          value === "all" ||
+          (key === "tab" && value === "videos") ||
+          (key === "view" && value === "library");
+        if (!isDefaultValue) {
           newParams.set(key, value);
         } else {
           newParams.delete(key);
         }
       });
-      router.push(`/librarie?${newParams.toString()}`, { scroll: false });
+      const query = newParams.toString();
+      router.push(query ? `/librarie?${query}` : "/librarie", { scroll: false });
     },
     [router, searchParams]
   );
+
+  useEffect(() => {
+    setSearchQuery(searchParams.get("search") || "");
+    setFilterSubtitles(searchParams.get("subtitles") || "all");
+    setFilterVoiceover(searchParams.get("voiceover") || "all");
+    setFilterPostiz(searchParams.get("postiz") || "all");
+    setFilterTiktok(searchParams.get("tiktok") || "all");
+    setFilterSocialPosted(searchParams.get("social") || "all");
+    setFilterTag(searchParams.get("tag") || "");
+    setActiveTab(searchParams.get("tab") === "images" ? "images" : "videos");
+    setViewMode(searchParams.get("view") === "trash" ? "trash" : "library");
+  }, [searchParams]);
 
   // Fetch all clips — supports cursor-based pagination (Bug #46: wrapped in useCallback)
   const fetchAllClips = useCallback(async (cursor?: string | null, tagFilter?: string, signal?: AbortSignal) => {
@@ -434,6 +458,13 @@ function LibrarieContent() {
       .map(id => clipMap.get(id))
       .filter((c): c is ClipWithProject => !!c);
   }, [clips, selectedClipIds]);
+
+  const orderedSelectedImages = useMemo(() => {
+    const imageMap = new Map(generatedImages.map((image) => [image.id, image]));
+    return Array.from(selectedImageIds)
+      .map((id) => imageMap.get(id))
+      .filter((image): image is GeneratedImage => !!image);
+  }, [generatedImages, selectedImageIds]);
 
   // Fetch Postiz connection status
   const fetchPostizStatus = async () => {
@@ -987,6 +1018,22 @@ function LibrarieContent() {
     }
   }, []);
 
+  const handleTabChange = (tab: "videos" | "images") => {
+    setActiveTab(tab);
+    setSelectedClipIds(new Set());
+    setSelectedImageIds(new Set());
+    updateURL(
+      tab === "images"
+        ? { tab: "images", view: "" }
+        : { tab: "videos", view: viewMode }
+    );
+  };
+
+  const handleViewModeChange = (mode: "library" | "trash") => {
+    setViewMode(mode);
+    updateURL({ tab: "videos", view: mode });
+  };
+
   // Fetch images when tab switches to "images"
   useEffect(() => {
     if (activeTab === "images") {
@@ -1048,12 +1095,34 @@ function LibrarieContent() {
     }
   };
 
+  const toggleImageSelection = (imageId: string) => {
+    setSelectedImageIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(imageId)) next.delete(imageId);
+      else next.add(imageId);
+      return next;
+    });
+  };
+
+  const clearImageSelection = () => {
+    setSelectedImageIds(new Set());
+  };
+
+  const selectAllImages = () => {
+    setSelectedImageIds(new Set(generatedImages.map((image) => image.id)));
+  };
+
   // Delete generated image
   const deleteImage = async (imageId: string) => {
     setDeletingImageId(imageId);
     try {
       await apiDelete(`/image-gen/${imageId}`);
       setGeneratedImages((prev) => prev.filter((img) => img.id !== imageId));
+      setSelectedImageIds((prev) => {
+        const next = new Set(prev);
+        next.delete(imageId);
+        return next;
+      });
       toast.success("Image deleted!");
     } catch (error) {
       handleApiError(error, "Error deleting image");
@@ -1076,6 +1145,35 @@ function LibrarieContent() {
     } catch (error) {
       handleApiError(error, "Error toggling approval");
     }
+  };
+
+  const openBulkDeleteImagesConfirm = () => {
+    const imagesToDelete = orderedSelectedImages;
+    if (imagesToDelete.length === 0) return;
+
+    setConfirmDialog({
+      open: true,
+      title: "Delete Selected Images",
+      description: `Are you sure you want to delete ${imagesToDelete.length} selected ${imagesToDelete.length === 1 ? "image" : "images"}?`,
+      confirmLabel: "Delete Selected",
+      variant: "destructive",
+      onConfirm: async () => {
+        setConfirmDialog((prev) => ({ ...prev, loading: true }));
+        setBulkDeletingImages(true);
+        try {
+          await Promise.all(imagesToDelete.map((image) => apiDelete(`/image-gen/${image.id}`)));
+          const deletedIds = new Set(imagesToDelete.map((image) => image.id));
+          setGeneratedImages((prev) => prev.filter((image) => !deletedIds.has(image.id)));
+          setSelectedImageIds(new Set());
+          toast.success(`${imagesToDelete.length} ${imagesToDelete.length === 1 ? "image deleted" : "images deleted"}!`);
+        } catch (error) {
+          handleApiError(error, "Error deleting selected images");
+        } finally {
+          setBulkDeletingImages(false);
+          setConfirmDialog((prev) => ({ ...prev, open: false, loading: false }));
+        }
+      },
+    });
   };
 
   // Restore clip from trash
@@ -1164,7 +1262,7 @@ function LibrarieContent() {
 
   return (
     <div className="min-h-screen bg-background">
-      <main className={`w-full max-w-[1400px] mx-auto px-6 py-8 ${viewMode === "library" && selectedClipIds.size > 0 ? "pb-24" : ""}`}>
+      <main className={`w-full max-w-[1400px] mx-auto px-6 py-8 ${(viewMode === "library" && selectedClipIds.size > 0) || (activeTab === "images" && selectedImageIds.size > 0) ? "pb-24" : ""}`}>
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -1180,14 +1278,14 @@ function LibrarieContent() {
                 <Button
                   variant={viewMode === "library" ? "default" : "outline"}
                   size="sm"
-                  onClick={() => setViewMode("library")}
+                  onClick={() => handleViewModeChange("library")}
                 >
                   Library
                 </Button>
                 <Button
                   variant={viewMode === "trash" ? "default" : "outline"}
                   size="sm"
-                  onClick={() => { setViewMode("trash"); fetchTrash(); }}
+                  onClick={() => { handleViewModeChange("trash"); fetchTrash(); }}
                 >
                   <Trash2 className="h-4 w-4 mr-1" />
                   Trash
@@ -1206,14 +1304,14 @@ function LibrarieContent() {
           <Button
             variant={activeTab === "videos" ? "default" : "ghost"}
             size="sm"
-            onClick={() => setActiveTab("videos")}
+            onClick={() => handleTabChange("videos")}
           >
             <Film className="size-4 mr-2" /> Video Clips
           </Button>
           <Button
             variant={activeTab === "images" ? "default" : "ghost"}
             size="sm"
-            onClick={() => setActiveTab("images")}
+            onClick={() => handleTabChange("images")}
           >
             <ImageIcon className="size-4 mr-2" /> Imagini
           </Button>
@@ -1222,6 +1320,29 @@ function LibrarieContent() {
         {/* === IMAGES TAB === */}
         {activeTab === "images" && (
           <div className="space-y-4">
+            {postizStatus && (
+              <div>
+                {postizStatus.connected ? (
+                  <div className="flex items-center gap-2 text-sm">
+                    <Badge variant="outline" className="border-green-500 text-green-600 gap-1">
+                      <Link className="h-3 w-3" />
+                      {postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")} - {postizStatus.integrations_count} {postizStatus.integrations_count === 1 ? "account" : "accounts"}
+                    </Badge>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-sm">
+                    <Badge variant="destructive" className="gap-1">
+                      <AlertCircle className="h-3 w-3" />
+                      Postiz not configured
+                    </Badge>
+                    <a href="/settings" className="text-xs text-muted-foreground hover:underline">
+                      Configure in Settings
+                    </a>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
                 {generatedImages.length} generated images
@@ -1231,6 +1352,68 @@ function LibrarieContent() {
                 Refresh
               </Button>
             </div>
+
+            {selectedImageIds.size > 0 && (
+              <Card className="border-primary bg-primary/5">
+                <CardContent className="py-3">
+                  <div className="flex items-center justify-between flex-wrap gap-3">
+                    <div className="flex items-center gap-3">
+                      <CheckSquare className="h-5 w-5 text-primary" />
+                      <span className="font-medium">
+                        {selectedImageIds.size} {selectedImageIds.size === 1 ? "image selected" : "images selected"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={selectAllImages}
+                        disabled={selectedImageIds.size === generatedImages.length}
+                      >
+                        <CheckSquare className="h-4 w-4 mr-2" />
+                        Select all ({generatedImages.length})
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={clearImageSelection}>
+                        <XCircle className="h-4 w-4 mr-2" />
+                        Deselect
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                        onClick={() => setBulkImageDialogOpen(true)}
+                        disabled={bulkDeletingImages || !postizStatus?.connected}
+                      >
+                        <Share2 className="h-4 w-4 mr-2" />
+                        Send to Social
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-primary text-primary hover:bg-primary/10 disabled:opacity-50"
+                        onClick={() => setBulkImageDialogOpen(true)}
+                        disabled={bulkDeletingImages || !postizStatus?.connected}
+                      >
+                        <CalendarClock className="h-4 w-4 mr-2" />
+                        Schedule
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={openBulkDeleteImagesConfirm}
+                        disabled={bulkDeletingImages}
+                      >
+                        {bulkDeletingImages ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4 mr-2" />
+                        )}
+                        Delete selected
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {loadingImages ? (
               <div className="flex justify-center py-12">
@@ -1245,9 +1428,29 @@ function LibrarieContent() {
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
                 {generatedImages.map((img) => (
-                  <Card key={img.id} className="overflow-hidden group hover:ring-2 hover:ring-primary/50 transition-all">
+                  <Card
+                    key={img.id}
+                    className={`overflow-hidden group cursor-pointer transition-all hover:ring-2 hover:ring-primary/50 ${
+                      selectedImageIds.has(img.id) ? "ring-2 ring-primary" : ""
+                    }`}
+                    onClick={() => toggleImageSelection(img.id)}
+                  >
                     {/* Image thumbnail */}
                     <div className="aspect-square bg-muted relative">
+                      <div
+                        className={`absolute top-2 left-2 z-10 transition-opacity ${
+                          selectedImageIds.has(img.id) ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                        }`}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Checkbox
+                          checked={selectedImageIds.has(img.id)}
+                          onCheckedChange={() => toggleImageSelection(img.id)}
+                          className="h-5 w-5 bg-background/80 border-2"
+                          aria-label={`Select image ${img.id.slice(0, 8)}`}
+                        />
+                      </div>
+
                       {img.image_url || img.final_image_path || img.image_local_path ? (
                         /* eslint-disable-next-line @next/next/no-img-element */
                         <img
@@ -1287,7 +1490,7 @@ function LibrarieContent() {
 
                       {/* Approved badge */}
                       {img.is_approved && (
-                        <Badge className="absolute top-2 left-2 text-xs bg-emerald-600 text-white">
+                        <Badge className="absolute bottom-2 left-2 text-xs bg-emerald-600 text-white">
                           <CheckCircle2 className="h-3 w-3 mr-1" />
                           Aprobat
                         </Badge>
@@ -1300,7 +1503,8 @@ function LibrarieContent() {
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => {
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 window.open(
                                   `${API_URL}/image-gen/${img.id}/file?download=true`,
                                   "_blank"
@@ -1314,7 +1518,10 @@ function LibrarieContent() {
                               size="sm"
                               className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                               disabled={!postizStatus?.connected}
-                              onClick={() => openImagePublish(img.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openImagePublish(img.id);
+                              }}
                               title={postizStatus?.connected ? "Publish to Social Media" : "Postiz not configured"}
                             >
                               <Share2 className="h-4 w-4" />
@@ -1325,7 +1532,10 @@ function LibrarieContent() {
                           size="sm"
                           variant="destructive"
                           disabled={deletingImageId === img.id}
-                          onClick={() => deleteImage(img.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteImage(img.id);
+                          }}
                           title="Delete image"
                         >
                           {deletingImageId === img.id ? (
@@ -1355,7 +1565,7 @@ function LibrarieContent() {
 
                       {/* Approval checkbox */}
                       {img.status === "completed" && (
-                        <div className="flex items-center gap-1.5 mt-1.5">
+                        <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()}>
                           <Checkbox
                             id={`approve-${img.id}`}
                             checked={img.is_approved}
@@ -1584,7 +1794,7 @@ function LibrarieContent() {
         )}
 
         {/* Postiz connection indicator */}
-        {viewMode === "library" && postizStatus && (
+        {activeTab === "videos" && viewMode === "library" && postizStatus && (
           <div className="mb-4">
             {postizStatus.connected ? (
               <div className="flex items-center gap-2 text-sm">
@@ -1608,7 +1818,7 @@ function LibrarieContent() {
         )}
 
         {/* Filters - library mode only */}
-        {viewMode === "library" && <Card className="mb-6">
+        {activeTab === "videos" && viewMode === "library" && <Card className="mb-6">
           <CardContent className="pt-6">
             <div className="flex flex-wrap gap-4 items-end">
               {/* Search */}
@@ -2337,6 +2547,15 @@ function LibrarieContent() {
           />
         )}
 
+        <ImageBulkPublishDialog
+          open={bulkImageDialogOpen}
+          onOpenChange={setBulkImageDialogOpen}
+          images={orderedSelectedImages}
+          onPublished={() => {
+            setSelectedImageIds(new Set());
+          }}
+        />
+
         {/* Confirm Dialog */}
         <ConfirmDialog
           open={confirmDialog.open}
@@ -2496,6 +2715,68 @@ function LibrarieContent() {
                     disabled={bulkDeleting || bulkUploading}
                   >
                     {bulkDeleting ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4 mr-2" />
+                    )}
+                    Delete selected
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "images" && selectedImageIds.size > 0 && (
+          <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 shadow-[0_-4px_20px_rgba(0,0,0,0.15)]">
+            <div className="container mx-auto px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <CheckSquare className="h-5 w-5 text-primary" />
+                  <span className="font-medium">
+                    {selectedImageIds.size} {selectedImageIds.size === 1 ? "image selected" : "images selected"}
+                  </span>
+                  <Button variant="ghost" size="sm" onClick={clearImageSelection}>
+                    <XCircle className="h-4 w-4 mr-1" />
+                    Deselect
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={selectAllImages}
+                    disabled={selectedImageIds.size === generatedImages.length}
+                  >
+                    <CheckSquare className="h-4 w-4 mr-2" />
+                    Select all ({generatedImages.length})
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    onClick={() => setBulkImageDialogOpen(true)}
+                    disabled={bulkDeletingImages || !postizStatus?.connected}
+                  >
+                    <Share2 className="h-4 w-4 mr-2" />
+                    Send to Social
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-primary text-primary hover:bg-primary/10 disabled:opacity-50"
+                    onClick={() => setBulkImageDialogOpen(true)}
+                    disabled={bulkDeletingImages || !postizStatus?.connected}
+                  >
+                    <CalendarClock className="h-4 w-4 mr-2" />
+                    Schedule
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={openBulkDeleteImagesConfirm}
+                    disabled={bulkDeletingImages}
+                  >
+                    {bulkDeletingImages ? (
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     ) : (
                       <Trash2 className="h-4 w-4 mr-2" />

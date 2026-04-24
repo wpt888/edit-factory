@@ -16,6 +16,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api-keys", tags=["API Key Vault"])
 
 
+def _invalidate_service_cache(profile_id: str, service: str) -> None:
+    """Invalidate in-memory client caches for a service after a vault mutation.
+
+    Without this, changed keys don't take effect until the cached client is
+    rebuilt (Gemini never, FAL after 10 min TTL).
+    """
+    try:
+        if service == "gemini":
+            from app.api.image_generate_routes import reset_gemini_client
+            reset_gemini_client(profile_id)
+        elif service == "fal":
+            from app.services.fal_image_service import reset_fal_generator
+            reset_fal_generator(profile_id)
+    except Exception as e:
+        logger.warning(f"Failed to invalidate {service} cache for profile {profile_id}: {e}")
+
+
 def _validate_service(service: str) -> str:
     if service not in VAULT_SERVICES:
         raise HTTPException(
@@ -27,6 +44,10 @@ def _validate_service(service: str) -> str:
 
 class AddKeyRequest(BaseModel):
     label: str
+    api_key: str
+
+
+class ValidateKeyRequest(BaseModel):
     api_key: str
 
 
@@ -62,6 +83,7 @@ async def add_key(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    _invalidate_service_cache(ctx.profile_id, service)
     return {"key": key}
 
 
@@ -87,6 +109,7 @@ async def update_key(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    _invalidate_service_cache(ctx.profile_id, service)
     return {"key": key}
 
 
@@ -107,6 +130,7 @@ async def delete_key(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    _invalidate_service_cache(ctx.profile_id, service)
     return {"status": "deleted"}
 
 
@@ -135,6 +159,7 @@ async def set_primary(
                     repo.update_vault_key(row["id"], {"is_primary": False})
         except Exception as e:
             logger.warning(f"Failed to clear primary keys: {e}")
+        _invalidate_service_cache(ctx.profile_id, service)
         return {"key": {"id": "__env__", "service": service, "is_primary": True}}
 
     try:
@@ -142,7 +167,28 @@ async def set_primary(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    _invalidate_service_cache(ctx.profile_id, service)
     return {"key": key}
+
+
+@router.post("/{service}/validate")
+async def validate_key(
+    body: ValidateKeyRequest,
+    service: str = Path(...),
+    ctx: ProfileContext = Depends(get_profile_context),
+):
+    """Validate an API key against the provider without persisting it."""
+    _validate_service(service)
+    from app.services.api_key_validators import validate_gemini, validate_fal
+
+    if service == "gemini":
+        result = await validate_gemini(body.api_key)
+    elif service == "fal":
+        result = await validate_fal(body.api_key)
+    else:
+        raise HTTPException(status_code=400, detail=f"Validation not supported for service '{service}'")
+
+    return result
 
 
 @router.get("/{service}/{key_id}/secret")

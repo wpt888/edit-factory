@@ -21,16 +21,27 @@ class JobStorage:
 
     def __init__(self):
         self._repo = None
+        self._legacy_supabase = None
         self._memory_store: Dict[str, dict] = {}
         self._update_lock = threading.Lock()
         self._cancelled_jobs: Dict[str, float] = {}  # job_id -> monotonic timestamp
+        self._cleared_cancelled_jobs: Dict[str, float] = {}
         self._cancelled_lock = threading.Lock()
         self._MAX_CANCELLED = 500
         self._init_supabase()
 
     @property
     def supabase(self):
-        return self._repo
+        return self._legacy_supabase or self._repo
+
+    @property
+    def _supabase(self):
+        """Backward-compatible alias used by legacy tests and callers."""
+        return self.supabase
+
+    @_supabase.setter
+    def _supabase(self, value):
+        self._legacy_supabase = value
 
     @property
     def update_lock(self):
@@ -52,6 +63,12 @@ class JobStorage:
         except Exception as e:
             logger.error(f"JobStorage: Failed to initialize repository: {e}")
             self._repo = None
+
+    def _has_repository_backend(self) -> bool:
+        return self._repo is not None and hasattr(self._repo, "create_job")
+
+    def _has_legacy_supabase_backend(self) -> bool:
+        return self._legacy_supabase is not None and hasattr(self._legacy_supabase, "table")
 
     def _evict_oldest_memory_jobs(self):
         """Evict oldest completed/failed jobs from memory when over limit."""
@@ -93,7 +110,7 @@ class JobStorage:
         if profile_id:
             job_data["profile_id"] = profile_id
 
-        if self._repo:
+        if self._has_repository_backend():
             try:
                 self._repo.create_job({
                     "id": job_id,
@@ -114,6 +131,26 @@ class JobStorage:
             except Exception as e:
                 logger.error(f"JobStorage: Failed to create job: {e}, using memory")
                 # Fallback to memory — mark as memory-only so update_job can upsert later
+                job_data["_memory_only"] = True
+                with self._update_lock:
+                    self._memory_store[job_id] = job_data
+                    self._evict_oldest_memory_jobs()
+                return job_data
+        elif self._has_legacy_supabase_backend():
+            try:
+                self._legacy_supabase.table("jobs").insert({
+                    "id": job_id,
+                    "job_type": job_data.get("job_type", "video_processing"),
+                    "status": job_data.get("status", "pending"),
+                    "progress": job_data.get("progress", "Queued"),
+                    "profile_id": profile_id,
+                    "data": job_data,
+                    "created_at": job_data["created_at"],
+                    "updated_at": job_data["updated_at"],
+                }).execute()
+                return job_data
+            except Exception as e:
+                logger.error(f"JobStorage: Failed to create job via legacy Supabase client: {e}, using memory")
                 job_data["_memory_only"] = True
                 with self._update_lock:
                     self._memory_store[job_id] = job_data
@@ -140,7 +177,7 @@ class JobStorage:
         Returns:
             Job data or None if not found
         """
-        if self._repo:
+        if self._has_repository_backend():
             try:
                 row = self._repo.get_job(job_id)
                 if not row:
@@ -160,6 +197,19 @@ class JobStorage:
                 # Only fall through to memory if job might exist there (created during Supabase outage)
                 if job_id in self._memory_store:
                     logger.warning(f"JobStorage: Found job {job_id} in memory fallback after Supabase error")
+                    return self._memory_store.get(job_id)
+                return None
+        elif self._has_legacy_supabase_backend():
+            try:
+                row = self._legacy_supabase.table("jobs").select("*").eq("id", job_id).single().execute().data
+                if not row:
+                    return None
+                if isinstance(row, dict) and "data" in row:
+                    return row["data"]
+                return row
+            except Exception as e:
+                logger.error(f"JobStorage: Legacy Supabase error fetching job {job_id}: {e}")
+                if job_id in self._memory_store:
                     return self._memory_store.get(job_id)
                 return None
 
@@ -201,7 +251,7 @@ class JobStorage:
         is_memory_only = job.pop("_memory_only", False)
         if is_memory_only and job_id in self._memory_store:
             self._memory_store[job_id].pop("_memory_only", None)
-        if self._repo:
+        if self._has_repository_backend():
             try:
                 # Build update data
                 update_data = {
@@ -235,6 +285,17 @@ class JobStorage:
                     logger.debug(f"JobStorage: Updated job {job_id}")
             except Exception as e:
                 logger.error(f"JobStorage: Failed to update job: {e}, memory copy preserved")
+        elif self._has_legacy_supabase_backend():
+            try:
+                update_data = {
+                    "status": job.get("status"),
+                    "progress": job.get("progress"),
+                    "data": job,
+                    "updated_at": job["updated_at"],
+                }
+                self._legacy_supabase.table("jobs").update(update_data).eq("id", job_id).execute()
+            except Exception as e:
+                logger.error(f"JobStorage: Failed to update job via legacy Supabase client: {e}, memory copy preserved")
 
         return job
 
@@ -250,7 +311,7 @@ class JobStorage:
         Returns:
             List of job data dicts
         """
-        if self._repo:
+        if self._has_repository_backend():
             try:
                 from app.repositories.models import QueryFilters
                 filters = QueryFilters(
@@ -271,6 +332,21 @@ class JobStorage:
                 return jobs
             except Exception as e:
                 logger.warning(f"JobStorage: Failed to list jobs: {e}, using memory")
+        elif self._has_legacy_supabase_backend():
+            try:
+                query = self._legacy_supabase.table("jobs").select("*").order("created_at", desc=True).limit(limit)
+                result = query.execute()
+                jobs = []
+                for row in result.data or []:
+                    job_data = row.get("data", row)
+                    if status and job_data.get("status") != status:
+                        continue
+                    if profile_id and job_data.get("profile_id") != profile_id:
+                        continue
+                    jobs.append(job_data)
+                return jobs[:limit]
+            except Exception as e:
+                logger.warning(f"JobStorage: Failed to list jobs via legacy Supabase client: {e}, using memory")
 
         # Fallback to memory
         jobs = list(self._memory_store.values())
@@ -293,13 +369,20 @@ class JobStorage:
         Returns:
             True if deleted, False if not found
         """
-        if self._repo:
+        if self._has_repository_backend():
             try:
                 self._repo.delete_job(job_id)
                 logger.info(f"JobStorage: Deleted job {job_id}")
                 return True
             except Exception as e:
                 logger.error(f"JobStorage: Failed to delete job: {e}")
+        elif self._has_legacy_supabase_backend():
+            try:
+                self._legacy_supabase.table("jobs").delete().eq("id", job_id).execute()
+                logger.info(f"JobStorage: Deleted job {job_id} via legacy Supabase client")
+                return True
+            except Exception as e:
+                logger.error(f"JobStorage: Failed to delete job via legacy Supabase client: {e}")
 
         # Fallback to memory
         with self._update_lock:
@@ -319,6 +402,7 @@ class JobStorage:
             True if job was found and cancelled, False otherwise.
         """
         with self._cancelled_lock:
+            self._cleared_cancelled_jobs.pop(job_id, None)
             self._cancelled_jobs[job_id] = __import__('time').monotonic()
             # Evict oldest if over limit
             if len(self._cancelled_jobs) > self._MAX_CANCELLED:
@@ -341,12 +425,18 @@ class JobStorage:
         Uses in-memory dict for speed (no DB roundtrip).
         """
         with self._cancelled_lock:
-            return job_id in self._cancelled_jobs
+            if job_id in self._cancelled_jobs:
+                return True
+            if job_id in self._cleared_cancelled_jobs:
+                return False
+        job = self.get_job(job_id)
+        return bool(job and job.get("status") == "cancelled")
 
     def clear_job_cancelled(self, job_id: str):
         """Clear the cancellation flag for a job."""
         with self._cancelled_lock:
             self._cancelled_jobs.pop(job_id, None)
+            self._cleared_cancelled_jobs[job_id] = __import__('time').monotonic()
 
     def get_jobs_by_project(self, project_id: str, status: Optional[str] = None) -> list:
         """Get jobs for a specific project_id stored in job data.
@@ -354,7 +444,7 @@ class JobStorage:
         """
         results = []
         # Try repository first
-        if self._repo:
+        if self._has_repository_backend():
             try:
                 from app.repositories.models import QueryFilters
                 filters = QueryFilters(
@@ -390,7 +480,7 @@ class JobStorage:
         # DB-05: Update status columns without overwriting the data JSONB blob.
         # The data column contains project_id, profile_id, input_path, etc. that
         # must be preserved for post-mortem debugging.
-        if self._repo:
+        if self._has_repository_backend():
             try:
                 from app.repositories.models import QueryFilters
                 stale_filters = QueryFilters(
@@ -426,7 +516,7 @@ class JobStorage:
                         job["updated_at"] = datetime.now(timezone.utc).isoformat()
                         cleaned += 1
                         # Collect Supabase sync data (do I/O outside lock)
-                        if self._repo:
+                        if self._has_repository_backend():
                             supabase_updates.append((job_id, {
                                 "status": "failed",
                                 "progress": job["progress"],
@@ -457,7 +547,7 @@ class JobStorage:
         count = 0
 
         # DB-15: Do Supabase cleanup first, then in-memory cleanup
-        if self._repo:
+        if self._has_repository_backend():
             try:
                 from app.repositories.models import QueryFilters
                 cleanup_filters = QueryFilters(
@@ -470,24 +560,36 @@ class JobStorage:
                 count += db_count
             except Exception as e:
                 logger.error(f"JobStorage: Failed to cleanup old jobs: {e}")
+        elif self._has_legacy_supabase_backend():
+            try:
+                result = (
+                    self._legacy_supabase.table("jobs")
+                    .delete()
+                    .in_("status", ["failed", "completed", "cancelled"])
+                    .lt("created_at", cutoff)
+                    .execute()
+                )
+                db_count = len(result.data) if result.data else 0
+                count += db_count
+            except Exception as e:
+                logger.error(f"JobStorage: Failed to cleanup old jobs via legacy Supabase client: {e}")
 
         # Clean up in-memory store — snapshot under lock
-        # Only count memory-only jobs (not already counted from Supabase) to avoid double-counting
         with self._update_lock:
             snapshot = dict(self._memory_store)
         expired_keys = [
             job_id for job_id, job in snapshot.items()
             if job.get("created_at", "") < cutoff
         ]
-        memory_only_count = 0
+        memory_count = 0
         with self._update_lock:
             for job_id in expired_keys:
                 job = self._memory_store.pop(job_id, None)
-                if job and job.get("_memory_only"):
-                    memory_only_count += 1
+                if job:
+                    memory_count += 1
         if expired_keys:
-            logger.info(f"JobStorage: Cleaned up {len(expired_keys)} old jobs from memory ({memory_only_count} memory-only)")
-        count += memory_only_count
+            logger.info(f"JobStorage: Cleaned up {len(expired_keys)} old jobs from memory")
+        count += memory_count
 
         return count
 

@@ -8,7 +8,7 @@ import uuid
 import logging
 import shutil
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Literal, Optional, List
 
@@ -41,23 +41,47 @@ def _evict_stale_progress():
         del _generation_progress[k]
 
 
-# ============== Gemini client singleton ==============
-_gemini_client = None
+# ============== Per-profile Gemini client cache ==============
+_gemini_clients: dict[str, object] = {}  # profile_id -> genai.Client
 _gemini_lock = threading.Lock()
 
 
-def _get_gemini_client():
-    """Lazy singleton for Gemini client."""
-    global _gemini_client
-    if _gemini_client is None:
+def _get_gemini_client(profile_id: str = ""):
+    """Get or create a Gemini client for a profile (falls back to env key)."""
+    from app.services.api_key_vault import get_vault_manager
+    api_key = get_vault_manager().get_api_key_or_default(profile_id, "gemini") if profile_id else ""
+    if not api_key:
+        settings = get_settings()
+        api_key = settings.gemini_api_key
+    if not api_key:
+        raise ValueError("Gemini API key not configured")
+
+    cache_key = profile_id or "__global__"
+    client = _gemini_clients.get(cache_key)
+    if client is None:
         with _gemini_lock:
-            if _gemini_client is None:
+            client = _gemini_clients.get(cache_key)
+            if client is None:
                 from google import genai
-                settings = get_settings()
-                if not settings.gemini_api_key:
-                    raise ValueError("Gemini API key not configured")
-                _gemini_client = genai.Client(api_key=settings.gemini_api_key)
-    return _gemini_client
+                client = genai.Client(api_key=api_key)
+                _gemini_clients[cache_key] = client
+    return client
+
+
+def reset_gemini_client(profile_id: Optional[str] = None) -> None:
+    """Drop the cached Gemini client so the next call rebuilds it with fresh keys.
+
+    Call after a vault mutation (add/update/delete/set-primary) so users don't keep
+    generating with a stale key.
+    """
+    with _gemini_lock:
+        if profile_id is None:
+            _gemini_clients.clear()
+            return
+        _gemini_clients.pop(profile_id, None)
+        # Env fallback client caches under "__global__" — drop it too since
+        # changes to a profile's primary key can change which key is active.
+        _gemini_clients.pop("__global__", None)
 
 
 # ============== Pydantic models ==============
@@ -122,6 +146,14 @@ class PublishImageRequest(BaseModel):
     schedule_date: Optional[str] = None
 
 
+class BulkPublishImagesRequest(BaseModel):
+    image_ids: List[str]
+    caption: str = ""
+    integration_ids: List[str]
+    schedule_date: Optional[str] = None
+    schedule_interval_minutes: int = 1440
+
+
 # ============== Background task ==============
 
 def _generate_image_task(
@@ -137,12 +169,13 @@ def _generate_image_task(
 ):
     """Background task: generate image via FAL AI, download, update DB."""
     repo = get_repository()
+    scoped_key = f"{profile_id}:{image_id}"
 
     local_path = None
     try:
         with _progress_lock:
             _evict_stale_progress()
-            _generation_progress[image_id] = {"status": "generating", "progress": 0, "_ts": time.time()}
+            _generation_progress[scoped_key] = {"status": "generating", "progress": 0, "_ts": time.time()}
 
         # Update DB status
         if repo:
@@ -153,7 +186,7 @@ def _generate_image_task(
 
         # Generate via FAL
         from app.services.fal_image_service import get_fal_generator
-        fal = get_fal_generator()
+        fal = get_fal_generator(profile_id)
         image_urls = [product_image_url] if product_image_url else None
         result = fal.generate(
             prompt=prompt,
@@ -173,7 +206,7 @@ def _generate_image_task(
             raise RuntimeError("FAL image has no URL")
 
         with _progress_lock:
-            _generation_progress[image_id] = {"status": "downloading", "progress": 50, "_ts": time.time()}
+            _generation_progress[scoped_key] = {"status": "downloading", "progress": 50, "_ts": time.time()}
 
         # Download to local
         dest_dir = get_settings().output_dir / "generated_images" / profile_id
@@ -182,7 +215,7 @@ def _generate_image_task(
         fal.download_image(image_url, local_path)
 
         with _progress_lock:
-            _generation_progress[image_id] = {"status": "completed", "progress": 100, "_ts": time.time()}
+            _generation_progress[scoped_key] = {"status": "completed", "progress": 100, "_ts": time.time()}
 
         # Calculate cost
         cost = None
@@ -230,7 +263,7 @@ def _generate_image_task(
             except Exception:
                 pass
         with _progress_lock:
-            _generation_progress[image_id] = {"status": "failed", "progress": 0, "error": str(e), "_ts": time.time()}
+            _generation_progress[scoped_key] = {"status": "failed", "progress": 0, "error": str(e), "_ts": time.time()}
         if repo:
             try:
                 repo.table_query("generated_images", "update", data={
@@ -253,8 +286,9 @@ async def generate_image(
     ctx: ProfileContext = Depends(get_profile_context),
 ):
     """Start AI image generation (background task)."""
-    settings = get_settings()
-    if not settings.fal_api_key:
+    from app.services.api_key_vault import get_vault_manager
+    fal_key = get_vault_manager().get_api_key_or_default(ctx.profile_id, "fal")
+    if not fal_key:
         raise HTTPException(status_code=503, detail="FAL API key not configured")
 
     repo = get_repository()
@@ -391,14 +425,15 @@ async def get_generation_status(
     ctx: ProfileContext = Depends(get_profile_context),
 ):
     """Poll generation status."""
-    # Check in-memory first (faster)
+    # Check in-memory first (faster) — scoped key for multi-tenancy
+    scoped_key = f"{ctx.profile_id}:{image_id}"
     with _progress_lock:
-        progress = _generation_progress.get(image_id)
+        progress = _generation_progress.get(scoped_key)
         if progress is not None:
             if progress["status"] in ("completed", "failed"):
                 # Clean up after client reads final status
                 cached = dict(progress)
-                del _generation_progress[image_id]
+                del _generation_progress[scoped_key]
             else:
                 return dict(progress)
     if progress is not None and progress["status"] in ("completed", "failed"):
@@ -1020,11 +1055,8 @@ async def generate_caption(
 
     # Call Gemini
     try:
+        client = _get_gemini_client(ctx.profile_id)
         settings = get_settings()
-        if not settings.gemini_api_key:
-            raise HTTPException(status_code=503, detail="Gemini API key not configured")
-
-        client = _get_gemini_client()
         response = client.models.generate_content(
             model=settings.gemini_model,
             contents=prompt_text,
@@ -1112,6 +1144,78 @@ async def _publish_image_task(
         update_publish_progress(job_id, f"Error: {str(e)}", 100, "failed")
 
 
+async def _bulk_publish_images_task(
+    job_id: str,
+    profile_id: str,
+    images: List[dict],
+    caption: str,
+    integration_ids: List[str],
+    schedule_start: Optional[datetime],
+    interval_minutes: int,
+):
+    """Background task to publish multiple images via Postiz."""
+    from app.services.postiz_service import get_postiz_publisher
+
+    logger.info(f"[Profile {profile_id}] Bulk publishing {len(images)} images (job {job_id})")
+    update_publish_progress(job_id, "Initializing bulk image publish...", 0)
+
+    try:
+        publisher = get_postiz_publisher(profile_id)
+
+        update_publish_progress(job_id, "Fetching platform info...", 10)
+        integrations = await publisher.get_integrations(profile_id=profile_id)
+        integrations_info = {i.id: i.type for i in integrations}
+
+        total = max(len(images), 1)
+        for index, image in enumerate(images):
+            image_label = f"{index + 1}/{total}"
+            progress_base = int((index / total) * 90)
+
+            update_publish_progress(
+                job_id,
+                f"Uploading image {image_label}...",
+                progress_base + 15,
+            )
+            media = await publisher.upload_video(
+                video_path=Path(image["file_path"]),
+                profile_id=profile_id,
+            )
+
+            scheduled_for = None
+            if schedule_start is not None:
+                scheduled_for = schedule_start + timedelta(minutes=index * interval_minutes)
+
+            update_publish_progress(
+                job_id,
+                f"Creating post for image {image_label}...",
+                progress_base + 25,
+            )
+            result = await publisher.create_post(
+                media_id=media.id,
+                media_path=media.path,
+                caption=caption,
+                integration_ids=integration_ids,
+                integrations_info=integrations_info,
+                schedule_date=scheduled_for,
+                profile_id=profile_id,
+            )
+
+            if not result.success:
+                update_publish_progress(job_id, f"Failed: {result.error}", 100, "failed")
+                return
+
+        final_step = (
+            f"Scheduled {len(images)} image(s) successfully!"
+            if schedule_start
+            else f"Published {len(images)} image(s) successfully!"
+        )
+        update_publish_progress(job_id, final_step, 100, "completed")
+
+    except Exception as e:
+        logger.error(f"Bulk image publish job {job_id} failed: {e}")
+        update_publish_progress(job_id, f"Error: {str(e)}", 100, "failed")
+
+
 @router.post("/publish-image")
 @limiter.limit("10/minute")
 async def publish_image(
@@ -1166,4 +1270,73 @@ async def publish_image(
         "status": "processing",
         "job_id": job_id,
         "message": f"Publishing image to {len(req.integration_ids)} platform(s)...",
+    }
+
+
+@router.post("/bulk-publish")
+@limiter.limit("10/minute")
+async def bulk_publish_images(
+    request: Request,
+    req: BulkPublishImagesRequest,
+    background_tasks: BackgroundTasks,
+    ctx: ProfileContext = Depends(get_profile_context),
+):
+    """Publish multiple generated images to social media via Postiz."""
+    if not req.image_ids:
+        raise HTTPException(status_code=400, detail="At least one image must be selected")
+    if not req.integration_ids:
+        raise HTTPException(status_code=400, detail="At least one platform must be selected")
+
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    result = repo.table_query(
+        "generated_images",
+        "select",
+        filters=QueryFilters(
+            select="id, final_image_path, image_local_path",
+            in_={"id": req.image_ids},
+            eq={"profile_id": ctx.profile_id},
+        ),
+    )
+    rows = result.data or []
+    rows_by_id = {row["id"]: row for row in rows}
+
+    valid_images = []
+    for image_id in req.image_ids:
+        row = rows_by_id.get(image_id)
+        if not row:
+          continue
+        file_path = row.get("final_image_path") or row.get("image_local_path")
+        if not file_path or not Path(file_path).exists():
+            continue
+        valid_images.append({"id": image_id, "file_path": file_path})
+
+    if not valid_images:
+        raise HTTPException(status_code=400, detail="No valid images found for publishing")
+
+    schedule_dt = None
+    if req.schedule_date:
+        try:
+            schedule_dt = datetime.fromisoformat(req.schedule_date.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid schedule_date format. Use ISO format.")
+
+    job_id = str(uuid.uuid4())
+    background_tasks.add_task(
+        _bulk_publish_images_task,
+        job_id=job_id,
+        profile_id=ctx.profile_id,
+        images=valid_images,
+        caption=req.caption,
+        integration_ids=req.integration_ids,
+        schedule_start=schedule_dt,
+        interval_minutes=max(req.schedule_interval_minutes, 1),
+    )
+
+    return {
+        "status": "processing",
+        "job_id": job_id,
+        "message": f"Publishing {len(valid_images)} image(s) to {len(req.integration_ids)} platform(s)...",
     }

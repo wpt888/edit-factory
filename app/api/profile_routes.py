@@ -282,6 +282,28 @@ async def patch_profile(
                 logger.info(f"[Profile {profile_id}] Reset Postiz publisher cache after settings update")
             except Exception as e:
                 logger.warning(f"[Profile {profile_id}] Failed to reset Postiz cache: {e}")
+            try:
+                from app.services.buffer_service import reset_buffer_publisher
+                reset_buffer_publisher(profile_id)
+                logger.info(f"[Profile {profile_id}] Reset Buffer publisher cache after settings update")
+            except Exception as e:
+                logger.warning(f"[Profile {profile_id}] Failed to reset Buffer cache: {e}")
+            try:
+                from app.services.telegram_service import reset_telegram_sender
+                reset_telegram_sender(profile_id)
+                logger.info(f"[Profile {profile_id}] Reset Telegram sender cache after settings update")
+            except Exception as e:
+                logger.warning(f"[Profile {profile_id}] Failed to reset Telegram cache: {e}")
+            try:
+                from app.api.image_generate_routes import reset_gemini_client
+                reset_gemini_client(profile_id)
+            except Exception as e:
+                logger.warning(f"[Profile {profile_id}] Failed to reset Gemini cache: {e}")
+            try:
+                from app.services.fal_image_service import reset_fal_generator
+                reset_fal_generator(profile_id)
+            except Exception as e:
+                logger.warning(f"[Profile {profile_id}] Failed to reset FAL cache: {e}")
 
         logger.info(f"[Profile {profile_id}] PATCH by user {current_user.id}, tts_settings_updated={tts_settings_updated}")
         return updated_profile
@@ -558,6 +580,143 @@ async def update_subtitle_settings(
     except Exception as e:
         logger.error(f"Failed to update subtitle settings for profile {profile_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to save subtitle settings")
+
+
+# ============== USER-SAVED SUBTITLE PRESETS ==============
+#
+# Distinct from the hardcoded CAPTION_PRESETS in
+# frontend/src/types/video-processing.ts. These are presets the user builds
+# themselves at the profile level and can reuse across pipelines. Per-variant
+# overrides still live on the pipeline; presets are just a convenience for
+# materializing a known style into a variant quickly.
+
+class UserSubtitlePresetCreate(BaseModel):
+    """Payload for creating a new user-saved subtitle preset."""
+    name: str
+    settings: Dict[str, Any]
+
+
+@router.get("/{profile_id}/subtitle-presets")
+async def list_user_subtitle_presets(
+    profile_id: str,
+    current_user: AuthUser = Depends(get_current_user)
+):
+    """Return the list of user-saved subtitle presets for a profile."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        profile = repo.get_profile(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if profile["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+
+        return {"presets": profile.get("user_subtitle_presets") or []}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list subtitle presets for profile {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch subtitle presets")
+
+
+@router.post("/{profile_id}/subtitle-presets")
+async def create_user_subtitle_preset(
+    profile_id: str,
+    body: UserSubtitlePresetCreate,
+    current_user: AuthUser = Depends(get_current_user)
+):
+    """Append a new user-saved subtitle preset to the profile."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Preset name cannot be empty")
+    if len(name) > 80:
+        raise HTTPException(status_code=400, detail="Preset name too long (max 80 chars)")
+    if not isinstance(body.settings, dict) or not body.settings:
+        raise HTTPException(status_code=400, detail="Preset settings must be a non-empty dict")
+
+    try:
+        profile = repo.get_profile(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if profile["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+
+        existing = list(profile.get("user_subtitle_presets") or [])
+        if len(existing) >= 50:
+            raise HTTPException(status_code=400, detail="Maximum 50 presets per profile")
+
+        new_preset = {
+            "id": str(uuid.uuid4()),
+            "name": name,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "settings": body.settings,
+        }
+        existing.append(new_preset)
+
+        try:
+            repo.update_profile(profile_id, {
+                "user_subtitle_presets": existing,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as update_err:
+            # Pre-migration databases will hit this path — return a helpful error
+            if "user_subtitle_presets" in str(update_err):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Database not migrated: run migration 043_add_user_subtitle_presets.sql"
+                )
+            raise
+
+        logger.info(f"[Profile {profile_id}] Created subtitle preset {new_preset['id']} ({name})")
+        return new_preset
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create subtitle preset for profile {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create subtitle preset")
+
+
+@router.delete("/{profile_id}/subtitle-presets/{preset_id}")
+async def delete_user_subtitle_preset(
+    profile_id: str,
+    preset_id: str,
+    current_user: AuthUser = Depends(get_current_user)
+):
+    """Delete a user-saved subtitle preset by id."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        profile = repo.get_profile(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if profile["user_id"] != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
+
+        existing = list(profile.get("user_subtitle_presets") or [])
+        filtered = [p for p in existing if p.get("id") != preset_id]
+        if len(filtered) == len(existing):
+            raise HTTPException(status_code=404, detail="Preset not found")
+
+        repo.update_profile(profile_id, {
+            "user_subtitle_presets": filtered,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+        logger.info(f"[Profile {profile_id}] Deleted subtitle preset {preset_id}")
+        return {"deleted": preset_id, "remaining": len(filtered)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete subtitle preset {preset_id} for profile {profile_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete subtitle preset")
 
 
 # ============== AI INSTRUCTIONS ==============

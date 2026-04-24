@@ -793,6 +793,36 @@ class DataRepository(ABC):
         ...
 
     # ──────────────────────────────────────────────
+    # 26. API Key Vault
+    # ──────────────────────────────────────────────
+
+    @abstractmethod
+    def list_vault_keys(
+        self, profile_id: str, service: str, filters: Optional[QueryFilters] = None
+    ) -> QueryResult:
+        """List API keys for a profile and service from the vault."""
+        ...
+
+    @abstractmethod
+    def get_vault_key(self, key_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single vault key by ID."""
+        ...
+
+    @abstractmethod
+    def create_vault_key(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Insert a vault key. Returns the created row."""
+        ...
+
+    @abstractmethod
+    def update_vault_key(self, key_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Update a vault key by ID. Returns the updated row."""
+        ...
+
+    @abstractmethod
+    def delete_vault_key(self, key_id: str) -> None:
+        """Delete a vault key by ID."""
+        ...
+
     # 25. Generic escape hatch
     # ──────────────────────────────────────────────
 

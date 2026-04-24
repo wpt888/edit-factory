@@ -37,6 +37,7 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
   const [newKey, setNewKey] = useState("")
   const [showNewKey, setShowNewKey] = useState(false)
   const [adding, setAdding] = useState(false)
+  const [testStatus, setTestStatus] = useState<"idle" | "success" | "error">("idle")
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [visibleSecrets, setVisibleSecrets] = useState<Record<string, string>>({})
   const [secretLoading, setSecretLoading] = useState<string | null>(null)
@@ -66,16 +67,29 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
       return
     }
     setAdding(true)
+    setTestStatus("idle")
     try {
+      // Validate first — never persist a key that fails provider auth
+      const validateRes = await apiPost(`/api-keys/${service}/validate`, { api_key: newKey.trim() })
+      const validateData = await validateRes.json()
+      if (!validateData.connected) {
+        setTestStatus("error")
+        toast.error(`${label} key invalid: ${validateData.error || "Authentication failed"}`)
+        return
+      }
+      // Key is valid — persist it
       await apiPost(`/api-keys/${service}/`, {
         label: newLabel.trim(),
         api_key: newKey.trim(),
       })
-      toast.success(`${label} key added`)
+      setTestStatus("success")
+      toast.success(`${label} key validated and added`)
       setNewLabel("")
       setNewKey("")
+      setTimeout(() => setTestStatus("idle"), 4000)
       loadKeys()
     } catch (error) {
+      setTestStatus("error")
       handleApiError(error, `Failed to add ${label} key`)
     } finally {
       setAdding(false)
@@ -299,8 +313,20 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
             ) : (
               <Plus className="mr-2 h-4 w-4" />
             )}
-            Add {label} Key
+            {adding ? "Validating…" : `Test & Add ${label} Key`}
           </Button>
+          {testStatus === "success" && (
+            <div className="flex items-center gap-2 p-2 bg-green-500/10 rounded-md border border-green-500/30">
+              <div className="w-2 h-2 rounded-full bg-green-500" />
+              <span className="text-xs text-green-600 dark:text-green-400">Key validated and added</span>
+            </div>
+          )}
+          {testStatus === "error" && (
+            <div className="flex items-center gap-2 p-2 bg-red-500/10 rounded-md border border-red-500/30">
+              <div className="w-2 h-2 rounded-full bg-red-500" />
+              <span className="text-xs text-red-600 dark:text-red-400">Validation failed — key not saved</span>
+            </div>
+          )}
         </div>
       )}
     </div>

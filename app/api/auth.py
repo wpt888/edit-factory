@@ -15,6 +15,7 @@ from jwt.exceptions import PyJWTError
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+_DEV_PROFILE_ID = "00000000-0000-0000-0000-000000000000"
 
 # Profile context cache: (user_id, profile_id_or_default) -> (ProfileContext, timestamp)
 _profile_cache: Dict[tuple, tuple] = {}
@@ -241,7 +242,7 @@ async def get_profile_context(
     settings = get_settings()
 
     # Development mode bypass
-    if settings.auth_disabled or settings.desktop_mode:
+    if settings.auth_disabled:
         profile_key = x_profile_id or "default"
 
         if x_profile_id:
@@ -283,12 +284,42 @@ async def get_profile_context(
             except Exception as e:
                 logger.warning(f"Dev mode: could not query profiles table: {e}")
 
-        # DB-11: Return HTTP 503 instead of picking an arbitrary placeholder profile
-        # that would fail on FK-constrained inserts anyway
+        # DB-11: Fail fast rather than return a placeholder UUID that violates FK
+        # constraints on every downstream insert and produces cryptic errors.
         logger.error("Dev mode: no profiles found in DB — cannot proceed without a valid profile")
         raise HTTPException(
-            status_code=503,
-            detail="No profiles found in database. Please create a profile first (run account setup or insert a row into the profiles table)."
+            status_code=422,
+            detail="No profile available. Create or seed a profile before using the API in auth-disabled mode.",
+        )
+
+    if settings.desktop_mode:
+        profile_key = x_profile_id or "default"
+        cached = await _cache_get_profile(current_user.id, profile_key)
+        if cached:
+            return cached
+
+        if x_profile_id:
+            ctx = ProfileContext(profile_id=x_profile_id, user_id=current_user.id)
+            await _cache_set_profile(current_user.id, profile_key, ctx)
+            return ctx
+
+        repo = _get_repo()
+        if repo:
+            try:
+                from app.repositories.models import QueryFilters
+                result = repo.table_query("profiles", "select", filters=QueryFilters(select="id", eq={"is_default": True}, limit=1))
+                if result.data:
+                    profile_id = result.data[0]["id"]
+                    ctx = ProfileContext(profile_id=profile_id, user_id=current_user.id)
+                    await _cache_set_profile(current_user.id, "default", ctx)
+                    return ctx
+            except Exception as e:
+                logger.warning(f"Desktop mode: could not query profiles table: {e}")
+
+        logger.error("Desktop mode: no DB profile found — refusing to fall back to placeholder UUID")
+        raise HTTPException(
+            status_code=422,
+            detail="No profile available for desktop mode. Create a profile first.",
         )
 
     repo = _get_repo()

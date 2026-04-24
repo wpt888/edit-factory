@@ -70,7 +70,7 @@ interface SubtitleEditorProps {
   pipelineId?: string;
   /** Variant index for FFmpeg frame preview */
   variantIndex?: number;
-  /** Text to use for the fast CSS overlay when subtitle lines are not available */
+  /** Text sent to the FFmpeg preview endpoint when subtitle lines are not available */
   previewText?: string;
   /**
    * Optional Meta visual version label ("A" or "B"). When set and the active
@@ -120,7 +120,6 @@ export function SubtitleEditor({
   // FFmpeg frame preview state
   const [ffmpegPreviewUrl, setFfmpegPreviewUrl] = useState<string | null>(null);
   const [ffmpegLoading, setFfmpegLoading] = useState(false);
-  const [showCssPreview, setShowCssPreview] = useState(true);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const ffmpegTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const abortRef = useRef<AbortController>(undefined);
@@ -135,15 +134,11 @@ export function SubtitleEditor({
 
     // Include visualVersion in the fingerprint so toggling between Meta
     // versions triggers a new preview render even when settings are identical.
-    const fingerprint = JSON.stringify(settings) + "|v=" + (visualVersion || "");
+    const fingerprint =
+      JSON.stringify(settings) +
+      "|v=" + (visualVersion || "") +
+      "|t=" + previewOverlayText;
     if (fingerprint === prevFingerprint.current) return;
-
-    // Keep the preview responsive while the debounced FFmpeg frame catches up.
-    // We intentionally retain the previous FFmpeg frame as a background so the
-    // video thumbnail stays visible; the live CSS overlay (same text, new size)
-    // sits on top and largely covers the stale burned-in text until the new
-    // frame arrives.
-    setShowCssPreview(true);
 
     // Clear previous timer and abort in-flight request
     if (ffmpegTimer.current) clearTimeout(ffmpegTimer.current);
@@ -174,9 +169,7 @@ export function SubtitleEditor({
           if (prev) URL.revokeObjectURL(prev);
           return URL.createObjectURL(blob);
         });
-        setShowCssPreview(false);
       } catch (err: unknown) {
-        // Silently keep CSS preview on error
         if (err instanceof Error && err.name !== "AbortError") {
           console.warn("FFmpeg frame preview failed:", err);
         }
@@ -255,28 +248,6 @@ export function SubtitleEditor({
     };
   }, [videoInfo, previewHeight]);
 
-  // Always use the ASS PlayRes reference height (1920) for scaling,
-  // NOT the encoded video pixel height which may be half-res (960).
-  // FontSize values are defined in a 1920-tall coordinate space.
-  const ASS_REF_HEIGHT = 1920;
-
-  const scaledFontSize = useMemo(() => {
-    return (settings.fontSize / ASS_REF_HEIGHT) * previewHeight;
-  }, [settings.fontSize, previewHeight]);
-
-  const scaledOutline = useMemo(() => {
-    return (settings.outlineWidth / ASS_REF_HEIGHT) * previewHeight;
-  }, [settings.outlineWidth, previewHeight]);
-
-  // Scaled shadow values for preview
-  const scaledShadowDepth = useMemo(() => {
-    return ((settings.shadowDepth ?? 0) / ASS_REF_HEIGHT) * previewHeight;
-  }, [settings.shadowDepth, previewHeight]);
-
-  const scaledGlowBlur = useMemo(() => {
-    return ((settings.glowBlur ?? 0) / ASS_REF_HEIGHT) * previewHeight;
-  }, [settings.glowBlur, previewHeight]);
-
   // The preview panel rendered as a standalone block
   const previewPanel = showPreview ? (
     <div className="space-y-3">
@@ -307,37 +278,6 @@ export function SubtitleEditor({
               <div className="absolute inset-0 bg-gradient-to-br from-gray-700 via-gray-800 to-gray-900" />
 
             </>
-          )}
-          {showCssPreview && (
-            <div
-              className="absolute left-0 right-0 text-center px-4 transition-all duration-100 pointer-events-none"
-              style={{
-                fontFamily: settings.fontFamily,
-                fontSize: `${scaledFontSize}px`,
-                color: settings.textColor,
-                opacity: (settings.opacity ?? 100) / 100,
-                WebkitTextStroke: `${scaledOutline}px ${settings.outlineColor}`,
-                paintOrder: "stroke fill",
-                textShadow: [
-                  scaledShadowDepth > 0
-                    ? `0 ${scaledShadowDepth}px ${scaledShadowDepth * 2}px ${settings.shadowColor ?? "rgba(0,0,0,0.8)"}`
-                    : "0 1px 3px rgba(0,0,0,0.85)",
-                  settings.enableGlow && scaledGlowBlur > 0
-                    ? `0 0 ${scaledGlowBlur}px ${settings.outlineColor}`
-                    : "",
-                ].filter(Boolean).join(", "),
-                fontWeight: 700,
-                top: `${settings.positionY}%`,
-                transform: "translateY(-50%)",
-                ...(settings.borderStyle === 3 ? {
-                  backgroundColor: "rgba(0, 0, 0, 0.7)",
-                  padding: "4px 8px",
-                  borderRadius: "4px",
-                } : {}),
-              }}
-            >
-              {previewOverlayText}
-            </div>
           )}
           {ffmpegLoading && (
             <div className="absolute top-2 right-2">
@@ -379,37 +319,6 @@ export function SubtitleEditor({
             ) : (
               <div className="absolute inset-0 bg-gradient-to-br from-gray-700 via-gray-800 to-gray-900" />
             )}
-            {showCssPreview && (
-              <div
-                className="absolute left-0 right-0 text-center px-6 pointer-events-none"
-                style={{
-                  fontFamily: settings.fontFamily,
-                  fontSize: `${(settings.fontSize / ASS_REF_HEIGHT) * 100}cqh`,
-                  color: settings.textColor,
-                  opacity: (settings.opacity ?? 100) / 100,
-                  WebkitTextStroke: `${(settings.outlineWidth / ASS_REF_HEIGHT) * 100}cqh ${settings.outlineColor}`,
-                  paintOrder: "stroke fill",
-                  textShadow: [
-                    (settings.shadowDepth ?? 0) > 0
-                      ? `0 ${((settings.shadowDepth ?? 0) / ASS_REF_HEIGHT) * 100}cqh ${(((settings.shadowDepth ?? 0) * 2) / ASS_REF_HEIGHT) * 100}cqh ${settings.shadowColor ?? "rgba(0,0,0,0.8)"}`
-                      : "0 1px 3px rgba(0,0,0,0.85)",
-                    settings.enableGlow && (settings.glowBlur ?? 0) > 0
-                      ? `0 0 ${((settings.glowBlur ?? 0) / ASS_REF_HEIGHT) * 100}cqh ${settings.outlineColor}`
-                      : "",
-                  ].filter(Boolean).join(", "),
-                  fontWeight: 700,
-                  top: `${settings.positionY}%`,
-                  transform: "translateY(-50%)",
-                  ...(settings.borderStyle === 3 ? {
-                    backgroundColor: "rgba(0, 0, 0, 0.7)",
-                    padding: "0.5cqh 1cqh",
-                    borderRadius: "4px",
-                  } : {}),
-                }}
-              >
-                {previewOverlayText}
-              </div>
-            )}
           </div>
         </DialogContent>
       </Dialog>
@@ -427,7 +336,7 @@ export function SubtitleEditor({
             </Badge>
           ) : (
             <Badge variant="outline" className="text-[10px] text-amber-500 border-amber-500/30">
-              Approximate preview
+              Rendering preview
             </Badge>
           )
         )}

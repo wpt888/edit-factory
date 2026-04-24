@@ -26,6 +26,15 @@ export interface SubtitleSettings {
   opacity?: number;
 }
 
+// User-saved named preset (distinct from hardcoded CAPTION_PRESETS).
+// Persisted at profile level via /profiles/{id}/subtitle-presets.
+export interface UserSubtitlePreset {
+  id: string;
+  name: string;
+  created_at: string;
+  settings: SubtitleSettings;
+}
+
 export interface SubtitleLine {
   id: number;
   start: string;

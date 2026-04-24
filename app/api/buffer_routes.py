@@ -63,6 +63,17 @@ class BufferStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+class BufferValidateRequest(BaseModel):
+    api_key: str
+    organization_id: str
+
+
+class BufferValidateResponse(BaseModel):
+    connected: bool
+    channels_count: int = 0
+    error: Optional[str] = None
+
+
 class BufferPublishRequest(BaseModel):
     clip_id: str
     caption: str
@@ -121,6 +132,23 @@ def get_progress(job_id: str) -> Optional[dict]:
 
 
 # ============== ENDPOINTS ==============
+
+@router.post("/validate", response_model=BufferValidateResponse)
+async def validate_buffer_credentials(
+    body: BufferValidateRequest,
+    _ctx: ProfileContext = Depends(get_profile_context),
+):
+    """Validate Buffer credentials against the API without persisting them."""
+    from app.services.buffer_service import BufferPublisher
+    try:
+        publisher = BufferPublisher(api_key=body.api_key, organization_id=body.organization_id)
+        channels = await publisher.get_channels()
+        return BufferValidateResponse(connected=True, channels_count=len(channels))
+    except Exception as e:
+        msg = str(e)
+        logger.debug(f"Buffer validation failed: {msg}")
+        return BufferValidateResponse(connected=False, error=msg[:300])
+
 
 @router.get("/status", response_model=BufferStatusResponse)
 async def get_buffer_status(

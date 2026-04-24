@@ -3044,8 +3044,10 @@ function PipelinePage() {
       setSavePresetError("Preset name cannot be empty");
       return;
     }
-    // Save the shared base subtitle settings (common to all variants).
-    const effective: SubtitleSettings = { ...subtitleSettings };
+    // Save what the user sees: base ⊕ active-tab override. If they've been
+    // editing the A or B tab, that tab's overrides must be captured or the
+    // preset won't reflect the on-screen styling when reapplied.
+    const effective: SubtitleSettings = getSubtitleSettingsFor(activeStyleKey);
 
     setSavePresetSubmitting(true);
     setSavePresetError(null);
@@ -3068,7 +3070,7 @@ function PipelinePage() {
     } finally {
       setSavePresetSubmitting(false);
     }
-  }, [savePresetName, subtitleSettings]);
+  }, [savePresetName, activeStyleKey, getSubtitleSettingsFor]);
 
   // Load/refresh user-saved subtitle presets from the profile.
   const refreshUserSubtitlePresets = useCallback(async () => {

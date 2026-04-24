@@ -23,7 +23,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Body, Query, Request
 from fastapi.responses import FileResponse
 import re as _re
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.auth import ProfileContext, get_profile_context
 from app.repositories.factory import get_repository
@@ -302,12 +302,17 @@ _pipeline_state_locks: Dict[str, threading.Lock] = {}
 _pipeline_state_locks_meta: threading.Lock = threading.Lock()
 
 
-def _get_pipeline_state_lock(pipeline_id: str) -> threading.Lock:
-    """Get or create a lock for pipeline state mutations."""
+def _get_pipeline_state_lock(pipeline_id: str, profile_id: str = "") -> threading.Lock:
+    """Get or create a lock for pipeline state mutations.
+
+    Keys are scoped by profile_id when available (defense-in-depth for multi-tenancy).
+    Pipeline UUIDs are globally unique, so the profile prefix is a secondary safeguard.
+    """
+    scoped_key = f"{profile_id}:{pipeline_id}" if profile_id else pipeline_id
     with _pipeline_state_locks_meta:
-        if pipeline_id not in _pipeline_state_locks:
-            _pipeline_state_locks[pipeline_id] = threading.Lock()
-        return _pipeline_state_locks[pipeline_id]
+        if scoped_key not in _pipeline_state_locks:
+            _pipeline_state_locks[scoped_key] = threading.Lock()
+        return _pipeline_state_locks[scoped_key]
 
 
 
@@ -854,7 +859,7 @@ async def _save_clip_to_library(
                 with _library_project_lock:
                     library_project_id = pipeline.get("library_project_id")
                     if not library_project_id:
-                        pipeline_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
+                        pipeline_name = (pipeline.get("name") or pipeline.get("idea", ""))[:80].strip() or f"Pipeline {pipeline_id[:8]}"
                         project_payload = {
                             "profile_id": profile_id,
                             "name": pipeline_name,
@@ -1336,12 +1341,16 @@ class PipelineRenderRequest(BaseModel):
     match_overrides: Optional[Dict[str, List[dict]]] = None
 
     # BUG-PR-14: Validate source_video_ids are valid UUIDs
-    @validator("source_video_ids", each_item=True, pre=True)
-    def _validate_uuid_format(cls, v):
+    @field_validator("source_video_ids")
+    @classmethod
+    def _validate_uuid_format(cls, values):
+        if values is None:
+            return values
         _uuid_re = _re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", _re.IGNORECASE)
-        if not isinstance(v, str) or not _uuid_re.match(v):
-            raise ValueError(f"Invalid UUID format: {v!r}")
-        return v
+        for value in values:
+            if not isinstance(value, str) or not _uuid_re.match(value):
+                raise ValueError(f"Invalid UUID format: {value!r}")
+        return values
     # Subtitle settings
     font_size: int = 48
     font_family: str = "Montserrat"
@@ -1487,11 +1496,13 @@ class PipelineImportRequest(BaseModel):
     context: str = ""
     context_products: List[ContextProductItem] = Field(default_factory=list)
 
-    @validator("scripts", each_item=True)
-    def validate_script_length(cls, v):
-        if len(v) > 5000:
-            raise ValueError("Each script must be at most 5000 characters")
-        return v
+    @field_validator("scripts")
+    @classmethod
+    def validate_script_length(cls, values):
+        for value in values:
+            if len(value) > 5000:
+                raise ValueError("Each script must be at most 5000 characters")
+        return values
     provider: str = "imported"
 
 
@@ -4597,7 +4608,8 @@ async def sync_pipeline_to_library(
         return {"synced": 0, "message": "No completed variants to sync"}
 
     # PIP-13: Lock the SELECT+INSERT for library project to prevent races
-    pipeline_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
+    pipeline_name = (pipeline.get("name") or pipeline.get("idea", ""))[:80].strip() or f"Pipeline {pipeline_id[:8]}"
+    legacy_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
     with _library_project_lock:
         existing = supabase.table("editai_projects")\
             .select("id")\
@@ -4605,6 +4617,15 @@ async def sync_pipeline_to_library(
             .eq("name", pipeline_name)\
             .limit(1)\
             .execute()
+
+        # Fall back to legacy "Pipeline: {idea}" name for older projects
+        if not existing.data and pipeline_name != legacy_name:
+            existing = supabase.table("editai_projects")\
+                .select("id")\
+                .eq("profile_id", profile.profile_id)\
+                .eq("name", legacy_name)\
+                .limit(1)\
+                .execute()
 
         if existing.data:
             library_project_id = existing.data[0]["id"]
@@ -4969,12 +4990,16 @@ class PreviewRenderRequest(BaseModel):
     visual_version: Optional[str] = None
 
     # BUG-PR-14: Validate source_video_ids are valid UUIDs
-    @validator("source_video_ids", each_item=True, pre=True)
-    def _validate_uuid_format(cls, v):
+    @field_validator("source_video_ids")
+    @classmethod
+    def _validate_uuid_format(cls, values):
+        if values is None:
+            return values
         _uuid_re = _re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", _re.IGNORECASE)
-        if not isinstance(v, str) or not _uuid_re.match(v):
-            raise ValueError(f"Invalid UUID format: {v!r}")
-        return v
+        for value in values:
+            if not isinstance(value, str) or not _uuid_re.match(value):
+                raise ValueError(f"Invalid UUID format: {value!r}")
+        return values
 
 
 class PreviewRenderStatusResponse(BaseModel):
@@ -5371,10 +5396,12 @@ async def generate_video_captions(
 
     try:
         from google import genai
+        from app.services.api_key_vault import get_vault_manager
         settings = get_settings()
-        if not settings.gemini_api_key:
+        gemini_key = get_vault_manager().get_api_key_or_default(ctx.profile_id, "gemini")
+        if not gemini_key:
             raise HTTPException(status_code=503, detail="Gemini API key not configured")
-        gemini_client = genai.Client(api_key=settings.gemini_api_key)
+        gemini_client = genai.Client(api_key=gemini_key)
         gemini_model_name = settings.gemini_model
     except HTTPException:
         raise
@@ -5691,7 +5718,6 @@ async def subtitle_frame_preview(
     Invalid `visual_version` values raise 400 (matches /render-preview).
     """
     from app.services.subtitle_styler import build_subtitle_filter
-    import tempfile
 
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:
@@ -5739,29 +5765,31 @@ async def subtitle_frame_preview(
     if not source_video_path or not source_video_path.exists():
         raise HTTPException(status_code=400, detail="No source video available for preview")
 
-    # --- Get or create SRT content ---
+    # --- Build SRT content directly from the editor sample text ---
     settings = get_settings()
     output_dir = settings.output_dir
     preview_dir = output_dir / "subtitle_previews"
     preview_dir.mkdir(parents=True, exist_ok=True)
 
-    srt_content: Optional[str] = None
-    tts_previews = pipeline.get("tts_previews", {})
-    tts_entry = tts_previews.get(variant_index) or tts_previews.get(str(variant_index))
-    if tts_entry and tts_entry.get("srt_content"):
-        srt_content = tts_entry["srt_content"]
+    sample_text = (request.sample_text or "").strip() or "Sample subtitle text"
+    ts = max(float(request.timestamp or 0), 0.0)
 
-    if not srt_content:
-        # Generate minimal temp SRT with sample text
-        ts = request.timestamp
-        start_tc = f"00:00:{int(ts):02d},000"
-        end_ts = ts + 3.0
-        end_tc = f"00:00:{int(end_ts):02d},000"
-        srt_content = f"1\n{start_tc} --> {end_tc}\n{request.sample_text}\n"
+    def _format_srt_timestamp(seconds: float) -> str:
+        total_ms = max(int(round(seconds * 1000)), 0)
+        hours, rem = divmod(total_ms, 3_600_000)
+        minutes, rem = divmod(rem, 60_000)
+        secs, ms = divmod(rem, 1000)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
+
+    start_tc = _format_srt_timestamp(ts)
+    end_tc = _format_srt_timestamp(ts + 3.0)
+    srt_content = f"1\n{start_tc} --> {end_tc}\n{sample_text}\n"
 
     # --- Compute cache fingerprint (include visual_version so A vs B differ) ---
     settings_json = _json.dumps(effective_subtitle_settings, sort_keys=True)
-    fingerprint_input = f"{settings_json}|{source_video_path}|{request.timestamp}|{visual_version or ''}"
+    fingerprint_input = (
+        f"{settings_json}|{source_video_path}|{ts:.3f}|{visual_version or ''}|{sample_text}"
+    )
     fingerprint = hashlib.md5(fingerprint_input.encode()).hexdigest()[:16]
     output_path = preview_dir / f"{fingerprint}.jpg"
 

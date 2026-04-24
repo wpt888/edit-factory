@@ -2492,6 +2492,87 @@ async def get_project_segments(
     return segments
 
 
+# ============== FRAME EXTRACTION ENDPOINT ==============
+
+@router.get("/{segment_id}/frames")
+async def extract_segment_frames(
+    segment_id: str,
+    count: int = Query(default=6, ge=1, le=12),
+    profile: ProfileContext = Depends(get_profile_context)
+):
+    """Extract candidate thumbnail frames from a segment's source video."""
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Lookup segment
+    seg_result = supabase.table("editai_segments")\
+        .select("source_video_id, start_time, end_time")\
+        .eq("id", segment_id)\
+        .eq("profile_id", profile.profile_id)\
+        .limit(1)\
+        .execute()
+    if not seg_result.data:
+        raise HTTPException(status_code=404, detail="Segment not found")
+    seg = seg_result.data[0]
+
+    # Lookup source video file path
+    vid_result = supabase.table("editai_source_videos")\
+        .select("file_path")\
+        .eq("id", seg["source_video_id"])\
+        .limit(1)\
+        .execute()
+    if not vid_result.data:
+        raise HTTPException(status_code=404, detail="Source video not found")
+    video_path = normalize_path(vid_result.data[0]["file_path"])
+    if not Path(video_path).exists():
+        raise HTTPException(status_code=404, detail="Source video file not found on disk")
+
+    settings = get_settings()
+    output_dir = settings.base_dir / "segments"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    start_t = float(seg["start_time"])
+    end_t = float(seg["end_time"])
+    duration = end_t - start_t
+    if duration <= 0:
+        raise HTTPException(status_code=400, detail="Segment has zero duration")
+
+    frames = []
+    for i in range(count):
+        # Distribute timestamps evenly within the segment
+        ts = start_t + (duration * (i + 0.5) / count)
+        frame_filename = f"{segment_id}_frame_{i}.jpg"
+        frame_path = output_dir / frame_filename
+
+        # Cache: skip if already extracted
+        if not frame_path.exists():
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", f"{ts:.3f}",
+                "-i", video_path,
+                "-vframes", "1",
+                "-vf", "scale=540:-1",
+                "-q:v", "3",
+                str(frame_path)
+            ]
+            result = safe_ffmpeg_run(cmd, timeout=15, operation=f"frame extract {segment_id}#{i}")
+            if not result or result.returncode != 0:
+                logger.warning(f"Frame extraction failed for segment {segment_id} frame {i}")
+                continue
+
+        frames.append({
+            "index": i,
+            "timestamp": round(ts, 3),
+            "frame_url": frame_filename,
+        })
+
+    return frames
+
+
 # ============== FILES ENDPOINT ==============
 
 @router.get("/files/{file_path:path}")
@@ -2513,6 +2594,7 @@ async def serve_segment_file(
 
     # Convert WSL paths to Windows paths if needed
     decoded_path = normalize_path(decoded_path)
+    decoded_path = decoded_path.replace("\\", "/")
     full_path = Path(decoded_path)
 
     if not full_path.is_absolute():

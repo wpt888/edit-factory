@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -212,31 +212,64 @@ class FalImageGenerator:
 
 # --- Singleton factory ---
 
-_fal_instance: Optional[Tuple[FalImageGenerator, float]] = None
+_fal_instances: Dict[str, Tuple[FalImageGenerator, float]] = {}  # cache_key -> (instance, created_at)
 _fal_lock = threading.Lock()
 _FAL_CACHE_TTL = 600  # 10 minutes
 
 
-def get_fal_generator() -> FalImageGenerator:
-    """Get singleton FAL image generator instance."""
-    global _fal_instance
+def reset_fal_generator(profile_id: Optional[str] = None) -> None:
+    """Drop the cached FAL generator so the next call rebuilds with fresh keys.
 
-    old_instance = None
+    Call after a vault mutation so API-key changes take effect immediately
+    instead of after the 10-minute TTL expires.
+    """
+    to_close: list[FalImageGenerator] = []
     with _fal_lock:
-        if _fal_instance is not None:
-            instance, created_at = _fal_instance
+        if profile_id is None:
+            for entry in _fal_instances.values():
+                to_close.append(entry[0])
+            _fal_instances.clear()
+        else:
+            entry = _fal_instances.pop(profile_id, None)
+            if entry is not None:
+                to_close.append(entry[0])
+            # Env-key fallback lives under "__global__" — drop it as well since
+            # a vault change can flip which key is active.
+            entry_global = _fal_instances.pop("__global__", None)
+            if entry_global is not None:
+                to_close.append(entry_global[0])
+    for inst in to_close:
+        try:
+            inst.close()
+        except Exception:
+            pass
+
+
+def get_fal_generator(profile_id: str = "") -> FalImageGenerator:
+    """Get FAL image generator instance, per-profile if vault key exists."""
+    from app.services.api_key_vault import get_vault_manager
+
+    api_key = get_vault_manager().get_api_key_or_default(profile_id, "fal") if profile_id else ""
+    if not api_key:
+        settings = get_settings()
+        api_key = settings.fal_api_key
+    if not api_key:
+        raise ValueError("FAL_API_KEY not configured")
+
+    cache_key = profile_id or "__global__"
+    old_instance = None
+
+    with _fal_lock:
+        entry = _fal_instances.get(cache_key)
+        if entry is not None:
+            instance, created_at = entry
             if (time.time() - created_at) < _FAL_CACHE_TTL:
                 return instance
             old_instance = instance
 
-        settings = get_settings()
-        if not settings.fal_api_key:
-            raise ValueError("FAL_API_KEY not configured")
+        gen = FalImageGenerator(api_key=api_key)
+        _fal_instances[cache_key] = (gen, time.time())
 
-        gen = FalImageGenerator(api_key=settings.fal_api_key)
-        _fal_instance = (gen, time.time())
-
-    # Close expired client outside the lock to avoid blocking
     if old_instance is not None:
         try:
             old_instance.close()

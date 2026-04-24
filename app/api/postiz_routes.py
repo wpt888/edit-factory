@@ -107,9 +107,20 @@ class PostizStatusResponse(BaseModel):
 
 class PostizCredentialsResponse(BaseModel):
     configured: bool
-    api_url: str = ""
-    api_key: str = ""
+    api_url_hint: str = ""
+    api_key_hint: str = ""
     source: Optional[str] = None
+
+
+class PostizValidateRequest(BaseModel):
+    api_url: str
+    api_key: str
+
+
+class PostizValidateResponse(BaseModel):
+    connected: bool
+    integrations_count: int = 0
+    error: Optional[str] = None
 
 
 # ============== PROGRESS TRACKING ==============
@@ -204,6 +215,41 @@ async def get_postiz_status(
     return result
 
 
+@router.post("/validate", response_model=PostizValidateResponse)
+async def validate_postiz_credentials(
+    body: PostizValidateRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """
+    Validate arbitrary Postiz credentials WITHOUT touching saved state or caches.
+
+    Used by the Settings 'Test Connection' button so that users can verify
+    freshly-typed credentials before saving. Unlike /status, this endpoint
+    never reads the stored profile creds and never falls back to env.
+    """
+    api_url = (body.api_url or "").strip()
+    api_key = (body.api_key or "").strip()
+
+    if not api_url or not api_key:
+        return PostizValidateResponse(
+            connected=False,
+            error="Both API URL and API key are required.",
+        )
+
+    try:
+        from app.services.postiz_service import PostizPublisher
+
+        publisher = PostizPublisher(api_url=api_url, api_key=api_key)
+        integrations = await publisher.get_integrations(profile_id=profile.profile_id)
+        return PostizValidateResponse(
+            connected=True,
+            integrations_count=len([i for i in integrations if not i.disabled]),
+        )
+    except Exception as e:
+        logger.info(f"[Profile {profile.profile_id}] Postiz validate failed: {e}")
+        return PostizValidateResponse(connected=False, error=str(e))
+
+
 @router.get("/credentials", response_model=PostizCredentialsResponse)
 async def get_postiz_credentials(
     profile: ProfileContext = Depends(get_profile_context)
@@ -240,10 +286,14 @@ async def get_postiz_credentials(
         if api_url or api_key:
             source = "env"
 
+    # Never leak secrets — return only masked hints for UI display.
+    api_key_hint = f"...{api_key[-4:]}" if len(api_key) >= 4 else ""
+    api_url_hint = api_url  # URL is not secret; safe to return as-is for hint display.
+
     return PostizCredentialsResponse(
         configured=bool(api_url and api_key),
-        api_url=api_url,
-        api_key=api_key,
+        api_url_hint=api_url_hint,
+        api_key_hint=api_key_hint,
         source=source,
     )
 
@@ -653,35 +703,95 @@ async def get_post_status(
         raise HTTPException(status_code=500, detail="Failed to get post status")
 
 
+def _delete_buffer_publication(post_id: str, profile_id: str) -> None:
+    """Delete a Buffer-published row from our DB and cleanup its MinIO storage.
+
+    Note: does NOT call the Buffer API — Buffer doesn't expose a delete endpoint
+    we use here. User must cancel the post in Buffer UI if they want to stop it
+    from publishing. This only removes our local tracking record.
+    """
+    repo = get_repository()
+    if not repo:
+        raise RuntimeError("Database not available")
+    # Look up storage_path so we can clean up MinIO
+    row = repo.table_query(
+        "editai_postiz_publications", "select",
+        filters=QueryFilters(
+            select="id, storage_path",
+            eq={"postiz_post_id": post_id, "profile_id": profile_id},
+            limit=1,
+        )
+    )
+    if not row.data:
+        raise ValueError("Buffer publication not found")
+    pub = row.data[0]
+    # Best-effort MinIO cleanup
+    if pub.get("storage_path"):
+        try:
+            from app.services.buffer_service import get_buffer_publisher
+            pub_client = get_buffer_publisher(profile_id)
+            pub_client.delete_from_storage(pub["storage_path"])
+        except Exception as e:
+            logger.warning(f"[Profile {profile_id}] Buffer storage cleanup failed for {pub['storage_path']}: {e}")
+    # Remove our tracking row
+    repo.table_query(
+        "editai_postiz_publications", "delete",
+        filters=QueryFilters(eq={"id": pub["id"]}),
+    )
+
+
 @router.post("/posts/bulk-delete", response_model=BulkDeleteResponse)
 async def bulk_delete_postiz_posts(
     request: BulkDeleteRequest,
     profile: ProfileContext = Depends(get_profile_context),
 ):
-    """Delete multiple posts from Postiz in bulk."""
+    """Delete multiple posts from Postiz (or Buffer) in bulk.
+
+    IDs with prefix "buffer:" are routed to local DB cleanup; the rest go to
+    the Postiz API. This preserves behavior for Postiz posts while enabling
+    deletion of Buffer-published items.
+    """
     logger.info(f"[Profile {profile.profile_id}] Bulk deleting {len(request.post_ids)} posts")
 
     if not request.post_ids:
         return BulkDeleteResponse(deleted=[], failed=[], total_deleted=0, total_failed=0)
 
-    try:
-        from app.services.postiz_service import get_postiz_publisher
-        publisher = get_postiz_publisher(profile.profile_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
     deleted: List[str] = []
     failed: List[dict] = []
 
-    for post_id in request.post_ids:
+    buffer_ids = [pid for pid in request.post_ids if pid.startswith("buffer:")]
+    postiz_ids = [pid for pid in request.post_ids if not pid.startswith("buffer:")]
+
+    # Handle Buffer rows locally
+    for post_id in buffer_ids:
         try:
-            await publisher.delete_post(post_id, profile_id=profile.profile_id)
+            await asyncio.to_thread(_delete_buffer_publication, post_id, profile.profile_id)
             deleted.append(post_id)
         except ValueError:
-            failed.append({"id": post_id, "error": "Post not found"})
+            failed.append({"id": post_id, "error": "Buffer post not found"})
         except Exception as e:
-            logger.error(f"[Profile {profile.profile_id}] Failed to delete post {post_id}: {e}")
+            logger.error(f"[Profile {profile.profile_id}] Failed to delete Buffer post {post_id}: {e}")
             failed.append({"id": post_id, "error": "Delete failed"})
+
+    # Handle Postiz posts through the publisher (only if there are any)
+    if postiz_ids:
+        try:
+            from app.services.postiz_service import get_postiz_publisher
+            publisher = get_postiz_publisher(profile.profile_id)
+        except ValueError as e:
+            # Mark all remaining as failed rather than raising, so Buffer deletes still return
+            for post_id in postiz_ids:
+                failed.append({"id": post_id, "error": str(e)})
+        else:
+            for post_id in postiz_ids:
+                try:
+                    await publisher.delete_post(post_id, profile_id=profile.profile_id)
+                    deleted.append(post_id)
+                except ValueError:
+                    failed.append({"id": post_id, "error": "Post not found"})
+                except Exception as e:
+                    logger.error(f"[Profile {profile.profile_id}] Failed to delete post {post_id}: {e}")
+                    failed.append({"id": post_id, "error": "Delete failed"})
 
     logger.info(f"[Profile {profile.profile_id}] Bulk delete complete: {len(deleted)} deleted, {len(failed)} failed")
     return BulkDeleteResponse(
@@ -697,8 +807,22 @@ async def delete_postiz_post(
     post_id: str,
     profile: ProfileContext = Depends(get_profile_context),
 ):
-    """Delete a post from Postiz."""
+    """Delete a post from Postiz or Buffer.
+
+    Buffer-published posts (prefix "buffer:") are cleaned up in our DB only.
+    """
     logger.info(f"[Profile {profile.profile_id}] Deleting post: {post_id}")
+
+    if post_id.startswith("buffer:"):
+        try:
+            await asyncio.to_thread(_delete_buffer_publication, post_id, profile.profile_id)
+            return {"id": post_id, "message": "Buffer post removed from calendar"}
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except Exception as e:
+            logger.error(f"[Profile {profile.profile_id}] Failed to delete Buffer post: {e}")
+            raise HTTPException(status_code=500, detail="Failed to delete post")
+
     try:
         from app.services.postiz_service import get_postiz_publisher
         publisher = get_postiz_publisher(profile.profile_id)

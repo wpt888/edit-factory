@@ -32,6 +32,7 @@ import {
   Trash2,
   ChevronDown,
   Loader2,
+  Maximize2,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import { formatTimeShort as formatTime } from "@/lib/utils";
@@ -130,6 +131,7 @@ export function TimelineEditor({
 
   // --- Inline continuous preview player state ---
   const [isPreviewActive, setIsPreviewActive] = useState(false);
+  const [isPreviewExpanded, setIsPreviewExpanded] = useState(false);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const [isPreviewBuffering, setIsPreviewBuffering] = useState(false);
   const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
@@ -179,6 +181,12 @@ export function TimelineEditor({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!isPreviewActive) {
+      setIsPreviewExpanded(false);
+    }
+  }, [isPreviewActive]);
 
   // Unique source video IDs for video pooling
   const videoMatches = matches.filter((m) => m.segment_id && m.source_video_id);
@@ -1051,153 +1059,314 @@ export function TimelineEditor({
 
       {/* Inline continuous preview player */}
       {isPreviewActive && pipelineId && variantIndex !== undefined && profileId && (
-        <div className="rounded-lg border bg-card mb-3 overflow-hidden">
-          {/* Video display with subtitle overlay */}
-          <div
-            ref={previewContainerRef}
-            className="relative mx-auto bg-black flex items-center justify-center"
-            style={{ aspectRatio: "9/16", maxHeight: "360px" }}
-          >
-            {uniqueSourceVideoIds.map((sourceVideoId) => (
-              <video
-                key={sourceVideoId}
-                ref={(el) => { previewVideoRefs.current[sourceVideoId] = el; }}
-                src={`${API_URL}/segments/source-videos/${sourceVideoId}/stream?profile_id=${profileId}`}
-                muted
-                playsInline
-                preload="auto"
-                className="absolute inset-0 w-full h-full object-cover"
-                onWaiting={() => setIsPreviewBuffering(true)}
-                onPlaying={() => setIsPreviewBuffering(false)}
-                onSeeked={() => setIsPreviewBuffering(false)}
-                style={{
-                  display:
-                    matches[previewActiveIndex]?.source_video_id === sourceVideoId
-                      ? "block"
-                      : "none",
-                }}
-              />
-            ))}
-
-            {/* Buffering indicator */}
-            {isPreviewBuffering && isPreviewPlaying && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/30 z-10">
-                <Loader2 className="h-6 w-6 animate-spin text-white" />
-              </div>
-            )}
-
-            {/* No video fallback */}
-            {!matches[previewActiveIndex]?.source_video_id && (
-              <div className="flex items-center justify-center text-muted-foreground text-sm">
-                No video for this segment
-              </div>
-            )}
-
-            {/* Subtitle overlay — respects subtitleSettings if provided */}
-            {matches[previewActiveIndex]?.srt_text && (() => {
-              // Use same proportional scaling as subtitle-editor.tsx
-              // ASS PlayRes reference height = 1920; scale to actual preview container height
-              const ASS_REF_HEIGHT = 1920;
-              const containerH = previewContainerRef.current?.clientHeight ?? 360;
-              const scale = containerH / ASS_REF_HEIGHT;
-              const fontSize = Math.max(8, (subtitleSettings?.fontSize ?? 48) * scale);
-              const outlineW = (subtitleSettings?.outlineWidth ?? 3) * scale;
-              const shadowDepth = ((subtitleSettings?.shadowDepth ?? 0)) * scale;
-              const glowBlur = ((subtitleSettings?.glowBlur ?? 0)) * scale;
-
-              return (
-                <div
-                  className="absolute left-2 right-2 text-center pointer-events-none"
-                  style={{
-                    top: `${subtitleSettings?.positionY ?? 85}%`,
-                    transform: "translateY(-50%)",
-                  }}
-                >
-                  <p
-                    className="font-semibold px-2 py-1 inline-block"
+        <>
+          {!isPreviewExpanded && (
+            <div className="rounded-lg border bg-card mb-3 overflow-hidden">
+              {/* Video display with subtitle overlay */}
+              <div
+                ref={previewContainerRef}
+                className="relative mx-auto bg-black flex items-center justify-center"
+                style={{ aspectRatio: "9/16", maxHeight: "360px" }}
+              >
+                {uniqueSourceVideoIds.map((sourceVideoId) => (
+                  <video
+                    key={sourceVideoId}
+                    ref={(el) => { previewVideoRefs.current[sourceVideoId] = el; }}
+                    src={`${API_URL}/segments/source-videos/${sourceVideoId}/stream?profile_id=${profileId}`}
+                    muted
+                    playsInline
+                    preload="auto"
+                    className="absolute inset-0 w-full h-full object-cover"
+                    onWaiting={() => setIsPreviewBuffering(true)}
+                    onPlaying={() => setIsPreviewBuffering(false)}
+                    onSeeked={() => setIsPreviewBuffering(false)}
                     style={{
-                      fontFamily: subtitleSettings?.fontFamily ?? "var(--font-montserrat), Montserrat, sans-serif",
-                      fontSize: `${fontSize}px`,
-                      color: subtitleSettings?.textColor ?? "#FFFFFF",
-                      textShadow: subtitleSettings?.enableGlow && glowBlur > 0
-                        ? `0 ${Math.max(1, shadowDepth)}px ${Math.max(3, shadowDepth * 2)}px rgba(0,0,0,0.85), 0 0 ${glowBlur}px rgba(0,0,0,0.7)`
-                        : shadowDepth > 0
-                          ? `0 ${shadowDepth}px ${shadowDepth * 2}px rgba(0,0,0,0.85)`
-                          : "0 1px 3px rgba(0,0,0,0.85)",
-                      WebkitTextStroke: outlineW > 0
-                        ? `${outlineW}px ${subtitleSettings?.outlineColor ?? "#000000"}`
-                        : undefined,
-                      paintOrder: "stroke fill",
+                      display:
+                        matches[previewActiveIndex]?.source_video_id === sourceVideoId
+                          ? "block"
+                          : "none",
                     }}
-                  >
-                    {matches[previewActiveIndex].srt_text}
-                  </p>
-                </div>
-              );
-            })()}
-          </div>
+                  />
+                ))}
 
-          {/* Controls */}
-          <div className="px-3 py-2 space-y-1.5">
-            {/* Progress bar */}
-            <input
-              type="range"
-              min={0}
-              max={previewDuration || 1}
-              step={0.1}
-              value={previewCurrentTime}
-              onChange={handlePreviewSeek}
-              className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-secondary accent-primary"
-            />
+                {/* Buffering indicator */}
+                {isPreviewBuffering && isPreviewPlaying && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/30 z-10">
+                    <Loader2 className="h-6 w-6 animate-spin text-white" />
+                  </div>
+                )}
 
-            {/* Time + segment info + buttons */}
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-muted-foreground font-mono tabular-nums">
-                {formatTime(previewCurrentTime)} / {formatTime(previewDuration || audioDuration)}
-              </span>
+                {/* No video fallback */}
+                {!matches[previewActiveIndex]?.source_video_id && (
+                  <div className="flex items-center justify-center text-muted-foreground text-sm">
+                    No video for this segment
+                  </div>
+                )}
 
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  onClick={previewPrevSegment}
-                  disabled={previewActiveIndex <= 0}
-                  title="Previous segment"
-                >
-                  <SkipBack className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="default"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={togglePreviewPlayPause}
-                  title={isPreviewPlaying ? "Pause" : "Play"}
-                >
-                  {isPreviewPlaying ? (
-                    <Pause className="h-4 w-4" />
-                  ) : (
-                    <Play className="h-4 w-4" />
-                  )}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  onClick={previewNextSegment}
-                  disabled={previewActiveIndex >= matches.length - 1}
-                  title="Next segment"
-                >
-                  <SkipForward className="h-3.5 w-3.5" />
-                </Button>
+                {/* Subtitle overlay — respects subtitleSettings if provided */}
+                {matches[previewActiveIndex]?.srt_text && (() => {
+                  // Use same proportional scaling as subtitle-editor.tsx
+                  // ASS PlayRes reference height = 1920; scale to actual preview container height
+                  const ASS_REF_HEIGHT = 1920;
+                  const containerH = previewContainerRef.current?.clientHeight ?? 360;
+                  const scale = containerH / ASS_REF_HEIGHT;
+                  const fontSize = Math.max(8, (subtitleSettings?.fontSize ?? 48) * scale);
+                  const outlineW = (subtitleSettings?.outlineWidth ?? 3) * scale;
+                  const shadowDepth = ((subtitleSettings?.shadowDepth ?? 0)) * scale;
+                  const glowBlur = ((subtitleSettings?.glowBlur ?? 0)) * scale;
+
+                  return (
+                    <div
+                      className="absolute left-2 right-2 text-center pointer-events-none"
+                      style={{
+                        top: `${subtitleSettings?.positionY ?? 85}%`,
+                        transform: "translateY(-50%)",
+                      }}
+                    >
+                      <p
+                        className="font-semibold px-2 py-1 inline-block"
+                        style={{
+                          fontFamily: subtitleSettings?.fontFamily ?? "var(--font-montserrat), Montserrat, sans-serif",
+                          fontSize: `${fontSize}px`,
+                          color: subtitleSettings?.textColor ?? "#FFFFFF",
+                          textShadow: subtitleSettings?.enableGlow && glowBlur > 0
+                            ? `0 ${Math.max(1, shadowDepth)}px ${Math.max(3, shadowDepth * 2)}px rgba(0,0,0,0.85), 0 0 ${glowBlur}px rgba(0,0,0,0.7)`
+                            : shadowDepth > 0
+                              ? `0 ${shadowDepth}px ${shadowDepth * 2}px rgba(0,0,0,0.85)`
+                              : "0 1px 3px rgba(0,0,0,0.85)",
+                          WebkitTextStroke: outlineW > 0
+                            ? `${outlineW}px ${subtitleSettings?.outlineColor ?? "#000000"}`
+                            : undefined,
+                          paintOrder: "stroke fill",
+                        }}
+                      >
+                        {matches[previewActiveIndex].srt_text}
+                      </p>
+                    </div>
+                  );
+                })()}
               </div>
 
-              <span className="text-[11px] text-muted-foreground">
-                {previewActiveIndex + 1}/{matches.length}
-              </span>
+              {/* Controls */}
+              <div className="px-3 py-2 space-y-1.5">
+                {/* Progress bar */}
+                <input
+                  type="range"
+                  min={0}
+                  max={previewDuration || 1}
+                  step={0.1}
+                  value={previewCurrentTime}
+                  onChange={handlePreviewSeek}
+                  className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-secondary accent-primary"
+                />
+
+                {/* Time + segment info + buttons */}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] text-muted-foreground font-mono tabular-nums">
+                    {formatTime(previewCurrentTime)} / {formatTime(previewDuration || audioDuration)}
+                  </span>
+
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={previewPrevSegment}
+                      disabled={previewActiveIndex <= 0}
+                      title="Previous segment"
+                    >
+                      <SkipBack className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="default"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={togglePreviewPlayPause}
+                      title={isPreviewPlaying ? "Pause" : "Play"}
+                    >
+                      {isPreviewPlaying ? (
+                        <Pause className="h-4 w-4" />
+                      ) : (
+                        <Play className="h-4 w-4" />
+                      )}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={previewNextSegment}
+                      disabled={previewActiveIndex >= matches.length - 1}
+                      title="Next segment"
+                    >
+                      <SkipForward className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => setIsPreviewExpanded(true)}
+                      title="Expand preview"
+                    >
+                      <Maximize2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+
+                  <span className="text-[11px] text-muted-foreground">
+                    {previewActiveIndex + 1}/{matches.length}
+                  </span>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          )}
+
+          <Dialog open={isPreviewExpanded} onOpenChange={setIsPreviewExpanded}>
+            <DialogContent className="w-[min(96vw,1200px)] max-w-[1200px] p-0 overflow-hidden">
+              <DialogHeader className="px-6 pt-6 pb-0">
+                <DialogTitle>Expanded Preview</DialogTitle>
+              </DialogHeader>
+              <div className="px-6 pb-6">
+                <div className="rounded-lg border bg-card overflow-hidden">
+                  <div
+                    ref={previewContainerRef}
+                    className="relative mx-auto bg-black flex items-center justify-center"
+                    style={{ aspectRatio: "9/16", maxHeight: "75vh" }}
+                  >
+                    {uniqueSourceVideoIds.map((sourceVideoId) => (
+                      <video
+                        key={`expanded-${sourceVideoId}`}
+                        ref={(el) => { previewVideoRefs.current[sourceVideoId] = el; }}
+                        src={`${API_URL}/segments/source-videos/${sourceVideoId}/stream?profile_id=${profileId}`}
+                        muted
+                        playsInline
+                        preload="auto"
+                        className="absolute inset-0 w-full h-full object-cover"
+                        onWaiting={() => setIsPreviewBuffering(true)}
+                        onPlaying={() => setIsPreviewBuffering(false)}
+                        onSeeked={() => setIsPreviewBuffering(false)}
+                        style={{
+                          display:
+                            matches[previewActiveIndex]?.source_video_id === sourceVideoId
+                              ? "block"
+                              : "none",
+                        }}
+                      />
+                    ))}
+
+                    {isPreviewBuffering && isPreviewPlaying && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/30 z-10">
+                        <Loader2 className="h-8 w-8 animate-spin text-white" />
+                      </div>
+                    )}
+
+                    {!matches[previewActiveIndex]?.source_video_id && (
+                      <div className="flex items-center justify-center text-muted-foreground text-sm">
+                        No video for this segment
+                      </div>
+                    )}
+
+                    {matches[previewActiveIndex]?.srt_text && (() => {
+                      const ASS_REF_HEIGHT = 1920;
+                      const containerH = previewContainerRef.current?.clientHeight ?? 720;
+                      const scale = containerH / ASS_REF_HEIGHT;
+                      const fontSize = Math.max(10, (subtitleSettings?.fontSize ?? 48) * scale);
+                      const outlineW = (subtitleSettings?.outlineWidth ?? 3) * scale;
+                      const shadowDepth = ((subtitleSettings?.shadowDepth ?? 0)) * scale;
+                      const glowBlur = ((subtitleSettings?.glowBlur ?? 0)) * scale;
+
+                      return (
+                        <div
+                          className="absolute left-4 right-4 text-center pointer-events-none"
+                          style={{
+                            top: `${subtitleSettings?.positionY ?? 85}%`,
+                            transform: "translateY(-50%)",
+                          }}
+                        >
+                          <p
+                            className="font-semibold px-3 py-1.5 inline-block"
+                            style={{
+                              fontFamily: subtitleSettings?.fontFamily ?? "var(--font-montserrat), Montserrat, sans-serif",
+                              fontSize: `${fontSize}px`,
+                              color: subtitleSettings?.textColor ?? "#FFFFFF",
+                              textShadow: subtitleSettings?.enableGlow && glowBlur > 0
+                                ? `0 ${Math.max(1, shadowDepth)}px ${Math.max(3, shadowDepth * 2)}px rgba(0,0,0,0.85), 0 0 ${glowBlur}px rgba(0,0,0,0.7)`
+                                : shadowDepth > 0
+                                  ? `0 ${shadowDepth}px ${shadowDepth * 2}px rgba(0,0,0,0.85)`
+                                  : "0 1px 3px rgba(0,0,0,0.85)",
+                              WebkitTextStroke: outlineW > 0
+                                ? `${outlineW}px ${subtitleSettings?.outlineColor ?? "#000000"}`
+                                : undefined,
+                              paintOrder: "stroke fill",
+                            }}
+                          >
+                            {matches[previewActiveIndex].srt_text}
+                          </p>
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  <div className="px-4 py-3 space-y-2">
+                    <input
+                      type="range"
+                      min={0}
+                      max={previewDuration || 1}
+                      step={0.1}
+                      value={previewCurrentTime}
+                      onChange={handlePreviewSeek}
+                      className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-secondary accent-primary"
+                    />
+
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground font-mono tabular-nums">
+                        {formatTime(previewCurrentTime)} / {formatTime(previewDuration || audioDuration)}
+                      </span>
+
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={previewPrevSegment}
+                          disabled={previewActiveIndex <= 0}
+                          title="Previous segment"
+                        >
+                          <SkipBack className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="default"
+                          size="icon"
+                          className="h-9 w-9"
+                          onClick={togglePreviewPlayPause}
+                          title={isPreviewPlaying ? "Pause" : "Play"}
+                        >
+                          {isPreviewPlaying ? (
+                            <Pause className="h-4 w-4" />
+                          ) : (
+                            <Play className="h-4 w-4" />
+                          )}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={previewNextSegment}
+                          disabled={previewActiveIndex >= matches.length - 1}
+                          title="Next segment"
+                        >
+                          <SkipForward className="h-4 w-4" />
+                        </Button>
+                      </div>
+
+                      <span className="text-xs text-muted-foreground">
+                        {previewActiveIndex + 1}/{matches.length}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+        </>
       )}
 
       {viewMode === "timeline" ? (

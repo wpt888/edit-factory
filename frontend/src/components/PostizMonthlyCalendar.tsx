@@ -16,7 +16,9 @@ import {
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 import { PostDetailModal } from "@/components/PostDetailModal";
+import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
+import { friendlyPlatformName } from "@/lib/platforms";
 
 /* ---------- Types ---------- */
 
@@ -29,6 +31,25 @@ export interface PostizPost {
   platform: string;
   platform_name: string;
   platform_picture?: string;
+  source?: string;
+  group?: string | null;
+}
+
+/** Short label for the platform shown inside calendar cells. */
+export function shortPlatformLabel(platform: string | undefined): string {
+  const p = (platform || "").toLowerCase();
+  const map: Record<string, string> = {
+    tiktok: "TT",
+    instagram: "IG",
+    youtube: "YT",
+    facebook: "FB",
+    twitter: "X",
+    x: "X",
+    linkedin: "LI",
+    pinterest: "PI",
+    threads: "TH",
+  };
+  return map[p] || (p ? p.slice(0, 2).toUpperCase() : "??");
 }
 
 export interface ScheduleItem {
@@ -42,6 +63,8 @@ export interface ScheduleItem {
   status: string;
   postiz_post_id?: string;
   error_message?: string;
+  source?: string;
+  platform_type?: string;
 }
 
 export interface CalendarData {
@@ -120,6 +143,8 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
   const onDataLoadedRef = useRef(onDataLoaded);
   onDataLoadedRef.current = onDataLoaded;
 
+  const { currentProfile } = useProfile();
+
   const [viewYear, setViewYear] = useState(() => new Date().getFullYear());
   const [viewMonth, setViewMonth] = useState(() => new Date().getMonth());
   const [calendarData, setCalendarData] = useState<CalendarData | null>(null);
@@ -161,6 +186,8 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
     if (!calendarData) return {};
     const map: Record<string, ScheduleItem[]> = {};
     for (const item of calendarData.schedule_items) {
+      // Buffer publications are rendered as posts; keep the linked item only for modal preview.
+      if (item.source === "buffer") continue;
       const date = item.scheduled_date.split("T")[0];
       if (!map[date]) map[date] = [];
       map[date].push(item);
@@ -183,12 +210,24 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
     return map;
   }, [calendarData]);
 
+  const selectedPostSiblings = useMemo((): PostizPost[] => {
+    if (!selectedPost || !calendarData) return [];
+    if (selectedPost.group) {
+      return calendarData.postiz_posts.filter(p => p.group === selectedPost.group);
+    }
+    // Fallback for Postiz instances that don't return group: match by content + date
+    return calendarData.postiz_posts.filter(
+      p => p.publish_date === selectedPost.publish_date && p.content === selectedPost.content
+    );
+  }, [selectedPost, calendarData]);
+
   const handlePostDeleted = useCallback((postId: string) => {
     setCalendarData(prev => {
       if (!prev) return prev;
       return {
         ...prev,
         postiz_posts: prev.postiz_posts.filter(p => p.id !== postId),
+        schedule_items: prev.schedule_items.filter(item => item.postiz_post_id !== postId),
       };
     });
   }, []);
@@ -268,6 +307,8 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
 
   const fetchCalendar = useCallback(async () => {
     if (!dateRange.start) return;
+    // Clear stale data so the previous profile's posts never linger after a switch.
+    setCalendarData(null);
     setLoadingCalendar(true);
     try {
       const res = await apiGet(
@@ -281,9 +322,13 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
     } finally {
       setLoadingCalendar(false);
     }
-  }, [dateRange]);
+  }, [dateRange, currentProfile?.id]);
 
   useEffect(() => { fetchCalendar(); }, [fetchCalendar]);
+
+  // Drop any in-flight selection when the active profile changes — selected IDs
+  // belong to the previous profile's posts and must not bleed into the new one.
+  useEffect(() => { exitSelectionMode(); }, [currentProfile?.id, exitSelectionMode]);
 
   /* ---------- Navigation ---------- */
 
@@ -501,7 +546,7 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
                               className={`rounded px-1 py-0.5 text-[10px] leading-tight border cursor-pointer hover:opacity-80 transition-opacity ${stateColor(post.state)} ${
                                 selectionMode && isSelected ? "ring-1 ring-primary" : ""
                               }`}
-                              title={`[${post.state}] ${post.platform_name}\n${timeStr}\n${stripHtml(post.content || "(no content)")}`}
+                              title={`[${post.state}] ${post.platform_name} · ${friendlyPlatformName(post.platform)}\n${timeStr}\n${stripHtml(post.content || "(no content)")}`}
                               onClick={() => selectionMode ? toggleSelect(post.id) : setSelectedPost(post)}
                             >
                               <div className="flex items-center gap-1">
@@ -511,7 +556,11 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
                                     : <Square className="size-3 shrink-0" />
                                 ) : post.platform_picture ? (
                                   <img src={post.platform_picture} alt="" className="size-3 rounded-full shrink-0" />
-                                ) : null}
+                                ) : (
+                                  <span className="text-[8px] font-bold px-1 rounded bg-background/60 border shrink-0" title={post.platform_name}>
+                                    {shortPlatformLabel(post.platform)}
+                                  </span>
+                                )}
                                 <span className="truncate font-medium">
                                   {timeStr && <span className="opacity-70 mr-0.5">{timeStr}</span>}
                                   {post.content ? stripHtml(post.content).slice(0, 20) : post.platform_name}
@@ -573,6 +622,7 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
       <PostDetailModal
         post={selectedPost}
         scheduleItem={selectedPost ? postToScheduleItem.get(selectedPost.id) : undefined}
+        siblings={selectedPostSiblings}
         onClose={() => setSelectedPost(null)}
         onDeleted={handlePostDeleted}
       />

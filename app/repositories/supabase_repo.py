@@ -573,6 +573,40 @@ class SupabaseRepository(DataRepository):
         self._delete("elevenlabs_accounts", "id", account_id)
 
     # ──────────────────────────────────────────────
+    # 26. API Key Vault
+    # ──────────────────────────────────────────────
+
+    def list_vault_keys(
+        self, profile_id: str, service: str, filters: Optional[QueryFilters] = None
+    ) -> QueryResult:
+        sb = get_supabase()
+        select_cols = filters.select if filters and filters.select else "*"
+        query = (
+            sb.table("api_key_vault")
+            .select(select_cols)
+            .eq("profile_id", profile_id)
+            .eq("service", service)
+        )
+        query = self._apply_filters(query, filters)
+        if not filters or not filters.order_by:
+            query = query.order("sort_order", desc=False)
+        result = query.execute()
+        data = result.data or []
+        return QueryResult(data=data, count=len(data))
+
+    def get_vault_key(self, key_id: str) -> Optional[Dict[str, Any]]:
+        return self._get_one("api_key_vault", "id", key_id)
+
+    def create_vault_key(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        return self._insert("api_key_vault", data)
+
+    def update_vault_key(self, key_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        return self._update("api_key_vault", "id", key_id, data)
+
+    def delete_vault_key(self, key_id: str) -> None:
+        self._delete("api_key_vault", "id", key_id)
+
+    # ──────────────────────────────────────────────
     # 16. Products & Feeds
     # ──────────────────────────────────────────────
 

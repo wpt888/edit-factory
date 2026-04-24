@@ -16,6 +16,12 @@ import {
   NavigationMenuLink,
 } from "@/components/ui/navigation-menu";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Sheet,
   SheetTrigger,
   SheetContent,
@@ -42,6 +48,7 @@ import {
   Music,
   ImageIcon,
   CalendarClock,
+  Calendar,
   LogOut,
 } from "lucide-react";
 
@@ -136,35 +143,52 @@ export function NavBar() {
                 </NavigationMenuItem>
               ))}
 
+              {/* Calendar top-level tab */}
+              <NavigationMenuItem>
+                <NavigationMenuLink asChild>
+                  <Link
+                    href="/calendar"
+                    className={`inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors hover:bg-accent ${
+                      pathname === "/calendar" ? "text-foreground bg-accent/50" : "text-muted-foreground"
+                    }`}
+                  >
+                    <Calendar className="size-4" />
+                    Calendar
+                  </Link>
+                </NavigationMenuLink>
+              </NavigationMenuItem>
+
               {/* Settings gear dropdown */}
               <NavigationMenuItem>
-                <NavigationMenuTrigger
-                  className={isGroupActive(settingsGroup.items, pathname) ? "text-foreground bg-accent/50" : "text-muted-foreground"}
-                >
-                  <Settings className="size-4" />
-                </NavigationMenuTrigger>
-                <NavigationMenuContent>
-                  <ul className="grid w-[220px] gap-1 p-2">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      className={`inline-flex items-center justify-center rounded-md px-3 py-2 text-sm font-medium transition-colors hover:bg-accent focus:outline-none ${
+                        isGroupActive(settingsGroup.items, pathname) ? "text-foreground bg-accent/50" : "text-muted-foreground"
+                      }`}
+                    >
+                      <Settings className="size-4" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-[220px]">
                     {settingsGroup.items.map((item) => (
-                      <li key={item.href}>
-                        <NavigationMenuLink asChild>
-                          <Link
-                            href={item.href}
-                            className={`flex items-center gap-3 rounded-md p-3 text-sm transition-colors hover:bg-accent ${
-                              pathname === item.href ? "bg-accent text-accent-foreground" : ""
-                            }`}
-                          >
-                            <item.icon className="size-4 shrink-0 text-muted-foreground" />
-                            <div>
-                              <div className="font-medium leading-none">{item.label}</div>
-                              <p className="mt-1 text-xs text-muted-foreground">{item.desc}</p>
-                            </div>
-                          </Link>
-                        </NavigationMenuLink>
-                      </li>
+                      <DropdownMenuItem key={item.href} asChild>
+                        <Link
+                          href={item.href}
+                          className={`flex items-center gap-3 cursor-pointer ${
+                            pathname === item.href ? "bg-accent text-accent-foreground" : ""
+                          }`}
+                        >
+                          <item.icon className="size-4 shrink-0 text-muted-foreground" />
+                          <div>
+                            <div className="font-medium leading-none">{item.label}</div>
+                            <p className="mt-1 text-xs text-muted-foreground">{item.desc}</p>
+                          </div>
+                        </Link>
+                      </DropdownMenuItem>
                     ))}
-                  </ul>
-                </NavigationMenuContent>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </NavigationMenuItem>
             </NavigationMenuList>
           </NavigationMenu>
@@ -206,6 +230,16 @@ export function NavBar() {
                       onNavigate={() => setMobileOpen(false)}
                     />
                   ))}
+                  <Link
+                    href="/calendar"
+                    onClick={() => setMobileOpen(false)}
+                    className={`flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors hover:bg-accent ${
+                      pathname === "/calendar" ? "bg-accent text-accent-foreground font-medium" : "text-muted-foreground"
+                    }`}
+                  >
+                    <Calendar className="size-4 shrink-0" />
+                    Calendar
+                  </Link>
                   {user && (
                     <button
                       onClick={() => { signOut(); setMobileOpen(false); }}

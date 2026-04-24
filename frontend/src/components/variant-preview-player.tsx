@@ -125,6 +125,8 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
                   outlineWidth: subtitleSettings.outlineWidth,
                   positionY: subtitleSettings.positionY,
                   shadowDepth: subtitleSettings.shadowDepth,
+                  shadowColor: subtitleSettings.shadowColor,
+                  borderStyle: subtitleSettings.borderStyle,
                   enableGlow: subtitleSettings.enableGlow,
                   glowBlur: subtitleSettings.glowBlur,
                   adaptiveSizing: subtitleSettings.adaptiveSizing,
@@ -239,14 +241,14 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-[480px]">
+      <DialogContent className="w-[min(96vw,1200px)] max-w-[1200px]">
         <DialogHeader>
           <DialogTitle>{title ?? `Variant ${variantIndex + 1} Preview`}</DialogTitle>
         </DialogHeader>
 
         <div
           className="relative mx-auto bg-black rounded-lg overflow-hidden flex items-center justify-center"
-          style={{ aspectRatio: "9/16", maxHeight: "450px" }}
+          style={{ aspectRatio: "9/16", maxHeight: "75vh" }}
         >
           {/* Loading state */}
           {status === "processing" && (

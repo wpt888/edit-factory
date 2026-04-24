@@ -36,18 +36,47 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
+// When NEXT_PUBLIC_AUTH_DISABLED=true we must not instantiate the Supabase
+// browser client at all: its constructor runs _recoverAndRefresh() against any
+// stored session and crashes with `TypeError: Failed to fetch` during
+// HMR/Fast Refresh remounts or when the stored refresh_token is stale.
+// Matches the gate already present in middleware.ts:15 and the backend
+// auth_disabled branch in app/api/auth.py.
+const AUTH_DISABLED = process.env.NEXT_PUBLIC_AUTH_DISABLED === "true";
+
+// TODO(you): fill in the dev user contract below.
+//
+// This is the object returned from useAuth() in dev mode. The backend already
+// hardcodes a dev user when AUTH_DISABLED=true, so we want the frontend to
+// mirror that — otherwise navbar.tsx and pages that read `user?.id` will
+// flip into guest mode and hide data.
+//
+// Fields to decide (5–10 lines):
+//   - id:    should match whatever profile_id your backend dev-bypass returns
+//            (grep backend for `auth_disabled` / dev user to find it)
+//   - email: cosmetic, shows in navbar dropdown
+//   - any other User fields your pages actually read (check navbar + pipeline)
+//
+// Return `null` instead of an object if you want to test the real guest UX.
+const DEV_USER: User | null = null;  // <-- replace with { id, email, ... } or keep null
+
 export function AuthProvider({ children }: AuthProviderProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(AUTH_DISABLED ? DEV_USER : null);
   const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!AUTH_DISABLED);
 
-  const supabase = useMemo(() => createClient(), []);
+  // Only create the Supabase client when auth is actually enabled. The
+  // constructor itself triggers network calls, so gating createClient() is
+  // what actually silences the "Failed to fetch" error — not just skipping
+  // refreshSession().
+  const supabase = useMemo(() => (AUTH_DISABLED ? null : createClient()), []);
   const pathnameRef = useRef(pathname);
   pathnameRef.current = pathname;
 
   const refreshSession = useCallback(async () => {
+    if (!supabase) return;  // AUTH_DISABLED — nothing to refresh
     try {
       const { data, error } = await supabase.auth.refreshSession();
       if (error) {
@@ -64,6 +93,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [supabase]);
 
   const signOut = useCallback(async () => {
+    if (!supabase) {
+      // AUTH_DISABLED — no real session to terminate, just bounce to login
+      // so the user can test the login UI if they want.
+      setUser(null);
+      setSession(null);
+      router.push("/login");
+      return;
+    }
     try {
       await supabase.auth.signOut();
     } catch (error) {
@@ -89,6 +126,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   useEffect(() => {
     initCompleteRef.current = false;
+
+    // AUTH_DISABLED: no Supabase client exists, skip init + listener entirely.
+    // State was already seeded from DEV_USER above, and loading started false.
+    if (!supabase) {
+      initCompleteRef.current = true;
+      return;
+    }
 
     // Initial session check
     const initAuth = async () => {

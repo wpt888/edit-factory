@@ -565,6 +565,7 @@ def get_postiz_publisher(profile_id: str) -> PostizPublisher:
     repo = get_repository()
     api_url = None
     api_key = None
+    profile_has_partial_config = False
 
     if repo:
         try:
@@ -577,13 +578,27 @@ def get_postiz_publisher(profile_id: str) -> PostizPublisher:
                 api_key = postiz_config.get("api_key")
                 if api_url and api_key:
                     logger.info(f"[Profile {profile_id}] Loaded Postiz config from database")
+                elif api_url or api_key:
+                    # Partial config — do NOT silently mix with env values
+                    profile_has_partial_config = True
+                    logger.warning(
+                        f"[Profile {profile_id}] Postiz config is incomplete "
+                        f"(api_url={'set' if api_url else 'missing'}, "
+                        f"api_key={'set' if api_key else 'missing'})"
+                    )
                 else:
                     logger.debug(f"[Profile {profile_id}] Profile found but Postiz credentials not set")
         except Exception as e:
             logger.warning(f"[Profile {profile_id}] Failed to load Postiz config: {e}")
 
+    if profile_has_partial_config:
+        raise ValueError(
+            f"Profile {profile_id} has incomplete Postiz credentials — "
+            "both api_url and api_key are required. Update them in Settings."
+        )
+
     if not api_url or not api_key:
-        # Fallback: use global env vars
+        # Fallback: use global env vars (only when profile has no Postiz config at all)
         from app.config import get_settings
         settings = get_settings()
         api_url = getattr(settings, "postiz_api_url", None)
@@ -666,10 +681,13 @@ def is_postiz_configured(profile_id: Optional[str] = None) -> bool:
                     api_key = postiz_config.get("api_key")
                     if api_url and api_key:
                         return True
+                    if api_url or api_key:
+                        # Partial profile config — don't silently fall through to env
+                        return False
             except Exception:
                 pass
 
-    # Fallback: check global env vars
+    # Fallback: check global env vars (only when profile has no Postiz block at all)
     from app.config import get_settings
     settings = get_settings()
     if getattr(settings, "postiz_api_url", None) and getattr(settings, "postiz_api_key", None):

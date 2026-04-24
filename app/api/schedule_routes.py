@@ -603,6 +603,7 @@ async def get_schedule_calendar(
                     "platform": integration.get("providerIdentifier", "unknown"),
                     "platform_name": integration.get("name", ""),
                     "platform_picture": integration.get("picture"),
+                    "group": post.get("group"),
                 })
     except Exception as e:
         logger.warning(f"Failed to fetch Postiz calendar: {e}")
@@ -667,6 +668,7 @@ async def get_schedule_calendar(
                 filters=QueryFilters(
                     select="postiz_post_id, clip_id",
                     in_={"postiz_post_id": unlinked_ids},
+                    eq={"profile_id": profile.profile_id},
                 ))
             if pubs_resp.data:
                 # Get clip details for these publications
@@ -701,6 +703,110 @@ async def get_schedule_calendar(
                         })
     except Exception as e:
         logger.warning(f"Failed to enrich posts from publications: {e}")
+
+    # 2c. Fetch Buffer publications (not present in Postiz API — live only in our DB)
+    # These have postiz_post_id prefixed with "buffer:" and must be surfaced
+    # as synthetic postiz_posts + schedule_items so the calendar renders them.
+    try:
+        start_iso = datetime.combine(start_dt, time(0, 0), tzinfo=timezone.utc).isoformat()
+        end_iso = datetime.combine(end_dt, time(23, 59, 59), tzinfo=timezone.utc).isoformat()
+
+        # Pull scheduled-range and published-range separately, then merge.
+        buf_scheduled = repo.table_query("editai_postiz_publications", "select",
+            filters=QueryFilters(
+                select="postiz_post_id, platform, status, scheduled_at, published_at, caption, clip_id",
+                eq={"profile_id": profile.profile_id},
+                like={"postiz_post_id": "buffer:%"},
+                gte={"scheduled_at": start_iso},
+                lte={"scheduled_at": end_iso},
+            ))
+        buf_published = repo.table_query("editai_postiz_publications", "select",
+            filters=QueryFilters(
+                select="postiz_post_id, platform, status, scheduled_at, published_at, caption, clip_id",
+                eq={"profile_id": profile.profile_id},
+                like={"postiz_post_id": "buffer:%"},
+                gte={"published_at": start_iso},
+                lte={"published_at": end_iso},
+            ))
+
+        # Dedupe by postiz_post_id (a single row may match both windows)
+        buffer_pubs: Dict[str, dict] = {}
+        for row in (buf_scheduled.data or []) + (buf_published.data or []):
+            pid = row.get("postiz_post_id")
+            if pid:
+                buffer_pubs.setdefault(pid, row)
+
+        if buffer_pubs:
+            # Fetch clip metadata in one query for thumbnails / video paths
+            clip_ids = list({r["clip_id"] for r in buffer_pubs.values() if r.get("clip_id")})
+            clips_by_id: Dict[str, dict] = {}
+            if clip_ids:
+                clips_resp = repo.table_query("editai_clips", "select",
+                    filters=QueryFilters(
+                        select="id, variant_name, thumbnail_path, duration, final_video_path",
+                        in_={"id": clip_ids},
+                    ))
+                clips_by_id = {c["id"]: c for c in (clips_resp.data or [])}
+
+            status_to_state = {
+                "published": "PUBLISHED",
+                "scheduled": "QUEUE",
+                "failed": "ERROR",
+                "pending": "QUEUE",
+            }
+
+            for pid, row in buffer_pubs.items():
+                publish_ts = row.get("scheduled_at") or row.get("published_at")
+                if not publish_ts:
+                    continue  # Skip rows with no usable date
+                state = status_to_state.get((row.get("status") or "").lower(), "UNKNOWN")
+                raw_platform = (row.get("platform") or "").lower()
+                # Normalize: "tiktok (buffer)" → platform="tiktok", clear name
+                platform_key = raw_platform.split(" ")[0] if raw_platform else "tiktok"
+                platform_display = {
+                    "tiktok": "TikTok",
+                    "instagram": "Instagram",
+                    "youtube": "YouTube",
+                    "facebook": "Facebook",
+                    "twitter": "Twitter/X",
+                    "x": "Twitter/X",
+                    "linkedin": "LinkedIn",
+                    "pinterest": "Pinterest",
+                    "threads": "Threads",
+                }.get(platform_key, platform_key.title() or "TikTok")
+
+                result["postiz_posts"].append({
+                    "id": pid,
+                    "content": (row.get("caption") or "")[:200],
+                    "publish_date": publish_ts,
+                    "state": state,
+                    "release_url": None,
+                    "platform": platform_key or "tiktok",
+                    "platform_name": f"{platform_display} (via Buffer)",
+                    "platform_picture": None,
+                    "source": "buffer",
+                })
+
+                clip = clips_by_id.get(row.get("clip_id")) if row.get("clip_id") else None
+                if clip:
+                    # Derive date string for schedule_items grouping
+                    sched_date = publish_ts[:10] if isinstance(publish_ts, str) else None
+                    result["schedule_items"].append({
+                        "id": f"buf-{pid}",
+                        "clip_id": clip["id"],
+                        "clip_name": clip.get("variant_name", ""),
+                        "thumbnail_path": clip.get("thumbnail_path"),
+                        "final_video_path": clip.get("final_video_path"),
+                        "scheduled_date": sched_date,
+                        "scheduled_at": publish_ts,
+                        "status": row.get("status") or "scheduled",
+                        "postiz_post_id": pid,
+                        "error_message": None,
+                        "platform_type": platform_key,
+                        "source": "buffer",
+                    })
+    except Exception as e:
+        logger.warning(f"Failed to fetch Buffer publications for calendar: {e}")
 
     # 3. Build per-day summary
     from collections import defaultdict

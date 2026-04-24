@@ -341,6 +341,10 @@ async def serve_file(
     """
     settings = get_settings()
     file_path = normalize_path(file_path)
+    # Normalise backslashes to forward slashes so that DB paths stored with
+    # Windows separators (e.g. "output\profile_id\…") match the "output/" prefix
+    # check below and don't cause double-directory or tenant-check failures.
+    file_path = file_path.replace("\\", "/")
     full_path = Path(file_path)
     if not full_path.is_absolute():
         # Handle paths that start with "output/" - strip the prefix since output_dir already ends with /output
@@ -368,6 +372,27 @@ async def serve_file(
 
     if not is_allowed:
         raise HTTPException(status_code=403, detail="Access denied")
+
+    # Multi-tenant: verify the file belongs to the requesting profile
+    try:
+        rel_to_output = resolved_path.relative_to(settings.output_dir.resolve())
+        top_dir = rel_to_output.parts[0] if rel_to_output.parts else None
+        if top_dir and top_dir != profile.profile_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+    except ValueError:
+        # File is in media_dir or input_dir — check via project_id in path
+        try:
+            rel_to_media = resolved_path.relative_to(settings.media_dir.resolve())
+            # media/{project_id}/... — verify project ownership
+            project_id_candidate = rel_to_media.parts[0] if rel_to_media.parts else None
+            if project_id_candidate:
+                repo = get_repository()
+                if repo:
+                    proj = repo.get_project(project_id_candidate)
+                    if proj and proj.get("profile_id") != profile.profile_id:
+                        raise HTTPException(status_code=403, detail="Access denied")
+        except ValueError:
+            pass  # input_dir or temp — allow (shared resources)
 
     # If the file doesn't exist locally, try retrieving it from the storage backend
     if not resolved_path.exists():
@@ -498,6 +523,7 @@ async def download_clip_video(
         raise HTTPException(status_code=404, detail="No video file associated with this clip")
 
     settings = get_settings()
+    video_path_str = video_path_str.replace("\\", "/")
     file_path = Path(video_path_str)
     if not file_path.is_absolute():
         # Try output_dir first, then media_dir

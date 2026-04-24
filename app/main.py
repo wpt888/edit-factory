@@ -66,6 +66,7 @@ from app.api.profile_routes import router as profile_router
 from app.api import tts_routes
 from app.api.pipeline_routes import router as pipeline_router
 from app.api.elevenlabs_accounts_routes import router as elevenlabs_accounts_router
+from app.api.api_key_vault_routes import router as api_key_vault_router
 from app.api.feed_routes import router as feed_router
 from app.api.product_routes import router as product_router
 from app.api.product_generate_routes import router as product_generate_router
@@ -264,6 +265,11 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("AUTH_DISABLED=true is not allowed in non-debug mode. Set DEBUG=true for development or disable AUTH_DISABLED.")
     if not settings.auth_disabled and not settings.supabase_jwt_secret:
         raise RuntimeError("SUPABASE_JWT_SECRET is empty — JWT auth will reject all tokens. Set the secret or AUTH_DISABLED=true for development.")
+    if settings.desktop_mode and not settings.debug and settings.host not in ("127.0.0.1", "localhost"):
+        raise RuntimeError(
+            "desktop_mode=True requires host=127.0.0.1 or localhost in non-debug mode. "
+            "Refusing to expose an unauthenticated desktop API to the network."
+        )
     if settings.desktop_mode:
         logger.info("Desktop mode active — auth bypassed, config from %s", settings.base_dir)
         # Safety: desktop mode with auth bypass should only bind to localhost
@@ -399,6 +405,7 @@ app.include_router(profile_router, prefix="/api/v1")
 app.include_router(tts_routes.router, prefix="/api/v1")
 app.include_router(pipeline_router, prefix="/api/v1", tags=["Multi-Variant Pipeline"])
 app.include_router(elevenlabs_accounts_router, prefix="/api/v1", tags=["ElevenLabs Accounts"])
+app.include_router(api_key_vault_router, prefix="/api/v1", tags=["API Key Vault"])
 app.include_router(feed_router, prefix="/api/v1", tags=["feeds"])
 app.include_router(product_router, prefix="/api/v1", tags=["Products"])
 app.include_router(product_generate_router, prefix="/api/v1", tags=["Product Video Generation"])

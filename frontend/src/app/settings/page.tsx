@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input"
 import { useProfile } from "@/contexts/profile-context"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { ApiKeyManager } from "@/components/api-key-manager"
+import { friendlyPlatformName } from "@/lib/platforms"
 
 interface Voice {
   voice_id: string
@@ -40,6 +41,10 @@ interface TTSSettings {
     api_key: string
     organization_id: string
   }
+  // tts_settings carries fields this page does not render — voice tuning
+  // sliders (Pipeline) and Telegram credentials. Preserve them on save via
+  // spread merge; do NOT re-declare them here, they flow through unchanged.
+  [key: string]: unknown
 }
 
 interface DashboardData {
@@ -89,11 +94,52 @@ export default function SettingsPage() {
   const [postizUrl, setPostizUrl] = useState("")
   const [postizKey, setPostizKey] = useState("")
   const [postizEnabled, setPostizEnabled] = useState(false)
-  const [postizSource, setPostizSource] = useState<"profile" | "env" | null>(null)
+  const [postizCredentialsReady, setPostizCredentialsReady] = useState(false)
+  // Tracks whether the *saved* profile has complete Postiz credentials on the server.
+  // Integrations are fetched based on this (not the live form state), because
+  // /postiz/integrations on the backend always uses the stored profile creds —
+  // typing in the form does not change what the backend uses.
+  const [postizSavedConfigured, setPostizSavedConfigured] = useState(false)
+  // Snapshot of what the server actually has — used to detect an unsaved dirty form.
+  const [savedPostizUrl, setSavedPostizUrl] = useState("")
+  const [savedPostizKey, setSavedPostizKey] = useState("")
+
+  // Connected social platforms panel — shows accounts from Postiz for the active profile
+  interface PostizIntegration {
+    id: string
+    name: string
+    type: string
+    identifier?: string | null
+    picture?: string | null
+    disabled: boolean
+  }
+  const [integrations, setIntegrations] = useState<PostizIntegration[]>([])
+  const [integrationsLoading, setIntegrationsLoading] = useState(false)
+  const [integrationsError, setIntegrationsError] = useState<string | null>(null)
+  const integrationsRequestSeq = useRef(0)
+
+  // Connected Buffer channels panel — mirrors Postiz integrations card
+  interface BufferChannel {
+    id: string
+    name: string
+    service: string          // "tiktok" | "instagram" | "facebook" | "youtube" | "linkedin" | "twitter"
+    type: string             // "account" | "page" | "business"
+    avatar?: string | null
+    is_disconnected?: boolean
+  }
+  const [bufferChannels, setBufferChannels] = useState<BufferChannel[]>([])
+  const [bufferChannelsLoading, setBufferChannelsLoading] = useState(false)
+  const [bufferChannelsError, setBufferChannelsError] = useState<string | null>(null)
+  const bufferChannelsRequestSeq = useRef(0)
 
   // Buffer settings state
   const [bufferKey, setBufferKey] = useState("")
   const [bufferOrgId, setBufferOrgId] = useState("")
+  const [savedBufferKey, setSavedBufferKey] = useState("")
+  const [savedBufferOrgId, setSavedBufferOrgId] = useState("")
+  const [bufferSavedConfigured, setBufferSavedConfigured] = useState(false)
+  const [bufferTestingConnection, setBufferTestingConnection] = useState(false)
+  const [bufferConnectionStatus, setBufferConnectionStatus] = useState<"idle" | "success" | "error">("idle")
   const [testingConnection, setTestingConnection] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "success" | "error">("idle")
   const [showPostizKey, setShowPostizKey] = useState(false)
@@ -162,6 +208,19 @@ export default function SettingsPage() {
   useEffect(() => {
     if (profileLoading || !currentProfile) return
     const controller = new AbortController()
+    setPostizCredentialsReady(false)
+    setPostizUrl("")
+    setPostizKey("")
+    setPostizEnabled(false)
+    setPostizSavedConfigured(false)
+    setSavedPostizUrl("")
+    setSavedPostizKey("")
+    setIntegrations([])
+    setIntegrationsError(null)
+    integrationsRequestSeq.current += 1
+    setBufferChannels([])
+    setBufferChannelsError(null)
+    bufferChannelsRequestSeq.current += 1
 
     const loadSettings = async () => {
       try {
@@ -177,14 +236,23 @@ export default function SettingsPage() {
         }
 
         const postizSettings = ttsSettings.postiz || {}
-        setPostizUrl(postizSettings.api_url || "")
-        setPostizKey(postizSettings.api_key || "")
+        const loadedUrl = postizSettings.api_url || ""
+        const loadedKey = postizSettings.api_key || ""
+        setPostizUrl(loadedUrl)
+        setPostizKey(loadedKey)
         setPostizEnabled(postizSettings.enabled || false)
-        setPostizSource((postizSettings.api_url || postizSettings.api_key) ? "profile" : null)
+        setPostizSavedConfigured(Boolean(loadedUrl && loadedKey))
+        setSavedPostizUrl(loadedUrl)
+        setSavedPostizKey(loadedKey)
 
         const bufferSettings = ttsSettings.buffer || {}
-        setBufferKey(bufferSettings.api_key || "")
-        setBufferOrgId(bufferSettings.organization_id || "")
+        const loadedBufferKey = bufferSettings.api_key || ""
+        const loadedBufferOrgId = bufferSettings.organization_id || ""
+        setBufferKey(loadedBufferKey)
+        setBufferOrgId(loadedBufferOrgId)
+        setSavedBufferKey(loadedBufferKey)
+        setSavedBufferOrgId(loadedBufferOrgId)
+        setBufferSavedConfigured(Boolean(loadedBufferKey && loadedBufferOrgId))
 
         if (data.monthly_quota_usd !== undefined && data.monthly_quota_usd !== null) {
           setMonthlyQuota(data.monthly_quota_usd.toString())
@@ -195,42 +263,13 @@ export default function SettingsPage() {
         setPrimaryColor(videoSettings.primary_color || "#FF0000")
         setAccentColor(videoSettings.accent_color || "#FFFF00")
         setTemplateCta(videoSettings.cta_text || "Comanda acum!")
-
-        const shouldCheckPostizFallback =
-          !(postizSettings.api_url || "").trim() && !(postizSettings.api_key || "").trim()
-
-        if (shouldCheckPostizFallback) {
-          try {
-            const credentialsResponse = await apiGetWithRetry("/postiz/credentials", { signal: controller.signal })
-            if (controller.signal.aborted) return
-            const credentialsData = await credentialsResponse.json()
-            if (credentialsData.source === "profile") {
-              if (credentialsData.api_url) {
-                setPostizUrl(credentialsData.api_url)
-              }
-              if (credentialsData.api_key) {
-                setPostizKey(credentialsData.api_key)
-              }
-              setPostizSource("profile")
-            } else if (credentialsData.source === "env") {
-              if (credentialsData.api_url) {
-                setPostizUrl(credentialsData.api_url)
-              }
-              if (credentialsData.api_key) {
-                setPostizKey(credentialsData.api_key)
-              }
-              setPostizSource("env")
-            }
-          } catch (credentialsError) {
-            if (!controller.signal.aborted) {
-              console.warn("Failed to load effective Postiz credentials:", credentialsError)
-            }
-          }
-        }
       } catch (error) {
         if (controller.signal.aborted) return
         handleApiError(error, "Error loading settings")
       } finally {
+        if (!controller.signal.aborted) {
+          setPostizCredentialsReady(true)
+        }
         setInitialLoad(false)
       }
     }
@@ -345,7 +384,22 @@ export default function SettingsPage() {
 
     setSaving(true)
     try {
+      // Read-then-merge: tts_settings holds fields this page does not render
+      // (voice tuning from Pipeline, telegram creds). Overwriting wholesale
+      // silently wipes them. Mirror the pipeline page's merge pattern.
+      let existingTts: Record<string, unknown> = {}
+      try {
+        const res = await apiGetWithRetry(`/profiles/${currentProfile.id}`)
+        const profileData = await res.json()
+        existingTts = (profileData?.tts_settings ?? {}) as Record<string, unknown>
+      } catch (e) {
+        console.warn("Could not fetch existing tts_settings for merge; proceeding with form values only", e)
+      }
+
+      const selectedVoice = voices.find(v => v.voice_id === voiceId)
+
       const ttsSettings: TTSSettings = {
+        ...existingTts,
         provider: "elevenlabs",
         voice_id: voiceId,
         postiz: {
@@ -359,8 +413,6 @@ export default function SettingsPage() {
         },
       }
 
-      // Add voice name if available
-      const selectedVoice = voices.find(v => v.voice_id === voiceId)
       if (selectedVoice) {
         ttsSettings.voice_name = selectedVoice.name
       }
@@ -386,6 +438,19 @@ export default function SettingsPage() {
       await apiPatch(`/profiles/${currentProfile.id}`, updates)
 
       toast.success("Settings saved successfully (TTS, Postiz, and Template)")
+      const nowConfigured = Boolean(postizUrl && postizKey)
+      setPostizSavedConfigured(nowConfigured)
+      setSavedPostizUrl(postizUrl)
+      setSavedPostizKey(postizKey)
+      if (nowConfigured) {
+        fetchIntegrations()
+      } else {
+        setIntegrations([])
+      }
+      const bufferNowConfigured = Boolean(bufferKey && bufferOrgId)
+      setBufferSavedConfigured(bufferNowConfigured)
+      setSavedBufferKey(bufferKey)
+      setSavedBufferOrgId(bufferOrgId)
     } catch (error) {
       handleApiError(error, "Failed to save settings")
     } finally {
@@ -393,25 +458,100 @@ export default function SettingsPage() {
     }
   }
 
+  const fetchIntegrations = useCallback(async () => {
+    if (!currentProfile) return
+    const requestSeq = ++integrationsRequestSeq.current
+    setIntegrationsLoading(true)
+    setIntegrationsError(null)
+    try {
+      const response = await apiGetWithRetry("/postiz/integrations")
+      const data = (await response.json()) as PostizIntegration[]
+      if (requestSeq !== integrationsRequestSeq.current) return
+      setIntegrations(data || [])
+    } catch (error) {
+      if (requestSeq !== integrationsRequestSeq.current) return
+      setIntegrationsError(error instanceof Error ? error.message : "Failed to load")
+      setIntegrations([])
+    } finally {
+      if (requestSeq === integrationsRequestSeq.current) {
+        setIntegrationsLoading(false)
+      }
+    }
+  }, [currentProfile])
+
+  const fetchBufferChannels = useCallback(async () => {
+    if (!currentProfile) return
+    const requestSeq = ++bufferChannelsRequestSeq.current
+    setBufferChannelsLoading(true)
+    setBufferChannelsError(null)
+    try {
+      const response = await apiGetWithRetry("/buffer/channels")
+      const data = (await response.json()) as BufferChannel[]
+      if (requestSeq !== bufferChannelsRequestSeq.current) return
+      setBufferChannels(data || [])
+    } catch (error) {
+      if (requestSeq !== bufferChannelsRequestSeq.current) return
+      setBufferChannelsError(error instanceof Error ? error.message : "Failed to load")
+      setBufferChannels([])
+    } finally {
+      if (requestSeq === bufferChannelsRequestSeq.current) {
+        setBufferChannelsLoading(false)
+      }
+    }
+  }, [currentProfile])
+
+  // Fetch integrations only when the *saved* profile has complete creds.
+  // Intentionally excludes live form state (postizUrl/postizKey) — the backend
+  // /postiz/integrations uses the stored profile creds, so refetching on every
+  // keystroke would show another profile's / env-fallback's connected accounts.
+  useEffect(() => {
+    if (!currentProfile) return
+    if (!postizCredentialsReady) return
+    if (postizSavedConfigured) fetchIntegrations()
+    else {
+      setIntegrations([])
+      setIntegrationsLoading(false)
+    }
+  }, [currentProfile, postizSavedConfigured, postizCredentialsReady, fetchIntegrations])
+
+  useEffect(() => {
+    if (!currentProfile) return
+    if (!postizCredentialsReady) return
+    if (bufferSavedConfigured) fetchBufferChannels()
+    else {
+      setBufferChannels([])
+      setBufferChannelsLoading(false)
+    }
+  }, [currentProfile, bufferSavedConfigured, postizCredentialsReady, fetchBufferChannels])
+
   const handleTestConnection = async () => {
     if (!postizUrl || !postizKey) {
       toast.warning("Please enter Postiz API URL and API Key first")
       return
     }
 
-    // Warn user that test uses saved credentials, not current form values
-    toast.info("Testing uses saved credentials. Please save settings first if you changed them.", { duration: 4000 })
-
     setTestingConnection(true)
     setConnectionStatus("idle")
 
     try {
-      const response = await apiGetWithRetry("/postiz/status")
+      // Validate what is currently in the form — do NOT use saved creds.
+      // /postiz/validate constructs a one-off publisher and never touches state.
+      const response = await apiPost("/postiz/validate", {
+        api_url: postizUrl,
+        api_key: postizKey,
+      })
 
       const data = await response.json()
       if (data.connected) {
         setConnectionStatus("success")
-        toast.success(`Connected successfully! Found ${data.integrations_count} social media accounts.`)
+        toast.success(
+          `Credentials valid. ${data.integrations_count} social account(s) available. Saving…`
+        )
+        // Auto-persist on successful validation so users don't need a separate
+        // Save click. handleSave reads current form state, so the just-validated
+        // values are what get written. The integrations panel refresh happens
+        // inside handleSave once the profile is persisted.
+        await handleSave()
       } else {
         setConnectionStatus("error")
         toast.error(`Connection failed: ${data.error || "Unknown error"}`)
@@ -421,6 +561,36 @@ export default function SettingsPage() {
       handleApiError(error, "Connection test failed")
     } finally {
       setTestingConnection(false)
+    }
+  }
+
+  const handleTestBufferConnection = async () => {
+    if (!bufferKey || !bufferOrgId) {
+      toast.warning("Please enter Buffer API Key and Organization ID first")
+      return
+    }
+    setBufferTestingConnection(true)
+    setBufferConnectionStatus("idle")
+    try {
+      const response = await apiPost("/buffer/validate", {
+        api_key: bufferKey,
+        organization_id: bufferOrgId,
+      })
+      const data = await response.json()
+      if (data.connected) {
+        setBufferConnectionStatus("success")
+        toast.success(`Buffer credentials valid. ${data.channels_count} channel(s) connected. Saving…`)
+        await handleSave()
+        fetchBufferChannels()
+      } else {
+        setBufferConnectionStatus("error")
+        toast.error(`Buffer connection failed: ${data.error || "Unknown error"}`)
+      }
+    } catch (error) {
+      setBufferConnectionStatus("error")
+      handleApiError(error, "Buffer connection test failed")
+    } finally {
+      setBufferTestingConnection(false)
     }
   }
 
@@ -875,7 +1045,7 @@ export default function SettingsPage() {
                 ) : (
                   <>
                     <Plus className="mr-2 h-4 w-4" />
-                    Add Account
+                    Test & Add Account
                   </>
                 )}
               </Button>
@@ -919,16 +1089,6 @@ export default function SettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {postizSource === "env" && (
-            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-              <p className="text-sm font-medium text-foreground">
-                Postiz credentials are currently loaded from global `.env`.
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                These values are active for this profile right now. Save this form to store profile-specific Postiz credentials and stop relying on the shared fallback.
-              </p>
-            </div>
-          )}
           <div className="space-y-2">
             <label className="text-sm font-medium">Postiz API URL</label>
             <Input
@@ -982,6 +1142,22 @@ export default function SettingsPage() {
                 "Test Connection"
               )}
             </Button>
+            <Button
+              onClick={handleSave}
+              disabled={saving || !postizUrl || !postizKey}
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save className="mr-2 h-4 w-4" />
+                  Save
+                </>
+              )}
+            </Button>
             {connectionStatus === "success" && (
               <span className="text-sm text-green-600">Connected</span>
             )}
@@ -990,14 +1166,129 @@ export default function SettingsPage() {
             )}
           </div>
 
-          {postizUrl && postizKey && (
-            <div className="flex items-center gap-2 p-3 bg-muted rounded-md">
-              <div className={`w-2 h-2 rounded-full ${connectionStatus === "success" ? "bg-green-500" : "bg-yellow-500"}`} />
-              <span className="text-sm">
-                {connectionStatus === "success"
-                  ? "Credentials configured and verified"
-                  : "Credentials configured (not yet verified)"}
-              </span>
+          {postizUrl && postizKey && (() => {
+            // Distinguish three states clearly so "verified" never implies "saved":
+            //   - saved + verified (post-save, both form and server agree)
+            //   - unsaved + verified (Test Connection worked but form differs from saved)
+            //   - unsaved (typed, not yet tested or saved)
+            const formMatchesSaved =
+              postizSavedConfigured &&
+              postizUrl === savedPostizUrl &&
+              postizKey === savedPostizKey
+            const verified = connectionStatus === "success"
+            let dotClass = "bg-yellow-500"
+            let label = "Credentials entered — click Save to persist for this profile."
+            if (formMatchesSaved && verified) {
+              dotClass = "bg-green-500"
+              label = "Credentials saved and verified for this profile."
+            } else if (formMatchesSaved) {
+              dotClass = "bg-green-500"
+              label = "Credentials saved for this profile."
+            } else if (verified) {
+              dotClass = "bg-yellow-500"
+              label = "Credentials verified but not saved yet — click Save to persist."
+            }
+            return (
+              <div className="flex items-center gap-2 p-3 bg-muted rounded-md">
+                <div className={`w-2 h-2 rounded-full ${dotClass}`} />
+                <span className="text-sm">{label}</span>
+              </div>
+            )
+          })()}
+        </CardContent>
+      </Card>
+
+      {/* Connected Social Platforms — shows the Postiz accounts available for the active profile.
+          Scoped by X-Profile-Id header in apiGetWithRetry, so switching profile auto-refreshes. */}
+      <Card key={`postiz-integrations-${currentProfile.id}`}>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <CardTitle>Connected Social Platforms</CardTitle>
+              <CardDescription>
+                Accounts linked in Postiz for <span className="font-medium">{currentProfile.name}</span>.
+                {integrations.length > 0 && ` ${integrations.length} connected.`}
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={fetchIntegrations}
+              disabled={integrationsLoading || !postizSavedConfigured}
+            >
+              {integrationsLoading
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <RefreshCw className="h-4 w-4" />}
+              <span className="ml-2">Refresh</span>
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {!postizSavedConfigured ? (
+            <p className="text-sm text-muted-foreground">
+              Save Postiz credentials above to see connected social platforms for this profile.
+            </p>
+          ) : integrationsError ? (
+            <p className="text-sm text-red-600">Could not load integrations: {integrationsError}</p>
+          ) : integrationsLoading && integrations.length === 0 ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading integrations…
+            </div>
+          ) : integrations.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No social platforms connected in Postiz for this profile yet.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {/* TODO: render one card per integration.
+                  Each `integration` has: { id, name, type, identifier?, picture?, disabled }.
+                  - `name` is the display name of the account (e.g. "Nortia Official")
+                  - `identifier` is the handle (e.g. "@nortia_official") — may be null
+                  - `type` is the platform type (e.g. "instagram-standalone", "tiktok")
+                    → use `friendlyPlatformName(integration.type)` for the badge label
+                  - `picture` is an avatar URL — may be null, so handle a fallback
+                  See `frontend/src/components/PublishDialog.tsx` for how Step 4 styles these. */}
+              {integrations
+                .slice()
+                .sort((a, b) =>
+                  friendlyPlatformName(a.type).localeCompare(friendlyPlatformName(b.type)) ||
+                  a.name.localeCompare(b.name)
+                )
+                .map((integration) => (
+                <div
+                  key={integration.id}
+                  className={`rounded-md border p-3 transition-colors ${
+                    integration.disabled ? "opacity-60" : ""
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    {integration.picture ? (
+                      <img
+                        src={integration.picture}
+                        alt={integration.name}
+                        className="h-11 w-11 rounded-full object-cover border shrink-0"
+                      />
+                    ) : (
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground">
+                        {integration.name.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-foreground">{integration.name}</p>
+                          {integration.identifier && (
+                            <p className="truncate text-xs text-muted-foreground">{integration.identifier}</p>
+                          )}
+                        </div>
+                        <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground">
+                          {friendlyPlatformName(integration.type)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </CardContent>
@@ -1054,10 +1345,148 @@ export default function SettingsPage() {
             </p>
           </div>
 
-          {bufferKey && bufferOrgId && (
-            <div className="flex items-center gap-2 p-3 bg-muted rounded-md">
-              <div className="w-2 h-2 rounded-full bg-blue-500" />
-              <span className="text-sm">Buffer credentials configured</span>
+          <div className="flex items-center gap-4">
+            <Button
+              variant="outline"
+              onClick={handleTestBufferConnection}
+              disabled={bufferTestingConnection || !bufferKey || !bufferOrgId}
+            >
+              {bufferTestingConnection ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Testing...
+                </>
+              ) : (
+                "Test Connection"
+              )}
+            </Button>
+            <Button
+              onClick={handleSave}
+              disabled={saving || !bufferKey || !bufferOrgId}
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save className="mr-2 h-4 w-4" />
+                  Save
+                </>
+              )}
+            </Button>
+            {bufferConnectionStatus === "success" && (
+              <span className="text-sm text-green-600">Connected</span>
+            )}
+            {bufferConnectionStatus === "error" && (
+              <span className="text-sm text-red-600">Connection failed</span>
+            )}
+          </div>
+
+          {bufferKey && bufferOrgId && (() => {
+            const formMatchesSaved =
+              bufferSavedConfigured &&
+              bufferKey === savedBufferKey &&
+              bufferOrgId === savedBufferOrgId
+            const verified = bufferConnectionStatus === "success"
+            let dotClass = "bg-yellow-500"
+            let label = "Credentials entered — click Save to persist for this profile."
+            if (formMatchesSaved && verified) {
+              dotClass = "bg-green-500"
+              label = "Credentials saved and verified for this profile."
+            } else if (formMatchesSaved) {
+              dotClass = "bg-green-500"
+              label = "Credentials saved for this profile."
+            } else if (verified) {
+              dotClass = "bg-yellow-500"
+              label = "Credentials verified but not saved yet — click Save to persist."
+            }
+            return (
+              <div className="flex items-center gap-2 p-3 bg-muted rounded-md">
+                <div className={`w-2 h-2 rounded-full ${dotClass}`} />
+                <span className="text-sm">{label}</span>
+              </div>
+            )
+          })()}
+        </CardContent>
+      </Card>
+
+      {/* Connected Buffer Channels — mirrors the Postiz integrations card above */}
+      <Card key={`buffer-channels-${currentProfile.id}`}>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <CardTitle>Connected Buffer Channels</CardTitle>
+              <CardDescription>
+                Channels linked in Buffer for <span className="font-medium">{currentProfile.name}</span>.
+                {bufferChannels.length > 0 && ` ${bufferChannels.length} connected.`}
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={fetchBufferChannels}
+              disabled={bufferChannelsLoading || !bufferSavedConfigured}
+            >
+              {bufferChannelsLoading
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <RefreshCw className="h-4 w-4" />}
+              <span className="ml-2">Refresh</span>
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {!bufferSavedConfigured ? (
+            <p className="text-sm text-muted-foreground">
+              Save Buffer credentials above to see connected channels for this profile.
+            </p>
+          ) : bufferChannelsError ? (
+            <p className="text-sm text-red-600">Could not load channels: {bufferChannelsError}</p>
+          ) : bufferChannelsLoading && bufferChannels.length === 0 ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading channels…
+            </div>
+          ) : bufferChannels.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No channels connected in Buffer for this profile yet.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {bufferChannels
+                .slice()
+                .sort((a, b) =>
+                  friendlyPlatformName(a.service).localeCompare(friendlyPlatformName(b.service)) ||
+                  a.name.localeCompare(b.name)
+                )
+                .map((channel) => (
+                <div key={channel.id} className="rounded-md border p-3 transition-colors">
+                  <div className="flex items-start gap-3">
+                    {channel.avatar ? (
+                      <img
+                        src={channel.avatar}
+                        alt={channel.name}
+                        className="h-11 w-11 rounded-full object-cover border shrink-0"
+                      />
+                    ) : (
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground">
+                        {channel.name.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-foreground">{channel.name}</p>
+                          <p className="truncate text-xs text-muted-foreground capitalize">{channel.type}</p>
+                        </div>
+                        <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground">
+                          {friendlyPlatformName(channel.service)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </CardContent>

@@ -19,12 +19,15 @@ import { Trash2, Film, ExternalLink, Loader2 } from "lucide-react";
 import { apiDelete } from "@/lib/api";
 import { toast } from "sonner";
 import type { PostizPost, ScheduleItem } from "./PostizMonthlyCalendar";
+import { shortPlatformLabel } from "./PostizMonthlyCalendar";
+import { friendlyPlatformName } from "@/lib/platforms";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
 interface PostDetailModalProps {
   post: PostizPost | null;
   scheduleItem?: ScheduleItem;
+  siblings?: PostizPost[];
   onClose: () => void;
   onDeleted: (postId: string) => void;
 }
@@ -59,7 +62,7 @@ function formatDate(dateStr: string): string {
   }
 }
 
-export function PostDetailModal({ post, scheduleItem, onClose, onDeleted }: PostDetailModalProps) {
+export function PostDetailModal({ post, scheduleItem, siblings = [], onClose, onDeleted }: PostDetailModalProps) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -98,12 +101,21 @@ export function PostDetailModal({ post, scheduleItem, onClose, onDeleted }: Post
           {/* Header */}
           <div className="px-6 pt-5 pb-3 border-b">
             <div className="flex items-center gap-3">
-              {post.platform_picture && (
+              {post.platform_picture ? (
                 <img src={post.platform_picture} alt="" className="size-8 rounded-full" />
+              ) : (
+                <div className="size-8 rounded-full bg-primary/10 border flex items-center justify-center text-[10px] font-bold">
+                  {shortPlatformLabel(post.platform)}
+                </div>
               )}
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-sm">{post.platform_name || post.platform}</span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-sm">
+                    {post.platform_name || post.platform}
+                    {post.platform_name && (
+                      <span className="text-muted-foreground font-normal"> · {friendlyPlatformName(post.platform)}</span>
+                    )}
+                  </span>
                   <Badge variant="outline" className={stateColor(post.state)}>
                     {post.state}
                   </Badge>
@@ -172,6 +184,31 @@ export function PostDetailModal({ post, scheduleItem, onClose, onDeleted }: Post
 
                   <span className="text-muted-foreground">Scheduled</span>
                   <span>{formatDate(post.publish_date)}</span>
+
+                  {siblings.length > 1 && (
+                    <>
+                      <span className="text-muted-foreground self-start pt-0.5">Platforms</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {siblings.map((s) => (
+                          <Badge
+                            key={s.id}
+                            variant="outline"
+                            className={`text-[10px] gap-1 ${stateColor(s.state)}`}
+                          >
+                            {s.platform_picture ? (
+                              <img src={s.platform_picture} alt="" className="size-3 rounded-full" />
+                            ) : (
+                              <span className="font-bold">{shortPlatformLabel(s.platform)}</span>
+                            )}
+                            {friendlyPlatformName(s.platform)}
+                            {s.platform_name && s.platform_name !== s.platform && (
+                              <span className="opacity-70">· {s.platform_name}</span>
+                            )}
+                          </Badge>
+                        ))}
+                      </div>
+                    </>
+                  )}
 
                   {post.release_url && (
                     <>
