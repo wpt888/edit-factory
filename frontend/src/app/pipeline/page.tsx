@@ -1398,17 +1398,28 @@ function PipelinePage() {
         const previewInfo: Record<string, { has_audio: boolean; audio_duration: number }> = data.preview_info || {};
         const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
         const restoredApproved = new Set<number>();
+        // Meta-multiplication keys like "0_A" must collapse to base variant 0.
+        const toBaseVariant = (key: string): number | null => {
+          const m = key.match(/^(\d+)/);
+          if (!m) return null;
+          const n = Number(m[1]);
+          return Number.isFinite(n) ? n : null;
+        };
         Object.entries(ttsInfo).forEach(([key, info]) => {
-          if (info.has_audio) {
-            restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
-            if (info.approved) restoredApproved.add(Number(key));
-          }
+          if (!info.has_audio) return;
+          const idx = toBaseVariant(key);
+          if (idx === null) return;
+          restoredTts[idx] = { audio_duration: info.audio_duration, generating: false, stale: false };
+          if (info.approved) restoredApproved.add(idx);
         });
         // Per-variant fallback: fill gaps from preview_info (Step 3 audio may
         // survive temp cleanup even when Step 2 TTS audio was deleted)
         Object.entries(previewInfo).forEach(([key, info]) => {
-          if (info.has_audio && !restoredTts[Number(key)]) {
-            restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
+          if (!info.has_audio) return;
+          const idx = toBaseVariant(key);
+          if (idx === null) return;
+          if (!restoredTts[idx]) {
+            restoredTts[idx] = { audio_duration: info.audio_duration, generating: false, stale: false };
           }
         });
         setTtsResults(restoredTts);

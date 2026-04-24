@@ -1114,14 +1114,19 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             return None
 
         row = result.data[0]
-        # Convert string keys back to int for previews and render_jobs
+        # Convert string keys back to int for previews and render_jobs.
+        # Meta-multiplication keys ("0_A", "0_B", ...) are kept as strings;
+        # legacy integer-only keys are coerced back to int.
         previews = {}
         for k, v in (row.get("previews") or {}).items():
-            try:
-                previews[int(k)] = v
-            except (ValueError, TypeError):
-                logger.warning(f"Skipping invalid preview key: {k}")
-                continue
+            if isinstance(k, str) and "_" in k and any(k.endswith(f"_{c}") for c in "ABCDEFGHIJ"):
+                previews[k] = v
+            else:
+                try:
+                    previews[int(k)] = v
+                except (ValueError, TypeError):
+                    logger.warning(f"Skipping invalid preview key: {k}")
+                    continue
             # Verify audio_path still exists on disk
             if isinstance(v, dict) and "preview_data" in v:
                 pd = v["preview_data"]
@@ -1152,14 +1157,18 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
             if isinstance(v, dict) and v.get("audio_path") and not Path(v["audio_path"]).exists():
                 v["audio_path"] = None
 
-        # PIP-14: Load preview_renders from DB
+        # PIP-14: Load preview_renders from DB. Same meta-multiplication
+        # key handling as `previews` above.
         preview_renders = {}
         for k, v in (row.get("preview_renders") or {}).items():
-            try:
-                preview_renders[int(k)] = v
-            except (ValueError, TypeError):
-                logger.warning(f"Skipping invalid preview_renders key: {k}")
-                continue
+            if isinstance(k, str) and "_" in k and any(k.endswith(f"_{c}") for c in "ABCDEFGHIJ"):
+                preview_renders[k] = v
+            else:
+                try:
+                    preview_renders[int(k)] = v
+                except (ValueError, TypeError):
+                    logger.warning(f"Skipping invalid preview_renders key: {k}")
+                    continue
 
         # Load segment_usage from DB
         segment_usage = {}
@@ -5774,16 +5783,13 @@ async def subtitle_frame_preview(
     sample_text = (request.sample_text or "").strip() or "Sample subtitle text"
     ts = max(float(request.timestamp or 0), 0.0)
 
-    def _format_srt_timestamp(seconds: float) -> str:
-        total_ms = max(int(round(seconds * 1000)), 0)
-        hours, rem = divmod(total_ms, 3_600_000)
-        minutes, rem = divmod(rem, 60_000)
-        secs, ms = divmod(rem, 1000)
-        return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
-
-    start_tc = _format_srt_timestamp(ts)
-    end_tc = _format_srt_timestamp(ts + 3.0)
-    srt_content = f"1\n{start_tc} --> {end_tc}\n{sample_text}\n"
+    # `-ss ts` is placed BEFORE `-i` (fast input seek), which resets output
+    # PTS to 0. The `subtitles` filter compares SRT times against frame PTS,
+    # so the SRT must be anchored at 00:00:00 — otherwise the single captured
+    # frame (at output t=0) falls outside the subtitle window and no text
+    # renders. Span 0..10s so the overlay is always visible regardless of
+    # decoder boundary quirks.
+    srt_content = f"1\n00:00:00,000 --> 00:00:10,000\n{sample_text}\n"
 
     # --- Compute cache fingerprint (include visual_version so A vs B differ) ---
     settings_json = _json.dumps(effective_subtitle_settings, sort_keys=True)

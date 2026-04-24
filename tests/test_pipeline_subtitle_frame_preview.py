@@ -71,6 +71,7 @@ def test_subtitle_frame_preview_uses_sample_text_and_fingerprint(tmp_path):
     response_a = asyncio.run(_run("editor text one"))
     response_b = asyncio.run(_run("editor text two"))
 
+    assert "00:00:01,900 --> 00:00:05,000" in captured_srt_contents[0]
     assert "editor text one" in captured_srt_contents[0]
     assert "old saved text" not in captured_srt_contents[0]
     assert "editor text two" in captured_srt_contents[1]
