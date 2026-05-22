@@ -9,9 +9,9 @@ Requirements for Desktop Production-Ready & Monetization. Each maps to roadmap p
 
 ### Functional Desktop (Track A) — closes the v12 functional gap
 
-- [ ] **FUNC-01**: Every backend endpoint that currently calls `repo.get_client()` returns a typed repository result under `DATA_BACKEND=sqlite` — no route returns `503 Database not available` during a complete end-to-end smoke test.
+- [x] **FUNC-01**: Every backend endpoint that currently calls `repo.get_client()` returns a typed repository result under `DATA_BACKEND=sqlite` — no route returns `503 Database not available` during a complete end-to-end smoke test.
 - [ ] **FUNC-02**: The full pipeline (upload source video → segment extraction → 3-step script→TTS→render flow → library save → tag/trash) completes successfully on a freshly installed desktop with no Supabase configured.
-- [ ] **FUNC-03**: Repository ABC gains the methods required by patterns currently handled via `.table().select()…` chains in `library_routes.py`, `pipeline_routes.py`, `segments_routes.py`, `assembly_service.py`, `core/cleanup.py`.
+- [x] **FUNC-03**: Repository ABC gains the methods required by patterns currently handled via `.table().select()…` chains in `library_routes.py`, `pipeline_routes.py`, `segments_routes.py`, `assembly_service.py`, `core/cleanup.py`.
 - [ ] **FUNC-04**: `app/config.py` resolves a platform-appropriate `base_dir` on Windows, macOS, and Linux (`%APPDATA%\EditFactory\`, `~/Library/Application Support/EditFactory/`, `~/.config/EditFactory/`).
 - [ ] **FUNC-05**: FFmpeg resolver finds the binary on all three OSes — bundled binary in `extraResources` per-target, fallback to system PATH, fallback to `FFMPEG_BINARY` env var.
 - [ ] **FUNC-06**: A `scripts/desktop-smoke-test.py` (or Playwright spec) exercises every previously-broken route in SQLite mode and is wired into CI as a release gate.
@@ -103,9 +103,9 @@ Which phases cover which requirements. Filled in during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FUNC-01 | 80, 81, 82, 83, 85 | Pending |
+| FUNC-01 | 80, 81, 82, 83, 85 | Complete |
 | FUNC-02 | 85 (smoke test gate) | Pending |
-| FUNC-03 | 80, 81, 82, 83 (ABC method additions) | Pending |
+| FUNC-03 | 80, 81, 82, 83 (ABC method additions) | Complete |
 | FUNC-04 | 84 | Pending |
 | FUNC-05 | 84 | Pending |
 | FUNC-06 | 85 | Pending |

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Executing Phase 80 — Plan 80-01 complete, Plan 80-02 next
-stopped_at: Plan 80-01 complete (18 routes migrated, get_client() 27→9); Plan 80-02 (Pattern C/D + retry-block cleanup) pending
-last_updated: "2026-05-22T22:05:00.000Z"
+status: Ready to execute
+stopped_at: Plan 80-02 complete; Plan 80-03 (test rewrite) next
+last_updated: "2026-05-22T19:49:11.471Z"
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
-  percent: 33
+  completed_plans: 2
+  percent: 67
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 ## Current Position
 
 Phase: 80 (library-routes-repository-migration) — EXECUTING
-Plan: 2 of 3 (80-01 complete 2026-05-22; 80-02 next)
+Plan: 3 of 3 (80-01 complete 2026-05-22; 80-02 next)
 Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 0/19 phases complete.
 Next action: `/gsd-execute-phase 80` (continues from Plan 80-02 — Pattern C/D migration + _render_final_clip_task retry-block cleanup + in-body supabase.table() migrations).
 
@@ -60,6 +60,7 @@ Sources:
 | v11 Production Polish | 9 (55-63) | 22 | Shipped 2026-03-03 |
 | v12 Desktop Product MVP | 16 (64-79) | 29 | Shipped 2026-03-09 |
 | **v13 Desktop Production-Ready & Monetization** | **19 (80-98)** | **~28–32 (est.)** | **Active — opened 2026-05-22** |
+| Phase 80 P02 | 75min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -79,6 +80,7 @@ Earlier project decisions are logged in PROJECT.md Key Decisions table.
 
 - [Phase 80]: Plan 80-01 deferred site #23 (_regenerate_voiceover_task body) to Plan 80-02 — audit gap discovered during execution, 7+ in-body supabase.table() calls beyond the get_client() guard would have caused NameError if migrated piecemeal
 - [Phase 80]: Plan 80-01 added 5 new ABC methods (count_clips, get_export_preset_by_name, delete_exports_older_than, get_project_by_name, increment_segment_usage) on both backends and migrated 18 Pattern A/B routes in library_routes.py — get_client() count reduced from 27 to 9 (the Pattern C/D residual handed to 80-02)
+- [Phase 80]: Plan 80-02: get_client() count driven to 0 in library_routes.py; both grep gates pass (get_client = 0 AND supabase.table/.rpc = 0); deviations driven by second-gate necessity (5 unenumerated calls in _generate_from_segments_task, full _regenerate_voiceover_task migration, dead 503 guard removal)
 
 ### Pending Todos
 
@@ -102,9 +104,9 @@ New for v13:
 
 ## Session Continuity
 
-Last session: 2026-05-22T22:05:00.000Z — Phase 80 Plan 80-01 executed (autonomous loop)
-Stopped at: Plan 80-01 complete; 80-02 pending. Working tree clean except untracked CONTINUE-GOAL-PROMPT.md.
-Resume file: `.planning/phases/80-library-routes-repository-migration/80-01-SUMMARY.md`
+Last session: 2026-05-22T19:49:11.464Z
+Stopped at: Plan 80-02 complete; Plan 80-03 (test rewrite) next
+Resume file: None
 Next action: `/gsd-execute-phase 80` to start Plan 80-02 (Pattern C/D migration — sites #5, #6, #8, #9, #23, #24-26 dead code, #27, plus 8 in-body supabase.table() lines inside `_render_final_clip_task`).
 
 ---
