@@ -286,6 +286,18 @@ class DataRepository(ABC):
         ...
 
     @abstractmethod
+    def upsert_pipeline(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Insert or update a pipeline row keyed on ``data["id"]``.
+
+        Mirrors PostgREST upsert semantics: INSERT when no row with that id
+        exists, otherwise UPDATE in place. Returns the resulting row.
+
+        Used by ``_db_save_pipeline`` in pipeline_routes.py where the row is
+        created on first save and updated on subsequent saves.
+        """
+        ...
+
+    @abstractmethod
     def delete_pipeline(self, pipeline_id: str) -> None:
         """Delete a pipeline by ID."""
         ...

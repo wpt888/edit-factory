@@ -31,6 +31,11 @@ _JSON_COLUMNS = frozenset({
     "collection_ids", "summary",
     # V2 smart schedule
     "platform_times", "variant_routing",
+    # Phase 81 — editai_pipelines JSON columns required by upsert_pipeline.
+    # Without these, callers passing raw dicts (e.g., _db_save_pipeline) get
+    # `sqlite3.ProgrammingError: type 'dict' is not supported` on the bind.
+    "tts_previews", "preview_renders", "segment_usage", "captions",
+    "context_products",
 })
 
 
@@ -874,6 +879,22 @@ class SQLiteRepository(DataRepository):
         self, pipeline_id: str, data: Dict[str, Any]
     ) -> Dict[str, Any]:
         return self._update("editai_pipelines", "id", pipeline_id, data)
+
+    def upsert_pipeline(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """INSERT or UPDATE editai_pipelines keyed on ``data["id"]``.
+
+        Mirrors PostgREST upsert: existence check then branch to UPDATE or
+        INSERT. SQLite's single-writer model serializes concurrent calls;
+        the race window for a duplicate-existence check is ~ms.
+        """
+        pipeline_id = data.get("id")
+        if pipeline_id:
+            existing = self._get_one("editai_pipelines", "id", pipeline_id)
+            if existing:
+                return self._update(
+                    "editai_pipelines", "id", pipeline_id, data
+                )
+        return self._insert("editai_pipelines", data)
 
     def delete_pipeline(self, pipeline_id: str) -> None:
         self._delete("editai_pipelines", "id", pipeline_id)

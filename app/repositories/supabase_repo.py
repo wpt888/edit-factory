@@ -392,6 +392,14 @@ class SupabaseRepository(DataRepository):
     def update_pipeline(self, pipeline_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
         return self._update("editai_pipelines", "id", pipeline_id, data)
 
+    def upsert_pipeline(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """PostgREST native upsert on editai_pipelines keyed on id."""
+        sb = get_supabase()
+        result = sb.table("editai_pipelines").upsert(data).execute()
+        if result.data:
+            return result.data[0]
+        return data
+
     def delete_pipeline(self, pipeline_id: str) -> None:
         self._delete("editai_pipelines", "id", pipeline_id)
 
