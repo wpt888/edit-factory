@@ -137,3 +137,48 @@ No additional new ABC methods identified by the audit. The Phase 80 method `upda
 ## Residual `get_client()` count after Plan 81-01
 
 Target: **5** (sites 6, 20, 21, 22, 23) — within the [4, 10] acceptance gate.
+
+---
+
+## Plan 81-01 — Mid-Execution Checkpoint (2026-05-23)
+
+**Reason for checkpoint:** Previous executor agent dispatched 2026-05-23, ran ~27 minutes, was cut off at the boundary between site #11 and site #12 due to runtime interruption. Orchestrator committed chunk 2 (sites 5,7-11) as commit `1106d51` and writes this checkpoint so the resume agent has unambiguous state.
+
+### Migration progress as of commit `1106d51`
+
+| Site | Function | Status | Commit |
+|------|----------|--------|--------|
+| 1 | `_restore_missing_tts_audio_paths` | ✅ migrated | 8febdc8 (chunk 1) |
+| 2 | `_persist_one` inner helper | ✅ migrated | 8febdc8 (chunk 1) |
+| 3 | `_db_save_pipeline` (used new `upsert_pipeline` ABC) | ✅ migrated | 8febdc8 (chunk 1) |
+| 4 | `_db_update_render_jobs` | ✅ migrated | 8febdc8 (chunk 1) |
+| 5 | `_fetch_preset_and_settings` | ✅ migrated | 1106d51 (chunk 2) |
+| 7 | `_db_load_pipeline` | ✅ migrated | 1106d51 (chunk 2) |
+| 8 | `_compute_segment_duration` | ✅ migrated | 1106d51 (chunk 2) |
+| 9 | `list_pipelines` | ✅ migrated | 1106d51 (chunk 2) |
+| 10 | `delete_pipeline` | ✅ migrated | 1106d51 (chunk 2) |
+| 11 | `update_source_selection` | ✅ migrated | 1106d51 (chunk 2) |
+| 12 | `update_pipeline_scripts` | ⏳ remaining | — |
+| 13 | `regenerate_script` | ⏳ remaining | — |
+| 14 | `rename_pipeline` | ⏳ remaining | — |
+| 15 | `approve_tts_variant` | ⏳ remaining | — |
+| 16 | `generate_pipeline` | ⏳ remaining | — |
+| 17 | `adopt_library_tts` | ⏳ remaining | — |
+| 18 | `generate_variant_tts` subhelper | ⏳ remaining | — |
+| 19 | `preview_variant` subroutine | ⏳ remaining | — |
+| 24 | `save_selected_captions` | ⏳ remaining | — |
+| 6 | `_save_clip_to_library` | (Plan 81-02 owns) | — |
+| 20 | `check_render_skip` | (Plan 81-02 owns) | — |
+| 21 | `render_variants` subroutine | (Plan 81-02 owns) | — |
+| 22 | `remake_variant` subroutine | (Plan 81-02 owns) | — |
+| 23 | `sync_pipeline_to_library` | (Plan 81-02 owns) | — |
+
+**Empirical residual at `1106d51`:** `grep -c "get_client()" app/api/pipeline_routes.py` = **14** (= 9 remaining 81-01 sites + 5 Plan-81-02 sites).
+
+**Resume contract for the next executor:** Continue Task 3 of Plan 81-01 starting at site #12 (`update_pipeline_scripts` at line 2225). Use the per-site target methods in the site-by-site table above. After site #24 is migrated, residual must be exactly **5** (sites 6, 20, 21, 22, 23). Then create 81-01-SUMMARY.md and update STATE.md + ROADMAP.md.
+
+### Task completion status
+
+- ✅ Task 1 (Audit) — `05c6843` — ROUTES-AUDIT.md created and verified
+- ✅ Task 2 (ABC methods TDD red/green) — `4d94ec8`, `0d81fc9` — `upsert_pipeline` added to base.py, supabase_repo.py, sqlite_repo.py; 6/6 tests pass in `tests/test_repository_upsert_pipeline.py`
+- ⏳ Task 3 (Pattern A/B migration) — 11 of 19 sites done (chunks 1+2); 8 remaining sites (12-19,24) + final SUMMARY/STATE/ROADMAP wrap-up
