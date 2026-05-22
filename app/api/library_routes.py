@@ -2379,20 +2379,21 @@ async def delete_clip(
 ):
     """Permanently delete a clip (files + DB record)."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        clip_result = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", False).limit(1).execute()
-        if not clip_result.data:
+        # T-80-01-01: profile_id check after repo.get_clip
+        clip = repo.get_clip(clip_id)
+        if (
+            not clip
+            or clip.get("profile_id") != profile.profile_id
+            or clip.get("is_deleted")
+        ):
             raise HTTPException(status_code=404, detail="Clip not found")
-        clip = clip_result.data[0]
         # Hard-delete: remove files from disk
         _delete_clip_files(clip)
         # Delete content row (child) then clip row (parent)
-        supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
-        supabase.table("editai_clips").delete().eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
+        repo.delete_clip_content_by_clip_ids([clip_id])
+        repo.delete_clip(clip_id)
         logger.info(f"Hard-deleted clip {clip_id} (files + DB)")
         return {"status": "deleted", "clip_id": clip_id}
     except HTTPException:
@@ -2413,24 +2414,24 @@ async def bulk_delete_clips(
 ):
     """Permanently delete multiple clips (files + DB records)."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     deleted = []
     failed = []
     clip_ids = request.clip_ids
 
     try:
-        # Fetch all active clips with full data for file deletion
-        result = supabase.table("editai_clips")\
-            .select("*")\
-            .in_("id", clip_ids)\
-            .eq("profile_id", profile.profile_id)\
-            .eq("is_deleted", False)\
-            .execute()
-
-        found_clips = result.data or []
+        # T-80-01-01: per-id ownership check via repo.get_clip
+        # Loop approach (vs in_() select) to reuse existing ABC methods.
+        # T-80-01-06: silently skip non-owned IDs (accepted threat).
+        found_clips = []
+        for cid in clip_ids:
+            clip = repo.get_clip(cid)
+            if (
+                clip
+                and clip.get("profile_id") == profile.profile_id
+                and not clip.get("is_deleted")
+            ):
+                found_clips.append(clip)
         found_ids = {clip["id"] for clip in found_clips}
 
         # Mark missing clips as failed
@@ -2444,8 +2445,8 @@ async def bulk_delete_clips(
             for clip in found_clips:
                 _delete_clip_files(clip)
             # Delete content rows (child) then clip rows (parent)
-            supabase.table("editai_clip_content").delete().in_("clip_id", found_id_list).execute()
-            supabase.table("editai_clips").delete().in_("id", found_id_list).eq("profile_id", profile.profile_id).execute()
+            repo.delete_clip_content_by_clip_ids(found_id_list)
+            repo.delete_clips_by_ids(found_id_list)
 
         deleted = list(found_ids)
         for clip_id in deleted:
@@ -2474,23 +2475,24 @@ async def bulk_delete_clips(
 async def list_trash(profile: ProfileContext = Depends(get_profile_context)):
     """List soft-deleted clips (trash view)."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
     try:
-        result = supabase.table("editai_clips")\
-            .select("id, project_id, variant_index, variant_name, raw_video_path, thumbnail_path, duration, final_video_path, final_status, created_at, deleted_at")\
-            .eq("profile_id", profile.profile_id)\
-            .eq("is_deleted", True)\
-            .order("deleted_at", desc=True)\
-            .execute()
-        # Enrich with project names
+        result = repo.list_clips_by_profile(
+            profile.profile_id,
+            QueryFilters(
+                eq={"is_deleted": True},
+                order_by="deleted_at",
+                order_desc=True,
+                select="id, project_id, variant_index, variant_name, raw_video_path, thumbnail_path, duration, final_video_path, final_status, created_at, deleted_at",
+            ),
+        )
+        # Enrich with project names (N small per-project lookups; trash is bounded)
         clips = result.data or []
-        project_ids = list(set(c["project_id"] for c in clips if c.get("project_id")))
-        project_names = {}
-        if project_ids:
-            projects = supabase.table("editai_projects").select("id, name").in_("id", project_ids).execute()
-            project_names = {p["id"]: p["name"] for p in (projects.data or [])}
+        project_ids = list({c["project_id"] for c in clips if c.get("project_id")})
+        project_names: Dict[str, str] = {}
+        for pid in project_ids:
+            project_row = repo.get_project(pid)
+            if project_row and project_row.get("name"):
+                project_names[pid] = project_row["name"]
         for clip in clips:
             clip["project_name"] = project_names.get(clip.get("project_id"), "Unknown")
             # Calculate days remaining before permanent deletion
@@ -2511,23 +2513,22 @@ async def list_trash(profile: ProfileContext = Depends(get_profile_context)):
 async def empty_trash(profile: ProfileContext = Depends(get_profile_context)):
     """Permanently delete ALL clips in trash (files + DB)."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
     try:
-        result = supabase.table("editai_clips")\
-            .select("id, raw_video_path, thumbnail_path, final_video_path")\
-            .eq("profile_id", profile.profile_id)\
-            .eq("is_deleted", True)\
-            .execute()
+        result = repo.list_clips_by_profile(
+            profile.profile_id,
+            QueryFilters(
+                eq={"is_deleted": True},
+                select="id, raw_video_path, thumbnail_path, final_video_path",
+            ),
+        )
         clips = result.data or []
         if not clips:
             return {"status": "empty", "deleted_count": 0}
         for clip in clips:
             _delete_clip_files(clip)
         clip_ids = [c["id"] for c in clips]
-        supabase.table("editai_clip_content").delete().in_("clip_id", clip_ids).execute()
-        supabase.table("editai_clips").delete().in_("id", clip_ids).eq("profile_id", profile.profile_id).execute()
+        repo.delete_clip_content_by_clip_ids(clip_ids)
+        repo.delete_clips_by_ids(clip_ids)
         logger.info(f"Emptied trash: {len(clips)} clips permanently deleted")
         return {"status": "emptied", "deleted_count": len(clips)}
     except Exception as e:
@@ -2539,21 +2540,15 @@ async def empty_trash(profile: ProfileContext = Depends(get_profile_context)):
 async def restore_clip(clip_id: str, profile: ProfileContext = Depends(get_profile_context)):
     """Restore a soft-deleted clip from trash."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
     try:
-        # DB-06: Use .limit(1) instead of .single()
-        clip_result = supabase.table("editai_clips")\
-            .select("id, project_id, raw_video_path, final_video_path, thumbnail_path")\
-            .eq("id", clip_id)\
-            .eq("profile_id", profile.profile_id)\
-            .eq("is_deleted", True)\
-            .limit(1)\
-            .execute()
-        if not clip_result.data:
+        # T-80-01-01: profile_id check after repo.get_clip
+        clip = repo.get_clip(clip_id)
+        if (
+            not clip
+            or clip.get("profile_id") != profile.profile_id
+            or not clip.get("is_deleted")
+        ):
             raise HTTPException(status_code=404, detail="Clip not found in trash")
-        clip = clip_result.data[0]
 
         thumbnail_path = clip.get("thumbnail_path")
         if thumbnail_path and not Path(thumbnail_path).exists():
@@ -2569,12 +2564,12 @@ async def restore_clip(clip_id: str, profile: ProfileContext = Depends(get_profi
                     if regenerated_thumb:
                         thumbnail_path = str(regenerated_thumb)
 
-        # DB-01/DB-07: Include profile_id filter to prevent IDOR
-        supabase.table("editai_clips").update({
+        # T-80-01-01: ownership already verified above; update is safe
+        repo.update_clip(clip_id, {
             "is_deleted": False,
             "deleted_at": None,
             "thumbnail_path": thumbnail_path,
-        }).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
+        })
         logger.info(f"Restored clip {clip_id} from trash")
         return {"status": "restored", "clip_id": clip_id}
     except HTTPException:
@@ -2588,18 +2583,19 @@ async def restore_clip(clip_id: str, profile: ProfileContext = Depends(get_profi
 async def permanently_delete_clip(clip_id: str, profile: ProfileContext = Depends(get_profile_context)):
     """Permanently delete a clip from trash (files + DB)."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
     try:
-        # DB-06: Use .limit(1) instead of .single()
-        clip_result = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).eq("is_deleted", True).limit(1).execute()
-        if not clip_result.data:
+        # T-80-01-01: profile_id check after repo.get_clip
+        clip = repo.get_clip(clip_id)
+        if (
+            not clip
+            or clip.get("profile_id") != profile.profile_id
+            or not clip.get("is_deleted")
+        ):
             raise HTTPException(status_code=404, detail="Clip not found in trash")
-        _delete_clip_files(clip_result.data[0])
-        # DB-01/DB-07: Delete content first (child), then clip record (parent); include profile_id filter
-        supabase.table("editai_clip_content").delete().eq("clip_id", clip_id).execute()
-        supabase.table("editai_clips").delete().eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
+        _delete_clip_files(clip)
+        # Delete content first (child), then clip record (parent)
+        repo.delete_clip_content_by_clip_ids([clip_id])
+        repo.delete_clip(clip_id)
         logger.info(f"Permanently deleted clip {clip_id}")
         return {"status": "permanently_deleted", "clip_id": clip_id}
     except HTTPException:
