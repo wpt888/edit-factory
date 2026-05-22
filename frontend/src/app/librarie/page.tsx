@@ -57,7 +57,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { InlineVideoPlayer } from "@/components/inline-video-player";
 import { ClipHoverPreview } from "@/components/clip-hover-preview";
 import { ClipTagEditor } from "@/components/clip-tag-editor";
-import { BulkScheduleDialog } from "@/components/BulkScheduleDialog";
+import { BulkScheduleDialog } from "@/components/dialogs/bulk-schedule-dialog";
 import {
   Dialog,
   DialogContent,
