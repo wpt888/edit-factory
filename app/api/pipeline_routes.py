@@ -2191,18 +2191,17 @@ async def update_pipeline_scripts(
     # Persist to DB — convert int keys to strings for JSONB compatibility
     try:
         repo = get_repository()
-        supabase = repo.get_client() if repo else None
-        if supabase:
+        if repo:
             tts_previews_json = {str(k): v for k, v in pipeline.get("tts_previews", {}).items()}
             previews_json = {str(k): v for k, v in pipeline.get("previews", {}).items()}
             segment_usage_json = {str(k): v for k, v in pipeline.get("segment_usage", {}).items()}
-            supabase.table("editai_pipelines").update({
+            repo.update_pipeline(pipeline_id, {
                 "scripts": request.scripts,
                 "variant_count": len(request.scripts),
                 "tts_previews": tts_previews_json,
                 "previews": previews_json,
                 "segment_usage": segment_usage_json,
-            }).eq("id", pipeline_id).execute()
+            })
     except Exception as e:
         logger.warning(f"Failed to update scripts for pipeline {pipeline_id} in DB: {e}")
 
@@ -2271,23 +2270,18 @@ async def regenerate_script(
 
     # Fetch keywords and product groups, filtered by selected products if available
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
     unique_keywords = []
     product_groups_dict = {}
 
     # Use stored context_products from pipeline to filter keywords
     selected_product_titles = [p["title"] for p in stored_products if p.get("title")] if stored_products else []
 
-    if supabase:
+    if repo:
         try:
-            query = supabase.table("editai_segments")\
-                .select("keywords, product_group")\
-                .eq("profile_id", profile.profile_id)
-
+            seg_filters = QueryFilters(select="keywords, product_group")
             if selected_product_titles:
-                query = query.in_("product_group", selected_product_titles)
-
-            result = query.execute()
+                seg_filters.in_ = {"product_group": selected_product_titles}
+            result = repo.list_segments(profile.profile_id, seg_filters)
             all_keywords = set()
             for seg in result.data:
                 keywords_list = seg.get("keywords") or []
@@ -2311,15 +2305,11 @@ async def regenerate_script(
 
     # Fetch AI instructions
     ai_instructions = ""
-    if supabase:
+    if repo:
         try:
-            profile_result = supabase.table("profiles")\
-                .select("ai_instructions")\
-                .eq("id", profile.profile_id)\
-                .limit(1)\
-                .execute()
-            if profile_result.data:
-                ai_instructions = profile_result.data[0].get("ai_instructions") or ""
+            profile_row = repo.get_profile(profile.profile_id)
+            if profile_row:
+                ai_instructions = profile_row.get("ai_instructions") or ""
         except Exception as e:
             logger.warning(f"Failed to fetch AI instructions: {e}")
 
@@ -2435,11 +2425,8 @@ async def rename_pipeline(
 
     try:
         repo = get_repository()
-        supabase = repo.get_client() if repo else None
-        if supabase:
-            supabase.table("editai_pipelines").update({
-                "name": request.name,
-            }).eq("id", pipeline_id).execute()
+        if repo:
+            repo.update_pipeline(pipeline_id, {"name": request.name})
     except Exception as e:
         logger.warning(f"Failed to update name for pipeline {pipeline_id} in DB: {e}")
 
@@ -2474,12 +2461,9 @@ async def approve_tts_variant(
     # Persist to DB
     try:
         repo = get_repository()
-        supabase = repo.get_client() if repo else None
-        if supabase:
+        if repo:
             tts_previews_json = {str(k): v for k, v in dict(tts_previews).items()}
-            supabase.table("editai_pipelines").update({
-                "tts_previews": tts_previews_json,
-            }).eq("id", pipeline_id).execute()
+            repo.update_pipeline(pipeline_id, {"tts_previews": tts_previews_json})
     except Exception as e:
         logger.warning(f"Failed to persist TTS approval for pipeline {pipeline_id}: {e}")
 
@@ -2576,24 +2560,19 @@ async def generate_pipeline(
     # Fetch unique keywords from editai_segments table, grouped by product_group
     # When context_products are selected, filter to only those product groups
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
     unique_keywords = []
     product_groups_dict = {}  # {group_label: [keywords]}
 
     # Build product filter from selected catalog products
     selected_product_titles = [p.title for p in body.context_products] if body.context_products else []
 
-    if supabase:
+    if repo:
         try:
-            query = supabase.table("editai_segments")\
-                .select("keywords, product_group")\
-                .eq("profile_id", profile.profile_id)
-
+            seg_filters = QueryFilters(select="keywords, product_group")
             # Filter segments to only the selected product groups
             if selected_product_titles:
-                query = query.in_("product_group", selected_product_titles)
-
-            result = query.execute()
+                seg_filters.in_ = {"product_group": selected_product_titles}
+            result = repo.list_segments(profile.profile_id, seg_filters)
 
             # Flatten and deduplicate keywords, and group by product_group
             all_keywords = set()
@@ -2620,7 +2599,7 @@ async def generate_pipeline(
         except Exception as e:
             logger.warning(f"Failed to fetch keywords from database: {e}")
     else:
-        logger.warning("Supabase not available, continuing without keywords")
+        logger.warning("Repository not available, continuing without keywords")
 
     # Compute total segment duration using shared helper
     total_segment_duration = _compute_segment_duration(profile.profile_id)
@@ -2633,15 +2612,11 @@ async def generate_pipeline(
 
     # Fetch AI instructions from profile
     ai_instructions = ""
-    if supabase:
+    if repo:
         try:
-            profile_result = supabase.table("profiles")\
-                .select("ai_instructions")\
-                .eq("id", profile.profile_id)\
-                .limit(1)\
-                .execute()
-            if profile_result.data:
-                ai_instructions = profile_result.data[0].get("ai_instructions") or ""
+            profile_row = repo.get_profile(profile.profile_id)
+            if profile_row:
+                ai_instructions = profile_row.get("ai_instructions") or ""
         except Exception as e:
             logger.warning(f"Failed to fetch AI instructions for profile {profile.profile_id}: {e}")
 
@@ -2787,26 +2762,22 @@ async def adopt_library_tts(
 
     # Fetch the TTS asset from the library
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
+    if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        result = supabase.table("editai_tts_assets")\
-            .select("*")\
-            .eq("id", request.asset_id)\
-            .eq("profile_id", profile.profile_id)\
-            .eq("status", "ready")\
-            .limit(1)\
-            .execute()
+        asset = repo.get_tts_asset(request.asset_id)
     except Exception as e:
         logger.error(f"Failed to fetch TTS asset: {e}")
         raise HTTPException(status_code=404, detail="TTS asset not found in library")
 
-    if not result.data:
+    # T-81-01-01 IDOR mitigation: verify profile ownership + ready status
+    if (
+        not asset
+        or asset.get("profile_id") != profile.profile_id
+        or asset.get("status") != "ready"
+    ):
         raise HTTPException(status_code=404, detail="TTS asset not found in library")
-
-    asset = result.data[0]
     audio_path = asset.get("mp3_path")
     if not audio_path or not Path(audio_path).exists():
         raise HTTPException(status_code=404, detail="TTS audio file no longer exists on disk")
