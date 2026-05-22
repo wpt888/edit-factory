@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { apiGetWithRetry, apiPost } from "@/lib/api";
 import { toast } from "sonner";
-import { PostizMonthlyCalendar } from "@/components/PostizMonthlyCalendar";
+import { PostizMonthlyCalendar } from "@/components/schedule/postiz-monthly-calendar";
 import {
   ScheduleCalendarPreview,
   type ScheduleEntry,

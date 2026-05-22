@@ -1,7 +1,7 @@
 "use client";
 
 import { useProfile } from "@/contexts/profile-context";
-import { PostizMonthlyCalendar } from "@/components/PostizMonthlyCalendar";
+import { PostizMonthlyCalendar } from "@/components/schedule/postiz-monthly-calendar";
 
 export default function CalendarPage() {
   const { isLoading: profileLoading } = useProfile();

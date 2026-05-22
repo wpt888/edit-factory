@@ -34,7 +34,7 @@ import {
   ScheduleCalendarPreview,
   type ScheduleEntry,
 } from "@/components/ScheduleCalendarPreview";
-import { PostizMonthlyCalendar } from "@/components/PostizMonthlyCalendar";
+import { PostizMonthlyCalendar } from "@/components/schedule/postiz-monthly-calendar";
 
 /* ---------- Types ---------- */
 

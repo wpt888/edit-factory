@@ -30,7 +30,7 @@ import {
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 import { toast } from "sonner";
-import { PostizMonthlyCalendar } from "@/components/PostizMonthlyCalendar";
+import { PostizMonthlyCalendar } from "@/components/schedule/postiz-monthly-calendar";
 import { PLATFORM_CHAR_LIMITS, PLATFORM_NAMES } from "@/lib/platforms";
 
 // Unified platform item — can be a Postiz integration or a Buffer channel
