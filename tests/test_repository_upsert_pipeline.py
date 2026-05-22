@@ -93,20 +93,21 @@ def test_upsert_pipeline_inserts_when_id_does_not_exist(sqlite_repo):
     data = {
         "id": pipeline_id,
         "profile_id": profile_id,
-        "status": "draft",
+        "idea": "test idea",  # NOT NULL column in editai_pipelines schema
+        "name": "first save",
         "scripts": [{"text": "hello"}],
     }
     result = sqlite_repo.upsert_pipeline(data)
 
     assert result is not None
     assert result.get("id") == pipeline_id
-    assert result.get("status") == "draft"
+    assert result.get("name") == "first save"
 
     # Verify it's actually persisted
     fetched = sqlite_repo.get_pipeline(pipeline_id)
     assert fetched is not None
     assert fetched["id"] == pipeline_id
-    assert fetched["status"] == "draft"
+    assert fetched["name"] == "first save"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -124,19 +125,21 @@ def test_upsert_pipeline_updates_when_id_already_exists(sqlite_repo):
     sqlite_repo.upsert_pipeline({
         "id": pipeline_id,
         "profile_id": profile_id,
-        "status": "draft",
+        "idea": "test idea",
+        "name": "first save",
     })
 
     # Second upsert with same id should update
     sqlite_repo.upsert_pipeline({
         "id": pipeline_id,
         "profile_id": profile_id,
-        "status": "completed",
+        "idea": "test idea",
+        "name": "renamed",
     })
 
     fetched = sqlite_repo.get_pipeline(pipeline_id)
     assert fetched is not None
-    assert fetched["status"] == "completed", \
+    assert fetched["name"] == "renamed", \
         "upsert_pipeline must UPDATE existing row when id already present"
 
     # Confirm we still have only one row (no duplicate insert)
@@ -162,7 +165,7 @@ def test_upsert_pipeline_returns_dict_with_all_fields(sqlite_repo):
     data = {
         "id": pipeline_id,
         "profile_id": profile_id,
-        "status": "draft",
+        "idea": "test idea",
         "tts_previews": {"v1": "audio.mp3"},
     }
     result = sqlite_repo.upsert_pipeline(data)

@@ -821,7 +821,6 @@ def _fetch_preset_and_settings(render_request) -> tuple:
     Shared by render_variants and remake_variant to avoid duplication.
     """
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
 
     preset_data = {
         "name": render_request.preset_name,
@@ -834,15 +833,11 @@ def _fetch_preset_and_settings(render_request) -> tuple:
         "audio_bitrate": "192k"
     }
 
-    if supabase:
+    if repo:
         try:
-            preset_result = supabase.table("editai_export_presets")\
-                .select("*")\
-                .eq("name", render_request.preset_name)\
-                .limit(1)\
-                .execute()
-            if preset_result.data:
-                preset_data = preset_result.data[0]
+            preset_row = repo.get_export_preset_by_name(render_request.preset_name)
+            if preset_row:
+                preset_data = preset_row
             else:
                 logger.warning(f"Preset '{render_request.preset_name}' not found, using default")
         except Exception as e:
@@ -1276,18 +1271,9 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
     """Load pipeline from DB into _pipelines cache. Returns pipeline dict or None."""
     try:
         repo = get_repository()
-        supabase = repo.get_client() if repo else None
-        if not supabase:
+        row = repo.get_pipeline(pipeline_id)
+        if not row:
             return None
-        result = supabase.table("editai_pipelines")\
-            .select("*")\
-            .eq("id", pipeline_id)\
-            .limit(1)\
-            .execute()
-        if not result.data:
-            return None
-
-        row = result.data[0]
         # Convert string keys back to int for previews and render_jobs.
         # Meta-multiplication keys ("0_A", "0_B", ...) are kept as strings;
         # legacy integer-only keys are coerced back to int.
@@ -1418,14 +1404,11 @@ def _get_pipeline_or_load(pipeline_id: str) -> Optional[dict]:
 def _compute_segment_duration(profile_id: str) -> float:
     """Compute total duration of all segments for a profile."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        return 0.0
     try:
-        result = supabase.table("editai_segments")\
-            .select("start_time, end_time")\
-            .eq("profile_id", profile_id)\
-            .execute()
+        result = repo.list_segments(
+            profile_id,
+            QueryFilters(select="start_time, end_time"),
+        )
         total = 0.0
         for seg in result.data:
             start = seg.get("start_time")
@@ -1730,14 +1713,16 @@ async def list_pipelines(
     # Try DB first
     try:
         repo = get_repository()
-        supabase = repo.get_client() if repo else None
-        if supabase:
-            result = supabase.table("editai_pipelines")\
-                .select("id, name, idea, provider, variant_count, keyword_count, created_at, target_script_duration")\
-                .eq("profile_id", profile.profile_id)\
-                .order("created_at", desc=True)\
-                .limit(limit)\
-                .execute()
+        if repo:
+            result = repo.list_pipelines(
+                profile.profile_id,
+                QueryFilters(
+                    select="id, name, idea, provider, variant_count, keyword_count, created_at, target_script_duration",
+                    order_by="created_at",
+                    order_desc=True,
+                    limit=limit,
+                ),
+            )
             if result.data:
                 for row in result.data:
                     items.append(PipelineListItem(
@@ -1790,20 +1775,13 @@ async def delete_pipeline(
     db_found = False
     try:
         repo = get_repository()
-        supabase = repo.get_client() if repo else None
-        if supabase:
-            result = supabase.table("editai_pipelines")\
-                .select("id, profile_id")\
-                .eq("id", pipeline_id)\
-                .limit(1)\
-                .execute()
-            if result.data:
-                if result.data[0].get("profile_id") != profile.profile_id:
+        if repo:
+            existing = repo.get_pipeline(pipeline_id)
+            if existing:
+                # T-81-01-01 IDOR mitigation: verify profile ownership before delete
+                if existing.get("profile_id") != profile.profile_id:
                     raise HTTPException(status_code=403, detail="Not authorized to delete this pipeline")
-                supabase.table("editai_pipelines")\
-                    .delete()\
-                    .eq("id", pipeline_id)\
-                    .execute()
+                repo.delete_pipeline(pipeline_id)
                 logger.info(f"Pipeline {pipeline_id} deleted from DB")
                 db_found = True
     except HTTPException:
@@ -2015,11 +1993,8 @@ async def update_source_selection(
     db_persisted = False
     try:
         repo = get_repository()
-        supabase = repo.get_client() if repo else None
-        if supabase:
-            supabase.table("editai_pipelines").update({
-                "source_video_ids": request.source_video_ids
-            }).eq("id", pipeline_id).execute()
+        if repo:
+            repo.update_pipeline(pipeline_id, {"source_video_ids": request.source_video_ids})
             db_persisted = True
     except Exception as e:
         logger.warning(f"Failed to save source selection for {pipeline_id}: {e}")
