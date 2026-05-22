@@ -236,6 +236,24 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
   - 80-02-PLAN.md — Pattern C/D migration + helper refactor + dead-code removal
   - 80-03-PLAN.md — Per-route pytest cases asserting 200 under DATA_BACKEND=sqlite
 
+### Phase 81: Pipeline routes repository migration
+
+**Goal**: Every `repo.get_client()` call in `app/api/pipeline_routes.py` (24 sites covering `/render`, `/render-preview`, `/tts`, `/preview`, `/scripts`, `/sync-to-library`, `/check-render`, `/generate-video-captions`, `/selected-captions`, `/video-caption-templates` CRUD, `/subtitle-frame-preview`) is replaced with typed repository methods. The full 4-step pipeline (script → TTS → preview → render) executes end-to-end under `DATA_BACKEND=sqlite`.
+
+**Depends on**: Phase 80 (the migration pattern is established and ABC has the new methods).
+**Requirements**: FUNC-01, FUNC-03. (FUNC-02 is owned by Phase 85 per REQUIREMENTS.md line 107 — Phase 81 builds the scaffold, Phase 85 lights it up.)
+**Success Criteria**:
+  1. Zero `repo.get_client()` calls remain in `pipeline_routes.py` — `grep -c "get_client()" app/api/pipeline_routes.py` returns `0`.
+  2. An end-to-end pipeline E2E test scaffold exists in `tests/test_pipeline_e2e_sqlite.py` and runs through all 4 steps (create → script gen → TTS → render-preview → render) without `503 Database not available` errors. Full passing (mp4 emergence + clip persistence) is deferred to **Phase 85 (FUNC-06 — desktop smoke-test harness)**.
+  3. Per-route pytest cases pass under `DATA_BACKEND=sqlite`.
+  4. Both grep gates from Phase 80 pass (expanded to 6 variable names for Phase 81): `grep -c "get_client()" app/api/pipeline_routes.py` AND `grep -cE "(supabase|_sb|_supa|_supa_render|supabase_chk|supabase_lib)\.(table|rpc)\(" app/api/pipeline_routes.py` return `0`. The expanded gate is required because Phase 81 has 6 variable-name aliases (vs Phase 80's single `supabase`).
+  5. Background tasks (`_save_clip_to_library`, `sync_pipeline_to_library`, similar in-body Supabase chains across all 6 variable names) are migrated as part of the same plan that migrates their parent route guard — no half-migrated functions.
+
+**Plans**: 3 plans (Wave 1 → 2 → 3, sequential because all plans modify app/api/pipeline_routes.py):
+  - 81-01-PLAN.md — Audit (ROUTES-AUDIT.md) + new ABC methods (upsert_pipeline at minimum) + Pattern A/B migration (~17 sites)
+  - 81-02-PLAN.md — Pattern C/D + fat multi-site function migration (_save_clip_to_library + sync_pipeline_to_library + check_render_skip + render_variants/remake_variant subroutines); drives both grep gates to 0 across 6 variable names (supabase, _sb, _supa, _supa_render, supabase_chk, supabase_lib)
+  - 81-03-PLAN.md — Per-route SQLite pytest cases (reusing Phase 80 sqlite_backend fixture) + E2E pipeline test (test_pipeline_full_flow_produces_mp4) + xfail repairs in tests/test_pipeline_routes.py
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
