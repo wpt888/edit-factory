@@ -112,6 +112,7 @@ playwright-report/
 coverage/
 .playwright-mcp/
 screenshots/
+.pytest_tmp/
 
 # ======================
 # Docker
