@@ -16,6 +16,30 @@ from unittest.mock import patch, MagicMock
 
 
 # ---------------------------------------------------------------------------
+# Phase 80 xfail reasons (test_api_library.py was written for the pre-Phase-80
+# behavior where library routes returned 503 when Supabase was unavailable
+# AND used `supabase.table(...).select()` chains. Phase 80 removed both:
+#   - 503 "Database not available" is eliminated (FUNC-01); routes assume
+#     get_repository() is always available.
+#   - Routes now call `repo.*` methods, not `supabase.table()` chains, so
+#     mock chains on `get_supabase` no longer intercept any DB call.
+# SQLite-mode coverage for every migrated route is now in
+# tests/test_api_library_sqlite.py (per Phase 80 success criterion 5).
+# ---------------------------------------------------------------------------
+_PHASE_80_NO_503_REASON = (
+    "v13 Phase 80 (FUNC-01): routes no longer return 503 when DB is "
+    "unavailable; auth dev-mode requires a real profile and returns 422 "
+    "instead. SQLite coverage in tests/test_api_library_sqlite.py."
+)
+_PHASE_80_MOCK_CHAIN_REASON = (
+    "v13 Phase 80: route migrated from supabase.table() chains to repo.* "
+    "methods; the mock on app.api.library_routes.get_supabase no longer "
+    "intercepts the DB calls. SQLite coverage in "
+    "tests/test_api_library_sqlite.py."
+)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -98,6 +122,7 @@ class TestProjectsNoSupabase:
     In degraded mode (Supabase = None), routes that require DB return 503 with 'detail'.
     """
 
+    @pytest.mark.xfail(reason=_PHASE_80_NO_503_REASON, strict=True)
     def test_create_project_no_supabase_returns_503(self, client):
         """POST /library/projects without Supabase returns 503 with detail."""
         payload = {"name": "Test Project", "description": "A test"}
@@ -106,6 +131,7 @@ class TestProjectsNoSupabase:
         body = response.json()
         assert "detail" in body, f"Missing 'detail' in 503 response: {body}"
 
+    @pytest.mark.xfail(reason=_PHASE_80_NO_503_REASON, strict=True)
     def test_list_projects_no_supabase_returns_503(self, client):
         """GET /library/projects without Supabase returns 503 with detail."""
         response = client.get("/api/v1/library/projects")
@@ -113,6 +139,7 @@ class TestProjectsNoSupabase:
         body = response.json()
         assert "detail" in body, f"Missing 'detail' in 503 response: {body}"
 
+    @pytest.mark.xfail(reason=_PHASE_80_NO_503_REASON, strict=True)
     def test_get_project_no_supabase_returns_503(self, client):
         """GET /library/projects/{id} without Supabase returns 503 with detail."""
         response = client.get("/api/v1/library/projects/some-fake-uuid")
@@ -120,6 +147,7 @@ class TestProjectsNoSupabase:
         body = response.json()
         assert "detail" in body
 
+    @pytest.mark.xfail(reason=_PHASE_80_NO_503_REASON, strict=True)
     def test_delete_project_no_supabase_returns_503(self, client):
         """DELETE /library/projects/{id} without Supabase returns 503 with detail."""
         response = client.delete("/api/v1/library/projects/some-fake-uuid")
@@ -135,6 +163,7 @@ class TestProjectsNoSupabase:
 class TestProjectsWithMockedSupabase:
     """Test happy-path project CRUD with a mocked Supabase client."""
 
+    @pytest.mark.xfail(reason=_PHASE_80_MOCK_CHAIN_REASON, strict=True)
     def test_create_project_returns_200_with_id(self, client):
         """POST /library/projects with valid data and mocked Supabase returns 200 with id and name."""
         mock_sb = _make_mock_supabase()
@@ -148,6 +177,7 @@ class TestProjectsWithMockedSupabase:
         assert "name" in body, f"Missing 'name' in create project response: {body}"
         assert "status" in body, f"Missing 'status' in create project response: {body}"
 
+    @pytest.mark.xfail(reason=_PHASE_80_MOCK_CHAIN_REASON, strict=True)
     def test_create_project_response_structure(self, client):
         """Create project response contains all required ProjectResponse fields."""
         mock_sb = _make_mock_supabase()
@@ -161,6 +191,7 @@ class TestProjectsWithMockedSupabase:
         for field in required_fields:
             assert field in body, f"Missing required field '{field}' in project response: {body}"
 
+    @pytest.mark.xfail(reason=_PHASE_80_MOCK_CHAIN_REASON, strict=True)
     def test_list_projects_returns_200_with_list(self, client):
         """GET /library/projects with mocked Supabase returns 200 with 'projects' list."""
         mock_sb = _make_mock_supabase()
@@ -172,6 +203,7 @@ class TestProjectsWithMockedSupabase:
         assert "projects" in body, f"Missing 'projects' key in list response: {body}"
         assert isinstance(body["projects"], list)
 
+    @pytest.mark.xfail(reason=_PHASE_80_MOCK_CHAIN_REASON, strict=True)
     def test_list_projects_has_total(self, client):
         """List projects response includes 'total' count."""
         mock_sb = _make_mock_supabase()
@@ -210,6 +242,7 @@ class TestProjectsValidation:
 class TestClipsNoSupabase:
     """Verify clip endpoints return proper error shape when Supabase unavailable."""
 
+    @pytest.mark.xfail(reason=_PHASE_80_NO_503_REASON, strict=True)
     def test_get_clip_not_found_returns_503(self, client):
         """GET /library/clips/{id} without Supabase returns 503 with detail."""
         response = client.get("/api/v1/library/clips/fake-clip-uuid")
@@ -217,6 +250,7 @@ class TestClipsNoSupabase:
         body = response.json()
         assert "detail" in body
 
+    @pytest.mark.xfail(reason=_PHASE_80_NO_503_REASON, strict=True)
     def test_delete_clip_not_found_returns_503(self, client):
         """DELETE /library/clips/{id} without Supabase returns 503 with detail."""
         response = client.delete("/api/v1/library/clips/fake-clip-uuid")
@@ -224,6 +258,7 @@ class TestClipsNoSupabase:
         body = response.json()
         assert "detail" in body
 
+    @pytest.mark.xfail(reason=_PHASE_80_NO_503_REASON, strict=True)
     def test_list_all_clips_no_supabase_returns_503(self, client):
         """GET /library/all-clips without Supabase returns 503 with detail."""
         response = client.get("/api/v1/library/all-clips")
