@@ -15,7 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
-import { PostDetailModal } from "@/components/PostDetailModal";
+import { PostDetailModal } from "@/components/post-detail-modal";
 import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
 import { friendlyPlatformName } from "@/lib/platforms";
