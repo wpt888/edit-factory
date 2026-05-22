@@ -207,10 +207,11 @@ def build_schedule_plan(
     if not active_collections:
         raise ValueError("No clips available to schedule. Ensure collections have rendered clips (final_status='completed').")
 
-    # V1 fallback: no integration_ids → old behavior
+    # V1 fallback: no integration_ids → old behavior (with jitter support)
     if not integration_ids:
         return _build_schedule_plan_v1(
-            active_collections, collection_names, start_date, post_time, tz, excluded
+            active_collections, collection_names, start_date, post_time, tz, excluded,
+            jitter_minutes=jitter_minutes, jitter_seed=jitter_seed,
         )
 
     # V2: smart schedule with per-platform routing
@@ -356,12 +357,21 @@ def _build_schedule_plan_v1(
     post_time: time,
     tz: zoneinfo.ZoneInfo,
     excluded: List[Dict[str, str]],
+    jitter_minutes: int = 0,
+    jitter_seed: Optional[int] = None,
 ) -> SchedulePlan:
-    """V1 legacy algorithm: one assignment per project per day, no per-platform routing."""
+    """V1 legacy algorithm: one assignment per project per day, no per-platform routing.
+
+    Applies optional jitter (±N minutes) per assignment so multiple clips on the
+    same day don't all land on the exact same minute.
+    """
     collection_ids = sorted(active_collections.keys())
     queues: Dict[str, List[dict]] = {
         cid: list(clips) for cid, clips in active_collections.items()
     }
+
+    seed = jitter_seed if jitter_seed is not None else random.randint(0, 2**31)
+    rng = random.Random(seed)
 
     assignments: List[ScheduleAssignment] = []
     day_offset = 0
@@ -374,7 +384,9 @@ def _build_schedule_plan_v1(
                 continue
             clip = queues[cid].pop(0)
 
-            naive_dt = datetime.combine(current_date, post_time)
+            jitter = rng.randint(-jitter_minutes, jitter_minutes) if jitter_minutes > 0 else 0
+
+            naive_dt = datetime.combine(current_date, post_time) + timedelta(minutes=jitter)
             local_dt = naive_dt.replace(tzinfo=tz)
             utc_dt = local_dt.astimezone(timezone.utc)
 
@@ -388,6 +400,7 @@ def _build_schedule_plan_v1(
                 thumbnail_path=clip.get("thumbnail_path"),
                 duration=clip.get("duration"),
                 final_video_path=clip.get("final_video_path"),
+                jitter_offset_minutes=jitter,
             ))
 
         day_offset += 1
@@ -404,6 +417,7 @@ def _build_schedule_plan_v1(
         collections_count=len(active_collections),
         total_clips=len(assignments),
         excluded_collections=excluded,
+        jitter_seed=seed,
     )
 
 

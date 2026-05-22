@@ -1921,24 +1921,23 @@ function PipelinePage() {
 
   // FE-15: Per-variant cache-bust timestamps stored in a ref so completing variant N
   // does NOT cause variant M's video to reload and interrupt playback.
-  const videoCacheBustRef = useRef<Record<number, number>>({});
+  const videoCacheBustRef = useRef<Record<string, number>>({});
   const completedFingerprint = useMemo(
     () => variantStatuses.filter(v => v.status === "completed").map(v => `${v.variant_index}${v.visual_version ? `_${v.visual_version}` : ""}`).join(","),
     [variantStatuses]
   );
   useEffect(() => {
     variantStatuses.filter(v => v.status === "completed").forEach(v => {
-      if (!videoCacheBustRef.current[v.variant_index]) {
-        videoCacheBustRef.current[v.variant_index] = Date.now();
+      const key = v.visual_version ? `${v.variant_index}_${v.visual_version}` : String(v.variant_index);
+      if (!videoCacheBustRef.current[key]) {
+        videoCacheBustRef.current[key] = Date.now();
       }
     });
   }, [completedFingerprint]); // eslint-disable-line react-hooks/exhaustive-deps
-  const getVideoCacheBust = useCallback((variantIndex: number) => {
-    return videoCacheBustRef.current[variantIndex] || Date.now();
+  const getVideoCacheBust = useCallback((variantIndex: number, visualVersion?: string) => {
+    const key = visualVersion ? `${variantIndex}_${visualVersion}` : String(variantIndex);
+    return videoCacheBustRef.current[key] || Date.now();
   }, []);
-  // Legacy single value for download links
-  const videoCacheBust = useMemo(() => Date.now(), [completedFingerprint]);
-
   const { startPolling: startRenderPolling, stopPolling: stopRenderPolling } = usePolling<{
     variants: VariantStatus[];
     meta_variants?: VariantStatus[];
@@ -2061,14 +2060,22 @@ function PipelinePage() {
         const hasAi = Object.keys(aiCaptions).length > 0;
         if ((hasSelected || hasAi) && Object.keys(generatedCaptions).length === 0) {
           const captionMap: Record<string, string> = {};
-          // Get all variant indices from either source
+          for (const [captionKey, captionText] of Object.entries(selectedCaptions)) {
+            const byClip = freshStatuses.find((v: VariantStatus) => v.clip_id === captionKey);
+            if (byClip?.clip_id) {
+              captionMap[byClip.clip_id] = String(captionText ?? "");
+            }
+          }
+          // Get all legacy variant indices from either source
           const allVarIndices = new Set([
             ...Object.keys(selectedCaptions),
             ...Object.keys(aiCaptions),
           ]);
           for (const varIdx of allVarIndices) {
-            const vs = freshStatuses.find((v: VariantStatus) => String(v.variant_index) === varIdx);
+            if (!/^\d+$/.test(varIdx)) continue;
+            const vs = freshStatuses.find((v: VariantStatus) => String(v.variant_index) === varIdx && !v.visual_version);
             if (!vs?.clip_id) continue;
+            if (captionMap[vs.clip_id] !== undefined) continue;
             // If user has a saved selection (even empty = deliberately cleared), use it
             if (varIdx in selectedCaptions) {
               captionMap[vs.clip_id] = selectedCaptions[varIdx] || "";
@@ -2354,6 +2361,24 @@ function PipelinePage() {
     }
   }, [buildPreviewKey, pipelineId, scripts.length]);
 
+  const buildPipOverlaysForMatches = (matches: MatchPreview[] | undefined) => {
+    const pipOverlays: Record<string, { image_url: string; position: string; size: string; animation: string }> = {};
+    for (const match of matches ?? []) {
+      if (!match.segment_id) continue;
+      const assoc = associations[match.segment_id];
+      if (!assoc?.pip_config?.enabled) continue;
+      const imageUrl = assoc.selected_image_urls?.[0] || assoc.product_image;
+      if (!imageUrl) continue;
+      pipOverlays[match.segment_id] = {
+        image_url: imageUrl,
+        position: assoc.pip_config.position,
+        size: assoc.pip_config.size,
+        animation: assoc.pip_config.animation,
+      };
+    }
+    return pipOverlays;
+  };
+
   // Build the render payload (shared between check-render and render calls)
   const buildRenderPayload = () => {
     const matchOverrides: Record<string, MatchPreview[]> = {};
@@ -2395,21 +2420,7 @@ function PipelinePage() {
 
     const pipOverlays: Record<string, { image_url: string; position: string; size: string; animation: string }> = {};
     for (const card of selectedPreviewCards) {
-      const preview = previews[card.key];
-      if (!preview?.matches) continue;
-      for (const match of preview.matches) {
-        if (!match.segment_id) continue;
-        const assoc = associations[match.segment_id];
-        if (!assoc?.pip_config?.enabled) continue;
-        const imageUrl = assoc.selected_image_urls?.[0] || assoc.product_image;
-        if (!imageUrl) continue;
-        pipOverlays[match.segment_id] = {
-          image_url: imageUrl,
-          position: assoc.pip_config.position,
-          size: assoc.pip_config.size,
-          animation: assoc.pip_config.animation,
-        };
-      }
+      Object.assign(pipOverlays, buildPipOverlaysForMatches(previews[card.key]?.matches));
     }
 
     return {
@@ -2593,13 +2604,16 @@ function PipelinePage() {
   };
 
   // Remake variant with different segments (same voiceover)
-  const handleRemakeVariant = async (variantIndex: number) => {
+  const handleRemakeVariant = async (variantIndex: number, visualVersion?: string) => {
     if (!pipelineId) return;
+    const statusMatches = (v: VariantStatus) =>
+      v.variant_index === variantIndex &&
+      (visualVersion ? v.visual_version === visualVersion : !v.visual_version);
 
     // Optimistic UI: set variant back to processing
     setVariantStatuses(prev =>
       prev.map(v =>
-        v.variant_index === variantIndex
+        statusMatches(v)
           ? { ...v, status: "processing" as const, progress: 0, current_step: "Remaking with new segments...", final_video_path: undefined, render_fingerprint: undefined }
           : v
       )
@@ -2611,7 +2625,8 @@ function PipelinePage() {
       delete payload.match_overrides;
       payload.variant_indices = [variantIndex];
 
-      await apiPost(`/pipeline/remake/${pipelineId}/${variantIndex}`, payload, {
+      const url = `/pipeline/remake/${pipelineId}/${variantIndex}` + (visualVersion ? `?visual_version=${encodeURIComponent(visualVersion)}` : "");
+      await apiPost(url, payload, {
         timeout: renderSettings.encoding_mode === "vbr_2pass" ? 1_200_000 : 600_000,
       });
 
@@ -2623,7 +2638,7 @@ function PipelinePage() {
       // Revert optimistic update
       setVariantStatuses(prev =>
         prev.map(v =>
-          v.variant_index === variantIndex
+          statusMatches(v)
             ? { ...v, status: "failed" as const, current_step: "Remake failed", progress: 0 }
             : v
         )
@@ -3502,20 +3517,24 @@ function PipelinePage() {
     };
   }, []);
 
-  // Mark existing TTS results as stale when voice settings change (user-initiated only)
-  // voiceSettingsHydrated captures the settings value AFTER localStorage hydration.
-  // Any change after that point is a real user change. (Bug #48: React batches all
-  // setState calls from the hydration useEffect into a single render, so skipping
-  // the first trigger after voiceSettingsLoaded is sufficient.)
+  // Mark existing TTS results as stale when voice settings change (user-initiated only).
+  //
+  // Previously this used a one-shot ref flipped after the first dep-change post-hydration,
+  // which assumed localStorage was the only async hydration source. The profile-fetch effect
+  // (`loadDefaultVoice`) is a SECOND async hydration that overwrites voice settings ~hundreds
+  // of ms later; if its values differ from localStorage, it would re-trigger this effect and
+  // mark every restored TTS entry as stale, forcing the Step 2 button back to "Generate
+  // Voice-Overs" even when valid audio existed on disk.
+  //
+  // Fix: the only way `userChangedVoiceRef` flips to true is via the slider / checkbox
+  // onChange handlers below, so any number of async hydration sources can fire without
+  // triggering staleness.
   const voiceSettingsHydrated = useRef(false);
+  const userChangedVoiceRef = useRef(false);
   useEffect(() => {
-    // Wait until localStorage hydration is complete
     if (!voiceSettingsLoaded) return;
-    // The first trigger after hydration is the hydrated values settling — skip it
-    if (!voiceSettingsHydrated.current) {
-      voiceSettingsHydrated.current = true;
-      return;
-    }
+    if (!userChangedVoiceRef.current) return;
+    userChangedVoiceRef.current = false;
     setTtsResults(prev => {
       const hasAny = Object.values(prev).some(r => r.audio_duration > 0 && !r.generating);
       if (!hasAny) return prev;
@@ -4826,7 +4845,7 @@ function PipelinePage() {
                     </div>
                     <Slider
                       value={[voiceSpeed]}
-                      onValueChange={([v]) => setVoiceSpeed(v)}
+                      onValueChange={([v]) => { userChangedVoiceRef.current = true; setVoiceSpeed(v); }}
                       min={0.7} max={1.2} step={0.01}
                     />
                     <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -4842,7 +4861,7 @@ function PipelinePage() {
                     </div>
                     <Slider
                       value={[voiceStability]}
-                      onValueChange={([v]) => setVoiceStability(v)}
+                      onValueChange={([v]) => { userChangedVoiceRef.current = true; setVoiceStability(v); }}
                       min={0} max={1} step={0.01}
                     />
                     <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -4858,7 +4877,7 @@ function PipelinePage() {
                     </div>
                     <Slider
                       value={[voiceSimilarity]}
-                      onValueChange={([v]) => setVoiceSimilarity(v)}
+                      onValueChange={([v]) => { userChangedVoiceRef.current = true; setVoiceSimilarity(v); }}
                       min={0} max={1} step={0.01}
                     />
                     <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -4874,7 +4893,7 @@ function PipelinePage() {
                     </div>
                     <Slider
                       value={[voiceStyle]}
-                      onValueChange={([v]) => setVoiceStyle(v)}
+                      onValueChange={([v]) => { userChangedVoiceRef.current = true; setVoiceStyle(v); }}
                       min={0} max={1} step={0.01}
                     />
                     <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -4888,7 +4907,7 @@ function PipelinePage() {
                     <Checkbox
                       id="speaker-boost"
                       checked={voiceSpeakerBoost}
-                      onCheckedChange={(checked) => setVoiceSpeakerBoost(checked === true)}
+                      onCheckedChange={(checked) => { userChangedVoiceRef.current = true; setVoiceSpeakerBoost(checked === true); }}
                     />
                     <Label htmlFor="speaker-boost" className="text-xs">
                       Speaker Boost
@@ -6150,6 +6169,7 @@ function PipelinePage() {
               const _activeStyleKey = toStyleKey(activeCard);
               const _activeOverride = subtitleOverrides[_activeStyleKey];
               const _hasOverride = !!_activeOverride && Object.keys(_activeOverride).length > 0;
+              const _previewPipOverlays = buildPipOverlaysForMatches(previews[previewVariant]?.matches);
               return (
                 <VariantPreviewPlayer
                   open={true}
@@ -6166,6 +6186,7 @@ function PipelinePage() {
                   wordsPerSubtitle={wordsPerSubtitle}
                   ultraRapidIntro={ultraRapidIntro}
                   interstitialSlides={interstitialSlides[previewVariant]}
+                  pipOverlays={Object.keys(_previewPipOverlays).length > 0 ? _previewPipOverlays : undefined}
                 />
               );
             })()}
@@ -6463,7 +6484,7 @@ function PipelinePage() {
                             size="icon"
                             className="h-7 w-7 text-muted-foreground hover:text-primary"
                             title="Remake with different segments"
-                            onClick={() => handleRemakeVariant(status.variant_index)}
+                            onClick={() => handleRemakeVariant(status.variant_index, status.visual_version)}
                           >
                             <RefreshCw className="h-4 w-4" />
                           </Button>
@@ -6486,7 +6507,11 @@ function PipelinePage() {
                                       await apiDelete(`/library/clips/${status.clip_id}`);
                                     }
                                     setVariantStatuses(prev =>
-                                      prev.filter(v => v.variant_index !== status.variant_index)
+                                      prev.filter(v =>
+                                        status.visual_version
+                                          ? !(v.variant_index === status.variant_index && v.visual_version === status.visual_version)
+                                          : !(v.variant_index === status.variant_index && !v.visual_version)
+                                      )
                                     );
                                     toast.success(`Variant ${status.variant_index + 1} deleted`);
                                   } catch (err) {
@@ -6537,7 +6562,7 @@ function PipelinePage() {
                     {status.status === "completed" && status.final_video_path && (
                       <div className="space-y-3">
                         <video
-                          key={`video-${status.variant_index}${status.visual_version ? `_${status.visual_version}` : ""}-${getVideoCacheBust(status.variant_index)}`}
+                          key={`video-${status.variant_index}${status.visual_version ? `_${status.visual_version}` : ""}-${getVideoCacheBust(status.variant_index, status.visual_version)}`}
                           controls
                           className="w-full rounded-md bg-black max-h-64 object-contain"
                           poster={
@@ -6546,13 +6571,13 @@ function PipelinePage() {
                               : undefined
                           }
                           preload="auto"
-                          src={`${API_URL}/library/files/${encodeURIComponent(status.final_video_path)}?v=${getVideoCacheBust(status.variant_index)}`}
+                          src={`${API_URL}/library/files/${encodeURIComponent(status.final_video_path)}?v=${getVideoCacheBust(status.variant_index, status.visual_version)}`}
                         />
                         <Button variant="outline" className="w-full" asChild>
                           <a
                             href={`${API_URL}/library/files/${encodeURIComponent(
                               status.final_video_path
-                            )}?v=${videoCacheBust}&download=true`}
+                            )}?v=${getVideoCacheBust(status.variant_index, status.visual_version)}&download=true`}
                             download
                           >
                             <Download className="h-4 w-4 mr-2" />

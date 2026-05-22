@@ -260,6 +260,60 @@ def calculate_adaptive_font_size(
         return base_font_size, 0
 
 
+def _inject_wrap_style_override_in_srt(srt_path: Path) -> None:
+    """Prepend `{\\q2}` to each subtitle text line in the SRT file.
+
+    `{\\q2}` is an ASS override tag that sets WrapStyle=2 (no automatic
+    wrapping — break only on explicit \\N). libass parses override tags
+    inside SRT text consistently across frame sizes, unlike the WrapStyle
+    key in the `force_style` argument.
+
+    If a cue already starts with `{\\q2}` (e.g. from a prior pass) the
+    function is a no-op for that cue. Runs idempotently and rewrites the
+    file in place. Errors are swallowed — wrap style is a rendering
+    preference, not a correctness requirement.
+    """
+    try:
+        content = srt_path.read_text(encoding="utf-8")
+    except Exception:
+        try:
+            content = srt_path.read_text(encoding="latin-1")
+        except Exception as e:
+            logger.warning(f"Could not read SRT for wrap-style injection: {e}")
+            return
+
+    lines = content.split("\n")
+    out: list[str] = []
+    # State machine: after a timestamp line, the next non-empty lines are text.
+    saw_timestamp = False
+    for line in lines:
+        stripped = line.strip()
+        if " --> " in stripped:
+            saw_timestamp = True
+            out.append(line)
+            continue
+        if saw_timestamp and stripped:
+            # First text line after timestamp — inject override if not already present.
+            if not stripped.startswith("{\\q2}"):
+                # Preserve leading whitespace (unlikely but harmless) by inserting
+                # at the start of the content, keeping trailing content intact.
+                out.append("{\\q2}" + line)
+            else:
+                out.append(line)
+            saw_timestamp = False  # subsequent text lines in the same cue untouched
+            continue
+        if not stripped:
+            saw_timestamp = False
+        out.append(line)
+
+    new_content = "\n".join(out)
+    if new_content != content:
+        try:
+            srt_path.write_text(new_content, encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Could not write SRT after wrap-style injection: {e}")
+
+
 def build_subtitle_filter(
     srt_path: Path,
     subtitle_settings: dict,
@@ -330,12 +384,35 @@ def build_subtitle_filter(
     except Exception as e:
         logger.debug(f"[SUBTITLE-DEBUG] Could not read SRT file: {e}")
 
+    # Force WrapStyle=2 (no automatic wrapping) per-cue via the ASS `{\q2}`
+    # override tag, injected at the start of each subtitle text line. The
+    # `WrapStyle` key inside `force_style` is unreliable for SRT inputs — it
+    # lives in [Script Info], not the [V4+ Styles] line, and FFmpeg's SRT→ASS
+    # conversion + libass scaling will otherwise wrap short phrases
+    # differently depending on the frame size (e.g. the 540x960 preview
+    # wraps "Ești gata" onto two lines while the 1080x1920 final render
+    # keeps it on one). Override tags embedded in the subtitle text ARE
+    # honored consistently by libass.
+    _inject_wrap_style_override_in_srt(srt_path)
+
     # BUG-1.4: Use shared escape function for consistent path handling across codepaths
     from app.services.video_processor import escape_srt_path_for_ffmpeg
     srt_path_escaped = escape_srt_path_for_ffmpeg(srt_path)
 
-    # Build filter
-    filter_str = f"subtitles='{srt_path_escaped}':force_style='{force_style}'"
+    # Build filter.
+    # `original_size` tells libass to use (video_width, video_height) as the
+    # reference resolution when scaling subtitle sizes. Without it, libass
+    # uses the actual frame dimensions for SRT input, which breaks the
+    # preview render (540x960 frame) — FontSize=100 would render ~2x too
+    # large relative to the frame compared to the final 1080x1920 render.
+    # PlayResX/PlayResY inside force_style don't help because those live in
+    # the ASS [Script Info] section, not the [Style] line that force_style
+    # can override.
+    filter_str = (
+        f"subtitles='{srt_path_escaped}'"
+        f":original_size={video_width}x{video_height}"
+        f":force_style='{force_style}'"
+    )
 
     logger.debug(f"Subtitle filter: {filter_str[:150]}...")
     return filter_str

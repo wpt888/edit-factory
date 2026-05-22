@@ -63,7 +63,7 @@ class SchedulePreviewRequest(BaseModel):
     # V2 smart schedule fields
     integration_ids: Optional[List[str]] = None
     platform_times: Optional[Dict[str, str]] = None  # {integration_id: "HH:MM"}
-    jitter_minutes: int = Field(default=0, ge=0, le=60)
+    jitter_minutes: int = Field(default=0, ge=0, le=720)
     clip_ids: Optional[List[str]] = None  # Filter to specific clips (from pipeline selection)
 
 
@@ -105,7 +105,7 @@ class CreateSchedulePlanRequest(BaseModel):
     name: str = ""
     # V2 smart schedule fields
     platform_times: Optional[Dict[str, str]] = None  # {integration_id: "HH:MM"}
-    jitter_minutes: int = Field(default=15, ge=0, le=60)
+    jitter_minutes: int = Field(default=15, ge=0, le=720)
     clip_ids: Optional[List[str]] = None  # Filter to specific clips (from pipeline selection)
     # Per-clip captions (from Library BulkScheduleDialog)
     captions: Optional[Dict[str, str]] = None  # {clip_id: "caption text"}

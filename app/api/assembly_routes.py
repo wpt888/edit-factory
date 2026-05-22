@@ -20,7 +20,7 @@ from app.api.auth import ProfileContext, get_profile_context
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 from app.services.assembly_service import get_assembly_service
-from app.services.ffmpeg_semaphore import is_nvenc_available
+from app.services.ffmpeg_semaphore import acquire_render_slot, is_nvenc_available
 from app.services.job_storage import get_job_storage
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,10 @@ def _evict_old_entries(store: dict, max_entries: int = _MAX_MEMORY_ENTRIES):
     """Remove oldest entries if store exceeds max size."""
     if len(store) > max_entries:
         snapshot = list(store.keys())
-        to_remove = sorted(snapshot)[:len(snapshot) - max_entries]
+        to_remove = sorted(
+            snapshot,
+            key=lambda key: store.get(key, {}).get("started_at") or "",
+        )[:len(snapshot) - max_entries]
         for key in to_remove:
             store.pop(key, None)
 
@@ -181,6 +184,7 @@ class AssemblyRenderRequest(BaseModel):
     brightness: float = 0.0
     contrast: float = 1.0
     saturation: float = 1.0
+    force_cpu: bool = False
 
 
 class AssemblyRenderResponse(BaseModel):
@@ -347,6 +351,8 @@ async def render_assembly(
 
     # Background task function
     async def do_assembly():
+        from app.services.ffmpeg_registry import active_job_key as _active_job_key_ctx
+        _ctx_token = _active_job_key_ctx.set(f"assembly:{job_id}")
         try:
             logger.info(f"[Profile {profile.profile_id}] Background assembly job {job_id} started")
 
@@ -364,27 +370,29 @@ async def render_assembly(
             assembly_service = get_assembly_service()
 
             # Run full assembly
-            final_video_path, _raw_assembly_path, _seg_comp = await assembly_service.assemble_and_render(
-                script_text=request.script_text,
-                profile_id=profile.profile_id,
-                preset_data=preset_data,
-                subtitle_settings=subtitle_settings,
-                elevenlabs_model=request.elevenlabs_model,
-                voice_id=request.voice_id,
-                voice_settings=request.voice_settings,
-                enable_denoise=request.enable_denoise,
-                denoise_strength=request.denoise_strength,
-                enable_sharpen=request.enable_sharpen,
-                sharpen_amount=request.sharpen_amount,
-                enable_color=request.enable_color,
-                brightness=request.brightness,
-                contrast=request.contrast,
-                saturation=request.saturation,
-                shadow_depth=request.shadow_depth,
-                enable_glow=request.enable_glow,
-                glow_blur=request.glow_blur,
-                adaptive_sizing=request.adaptive_sizing
-            )
+            async with await acquire_render_slot():
+                final_video_path, _raw_assembly_path, _seg_comp = await assembly_service.assemble_and_render(
+                    script_text=request.script_text,
+                    profile_id=profile.profile_id,
+                    preset_data=preset_data,
+                    subtitle_settings=subtitle_settings,
+                    elevenlabs_model=request.elevenlabs_model,
+                    voice_id=request.voice_id,
+                    voice_settings=request.voice_settings,
+                    enable_denoise=request.enable_denoise,
+                    denoise_strength=request.denoise_strength,
+                    enable_sharpen=request.enable_sharpen,
+                    sharpen_amount=request.sharpen_amount,
+                    enable_color=request.enable_color,
+                    brightness=request.brightness,
+                    contrast=request.contrast,
+                    saturation=request.saturation,
+                    shadow_depth=request.shadow_depth,
+                    enable_glow=request.enable_glow,
+                    glow_blur=request.glow_blur,
+                    adaptive_sizing=request.adaptive_sizing,
+                    force_cpu=request.force_cpu,
+                )
 
             # Success
             with _assembly_jobs_lock:
@@ -412,16 +420,21 @@ async def render_assembly(
                 _assembly_jobs[job_id]["status"] = "failed"
                 _assembly_jobs[job_id]["progress"] = 0
                 _assembly_jobs[job_id]["current_step"] = "Assembly failed"
-                _assembly_jobs[job_id]["error"] = "Assembly failed"
+                _assembly_jobs[job_id]["error"] = str(e)
                 _assembly_jobs[job_id]["failed_at"] = datetime.now(timezone.utc).isoformat()
             get_job_storage().update_job(job_id, {
                 "status": "failed",
                 "progress": "Assembly failed",
-                "error": "Assembly failed",
+                "error": str(e),
             })
 
             # Persist to DB
             _db_update_assembly_job(job_id, _assembly_jobs[job_id])
+        finally:
+            try:
+                _active_job_key_ctx.reset(_ctx_token)
+            except Exception:
+                pass
 
     # Add background task
     background_tasks.add_task(do_assembly)

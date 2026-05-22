@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional, List, Dict
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
@@ -61,6 +61,7 @@ class BulkPublishRequest(BaseModel):
     integration_ids: List[str]
     schedule_date: Optional[str] = None
     schedule_interval_minutes: int = 30  # Interval between posts for bulk
+    schedule_jitter_minutes: int = Field(default=0, ge=0, le=720)  # ±N min random offset on top of fixed interval
     save_as_draft: bool = False
     youtube_title: Optional[str] = None  # Shared YouTube title for all clips in batch
 
@@ -653,6 +654,7 @@ async def bulk_publish_clips(
         integration_ids=request.integration_ids,
         schedule_start=schedule_dt,
         interval_minutes=request.schedule_interval_minutes,
+        jitter_minutes=request.schedule_jitter_minutes,
         save_as_draft=request.save_as_draft,
         youtube_title=request.youtube_title
     )
@@ -1089,14 +1091,17 @@ async def _bulk_publish_task(
     integration_ids: List[str],
     schedule_start: Optional[datetime],
     interval_minutes: int,
+    jitter_minutes: int = 0,
     save_as_draft: bool = False,
     youtube_title: Optional[str] = None
 ):
     """Background task to publish multiple clips using profile-specific Postiz."""
+    import random as _random
     from app.services.postiz_service import get_postiz_publisher
 
     logger.info(f"[Profile {profile_id}] Bulk publishing {len(clips)} clips (job {job_id})")
     update_publish_progress(job_id, "Starting bulk publish...", 0)
+    rng = _random.Random()
 
     try:
         publisher = get_postiz_publisher(profile_id)
@@ -1121,10 +1126,12 @@ async def _bulk_publish_task(
                 # Upload video
                 media = await publisher.upload_video(Path(clip["video_path"]), profile_id=profile_id)
 
-                # Calculate schedule time for this clip
+                # Calculate schedule time for this clip (fixed interval + optional jitter)
                 clip_schedule = None
                 if schedule_start:
-                    clip_schedule = schedule_start + timedelta(minutes=idx * interval_minutes)
+                    base_offset = idx * interval_minutes
+                    jitter = rng.randint(-jitter_minutes, jitter_minutes) if jitter_minutes > 0 else 0
+                    clip_schedule = schedule_start + timedelta(minutes=base_offset + jitter)
 
                 # Use per-clip caption if available, otherwise shared caption
                 clip_caption = (captions or {}).get(clip["id"], caption)

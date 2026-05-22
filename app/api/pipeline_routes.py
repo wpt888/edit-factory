@@ -1855,6 +1855,8 @@ async def cancel_pipeline_render(
     with render_lock:
         for idx, job in pipeline.get("render_jobs", {}).items():
             if job.get("status") == "processing":
+                from app.services.ffmpeg_registry import kill_job
+                kill_job(f"{pipeline_id}:{idx}")
                 job["status"] = "cancelled"
                 job["current_step"] = "Cancelled by user"
                 job["progress"] = 0
@@ -1889,7 +1891,7 @@ def _cancel_single_job(pipeline: dict, pipeline_id: str, job_key, render_lock: t
     if not job:
         return False
     mark_variant_cancelled(pipeline_id, job_key)
-    kill_job(str(job_key))
+    kill_job(f"{pipeline_id}:{job_key}")
     with render_lock:
         if job.get("status") in ("processing", "not_started", "pending", None):
             job["status"] = "cancelled"
@@ -3796,7 +3798,8 @@ async def render_variants(
         # Cancellation is keyed by job_key (str form). Any "0_A" Stop targets
         # only that A/B version; a "0" Stop targets the bare variant.
         _cancel_scope = str(job_key)
-        _ctx_token = _active_job_key_ctx.set(_cancel_scope)
+        _registry_scope = f"{pipeline_id}:{_cancel_scope}"
+        _ctx_token = _active_job_key_ctx.set(_registry_scope)
         try:
             # PIP-12: Bound check — ensure variant index is still valid
             if vid >= _script_count_snapshot:
@@ -4109,6 +4112,7 @@ async def render_variants(
                         output_project_label=(pipeline.get("name") or pipeline.get("idea") or "").strip(),
                         output_script_label=script_text,
                         output_created_at=datetime.now(timezone.utc),
+                        force_cpu=render_request.force_cpu,
                     ),
                     timeout=1800 if preset_data.get("encoding_mode") == "vbr_2pass" else 900
                 )
@@ -4366,6 +4370,7 @@ async def remake_variant(
     variant_index: int,
     render_request: PipelineRenderRequest,
     background_tasks: BackgroundTasks,
+    visual_version: Optional[str] = Query(None),
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Re-render a completed variant with the SAME voiceover but DIFFERENT video segments.
@@ -4382,12 +4387,19 @@ async def remake_variant(
         raise HTTPException(status_code=403, detail="Not authorized")
 
     vid = variant_index
+    normalized_visual_version = _normalize_meta_version_label(visual_version)
+    job_key: Any = f"{vid}_{normalized_visual_version}" if normalized_visual_version else vid
+    version_index = (
+        next((i for i in range(len(META_PROFILES)) if get_version_label(i) == normalized_visual_version), None)
+        if normalized_visual_version else None
+    )
+    effective_vid = vid + META_PROFILES[version_index].segment_offset if version_index is not None else vid
     scripts = pipeline.get("scripts", [])
     if vid < 0 or vid >= len(scripts):
         raise HTTPException(status_code=400, detail=f"Variant index {vid} out of range (0-{len(scripts)-1})")
 
     # 2. Check variant is not currently processing
-    existing_job = pipeline.get("render_jobs", {}).get(vid)
+    existing_job = pipeline.get("render_jobs", {}).get(job_key)
     if existing_job and existing_job.get("status") == "processing":
         raise HTTPException(status_code=409, detail="Variant is currently rendering. Wait or cancel first.")
 
@@ -4459,9 +4471,7 @@ async def remake_variant(
     # 5. Clear cancellation flags
     clear_pipeline_cancelled(pipeline_id)
     # Clear per-variant cancellation
-    _cancel_key = f"{pipeline_id}:{vid}"
-    with _cancelled_variants_lock:
-        _cancelled_variants.pop(_cancel_key, None)
+    clear_variant_cancelled(pipeline_id, job_key)
 
     # 6. Fetch preset and DEFAULT subtitle settings. Per-Meta-version override
     # for this single remake is resolved inside do_remake below.
@@ -4484,7 +4494,7 @@ async def remake_variant(
 
     state_lock = _get_pipeline_state_lock(pipeline_id)
     with state_lock:
-        pipeline["render_jobs"][vid] = {
+        pipeline["render_jobs"][job_key] = {
             "status": "processing",
             "progress": 0,
             "current_step": "Remaking with new segments",
@@ -4492,6 +4502,10 @@ async def remake_variant(
             "error": None,
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
+        if normalized_visual_version:
+            pipeline["render_jobs"][job_key]["visual_version"] = normalized_visual_version
+            if version_index is not None:
+                pipeline["render_jobs"][job_key]["meta_platform"] = META_PROFILES[version_index].name
 
     _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
@@ -4501,17 +4515,18 @@ async def remake_variant(
     # Resolve effective subtitle settings for this remake (single variant, no
     # Meta). Key is just str(vid) because remake never goes through meta mul.
     _remake_effective_subtitle_settings, _ = _get_subtitle_settings_for_key(
-        render_request, str(vid), default_subtitle_settings
+        render_request, str(job_key), default_subtitle_settings
     )
 
     # 8. Background remake task
     async def do_remake():
         from app.services.ffmpeg_registry import active_job_key as _active_job_key_ctx
-        _remake_scope = str(vid)
-        _ctx_token = _active_job_key_ctx.set(_remake_scope)
+        _remake_scope = str(job_key)
+        _registry_scope = f"{pipeline_id}:{_remake_scope}"
+        _ctx_token = _active_job_key_ctx.set(_registry_scope)
         try:
             assembly_service = get_assembly_service()
-            job = pipeline["render_jobs"][vid]
+            job = pipeline["render_jobs"][job_key]
 
             # Check for cancellation
             if is_pipeline_cancelled(pipeline_id) or is_variant_cancelled(pipeline_id, _remake_scope):
@@ -4533,7 +4548,12 @@ async def remake_variant(
             # Extract overlay params
             variant_interstitial_slides = None
             if render_request.interstitial_slides:
-                variant_slides = render_request.interstitial_slides.get(str(vid)) or render_request.interstitial_slides.get(vid) or []
+                variant_slides = (
+                    render_request.interstitial_slides.get(str(job_key))
+                    or render_request.interstitial_slides.get(str(vid))
+                    or render_request.interstitial_slides.get(vid)
+                    or []
+                )
                 if variant_slides:
                     variant_interstitial_slides = variant_slides
 
@@ -4563,7 +4583,7 @@ async def remake_variant(
                         enable_glow=render_request.enable_glow,
                         glow_blur=render_request.glow_blur,
                         adaptive_sizing=render_request.adaptive_sizing,
-                        variant_index=vid,
+                        variant_index=effective_vid,
                         voice_settings=render_request.voice_settings,
                         reuse_audio_path=reuse_audio_path,
                         reuse_audio_duration=reuse_audio_duration,
@@ -4578,6 +4598,8 @@ async def remake_variant(
                         output_project_label=(pipeline.get("name") or pipeline.get("idea") or "").strip(),
                         output_script_label=script_text,
                         output_created_at=datetime.now(timezone.utc),
+                        force_cpu=render_request.force_cpu,
+                        visual_version_label=normalized_visual_version,
                     ),
                     timeout=1800 if preset_data.get("encoding_mode") == "vbr_2pass" else 900
                 )
@@ -4608,7 +4630,7 @@ async def remake_variant(
 
             # Success
             _remake_fingerprint = hashlib.sha256(
-                f"remake_{vid}_{datetime.now(timezone.utc).isoformat()}".encode()
+                f"remake_{job_key}_{datetime.now(timezone.utc).isoformat()}".encode()
             ).hexdigest()[:32]
 
             with render_jobs_lock:
@@ -4619,6 +4641,10 @@ async def remake_variant(
                 job["raw_video_path"] = str(raw_assembly_path)
                 job["render_fingerprint"] = _remake_fingerprint
                 job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                if normalized_visual_version:
+                    job["visual_version"] = normalized_visual_version
+                    if version_index is not None:
+                        job["meta_platform"] = META_PROFILES[version_index].name
 
             _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
@@ -4629,6 +4655,8 @@ async def remake_variant(
                 raw_assembly_path=raw_assembly_path,
                 subtitle_settings=_remake_effective_subtitle_settings,
                 segment_composition=_seg_composition,
+                job_key=job_key,
+                visual_version=normalized_visual_version,
                 voice_settings=render_request.voice_settings,
             )
 
@@ -4638,7 +4666,7 @@ async def remake_variant(
             )
 
         except Exception as e:
-            _remake_job = pipeline.get("render_jobs", {}).get(vid)
+            _remake_job = pipeline.get("render_jobs", {}).get(job_key)
             _was_cancelled_remake = (
                 is_pipeline_cancelled(pipeline_id)
                 or is_variant_cancelled(pipeline_id, _remake_scope)
@@ -4663,7 +4691,7 @@ async def remake_variant(
                 f"variant {vid} remake failed: {e}"
             )
             with render_jobs_lock:
-                job = pipeline["render_jobs"][vid]
+                job = pipeline["render_jobs"][job_key]
                 job["status"] = "failed"
                 job["progress"] = 0
                 job["current_step"] = "Remake failed"
@@ -4685,7 +4713,13 @@ async def remake_variant(
         _render_locks_timestamps[pipeline_id_str] = _time_mod.monotonic()
     background_tasks.add_task(_throttled_remake)
 
-    return {"status": "remaking", "pipeline_id": pipeline_id, "variant_index": variant_index}
+    return {
+        "status": "remaking",
+        "pipeline_id": pipeline_id,
+        "variant_index": variant_index,
+        "job_key": str(job_key),
+        "visual_version": normalized_visual_version,
+    }
 
 
 @router.get("/status/{pipeline_id}", response_model=PipelineStatusResponse)
@@ -4793,6 +4827,12 @@ async def get_pipeline_status(pipeline_id: str):
                 visual_version=job.get("visual_version"),
                 meta_platform=job.get("meta_platform"),
             ))
+
+    # Force pair-by-pair order so the Step 4 grid renders A on the left and
+    # B on the right within the same row (1A|1B, 2A|2B, ...). Without this,
+    # render_jobs dict order can drift after Supabase JSONB round-trips and
+    # produce A|A then B|B rows.
+    meta_variants.sort(key=lambda v: (v.variant_index, v.visual_version or ""))
 
     # Recovery: look up missing clip_ids from editai_clips for completed variants
     if _clip_id_recovery_needed:
@@ -5420,6 +5460,15 @@ class PreviewRenderRequest(BaseModel):
     words_per_subtitle: int = Field(default=2, ge=1, le=20)  # BUG-PR-19
     ultra_rapid_intro: bool = True  # Match PipelineRenderRequest default
     interstitial_slides: Optional[List[dict]] = None
+    pip_overlays: Optional[Dict[str, dict]] = None
+    enable_denoise: bool = False
+    denoise_strength: float = 2.0
+    enable_sharpen: bool = False
+    sharpen_amount: float = 0.5
+    enable_color: bool = False
+    brightness: float = 0.0
+    contrast: float = 1.0
+    saturation: float = 1.0
     visual_version: Optional[str] = None
 
     # BUG-PR-14: Validate source_video_ids are valid UUIDs
@@ -5524,27 +5573,55 @@ async def render_preview(
     if not audio_path_str or not Path(audio_path_str).exists():
         raise HTTPException(status_code=400, detail="TTS audio file missing from disk. Re-run Preview All.")
 
-    # Compute fingerprint from segment IDs (ordered) + merge groups + preview-affecting params.
-    # Include index to ensure different orderings produce different fingerprints.
-    # Include TTS audio mtime so regenerated voiceover invalidates cached preview video.
-    seg_parts = [f"{i}:{m.get('segment_id', 'none')}:{m.get('merge_group', '')}" for i, m in enumerate(render_request.match_overrides)]
     try:
         audio_mtime = str(Path(audio_path_str).stat().st_mtime)
     except OSError:
         audio_mtime = "0"
-    # Include per-segment transforms in fingerprint so changed transforms invalidate cache
-    transforms_hash = hashlib.md5(_json.dumps(
-        {str(i): m.get("transforms") or {} for i, m in enumerate(render_request.match_overrides)},
+
+    preview_fingerprint_payload = {
+        "variant_index": variant_index,
+        "effective_variant_index": effective_variant_index,
+        "visual_version": normalized_visual_version or "",
+        "matches": [
+            {
+                "index": i,
+                "srt_index": m.get("srt_index"),
+                "segment_id": m.get("segment_id"),
+                "source_video_id": m.get("source_video_id"),
+                "segment_start_time": m.get("segment_start_time"),
+                "segment_end_time": m.get("segment_end_time"),
+                "duration_override": m.get("duration_override"),
+                "merge_group": m.get("merge_group"),
+                "merge_group_duration": m.get("merge_group_duration"),
+                "transforms": m.get("transforms") or {},
+            }
+            for i, m in enumerate(render_request.match_overrides)
+        ],
+        "source_video_ids": sorted(render_request.source_video_ids or []),
+        "min_segment_duration": render_request.min_segment_duration,
+        "words_per_subtitle": render_request.words_per_subtitle,
+        "ultra_rapid_intro": render_request.ultra_rapid_intro,
+        "interstitial_slides": render_request.interstitial_slides or [],
+        "pip_overlays": render_request.pip_overlays or {},
+        "subtitle_settings": render_request.subtitle_settings or {},
+        "subtitle_style_override": subtitle_style_override or {},
+        "filters": {
+            "enable_denoise": render_request.enable_denoise,
+            "denoise_strength": render_request.denoise_strength,
+            "enable_sharpen": render_request.enable_sharpen,
+            "sharpen_amount": render_request.sharpen_amount,
+            "enable_color": render_request.enable_color,
+            "brightness": render_request.brightness,
+            "contrast": render_request.contrast,
+            "saturation": render_request.saturation,
+        },
+        "audio_mtime": audio_mtime,
+    }
+    matches_fingerprint = hashlib.sha256(_json.dumps(
+        preview_fingerprint_payload,
         sort_keys=True,
-    ).encode()).hexdigest()[:8]
-    fp_parts = seg_parts + [
-        f"uri={render_request.ultra_rapid_intro}",
-        f"isl={hashlib.md5(_json.dumps([{'url': s.get('imageUrl',''), 'dur': s.get('duration',0), 'anim': s.get('animation',''), 'after': s.get('afterMatchIndex',0)} for s in (render_request.interstitial_slides or [])], sort_keys=True).encode()).hexdigest()[:8]}",
-        f"subs={hashlib.md5(_json.dumps(render_request.subtitle_settings or {}, sort_keys=True).encode()).hexdigest()[:8]}",
-        f"tts={audio_mtime}",
-        f"tfm={transforms_hash}",
-    ]
-    matches_fingerprint = hashlib.md5("|".join(fp_parts).encode()).hexdigest()[:12]
+        default=str,
+    ).encode()).hexdigest()[:16]
 
     # Initialize preview_renders dict if needed
     if "preview_renders" not in pipeline:
@@ -5580,7 +5657,10 @@ async def render_preview(
         if existing_state and existing_state.get("status") == "processing":
             return {"status": "processing", "matches_fingerprint": existing_state.get("matches_fingerprint")}
         # Lock held but no processing state — force acquire
-        await preview_lock.acquire()
+        raise HTTPException(
+            status_code=409,
+            detail="Preview render lock is held but no processing preview state exists. Try again shortly.",
+        )
     else:
         await preview_lock.acquire()
 
@@ -5640,6 +5720,15 @@ async def render_preview(
                         max_words_per_phrase=render_request.words_per_subtitle,
                         ultra_rapid_intro=render_request.ultra_rapid_intro,
                         interstitial_slides=render_request.interstitial_slides,
+                        pip_overlays=render_request.pip_overlays,
+                        enable_denoise=render_request.enable_denoise,
+                        denoise_strength=render_request.denoise_strength,
+                        enable_sharpen=render_request.enable_sharpen,
+                        sharpen_amount=render_request.sharpen_amount,
+                        enable_color=render_request.enable_color,
+                        brightness=render_request.brightness,
+                        contrast=render_request.contrast,
+                        saturation=render_request.saturation,
                         subtitle_style_override=subtitle_style_override,
                         visual_version_label=normalized_visual_version,
                     ),
@@ -5654,9 +5743,7 @@ async def render_preview(
                     render_state["preview_video_path"] = str(preview_path)
                     render_state["preview_limitations"] = [
                         "Audio volume may differ from export (loudness normalization disabled)",
-                        "Video filters (denoise, sharpen, color) disabled for speed",
                         "Resolution is 540x960 (export will be 1080x1920)",
-                        "Product image overlays (PiP) are not shown in preview",
                     ]
                 logger.info(f"Preview render completed: {preview_path}")
 
@@ -5953,7 +6040,7 @@ async def generate_video_captions(
 
 class SaveSelectedCaptionsRequest(BaseModel):
     pipeline_id: str
-    selected_captions: Dict[str, str]  # variant_index (string) -> final caption text
+    selected_captions: Dict[str, str]  # preferred: clip_id -> final caption text; legacy: variant_index -> text
 
 
 @router.patch("/selected-captions")
@@ -5969,7 +6056,35 @@ async def save_selected_captions(
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
-    pipeline["selected_captions"] = req.selected_captions
+    render_jobs = pipeline.get("render_jobs", {})
+    normalized_captions: Dict[str, str] = {}
+    legacy_captions: Dict[str, str] = {}
+    for caption_key, caption_text in req.selected_captions.items():
+        key = str(caption_key)
+        if any(isinstance(job, dict) and job.get("clip_id") == key for job in render_jobs.values()):
+            normalized_captions[key] = caption_text
+            continue
+        try:
+            variant_index = int(key)
+        except (TypeError, ValueError):
+            normalized_captions[key] = caption_text
+            continue
+
+        legacy_captions[key] = caption_text
+        for job_key, job in render_jobs.items():
+            if not isinstance(job, dict) or not job.get("clip_id"):
+                continue
+            if job_key == variant_index or str(job_key) == key or (
+                isinstance(job_key, str) and job_key.startswith(f"{variant_index}_")
+            ):
+                normalized_captions[str(job["clip_id"])] = caption_text
+
+    if not normalized_captions:
+        normalized_captions = {str(k): v for k, v in req.selected_captions.items()}
+
+    pipeline["selected_captions"] = normalized_captions
+    if legacy_captions:
+        pipeline["selected_captions_legacy"] = legacy_captions
     _db_save_pipeline(req.pipeline_id, pipeline)
 
     # Keep existing library clips in sync so Smart Schedule V2 uses the latest
@@ -5978,8 +6093,32 @@ async def save_selected_captions(
         repo = get_repository()
         supabase = repo.get_client() if repo else None
         if supabase:
-            render_jobs = pipeline.get("render_jobs", {})
-            for variant_key, caption_text in req.selected_captions.items():
+            for variant_key, caption_text in normalized_captions.items():
+                clip_ids_to_update = set()
+                if any(isinstance(job, dict) and job.get("clip_id") == variant_key for job in render_jobs.values()):
+                    clip_ids_to_update.add(variant_key)
+                else:
+                    try:
+                        variant_index = int(str(variant_key))
+                    except (TypeError, ValueError):
+                        variant_index = None
+                    if variant_index is not None:
+                        standard_job = render_jobs.get(variant_index)
+                        if standard_job and standard_job.get("clip_id"):
+                            clip_ids_to_update.add(standard_job["clip_id"])
+
+                        for job_key, job in render_jobs.items():
+                            if not isinstance(job_key, str) or not job_key.startswith(f"{variant_index}_"):
+                                continue
+                            if job.get("clip_id"):
+                                clip_ids_to_update.add(job["clip_id"])
+
+                for clip_id in clip_ids_to_update:
+                    supabase.table("editai_clip_content").upsert(
+                        {"clip_id": clip_id, "caption": caption_text or ""},
+                        on_conflict="clip_id"
+                    ).execute()
+            for variant_key, caption_text in legacy_captions.items():
                 try:
                     variant_index = int(str(variant_key))
                 except (TypeError, ValueError):

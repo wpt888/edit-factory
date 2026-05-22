@@ -4477,6 +4477,7 @@ async def _render_with_preset(
     saturation: float = 1.0,
     # Preview mode: skip loudnorm, use ultrafast codec
     _preview_mode: bool = False,
+    force_cpu: bool = False,
 ):
     """
     Randează video-ul final cu preset optimizat pentru social media.
@@ -4614,11 +4615,11 @@ async def _render_with_preset(
     # Preview mode: use ultrafast codec params, skip encoding preset
     if _preview_mode:
         from app.services.ffmpeg_semaphore import get_preview_codec_params
-        _use_gpu = is_nvenc_available()
+        _use_gpu = False if force_cpu else is_nvenc_available()
         encoding_params = get_preview_codec_params(use_gpu=_use_gpu)
         # Add audio codec
         encoding_params.extend(["-c:a", "aac", "-b:a", "128k"])
-        logger.info(f"Preview mode: using {'GPU' if _use_gpu else 'CPU'} ultrafast encoding")
+        logger.info(f"Preview mode: using {'CPU forced' if force_cpu else ('GPU' if _use_gpu else 'CPU')} ultrafast encoding")
     else:
         # Reuse encoding_preset from audio normalization block (or compute if first time)
         if not encoding_preset:
@@ -4658,7 +4659,9 @@ async def _render_with_preset(
         logger.info(f"Using encoding preset: {encoding_preset.name} (platform: {encoding_preset.platform}, mode: {encoding_preset.encoding_mode})")
 
         # Use GPU encoding when NVENC is available (much faster + frees CPU)
-        _use_gpu = is_nvenc_available()
+        _use_gpu = False if force_cpu else is_nvenc_available()
+        if force_cpu:
+            logger.info("Encoding with CPU forced")
 
     # Extract audio bitrate from encoding params for comparison (skip in preview mode)
     if not _preview_mode and encoding_preset:
@@ -4770,6 +4773,8 @@ async def _render_with_preset(
                 pass2_cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
                 if _audio_dur > 0:
                     pass2_cmd.extend(["-t", str(_audio_dur)])
+                else:
+                    pass2_cmd.extend(["-shortest"])
             else:
                 pass2_cmd.extend(["-map", "0:v:0", "-map", "1:a:0", "-shortest"])
 
@@ -4816,6 +4821,8 @@ async def _render_with_preset(
             cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
             if _audio_dur > 0:
                 cmd.extend(["-t", str(_audio_dur)])
+            else:
+                cmd.extend(["-shortest"])
         else:
             cmd.extend(["-map", "0:v:0", "-map", "1:a:0", "-shortest"])
 

@@ -71,6 +71,10 @@ class SourceVideoResponse(BaseModel):
     file_size_bytes: Optional[int]
     segments_count: int
     status: str = "ready"
+    preview_proxy_path: Optional[str] = None
+    preview_proxy_status: Optional[str] = None
+    preview_proxy_error: Optional[str] = None
+    preview_proxy_created_at: Optional[str] = None
     created_at: str
 
 class SegmentCreate(BaseModel):
@@ -214,6 +218,158 @@ def _generate_thumbnail(video_path: Path, output_path: Path, timestamp: float = 
         return False
     except Exception as e:
         logger.error(f"Failed to generate thumbnail: {e}")
+        return False
+
+
+def _preview_proxy_output_path(video_id: str) -> Path:
+    settings = get_settings()
+    proxy_dir = settings.base_dir / "source_videos" / "proxies"
+    proxy_dir.mkdir(parents=True, exist_ok=True)
+    return proxy_dir / f"{video_id}_preview.mp4"
+
+
+def _generate_preview_proxy(video_id: str, source_path: Path) -> dict:
+    """Generate a browser-friendly proxy for Step 3 live preview."""
+    output_path = _preview_proxy_output_path(video_id)
+    try:
+        if not source_path.exists():
+            return {
+                "preview_proxy_path": None,
+                "preview_proxy_status": "failed",
+                "preview_proxy_error": "Source video file not found",
+                "preview_proxy_created_at": None,
+            }
+
+        # Max 720x1280, preserve aspect ratio, force even dimensions for H.264.
+        vf = (
+            "scale=w='min(720,iw)':h='min(1280,ih)':"
+            "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+            "fps=30"
+        )
+        cmd = [
+            "ffmpeg", "-y", "-threads", "4",
+            "-i", str(source_path),
+            "-an",
+            "-vf", vf,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "28",
+            "-pix_fmt", "yuv420p",
+            "-g", "15",
+            "-keyint_min", "15",
+            "-sc_threshold", "0",
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+        result = safe_ffmpeg_run(cmd, timeout=900, operation="ffmpeg-preview-proxy")
+        if result.returncode == 0 and output_path.exists():
+            return {
+                "preview_proxy_path": str(output_path),
+                "preview_proxy_status": "ready",
+                "preview_proxy_error": None,
+                "preview_proxy_created_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+        output_path.unlink(missing_ok=True)
+        error = (result.stderr or "FFmpeg proxy generation failed")[-1000:]
+        return {
+            "preview_proxy_path": None,
+            "preview_proxy_status": "failed",
+            "preview_proxy_error": error,
+            "preview_proxy_created_at": None,
+        }
+    except RuntimeError as e:
+        output_path.unlink(missing_ok=True)
+        return {
+            "preview_proxy_path": None,
+            "preview_proxy_status": "failed",
+            "preview_proxy_error": str(e)[-1000:],
+            "preview_proxy_created_at": None,
+        }
+    except Exception as e:
+        output_path.unlink(missing_ok=True)
+        logger.error(f"Failed to generate preview proxy for {video_id}: {e}")
+        return {
+            "preview_proxy_path": None,
+            "preview_proxy_status": "failed",
+            "preview_proxy_error": str(e)[-1000:],
+            "preview_proxy_created_at": None,
+        }
+
+
+def _generate_preview_proxy_background(video_id: str, source_path: Path, profile_id: str) -> None:
+    repo = get_repository()
+    if not repo:
+        logger.error(f"[BG-Proxy] No DB for source video {video_id}")
+        return
+    supabase = repo.get_client()
+    if not supabase:
+        logger.error(f"[BG-Proxy] No DB client for source video {video_id}")
+        return
+
+    try:
+        supabase.table("editai_source_videos").update({
+            "preview_proxy_status": "pending",
+            "preview_proxy_error": None,
+        }).eq("id", video_id).eq("profile_id", profile_id).execute()
+    except Exception as e:
+        logger.warning(f"[BG-Proxy] Failed to mark proxy pending for {video_id}: {e}")
+
+    proxy_update = _generate_preview_proxy(video_id, source_path)
+    try:
+        supabase.table("editai_source_videos").update(proxy_update)\
+            .eq("id", video_id)\
+            .eq("profile_id", profile_id)\
+            .execute()
+    except Exception as e:
+        logger.error(f"[BG-Proxy] Failed to save proxy status for {video_id}: {e}")
+
+
+def _source_video_response(v: dict) -> SourceVideoResponse:
+    return SourceVideoResponse(
+        id=v["id"],
+        name=v["name"],
+        description=v.get("description"),
+        file_path=v["file_path"],
+        thumbnail_path=v.get("thumbnail_path"),
+        duration=v.get("duration"),
+        width=v.get("width"),
+        height=v.get("height"),
+        fps=v.get("fps"),
+        file_size_bytes=v.get("file_size_bytes"),
+        segments_count=v.get("segments_count", 0),
+        status=v.get("status", "ready"),
+        preview_proxy_path=v.get("preview_proxy_path"),
+        preview_proxy_status=v.get("preview_proxy_status"),
+        preview_proxy_error=v.get("preview_proxy_error"),
+        preview_proxy_created_at=v.get("preview_proxy_created_at"),
+        created_at=v["created_at"],
+    )
+
+
+def _video_file_response(video_path: Path) -> FileResponse:
+    suffix = video_path.suffix.lower()
+    media_type = {
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".webm": "video/webm",
+        ".avi": "video/x-msvideo",
+        ".mkv": "video/x-matroska",
+    }.get(suffix, "video/mp4")
+
+    return FileResponse(
+        path=str(video_path),
+        media_type=media_type,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "public, max-age=3600"}
+    )
+
+
+def _is_app_source_video_path(path: Path) -> bool:
+    try:
+        source_dir = (get_settings().base_dir / "source_videos").resolve()
+        return path.resolve().is_relative_to(source_dir)
+    except Exception:
         return False
 
 def _extract_segment_video(
@@ -370,6 +526,8 @@ def _process_source_video_background(
         thumbnail_path = source_dir / f"{video_id}_thumb.jpg"
         _generate_thumbnail(current_path, thumbnail_path, timestamp=1)
 
+        proxy_update = _generate_preview_proxy(video_id, current_path)
+
         # Update DB with metadata and set status=ready
         supabase.table("editai_source_videos").update({
             "file_path": str(current_path),
@@ -380,6 +538,7 @@ def _process_source_video_background(
             "fps": video_info.get("fps"),
             "file_size_bytes": video_info.get("file_size_bytes"),
             "status": "ready",
+            **proxy_update,
         }).eq("id", video_id).execute()
 
         logger.info(f"[BG] Source video {video_id} ready")
@@ -606,6 +765,8 @@ async def add_local_source_video(
             "file_size_bytes": None,
             "segments_count": 0,
             "status": "processing",
+            "preview_proxy_status": "pending",
+            "preview_proxy_error": None,
         }).execute()
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to save video record")
@@ -628,6 +789,7 @@ async def add_local_source_video(
         file_size_bytes=None,
         segments_count=0,
         status="processing",
+        preview_proxy_status="pending",
         created_at=now_iso,
     )
 
@@ -659,6 +821,8 @@ def _process_local_video_background(
         thumbnail_path = source_dir / f"{video_id}_thumb.jpg"
         _generate_thumbnail(video_path, thumbnail_path, timestamp=1)
 
+        proxy_update = _generate_preview_proxy(video_id, video_path)
+
         supabase.table("editai_source_videos").update({
             "file_path": str(video_path),
             "thumbnail_path": str(thumbnail_path) if thumbnail_path.exists() else None,
@@ -668,6 +832,7 @@ def _process_local_video_background(
             "fps": video_info.get("fps"),
             "file_size_bytes": video_info.get("file_size_bytes"),
             "status": "ready",
+            **proxy_update,
         }).eq("id", video_id).execute()
 
         logger.info(f"[BG-Local] Source video {video_id} ready")
@@ -751,6 +916,8 @@ async def upload_source_video(
             "file_size_bytes": None,
             "segments_count": 0,
             "status": "processing",
+            "preview_proxy_status": "pending",
+            "preview_proxy_error": None,
         }).execute()
     except Exception as e:
         video_path.unlink(missing_ok=True)
@@ -774,6 +941,7 @@ async def upload_source_video(
         file_size_bytes=None,
         segments_count=0,
         status="processing",
+        preview_proxy_status="pending",
         created_at=now_iso,
     )
 
@@ -802,24 +970,7 @@ async def list_source_videos(
         .offset(offset)\
         .execute()
 
-    return [
-        SourceVideoResponse(
-            id=v["id"],
-            name=v["name"],
-            description=v.get("description"),
-            file_path=v["file_path"],
-            thumbnail_path=v.get("thumbnail_path"),
-            duration=v.get("duration"),
-            width=v.get("width"),
-            height=v.get("height"),
-            fps=v.get("fps"),
-            file_size_bytes=v.get("file_size_bytes"),
-            segments_count=v.get("segments_count", 0),
-            status=v.get("status", "ready"),
-            created_at=v["created_at"]
-        )
-        for v in result.data
-    ]
+    return [_source_video_response(v) for v in result.data]
 
 
 @router.get("/source-videos/{video_id}", response_model=SourceVideoResponse)
@@ -845,22 +996,7 @@ async def get_source_video(
     if not result.data:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    v = result.data[0]
-    return SourceVideoResponse(
-        id=v["id"],
-        name=v["name"],
-        description=v.get("description"),
-        file_path=v["file_path"],
-        thumbnail_path=v.get("thumbnail_path"),
-        duration=v.get("duration"),
-        width=v.get("width"),
-        height=v.get("height"),
-        fps=v.get("fps"),
-        file_size_bytes=v.get("file_size_bytes"),
-        segments_count=v.get("segments_count", 0),
-        status=v.get("status", "ready"),
-        created_at=v["created_at"]
-    )
+    return _source_video_response(result.data[0])
 
 
 @router.patch("/source-videos/{video_id}", response_model=SourceVideoResponse)
@@ -893,22 +1029,7 @@ async def update_source_video(
     if not result.data:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    v = result.data[0]
-    return SourceVideoResponse(
-        id=v["id"],
-        name=v["name"],
-        description=v.get("description"),
-        file_path=v["file_path"],
-        thumbnail_path=v.get("thumbnail_path"),
-        duration=v.get("duration"),
-        width=v.get("width"),
-        height=v.get("height"),
-        fps=v.get("fps"),
-        file_size_bytes=v.get("file_size_bytes"),
-        segments_count=v.get("segments_count", 0),
-        status=v.get("status", "ready"),
-        created_at=v["created_at"]
-    )
+    return _source_video_response(result.data[0])
 
 
 @router.delete("/source-videos/{video_id}")
@@ -927,7 +1048,7 @@ async def delete_source_video(
 
     # Get video info first (scoped to profile)
     result = supabase.table("editai_source_videos")\
-        .select("file_path, thumbnail_path")\
+        .select("file_path, thumbnail_path, preview_proxy_path")\
         .eq("id", video_id)\
         .eq("profile_id", profile.profile_id)\
         .execute()
@@ -959,9 +1080,13 @@ async def delete_source_video(
 
     # Delete source video files
     if video_data.get("file_path"):
-        Path(normalize_path(video_data["file_path"])).unlink(missing_ok=True)
+        source_path = Path(normalize_path(video_data["file_path"]))
+        if _is_app_source_video_path(source_path):
+            source_path.unlink(missing_ok=True)
     if video_data.get("thumbnail_path"):
         Path(video_data["thumbnail_path"]).unlink(missing_ok=True)
+    if video_data.get("preview_proxy_path"):
+        Path(video_data["preview_proxy_path"]).unlink(missing_ok=True)
 
     return {"status": "deleted", "id": video_id}
 
@@ -996,21 +1121,71 @@ async def stream_source_video(
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found")
 
-    suffix = video_path.suffix.lower()
-    media_type = {
-        ".mp4": "video/mp4",
-        ".mov": "video/quicktime",
-        ".webm": "video/webm",
-        ".avi": "video/x-msvideo",
-        ".mkv": "video/x-matroska",
-    }.get(suffix, "video/mp4")
+    return _video_file_response(video_path)
 
-    return FileResponse(
-        path=str(video_path),
-        media_type=media_type,
-        content_disposition_type="inline",
-        headers={"Cache-Control": "public, max-age=3600"}
+
+@router.get("/source-videos/{video_id}/preview-stream")
+async def preview_stream_source_video(
+    video_id: str,
+    background_tasks: BackgroundTasks,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Stream the optimized preview proxy when available, falling back to the original."""
+    effective_profile_id = profile.profile_id
+
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+    supabase = repo.get_client()
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    result = await asyncio.to_thread(
+        lambda: supabase.table("editai_source_videos")
+            .select("file_path, status, preview_proxy_path, preview_proxy_status")
+            .eq("id", video_id)
+            .eq("profile_id", effective_profile_id)
+            .execute()
     )
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Source video not found")
+
+    video_data = result.data[0]
+    original_path = Path(normalize_path(video_data["file_path"]))
+    if not original_path.exists():
+        raise HTTPException(status_code=404, detail="Video file not found")
+
+    proxy_path_value = video_data.get("preview_proxy_path")
+    proxy_path = Path(normalize_path(proxy_path_value)) if proxy_path_value else None
+    if video_data.get("preview_proxy_status") == "ready" and proxy_path and proxy_path.exists():
+        return _video_file_response(proxy_path)
+
+    # Existing records may not have proxy metadata yet. Start lazy generation,
+    # but return the original immediately so playback is never blocked.
+    proxy_status = video_data.get("preview_proxy_status")
+    source_status = video_data.get("status")
+    should_start_lazy_proxy = (
+        source_status != "processing"
+        and proxy_status != "failed"
+        and (proxy_status != "pending" or not proxy_path_value)
+    )
+    if should_start_lazy_proxy:
+        try:
+            supabase.table("editai_source_videos").update({
+                "preview_proxy_status": "pending",
+                "preview_proxy_error": None,
+            }).eq("id", video_id).eq("profile_id", effective_profile_id).execute()
+        except Exception as e:
+            logger.warning(f"Failed to mark lazy preview proxy pending for {video_id}: {e}")
+        background_tasks.add_task(
+            _generate_preview_proxy_background,
+            video_id,
+            original_path,
+            effective_profile_id,
+        )
+
+    return _video_file_response(original_path)
 
 
 # ============== WAVEFORM & VOICE DETECTION ==============

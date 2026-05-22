@@ -134,27 +134,30 @@ export function PipelineCaptionGenerator({
   const isMountedRef = useRef(true);
   useEffect(() => () => { isMountedRef.current = false; }, []);
 
-  // Manual captions per variant (always editable)
-  const [manualCaptions, setManualCaptions] = useState<Record<number, string>>({});
+  const clipKey = useCallback((clip: CompletedClip) => clip.clip_id, []);
+
+  // Manual captions per clip (always editable)
+  const [manualCaptions, setManualCaptions] = useState<Record<string, string>>({});
 
   // Seed manual captions from initialCaptions (DB restore)
   const initialCaptionsAppliedRef = useRef(false);
   useEffect(() => {
     if (initialCaptionsAppliedRef.current) return;
     if (!initialCaptions || Object.keys(initialCaptions).length === 0) return;
-    // Map clip_id-keyed captions back to variant_index-keyed manualCaptions
-    const restored: Record<number, string> = {};
+    const restored: Record<string, string> = {};
     for (const clip of completedClips) {
       if (clip.clip_id in initialCaptions) {
-        restored[clip.variant_index] = initialCaptions[clip.clip_id] || "";
+        restored[clip.clip_id] = initialCaptions[clip.clip_id] || "";
+      } else if (String(clip.variant_index) in initialCaptions) {
+        restored[clip.clip_id] = initialCaptions[String(clip.variant_index)] || "";
       }
     }
     if (Object.keys(restored).length > 0) {
       setManualCaptions(prev => {
         const merged = { ...prev };
         for (const [k, v] of Object.entries(restored)) {
-          if (!merged[Number(k)]?.trim()) {
-            merged[Number(k)] = v;
+          if (!merged[k]?.trim()) {
+            merged[k] = v;
           }
         }
         return merged;
@@ -203,14 +206,14 @@ export function PipelineCaptionGenerator({
 
   // Generation state
   const [generating, setGenerating] = useState(false);
-  // variant_index -> string[] (multiple AI caption options)
-  const [generatedCaptions, setGeneratedCaptions] = useState<Record<number, string[]>>({});
-  // variant_index -> string[] (YouTube titles per variant)
-  const [generatedYoutubeTitles, setGeneratedYoutubeTitles] = useState<Record<number, string[]>>({});
-  // variant_index -> manually edited YouTube title
-  const [manualYoutubeTitles, setManualYoutubeTitles] = useState<Record<number, string>>({});
-  // variant_index -> selected AI caption index
-  const [selectedCaptionIdx, setSelectedCaptionIdx] = useState<Record<number, number>>({});
+  // clip_id -> string[] (multiple AI caption options)
+  const [generatedCaptions, setGeneratedCaptions] = useState<Record<string, string[]>>({});
+  // clip_id -> string[] (YouTube titles per clip)
+  const [generatedYoutubeTitles, setGeneratedYoutubeTitles] = useState<Record<string, string[]>>({});
+  // clip_id -> manually edited YouTube title
+  const [manualYoutubeTitles, setManualYoutubeTitles] = useState<Record<string, string>>({});
+  // clip_id -> selected AI caption index
+  const [selectedCaptionIdx, setSelectedCaptionIdx] = useState<Record<string, number>>({});
 
   // Persist tone/language to localStorage
   useEffect(() => {
@@ -231,18 +234,19 @@ export function PipelineCaptionGenerator({
   completedClipsRef.current = completedClips;
 
   const propagateCaptions = useCallback((
-    manual: Record<number, string>,
-    aiCaptions: Record<number, string[]>,
-    aiSelections: Record<number, number>,
+    manual: Record<string, string>,
+    aiCaptions: Record<string, string[]>,
+    aiSelections: Record<string, number>,
   ) => {
     const captionMap: Record<string, string> = {};
     for (const clip of completedClipsRef.current) {
-      const manualText = manual[clip.variant_index];
+      const key = clip.clip_id;
+      const manualText = manual[key];
       if (manualText && manualText.trim()) {
         captionMap[clip.clip_id] = manualText;
       } else {
-        const varCaptions = aiCaptions[clip.variant_index];
-        const idx = aiSelections[clip.variant_index] ?? 0;
+        const varCaptions = aiCaptions[key];
+        const idx = aiSelections[key] ?? 0;
         if (varCaptions && varCaptions[idx]) {
           captionMap[clip.clip_id] = varCaptions[idx];
         }
@@ -268,7 +272,7 @@ export function PipelineCaptionGenerator({
     if (!onYoutubeTitlesGenerated) return;
     const titleMap: Record<string, string> = {};
     for (const clip of completedClips) {
-      const title = manualYoutubeTitles[clip.variant_index];
+      const title = manualYoutubeTitles[clip.clip_id];
       if (title?.trim()) {
         titleMap[clip.clip_id] = title;
       }
@@ -312,8 +316,8 @@ export function PipelineCaptionGenerator({
     }
   }, [sendSave]);
 
-  const saveSelectedCaptions = useCallback((manual: Record<number, string>) => {
-    // Build variant_index -> caption text map for backend
+  const saveSelectedCaptions = useCallback((manual: Record<string, string>) => {
+    // Build clip_id -> caption text map for backend
     // Include empty strings too — they mark "user deliberately cleared this"
     const selected: Record<string, string> = {};
     for (const [varIdx, text] of Object.entries(manual)) {
@@ -336,8 +340,8 @@ export function PipelineCaptionGenerator({
 
   /* ---------- Manual caption editing ---------- */
 
-  const handleManualCaptionChange = (variantIndex: number, text: string) => {
-    const updated = { ...manualCaptions, [variantIndex]: text };
+  const handleManualCaptionChange = (clipId: string, text: string) => {
+    const updated = { ...manualCaptions, [clipId]: text };
     setManualCaptions(updated);
     propagateCaptions(updated, generatedCaptions, selectedCaptionIdx);
     saveSelectedCaptions(updated);
@@ -551,48 +555,54 @@ export function PipelineCaptionGenerator({
       // NOTE: removed isMountedRef early-return — it was likely causing captions to silently drop
       // when the component remounted during the async API call
 
-      const captions: Record<number, string[]> = {};
+      const captions: Record<string, string[]> = {};
       const captionsObj = data.captions || {};
       for (const [key, val] of Object.entries(captionsObj)) {
-        captions[parseInt(key)] = val as string[];
+        for (const clip of completedClips) {
+          if (String(clip.variant_index) === key) {
+            captions[clip.clip_id] = val as string[];
+          }
+        }
       }
       console.log("[CaptionGenerator] Parsed captions:", Object.keys(captions).length, "variants");
       setGeneratedCaptions(captions);
 
       // Parse YouTube titles if generated
       if (data.youtube_titles) {
-        const ytTitles: Record<number, string[]> = {};
+        const ytTitles: Record<string, string[]> = {};
         for (const [key, val] of Object.entries(data.youtube_titles)) {
-          ytTitles[parseInt(key)] = val as string[];
+          for (const clip of completedClips) {
+            if (String(clip.variant_index) === key) {
+              ytTitles[clip.clip_id] = val as string[];
+            }
+          }
         }
         setGeneratedYoutubeTitles(ytTitles);
         // Auto-fill manual YouTube title fields with first option
-        const updatedYt: Record<number, string> = { ...manualYoutubeTitles };
-        for (const [varIdx, titles] of Object.entries(ytTitles)) {
-          const idx = Number(varIdx);
-          if (titles && titles.length > 0 && !updatedYt[idx]?.trim()) {
-            updatedYt[idx] = titles[0];
+        const updatedYt: Record<string, string> = { ...manualYoutubeTitles };
+        for (const [clipId, titles] of Object.entries(ytTitles)) {
+          if (titles && titles.length > 0 && !updatedYt[clipId]?.trim()) {
+            updatedYt[clipId] = titles[0];
           }
         }
         setManualYoutubeTitles(updatedYt);
       }
 
       // Auto-select first AI caption for each variant (only if no manual caption)
-      const selections: Record<number, number> = {};
+      const selections: Record<string, number> = {};
       for (const clip of completedClips) {
-        const varCaptions = captions[clip.variant_index];
+        const varCaptions = captions[clip.clip_id];
         if (varCaptions && varCaptions.length > 0) {
-          selections[clip.variant_index] = 0;
+          selections[clip.clip_id] = 0;
         }
       }
       setSelectedCaptionIdx(selections);
 
       // Auto-fill manual caption fields with first AI option for each variant
-      const updatedManual: Record<number, string> = { ...manualCaptions };
-      for (const [varIdx, varCaptions] of Object.entries(captions)) {
-        const idx = Number(varIdx);
-        if (varCaptions && varCaptions.length > 0 && !updatedManual[idx]?.trim()) {
-          updatedManual[idx] = varCaptions[0];
+      const updatedManual: Record<string, string> = { ...manualCaptions };
+      for (const [clipId, varCaptions] of Object.entries(captions)) {
+        if (varCaptions && varCaptions.length > 0 && !updatedManual[clipId]?.trim()) {
+          updatedManual[clipId] = varCaptions[0];
         }
       }
       setManualCaptions(updatedManual);
@@ -616,14 +626,14 @@ export function PipelineCaptionGenerator({
 
   /* ---------- AI Caption selection ---------- */
 
-  const handleSelectCaption = (variantIndex: number, captionIdx: number) => {
-    const newSelections = { ...selectedCaptionIdx, [variantIndex]: captionIdx };
+  const handleSelectCaption = (clipId: string, captionIdx: number) => {
+    const newSelections = { ...selectedCaptionIdx, [clipId]: captionIdx };
     setSelectedCaptionIdx(newSelections);
 
     // Apply the selected AI caption to the manual field
-    const varCaptions = generatedCaptions[variantIndex];
+    const varCaptions = generatedCaptions[clipId];
     if (varCaptions && varCaptions[captionIdx]) {
-      const updated = { ...manualCaptions, [variantIndex]: varCaptions[captionIdx] };
+      const updated = { ...manualCaptions, [clipId]: varCaptions[captionIdx] };
       setManualCaptions(updated);
       propagateCaptions(updated, generatedCaptions, newSelections);
       saveSelectedCaptions(updated);
@@ -1004,9 +1014,10 @@ export function PipelineCaptionGenerator({
                     Click an AI caption to use it. It will be copied to the caption field below.
                   </p>
                   {completedClips.map((clip, clipIdx) => {
-                    const varCaptions = generatedCaptions[clip.variant_index];
+                    const key = clipKey(clip);
+                    const varCaptions = generatedCaptions[key];
                     if (!varCaptions || varCaptions.length === 0) return null;
-                    const selectedIdx = selectedCaptionIdx[clip.variant_index] ?? 0;
+                    const selectedIdx = selectedCaptionIdx[key] ?? 0;
 
                     return (
                       <div key={`${clip.clip_id}-${clipIdx}`} className="space-y-2">
@@ -1014,7 +1025,7 @@ export function PipelineCaptionGenerator({
                         {varCaptions.map((caption, idx) => (
                           <div
                             key={idx}
-                            onClick={() => handleSelectCaption(clip.variant_index, idx)}
+                            onClick={() => handleSelectCaption(key, idx)}
                             className={`relative p-3 rounded-md border-2 cursor-pointer transition-colors text-sm ${
                               idx === selectedIdx
                                 ? "border-primary bg-primary/5"
@@ -1056,13 +1067,15 @@ export function PipelineCaptionGenerator({
 
       {/* Manual caption fields per variant — always visible, below AI generator */}
       <div className="space-y-3">
-        {completedClips.map((clip, clipIdx) => (
+        {completedClips.map((clip, clipIdx) => {
+          const key = clipKey(clip);
+          return (
           <Card key={`${clip.clip_id}-${clipIdx}`}>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center gap-2">
                 <Pencil className="size-3.5" />
                 Variant {clip.variant_index + 1} — Caption
-                {manualCaptions[clip.variant_index]?.trim() && (
+                {manualCaptions[key]?.trim() && (
                   <Badge variant="default" className="text-xs">Has caption</Badge>
                 )}
               </CardTitle>
@@ -1070,42 +1083,42 @@ export function PipelineCaptionGenerator({
             <CardContent>
               <Textarea
                 placeholder={`Write the social media caption for variant ${clip.variant_index + 1}...`}
-                value={manualCaptions[clip.variant_index] || ""}
-                onChange={(e) => handleManualCaptionChange(clip.variant_index, e.target.value)}
+                value={manualCaptions[key] || ""}
+                onChange={(e) => handleManualCaptionChange(key, e.target.value)}
                 rows={3}
                 className="resize-y"
               />
-              {manualCaptions[clip.variant_index]?.trim() && (
+              {manualCaptions[key]?.trim() && (
                 <p className="text-xs text-muted-foreground mt-1">
-                  {manualCaptions[clip.variant_index].length} characters
+                  {manualCaptions[key].length} characters
                 </p>
               )}
 
               {/* YouTube Title — shown when generated or toggle is on */}
-              {(generateYoutubeTitles || manualYoutubeTitles[clip.variant_index]?.trim()) && (
+              {(generateYoutubeTitles || manualYoutubeTitles[key]?.trim()) && (
                 <div className="mt-3 space-y-1">
                   <Label className="text-xs text-muted-foreground">Titlu YouTube (max 100)</Label>
                   <Input
                     placeholder="Titlu SEO pentru YouTube..."
-                    value={manualYoutubeTitles[clip.variant_index] || ""}
+                    value={manualYoutubeTitles[key] || ""}
                     onChange={(e) => {
                       setManualYoutubeTitles(prev => ({
                         ...prev,
-                        [clip.variant_index]: e.target.value.slice(0, 100)
+                        [key]: e.target.value.slice(0, 100)
                       }));
                     }}
                     maxLength={100}
                   />
                   {/* AI-generated title alternatives */}
-                  {generatedYoutubeTitles[clip.variant_index]?.length > 1 && (
+                  {generatedYoutubeTitles[key]?.length > 1 && (
                     <div className="flex flex-wrap gap-1 mt-1">
-                      {generatedYoutubeTitles[clip.variant_index].map((title, i) => (
+                      {generatedYoutubeTitles[key].map((title, i) => (
                         <button
                           key={i}
                           type="button"
-                          onClick={() => setManualYoutubeTitles(prev => ({ ...prev, [clip.variant_index]: title }))}
+                          onClick={() => setManualYoutubeTitles(prev => ({ ...prev, [key]: title }))}
                           className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-                            manualYoutubeTitles[clip.variant_index] === title
+                            manualYoutubeTitles[key] === title
                               ? "border-primary bg-primary/10"
                               : "border-border hover:bg-accent/50"
                           }`}
@@ -1119,7 +1132,8 @@ export function PipelineCaptionGenerator({
               )}
             </CardContent>
           </Card>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

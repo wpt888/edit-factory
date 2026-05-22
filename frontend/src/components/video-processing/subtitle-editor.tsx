@@ -378,7 +378,13 @@ export function SubtitleEditor({
             height: `${previewDimensions.height}px`,
           }}
         >
-          {ffmpegBackgroundUrl ? (
+          {!ffmpegLoading && ffmpegPreviewUrl ? (
+            <img
+              src={ffmpegPreviewUrl}
+              alt="Subtitle preview"
+              className="absolute inset-0 w-full h-full object-contain rounded-lg"
+            />
+          ) : ffmpegBackgroundUrl ? (
             <>
               <img
                 src={ffmpegBackgroundUrl}
@@ -387,12 +393,6 @@ export function SubtitleEditor({
               />
               {renderLocalSubtitleOverlay(previewDimensions)}
             </>
-          ) : !ffmpegLoading && ffmpegPreviewUrl ? (
-            <img
-              src={ffmpegPreviewUrl}
-              alt="Subtitle preview"
-              className="absolute inset-0 w-full h-full object-contain rounded-lg"
-            />
           ) : (
             <>
               {/* Gradient background simulating video */}
@@ -431,7 +431,13 @@ export function SubtitleEditor({
               containerType: "size",
             }}
           >
-            {ffmpegBackgroundUrl ? (
+            {!ffmpegLoading && ffmpegPreviewUrl ? (
+              <img
+                src={ffmpegPreviewUrl}
+                alt="Subtitle preview"
+                className="absolute inset-0 w-full h-full object-contain"
+              />
+            ) : ffmpegBackgroundUrl ? (
               <>
                 <img
                   src={ffmpegBackgroundUrl}
@@ -440,12 +446,6 @@ export function SubtitleEditor({
                 />
                 {renderLocalSubtitleOverlay({ height: 900 })}
               </>
-            ) : !ffmpegLoading && ffmpegPreviewUrl ? (
-              <img
-                src={ffmpegPreviewUrl}
-                alt="Subtitle preview"
-                className="absolute inset-0 w-full h-full object-contain"
-              />
             ) : (
               <>
                 <div className="absolute inset-0 bg-gradient-to-br from-gray-700 via-gray-800 to-gray-900" />

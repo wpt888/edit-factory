@@ -235,6 +235,10 @@ CREATE TABLE IF NOT EXISTS editai_source_videos (
     height          INTEGER,
     file_size        INTEGER,
     status          TEXT DEFAULT 'ready',
+    preview_proxy_path TEXT,
+    preview_proxy_status TEXT,
+    preview_proxy_error TEXT,
+    preview_proxy_created_at TEXT,
     segment_count   INTEGER DEFAULT 0,
 
     -- Profile (from 008)

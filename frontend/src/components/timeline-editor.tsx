@@ -226,6 +226,23 @@ export function TimelineEditor({
 
   // Can we show the preview? Need pipelineId, profileId, and at least one video match
   const canPreview = !!(pipelineId && variantIndex !== undefined && profileId && videoMatches.length > 0);
+  const nextPreviewSourceVideoId = useMemo(() => {
+    for (let i = previewActiveIndex + 1; i < matches.length; i += 1) {
+      const sourceVideoId = matches[i]?.source_video_id;
+      if (sourceVideoId) return sourceVideoId;
+    }
+    return null;
+  }, [matches, previewActiveIndex]);
+  const getPreviewVideoPreload = useCallback((sourceVideoId: string) => {
+    const activeSourceVideoId = matches[previewActiveIndex]?.source_video_id;
+    return sourceVideoId === activeSourceVideoId || sourceVideoId === nextPreviewSourceVideoId
+      ? "auto"
+      : "none";
+  }, [matches, nextPreviewSourceVideoId, previewActiveIndex]);
+  const getPreviewStreamUrl = useCallback((sourceVideoId: string) => {
+    if (!profileId) return "";
+    return `${API_URL}/segments/source-videos/${sourceVideoId}/preview-stream?profile_id=${profileId}`;
+  }, [profileId]);
 
   // --- Continuous preview helpers (same pattern as VariantPreviewPlayer) ---
 
@@ -942,7 +959,7 @@ export function TimelineEditor({
     if (sourceVideoId && (sourceVideoId !== lastSourceVideoId.current || startTime !== lastStartTime.current) && profileId) {
       lastSourceVideoId.current = sourceVideoId;
       lastStartTime.current = startTime;
-      video.src = `${API_URL}/segments/source-videos/${sourceVideoId}/stream?profile_id=${profileId}`;
+      video.src = getPreviewStreamUrl(sourceVideoId);
       video.load();
     }
 
@@ -982,7 +999,7 @@ export function TimelineEditor({
       if (enforcementRaf != null) cancelAnimationFrame(enforcementRaf);
       video.pause();
     };
-  }, [viewMode, selectedBlockIndex, matches, profileId]);
+  }, [viewMode, selectedBlockIndex, matches, profileId, getPreviewStreamUrl]);
 
   if (matches.length === 0) {
     return (
@@ -1084,10 +1101,10 @@ export function TimelineEditor({
                   <video
                     key={sourceVideoId}
                     ref={(el) => { previewVideoRefs.current[sourceVideoId] = el; }}
-                    src={`${API_URL}/segments/source-videos/${sourceVideoId}/stream?profile_id=${profileId}`}
+                    src={getPreviewStreamUrl(sourceVideoId)}
                     muted
                     playsInline
-                    preload="auto"
+                    preload={getPreviewVideoPreload(sourceVideoId)}
                     className="absolute inset-0 w-full h-full object-cover"
                     onWaiting={() => setIsPreviewBuffering(true)}
                     onPlaying={() => setIsPreviewBuffering(false)}
@@ -1252,10 +1269,10 @@ export function TimelineEditor({
                       <video
                         key={`expanded-${sourceVideoId}`}
                         ref={(el) => { previewVideoRefs.current[sourceVideoId] = el; }}
-                        src={`${API_URL}/segments/source-videos/${sourceVideoId}/stream?profile_id=${profileId}`}
+                        src={getPreviewStreamUrl(sourceVideoId)}
                         muted
                         playsInline
-                        preload="auto"
+                        preload={getPreviewVideoPreload(sourceVideoId)}
                         className="absolute inset-0 w-full h-full object-cover"
                         onWaiting={() => setIsPreviewBuffering(true)}
                         onPlaying={() => setIsPreviewBuffering(false)}

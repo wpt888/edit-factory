@@ -830,8 +830,8 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
                     value={[jitterMinutes]}
                     onValueChange={([val]) => setJitterMinutes(val)}
                     min={0}
-                    max={30}
-                    step={1}
+                    max={240}
+                    step={5}
                     className="flex-1"
                   />
                   <span className="text-sm font-medium w-16 text-right tabular-nums">{jitterMinutes} min</span>

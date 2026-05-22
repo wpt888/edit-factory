@@ -12,6 +12,13 @@ import { apiPost, apiGet, API_URL } from "@/lib/api";
 import type { MatchPreview, InterstitialSlide } from "@/components/timeline-editor";
 import type { SubtitleSettings } from "@/types/video-processing";
 
+type PreviewPipOverlayConfig = {
+  image_url: string;
+  position?: string;
+  size?: string;
+  animation?: string;
+};
+
 interface VariantPreviewPlayerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -27,6 +34,15 @@ interface VariantPreviewPlayerProps {
   wordsPerSubtitle?: number;
   ultraRapidIntro?: boolean;
   interstitialSlides?: InterstitialSlide[];
+  pipOverlays?: Record<string, PreviewPipOverlayConfig>;
+  enableDenoise?: boolean;
+  denoiseStrength?: number;
+  enableSharpen?: boolean;
+  sharpenAmount?: number;
+  enableColor?: boolean;
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
 }
 
 export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
@@ -44,6 +60,15 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   wordsPerSubtitle = 2,
   ultraRapidIntro = true,
   interstitialSlides,
+  pipOverlays,
+  enableDenoise = false,
+  denoiseStrength = 2.0,
+  enableSharpen = false,
+  sharpenAmount = 0.5,
+  enableColor = false,
+  brightness = 0.0,
+  contrast = 1.0,
+  saturation = 1.0,
 }: VariantPreviewPlayerProps) {
   const [status, setStatus] = useState<string>("idle");
   const [progress, setProgress] = useState(0);
@@ -136,6 +161,15 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
             words_per_subtitle: wordsPerSubtitle,
             ultra_rapid_intro: ultraRapidIntro,
             interstitial_slides: interstitialSlides?.filter((s) => s.imageUrl) ?? undefined,
+            pip_overlays: pipOverlays,
+            enable_denoise: enableDenoise,
+            denoise_strength: denoiseStrength,
+            enable_sharpen: enableSharpen,
+            sharpen_amount: sharpenAmount,
+            enable_color: enableColor,
+            brightness,
+            contrast,
+            saturation,
             visual_version: visualVersion,
           }
         );

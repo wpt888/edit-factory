@@ -1399,6 +1399,7 @@ class AssemblyService:
         pip_overlays: Optional[Dict[str, dict]] = None,
         match_results: Optional[List] = None,
         _preview_mode: bool = False,
+        strict_segments: bool = True,
     ) -> Path:
         """
         Assemble video from timeline using FFmpeg.
@@ -1586,6 +1587,21 @@ class AssemblyService:
             raise RuntimeError(f"All {len(results)} segments failed to extract — cannot assemble video")
 
         if failed_count > 0:
+            failed_segments = [
+                {
+                    "index": i,
+                    "source": timeline[i].source_video_path,
+                    "start": timeline[i].start_time,
+                    "end": timeline[i].end_time,
+                }
+                for i, result_path in enumerate(results)
+                if result_path is None
+            ]
+            if strict_segments:
+                raise RuntimeError(
+                    f"{failed_count}/{len(results)} segments failed to extract: "
+                    f"{failed_segments}"
+                )
             logger.warning(
                 f"{failed_count}/{len(results)} segments failed to extract — "
                 f"assembled video will be shorter than expected"
@@ -1704,6 +1720,8 @@ class AssemblyService:
         output_project_label: Optional[str] = None,
         output_script_label: Optional[str] = None,
         output_created_at: Optional[datetime] = None,
+        force_cpu: bool = False,
+        strict_segments: bool = True,
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
@@ -2116,6 +2134,7 @@ class AssemblyService:
                 pip_overlays=pip_overlays,
                 match_results=match_results,
                 _preview_mode=_preview_mode,
+                strict_segments=strict_segments,
             )
 
             # Render with preset and subtitle settings
@@ -2131,11 +2150,7 @@ class AssemblyService:
                 script_label=output_script_label or script_text,
                 created_at=output_created_at,
             )
-            final_output_path = output_dir / f"{output_stem}.mp4"
-            dedupe_index = 2
-            while final_output_path.exists():
-                final_output_path = output_dir / f"{output_stem}_{dedupe_index}.mp4"
-                dedupe_index += 1
+            final_output_path = output_dir / f"{output_stem}_{uuid.uuid4().hex[:8]}.mp4"
 
             # Save pre-subtitle assembly for voiceover regeneration
             raw_assembly_path = output_dir / f"{final_output_path.stem}_raw.mp4"
@@ -2172,6 +2187,7 @@ class AssemblyService:
                 contrast=contrast,
                 saturation=saturation,
                 _preview_mode=_preview_mode,
+                force_cpu=force_cpu,
             )
 
             logger.info(f"Assembly complete: {final_output_path}")
@@ -2236,14 +2252,22 @@ class AssemblyService:
         voice_id: Optional[str] = None,
         elevenlabs_model: str = "eleven_flash_v2_5",
         interstitial_slides: Optional[List[dict]] = None,
+        pip_overlays: Optional[Dict[str, dict]] = None,
+        enable_denoise: bool = False,
+        denoise_strength: float = 2.0,
+        enable_sharpen: bool = False,
+        sharpen_amount: float = 0.5,
+        enable_color: bool = False,
+        brightness: float = 0.0,
+        contrast: float = 1.0,
+        saturation: float = 1.0,
         subtitle_style_override: Optional[Dict[str, object]] = None,
         visual_version_label: Optional[str] = None,
     ) -> Path:
         """
         Fast preview render using assemble_and_render() with preview-mode settings.
 
-        Uses 540x960, ultrafast encoding, CRF 32, no loudnorm, no filters, no PiP,
-        no interstitials. Produces a real MP4 that matches the final render's
+        Uses 540x960, ultrafast encoding, CRF 32, and no loudnorm. Produces a real MP4 that matches the final render's
         segment order exactly (including ultra_rapid_intro if enabled).
 
         Returns:
@@ -2287,10 +2311,14 @@ class AssemblyService:
             avoid_segment_ids=avoid_segment_ids,
             voice_id=voice_id,
             elevenlabs_model=elevenlabs_model,
-            # Preview-specific: disable expensive features but keep segment order consistent
-            enable_denoise=False,
-            enable_sharpen=False,
-            enable_color=False,
+            enable_denoise=enable_denoise,
+            denoise_strength=denoise_strength,
+            enable_sharpen=enable_sharpen,
+            sharpen_amount=sharpen_amount,
+            enable_color=enable_color,
+            brightness=brightness,
+            contrast=contrast,
+            saturation=saturation,
             # Pass through subtitle style params to match final render output
             shadow_depth=_ss.get("shadowDepth", 0),
             enable_glow=_ss.get("enableGlow", False),
@@ -2298,7 +2326,7 @@ class AssemblyService:
             adaptive_sizing=_ss.get("adaptiveSizing", False),
             ultra_rapid_intro=ultra_rapid_intro,
             interstitial_slides=interstitial_slides,
-            pip_overlays=None,
+            pip_overlays=pip_overlays,
             variant_index=variant_index,
             _preview_mode=True,
             subtitle_style_override=subtitle_style_override,
@@ -2548,11 +2576,60 @@ class AssemblyService:
             for seg in segments_data
         ]
 
+        # Persist freshly-generated TTS to the library so audio_path survives the
+        # 2h temp-dir cleanup below. Without this, pipelines lose voice-overs
+        # whenever the cleanup timer fires before Step 2 explicit save runs.
+        if not reuse_audio_path and audio_path.exists():
+            try:
+                from app.services.tts_library_service import get_tts_library_service
+                tts_lib = get_tts_library_service()
+                saved_asset_id = tts_lib.save_from_pipeline(
+                    profile_id=profile_id,
+                    text=cleaned_text,
+                    audio_path=str(audio_path),
+                    srt_content=srt_content,
+                    timestamps=timestamps or None,
+                    model=elevenlabs_model,
+                    duration=audio_duration,
+                    voice_id=voice_id,
+                )
+                lib_rel = None
+                if saved_asset_id:
+                    lib_rel = f"media/tts/{profile_id}/{saved_asset_id}.mp3"
+                else:
+                    # Dedup hit — look up existing asset and reuse its path
+                    try:
+                        from app.repositories.factory import get_repository as _get_repository
+                        _repo = _get_repository()
+                        _sb = _repo.get_client() if _repo else None
+                        if _sb:
+                            _existing = _sb.table("editai_tts_assets").select("id, mp3_path")\
+                                .eq("profile_id", profile_id).eq("status", "ready")\
+                                .eq("tts_text", cleaned_text.strip()).limit(1).execute()
+                            if _existing.data and _existing.data[0].get("mp3_path"):
+                                lib_rel = _existing.data[0]["mp3_path"]
+                    except Exception as _dedup_err:
+                        logger.warning(f"Preview TTS library dedup lookup failed: {_dedup_err}")
+                if lib_rel:
+                    lib_full = self.settings.base_dir / lib_rel
+                    if lib_full.exists():
+                        audio_path = lib_full
+                        logger.info(f"Preview TTS persisted to library: {lib_rel}")
+            except Exception as lib_err:
+                logger.warning(f"Preview TTS library save failed (non-blocking): {lib_err}")
+
         # Schedule cleanup of temp TTS directory after 2 hours.
-        # Only schedule when audio was freshly generated — if reuse_audio_path was
-        # provided, audio_path.parent points to the library directory and must NOT
-        # be deleted.
-        if not reuse_audio_path:
+        # Only schedule when audio still lives under temp/ — if reuse_audio_path
+        # was provided OR we just persisted to the library, audio_path now points
+        # at media/tts/ which must NOT be wiped.
+        _temp_root = self.settings.base_dir / "temp"
+        _audio_under_temp = False
+        try:
+            audio_path.resolve().relative_to(_temp_root.resolve())
+            _audio_under_temp = True
+        except ValueError:
+            pass
+        if not reuse_audio_path and _audio_under_temp:
             temp_dir = audio_path.parent
             def _cleanup_temp():
                 import shutil

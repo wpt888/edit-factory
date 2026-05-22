@@ -30,6 +30,7 @@ _cached_model = None
 _cached_utils = None
 _model_cache_lock = threading.Lock()
 _model_load_attempted = False  # M7: Track if load was already attempted (prevents retries on failure)
+_last_model_load_attempt_time = 0.0
 
 
 @dataclass
@@ -79,7 +80,7 @@ class VoiceDetector:
 
     def _load_model(self):
         """Load Silero VAD model (uses module-level cache)."""
-        global _cached_model, _cached_utils, _model_load_attempted
+        global _cached_model, _cached_utils, _model_load_attempted, _last_model_load_attempt_time
         with _model_cache_lock:
             if _cached_model is not None:
                 self.model = _cached_model
@@ -89,12 +90,11 @@ class VoiceDetector:
             # M7: Rate-limit retries — allow retry after 5 minutes
             import time as _time
             if _model_load_attempted:
-                _last_attempt_time = getattr(_load_silero_vad, "_last_attempt_time", 0)
-                if _time.monotonic() - _last_attempt_time < 300:
+                if _time.monotonic() - _last_model_load_attempt_time < 300:
                     logger.debug("Silero VAD model load recently failed, skipping retry (5min cooldown)")
                     return
             _model_load_attempted = True
-            _load_silero_vad._last_attempt_time = _time.monotonic()
+            _last_model_load_attempt_time = _time.monotonic()
             try:
                 model, utils = torch.hub.load(
                     repo_or_dir='snakers4/silero-vad',
