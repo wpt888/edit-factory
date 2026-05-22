@@ -184,10 +184,10 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
 ### 🚧 v13 Desktop Production-Ready & Monetization (Phases 80-98) — ACTIVE (opened 2026-05-22)
 
 **Track A — Functional Desktop (Wave 1, sequential):**
-- [ ] Phase 80: Library routes repository migration (3 plans)
-  - 80-01-PLAN.md — Audit + new ABC methods + Pattern A/B migration
-  - 80-02-PLAN.md — Pattern C/D migration + helper refactor + dead-code removal
-  - 80-03-PLAN.md — Per-route pytest cases asserting 200 under DATA_BACKEND=sqlite
+- [ ] Phase 80: Library routes repository migration (1/3 plans complete)
+  - [x] 80-01-PLAN.md — Audit + new ABC methods + Pattern A/B migration (2026-05-22; see 80-01-SUMMARY.md; get_client() count: 27 → 9)
+  - [ ] 80-02-PLAN.md — Pattern C/D migration + helper refactor + dead-code removal (includes audit-gap site #23)
+  - [ ] 80-03-PLAN.md — Per-route pytest cases asserting 200 under DATA_BACKEND=sqlite (rewrites 11 broken mock-chain tests)
 - [ ] Phase 81: Pipeline routes repository migration (~2–3 plans)
 - [ ] Phase 82: Segments routes repository migration (~2–3 plans)
 - [ ] Phase 83: Background services repository migration (~1–2 plans)

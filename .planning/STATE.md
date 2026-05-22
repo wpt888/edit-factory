@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
 stopped_at: Milestone v13 defined, ready for phase planning
-last_updated: "2026-05-22T17:37:02.671Z"
+last_updated: "2026-05-22T19:01:28.975Z"
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 3
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 33
 ---
 
 # Project State
@@ -20,10 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale, distributed as a true downloadable desktop product priced for indie creators.
-**Current focus:** v13 Desktop Production-Ready & Monetization — make the desktop app actually functional under SQLite mode (88 broken sites), add the monetization layer (new `marketing/` subfolder, Lemon Squeezy checkout, OAuth device flow), ship via GitHub Releases.
+**Current focus:** Phase 80 — library-routes-repository-migration
 
 ## Current Position
 
+Phase: 80 (library-routes-repository-migration) — EXECUTING
+Plan: 2 of 3
 Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 0/19 phases complete.
 Next action: `/gsd-discuss-phase 80` (start with Phase 80: Library routes repository migration) or `/gsd-autonomous` for hands-off execution.
 
@@ -74,6 +76,9 @@ v13 product decisions (recorded 2026-05-22):
 - **Existing web app**: untouched. All monetization work goes into `marketing/`.
 
 Earlier project decisions are logged in PROJECT.md Key Decisions table.
+
+- [Phase 80]: Plan 80-01 deferred site #23 (_regenerate_voiceover_task body) to Plan 80-02 — audit gap discovered during execution, 7+ in-body supabase.table() calls beyond the get_client() guard would have caused NameError if migrated piecemeal
+- [Phase 80]: Plan 80-01 added 5 new ABC methods (count_clips, get_export_preset_by_name, delete_exports_older_than, get_project_by_name, increment_segment_usage) on both backends and migrated 18 Pattern A/B routes in library_routes.py — get_client() count reduced from 27 to 9 (the Pattern C/D residual handed to 80-02)
 
 ### Pending Todos
 

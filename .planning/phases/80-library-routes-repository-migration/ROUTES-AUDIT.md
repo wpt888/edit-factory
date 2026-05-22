@@ -90,3 +90,48 @@ Plan 80-01 owns sites 1-4, 7, 10-23 = **19 sites** total (including site #19 exp
 
 - `list_project_segments_with_source(project_id)` — OR refactor route to do `list_project_segments` + per-segment `get_segment` + `get_source_video`. Plan 80-02 decides during execution.
 - `list_clips_with_project_info(profile_id, ...)` — OR refactor /all-clips to do `list_clips_by_profile` + collect project_ids + bulk `get_project`.
+
+## Audit gap discovered during 80-01 execution: Site #23 deferred to Plan 80-02
+
+Site #23 (`_regenerate_voiceover_task`, line 3009 → now 2959 post-migration) was originally
+assigned to Plan 80-01. During execution, the executor discovered that the function body
+contains **7+ additional `supabase.table()` calls** that were NOT enumerated in the original
+audit (analogous to how `_render_final_clip_task` calls ARE enumerated). Migrating only the
+`get_client()` guard at line 2959 would have introduced `NameError: supabase` at runtime.
+
+Following the parallel handling of `_render_final_clip_task` (which the audit defers entirely
+to 80-02), site #23 is **reassigned to Plan 80-02**. Plan 80-02 should migrate the whole
+function as a unit. The in-body calls in `_regenerate_voiceover_task` that Plan 80-02 must migrate:
+
+- Initial `supabase = repo.get_client()` guard at line ~2959 → use repo directly
+- `supabase.table("editai_clips").update(...)` (set processing status, ~line 2966) → `repo.update_clip`
+- `supabase.table("editai_clip_content").upsert(..., on_conflict="clip_id")` (~line 3073) → `repo.table_query("editai_clip_content", "upsert", data=..., filters=QueryFilters(on_conflict="clip_id"))`
+- `supabase.table("profiles").select("subtitle_settings")...` (~line 3104) → `repo.get_profile(profile_id)`
+- `supabase.table("editai_projects").select("pipeline_id")...` (~line 3147) → `repo.get_project(project_id)`
+- `supabase.table("editai_pipelines").select("previews, source_video_ids")...` (~line 3155) → `repo.get_pipeline(pipeline_id)`
+- `supabase.table("editai_clips").update({"raw_video_path": ...})` (~line 3231) → `repo.update_clip`
+- `supabase.table("editai_clip_content").update({"segment_composition": ...})` (~line 3238) → `repo.update_clip_content`
+- `supabase.table("editai_clips").update({"final_status": "completed", ...})` (~line 3247) → `repo.update_clip`
+- `supabase.table("editai_clips").update({"final_status": "failed", ...})` (~line 3257, except block) → `repo.update_clip`
+
+After Plan 80-02 migrates site #23, the `supabase` variable name MUST NOT appear in
+`_regenerate_voiceover_task` body.
+
+### Updated summary
+
+| Pattern | Count | Owner |
+|---------|-------|-------|
+| A (simple chained) | 17 | 80-01 (less #23) → 16 sites in 80-01; #23 moved to 80-02 |
+| B (count/aggregate) | 1 | 80-01 |
+| C (complex OR/join/maybe_single) | 6 | 80-02 |
+| D (RPC/raw SQL) | 0 in get_client() sites; 1 separate (_increment_segment_usage, line 3945 post-migration — RPC) | 80-02 |
+| DEAD CODE (no real query) | 3 (3310/3317/3326 post-migration) | 80-02 |
+
+Plan 80-01 actually owned sites 1-4, 7, 10-22 = **18 sites** (not 19 as originally planned).
+Plan 80-02 owns sites 5, 6, 8, 9, 23, 24-27 = **9 sites** total, PLUS the in-body
+`supabase.table()` lines in both `_regenerate_voiceover_task` and `_render_final_clip_task`.
+
+### Residual `get_client()` count after Plan 80-01
+
+Final count: **9** (matches the 6 ≤ count ≤ 10 acceptance gate).
+Sites: 1164 (#5), 1417 (#6), 1987 (#8), 2114 (#9), 2959 (#23), 3310/3317/3326 (#24/#25/#26), 3841 (#27).
