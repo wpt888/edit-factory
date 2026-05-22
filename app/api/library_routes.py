@@ -2615,14 +2615,11 @@ async def update_clip_content(
 ):
     """Actualizează conținutul asociat unui clip (TTS text, SRT, stil)."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        # Verify the clip exists and belongs to the profile
-        clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
-        if not clip.data:
+        # T-80-01-01: profile_id check after repo.get_clip
+        clip = repo.get_clip(clip_id)
+        if not clip or clip.get("profile_id") != profile.profile_id:
             raise HTTPException(status_code=404, detail="Clip not found")
 
         # Prepare data for upsert
@@ -2638,11 +2635,14 @@ async def update_clip_content(
         if content.subtitle_settings is not None:
             content_data["subtitle_settings"] = content.subtitle_settings
 
-        # Upsert (insert or update)
-        result = supabase.table("editai_clip_content").upsert(
-            content_data,
-            on_conflict="clip_id"
-        ).execute()
+        # Upsert via table_query escape hatch (update_clip_content is UPDATE-only;
+        # both backends implement upsert with on_conflict in table_query).
+        result = repo.table_query(
+            "editai_clip_content",
+            "upsert",
+            data=content_data,
+            filters=QueryFilters(on_conflict="clip_id"),
+        )
 
         return {"status": "updated", "content": result.data[0] if result.data else None}
     except HTTPException:
@@ -2660,23 +2660,18 @@ async def copy_content_from_clip(
 ):
     """Copiază conținutul (TTS, SRT, stil) de la un alt clip."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        # Verify ownership of both clips
-        dest_clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
-        if not dest_clip.data:
+        # T-80-01-01: profile_id check for both clips
+        dest_clip = repo.get_clip(clip_id)
+        if not dest_clip or dest_clip.get("profile_id") != profile.profile_id:
             raise HTTPException(status_code=404, detail="Destination clip not found")
 
-        src_clip = supabase.table("editai_clips").select("id").eq("id", source_clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
-        if not src_clip.data:
+        src_clip = repo.get_clip(source_clip_id)
+        if not src_clip or src_clip.get("profile_id") != profile.profile_id:
             raise HTTPException(status_code=404, detail="Source clip not found")
 
-        # DB-06: Use .limit(1) instead of .single() to avoid exception when no rows
-        source_result = supabase.table("editai_clip_content").select("*").eq("clip_id", source_clip_id).limit(1).execute()
-        source_row = source_result.data[0] if source_result.data else None
+        source_row = repo.get_clip_content(source_clip_id)
         if not source_row:
             raise HTTPException(status_code=404, detail="Source content not found")
 
@@ -2690,10 +2685,13 @@ async def copy_content_from_clip(
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
 
-        result = supabase.table("editai_clip_content").upsert(
-            content_data,
-            on_conflict="clip_id"
-        ).execute()
+        # Upsert via table_query escape hatch (update_clip_content is UPDATE-only).
+        result = repo.table_query(
+            "editai_clip_content",
+            "upsert",
+            data=content_data,
+            filters=QueryFilters(on_conflict="clip_id"),
+        )
 
         return {"status": "copied", "content": result.data[0] if result.data else None}
     except HTTPException:
@@ -2711,17 +2709,13 @@ async def list_export_presets(
 ):
     """Listează toate preset-urile de export disponibile."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
-
     try:
-        # Filter by profile_id OR global presets (profile_id IS NULL)
-        result = supabase.table("editai_export_presets")\
-            .select("*")\
-            .or_(f"profile_id.eq.{profile.profile_id},profile_id.is.null")\
-            .order("is_default", desc=True)\
-            .execute()
+        # list_export_presets ABC already emits "profile_id = ? OR profile_id IS NULL"
+        # in SQLite impl (sqlite_repo.py:844-875) and the same OR semantics in Supabase impl.
+        result = repo.list_export_presets(
+            profile.profile_id,
+            QueryFilters(order_by="is_default", order_desc=True),
+        )
         return {"presets": result.data}
     except Exception as e:
         logger.error(f"Error listing presets: {e}")
@@ -2764,19 +2758,10 @@ async def cleanup_old_exports(
 ):
     """Cleanup export records older than specified days to prevent unbounded table growth."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
-        client = repo.get_client()
-        if client:
-            result = client.table("editai_exports").delete()\
-                .lt("created_at", cutoff)\
-                .eq("profile_id", profile.profile_id)\
-                .execute()
-            deleted_count = len(result.data) if result.data else 0
-            return {"status": "completed", "deleted_exports": deleted_count}
-        return {"status": "skipped", "reason": "No database client"}
+        deleted_count = repo.delete_exports_older_than(profile.profile_id, cutoff)
+        return {"status": "completed", "deleted_exports": deleted_count}
     except Exception as e:
         logger.error(f"Failed to cleanup exports: {e}")
         raise HTTPException(status_code=500, detail="Failed to cleanup exports")
@@ -2814,9 +2799,6 @@ async def render_final_clip(
     Folosește preset-ul de export specificat pentru encoding optimizat.
     """
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     # Parse boolean strings (HTML forms send strings)
     enable_denoise_bool = enable_denoise.lower() in ("true", "1", "yes", "on")
@@ -2826,32 +2808,29 @@ async def render_final_clip(
     adaptive_sizing_bool = adaptive_sizing.lower() in ("true", "1", "yes", "on")
 
     try:
-        # Get clip and content
-        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
-        if not clip.data:
+        # T-80-01-01: profile_id check after repo.get_clip
+        clip_row = repo.get_clip(clip_id)
+        if not clip_row or clip_row.get("profile_id") != profile.profile_id:
             raise HTTPException(status_code=404, detail="Clip not found")
 
         # Reject if this clip is already being rendered
-        if clip.data[0].get("final_status") == "processing":
+        if clip_row.get("final_status") == "processing":
             raise HTTPException(status_code=409, detail="Clip is already being rendered. Please wait for the current render to finish.")
 
         # Reject immediately if a task is already running for this project (STAB-03)
-        render_project_id = clip.data[0].get("project_id")
+        render_project_id = clip_row.get("project_id")
         if render_project_id and is_project_locked(render_project_id):
             raise HTTPException(
                 status_code=409,
                 detail="Project is currently being processed. Wait for the current job to finish before rendering."
             )
 
-        content = supabase.table("editai_clip_content").select("*").eq("clip_id", clip_id).execute()
+        content_row = repo.get_clip_content(clip_id)
 
-        # Get the preset
-        preset = supabase.table("editai_export_presets").select("*").eq("name", preset_name).limit(1).execute()
-        if not preset.data:
+        # Get the preset by name
+        preset_row = repo.get_export_preset_by_name(preset_name)
+        if not preset_row:
             raise HTTPException(status_code=404, detail=f"Preset '{preset_name}' not found")
-
-        clip_row = clip.data[0]
-        preset_row = preset.data[0]
 
         # Launch render in background (status update moved inside task after lock acquired)
         background_tasks.add_task(
@@ -2860,7 +2839,7 @@ async def render_final_clip(
             project_id=clip_row["project_id"],
             profile_id=profile.profile_id,
             clip_data=clip_row,
-            content_data=content.data[0] if content.data else None,
+            content_data=content_row,
             preset_data=preset_row,
             # Video enhancement filters (Phase 9)
             enable_denoise=enable_denoise_bool,
@@ -2909,16 +2888,12 @@ async def regenerate_voiceover(
     Scriptul rămâne același.
     """
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        clip = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
-        if not clip.data:
+        # T-80-01-01: profile_id check after repo.get_clip
+        clip_row = repo.get_clip(clip_id)
+        if not clip_row or clip_row.get("profile_id") != profile.profile_id:
             raise HTTPException(status_code=404, detail="Clip not found")
-
-        clip_row = clip.data[0]
 
         if clip_row.get("final_status") == "processing":
             raise HTTPException(status_code=409, detail="Clip is already being processed.")
@@ -2941,8 +2916,7 @@ async def regenerate_voiceover(
         # Pass the resolved absolute path to the background task
         clip_row = {**clip_row, "final_video_path": str(final_video)}
 
-        content = supabase.table("editai_clip_content").select("*").eq("clip_id", clip_id).execute()
-        content_data = content.data[0] if content.data else None
+        content_data = repo.get_clip_content(clip_id)
         if not content_data or not content_data.get("tts_text"):
             raise HTTPException(status_code=400, detail="No TTS text found for this clip.")
 
