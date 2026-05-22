@@ -95,7 +95,7 @@ import { VariantPreviewPlayer } from "@/components/variant-preview-player";
 import { SimplePipeline } from "@/components/simple-mode-pipeline";
 import type { PipelineMode } from "@/types/pipeline-presets";
 import { RenderSettingsPanel, DEFAULT_RENDER_SETTINGS } from "@/components/render-settings-panel";
-import { SkipRenderDialog, RenderCheckResult } from "@/components/SkipRenderDialog";
+import { SkipRenderDialog, RenderCheckResult } from "@/components/dialogs/skip-render-dialog";
 import type { RenderSettings } from "@/components/render-settings-panel";
 
 // TypeScript interfaces
