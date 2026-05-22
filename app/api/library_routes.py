@@ -820,8 +820,6 @@ async def generate_raw_clips(
     - video_path: local path to video file (for testing)
     """
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     settings = get_settings()
     settings.ensure_dirs()
@@ -2966,17 +2964,13 @@ async def _regenerate_voiceover_task(
     logger.info(f"[Profile {profile_id}] Starting voiceover regeneration for clip {clip_id}")
 
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        logger.critical(f"Clip {clip_id} voiceover regen abandoned: no DB connection.")
-        return
 
     # Mark as processing
     try:
-        supabase.table("editai_clips").update({
+        repo.update_clip(clip_id, {
             "final_status": "processing",
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
     except Exception as e:
         logger.error(f"Failed to set processing status: {e}")
 
@@ -3080,7 +3074,15 @@ async def _regenerate_voiceover_task(
             if tts_timestamps:
                 upsert_data["tts_timestamps"] = json.dumps(tts_timestamps)
             upsert_data["voice_settings"] = voice_settings
-            supabase.table("editai_clip_content").upsert(upsert_data, on_conflict="clip_id").execute()
+            # update_clip_content is UPDATE-only on both backends; use table_query
+            # upsert (established pattern from Plan 80-01) so the row is created
+            # when missing.
+            repo.table_query(
+                "editai_clip_content",
+                "upsert",
+                data=upsert_data,
+                filters=QueryFilters(on_conflict="clip_id"),
+            )
         except Exception as persist_err:
             logger.warning(f"Failed to persist regenerated TTS for clip {clip_id}: {persist_err}")
 
@@ -3111,13 +3113,9 @@ async def _regenerate_voiceover_task(
         sub_settings = content_data.get("subtitle_settings")
         if not sub_settings:
             try:
-                _profile_row = supabase.table("profiles")\
-                    .select("subtitle_settings")\
-                    .eq("id", profile_id)\
-                    .limit(1)\
-                    .execute()
-                if _profile_row.data and _profile_row.data[0].get("subtitle_settings"):
-                    sub_settings = _profile_row.data[0]["subtitle_settings"]
+                _profile_row = repo.get_profile(profile_id)
+                if _profile_row and _profile_row.get("subtitle_settings"):
+                    sub_settings = _profile_row["subtitle_settings"]
             except Exception:
                 pass
         # Don't set defaults here — assemble_and_render will handle default subtitle_settings
@@ -3154,22 +3152,12 @@ async def _regenerate_voiceover_task(
             try:
                 project_id = clip_data.get("project_id")
                 if project_id:
-                    proj_row = supabase.table("editai_projects")\
-                        .select("pipeline_id")\
-                        .eq("id", project_id)\
-                        .limit(1)\
-                        .execute()
-                    pipeline_id = proj_row.data[0].get("pipeline_id") if proj_row.data else None
+                    proj_row = repo.get_project(project_id)
+                    pipeline_id = proj_row.get("pipeline_id") if proj_row else None
 
                     if pipeline_id:
-                        pipe_row = supabase.table("editai_pipelines")\
-                            .select("previews, source_video_ids")\
-                            .eq("id", pipeline_id)\
-                            .limit(1)\
-                            .execute()
-                        if pipe_row.data:
-                            pipe_data = pipe_row.data[0]
-
+                        pipe_data = repo.get_pipeline(pipeline_id)
+                        if pipe_data:
                             # Try to recover match data from pipeline previews
                             variant_idx = clip_data.get("variant_index", 0)
                             previews = pipe_data.get("previews") or {}
@@ -3238,36 +3226,36 @@ async def _regenerate_voiceover_task(
         if new_raw_path and Path(new_raw_path).exists():
             raw_dest = final_video_path.parent / f"{final_video_path.stem}_raw.mp4"
             shutil.move(str(new_raw_path), str(raw_dest))
-            supabase.table("editai_clips").update({
+            repo.update_clip(clip_id, {
                 "raw_video_path": str(raw_dest),
-            }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+            })
 
         # 7. Persist updated segment composition for future regenerations
         if new_seg_composition:
             try:
-                supabase.table("editai_clip_content").update({
+                repo.update_clip_content(clip_id, {
                     "segment_composition": new_seg_composition,
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }).eq("clip_id", clip_id).execute()
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
                 logger.info(f"Updated segment_composition for clip {clip_id} ({len(new_seg_composition)} segments)")
             except Exception as comp_err:
                 logger.warning(f"Failed to update segment_composition for clip {clip_id}: {comp_err}")
 
         # 8. Mark completed
-        supabase.table("editai_clips").update({
+        repo.update_clip(clip_id, {
             "final_status": "completed",
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
 
         logger.info(f"Voiceover regeneration completed for clip {clip_id}")
 
     except Exception as e:
         logger.error(f"Voiceover regeneration failed for clip {clip_id}: {e}")
         try:
-            supabase.table("editai_clips").update({
+            repo.update_clip(clip_id, {
                 "final_status": "failed",
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
         except Exception:
             logger.critical(f"Clip {clip_id} stuck in processing — DB update for failed status also failed.")
     finally:
@@ -3317,31 +3305,6 @@ async def _render_final_clip_task(
     logger.info(f"[Profile {profile_id}] Starting final render for clip {clip_id} in project {project_id}")
 
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        # Retry a few times — Supabase may be temporarily unavailable
-        import time as _time
-        for _attempt in range(3):
-            _time.sleep(2)
-            repo = get_repository()
-            supabase = repo.get_client() if repo else None
-            if supabase:
-                logger.info(f"[Profile {profile_id}] Supabase recovered on attempt {_attempt + 1}")
-                break
-    if not supabase:
-        logger.critical(f"Clip {clip_id} render abandoned: no DB connection after retries.")
-        # Last-ditch attempt to mark clip as failed so it doesn't stay stuck in processing
-        try:
-            _last_repo = get_repository()
-            _last_client = _last_repo.get_client() if _last_repo else None
-            if _last_client:
-                _last_client.table("editai_clips").update({
-                    "final_status": "failed",
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }).eq("id", clip_id).execute()
-        except Exception:
-            logger.critical(f"Clip {clip_id} stuck in processing state — DB unreachable for status reset.")
-        return
 
     settings = get_settings()
 
@@ -3352,10 +3315,10 @@ async def _render_final_clip_task(
         acquired = lock.acquire(blocking=False)
         if acquired:
             try:
-                supabase.table("editai_clips").update({
+                repo.update_clip(clip_id, {
                     "final_status": "processing",
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
             except Exception as e:
                 logger.error(f"Failed to update clip status to processing: {e}")
             finally:
@@ -3364,19 +3327,19 @@ async def _render_final_clip_task(
             # Lock held — update status without lock (best-effort)
             logger.debug(f"Project lock held for {project_id}, updating status without lock")
             try:
-                supabase.table("editai_clips").update({
+                repo.update_clip(clip_id, {
                     "final_status": "processing",
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
             except Exception as e:
                 logger.error(f"Failed to update clip status to processing: {e}")
     else:
         # No project_id — just update status
         try:
-            supabase.table("editai_clips").update({
+            repo.update_clip(clip_id, {
                 "final_status": "processing",
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
         except Exception as e:
             logger.error(f"Failed to update clip status to processing: {e}")
 
@@ -3521,15 +3484,21 @@ async def _render_final_clip_task(
 
             audio_duration = await asyncio.to_thread(_get_audio_duration, audio_path)
 
-            # DB-17: Use upsert with on_conflict to prevent duplicate key errors
+            # DB-17: Use upsert with on_conflict to prevent duplicate key errors.
+            # update_clip_content is UPDATE-only on both backends; use table_query upsert.
             if tts_timestamps:
                 try:
-                    supabase.table("editai_clip_content").upsert({
-                        "clip_id": clip_id,
-                        "tts_timestamps": tts_timestamps,
-                        "tts_model": elevenlabs_model,
-                        "updated_at": datetime.now(timezone.utc).isoformat()
-                    }, on_conflict="clip_id").execute()
+                    repo.table_query(
+                        "editai_clip_content",
+                        "upsert",
+                        data={
+                            "clip_id": clip_id,
+                            "tts_timestamps": tts_timestamps,
+                            "tts_model": elevenlabs_model,
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                        filters=QueryFilters(on_conflict="clip_id"),
+                    )
                     logger.info(f"TTS timestamps persisted for clip {clip_id}")
                 except Exception as e:
                     logger.warning(f"Failed to persist TTS timestamps: {e}")
@@ -3563,12 +3532,18 @@ async def _render_final_clip_task(
             try:
                 tts_persist_path = media_manager.tts_path(project_id, clip_id)
                 shutil.copy2(str(audio_path), str(tts_persist_path))
-                # DB-17: Use upsert with on_conflict to prevent duplicate key errors
-                supabase.table("editai_clip_content").upsert({
-                    "clip_id": clip_id,
-                    "tts_audio_path": str(tts_persist_path),
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }, on_conflict="clip_id").execute()
+                # DB-17: Use upsert with on_conflict to prevent duplicate key errors.
+                # update_clip_content is UPDATE-only on both backends; use table_query upsert.
+                repo.table_query(
+                    "editai_clip_content",
+                    "upsert",
+                    data={
+                        "clip_id": clip_id,
+                        "tts_audio_path": str(tts_persist_path),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    filters=QueryFilters(on_conflict="clip_id"),
+                )
                 logger.info(f"TTS audio persisted for clip {clip_id}: {tts_persist_path}")
             except Exception as e:
                 tts_persist_failed = True
@@ -3609,8 +3584,7 @@ async def _render_final_clip_task(
                         target_duration=audio_duration,
                         project_id=project_id,
                         output_path=adjusted_video_path,
-                        supabase=supabase,
-                        profile_id=profile_id
+                        profile_id=profile_id,
                     )
 
                 if extended and adjusted_video_path.exists():
@@ -3729,21 +3703,21 @@ async def _render_final_clip_task(
         render_succeeded = True
 
         # Update the clip
-        supabase.table("editai_clips").update({
+        repo.update_clip(clip_id, {
             "final_video_path": stored_path,
             "final_status": "completed",
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
 
         # Save the export — non-critical, must not revert clip status on failure
         try:
-            supabase.table("editai_exports").insert({
+            repo.create_export({
                 "clip_id": clip_id,
                 "preset_name": preset_data["name"],
                 "output_path": stored_path,
                 "file_size": output_path.stat().st_size if output_path.exists() else 0,
-                "status": "completed"
-            }).execute()
+                "status": "completed",
+            })
         except Exception as e:
             logger.warning(f"Failed to insert export record for clip {clip_id}: {e}")
 
@@ -3755,10 +3729,10 @@ async def _render_final_clip_task(
     except Exception as e:
         logger.error(f"Error rendering clip {clip_id}: {e}", exc_info=True)
         try:
-            supabase.table("editai_clips").update({
+            repo.update_clip(clip_id, {
                 "final_status": "failed",
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", clip_id).eq("profile_id", profile_id).execute()
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
         except Exception as db_err:
             logger.error(f"CRITICAL: Failed to mark clip {clip_id} as failed in DB: {db_err}")
     finally:
@@ -3848,29 +3822,26 @@ async def _bulk_render_sequential(clip_ids: list, preset_name: str, profile_id: 
 async def _start_render_for_clip(clip_id: str, preset_name: str, profile_id: str = None):
     """Helper pentru bulk render."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        return
 
     try:
-        query = supabase.table("editai_clips").select("*").eq("id", clip_id)
-        if profile_id:
-            query = query.eq("profile_id", profile_id)
-        clip = query.limit(1).execute()
-        # Check project lock before starting render (same guard as single-clip endpoint)
-        if clip.data:
-            _proj_id = clip.data[0].get("project_id")
-            if _proj_id and is_project_locked(_proj_id):
-                logger.warning(f"Skipping bulk render for clip {clip_id}: project {_proj_id} is locked")
-                return
-        content = supabase.table("editai_clip_content").select("*").eq("clip_id", clip_id).execute()
-        preset = supabase.table("editai_export_presets").select("*").eq("name", preset_name).limit(1).execute()
+        # T-80-01-01 IDOR mitigation: profile_id check after repo.get_clip
+        clip_row = repo.get_clip(clip_id)
+        if not clip_row:
+            return
+        if profile_id and clip_row.get("profile_id") != profile_id:
+            return
 
-        if clip.data and preset.data:
-            clip_row = clip.data[0]
-            preset_row = preset.data[0]
+        # Check project lock before starting render (same guard as single-clip endpoint)
+        _proj_id = clip_row.get("project_id")
+        if _proj_id and is_project_locked(_proj_id):
+            logger.warning(f"Skipping bulk render for clip {clip_id}: project {_proj_id} is locked")
+            return
+
+        clip_content = repo.get_clip_content(clip_id)
+        preset_row = repo.get_export_preset_by_name(preset_name)
+
+        if preset_row:
             # Extract filter/subtitle settings from stored clip content
-            clip_content = content.data[0] if content.data else None
             sub_settings = clip_content.get("subtitle_settings", {}) if clip_content and isinstance(clip_content.get("subtitle_settings"), dict) else {}
 
             await _render_final_clip_task(
@@ -4117,8 +4088,7 @@ def _extend_video_with_segments(
     target_duration: float,
     project_id: str,
     output_path: Path,
-    supabase,
-    profile_id: Optional[str] = None
+    profile_id: Optional[str] = None,
 ) -> bool:
     """
     Extinde video-ul cu segmente adiționale din proiect pentru a atinge durata țintă.
@@ -4133,6 +4103,7 @@ def _extend_video_with_segments(
     3. Extrage și concatenează segmente până atingem target_duration
     """
     profile_id = profile_id or "default"
+    repo = get_repository()
     try:
         current_duration = _get_video_duration(base_video)
         needed_duration = target_duration - current_duration
@@ -4140,25 +4111,31 @@ def _extend_video_with_segments(
         if needed_duration <= 0:
             return False
 
-        # Get project segments
-        project_segments = supabase.table("editai_project_segments")\
-            .select("*, editai_segments(*, editai_source_videos(file_path))")\
-            .eq("project_id", project_id)\
-            .order("sequence_order")\
-            .execute()
+        # Get project segments — compose repo methods instead of nested join
+        ps_result = repo.list_project_segments(
+            project_id,
+            QueryFilters(order_by="sequence_order"),
+        )
 
-        if not project_segments.data:
+        if not ps_result.data:
             logger.warning(f"No segments found for project {project_id}")
             return False
 
-        # Prepare segment list
+        # Prepare segment list — fetch segment + source_video per project-segment
         available_segments = []
-        for ps in project_segments.data:
-            seg = ps.get("editai_segments", {})
+        for ps in ps_result.data:
+            seg_id = ps.get("segment_id") or ps.get("editai_segment_id")
+            if not seg_id:
+                embedded = ps.get("editai_segments") or {}
+                seg_id = embedded.get("id") if isinstance(embedded, dict) else None
+            if not seg_id:
+                continue
+            seg = repo.get_segment(seg_id)
             if not seg:
                 continue
 
-            source_video = seg.get("editai_source_videos", {})
+            source_video_id = seg.get("source_video_id")
+            source_video = repo.get_source_video(source_video_id) if source_video_id else None
             source_path = source_video.get("file_path") if source_video else None
 
             if source_path and Path(source_path).exists():
