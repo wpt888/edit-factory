@@ -1161,9 +1161,6 @@ async def generate_from_segments(
         mute_source_voice: Dacă să suprime vocea din video sursă
     """
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     settings = get_settings()
     settings.ensure_dirs()
@@ -1180,23 +1177,47 @@ async def generate_from_segments(
         )
 
     try:
-        # Get segments assigned to the project
-        segments_result = supabase.table("editai_project_segments")\
-            .select("*, editai_segments(*, editai_source_videos(file_path, name))")\
-            .eq("project_id", project_id)\
-            .order("sequence_order")\
-            .execute()
-
-        if not segments_result.data:
+        # Fetch project segments and compose nested shape expected by the background task.
+        # Replaces PostgREST nested-join syntax with explicit repo composition so the
+        # route works under DATA_BACKEND=sqlite.
+        ps_result = repo.list_project_segments(project_id, QueryFilters(order_by="sequence_order"))
+        composed_segments = []
+        for ps in (ps_result.data or []):
+            seg_id = ps.get("segment_id") or ps.get("editai_segment_id")
+            if not seg_id:
+                # Some Supabase responses embed the joined editai_segments row directly
+                embedded = ps.get("editai_segments") or {}
+                seg_id = embedded.get("id") if isinstance(embedded, dict) else None
+            if not seg_id:
+                continue
+            seg = repo.get_segment(seg_id)
+            if not seg:
+                continue
+            source_video_id = seg.get("source_video_id")
+            source_video = repo.get_source_video(source_video_id) if source_video_id else None
+            composed_segments.append({
+                **ps,
+                "editai_segments": {
+                    **seg,
+                    "editai_source_videos": source_video or {},
+                },
+            })
+        if not composed_segments:
             raise HTTPException(status_code=400, detail="No segments assigned to this project")
 
         # Find the highest existing variant_index to continue from there
-        existing_clips = supabase.table("editai_clips").select("variant_index").eq("project_id", project_id).eq("profile_id", profile.profile_id).eq("is_deleted", False).execute()
+        existing = repo.list_clips(
+            project_id,
+            QueryFilters(
+                eq={"profile_id": profile.profile_id, "is_deleted": False},
+                select="variant_index",
+            ),
+        )
         start_variant_index = 1
-        if existing_clips.data:
-            max_index = max(clip.get("variant_index", 0) for clip in existing_clips.data)
+        if existing.data:
+            max_index = max((clip.get("variant_index") or 0) for clip in existing.data)
             start_variant_index = max_index + 1
-            logger.info(f"Found {len(existing_clips.data)} existing clips, starting from variant {start_variant_index}")
+            logger.info(f"Found {len(existing.data)} existing clips, starting from variant {start_variant_index}")
 
         # Validate TTS text length before dispatching background task
         if request.generate_tts and request.tts_text:
@@ -1210,7 +1231,7 @@ async def generate_from_segments(
             _generate_from_segments_task,
             project_id=project_id,
             profile_id=profile.profile_id,
-            segments=segments_result.data,
+            segments=composed_segments,
             variant_count=variant_count,
             selection_mode=request.selection_mode,
             target_duration=request.target_duration,
@@ -1227,8 +1248,8 @@ async def generate_from_segments(
         "status": "generating",
         "project_id": project_id,
         "variant_count": variant_count,
-        "segments_count": len(segments_result.data),
-        "message": f"Generating {variant_count} clip variants from {len(segments_result.data)} segments..."
+        "segments_count": len(composed_segments),
+        "message": f"Generating {variant_count} clip variants from {len(composed_segments)} segments..."
     }
 
 
@@ -1414,19 +1435,6 @@ async def _generate_from_segments_task(
     logger.info(f"[Profile {profile_id}] Starting clip generation from segments for project {project_id}")
 
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        logger.error(f"[Profile {profile_id}] Supabase not available for segment generation")
-        # Set project status to failed
-        try:
-            _repo = get_repository()
-            if _repo:
-                _repo.update_project(project_id, {"status": "failed"})
-        except Exception:
-            pass
-        if held_lock:
-            held_lock.release()
-        return
 
     settings = get_settings()
 
@@ -1464,9 +1472,15 @@ async def _generate_from_segments_task(
         # BUG-5.3: Recompute start_variant_index inside the background task (after
         # acquiring the lock) to avoid TOCTOU race with concurrent requests.
         try:
-            _existing = supabase.table("editai_clips").select("variant_index").eq("project_id", project_id).eq("profile_id", profile_id).eq("is_deleted", False).execute()
+            _existing = repo.list_clips(
+                project_id,
+                QueryFilters(
+                    eq={"profile_id": profile_id, "is_deleted": False},
+                    select="variant_index",
+                ),
+            )
             if _existing.data:
-                _max_idx = max(clip.get("variant_index", 0) for clip in _existing.data)
+                _max_idx = max((clip.get("variant_index") or 0) for clip in _existing.data)
                 start_variant_index = _max_idx + 1
                 logger.info(f"[BUG-5.3] Recomputed start_variant_index={start_variant_index} inside lock")
         except Exception as _e:
@@ -1474,11 +1488,11 @@ async def _generate_from_segments_task(
 
         # Update project status now that we hold the lock
         try:
-            supabase.table("editai_projects").update({
+            repo.update_project(project_id, {
                 "status": "generating",
                 "target_duration": target_duration,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", project_id).eq("profile_id", profile_id).execute()
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
         except Exception as e:
             logger.warning(f"Failed to update project status to 'generating': {e} — continuing anyway")
 
@@ -1713,7 +1727,7 @@ async def _generate_from_segments_task(
 
                 # Save to DB
                 try:
-                    supabase.table("editai_clips").insert({
+                    repo.create_clip({
                         "project_id": project_id,
                         "profile_id": profile_id,
                         "variant_index": variant_idx,
@@ -1723,8 +1737,8 @@ async def _generate_from_segments_task(
                         "duration": actual_duration,
                         "is_selected": False,
                         "is_deleted": False,
-                        "final_status": "pending"
-                    }).execute()
+                        "final_status": "pending",
+                    })
                 except Exception as db_err:
                     logger.error(f"Failed to save clip for variant {variant_idx}: {db_err}")
                     continue
@@ -1739,7 +1753,7 @@ async def _generate_from_segments_task(
                 try:
                     used_seg_ids = [s["id"] for s in segments_for_variant if s.get("id")]
                     if used_seg_ids:
-                        _increment_segment_usage(supabase, used_seg_ids)
+                        _increment_segment_usage(used_seg_ids)
                         logger.info(
                             f"Incremented usage_count for {len(used_seg_ids)} "
                             f"segments (variant {variant_idx})"
@@ -1780,17 +1794,25 @@ async def _generate_from_segments_task(
 
         # Update the project
         if variants_created:
-            # Re-count AFTER all variants are created (must be fresh to avoid stale values)
-            total_clips = supabase.table("editai_clips").select("id", count="exact").eq("project_id", project_id).eq("is_deleted", False).execute()
-            total_count = total_clips.count if total_clips.count is not None else len(variants_created)
+            # Re-count AFTER all variants are created (must be fresh to avoid stale values).
+            # count_clips is profile-scoped; add eq filter on project_id to scope further.
+            try:
+                total_count = repo.count_clips(
+                    profile_id,
+                    QueryFilters(eq={"project_id": project_id, "is_deleted": False}),
+                )
+            except Exception as _cnt_err:
+                logger.warning(f"Failed to re-count clips for project {project_id}: {_cnt_err}")
+                total_count = len(variants_created)
 
-            status_result = supabase.table("editai_projects").update({
-                "status": "ready_for_triage",
-                "variants_count": total_count,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", project_id).eq("profile_id", profile_id).execute()
-            if not status_result.data:
-                logger.warning(f"Status update returned no data for project {project_id}")
+            try:
+                repo.update_project(project_id, {
+                    "status": "ready_for_triage",
+                    "variants_count": total_count,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception as _upd_err:
+                logger.warning(f"Status update failed for project {project_id}: {_upd_err}")
             logger.info(f"Added {len(variants_created)} new clips (total: {total_count}) for project {project_id}")
             # DB-03: Mark generation job as completed on success
             if _gen_job_id:
@@ -1802,23 +1824,22 @@ async def _generate_from_segments_task(
                 except Exception:
                     pass
         else:
-            status_result = supabase.table("editai_projects").update({
-                "status": "failed",
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", project_id).eq("profile_id", profile_id).execute()
-            if not status_result.data:
-                logger.warning(f"Status update returned no data for project {project_id}")
+            try:
+                repo.update_project(project_id, {
+                    "status": "failed",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception as _upd_err:
+                logger.warning(f"Status update failed for project {project_id}: {_upd_err}")
             logger.error(f"Failed to generate any clips for project {project_id}")
 
     except Exception as e:
         logger.error(f"Error generating from segments for {project_id}: {e}", exc_info=True)
         try:
-            status_result = supabase.table("editai_projects").update({
+            repo.update_project(project_id, {
                 "status": "failed",
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", project_id).eq("profile_id", profile_id).execute()
-            if not status_result.data:
-                logger.warning(f"Status update returned no data for project {project_id}")
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
         except Exception as db_err:
             logger.error(f"Failed to update project {project_id} status to failed: {db_err}")
     finally:
@@ -1894,21 +1915,19 @@ async def list_tags(profile: ProfileContext = Depends(get_profile_context)):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-def _get_or_create_sync_project(supabase, profile_id: str) -> str:
+def _get_or_create_sync_project(profile_id: str) -> str:
     """Find or create the 'Imported from disk' project for orphan clip sync."""
-    existing = supabase.table("editai_projects").select("id")\
-        .eq("profile_id", profile_id)\
-        .eq("name", "Imported from disk")\
-        .limit(1).execute()
-    if existing.data:
-        return existing.data[0]["id"]
-    result = supabase.table("editai_projects").insert({
+    repo = get_repository()
+    existing = repo.get_project_by_name(profile_id, "Imported from disk")
+    if existing:
+        return existing["id"]
+    created = repo.create_project({
         "profile_id": profile_id,
         "name": "Imported from disk",
         "description": "Auto-imported videos found on disk",
         "status": "completed",
-    }).execute()
-    return result.data[0]["id"]
+    })
+    return created["id"]
 
 
 def _is_syncable_orphan_video(video_file: Path) -> bool:
@@ -1920,8 +1939,9 @@ def _is_syncable_orphan_video(video_file: Path) -> bool:
     return True
 
 
-async def _sync_orphan_clips(profile_id: str, supabase) -> int:
+async def _sync_orphan_clips(profile_id: str) -> int:
     """Scan output/{profile_id}/ for .mp4 files not in DB and insert them."""
+    repo = get_repository()
     settings = get_settings()
     profile_dir = settings.output_dir / profile_id
     if not profile_dir.is_dir():
@@ -1932,11 +1952,12 @@ async def _sync_orphan_clips(profile_id: str, supabase) -> int:
         return 0
 
     # Get all known video filenames for this profile (including soft-deleted)
-    known = supabase.table("editai_clips").select("raw_video_path, final_video_path")\
-        .eq("profile_id", profile_id)\
-        .execute()
+    known_result = repo.list_clips_by_profile(
+        profile_id,
+        QueryFilters(select="raw_video_path, final_video_path"),
+    )
     known_names: set = set()
-    for row in (known.data or []):
+    for row in (known_result.data or []):
         for field in ("raw_video_path", "final_video_path"):
             val = row.get(field)
             if val:
@@ -1946,13 +1967,13 @@ async def _sync_orphan_clips(profile_id: str, supabase) -> int:
     if not orphans:
         return 0
 
-    sync_project_id = _get_or_create_sync_project(supabase, profile_id)
+    sync_project_id = _get_or_create_sync_project(profile_id)
     inserted = 0
     for video_file in orphans:
         try:
             duration = await asyncio.to_thread(_get_video_duration, video_file)
             thumbnail = await asyncio.to_thread(_generate_thumbnail, video_file, sync_project_id)
-            supabase.table("editai_clips").insert({
+            repo.create_clip({
                 "project_id": sync_project_id,
                 "profile_id": profile_id,
                 "variant_index": 0,
@@ -1964,7 +1985,7 @@ async def _sync_orphan_clips(profile_id: str, supabase) -> int:
                 "is_selected": False,
                 "is_deleted": False,
                 "final_status": "completed",
-            }).execute()
+            })
             inserted += 1
         except Exception as e:
             logger.warning(f"Failed to sync orphan clip {video_file.name}: {e}")
@@ -1984,9 +2005,6 @@ async def list_all_clips(
 ):
     """Listează toate clipurile pentru librărie cu suport cursor-based pagination."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     if sync_orphans and not cursor:
         import time as _time
@@ -1994,7 +2012,7 @@ async def list_all_clips(
         _last = getattr(list_all_clips, "_last_orphan_sync", {}).get(profile.profile_id, 0)
         if _now - _last > 300:  # 5 minutes
             try:
-                await _sync_orphan_clips(profile.profile_id, supabase)
+                await _sync_orphan_clips(profile.profile_id)
                 if not hasattr(list_all_clips, "_last_orphan_sync"):
                     list_all_clips._last_orphan_sync = {}
                 list_all_clips._last_orphan_sync[profile.profile_id] = _now
@@ -2002,57 +2020,54 @@ async def list_all_clips(
                 logger.warning(f"Orphan clip sync failed: {e}")
 
     try:
-        # Total count query — counts clips for this profile (with optional tag filter)
-        count_query = supabase.table("editai_clips")\
-            .select("id", count="exact")\
-            .eq("is_deleted", False)\
-            .eq("profile_id", profile.profile_id)
+        # Total count via repository
+        count_filters = QueryFilters(eq={"is_deleted": False})
         if tag:
-            count_query = count_query.contains("tags", [tag])
-        count_result = count_query.execute()
-        total = count_result.count if count_result.count is not None else 0
+            count_filters.contains = {"tags": [tag]}
+        total = repo.count_clips(profile.profile_id, count_filters)
 
-        # Data query — apply cursor filter when provided, otherwise use offset
-        query = supabase.table("editai_clips")\
-            .select("*, editai_projects(name, context_text)")\
-            .eq("is_deleted", False)\
-            .eq("profile_id", profile.profile_id)
+        # List query — apply cursor or offset (T-80-02-01: list_clips_by_profile
+        # is profile-scoped, ensuring per-clip get_clip_content cannot leak rows
+        # belonging to other profiles).
+        list_filters = QueryFilters(
+            eq={"is_deleted": False},
+            order_by="created_at",
+            order_desc=True,
+            limit=limit,
+        )
         if tag:
-            query = query.contains("tags", [tag])
-
+            list_filters.contains = {"tags": [tag]}
         if cursor:
-            # Cursor-based: use lte + fetch one extra to avoid dropping clips
-            # that share the exact same created_at timestamp as the cursor boundary
-            query = query.lte("created_at", cursor)
+            # Original PostgREST used .lte("created_at", cursor); preserve semantics
+            list_filters.lte = {"created_at": cursor}
         else:
-            # Offset-based fallback for backward compatibility
-            query = query.offset(offset)
-
-        clips_result = query\
-            .order("created_at", desc=True)\
-            .limit(limit)\
-            .execute()
+            list_filters.offset = offset
+        clips_result = repo.list_clips_by_profile(profile.profile_id, list_filters)
 
         if not clips_result.data:
             return {"clips": [], "total": total, "limit": limit, "offset": offset, "next_cursor": None, "has_more": False}
 
-        # Get content info for all clips to check subtitles/voiceover
-        clip_ids = [c["id"] for c in clips_result.data]
-        content_result = supabase.table("editai_clip_content")\
-            .select("clip_id, srt_content, tts_audio_path, tts_text")\
-            .in_("clip_id", clip_ids)\
-            .execute()
+        # Collect unique project IDs and fetch project metadata once each
+        project_ids = sorted({c["project_id"] for c in clips_result.data if c.get("project_id")})
+        project_cache: Dict[str, Dict] = {}
+        for pid in project_ids:
+            proj = repo.get_project(pid)
+            if proj:
+                project_cache[pid] = proj
 
-        # Create a map of clip_id -> content
-        content_map = {}
-        for content in (content_result.data or []):
-            content_map[content["clip_id"]] = content
+        # Fetch content per clip (T-80-02-02: N+1 accepted for v13 desktop scale —
+        # typical page size ≤ 200; batch-by-clip-ids optimization deferred to v14)
+        content_map: Dict[str, Dict] = {}
+        for clip in clips_result.data:
+            content = repo.get_clip_content(clip["id"])
+            if content:
+                content_map[clip["id"]] = content
 
         # Build response with has_subtitles and has_voiceover flags
         clips_with_info = []
         for clip in clips_result.data:
             content = content_map.get(clip["id"], {})
-            project_data = clip.get("editai_projects", {})
+            project_data = project_cache.get(clip.get("project_id"), {})
 
             # Check audio presence — use content data if available, fallback to filename heuristic
             video_path = clip.get("final_video_path") or clip.get("raw_video_path", "")
@@ -2110,13 +2125,8 @@ async def sync_orphan_clips(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Explicitly import orphaned mp4 files from disk into the library."""
-    repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
-
     try:
-        inserted = await _sync_orphan_clips(profile.profile_id, supabase)
+        inserted = await _sync_orphan_clips(profile.profile_id)
         return {"status": "completed", "inserted": inserted}
     except Exception as e:
         logger.error(f"Error syncing orphan clips: {e}")
@@ -3912,40 +3922,22 @@ def _get_video_info(video_path: Path) -> dict:
     return {"width": 1080, "height": 1920, "duration": 0}
 
 
-def _increment_segment_usage(supabase_client, segment_ids: list):
+def _increment_segment_usage(segment_ids: list):
     """Increment usage_count for segments after a successful generation.
 
-    Uses the increment_segment_usage_batch RPC for atomic batch increment.
-    Falls back to individual read-then-update if RPC is unavailable.
+    Delegates to repo.increment_segment_usage which handles both backends:
+    - SupabaseRepository: tries RPC `increment_segment_usage_batch` first,
+      falls back to per-id read-modify-write.
+    - SQLiteRepository: single UPDATE with IN clause (atomic).
     """
     if not segment_ids:
         return
-    # Try atomic batch increment via Postgres function
     try:
-        supabase_client.rpc(
-            "increment_segment_usage_batch",
-            {"segment_ids": segment_ids}
-        ).execute()
-        return
-    except Exception:
-        pass
-    # Fallback: individual read-then-update (not atomic, but functional)
-    for seg_id in segment_ids:
-        try:
-            current = supabase_client.table("editai_segments")\
-                .select("usage_count")\
-                .eq("id", seg_id)\
-                .execute()
-            if current.data:
-                new_count = (current.data[0].get("usage_count") or 0) + 1
-                supabase_client.table("editai_segments")\
-                    .update({"usage_count": new_count})\
-                    .eq("id", seg_id)\
-                    .execute()
-        except Exception as e:
-            logging.getLogger(__name__).warning(
-                f"Failed to increment usage_count for segment {seg_id}: {e}"
-            )
+        get_repository().increment_segment_usage(segment_ids)
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            f"Failed to increment usage_count for segments: {e}"
+        )
 
 
 def _get_video_duration(video_path: Path) -> float:
