@@ -10,8 +10,8 @@
 *.pem
 .mcp.json
 *.key
-credentials/
-secrets/
+/credentials/
+/secrets/
 
 # ======================
 # Python
