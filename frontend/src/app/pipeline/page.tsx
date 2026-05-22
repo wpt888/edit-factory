@@ -68,7 +68,7 @@ import { checkFallbacks } from "@/lib/api-fallback";
 import { EmptyState } from "@/components/empty-state";
 import { PublishDialog } from "@/components/dialogs/publish-dialog";
 import { PipelineSchedule } from "@/components/PipelineSchedule";
-import { PipelineCaptionGenerator } from "@/components/PipelineCaptionGenerator";
+import { PipelineCaptionGenerator } from "@/components/pipeline/pipeline-caption-generator";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ProductPickerDialog } from "@/components/product-picker-dialog";
 import { ImagePickerDialog } from "@/components/image-picker-dialog";
