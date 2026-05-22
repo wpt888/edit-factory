@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Executing Phase 81
-stopped_at: Phase 80 verified PASSED; advanced to Phase 81
-last_updated: "2026-05-22T22:13:55.147Z"
+status: Executing Phase 81 (Plan 81-01 complete; Plans 81-02, 81-03 pending)
+stopped_at: Phase 81 Plan 81-01 SHIPPED — pipeline_routes.py get_client() count 24 -> 5 (residual = Plan 81-02 contract)
+last_updated: "2026-05-23T00:00:00.000Z"
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 6
-  completed_plans: 3
-  percent: 50
+  completed_plans: 4
+  percent: 67
 ---
 
 # Project State
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 ## Current Position
 
 Phase: 81 (pipeline-routes-repository-migration) — EXECUTING
-Plan: 1 of 3
+Plan: 1 of 3 — **Plan 81-01 SHIPPED 2026-05-23**; Plans 81-02 (Pattern C/D + multi-site fns + get_pipeline_status body) and 81-03 (test rewriting + xfail markers) pending
 Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 1/19 phases complete (Phase 80 verified PASSED on 2026-05-23).
-Next action: `/gsd-plan-phase 81` to plan Phase 81 (pipeline_routes.py repository migration).
+Next action: `/gsd-execute-phase 81` to execute Plan 81-02 (pipeline_routes.py Pattern C/D migration).
 
 Sources:
 
@@ -82,6 +82,7 @@ Earlier project decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 80]: Plan 80-01 added 5 new ABC methods (count_clips, get_export_preset_by_name, delete_exports_older_than, get_project_by_name, increment_segment_usage) on both backends and migrated 18 Pattern A/B routes in library_routes.py — get_client() count reduced from 27 to 9 (the Pattern C/D residual handed to 80-02)
 - [Phase 80]: Plan 80-02: get_client() count driven to 0 in library_routes.py; both grep gates pass (get_client = 0 AND supabase.table/.rpc = 0); deviations driven by second-gate necessity (5 unenumerated calls in _generate_from_segments_task, full _regenerate_voiceover_task migration, dead 503 guard removal)
 - [Phase 80]: Plan 80-03: sqlite_backend fixture + 23 per-route SQLite integration tests in test_api_library_sqlite.py (all pass) + 11 xfail markers on broken Supabase-mocked tests; 0 regressions in wider suite. 3 route-side bugs (tts_text vs script_text column mismatch, missing timedelta import, missing Request param on SlowAPI route) filed as follow-up work — out of scope for Phase 80.
+- [Phase 81]: Plan 81-01 SHIPPED — pipeline_routes.py get_client() count 24 → 5 across 4 chunks (sites 1-4 in 8febdc8; 5,7-11 in 1106d51; 12-17 in f291f53; 18,19,24 + W-81-01 helper refactor in 99a0cdd). Plus 1 new ABC method `upsert_pipeline` (6/6 tests pass) and ROUTES-AUDIT.md cataloging all 24 guards + 52 in-body ride-alongs across 6 variable names. Residual = exactly the 5 Plan 81-02 sites (6, 20, 21, 22, 23) + the 2-call get_pipeline_status escape hatch.
 
 ### Pending Todos
 
@@ -106,9 +107,9 @@ New for v13:
 ## Session Continuity
 
 Last session: 2026-05-23T00:00:00.000Z
-Stopped at: Phase 80 verified PASSED; advanced to Phase 81
-Resume file: None
-Next action: `/gsd-plan-phase 81` to plan pipeline_routes.py repository migration.
+Stopped at: Phase 81 Plan 81-01 SHIPPED — get_client() count in pipeline_routes.py driven from 24 → 5 (Plan 81-02 contract residual). All four migration chunks committed; SUMMARY.md created.
+Resume file: .planning/phases/81-pipeline-routes-repository-migration/81-01-SUMMARY.md (handoff to Plan 81-02)
+Next action: `/gsd-execute-phase 81` to execute Plan 81-02 (Pattern C/D sites: _save_clip_to_library, check_render_skip, render_variants, remake_variant, sync_pipeline_to_library + the get_pipeline_status body escape hatch).
 
 ---
-*Last updated: 2026-05-23 after Phase 80 verification (PASSED — sync_orphan_clips signature mismatch test fix applied)*
+*Last updated: 2026-05-23 after Plan 81-01 completion (chunk 4 committed in 99a0cdd; SUMMARY.md created)*
