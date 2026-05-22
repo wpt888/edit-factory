@@ -47,36 +47,21 @@ def _stable_hash(text: str) -> str:
 def _increment_segment_usage(supabase_client, segment_ids: list):
     """Increment usage_count for segments after a successful render.
 
-    Uses the increment_segment_usage_batch RPC for atomic batch increment.
-    Falls back to individual read-then-update if RPC is unavailable.
+    The first argument ``supabase_client`` is kept for backwards compatibility
+    with callers that historically passed a Supabase client. It is IGNORED —
+    we always go through the repository. Callers should pass ``None``. This
+    signature is locked by W-81-01 in 81-01-PLAN.md so Plan 81-02 callers do
+    not need to drop the argument.
     """
     if not segment_ids:
         return
     _logger = logging.getLogger(__name__)
-    # Try atomic batch increment via Postgres function
     try:
-        supabase_client.rpc(
-            "increment_segment_usage_batch",
-            {"segment_ids": segment_ids}
-        ).execute()
-        return
-    except Exception:
-        pass
-    # Fallback: individual read-then-update (not atomic, but functional)
-    for seg_id in segment_ids:
-        try:
-            current = supabase_client.table("editai_segments")\
-                .select("usage_count")\
-                .eq("id", seg_id)\
-                .execute()
-            if current.data:
-                new_count = (current.data[0].get("usage_count") or 0) + 1
-                supabase_client.table("editai_segments")\
-                    .update({"usage_count": new_count})\
-                    .eq("id", seg_id)\
-                    .execute()
-        except Exception as e:
-            _logger.warning(f"Failed to increment usage_count for segment {seg_id}: {e}")
+        get_repository().increment_segment_usage(segment_ids)
+    except Exception as e:
+        _logger.warning(
+            f"Failed to increment usage_count for segments: {e}"
+        )
 
 logger = logging.getLogger(__name__)
 
@@ -3008,11 +2993,15 @@ async def generate_variant_tts(
             else:
                 # Dedup hit — asset already exists. Look it up and use its path.
                 _repo = get_repository()
-                _sb = _repo.get_client() if _repo else None
-                if _sb:
-                    _existing = _sb.table("editai_tts_assets").select("id, mp3_path")\
-                        .eq("profile_id", profile.profile_id).eq("status", "ready")\
-                        .eq("tts_text", cleaned_text).limit(1).execute()
+                if _repo:
+                    _existing = _repo.list_tts_assets(
+                        profile.profile_id,
+                        QueryFilters(
+                            eq={"status": "ready", "tts_text": cleaned_text},
+                            select="id, mp3_path",
+                            limit=1,
+                        ),
+                    )
                     if _existing.data and _existing.data[0].get("mp3_path"):
                         _lib_path = _existing.data[0]["mp3_path"]
                         _lib_asset_id = _existing.data[0]["id"]
@@ -3273,15 +3262,14 @@ async def preview_variant(
         # Persistent diversity: deprioritize segments with usage_count > 0
         try:
             repo = _get_data_repository()
-            _supa = repo.get_client() if repo else None
-            if _supa:
-                _usage_filter = _supa.table("editai_segments")\
-                    .select("id")\
-                    .eq("profile_id", profile.profile_id)\
-                    .gt("usage_count", 0)
+            if repo:
+                seg_filters = QueryFilters(
+                    gt={"usage_count": 0},
+                    select="id",
+                )
                 if source_video_ids:
-                    _usage_filter = _usage_filter.in_("source_video_id", source_video_ids)
-                _used_before = _usage_filter.execute()
+                    seg_filters.in_ = {"source_video_id": source_video_ids}
+                _used_before = repo.list_segments(profile.profile_id, seg_filters)
                 if _used_before.data:
                     previously_used = {s["id"] for s in _used_before.data}
                     avoid_ids.update(previously_used)
@@ -6031,8 +6019,7 @@ async def save_selected_captions(
     # user-edited caption even when the clip was saved before this edit.
     try:
         repo = get_repository()
-        supabase = repo.get_client() if repo else None
-        if supabase:
+        if repo:
             for variant_key, caption_text in normalized_captions.items():
                 clip_ids_to_update = set()
                 if any(isinstance(job, dict) and job.get("clip_id") == variant_key for job in render_jobs.values()):
@@ -6054,10 +6041,12 @@ async def save_selected_captions(
                                 clip_ids_to_update.add(job["clip_id"])
 
                 for clip_id in clip_ids_to_update:
-                    supabase.table("editai_clip_content").upsert(
-                        {"clip_id": clip_id, "caption": caption_text or ""},
-                        on_conflict="clip_id"
-                    ).execute()
+                    repo.table_query(
+                        "editai_clip_content",
+                        "upsert",
+                        data={"clip_id": clip_id, "caption": caption_text or ""},
+                        filters=QueryFilters(on_conflict="clip_id"),
+                    )
             for variant_key, caption_text in legacy_captions.items():
                 try:
                     variant_index = int(str(variant_key))
@@ -6076,10 +6065,12 @@ async def save_selected_captions(
                         clip_ids_to_update.add(job["clip_id"])
 
                 for clip_id in clip_ids_to_update:
-                    supabase.table("editai_clip_content").upsert(
-                        {"clip_id": clip_id, "caption": caption_text or ""},
-                        on_conflict="clip_id"
-                    ).execute()
+                    repo.table_query(
+                        "editai_clip_content",
+                        "upsert",
+                        data={"clip_id": clip_id, "caption": caption_text or ""},
+                        filters=QueryFilters(on_conflict="clip_id"),
+                    )
     except Exception as e:
         logger.warning(f"Failed to sync selected captions to clip_content for pipeline {req.pipeline_id}: {e}")
 
