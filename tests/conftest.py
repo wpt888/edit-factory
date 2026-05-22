@@ -28,7 +28,15 @@ class MockSettings:
     allowed_origins: str = "http://localhost:3000"
     # Additional Settings attributes needed by app.main and routes
     sentry_dsn: str = ""
-    data_backend: str = "supabase"  # default Supabase mock — sqlite_backend fixture overrides per-instance
+    # NOTE: `data_backend` deliberately NOT defaulted here.
+    # The pre-Phase-80 test suite relies on `MockSettings.data_backend`
+    # raising AttributeError so JobStorage._init_supabase falls into its
+    # except branch and sets `_repo = None`, leaving the legacy
+    # `_legacy_supabase` mock chain as the only active backend. Tests in
+    # tests/test_job_storage.py set `storage._supabase = mock_sb`
+    # (legacy path) and assert mock_sb.table was called — this only works
+    # when `_has_repository_backend()` returns False. The `sqlite_backend`
+    # fixture sets `data_backend = "sqlite"` on its own instance.
     file_storage_backend: str = "local"
     output_ttl_hours: int = 0
     minio_public_url: str = ""
