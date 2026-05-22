@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Plan 80-02 complete; Plan 80-03 (test rewrite) next
-last_updated: "2026-05-22T19:49:11.471Z"
+status: Phase 80 complete; ready for verification
+stopped_at: Plan 80-03 complete; Phase 80 ready for verification
+last_updated: "2026-05-22T23:45:00.000Z"
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 3
-  completed_plans: 2
-  percent: 67
+  completed_plans: 3
+  percent: 100
 ---
 
 # Project State
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 ## Current Position
 
-Phase: 80 (library-routes-repository-migration) — EXECUTING
-Plan: 3 of 3 (80-01 complete 2026-05-22; 80-02 next)
-Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 0/19 phases complete.
-Next action: `/gsd-execute-phase 80` (continues from Plan 80-02 — Pattern C/D migration + _render_final_clip_task retry-block cleanup + in-body supabase.table() migrations).
+Phase: 80 (library-routes-repository-migration) — COMPLETE (ready for verification)
+Plan: 3 of 3 complete
+Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 0/19 phases complete (Phase 80 awaiting verification).
+Next action: `/gsd-audit-uat 80` to verify Phase 80, then `/gsd-next` to advance to Phase 81.
 
 Sources:
 
@@ -81,6 +81,7 @@ Earlier project decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 80]: Plan 80-01 deferred site #23 (_regenerate_voiceover_task body) to Plan 80-02 — audit gap discovered during execution, 7+ in-body supabase.table() calls beyond the get_client() guard would have caused NameError if migrated piecemeal
 - [Phase 80]: Plan 80-01 added 5 new ABC methods (count_clips, get_export_preset_by_name, delete_exports_older_than, get_project_by_name, increment_segment_usage) on both backends and migrated 18 Pattern A/B routes in library_routes.py — get_client() count reduced from 27 to 9 (the Pattern C/D residual handed to 80-02)
 - [Phase 80]: Plan 80-02: get_client() count driven to 0 in library_routes.py; both grep gates pass (get_client = 0 AND supabase.table/.rpc = 0); deviations driven by second-gate necessity (5 unenumerated calls in _generate_from_segments_task, full _regenerate_voiceover_task migration, dead 503 guard removal)
+- [Phase 80]: Plan 80-03: sqlite_backend fixture + 23 per-route SQLite integration tests in test_api_library_sqlite.py (all pass) + 11 xfail markers on broken Supabase-mocked tests; 0 regressions in wider suite. 3 route-side bugs (tts_text vs script_text column mismatch, missing timedelta import, missing Request param on SlowAPI route) filed as follow-up work — out of scope for Phase 80.
 
 ### Pending Todos
 
@@ -104,10 +105,10 @@ New for v13:
 
 ## Session Continuity
 
-Last session: 2026-05-22T19:49:11.464Z
-Stopped at: Plan 80-02 complete; Plan 80-03 (test rewrite) next
+Last session: 2026-05-22T23:45:00.000Z
+Stopped at: Plan 80-03 complete; Phase 80 ready for verification
 Resume file: None
-Next action: `/gsd-execute-phase 80` to start Plan 80-02 (Pattern C/D migration — sites #5, #6, #8, #9, #23, #24-26 dead code, #27, plus 8 in-body supabase.table() lines inside `_render_final_clip_task`).
+Next action: `/gsd-audit-uat 80` to audit Phase 80 against original intent; then `/gsd-next` to advance to Phase 81 (pipeline_routes.py migration).
 
 ---
-*Last updated: 2026-05-22 after Plan 80-01 completion (autonomous iteration 74)*
+*Last updated: 2026-05-22 after Plan 80-03 completion*
