@@ -125,7 +125,16 @@ Automated video production from any input — an idea, a product feed, or a coll
 
 ### Active
 
-(No active milestone — use `/gsd:new-milestone` to start next)
+**v13 Desktop Production-Ready & Monetization** — Phases 80–98 (19 phases, ~28–32 plans)
+
+Closes the v12 functional gap (88 `get_client()` sites blocking SQLite mode) and adds the monetization layer (new `marketing/` subfolder web app, Lemon Squeezy 3-tier checkout, OAuth device flow auth, ML optional bundle download, GitHub Releases auto-publish). See `.planning/milestones/v13-REQUIREMENTS.md`, `.planning/milestones/v13-ROADMAP.md`, and `.planning/v13-desktop-production/{VISION,SCOPE,ARCHITECTURE}.md`.
+
+- [ ] **FUNC-01..06**: All `get_client()` sites migrated; SQLite end-to-end smoke test green — v13
+- [ ] **ML-01..05**: Optional 1.5GB ML bundle (PyTorch + Silero + Whisper + Coqui), installer ≤ 550MB, `412`/`402` gating — v13
+- [ ] **MARK-01..06**: New `marketing/` Next.js app with landing, pricing, Lemon Squeezy checkout, account dashboard — v13
+- [ ] **OAUTH-01..07**: OAuth device flow with PKCE, JWT with subscription_tier claim, OS keychain via `keyring` — v13
+- [ ] **TIER-01..04**: Subscription tier gating across backend + UI, webhook→refresh propagation < 60s — v13
+- [ ] **DIST-01..06**: GitHub Releases auto-publish pipeline, electron-updater verified, SmartScreen explainer onboarding — v13
 
 ### Out of Scope
 

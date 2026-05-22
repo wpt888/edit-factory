@@ -14,6 +14,7 @@
 - ✅ **v10 Desktop Launcher & Distribution** - Phases 47-54 (shipped 2026-03-01)
 - ✅ **v11 Production Polish & Platform Hardening** - Phases 55-63 (shipped 2026-03-03)
 - ✅ **v12 Desktop Product MVP** - Phases 64-79 (shipped 2026-03-09)
+- 🚧 **v13 Desktop Production-Ready & Monetization** - Phases 80-98 (active, opened 2026-05-22)
 
 ## Phases
 
@@ -180,6 +181,61 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
 
 </details>
 
+### 🚧 v13 Desktop Production-Ready & Monetization (Phases 80-98) — ACTIVE (opened 2026-05-22)
+
+**Track A — Functional Desktop (Wave 1, sequential):**
+- [ ] Phase 80: Library routes repository migration (3 plans)
+  - 80-01-PLAN.md — Audit + new ABC methods + Pattern A/B migration
+  - 80-02-PLAN.md — Pattern C/D migration + helper refactor + dead-code removal
+  - 80-03-PLAN.md — Per-route pytest cases asserting 200 under DATA_BACKEND=sqlite
+- [ ] Phase 81: Pipeline routes repository migration (~2–3 plans)
+- [ ] Phase 82: Segments routes repository migration (~2–3 plans)
+- [ ] Phase 83: Background services repository migration (~1–2 plans)
+- [ ] Phase 84: Cross-platform paths & FFmpeg discovery (~1 plan)
+- [ ] Phase 85: Desktop smoke-test harness (CI gate) (~1 plan)
+
+**Track B — Optional ML (Wave 3a, parallel):**
+- [ ] Phase 86: ML bundle download endpoint + UI (~2 plans)
+- [ ] Phase 87: ML feature flags & subscription gating in backend (~1 plan)
+- [ ] Phase 88: Installer slimming verification (~1 plan)
+
+**Track C — Marketing/Billing Web App (Wave 3b/4):**
+- [ ] Phase 89: Marketing app scaffolding (`marketing/`) (~1 plan)
+- [ ] Phase 90: Landing page + pricing (~1–2 plans)
+- [ ] Phase 91: Lemon Squeezy checkout + webhook (~2 plans)
+- [ ] Phase 92: Account dashboard (~2 plans)
+
+**Track D — OAuth Device Flow (Wave 5, sequential):**
+- [ ] Phase 93: OAuth endpoints on marketing app (~2 plans)
+- [ ] Phase 94: Desktop OAuth client (PKCE + OS keychain) (~2 plans)
+- [ ] Phase 95: Subscription tier gating in desktop UI (~1 plan)
+
+**Track E — Distribution & Launch (Waves 6–7):**
+- [ ] Phase 96: GitHub Releases auto-publish pipeline (~1 plan)
+- [ ] Phase 97: Onboarding flow polish + SmartScreen explainer (~1 plan)
+- [ ] Phase 98: Auto-updater verification + launch audit (~1–2 plans)
+
+Full phase details: `.planning/milestones/v13-ROADMAP.md` and `.planning/milestones/v13-REQUIREMENTS.md`.
+Vision/scope/architecture: `.planning/v13-desktop-production/`.
+
+### Phase 80: Library routes repository migration
+
+**Goal**: Every `repo.get_client()` call in `app/api/library_routes.py` (27 sites covering `/library/clips/{id}/srt`, `/audio`, `/download`, `/render`, `/regenerate-voiceover`, `/remove-audio`, `/restore`, `/permanent`, `/content`, `/tags`, `/all-clips`, `/trash`, `/projects/{id}/generate`, `/projects/{id}/generate-from-segments`, `/clips/bulk-delete`, `/clips/bulk-render`, `/sync-orphans`) is replaced with typed repository methods or `table_query(QueryFilters)` calls. Routes that previously returned `503 Database not available` under `DATA_BACKEND=sqlite` now return `200` (or the correct status for the operation).
+
+**Depends on**: Nothing (first v13 phase).
+**Requirements**: FUNC-01, FUNC-03.
+**Success Criteria**:
+  1. Zero `repo.get_client()` calls remain in `library_routes.py` — `grep -c "get_client()" app/api/library_routes.py` returns `0`.
+  2. A `ROUTES-AUDIT.md` artifact lists each migrated call site with the pattern (A/B/C/D from ARCHITECTURE.md §1) and the repository method used.
+  3. New ABC methods added to `app/repositories/base.py` are implemented in both `SupabaseRepository` and `SQLiteRepository` — no `NotImplementedError` paths.
+  4. Existing routes still work in Supabase mode — regression test suite passes.
+  5. Each migrated route gains a pytest case asserting `200` under `DATA_BACKEND=sqlite`.
+
+**Plans**: 3 plans (Wave 1 → 2 → 3, sequential because all three plans modify app/api/library_routes.py):
+  - 80-01-PLAN.md — Audit + new ABC methods + Pattern A/B migration
+  - 80-02-PLAN.md — Pattern C/D migration + helper refactor + dead-code removal
+  - 80-03-PLAN.md — Per-route pytest cases asserting 200 under DATA_BACKEND=sqlite
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -195,6 +251,7 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
 | 47-54 | v10 | 18/18 | Complete | 2026-03-01 |
 | 55-63 | v11 | 22/22 | Complete | 2026-03-03 |
 | 64-79 | v12 | 29/29 | Complete | 2026-03-09 |
+| 80-98 | v13 | 0/~30 | Active | — (opened 2026-05-22) |
 
 ---
-*Last updated: 2026-03-09 after v12 milestone completion*
+*Last updated: 2026-05-22 after v13 milestone opening*
