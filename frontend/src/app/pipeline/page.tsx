@@ -67,7 +67,7 @@ import { toast } from "sonner";
 import { checkFallbacks } from "@/lib/api-fallback";
 import { EmptyState } from "@/components/empty-state";
 import { PublishDialog } from "@/components/dialogs/publish-dialog";
-import { PipelineSchedule } from "@/components/PipelineSchedule";
+import { PipelineSchedule } from "@/components/pipeline/pipeline-schedule";
 import { PipelineCaptionGenerator } from "@/components/pipeline/pipeline-caption-generator";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ProductPickerDialog } from "@/components/product-picker-dialog";
