@@ -81,6 +81,33 @@ class SQLiteRepository(DataRepository):
         sql = schema_path.read_text(encoding="utf-8")
         with self._write_lock:
             self._conn.executescript(sql)
+        # In-place migrations for columns added by Phase 80 that are missing
+        # from the original sqlite_schema.sql snapshot. Sqlite's ALTER TABLE
+        # ADD COLUMN is idempotent only when guarded — we check pragma first.
+        self._ensure_phase80_columns()
+
+    def _ensure_phase80_columns(self) -> None:
+        """Add `editai_segments.usage_count` if missing (mirrors migration 034).
+
+        usage_count is used by `increment_segment_usage` and downstream render
+        analytics. Supabase has this column in production but sqlite_schema.sql
+        was never updated. ALTER TABLE ADD COLUMN is wrapped in a presence
+        check because SQLite does not support IF NOT EXISTS on column adds.
+        """
+        try:
+            cur = self._conn.execute('PRAGMA table_info("editai_segments")')
+            cols = {row[1] for row in cur.fetchall()}
+            if "usage_count" not in cols:
+                with self._write_lock:
+                    self._conn.execute(
+                        'ALTER TABLE "editai_segments" ADD COLUMN "usage_count" INTEGER DEFAULT 0'
+                    )
+                    self._conn.commit()
+                # Invalidate any cached column set
+                if hasattr(self, "_col_cache") and "editai_segments" in self._col_cache:
+                    self._col_cache.pop("editai_segments", None)
+        except Exception as e:
+            logger.warning(f"Could not ensure usage_count column on editai_segments: {e}")
 
     # ── Table name helper ──────────────────────────────
 
@@ -436,6 +463,22 @@ class SQLiteRepository(DataRepository):
     def delete_project(self, project_id: str) -> None:
         self._delete("editai_projects", "id", project_id)
 
+    def get_project_by_name(
+        self, profile_id: str, name: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return the first project matching profile_id + name, or None.
+
+        editai_projects in the SQLite schema has no `is_deleted` column,
+        so this matches the production Supabase semantics where soft delete
+        does not apply to projects.
+        """
+        table = self._t("editai_projects")
+        row = self._conn.execute(
+            f'SELECT * FROM "{table}" WHERE "profile_id" = ? AND "name" = ? LIMIT 1',
+            (profile_id, name),
+        ).fetchone()
+        return self._row_to_dict(row) if row else None
+
     # ──────────────────────────────────────────────
     # 2. Clips
     # ──────────────────────────────────────────────
@@ -548,6 +591,27 @@ class SQLiteRepository(DataRepository):
         rows = [self._row_to_dict(r) for r in cur.fetchall()]
         return QueryResult(data=rows, count=len(rows))
 
+    def count_clips(
+        self, profile_id: str, filters: Optional[QueryFilters] = None
+    ) -> int:
+        """Count clips for a profile honoring eq/contains filters.
+
+        Used by route 2002 (/all-clips) total count. Reuses the standard
+        `_apply_filters` so eq/contains/in_ semantics match list_clips_by_profile.
+        Column names in filters come from route code, not request bodies
+        (see threat_model T-80-01-02 — no user-supplied column names).
+        """
+        table = self._t("editai_clips")
+        where_parts: List[str] = ['"profile_id" = ?']
+        params: List[Any] = [profile_id]
+        self._apply_filters(where_parts, params, filters)
+
+        sql = f'SELECT COUNT(*) AS cnt FROM "{table}"'
+        if where_parts:
+            sql += " WHERE " + " AND ".join(where_parts)
+        row = self._conn.execute(sql, params).fetchone()
+        return int(row["cnt"]) if row else 0
+
     # ──────────────────────────────────────────────
     # 3. Clip Content
     # ──────────────────────────────────────────────
@@ -622,6 +686,28 @@ class SQLiteRepository(DataRepository):
 
     def delete_segment(self, segment_id: str) -> None:
         self._delete("editai_segments", "id", segment_id)
+
+    def increment_segment_usage(self, segment_ids: List[str]) -> None:
+        """Atomically increment usage_count by 1 for each segment id.
+
+        SQLite supports the single-statement UPDATE form so this is atomic
+        even without the increment_segment_usage_batch RPC used by Supabase.
+        `usage_count` column is added by `_ensure_phase80_columns` on init
+        if missing from the legacy sqlite_schema.sql snapshot.
+        """
+        if not segment_ids:
+            return
+        table = self._t("editai_segments")
+        placeholders = ", ".join("?" for _ in segment_ids)
+        sql = (
+            f'UPDATE "{table}" '
+            f'SET "usage_count" = COALESCE("usage_count", 0) + 1, '
+            f'    "updated_at" = ? '
+            f'WHERE "id" IN ({placeholders})'
+        )
+        with self._write_lock:
+            self._conn.execute(sql, [self._now()] + list(segment_ids))
+            self._conn.commit()
 
     # ──────────────────────────────────────────────
     # 5. Source Videos
@@ -895,6 +981,17 @@ class SQLiteRepository(DataRepository):
     ) -> Dict[str, Any]:
         return self._update("editai_export_presets", "id", preset_id, data)
 
+    def get_export_preset_by_name(
+        self, name: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return the first export preset matching `name`, or None."""
+        table = self._t("editai_export_presets")
+        row = self._conn.execute(
+            f'SELECT * FROM "{table}" WHERE "name" = ? LIMIT 1',
+            (name,),
+        ).fetchone()
+        return self._row_to_dict(row) if row else None
+
     # ──────────────────────────────────────────────
     # 10. Exports
     # ──────────────────────────────────────────────
@@ -931,6 +1028,30 @@ class SQLiteRepository(DataRepository):
         cur = self._conn.execute(sql, params)
         rows = [self._row_to_dict(r) for r in cur.fetchall()]
         return QueryResult(data=rows, count=len(rows))
+
+    def delete_exports_older_than(
+        self, profile_id: str, cutoff_iso: str
+    ) -> int:
+        """Delete exports older than `cutoff_iso` scoped to a profile via clip ownership.
+
+        `editai_exports` has no `profile_id` column. To respect threat T-80-01-04
+        (no cross-profile deletion) the WHERE clause restricts to exports whose
+        clip belongs to the given profile via a sub-select against editai_clips.
+        Returns the count of rows deleted.
+        """
+        exports_table = self._t("editai_exports")
+        clips_table = self._t("editai_clips")
+        sql = (
+            f'DELETE FROM "{exports_table}" '
+            f'WHERE "created_at" < ? '
+            f'AND "clip_id" IN ('
+            f'    SELECT "id" FROM "{clips_table}" WHERE "profile_id" = ?'
+            f')'
+        )
+        with self._write_lock:
+            cur = self._conn.execute(sql, (cutoff_iso, profile_id))
+            self._conn.commit()
+            return cur.rowcount or 0
 
     # ──────────────────────────────────────────────
     # 11. Jobs (background processing jobs)
@@ -1939,3 +2060,46 @@ class SQLiteRepository(DataRepository):
         cur = self._conn.execute(sql, params)
         rows = [self._row_to_dict(r) for r in cur.fetchall()]
         return QueryResult(data=rows, count=len(rows))
+
+    # ──────────────────────────────────────────────
+    # 26. API Key Vault (stub — Phase 80-01 unblock)
+    # ──────────────────────────────────────────────
+    # NOTE: These stubs exist to allow SQLiteRepository to instantiate.
+    # The vault_key abstract methods were added to base.py in commit 29c54ea
+    # (v12 monetization track) but never implemented in SQLite. A real impl
+    # requires a schema migration for `api_key_vault` plus encrypted-storage
+    # integration. Out of scope for Phase 80-01; flagged in 80-01 SUMMARY as
+    # a future-phase concern. library_routes.py does not reference vault keys,
+    # so library route migration is unaffected.
+
+    def list_vault_keys(
+        self, profile_id: str, service: str, filters: Optional[QueryFilters] = None
+    ) -> QueryResult:
+        raise NotImplementedError(
+            "Vault keys are not yet supported in the SQLite backend "
+            "(pre-existing gap from commit 29c54ea — out of scope for Phase 80-01)."
+        )
+
+    def get_vault_key(self, key_id: str) -> Optional[Dict[str, Any]]:
+        raise NotImplementedError(
+            "Vault keys are not yet supported in the SQLite backend "
+            "(pre-existing gap from commit 29c54ea — out of scope for Phase 80-01)."
+        )
+
+    def create_vault_key(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        raise NotImplementedError(
+            "Vault keys are not yet supported in the SQLite backend "
+            "(pre-existing gap from commit 29c54ea — out of scope for Phase 80-01)."
+        )
+
+    def update_vault_key(self, key_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        raise NotImplementedError(
+            "Vault keys are not yet supported in the SQLite backend "
+            "(pre-existing gap from commit 29c54ea — out of scope for Phase 80-01)."
+        )
+
+    def delete_vault_key(self, key_id: str) -> None:
+        raise NotImplementedError(
+            "Vault keys are not yet supported in the SQLite backend "
+            "(pre-existing gap from commit 29c54ea — out of scope for Phase 80-01)."
+        )

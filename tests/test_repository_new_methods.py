@@ -24,6 +24,8 @@ def sqlite_repo(tmp_path):
 
     Uses the MockSettings pattern from conftest.py:44 — set base_dir on the
     settings object so SQLiteRepository.__init__ creates {base_dir}/data.db.
+    Foreign keys are enforced; tests that create projects/clips must use
+    the `seed_profile` helper to ensure the referenced profile exists.
     """
     from tests.conftest import MockSettings
 
@@ -43,6 +45,15 @@ def sqlite_repo(tmp_path):
             repo._conn.close()
         except Exception:
             pass
+
+
+def _seed_profile(repo, profile_id: str) -> None:
+    """Insert a minimal profile row so FK constraints from clips/projects pass."""
+    repo._conn.execute(
+        'INSERT OR IGNORE INTO profiles (id, user_id, name) VALUES (?, ?, ?)',
+        (profile_id, str(uuid.uuid4()), f"profile-{profile_id[:8]}"),
+    )
+    repo._conn.commit()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -98,6 +109,8 @@ def test_count_clips_counts_only_matching_profile(sqlite_repo):
     profile_a = str(uuid.uuid4())
     profile_b = str(uuid.uuid4())
     project_id = str(uuid.uuid4())
+    _seed_profile(sqlite_repo, profile_a)
+    _seed_profile(sqlite_repo, profile_b)
 
     # Insert a project so the FK is satisfied (not strictly needed here)
     sqlite_repo.create_project({
@@ -144,6 +157,7 @@ def test_get_export_preset_by_name_returns_none_when_missing(sqlite_repo):
 
 def test_get_export_preset_by_name_returns_matching_preset(sqlite_repo):
     profile_id = str(uuid.uuid4())
+    _seed_profile(sqlite_repo, profile_id)
     sqlite_repo.create_export_preset({
         "id": str(uuid.uuid4()),
         "profile_id": profile_id,
@@ -183,6 +197,8 @@ def test_delete_exports_older_than_deletes_only_profile_scoped_old_rows(sqlite_r
     profile_a = str(uuid.uuid4())
     profile_b = str(uuid.uuid4())
     project_id = str(uuid.uuid4())
+    _seed_profile(sqlite_repo, profile_a)
+    _seed_profile(sqlite_repo, profile_b)
 
     sqlite_repo.create_project({
         "id": project_id, "profile_id": profile_a, "name": "p",
@@ -243,6 +259,7 @@ def test_get_project_by_name_returns_none_when_missing(sqlite_repo):
 
 def test_get_project_by_name_returns_matching_project(sqlite_repo):
     profile_id = str(uuid.uuid4())
+    _seed_profile(sqlite_repo, profile_id)
     sqlite_repo.create_project({
         "id": str(uuid.uuid4()),
         "profile_id": profile_id,
@@ -262,6 +279,8 @@ def test_get_project_by_name_returns_matching_project(sqlite_repo):
 def test_get_project_by_name_scopes_by_profile(sqlite_repo):
     profile_a = str(uuid.uuid4())
     profile_b = str(uuid.uuid4())
+    _seed_profile(sqlite_repo, profile_a)
+    _seed_profile(sqlite_repo, profile_b)
     sqlite_repo.create_project({
         "id": str(uuid.uuid4()),
         "profile_id": profile_a,
@@ -286,6 +305,7 @@ def test_increment_segment_usage_increments_count_by_one(sqlite_repo):
     profile_id = str(uuid.uuid4())
     seg_id_1 = str(uuid.uuid4())
     seg_id_2 = str(uuid.uuid4())
+    _seed_profile(sqlite_repo, profile_id)
 
     # create_segment uses _insert which honors known columns; usage_count
     # may need to be ALTER-added by the impl on init.

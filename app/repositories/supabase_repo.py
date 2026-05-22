@@ -134,6 +134,22 @@ class SupabaseRepository(DataRepository):
     def delete_project(self, project_id: str) -> None:
         self._delete("editai_projects", "id", project_id)
 
+    def get_project_by_name(
+        self, profile_id: str, name: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return the first non-deleted project matching profile_id + name, or None."""
+        sb = get_supabase()
+        result = (
+            sb.table("editai_projects")
+            .select("*")
+            .eq("profile_id", profile_id)
+            .eq("name", name)
+            .limit(1)
+            .execute()
+        )
+        rows = result.data or []
+        return rows[0] if rows else None
+
     # ──────────────────────────────────────────────
     # 2. Clips
     # ──────────────────────────────────────────────
@@ -200,6 +216,25 @@ class SupabaseRepository(DataRepository):
         data = result.data or []
         return QueryResult(data=data, count=len(data))
 
+    def count_clips(
+        self, profile_id: str, filters: Optional[QueryFilters] = None
+    ) -> int:
+        """Count clips for a profile honoring eq/contains filters from QueryFilters.
+
+        Used by route 2002 (/all-clips) for the cursor-pagination total.
+        Column names in filters come from route code, never from request bodies
+        (see threat_model T-80-01-02).
+        """
+        sb = get_supabase()
+        query = sb.table("editai_clips").select("id", count="exact").eq("profile_id", profile_id)
+        if filters:
+            for col, val in filters.eq.items():
+                query = query.eq(col, val)
+            for col, val in filters.contains.items():
+                query = query.contains(col, val if isinstance(val, list) else [val])
+        result = query.execute()
+        return result.count or 0
+
     # ──────────────────────────────────────────────
     # 3. Clip Content
     # ──────────────────────────────────────────────
@@ -247,6 +282,45 @@ class SupabaseRepository(DataRepository):
 
     def delete_segment(self, segment_id: str) -> None:
         self._delete("editai_segments", "id", segment_id)
+
+    def increment_segment_usage(self, segment_ids: List[str]) -> None:
+        """Increment usage_count by 1 for each segment id. Atomic via RPC; fallback per-id.
+
+        Mirrors the logic of the legacy `_increment_segment_usage` helper at
+        library_routes.py:3965, including the read-modify-write fallback.
+        """
+        if not segment_ids:
+            return
+        sb = get_supabase()
+        # Try atomic batch increment via Postgres function (migration 034)
+        try:
+            sb.rpc(
+                "increment_segment_usage_batch",
+                {"segment_ids": segment_ids},
+            ).execute()
+            return
+        except Exception as e:
+            logger.warning(
+                f"increment_segment_usage_batch RPC failed, falling back to per-id update: {e}"
+            )
+        # Fallback: individual read-then-update (not atomic, but functional)
+        for seg_id in segment_ids:
+            try:
+                current = (
+                    sb.table("editai_segments")
+                    .select("usage_count")
+                    .eq("id", seg_id)
+                    .execute()
+                )
+                if current.data:
+                    new_count = (current.data[0].get("usage_count") or 0) + 1
+                    sb.table("editai_segments").update(
+                        {"usage_count": new_count}
+                    ).eq("id", seg_id).execute()
+            except Exception as e:
+                logger.warning(
+                    f"Failed to increment usage_count for segment {seg_id}: {e}"
+                )
 
     # ──────────────────────────────────────────────
     # 5. Source Videos
@@ -382,6 +456,19 @@ class SupabaseRepository(DataRepository):
     def update_export_preset(self, preset_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
         return self._update("editai_export_presets", "id", preset_id, data)
 
+    def get_export_preset_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        """Return the export preset matching `name`, or None."""
+        sb = get_supabase()
+        result = (
+            sb.table("editai_export_presets")
+            .select("*")
+            .eq("name", name)
+            .limit(1)
+            .execute()
+        )
+        rows = result.data or []
+        return rows[0] if rows else None
+
     # ──────────────────────────────────────────────
     # 10. Exports
     # ──────────────────────────────────────────────
@@ -401,6 +488,37 @@ class SupabaseRepository(DataRepository):
         result = query.execute()
         data = result.data or []
         return QueryResult(data=data, count=len(data))
+
+    def delete_exports_older_than(
+        self, profile_id: str, cutoff_iso: str
+    ) -> int:
+        """Delete exports created before `cutoff_iso` scoped to `profile_id` via clip ownership.
+
+        editai_exports has no profile_id column natively (verified against
+        migrations 001-044). To enforce threat-model T-80-01-04 (no cross-profile
+        deletion) we first list the profile's clip ids and delete exports whose
+        clip_id is in that set.
+        """
+        sb = get_supabase()
+        # 1. Get this profile's clip ids
+        clip_resp = (
+            sb.table("editai_clips")
+            .select("id")
+            .eq("profile_id", profile_id)
+            .execute()
+        )
+        clip_ids = [c["id"] for c in (clip_resp.data or [])]
+        if not clip_ids:
+            return 0
+        # 2. Delete exports older than cutoff scoped to those clip ids
+        result = (
+            sb.table("editai_exports")
+            .delete()
+            .lt("created_at", cutoff_iso)
+            .in_("clip_id", clip_ids)
+            .execute()
+        )
+        return len(result.data) if result.data else 0
 
     # ──────────────────────────────────────────────
     # 11. Jobs (background processing jobs)

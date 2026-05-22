@@ -68,6 +68,16 @@ class DataRepository(ABC):
         """Delete a project by ID."""
         ...
 
+    @abstractmethod
+    def get_project_by_name(
+        self, profile_id: str, name: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return the first non-deleted project matching profile_id + name, or None.
+
+        Used for the 'Imported from disk' orphan-sync project lookup-or-create flow.
+        """
+        ...
+
     # ──────────────────────────────────────────────
     # 2. Clips
     # ──────────────────────────────────────────────
@@ -118,6 +128,13 @@ class DataRepository(ABC):
         self, profile_id: str, filters: Optional[QueryFilters] = None
     ) -> QueryResult:
         """List all clips accessible to a profile (across projects)."""
+        ...
+
+    @abstractmethod
+    def count_clips(
+        self, profile_id: str, filters: Optional[QueryFilters] = None
+    ) -> int:
+        """Count clips for a profile honoring filters (typically is_deleted=False, optional contains)."""
         ...
 
     # ──────────────────────────────────────────────
@@ -177,6 +194,11 @@ class DataRepository(ABC):
     @abstractmethod
     def delete_segment(self, segment_id: str) -> None:
         """Delete a segment by ID."""
+        ...
+
+    @abstractmethod
+    def increment_segment_usage(self, segment_ids: List[str]) -> None:
+        """Increment usage_count by 1 for each segment id. Atomic where possible."""
         ...
 
     # ──────────────────────────────────────────────
@@ -327,6 +349,13 @@ class DataRepository(ABC):
         """Update an export preset by ID. Returns the updated row."""
         ...
 
+    @abstractmethod
+    def get_export_preset_by_name(
+        self, name: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return the export preset matching `name`, or None."""
+        ...
+
     # ──────────────────────────────────────────────
     # 10. Exports
     # ──────────────────────────────────────────────
@@ -341,6 +370,18 @@ class DataRepository(ABC):
         self, clip_id: str, filters: Optional[QueryFilters] = None
     ) -> QueryResult:
         """List exports for a given clip."""
+        ...
+
+    @abstractmethod
+    def delete_exports_older_than(
+        self, profile_id: str, cutoff_iso: str
+    ) -> int:
+        """Delete exports created before `cutoff_iso` for the given profile.
+
+        Profile scoping is enforced via clip ownership (editai_exports.clip_id
+        joined with editai_clips.profile_id) since editai_exports itself has
+        no profile_id column. Returns the count of rows deleted.
+        """
         ...
 
     # ──────────────────────────────────────────────
