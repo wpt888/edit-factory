@@ -51,7 +51,7 @@ import { apiGet, apiGetWithRetry, apiPost, apiPatch, apiDelete, API_URL, ApiErro
 import { toast } from "sonner";
 import { useProfile } from "@/contexts/profile-context";
 import { EmptyState } from "@/components/empty-state";
-import { PublishDialog } from "@/components/PublishDialog";
+import { PublishDialog } from "@/components/dialogs/publish-dialog";
 import { ImageBulkPublishDialog } from "@/components/dialogs/image-bulk-publish-dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { InlineVideoPlayer } from "@/components/inline-video-player";

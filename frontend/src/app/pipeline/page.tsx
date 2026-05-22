@@ -66,7 +66,7 @@ import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
 import { checkFallbacks } from "@/lib/api-fallback";
 import { EmptyState } from "@/components/empty-state";
-import { PublishDialog } from "@/components/PublishDialog";
+import { PublishDialog } from "@/components/dialogs/publish-dialog";
 import { PipelineSchedule } from "@/components/PipelineSchedule";
 import { PipelineCaptionGenerator } from "@/components/PipelineCaptionGenerator";
 import { ConfirmDialog } from "@/components/confirm-dialog";
