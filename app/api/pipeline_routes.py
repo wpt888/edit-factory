@@ -181,14 +181,13 @@ def _restore_missing_tts_audio_paths(
 
     try:
         repo = get_repository()
-        supabase = repo.get_client() if repo else None
-        if supabase and profile_id:
-            lib_result = (
-                supabase.table("editai_tts_assets")
-                .select("id, tts_text, mp3_path, audio_duration, srt_content, tts_timestamps")
-                .eq("profile_id", profile_id)
-                .eq("status", "ready")
-                .execute()
+        if repo and profile_id:
+            lib_result = repo.list_tts_assets(
+                profile_id,
+                QueryFilters(
+                    eq={"status": "ready"},
+                    select="id, tts_text, mp3_path, audio_duration, srt_content, tts_timestamps",
+                ),
             )
             if lib_result.data:
                 lib_lookup = {}
@@ -633,13 +632,16 @@ def _promote_temp_audio_paths_to_library(pipeline_id: str, pipeline_dict: dict) 
                     return (rel, asset_id)
             # Dedup hit — try to look up the existing asset's path
             try:
-                from app.repositories.factory import get_repository as _gr
-                _r = _gr()
-                _sb = _r.get_client() if _r else None
-                if _sb and text_for_asset:
-                    _ex = _sb.table("editai_tts_assets").select("id, mp3_path")\
-                        .eq("profile_id", profile_id).eq("status", "ready")\
-                        .eq("tts_text", text_for_asset.strip()).limit(1).execute()
+                _r = get_repository()
+                if _r and text_for_asset:
+                    _ex = _r.list_tts_assets(
+                        profile_id,
+                        QueryFilters(
+                            eq={"status": "ready", "tts_text": text_for_asset.strip()},
+                            select="id, mp3_path",
+                            limit=1,
+                        ),
+                    )
                     if _ex.data and _ex.data[0].get("mp3_path"):
                         return (_ex.data[0]["mp3_path"], _ex.data[0]["id"])
             except Exception:
@@ -731,9 +733,6 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
     for attempt in range(2):
         try:
             repo = get_repository()
-            supabase = repo.get_client() if repo else None
-            if not supabase:
-                return
             # Snapshot dicts under a copy to avoid RuntimeError if another coroutine
             # mutates the pipeline dict concurrently (dict.items() is not thread-safe).
             previews_json = {str(k): v for k, v in dict(pipeline_dict.get("previews", {})).items()}
@@ -776,7 +775,7 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                 "subtitle_settings_by_key": subtitle_overrides_json,
             }
             try:
-                supabase.table("editai_pipelines").upsert(row).execute()
+                repo.upsert_pipeline(row)
             except Exception as upsert_err:
                 err_str = str(upsert_err)
                 # Graceful degradation for pre-migration databases
@@ -786,12 +785,12 @@ def _db_save_pipeline(pipeline_id: str, pipeline_dict: dict):
                         "Retrying without it."
                     )
                     row.pop("subtitle_settings_by_key", None)
-                    supabase.table("editai_pipelines").upsert(row).execute()
+                    repo.upsert_pipeline(row)
                 elif "selected_captions" in err_str or "target_script_duration" in err_str:
                     logger.warning(f"Column missing, retrying without it: {err_str[:100]}")
                     row.pop("selected_captions", None)
                     row.pop("target_script_duration", None)
-                    supabase.table("editai_pipelines").upsert(row).execute()
+                    repo.upsert_pipeline(row)
                 else:
                     raise
             logger.debug(f"Pipeline {pipeline_id} saved to DB")
@@ -808,13 +807,8 @@ def _db_update_render_jobs(pipeline_id: str, render_jobs: dict):
     """Update only render_jobs column for a pipeline. Graceful degradation."""
     try:
         repo = get_repository()
-        supabase = repo.get_client() if repo else None
-        if not supabase:
-            return
         render_jobs_json = {str(k): v for k, v in render_jobs.items()}
-        supabase.table("editai_pipelines").update({
-            "render_jobs": render_jobs_json
-        }).eq("id", pipeline_id).execute()
+        repo.update_pipeline(pipeline_id, {"render_jobs": render_jobs_json})
         logger.debug(f"Pipeline {pipeline_id} render_jobs updated in DB")
     except Exception as e:
         logger.warning(f"Failed to update render_jobs for {pipeline_id}: {e}")
