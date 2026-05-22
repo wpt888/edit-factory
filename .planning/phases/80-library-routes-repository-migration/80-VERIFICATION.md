@@ -1,9 +1,9 @@
 ---
 phase: 80-library-routes-repository-migration
-verified_at: 2026-05-22T00:00:00Z
+verified_at: 2026-05-23T00:00:00Z
 verifier: gsd-verifier (Claude Opus 4.7)
-status: partial
-score: 4/5 success criteria fully verified; SC-4 partial (1 newly-detected Phase-80 helper-signature regression in tests/test_pipeline_library_persistence.py)
+status: passed
+score: 5/5 success criteria fully verified (test_sync_orphan_clips_skips_raw_mp4_files signature mismatch fixed 2026-05-23)
 overrides_applied: 0
 ---
 

@@ -184,7 +184,7 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
 ### 🚧 v13 Desktop Production-Ready & Monetization (Phases 80-98) — ACTIVE (opened 2026-05-22)
 
 **Track A — Functional Desktop (Wave 1, sequential):**
-- [ ] Phase 80: Library routes repository migration (3/3 plans complete — ready for verification)
+- [x] Phase 80: Library routes repository migration (3/3 plans complete — VERIFIED PASSED 2026-05-23)
   - [x] 80-01-PLAN.md — Audit + new ABC methods + Pattern A/B migration (2026-05-22; see 80-01-SUMMARY.md; get_client() count: 27 → 9)
   - [x] 80-02-PLAN.md — Pattern C/D migration + helper refactor + dead-code removal (2026-05-22; see 80-02-SUMMARY.md; both grep gates at 0)
   - [x] 80-03-PLAN.md — Per-route SQLite integration tests + xfail repairs (2026-05-22; see 80-03-SUMMARY.md; 23 SQLite tests pass, 11 xfail-marked, 0 regressions)
@@ -251,7 +251,8 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
 | 47-54 | v10 | 18/18 | Complete | 2026-03-01 |
 | 55-63 | v11 | 22/22 | Complete | 2026-03-03 |
 | 64-79 | v12 | 29/29 | Complete | 2026-03-09 |
-| 80-98 | v13 | 0/~30 | Active | — (opened 2026-05-22) |
+| 80 | v13 | 3/3 | Complete (verified PASSED) | 2026-05-23 |
+| 81-98 | v13 | 0/~27 | Active | — |
 
 ---
-*Last updated: 2026-05-22 after v13 milestone opening*
+*Last updated: 2026-05-23 after Phase 80 verification (PASSED)*

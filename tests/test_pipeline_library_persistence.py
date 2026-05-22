@@ -226,29 +226,16 @@ def test_save_clip_to_library_retries_without_visual_version(tmp_path):
     assert "visual_version" not in fake_sb.clip_insert_payloads[0]
 
 
-class _FakeSupabaseOrphans:
+class _FakeOrphanRepo:
     def __init__(self):
-        self._table = None
         self.inserted = []
 
-    def table(self, name):
-        self._table = name
-        return self
+    def list_clips_by_profile(self, _profile_id, _filters):
+        return _FakeResult(data=[])
 
-    def select(self, _fields):
-        return self
-
-    def eq(self, *_args):
-        return self
-
-    def insert(self, payload):
+    def create_clip(self, payload):
         self.inserted.append(dict(payload))
-        return self
-
-    def execute(self):
-        if self._table == "editai_clips":
-            return _FakeResult(data=[])
-        return _FakeResult(data=[{"id": "clip-1"}])
+        return {"id": "clip-1"}
 
 
 def test_sync_orphan_clips_skips_raw_mp4_files(tmp_path):
@@ -258,14 +245,15 @@ def test_sync_orphan_clips_skips_raw_mp4_files(tmp_path):
     (output_dir / "variant_1_ok_TikTok.mp4").write_bytes(b"final")
     (output_dir / "variant_1_ok_TikTok_raw.mp4").write_bytes(b"raw")
 
-    fake_sb = _FakeSupabaseOrphans()
+    fake_repo = _FakeOrphanRepo()
 
-    with patch("app.api.library_routes.get_settings", return_value=SimpleNamespace(output_dir=tmp_path / "output")), \
+    with patch("app.api.library_routes.get_repository", return_value=fake_repo), \
+         patch("app.api.library_routes.get_settings", return_value=SimpleNamespace(output_dir=tmp_path / "output")), \
          patch("app.api.library_routes._get_or_create_sync_project", return_value="proj-sync"), \
          patch("app.api.library_routes._get_video_duration", return_value=9.87), \
          patch("app.api.library_routes._generate_thumbnail", return_value=output_dir / "thumb.jpg"):
-        inserted = asyncio.run(library_routes._sync_orphan_clips(profile_id, fake_sb))
+        inserted = asyncio.run(library_routes._sync_orphan_clips(profile_id))
 
     assert inserted == 1
-    assert len(fake_sb.inserted) == 1
-    assert fake_sb.inserted[0]["final_video_path"].endswith("variant_1_ok_TikTok.mp4")
+    assert len(fake_repo.inserted) == 1
+    assert fake_repo.inserted[0]["final_video_path"].endswith("variant_1_ok_TikTok.mp4")
