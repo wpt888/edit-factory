@@ -339,6 +339,10 @@ class SupabaseRepository(DataRepository):
         data = result.data or []
         return QueryResult(data=data, count=len(data))
 
+    def get_source_video(self, video_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single source video by ID. Returns None if not found."""
+        return self._get_one("editai_source_videos", "id", video_id)
+
     def create_source_video(self, data: Dict[str, Any]) -> Dict[str, Any]:
         return self._insert("editai_source_videos", data)
 

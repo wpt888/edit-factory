@@ -213,6 +213,11 @@ class DataRepository(ABC):
         ...
 
     @abstractmethod
+    def get_source_video(self, video_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single source video by ID. Returns None if not found."""
+        ...
+
+    @abstractmethod
     def create_source_video(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Insert a source video record. Returns the created row."""
         ...
