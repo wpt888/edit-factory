@@ -439,18 +439,13 @@ async def download_clip_srt(
 ):
     """Download SRT subtitle file for a clip."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Verify ownership
-    clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
-    if not clip.data:
+    # Verify ownership (T-80-01-01: profile_id check after repo.get_clip)
+    clip = repo.get_clip(clip_id)
+    if not clip or clip.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Clip not found")
 
-    # DB-06: Use .limit(1) instead of .single() to avoid exception when no rows
-    content_result = supabase.table("editai_clip_content").select("srt_content").eq("clip_id", clip_id).limit(1).execute()
-    content_row = content_result.data[0] if content_result.data else None
+    content_row = repo.get_clip_content(clip_id)
     if not content_row or not content_row.get("srt_content"):
         raise HTTPException(status_code=404, detail="No subtitles available for this clip")
 
@@ -468,18 +463,13 @@ async def download_clip_audio(
 ):
     """Download TTS audio (MP3) file for a clip."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Verify ownership
-    clip = supabase.table("editai_clips").select("id").eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
-    if not clip.data:
+    # Verify ownership (T-80-01-01: profile_id check after repo.get_clip)
+    clip = repo.get_clip(clip_id)
+    if not clip or clip.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Clip not found")
 
-    # DB-06: Use .limit(1) instead of .single() to avoid exception when no rows
-    content_result = supabase.table("editai_clip_content").select("tts_audio_path").eq("clip_id", clip_id).limit(1).execute()
-    content_row = content_result.data[0] if content_result.data else None
+    content_row = repo.get_clip_content(clip_id)
     if not content_row or not content_row.get("tts_audio_path"):
         raise HTTPException(status_code=404, detail="No audio available for this clip")
 
@@ -506,18 +496,12 @@ async def download_clip_video(
 ):
     """Download the final (or raw) video file for a clip."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Verify ownership
-    clip_result = supabase.table("editai_clips").select(
-        "id, final_video_path, raw_video_path"
-    ).eq("id", clip_id).eq("profile_id", profile.profile_id).limit(1).execute()
-    if not clip_result.data:
+    # Verify ownership (T-80-01-01: profile_id check after repo.get_clip)
+    clip_row = repo.get_clip(clip_id)
+    if not clip_row or clip_row.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Clip not found")
 
-    clip_row = clip_result.data[0]
     video_path_str = clip_row.get("final_video_path") or clip_row.get("raw_video_path")
     if not video_path_str:
         raise HTTPException(status_code=404, detail="No video file associated with this clip")
@@ -1053,13 +1037,19 @@ async def _generate_raw_clips_task(
             # Find highest existing variant_index to accumulate clips instead of overwriting
             start_variant_index = 1
             try:
-                supabase = repo.get_client()
-                if supabase:
-                    existing_clips = supabase.table("editai_clips").select("variant_index").eq("project_id", project_id).eq("profile_id", profile_id).eq("is_deleted", False).execute()
-                    if existing_clips.data:
-                        max_index = max(clip.get("variant_index", 0) for clip in existing_clips.data)
-                        start_variant_index = max_index + 1
-                        logger.info(f"Found {len(existing_clips.data)} existing clips, new variants start from {start_variant_index}")
+                existing = repo.list_clips(
+                    project_id,
+                    QueryFilters(
+                        eq={"profile_id": profile_id, "is_deleted": False},
+                        select="variant_index",
+                    ),
+                )
+                if existing.data:
+                    max_index = max((c.get("variant_index") or 0) for c in existing.data)
+                    start_variant_index = max_index + 1
+                    logger.info(
+                        f"Found {len(existing.data)} existing clips, new variants start from {start_variant_index}"
+                    )
             except Exception as e:
                 logger.warning(f"Could not check existing clips, starting from 1: {e}")
 
@@ -1886,16 +1876,11 @@ async def list_project_clips(
 async def list_tags(profile: ProfileContext = Depends(get_profile_context)):
     """Return all unique tags used across clips for this profile."""
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
     try:
-        # Query all non-deleted clips' tags for this profile
-        result = supabase.table("editai_clips")\
-            .select("tags")\
-            .eq("is_deleted", False)\
-            .eq("profile_id", profile.profile_id)\
-            .execute()
+        result = repo.list_clips_by_profile(
+            profile.profile_id,
+            QueryFilters(eq={"is_deleted": False}, select="tags"),
+        )
 
         # Flatten and deduplicate all tags
         all_tags: set = set()
@@ -2305,17 +2290,12 @@ async def remove_clip_audio(
     Creează o versiune nouă a videoclipului fără sunet.
     """
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     try:
-        # Get clip info
-        clip_result = supabase.table("editai_clips").select("*").eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
-        if not clip_result.data:
+        # Get clip info (T-80-01-01: profile_id check after repo.get_clip)
+        clip = repo.get_clip(clip_id)
+        if not clip or clip.get("profile_id") != profile.profile_id:
             raise HTTPException(status_code=404, detail="Clip not found")
-
-        clip = clip_result.data[0]
 
         # Check if project is currently being processed
         clip_project_id = clip.get("project_id")
@@ -2365,14 +2345,14 @@ async def remove_clip_audio(
         if clip.get("final_video_path"):
             update_data["final_video_path"] = str(output_path)
 
-        supabase.table("editai_clips").update(update_data).eq("id", clip_id).eq("profile_id", profile.profile_id).execute()
+        repo.update_clip(clip_id, update_data)
 
         # Clear TTS audio path in clip content so has_audio state stays consistent (P7-3)
         try:
-            supabase.table("editai_clip_content").update({
+            repo.update_clip_content(clip_id, {
                 "tts_audio_path": None,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }).eq("clip_id", clip_id).execute()
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
         except Exception as content_err:
             logger.warning(f"Failed to clear tts_audio_path for clip {clip_id}: {content_err}")
 
