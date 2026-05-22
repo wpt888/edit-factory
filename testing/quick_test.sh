@@ -62,7 +62,7 @@ import sys
 sys.path.insert(0, '.')
 errors = []
 try:
-    from app.services.silence_remover import SilenceRemover
+    from app.services.audio.silence_remover import SilenceRemover
 except Exception as e:
     errors.append(f'SilenceRemover: {e}')
 try:

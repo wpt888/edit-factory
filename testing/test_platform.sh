@@ -227,7 +227,7 @@ except Exception as e:
     print(f'VideoProcessor: FAIL - {e}')
 
 try:
-    from app.services.silence_remover import SilenceRemover
+    from app.services.audio.silence_remover import SilenceRemover
     print('SilenceRemover: OK')
 except Exception as e:
     errors.append(f'SilenceRemover: {e}')

@@ -5,7 +5,7 @@ Provides platform-specific video encoding configurations with Pydantic validatio
 import logging
 from typing import Literal, Optional
 from pydantic import BaseModel, Field
-from app.services.video_filters import VideoFilters
+from app.services.video_effects.filters import VideoFilters
 
 logger = logging.getLogger(__name__)
 

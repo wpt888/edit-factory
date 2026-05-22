@@ -58,7 +58,7 @@ class TTSLibraryService:
         char_count, tts_timestamps, tts_voice_id
         """
         from app.services.tts.elevenlabs import ElevenLabsTTSService
-        from app.services.silence_remover import SilenceRemover
+        from app.services.audio.silence_remover import SilenceRemover
         from app.services.tts_subtitle_generator import generate_srt_from_timestamps
 
         asset_dir = self._asset_dir(profile_id)

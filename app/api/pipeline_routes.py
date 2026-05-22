@@ -29,7 +29,7 @@ from app.api.auth import ProfileContext, get_profile_context
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 from app.utils import normalize_path
-from app.rate_limit import limiter
+from app.core.rate_limit import limiter
 from app.services.script_generator import get_script_generator
 from app.services.assembly_service import get_assembly_service, strip_product_group_tags
 from app.services.meta_visual_profiles import META_PROFILES, META_PROFILES_BY_NAME, get_version_label
@@ -5916,7 +5916,7 @@ async def generate_video_captions(
 
     try:
         from google import genai
-        from app.services.api_key_vault import get_vault_manager
+        from app.services.credentials.vault import get_vault_manager
         settings = get_settings()
         gemini_key = get_vault_manager().get_api_key_or_default(ctx.profile_id, "gemini")
         if not gemini_key:
@@ -6290,7 +6290,7 @@ async def subtitle_frame_preview(
     key — matching the render-time rule that user overrides suppress Meta.
     Invalid `visual_version` values raise 400 (matches /render-preview).
     """
-    from app.services.subtitle_styler import build_subtitle_filter
+    from app.services.video_effects.subtitle_styler import build_subtitle_filter
 
     pipeline = _get_pipeline_or_load(pipeline_id)
     if not pipeline:

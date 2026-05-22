@@ -64,7 +64,7 @@ function cleanupOrphans() {
   try {
     const result = spawnSync(
       PYTHON_EXE,
-      ['-m', 'app.desktop', 'cleanup', '--ports', String(BACKEND_PORT), String(FRONTEND_PORT)],
+      ['-m', 'app.platforms.desktop.service', 'cleanup', '--ports', String(BACKEND_PORT), String(FRONTEND_PORT)],
       { cwd: BACKEND_CWD, timeout: 10000, encoding: 'utf-8' }
     );
     if (result.stdout) console.log('[launcher] Orphan cleanup:', result.stdout.trim());
@@ -354,7 +354,7 @@ async function cleanup() {
   try {
     spawnSync(
       PYTHON_EXE,
-      ['-m', 'app.desktop', 'cleanup', '--ports', String(BACKEND_PORT), String(FRONTEND_PORT)],
+      ['-m', 'app.platforms.desktop.service', 'cleanup', '--ports', String(BACKEND_PORT), String(FRONTEND_PORT)],
       { cwd: BACKEND_CWD, timeout: 5000, encoding: 'utf-8' }
     );
   } catch (err) {

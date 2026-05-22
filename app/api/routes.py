@@ -20,7 +20,7 @@ from app.api.validators import (
     validate_upload_size, validate_tts_text_length,
     validate_file_mime_type, ALLOWED_VIDEO_MIMES, ALLOWED_AUDIO_MIMES, ALLOWED_SUBTITLE_MIMES,
 )
-from app.rate_limit import limiter
+from app.core.rate_limit import limiter
 from app.utils import sanitize_filename as _sanitize_filename
 from app.services.ffmpeg_semaphore import safe_ffmpeg_run
 from app.models import (
@@ -172,7 +172,7 @@ async def get_usage_stats(
         result["errors"].append("No ElevenLabs API keys configured")
 
     # Gemini
-    from app.services.api_key_vault import get_vault_manager
+    from app.services.credentials.vault import get_vault_manager
     gemini_key = get_vault_manager().get_api_key_or_default(profile.profile_id, "gemini")
     if gemini_key:
         result["gemini"] = {
@@ -203,7 +203,7 @@ async def get_gemini_status(profile: ProfileContext = Depends(get_profile_contex
         "billing_url": "https://console.cloud.google.com/billing"
     }
 
-    from app.services.api_key_vault import get_vault_manager
+    from app.services.credentials.vault import get_vault_manager
     gemini_key = get_vault_manager().get_api_key_or_default(profile.profile_id, "gemini")
     if not gemini_key:
         result["error"] = "Gemini API key not configured"

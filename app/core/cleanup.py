@@ -6,12 +6,12 @@ the retention window. Run periodically (e.g. cron) to prevent unbounded
 growth of transient data.
 
 Usage:
-    python -m app.cleanup [--days N] [--dry-run] [--temp-only] [--jobs-only]
+    python -m app.core.cleanup [--days N] [--dry-run] [--temp-only] [--jobs-only]
 
 Examples:
-    python -m app.cleanup --dry-run --days 7   # Preview what would be deleted
-    python -m app.cleanup --days 7             # Delete files/jobs older than 7 days
-    python -m app.cleanup --days 0 --temp-only # Delete all temp files (no age filter)
+    python -m app.core.cleanup --dry-run --days 7   # Preview what would be deleted
+    python -m app.core.cleanup --days 7             # Delete files/jobs older than 7 days
+    python -m app.core.cleanup --days 0 --temp-only # Delete all temp files (no age filter)
 """
 import argparse
 import logging
@@ -23,7 +23,7 @@ from pathlib import Path
 # Bootstrap JSON logging before any other app imports so cleanup output is
 # also structured JSON (importable even when run as __main__).
 try:
-    from app.logging_config import setup_logging
+    from app.core.logging_config import setup_logging
     setup_logging()
 except ImportError:
     # Fallback: plain logging if invoked outside the package context

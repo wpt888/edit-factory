@@ -509,7 +509,7 @@ def get_script_generator_for_profile(profile_id: str) -> "ScriptGenerator":
     Falls back to env-var keys if vault is empty for this profile.
     """
     from app.config import get_settings
-    from app.services.api_key_vault import get_vault_manager
+    from app.services.credentials.vault import get_vault_manager
 
     settings = get_settings()
     vault = get_vault_manager()

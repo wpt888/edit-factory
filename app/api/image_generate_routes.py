@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
-from app.rate_limit import limiter
+from app.core.rate_limit import limiter
 from app.api.validators import ALLOWED_IMAGE_MIMES, validate_file_mime_type, validate_upload_size
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
@@ -48,7 +48,7 @@ _gemini_lock = threading.Lock()
 
 def _get_gemini_client(profile_id: str = ""):
     """Get or create a Gemini client for a profile (falls back to env key)."""
-    from app.services.api_key_vault import get_vault_manager
+    from app.services.credentials.vault import get_vault_manager
     api_key = get_vault_manager().get_api_key_or_default(profile_id, "gemini") if profile_id else ""
     if not api_key:
         settings = get_settings()
@@ -286,7 +286,7 @@ async def generate_image(
     ctx: ProfileContext = Depends(get_profile_context),
 ):
     """Start AI image generation (background task)."""
-    from app.services.api_key_vault import get_vault_manager
+    from app.services.credentials.vault import get_vault_manager
     fal_key = get_vault_manager().get_api_key_or_default(ctx.profile_id, "fal")
     if not fal_key:
         raise HTTPException(status_code=503, detail="FAL API key not configured")
@@ -526,7 +526,7 @@ async def apply_logo(
 
     try:
         # Apply overlay
-        from app.services.logo_overlay_service import apply_logo_overlay
+        from app.services.video_effects.logo_overlay import apply_logo_overlay
 
         output_dir = settings.output_dir / "generated_images" / ctx.profile_id
         output_dir.mkdir(parents=True, exist_ok=True)

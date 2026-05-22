@@ -56,7 +56,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.config import get_settings, APP_VERSION
-from app.rate_limit import limiter
+from app.core.rate_limit import limiter
 from app.api.routes import router as api_router
 from app.api.library_routes import router as library_router
 from app.api.segments_routes import router as segments_router
@@ -77,7 +77,7 @@ from app.api.image_generate_routes import router as image_generate_router
 from app.api.schedule_routes import router as schedule_router
 from app.api.assembly_routes import router as assembly_router
 
-from app.logging_config import setup_logging
+from app.core.logging_config import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
@@ -417,7 +417,7 @@ app.include_router(assembly_router, prefix="/api/v1", tags=["Script-to-Video Ass
 
 # Desktop-only routes (license, version, settings) — gated behind DESKTOP_MODE
 if settings.desktop_mode:
-    from app.api.desktop_routes import router as desktop_router
+    from app.platforms.desktop.routes import router as desktop_router
     app.include_router(desktop_router, prefix="/api/v1", tags=["Desktop"])
 
 # Static files for frontend

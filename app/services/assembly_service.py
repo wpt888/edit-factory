@@ -329,7 +329,7 @@ class AssemblyService:
             Tuple of (audio_path, duration, timestamps_dict)
         """
         from app.services.tts.elevenlabs import ElevenLabsTTSService
-        from app.services.silence_remover import SilenceRemover
+        from app.services.audio.silence_remover import SilenceRemover
 
         # Use provided temp_dir or create a new one
         _owns_temp_dir = temp_dir is None
@@ -360,7 +360,7 @@ class AssemblyService:
     ) -> Tuple[Path, float, dict]:
         """Internal implementation for generate_tts_with_timestamps."""
         from app.services.tts.elevenlabs import ElevenLabsTTSService
-        from app.services.silence_remover import SilenceRemover
+        from app.services.audio.silence_remover import SilenceRemover
 
         # Generate TTS with timestamps (profile_id enables multi-account failover)
         tts_service = ElevenLabsTTSService(output_dir=temp_dir, model_id=elevenlabs_model, profile_id=profile_id)
@@ -1555,7 +1555,7 @@ class AssemblyService:
 
         # Apply PiP overlays to extracted segments (before collecting into segment_files)
         if pip_overlays and match_results:
-            from app.services.overlay_renderer import apply_pip_overlay
+            from app.services.video_effects.overlay_renderer import apply_pip_overlay
             for i, entry in enumerate(timeline):
                 if i < len(match_results):
                     seg_id = match_results[i].segment_id
@@ -1609,7 +1609,7 @@ class AssemblyService:
 
         # Generate and insert interstitial slide clips into segment list
         if interstitial_slides:
-            from app.services.overlay_renderer import generate_interstitial_clip
+            from app.services.video_effects.overlay_renderer import generate_interstitial_clip
             # Sort slides by afterMatchIndex
             sorted_slides = sorted(interstitial_slides, key=lambda s: s.get("afterMatchIndex", -1))
             # Build insertion map: afterMatchIndex -> list of clip paths

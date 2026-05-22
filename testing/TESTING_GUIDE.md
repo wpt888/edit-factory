@@ -199,7 +199,7 @@ ffmpeg -version
 #### 2. Python Services
 ```python
 from app.services.video_processor import VideoProcessor
-from app.services.silence_remover import SilenceRemover
+from app.services.audio.silence_remover import SilenceRemover
 from app.services.voice_detector import VoiceDetector
 ```
 

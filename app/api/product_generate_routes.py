@@ -608,7 +608,7 @@ async def _generate_product_video_task(
             # Use ScriptGenerator for AI-generated script
             from app.services.script_generator import ScriptGenerator
 
-            from app.services.api_key_vault import get_vault_manager
+            from app.services.credentials.vault import get_vault_manager
             _vault = get_vault_manager()
             generator = ScriptGenerator(
                 gemini_api_key=_vault.get_api_key_or_default(profile_id, "gemini") or settings.gemini_api_key,

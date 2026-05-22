@@ -18,7 +18,7 @@ from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
-from app.rate_limit import limiter
+from app.core.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/postiz", tags=["postiz"])
@@ -935,7 +935,7 @@ Cerinte:
         import json as _json
 
         # Get API key — vault (per-profile) → env fallback
-        from app.services.api_key_vault import get_vault_manager
+        from app.services.credentials.vault import get_vault_manager
         api_key = get_vault_manager().get_api_key_or_default(profile.profile_id, "gemini")
         if not api_key:
             api_key = os.getenv("GEMINI_API_KEY")

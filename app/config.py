@@ -6,7 +6,7 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
-from app.version import get_version
+from app.core.version import get_version
 APP_VERSION = get_version()
 
 

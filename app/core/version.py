@@ -1,7 +1,7 @@
 """Application version derived from git tags.
 
 Usage:
-    from app.version import get_version
+    from app.core.version import get_version
     version = get_version()  # e.g., "1.2.3" or "0.0.0-dev"
 
 Versioning convention:

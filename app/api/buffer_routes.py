@@ -19,7 +19,7 @@ from app.config import get_settings
 from app.api.auth import ProfileContext, get_profile_context
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
-from app.rate_limit import limiter
+from app.core.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/buffer", tags=["buffer"])

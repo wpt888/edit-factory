@@ -58,7 +58,7 @@ class GeminiVideoAnalyzer:
         # Key resolution: explicit param > per-profile vault > legacy KeyVault > env var
         if not api_key and profile_id:
             try:
-                from app.services.api_key_vault import get_vault_manager
+                from app.services.credentials.vault import get_vault_manager
                 api_key = get_vault_manager().get_api_key_or_default(profile_id, "gemini")
             except Exception:
                 pass

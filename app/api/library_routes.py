@@ -27,11 +27,11 @@ from app.api.validators import (
     validate_upload_size, validate_tts_text_length,
     validate_file_mime_type, ALLOWED_VIDEO_MIMES,
 )
-from app.rate_limit import limiter
+from app.core.rate_limit import limiter
 from app.services.encoding_presets import get_preset, EncodingPreset
-from app.services.audio_normalizer import measure_loudness, build_loudnorm_filter
-from app.services.video_filters import VideoFilters, DenoiseConfig, SharpenConfig, ColorConfig
-from app.services.subtitle_styler import build_subtitle_filter
+from app.services.audio.normalizer import measure_loudness, build_loudnorm_filter
+from app.services.video_effects.filters import VideoFilters, DenoiseConfig, SharpenConfig, ColorConfig
+from app.services.video_effects.subtitle_styler import build_subtitle_filter
 from app.services.tts_subtitle_generator import generate_srt_from_timestamps
 from app.services.srt_validator import sanitize_srt_text, sanitize_srt_full, SRTValidator
 from app.utils import sanitize_filename as _sanitize_filename, normalize_path
@@ -3084,7 +3084,7 @@ async def _regenerate_voiceover_task(
 
         # 3. Remove long artificial pauses (assembly pipeline handles normalization)
         try:
-            from app.services.silence_remover import SilenceRemover
+            from app.services.audio.silence_remover import SilenceRemover
 
             trimmed_audio_path = temp_dir / f"tts_trimmed_{clip_id}.mp3"
             remover = SilenceRemover(
@@ -3493,7 +3493,7 @@ async def _render_final_clip_task(
                 # BUG-6.9: Save copy of timestamps before remap so we can restore on failure
                 original_tts_timestamps = list(tts_timestamps) if tts_timestamps else None
                 try:
-                    from app.services.silence_remover import SilenceRemover
+                    from app.services.audio.silence_remover import SilenceRemover
                     remover = SilenceRemover(min_silence_duration=0.25, padding=0.06, target_pause_duration=0.1)
                     trimmed_path = temp_dir / f"tts_trimmed_{clip_id}.mp3"
                     silence_result = await asyncio.to_thread(remover.remove_silence, audio_path, trimmed_path)

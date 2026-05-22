@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel
 
 from app.api.auth import ProfileContext, get_profile_context
-from app.services.api_key_vault import VAULT_SERVICES, get_vault_manager
+from app.services.credentials.vault import VAULT_SERVICES, get_vault_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api-keys", tags=["API Key Vault"])
@@ -179,7 +179,7 @@ async def validate_key(
 ):
     """Validate an API key against the provider without persisting it."""
     _validate_service(service)
-    from app.services.api_key_validators import validate_gemini, validate_fal
+    from app.services.credentials.validators import validate_gemini, validate_fal
 
     if service == "gemini":
         result = await validate_gemini(body.api_key)

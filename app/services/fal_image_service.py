@@ -247,7 +247,7 @@ def reset_fal_generator(profile_id: Optional[str] = None) -> None:
 
 def get_fal_generator(profile_id: str = "") -> FalImageGenerator:
     """Get FAL image generator instance, per-profile if vault key exists."""
-    from app.services.api_key_vault import get_vault_manager
+    from app.services.credentials.vault import get_vault_manager
 
     api_key = get_vault_manager().get_api_key_or_default(profile_id, "fal") if profile_id else ""
     if not api_key:

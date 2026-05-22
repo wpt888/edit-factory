@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from app.config import get_settings, APP_VERSION
 from app.services.key_vault import get_key_vault
-from app.services.license_service import LicenseService
+from app.services.credentials.license import LicenseService
 
 logger = logging.getLogger(__name__)
 

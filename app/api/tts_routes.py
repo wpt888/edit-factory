@@ -13,7 +13,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Background
 
 from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import validate_tts_text_length, validate_file_mime_type, ALLOWED_AUDIO_MIMES
-from app.rate_limit import limiter
+from app.core.rate_limit import limiter
 from app.config import get_settings
 from app.repositories.factory import get_repository
 from app.services.tts import get_tts_service
