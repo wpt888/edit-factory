@@ -13,7 +13,7 @@
 
 import { useState } from "react";
 import { useProfile } from "@/contexts/profile-context";
-import { CreateProfileDialog } from "./create-profile-dialog";
+import { CreateProfileDialog } from "@/components/dialogs/create-profile-dialog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,

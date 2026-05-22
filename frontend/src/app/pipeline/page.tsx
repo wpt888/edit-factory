@@ -69,10 +69,10 @@ import { EmptyState } from "@/components/empty-state";
 import { PublishDialog } from "@/components/dialogs/publish-dialog";
 import { PipelineSchedule } from "@/components/pipeline/pipeline-schedule";
 import { PipelineCaptionGenerator } from "@/components/pipeline/pipeline-caption-generator";
-import { ConfirmDialog } from "@/components/confirm-dialog";
-import { ProductPickerDialog } from "@/components/product-picker-dialog";
-import { ImagePickerDialog } from "@/components/image-picker-dialog";
-import type { AssociationResponse } from "@/components/product-picker-dialog";
+import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
+import { ProductPickerDialog } from "@/components/dialogs/product-picker-dialog";
+import { ImagePickerDialog } from "@/components/dialogs/image-picker-dialog";
+import type { AssociationResponse } from "@/components/dialogs/product-picker-dialog";
 import { SubtitleEditor } from "@/components/video-processing/subtitle-editor";
 import { SubtitleSettings, DEFAULT_SUBTITLE_SETTINGS, UserSubtitlePreset } from "@/types/video-processing";
 import {

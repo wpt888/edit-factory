@@ -53,7 +53,7 @@ import { useProfile } from "@/contexts/profile-context";
 import { EmptyState } from "@/components/empty-state";
 import { PublishDialog } from "@/components/dialogs/publish-dialog";
 import { ImageBulkPublishDialog } from "@/components/dialogs/image-bulk-publish-dialog";
-import { ConfirmDialog } from "@/components/confirm-dialog";
+import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
 import { InlineVideoPlayer } from "@/components/inline-video-player";
 import { ClipHoverPreview } from "@/components/clip-hover-preview";
 import { ClipTagEditor } from "@/components/clip-tag-editor";

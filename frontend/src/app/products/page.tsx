@@ -32,8 +32,8 @@ import {
   BookOpen,
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
-import { CreateFeedDialog } from "@/components/create-feed-dialog";
-import { BatchSettingsDialog, type BatchSettings } from "@/components/batch-settings-dialog";
+import { CreateFeedDialog } from "@/components/dialogs/create-feed-dialog";
+import { BatchSettingsDialog, type BatchSettings } from "@/components/dialogs/batch-settings-dialog";
 
 // Type definitions
 interface Feed {

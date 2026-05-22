@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Layers, Save } from "lucide-react";
-import { PipConfig, DEFAULT_PIP_CONFIG } from "@/components/product-picker-dialog";
+import { PipConfig, DEFAULT_PIP_CONFIG } from "@/components/dialogs/product-picker-dialog";
 
 // ============== TYPES ==============
 

@@ -17,7 +17,7 @@ import { apiGetWithRetry, apiPost, apiPatch, apiDelete, handleApiError } from "@
 import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import { useProfile } from "@/contexts/profile-context"
-import { ConfirmDialog } from "@/components/confirm-dialog"
+import { ConfirmDialog } from "@/components/dialogs/confirm-dialog"
 import { ApiKeyManager } from "@/components/api-key-manager"
 import { friendlyPlatformName } from "@/lib/platforms"
 

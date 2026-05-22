@@ -27,8 +27,8 @@ import { toast } from "sonner";
 import { Check, Loader2, Images } from "lucide-react";
 
 // Re-export AssociationResponse so consumers can import from one place
-export type { AssociationResponse } from "@/components/product-picker-dialog";
-import type { AssociationResponse } from "@/components/product-picker-dialog";
+export type { AssociationResponse } from "@/components/dialogs/product-picker-dialog";
+import type { AssociationResponse } from "@/components/dialogs/product-picker-dialog";
 
 // ============== PROPS ==============
 

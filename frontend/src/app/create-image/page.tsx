@@ -38,7 +38,7 @@ import {
   AlertTriangle,
   Download,
 } from "lucide-react";
-import { ConfirmDialog } from "@/components/confirm-dialog";
+import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
