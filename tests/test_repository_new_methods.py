@@ -327,3 +327,44 @@ def test_increment_segment_usage_increments_count_by_one(sqlite_repo):
     ).fetchone()
     assert row1["usage_count"] == 2
     assert row2["usage_count"] == 1
+
+
+# ─────────────────────────────────────────────────────────────
+# 6. get_source_video (added in Plan 80-02)
+# ─────────────────────────────────────────────────────────────
+
+
+def test_get_source_video_declared_on_base():
+    """The new get_source_video method MUST be declared on DataRepository ABC."""
+    from app.repositories.base import DataRepository
+
+    assert hasattr(DataRepository, "get_source_video"), \
+        "DataRepository ABC missing get_source_video"
+
+
+def test_get_source_video_returns_none_for_missing_id(sqlite_repo):
+    """get_source_video returns None when no row matches the given id."""
+    missing_id = str(uuid.uuid4())
+    result = sqlite_repo.get_source_video(missing_id)
+    assert result is None
+
+
+def test_get_source_video_returns_row_when_found(sqlite_repo):
+    """get_source_video returns the full row for an existing source video."""
+    profile_id = str(uuid.uuid4())
+    video_id = str(uuid.uuid4())
+    _seed_profile(sqlite_repo, profile_id)
+
+    sqlite_repo.create_source_video({
+        "id": video_id,
+        "profile_id": profile_id,
+        "filename": "test.mp4",
+        "file_path": "/tmp/test.mp4",
+    })
+
+    result = sqlite_repo.get_source_video(video_id)
+    assert result is not None
+    assert result["id"] == video_id
+    assert result["profile_id"] == profile_id
+    assert result["filename"] == "test.mp4"
+    assert result["file_path"] == "/tmp/test.mp4"
