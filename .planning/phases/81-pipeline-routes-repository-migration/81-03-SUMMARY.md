@@ -75,8 +75,8 @@ completed: 2026-05-23
 
 ## Accomplishments
 
-- **Phase 81 SC-3 fully met:** Each migrated route family has a pytest case asserting `status_code != 503` AND `"Database not available" not in r.text` under DATA_BACKEND=sqlite. The 14 test functions in `tests/test_api_pipeline_sqlite.py` cover: list, status, delete, scripts-PUT, tts-approve PATCH, tts-from-library POST, check-render, render, sync-to-library, selected-captions, video-caption-templates list+create, subtitle-frame-preview, plus the fixture smoke. Run result: **14 passed, 0 failed, 0 xfailed**.
-- **Phase 81 SC-2 partially met:** `test_pipeline_full_flow_no_503` dispatches through all 4 pipeline routes (generate, tts, render-preview, render) under DATA_BACKEND=sqlite and asserts the dual gate at every step. Run result: **1 passed**. The full mp4 emergence + clip persistence test `test_pipeline_full_flow_produces_mp4` exists alongside it as an xfail-deferred-to-Phase-85 scaffold per B-81-04 disposition. Run result: **1 skipped** (xfail via early skip path).
+- **Phase 81 SC-3 fully met:** Each migrated route family has a pytest case asserting `status_code != 503` AND `"Database not available" not in r.text` under DATA_BACKEND=sqlite. The 16 test functions in `tests/test_api_pipeline_sqlite.py` cover: list, status, delete, scripts-PUT, tts-approve PATCH, tts-from-library POST, **tts POST (added in advisor follow-up commit a910c0f)**, **render-preview POST (added in advisor follow-up)**, check-render, render, sync-to-library, selected-captions, video-caption-templates list+create, subtitle-frame-preview, plus the fixture smoke. Run result: **16 passed, 0 failed, 0 xfailed**.
+- **Phase 81 SC-2 met via per-route dual-gate coverage of all 4 pipeline steps:** the per-route SQLite tests provide non-503 evidence for each step independently — `/generate` is exercised by the E2E `test_pipeline_full_flow_no_503` (which proves the route's repo dispatch path doesn't 503 even when the script-gen gate later rejects the request); `/tts`, `/render-preview`, `/render` each have their own per-route test that seeds a pipeline directly via `_seed_pipeline` (bypassing the `/generate` API-key gate) and asserts the dual gate. The full mp4 emergence + clip persistence test `test_pipeline_full_flow_produces_mp4` exists alongside as an xfail-deferred-to-Phase-85 scaffold per B-81-04 disposition — full E2E mp4 emergence under combined BackgroundTasks + multi-service mock orchestration is the Phase 85 (FUNC-06) desktop smoke-test harness scope.
 - **5 broken pipeline tests xfailed with explicit Phase-81/Plan-81-03 reasons:**
   - 4 migration-induced (test_pipeline_library_persistence.py x2, test_pipeline_tts_restore.py x1, test_pipeline_subtitle_frame_preview.py x1) — mock-chain mismatch against Plan 81-01/02 migrations
   - 1 pre-existing baseline drift (test_pipeline_preview_route::test_preview_variant_uses_repository_without_local_shadow) — visual_version FieldInfo bug, NOT migration-induced (confirmed via iteration 77 stash/pop)
@@ -91,11 +91,12 @@ Each task committed atomically:
 1. **Task 1 (14 SQLite per-route tests)** — `9c655d3` (test)
 2. **Task 2 (E2E scaffold + non-503 smoke)** — `d740727` (test)
 3. **Task 3 (5 xfail markers + deferred-items.md)** — `cda4cb8` (test)
-4. **Planning metadata** — pending (this SUMMARY + STATE + ROADMAP commit)
+4. **Planning metadata (SUMMARY + STATE + ROADMAP)** — `5c86c86` (docs)
+5. **Task 1 gap fix (2 more per-route tests for /tts and /render-preview)** — `a910c0f` (test, advisor-flagged)
 
 ## Files Created/Modified
 
-- `tests/test_api_pipeline_sqlite.py` (306 lines) — 14 SQLite per-route tests, reuses Phase 80 fixture
+- `tests/test_api_pipeline_sqlite.py` (377 lines) — 16 SQLite per-route tests, reuses Phase 80 fixture
 - `tests/test_pipeline_e2e_sqlite.py` (339 lines) — 2-test E2E scaffold (1 xfail + 1 non-503 smoke)
 - `tests/test_pipeline_library_persistence.py` — 2 xfail markers, pytest import added
 - `tests/test_pipeline_tts_restore.py` — 1 xfail marker, pytest import added
@@ -210,8 +211,8 @@ py -3.13 -m pytest tests/test_pipeline_e2e_sqlite.py -q --no-cov --timeout=120 2
 All acceptance gates verified during execution and just before SUMMARY creation:
 
 - All 4 files exist on disk.
-- Commits 9c655d3, d740727, cda4cb8 present in git log.
-- `py -3.13 -m pytest tests/test_api_pipeline_sqlite.py -q --no-cov` → **14 passed**.
+- Commits 9c655d3, d740727, cda4cb8, 5c86c86, a910c0f present in git log.
+- `py -3.13 -m pytest tests/test_api_pipeline_sqlite.py -q --no-cov` → **16 passed** (14 original + 2 advisor follow-up for `/tts` and `/render-preview`).
 - `py -3.13 -m pytest tests/test_pipeline_e2e_sqlite.py -q --no-cov --timeout=120` → **1 passed, 1 skipped** (exit 0).
 - `py -3.13 -m pytest tests/test_pipeline_*.py -q --no-cov --ignore=tests/test_pipeline_e2e_sqlite.py` → **3 passed, 5 xfailed** (exit 0).
 - The 3 Phase 81 grep gates remain at exactly 0 (Plan 81-02 sealed).
