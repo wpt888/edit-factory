@@ -345,6 +345,21 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
 **Plans**: 1 plan (planned 2026-05-23):
   - [x] 89-01-PLAN.md - Greenfield scaffold of `marketing/` Next.js 16 App Router app (16 new files, zero modifications outside marketing/): package.json with locked port 3001 (`next dev --port 3001`) + Next.js ^16.1.1 / React 19.2.1 / Tailwind ^4 / @supabase/ssr / sonner / @radix-ui/react-slot, App Router shell (layout.tsx + page.tsx with server-rendered "Edit Factory - Coming soon" placeholder + globals.css mirroring desktop OKLCH design tokens), Shadcn Button + Card primitives copied byte-for-byte from frontend/src/components/ui/, lib/utils.ts (cn helper) + lib/supabase.ts (`getMarketingSupabase()` server helper consuming MARKETING_SUPABASE_URL/KEY + `getMarketingBrowserClient()` consuming NEXT_PUBLIC_MARKETING_SUPABASE_URL/ANON_KEY, both throw on missing env per D-12), .env.example documenting current + future-phase placeholders, Playwright config + scaffold-smoke.spec.ts (asserts HTTP 200 + literal "Edit Factory" / "Coming soon" text + writes screenshot per CLAUDE.md MANDATORY rule). Version-bump decision: Next.js 16.1.1 instead of requirement-text "Next.js 15" per D-01 (matches existing frontend stack). Manual follow-ups documented in SUMMARY: provision marketing Supabase project + wire .env.local (autonomous loop cannot navigate Supabase Web UI).
 
+### Phase 90: Landing page + pricing
+
+**Goal**: The marketing app's home page presents a hero, feature grid, three-tier pricing table (Starter $79 / Pro $149 / Cloud Sync $39/yr), screenshots, and FAQ. Lighthouse Performance ≥ 90 and Accessibility ≥ 95.
+
+**Depends on**: Phase 89.
+**Requirements**: MARK-02.
+**Success Criteria**:
+  1. `marketing/app/page.tsx` renders the full landing page.
+  2. `npx playwright test marketing/tests/landing.spec.ts` passes a Lighthouse run with both metrics meeting thresholds (Performance ≥ 90, Accessibility ≥ 95).
+  3. Hero CTA wires to `/signup` placeholder (real signup lives in Phase 91+).
+  4. Pricing table reflects locked v13 product decisions: Starter $79 one-time, Pro $149 one-time, Cloud Sync $39/yr (per STATE.md Decisions L84).
+  5. MANDATORY Playwright screenshot per CLAUDE.md captures the rendered landing page at full-page resolution.
+
+**Plans**: 1–2 plans.
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
