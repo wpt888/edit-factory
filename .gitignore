@@ -123,6 +123,9 @@ docker-compose.override.yml
 # FFmpeg binaries (download separately)
 # ======================
 ffmpeg/
+# Allow README files under ffmpeg/ subdirs to be tracked (documents fetch steps)
+!ffmpeg/ffmpeg-mac/README.md
+!ffmpeg/ffmpeg-linux/README.md
 
 # ======================
 # Electron (allow electron/build/ to be tracked)
