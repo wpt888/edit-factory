@@ -212,14 +212,94 @@ def _seed_export_preset(repo, name="TikTok", **overrides):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Endpoint table (populated in Tasks 3 and 4)
+# Endpoint table — flat stateless reads (segments + assembly + routes + profiles)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Each entry: {"method": "GET"|"POST"|"PUT"|"DELETE"|"PATCH",
 #             "path": "/api/v1/...",
-#             "json": dict | None,
-#             "note": str}
-ENDPOINTS: list[dict] = []
+#             "json": dict | None}
+ENDPOINTS: list[dict] = [
+    # Segments (4) — Phase 82 migrated surface
+    {"method": "GET",  "path": "/api/v1/segments/source-videos",          "json": None},
+    {"method": "GET",  "path": "/api/v1/segments/",                       "json": None},  # trailing slash REQUIRED
+    {"method": "POST", "path": "/api/v1/segments/reset-usage",            "json": {}},
+    {"method": "GET",  "path": "/api/v1/segments/product-groups-bulk",    "json": None},
+    # Assembly (1) — router boot proof; 404 acceptable
+    {"method": "GET",  "path": "/api/v1/assembly/status/nonexistent-job-id", "json": None},
+    # Routes/jobs (2) — Phase 80 health check + job listing
+    {"method": "GET",  "path": "/api/v1/health",                          "json": None},
+    {"method": "GET",  "path": "/api/v1/jobs",                            "json": None},
+    # Profiles (2) — trailing slash REQUIRED on list endpoint
+    {"method": "GET",  "path": "/api/v1/profiles/",                       "json": None},
+    {"method": "GET",  "path": "/api/v1/profiles/templates",              "json": None},
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Library walk (stateful — POST /projects to capture project_id)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _run_library_walk(client) -> list[dict]:
+    """Walk the 7 library endpoints, capturing project_id from the POST.
+
+    Returns a list of result rows: [{"method": ..., "path": ..., "status": ...}].
+
+    Library steps exercised:
+    1. POST /projects  — creates project, captures project_id
+    2. GET  /projects
+    3. GET  /projects/{id}/clips
+    4. GET  /all-clips
+    5. GET  /tags
+    6. GET  /trash
+    7. GET  /export-presets
+    """
+    rows: list[dict] = []
+
+    # 1. POST /projects
+    r = client.post(
+        "/api/v1/library/projects",
+        json={"name": "Smoke Project", "description": "smoke", "target_duration": 20},
+        headers=HEADERS,
+    )
+    rows.append({"method": "POST", "path": "/api/v1/library/projects", "status": r.status_code})
+    project_id = None
+    try:
+        data = r.json()
+        # Response may have id directly or nested under project/data
+        project_id = data.get("id") or data.get("project_id")
+        if not project_id and isinstance(data.get("project"), dict):
+            project_id = data["project"].get("id")
+    except Exception:
+        pass
+
+    # 2. GET /projects
+    r = client.get("/api/v1/library/projects", headers=HEADERS)
+    rows.append({"method": "GET", "path": "/api/v1/library/projects", "status": r.status_code})
+
+    # 3. GET /projects/{id}/clips — use captured ID or fake fallback
+    if not project_id:
+        project_id = f"smoke-fallback-{uuid.uuid4().hex[:8]}"
+    r = client.get(f"/api/v1/library/projects/{project_id}/clips", headers=HEADERS)
+    rows.append({"method": "GET", "path": "/api/v1/library/projects/{id}/clips", "status": r.status_code})
+
+    # 4. GET /all-clips
+    r = client.get("/api/v1/library/all-clips", headers=HEADERS)
+    rows.append({"method": "GET", "path": "/api/v1/library/all-clips", "status": r.status_code})
+
+    # 5. GET /tags
+    r = client.get("/api/v1/library/tags", headers=HEADERS)
+    rows.append({"method": "GET", "path": "/api/v1/library/tags", "status": r.status_code})
+
+    # 6. GET /trash
+    r = client.get("/api/v1/library/trash", headers=HEADERS)
+    rows.append({"method": "GET", "path": "/api/v1/library/trash", "status": r.status_code})
+
+    # 7. GET /export-presets
+    r = client.get("/api/v1/library/export-presets", headers=HEADERS)
+    rows.append({"method": "GET", "path": "/api/v1/library/export-presets", "status": r.status_code})
+
+    return rows
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pipeline walk (FUNC-02 spine — 4-step sequential walk with ID capture)
@@ -369,11 +449,16 @@ def main() -> None:
     for row in pipeline_rows:
         _print_row(row["method"], row["path"], row["status"])
 
-    # (e) Walk remaining flat endpoint table (populated in Task 4)
+    # (e) Walk library (7 endpoints — Phase 80 migrated CRUD surface)
+    library_rows = _run_library_walk(client)
+    for row in library_rows:
+        _print_row(row["method"], row["path"], row["status"])
+
+    # (f) Walk flat endpoint table (9 stateless: segments + assembly + routes + profiles)
     flat_rows = _walk(client, ENDPOINTS)
 
-    # Combine all rows
-    all_rows = pipeline_rows + flat_rows
+    # Combine all rows: 6 pipeline + 7 library + 9 flat = 22 total
+    all_rows = pipeline_rows + library_rows + flat_rows
 
     # (f) Collect failures (status >= 500 — the FUNC-01 backslide gate)
     failures = [r for r in all_rows if r["status"] >= 500]
