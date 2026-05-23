@@ -3406,19 +3406,27 @@ async def check_render_skip(
     # Build a set of soft-deleted clip IDs so we don't offer skip for deleted clips
     _deleted_clip_ids: set = set()
     repo_chk = get_repository()
-    supabase_chk = repo_chk.get_client() if repo_chk else None
-    if supabase_chk:
-        _render_jobs = pipeline.get("render_jobs", {})
-        _clip_ids_to_check = [
-            j.get("clip_id") for j in _render_jobs.values()
-            if isinstance(j, dict) and j.get("clip_id")
-        ]
-        if _clip_ids_to_check:
-            try:
-                _del_result = supabase_chk.table("editai_clips").select("id").in_("id", _clip_ids_to_check).eq("is_deleted", True).execute()
-                _deleted_clip_ids = {r["id"] for r in (_del_result.data or [])}
-            except Exception as _del_err:
-                logger.warning(f"Failed to check deleted clips: {_del_err}")
+    _render_jobs = pipeline.get("render_jobs", {})
+    _clip_ids_to_check = [
+        j.get("clip_id") for j in _render_jobs.values()
+        if isinstance(j, dict) and j.get("clip_id")
+    ]
+    if _clip_ids_to_check:
+        try:
+            # Option A: list_clips_by_profile with in_ filter on id + eq is_deleted=True
+            # Both backends honor in_ on arbitrary columns (sqlite via _apply_filters,
+            # Supabase via .in_() chain). Plan 81-02 Task 1.A.
+            _del_result = repo_chk.list_clips_by_profile(
+                profile.profile_id,
+                QueryFilters(
+                    in_={"id": _clip_ids_to_check},
+                    eq={"is_deleted": True},
+                    select="id",
+                ),
+            )
+            _deleted_clip_ids = {r["id"] for r in (_del_result.data or [])}
+        except Exception as _del_err:
+            logger.warning(f"Failed to check deleted clips: {_del_err}")
 
     results: List[RenderCheckResult] = []
     for vid in render_request.variant_indices:
@@ -3929,19 +3937,22 @@ async def render_variants(
             # Persistent diversity: deprioritize segments with usage_count > 0
             try:
                 _repo = get_repository()
-                _supa_render = _repo.get_client() if _repo else None
-                if _supa_render:
-                    _render_usage_q = _supa_render.table("editai_segments")\
-                        .select("id")\
-                        .eq("profile_id", _profile_id)\
-                        .gt("usage_count", 0)
-                    if render_request.source_video_ids:
-                        _render_usage_q = _render_usage_q.in_(
-                            "source_video_id", render_request.source_video_ids
-                        )
-                    _render_used = _render_usage_q.execute()
-                    if _render_used.data:
-                        render_avoid_ids.update(s["id"] for s in _render_used.data)
+                # Plan 81-02 Task 1.B — list_segments composes profile_id + gt(usage_count, 0) + optional in_(source_video_id).
+                _seg_filter_eq: Dict[str, Any] = {}
+                _seg_filter_in: Dict[str, List[Any]] = {}
+                if render_request.source_video_ids:
+                    _seg_filter_in["source_video_id"] = list(render_request.source_video_ids)
+                _render_used = _repo.list_segments(
+                    _profile_id,
+                    QueryFilters(
+                        eq=_seg_filter_eq,
+                        gt={"usage_count": 0},
+                        in_=_seg_filter_in,
+                        select="id",
+                    ),
+                )
+                if _render_used.data:
+                    render_avoid_ids.update(s["id"] for s in _render_used.data)
             except Exception as e:
                 logger.warning(f"Failed to load segment usage for render: {e}")
 
@@ -4375,17 +4386,20 @@ async def remake_variant(
     # DB segments with usage_count > 0 (persistent diversity)
     try:
         _repo = get_repository()
-        _supa = _repo.get_client() if _repo else None
-        if _supa:
-            _usage_q = _supa.table("editai_segments")\
-                .select("id")\
-                .eq("profile_id", profile.profile_id)\
-                .gt("usage_count", 0)
-            if render_request.source_video_ids:
-                _usage_q = _usage_q.in_("source_video_id", render_request.source_video_ids)
-            _used = _usage_q.execute()
-            if _used.data:
-                remake_avoid_ids.update(s["id"] for s in _used.data)
+        # Plan 81-02 Task 1.C — list_segments composes profile_id + gt(usage_count, 0) + optional in_(source_video_id).
+        _seg_filter_in: Dict[str, List[Any]] = {}
+        if render_request.source_video_ids:
+            _seg_filter_in["source_video_id"] = list(render_request.source_video_ids)
+        _used = _repo.list_segments(
+            profile.profile_id,
+            QueryFilters(
+                gt={"usage_count": 0},
+                in_=_seg_filter_in,
+                select="id",
+            ),
+        )
+        if _used.data:
+            remake_avoid_ids.update(s["id"] for s in _used.data)
     except Exception as e:
         logger.warning(f"Failed to load segment usage for remake: {e}")
 
