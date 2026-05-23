@@ -120,6 +120,15 @@ All gates from the executor objective:
 | 9 | _save_clip_to_library body free of bare `supabase_lib` code references | **PASS** (sed scan returns 0 code matches; only the comment introducing the migration block survives) |
 | 10 | sync_pipeline_to_library body free of bare `supabase` code references | **PASS** (sed scan returns 0 code matches) |
 | 11 | get_pipeline_status recovery block free of supabase_lib + get_supabase code references | **PASS** |
+| 12 | Static repo.* method cross-check vs ABC | **PASS** — `grep -oE "repo[a-z_]*\.[a-z_]+\(" app/api/pipeline_routes.py \| sort -u` returns 26 distinct method calls; each verified present in `app/repositories/base.py` (no typos like `list_clip` instead of `list_clips`) |
+
+### Behavior changes (semantic equivalence, not strict equivalence)
+
+Two intentional semantic adjustments worth flagging — both preserve observable behavior but change the SQL-layer query shape:
+
+1. **IS NULL filter migrated from server-side to client-side filtering.** The pre-migration code at `_save_clip_to_library` line ~1097 and `get_pipeline_status` recovery line ~4801 used PostgREST's `.is_("visual_version", "null").limit(1)` to fetch exactly one row at the SQL layer. The migration uses `list_clips(QueryFilters(eq=..., select="id, visual_version", limit=10))` followed by a Python list comprehension filtering for `r.get("visual_version") is None`. Practically equivalent because each `(project_id, variant_index)` pair has ≤ 2-3 visual_version values in practice (None for standard, "A"/"B" for meta multiplication). The limit=10 ceiling is overkill — guards against pathological cases without altering correctness. Affects: 2 sites (Task 2 _save_clip_to_library Step D, Task 4 get_pipeline_status standard-clip recovery).
+
+2. **Defensive race-retry added in `sync_pipeline_to_library` project create.** The pre-migration code at line ~5058 raised `HTTPException(500, "Failed to create library project")` on insert failure inside the `_library_project_lock`. The lock serialized creates within a single process, but two API workers racing the same pipeline_id could each hit a uniqueness constraint and one would 500. The migration adds a `repo.get_project_by_name(profile_id, pipeline_name)` retry on create exception, gracefully resolving the inter-worker race. This is a strict superset of the original behavior (more graceful), not a 1-to-1 transcription.
 
 ### Sites migrated in this plan
 
@@ -157,7 +166,7 @@ All gates from the executor objective:
 - **Used `table_query` upsert** for both clip_content sites (2 in this plan) — same Phase 80 pattern, defers any "unified upsert_clip_content ABC method" decision.
 - **Removed the dead `if not repo:` 503 guard in `adopt_library_tts`** as a Rule 1 deviation. `get_repository()` never returns None under DATA_BACKEND=sqlite per FUNC-01.
 - **Reworded 5 inline comments** to avoid literal pattern strings (`get_client()`, `supabase.table()`, `from app.db import get_supabase`, `supabase_lib`, `Database not available`). Required by the plan's success_criteria which check literal grep counts including comments.
-- **Added race-retry to sync_pipeline_to_library project create** (on create exception, retry via repo.get_project_by_name). The pre-migration supabase chain implicitly handled this via PostgREST's post-insert conflict handler; the explicit retry keeps the same race-tolerance semantics on both backends.
+- **Added defensive race-retry to sync_pipeline_to_library project create** (on create exception, retry via repo.get_project_by_name). The pre-migration supabase chain did NOT have this fallback — it raised `HTTPException(500, "Failed to create library project")` on insert failure inside the `_library_project_lock`. The added retry is a strict superset of the original behavior (more graceful when two workers race), not a 1-to-1 transcription. See the "Behavior changes" subsection in Verification Results for full context.
 
 ## Deviations from Plan
 
