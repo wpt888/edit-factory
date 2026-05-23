@@ -308,7 +308,12 @@ class TestDownloadRangeResume:
     """test_download_resumes_with_range_header"""
 
     def test_download_resumes_with_range_header(self, monkeypatch, tmp_path):
-        """Pre-existing .partial/<filename> with 256 bytes triggers Range: bytes=256-; final .installed exists."""
+        """Pre-existing .partial/<filename> triggers Range: bytes=N-; final .installed exists.
+
+        Uses first half of the test tarball as the existing partial (tarball is ~109 bytes,
+        so PARTIAL_SIZE = 54). The mock returns 206 with the remaining bytes so that
+        partial + remaining = the full tarball, which then passes SHA256 verification.
+        """
         import app.api.desktop_ml_routes as mod
         monkeypatch.setattr("app.api.desktop_ml_routes.get_base_dir", lambda: tmp_path)
 
@@ -317,8 +322,9 @@ class TestDownloadRangeResume:
         partial_dir.mkdir(parents=True, exist_ok=True)
         partial_path = partial_dir / filename
 
-        first_256 = _TARBALL_BYTES[:256]
-        partial_path.write_bytes(first_256)
+        # Pre-seed first half of the tarball as an in-progress partial download.
+        PARTIAL_SIZE = len(_TARBALL_BYTES) // 2  # ~54 bytes for a 109-byte tarball
+        partial_path.write_bytes(_TARBALL_BYTES[:PARTIAL_SIZE])
 
         received_range_headers = []
 
@@ -331,9 +337,10 @@ class TestDownloadRangeResume:
             range_header = request.headers.get("range", "")
             received_range_headers.append(range_header)
 
-            assert range_header == "bytes=256-", f"Expected 'bytes=256-', got: {range_header!r}"
+            expected_range = f"bytes={PARTIAL_SIZE}-"
+            assert range_header == expected_range, f"Expected {expected_range!r}, got: {range_header!r}"
 
-            remaining = _TARBALL_BYTES[256:]
+            remaining = _TARBALL_BYTES[PARTIAL_SIZE:]
             return httpx.Response(
                 206,
                 headers={"Content-Length": str(len(remaining))},
@@ -356,7 +363,10 @@ class TestDownloadRangeResume:
         body = asyncio.run(_run())
 
         assert len(received_range_headers) > 0, "No Range header was seen by mock transport"
-        assert received_range_headers[0] == "bytes=256-"
+        expected_range = f"bytes={PARTIAL_SIZE}-"
+        assert received_range_headers[0] == expected_range, (
+            f"Expected {expected_range!r}, got {received_range_headers[0]!r}"
+        )
 
         installed_path = tmp_path / "ml" / ".installed"
         assert installed_path.exists(), f".installed not found after resume: {body[:500]}"
