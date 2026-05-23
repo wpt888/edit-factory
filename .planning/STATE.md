@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 84 SHIPPED — ready for Phase 85
-stopped_at: "Phase 84 Plan 84-01 SHIPPED end-to-end. Cross-platform base_dir resolver (win32/darwin/linux) + FFmpeg discovery (env → bundled → system PATH) extracted to a stdlib-only `app/ffmpeg_setup.py` to bypass the Py 3.14 scipy-wheel gap. 16 new tests (8 base_dir + 8 ffmpeg resolver) — 15 pass + 1 expected skip (no-ffmpeg-anywhere test self-skips because repo ships win64-gpl/bin). Code review surfaced 2 advisory warnings (WR-01 bundled-dir-without-binary-presence-check; WR-02 dead imports in app/main.py) — non-blocking, recorded for follow-up. Verifier returned status: passed with 12/12 must-haves. electron/package.json now has per-target win.extraResources + mac.extraResources; Linux electron target intentionally absent per v13 scope."
-last_updated: "2026-05-23T10:00:00.000Z"
+status: Phase 85 PLANNED — ready to execute (1 plan, 6 tasks, 1 wave)
+stopped_at: "Phase 85 Plan 85-01 PLANNED end-to-end. gsd-planner produced .planning/phases/85-desktop-smoke-test-harness/85-01-PLAN.md (926 lines, 6 tasks, single wave, atomic single-plan phase per v13-ROADMAP line 119). gsd-plan-checker verdict: PASS 49/50 with 4 non-blocking advisory notes (cosmetic endpoint-count off-by-one in a header comment; minor fake-UUID-fallback inline doc; harmless `spec.get(True) or spec.get('on')` YAML dead-code clause; files-modified manifest cleanliness verified). All 22 endpoint paths in the plan's table spot-checked against live `@router.*` decorators in app/api/pipeline_routes.py, library_routes.py, segments_routes.py, assembly_routes.py, routes.py, profile_routes.py — no drift. Plan ships scripts/desktop-smoke-test.py (TestClient-based, SQLite mode, mocks FFmpeg + Gemini + TTS, 5xx-only rejection, per-row status table to stdout) + .github/workflows/desktop-smoke.yml (Python 3.11 pin matching ci.yml:21 to sidestep host Py 3.14 scipy-wheel gap, on: pull_request: branches: [main]) + tests/test_pipeline_e2e_sqlite.py xfail-reason update (B-81-04 → cite Phase 85 as canonical FUNC-02 closer) + 85-01-SUMMARY.md. Closes FUNC-02 + FUNC-06."
+last_updated: "2026-05-23T11:00:00.000Z"
 progress:
   total_phases: 19
   completed_phases: 5
-  total_plans: 12
+  total_plans: 13
   completed_plans: 11
   percent: 26
 ---
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 ## Current Position
 
-Phase: 84 (cross-platform-paths-and-ffmpeg-discovery) — SHIPPED 2026-05-23 with verifier status: passed (12/12 must-haves)
-Plan: 1 of 1 complete (84-01 — cross-platform paths + FFmpeg discovery)
-Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 5/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81–83 SHIPPED 2026-05-23 — verification deferred, Phase 84 SHIPPED + VERIFIED 2026-05-23). Phase 84 closed FUNC-04 + FUNC-05 by adding cross-platform `_get_app_base_dir` (win32/darwin/linux) + extracting `_resolve_ffmpeg_path` into a stdlib-only `app/ffmpeg_setup.py` module (env → bundled → system PATH order per v13-ROADMAP line 101).
-Next action: `/gsd-plan-phase 85` (autonomous). Phase 85 builds `scripts/desktop-smoke-test.py` + `.github/workflows/desktop-smoke.yml` to fail CI on any 5xx in SQLite mode (FUNC-02 + FUNC-06; depends on Phases 80–84, all now SHIPPED). Phase 81 + 82 + 83 verifications (`/gsd-verify-phase 81/82/83`) remain deferred manual gates — can be batched.
+Phase: 85 (desktop-smoke-test-harness) — PLANNED 2026-05-23, ready to execute (gsd-plan-checker PASS 49/50)
+Plan: 0 of 1 executed (85-01 — desktop smoke harness + CI gate; 6 tasks, 1 wave, atomic single-plan phase)
+Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 5/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81–83 SHIPPED 2026-05-23 — verification deferred, Phase 84 SHIPPED + VERIFIED 2026-05-23, Phase 85 PLANNED 2026-05-23). Phase 85 will close FUNC-02 + FUNC-06 by shipping `scripts/desktop-smoke-test.py` (TestClient harness walking 22 endpoints across 6 routers, 5xx-only rejection) + `.github/workflows/desktop-smoke.yml` (Python 3.11 pin, on: pull_request).
+Next action: `/gsd-execute-phase 85` (autonomous). Plan file: `.planning/phases/85-desktop-smoke-test-harness/85-01-PLAN.md`. Phase 81 + 82 + 83 verifications (`/gsd-verify-phase 81/82/83`) remain deferred manual gates — can be batched.
 
 Sources:
 
