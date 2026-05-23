@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 83 PLANNED — Ready to execute (1 plan in 1 wave)
-stopped_at: "Phase 83 plan 83-01-PLAN.md authored (4 tasks, FUNC-01 + FUNC-03 covered, zero new ABC methods — reuses list_tts_assets + list_jobs filter primitives). Plan-checker returned 0 blockers + 1 warning + 1 info. Targeted revision applied (JobStorage singleton autouse fixture baked into Task 4 test template; case-(b) rationale relabel)."
-last_updated: "2026-05-23T07:30:00.000Z"
+status: Phase 83 SHIPPED — ready for milestone audit
+stopped_at: "Phase 83 fully shipped — Plan 83-01 executed end-to-end. Combined get_client() count across assembly_service.py + cleanup.py: 2 → 0. 4 atomic task commits (4e60c0b docs, f659081 assembly_service, 066cb9b cleanup, 507545c tests) + 1 metadata commit. Zero new ABC methods added — FUNC-03 closed by documented coverage. 5 new SQLite tests pass + 67 Phase 80/81/82 baseline tests preserved."
+last_updated: "2026-05-23T08:00:00.000Z"
 progress:
   total_phases: 19
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 10
-  completed_plans: 9
-  percent: 16
+  completed_plans: 10
+  percent: 21
 ---
 
 # Project State
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale, distributed as a true downloadable desktop product priced for indie creators.
-**Current focus:** Phase 83 — background-services-repository-migration (PLANNED, ready to execute)
+**Current focus:** Phase 84 — cross-platform paths & FFmpeg discovery (next; Phase 83 sealed)
 
 ## Current Position
 
-Phase: 83 (background-services-repository-migration) — PLANNED, READY TO EXECUTE
-Plan: 1 plan authored (83-01-PLAN.md, 4 tasks, single wave)
-Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 3/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred, Phase 82 SHIPPED 2026-05-23 — verification deferred). Phase 83 planned 2026-05-23 (1 plan, 4 tasks, 0 new ABC methods — reuses list_tts_assets + list_jobs filter primitives; FUNC-03 closed by documented-coverage rather than additions).
-Next action: `/gsd-execute-phase 83` — autonomous loop will execute the single plan 83-01 (audit + assembly_service.py dedup migration + cleanup.py dry-run migration + SQLite tests). Phase 81 + Phase 82 verifications (`/gsd-verify-phase 81` + `/gsd-verify-phase 82`) remain deferred manual gates — can be batched. Plan-checker noted 0 blockers + 1 warning + 1 info; warning (JobStorage singleton autouse fixture in test template) and info (case-(b) rationale relabel) applied via touch-up commit 8dd0a0a.
+Phase: 83 (background-services-repository-migration) — SHIPPED 2026-05-23
+Plan: 1 of 1 complete
+Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 4/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred, Phase 82 SHIPPED 2026-05-23 — verification deferred, Phase 83 SHIPPED 2026-05-23 — ready for milestone audit). Phase 83 Plan 83-01 closed FUNC-01 for non-route layers and FUNC-03 by documented coverage (zero new ABC methods — existing list_tts_assets + list_jobs cover both sites via existing eq/lt/in_/limit filter primitives).
+Next action: `/gsd-plan-phase 84` (autonomous). Phase 84 targets cross-platform paths & FFmpeg discovery per ROADMAP line 202 — no dependency on Phase 83. Phase 81 + Phase 82 + Phase 83 verifications (`/gsd-verify-phase 81/82/83`) remain deferred manual gates — can be batched.
 
 Sources:
 
@@ -64,6 +64,7 @@ Sources:
 | Phase 81 P02 | ~1 session | 4 tasks | 1 file |
 | Phase 81 P03 | ~10min | 3 tasks | 8 files (4 created + 4 modified) |
 | Phase 82 P82-02 | single session | 4 tasks | 1 files |
+| Phase 83 P83-01 | single session | 4 tasks | 2 modified + 3 created (audit + summary + sqlite tests) |
 
 ## Accumulated Context
 
@@ -91,6 +92,7 @@ Earlier project decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 82]: Plan 82-01 SHIPPED — segments_routes.py get_client() count 37 → 15 (within target band [13, 19]) across 22 Pattern A/B migrations in 3 chunks (Chunk 1: source-videos CRUD + waveform + voice-detection 8 sites in e891f3b; Chunk 2: segments read/delete/toggle/bulk-transforms + per-segment helpers 13 sites in 1e76b91; Chunk 3: list_product_groups in 47aeef6). 2 new ABC methods (`get_product_group`, `update_product_group`) added on both backends — base.py + supabase_repo.py + sqlite_repo.py — with 6/6 RED→GREEN tests in tests/test_repository_segments_phase82.py. ROUTES-AUDIT.md catalogs all 37 guards + 76 ride-alongs + helper-caller table (3-caller `_assign_product_group` + 4-caller `_reassign_all_segments`, both deferred to 82-02). T-82-01-01 IDOR ownership pattern applied at every new `repo.get_source_video / get_segment / get_product_group` site. T-82-01-02 silent-skip accepted threat for bulk_update_transforms per-id loop. Plan-checker BLOCKER 1/2 corrections preserved: update_segment + delete_product_group NOT migrated (deferred to 82-02 as Pattern C with helper dependency). 6 atomic commits (a5b533a docs, 3303bbe RED, 629493f GREEN, e891f3b chunk 1, 1e76b91 chunk 2, 47aeef6 chunk 3). No deviations from plan — all advisor-flagged nuances (bulk_update_transforms add-mode raise-404 preservation, set-mode per-id loop, test-env probe) handled inline.
 - [Phase 82]: Plan 82-02 SHIPPED — segments_routes.py all three Phase-82 grep gates at exactly 0 (get_client = 0, expanded ride-along = 0, Database not available = 0). Helpers _assign_product_group + _reassign_all_segments refactored to drop supabase first arg; all 7 caller sites updated. 4 atomic chunked commits (5bfc724, 172c7a1, ee5411f, b109728). 21 distinct repo.* methods, all defined in base.py. Chunk-order swap from plan (helpers in Chunk 2 instead of Chunk 3) eliminated transitional None first-arg per advisor recommendation. Gate 8 reformulated per advisor analysis: 4 of 7 callers use asyncio.to_thread so _helper( regex returns 3 (2 def + 1 internal recursion); to_thread arity validated separately. T-82-02-01..T-82-02-08 all honored. Two hardening adjustments: update_segment gained ownership check in times-not-changed branch, extract_segment gained T-82-01-01 ownership check + downstream source-video ownership.
 - [Phase 82]: Plan 82-03 SHIPPED — tests/test_api_segments_sqlite.py with 28 SQLite per-route integration tests (1 fixture smoke + 27 route tests, all passing the dual gate under DATA_BACKEND=sqlite). 3 new schema-aware seed helpers added to tests/conftest.py (_seed_source_video, _seed_segment, _seed_product_group — every helper uses ONLY columns present in supabase/sqlite_schema.sql per Phase 81 81-03 lesson). 2 xfail-strict markers on tests/test_segments_preview_proxy.py (the migration-induced _FakeRepo.get_source_video AttributeError breakages predicted by Phase 82-01 SUMMARY § Known Test Breakages — empirically confirmed). deferred-items.md with all 5 sections: Schema Drift (3 sub-sections: editai_segments + editai_source_videos + editai_product_groups column gaps), Tests Skipped (10 routes with rationale), Tests Broken by Phase 82 Migration (2 xfail-strict, citing the SQLite test that supersedes each), Pre-Existing Baseline Failures (41 orthogonal failures within Phase 81 baseline variance), Out of Scope (5 follow-up items including the one-line v.get('name') or v.get('filename') route-builder defensive fix that would collapse most of Section 1.2 drift to clean 200s). 3 atomic commits (10d319a, 9f9a40f, 12a46a2). All 13 verification gates PASS. Phase 80 (23) and Phase 81 (16) SQLite baselines preserved. Plan 82-02 grep gates re-verified at 0. Phase 82 fully shipped.
+- [Phase 83]: Plan 83-01 SHIPPED — combined `get_client()` count across `app/services/assembly_service.py` + `app/core/cleanup.py` driven from 2 to exactly 0. All four grep gates (get_client + 6-var ride-along × 2 files) green at 0. 4 atomic task commits (`4e60c0b` docs ROUTES-AUDIT.md, `f659081` refactor assembly_service.py dedup → repo.list_tts_assets, `066cb9b` refactor cleanup.py dry-run → repo.list_jobs, `507545c` test SQLite tests). **Zero new ABC methods added** — FUNC-03 closed by documented coverage in ROUTES-AUDIT.md Section 6 (empirical `_apply_filters` citations on both backends at supabase_repo.py:32-46 + sqlite_repo.py:243-265). 5 new SQLite tests pass (1 fixture sanity + 2 cleanup dry-run + 2 dedup) with module-level autouse `_reset_job_storage_singleton` fixture mitigating the JobStorage eager-_repo-capture singleton diagnostic. Behavior preservation gates all pass (try/except blocks + warning strings + non-dry-run path UNCHANGED). One deliberate defensiveness improvement on cleanup.py dry-run only: in-memory fallback now also fires when `repo.list_jobs` raises (case b), in addition to the original `repo is None` case (case a). Phase 80 (23) + Phase 81 (16) + Phase 82 (28) SQLite baselines all preserved at 100% (67 total). All 13 plan must_haves GREEN. No deviations from plan.
 
 ### Pending Todos
 
@@ -114,12 +116,14 @@ New for v13:
 
 ## Session Continuity
 
-Last session: 2026-05-23T07:00:00.000Z
-Stopped at: Phase 82 sealed at 06:30 UTC; this 07:00 UTC iteration advanced STATE.md cursor from Phase 82 → Phase 83 (per autonomous loop rule "phase has all plans + summaries → update STATE to N+1 and stop"). No new code changes this iteration.
-Resume file: None — next iteration will invoke `/gsd-plan-phase 83` against an empty phase directory.
-Next action: `/gsd-plan-phase 83` (autonomous). Phase 83 targets background services / non-route Supabase residue per ROADMAP line 200. Phase 81 + Phase 82 verifications (`/gsd-verify-phase 81` + `/gsd-verify-phase 82`) remain deferred manual gates — can be batched.
+Last session: 2026-05-23T08:00:00.000Z
+Stopped at: Phase 83 Plan 83-01 SHIPPED end-to-end. Combined `get_client()` count across `app/services/assembly_service.py` + `app/core/cleanup.py` driven from 2 → 0. 4 atomic task commits (`4e60c0b`, `f659081`, `066cb9b`, `507545c`) + 1 metadata commit. All 13 plan must_haves GREEN. 5 new SQLite tests pass + Phase 80/81/82 baselines preserved (67 tests). Zero new ABC methods — FUNC-03 closed by documented coverage. No deviations from plan.
+Resume file: None — next iteration will invoke `/gsd-plan-phase 84` against an empty phase directory.
+Next action: `/gsd-plan-phase 84` (autonomous). Phase 84 targets cross-platform paths & FFmpeg discovery per ROADMAP line 202 — no dependency on Phase 83. Phase 81 + Phase 82 + Phase 83 verifications (`/gsd-verify-phase 81/82/83`) remain deferred manual gates — can be batched.
 
 ---
-*Last updated: 2026-05-23T07:00:00.000Z — Phase 82 SHIPPED, STATE cursor advanced to Phase 83 (no code changes this iteration; cursor-only update so the next autonomous iteration enters `/gsd-plan-phase 83`)*
+*Last updated: 2026-05-23T08:00:00.000Z — Phase 83 SHIPPED, Plan 83-01 complete (1/1 plans, 4 task commits + 1 metadata commit, FUNC-01 + FUNC-03 closed for non-route layers, zero new ABC methods)*
+
+*Earlier: 2026-05-23T07:00:00.000Z — Phase 82 SHIPPED, STATE cursor advanced to Phase 83 (no code changes this iteration; cursor-only update so the next autonomous iteration enters `/gsd-plan-phase 83`)*
 
 *Earlier: 2026-05-23 after Plan 82-03 SHIPPED — Phase 82 fully shipped (3/3 plans complete; segments_routes.py sealed as repo-ABC-only with 28 SQLite dual-gate tests; deferred-items.md catalogs schema drift + 5 follow-up items)*

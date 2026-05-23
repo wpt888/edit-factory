@@ -197,8 +197,8 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
   - [x] 82-01-PLAN.md — Audit (ROUTES-AUDIT.md) + 2 new ABC methods (get_product_group + update_product_group) on both backends with 6/6 RED→GREEN tests + Pattern A/B migration of 22 sites in 3 chunks (2026-05-23; see 82-01-SUMMARY.md; get_client count 37 → 15 within target band [13, 19]; T-82-01-01 IDOR pattern applied)
   - [x] 82-02-PLAN.md — Pattern C/D + fat multi-site fns + helper refactors (2026-05-23; see 82-02-SUMMARY.md; all 3 Phase-82 grep gates at exactly 0; 4 atomic chunked commits)
   - [x] 82-03-PLAN.md — Per-route SQLite tests + deferred-items.md schema-drift catalog (2026-05-23; see 82-03-SUMMARY.md; 28 SQLite dual-gate tests + 3 new seed helpers + 2 xfail-strict markers; all 13 verification gates PASS; Phase 80/81 baselines preserved)
-- [ ] Phase 83: Background services repository migration (1 plan)
-  - [ ] 83-01-PLAN.md — Audit (ROUTES-AUDIT.md with FUNC-03 reuse disposition) + assembly_service.py dedup migration + cleanup.py dry-run migration + SQLite tests (4 tasks; 2 get_client sites; zero new ABC methods required — existing list_tts_assets + list_jobs cover both via existing eq/lt/in_ filter primitives)
+- [x] Phase 83: Background services repository migration (1/1 plans complete — SHIPPED 2026-05-23, ready for verification)
+  - [x] 83-01-PLAN.md — Audit (ROUTES-AUDIT.md with FUNC-03 reuse disposition) + assembly_service.py dedup migration + cleanup.py dry-run migration + SQLite tests (2026-05-23; see 83-01-SUMMARY.md; combined `get_client()` count 2 → 0 across both files; zero new ABC methods — FUNC-03 closed by documented coverage; 5 new SQLite tests pass + Phase 80/81/82 baselines preserved at 67 tests; 4 atomic task commits `4e60c0b`/`f659081`/`066cb9b`/`507545c`)
 - [ ] Phase 84: Cross-platform paths & FFmpeg discovery (~1 plan)
 - [ ] Phase 85: Desktop smoke-test harness (CI gate) (~1 plan)
 
@@ -299,9 +299,12 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
 | 80 | v13 | 3/3 | Complete (verified PASSED) | 2026-05-23 |
 | 81 | v13 | 3/3 | SHIPPED — ready for verification (Plan 81-03 SHIPPED 2026-05-23) | — |
 | 82 | v13 | 3/3 | Complete   | 2026-05-23 |
-| 83-98 | v13 | 0/~22 | Active | — |
+| 83 | v13 | 1/1 | SHIPPED — ready for verification | 2026-05-23 |
+| 84-98 | v13 | 0/~21 | Active | — |
 
 ---
-*Last updated: 2026-05-23 after Plan 82-03 SHIPPED — Phase 82 fully shipped (3/3 plans complete; 28 SQLite dual-gate tests in tests/test_api_segments_sqlite.py; deferred-items.md catalogs schema drift + 5 follow-up items; all 13 verification gates PASS)*
+*Last updated: 2026-05-23 after Plan 83-01 SHIPPED — Phase 83 fully shipped (1/1 plans complete; combined `get_client()` count 2 → 0 across assembly_service.py + cleanup.py; zero new ABC methods — FUNC-03 closed by documented coverage; 5 new SQLite tests pass + Phase 80/81/82 baselines preserved at 67 tests; 4 atomic task commits `4e60c0b`/`f659081`/`066cb9b`/`507545c`; all 13 plan must_haves GREEN)*
+
+*Earlier: 2026-05-23 after Plan 82-03 SHIPPED — Phase 82 fully shipped (3/3 plans complete; 28 SQLite dual-gate tests in tests/test_api_segments_sqlite.py; deferred-items.md catalogs schema drift + 5 follow-up items; all 13 verification gates PASS)*
 
 *Earlier: 2026-05-23 after Plan 81-03 completion (14 SQLite per-route tests + E2E scaffold + 5 broken pipeline tests xfailed; pipeline test suite green: 3 passed + 5 xfailed + 0 failed; 3 atomic task commits 9c655d3 / d740727 / cda4cb8; all 3 Phase 81 grep gates remain at 0)*
