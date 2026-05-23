@@ -1492,6 +1492,12 @@ class SQLiteRepository(DataRepository):
     ) -> Dict[str, Any]:
         return self._insert("editai_product_groups", data)
 
+    def get_product_group(self, group_id: str) -> Optional[Dict[str, Any]]:
+        return self._get_one("editai_product_groups", "id", group_id)
+
+    def update_product_group(self, group_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        return self._update("editai_product_groups", "id", group_id, data)
+
     def delete_product_group(self, group_id: str) -> None:
         self._delete("editai_product_groups", "id", group_id)
 

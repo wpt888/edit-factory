@@ -813,6 +813,15 @@ class SupabaseRepository(DataRepository):
     def create_product_group(self, data: Dict[str, Any]) -> Dict[str, Any]:
         return self._insert("editai_product_groups", data)
 
+    def get_product_group(self, group_id: str) -> Optional[Dict[str, Any]]:
+        return self._get_one("editai_product_groups", "id", group_id)
+
+    def update_product_group(self, group_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        sb = get_supabase()
+        result = sb.table("editai_product_groups").update(data).eq("id", group_id).execute()
+        rows = result.data or []
+        return rows[0] if rows else {}
+
     def delete_product_group(self, group_id: str) -> None:
         self._delete("editai_product_groups", "id", group_id)
 

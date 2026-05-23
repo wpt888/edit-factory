@@ -655,6 +655,28 @@ class DataRepository(ABC):
         ...
 
     @abstractmethod
+    def get_product_group(self, group_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single product group by ID. Returns None if not found.
+
+        Used for ownership checks before update/delete in product-group routes
+        (mirrors get_clip / get_segment / get_source_video pattern). Added in
+        Phase 82-01 to replace inline supabase.table().select().eq(id).eq(profile_id)
+        chains with repo.get_product_group + Python-side profile_id check.
+        """
+        ...
+
+    @abstractmethod
+    def update_product_group(self, group_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Update a product group by ID. Returns the updated row.
+
+        Used by app/api/segments_routes.py:update_product_group
+        (PATCH /product-groups/{group_id}). Ownership is enforced by the
+        route via get_product_group + Python-side profile_id check (not in-query).
+        Added in Phase 82-01.
+        """
+        ...
+
+    @abstractmethod
     def delete_product_group(self, group_id: str) -> None:
         """Delete a product group by ID."""
         ...
