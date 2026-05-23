@@ -1395,9 +1395,15 @@ async def list_video_segments(
         ),
     )
 
-    # Compose source_video_name via per-video lookup (replaces PostgREST nested join)
-    source_video = repo.get_source_video(video_id)
-    source_video_name = source_video.get("name") if source_video else None
+    # Compose source_video_name via per-video lookup (replaces PostgREST nested join).
+    # Guard: skip the lookup when the segment list is empty — avoids loading
+    # cross-profile source-video metadata into memory for non-owned video_ids
+    # (response shape is identical either way; this is a defensive cleanup).
+    source_video_name = None
+    if result.data:
+        source_video = repo.get_source_video(video_id)
+        if source_video and source_video.get("profile_id") == profile.profile_id:
+            source_video_name = source_video.get("name")
 
     return [
         SegmentResponse(

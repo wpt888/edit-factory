@@ -218,6 +218,32 @@ Plan 82-02's contract is the residual 15 sites + 2 helpers + the fat-fn units. S
 - **PreToolUse Edit hook firing pre-emptively** on every Edit invocation even when the file had been read multiple times in the session. Worked around by continuing edits — all edits succeeded per the response text. Did not block execution.
 - **Test environment probe pre-Task 2.E (advisor caveat):** `py -3.13 -c "import pytest, fastapi"` succeeded (pytest 9.0.3 + fastapi 0.127.0). No piecemeal installs needed.
 
+## Known Test Breakages (Plan 82-03 will xfail/rewrite)
+
+Broader pytest scan (`py -3.13 -m pytest tests/ -k "segment or source_video" --ignore=tests/test_repository_segments_phase82.py`) shows 4 failures total: 2 migration-induced (covered below) + 2 pre-existing unrelated baseline failures (verified via `git log` — `app/services` was not touched by this plan).
+
+### Migration-induced (will be xfailed/rewritten in Plan 82-03)
+
+| Test | File | Reason |
+|------|------|--------|
+| `test_preview_stream_uses_ready_proxy` | tests/test_segments_preview_proxy.py | Patches `_FakeRepo` which only implements `get_client()`. Migration moved `preview_stream_source_video` to `repo.get_source_video(video_id)`. Plan 82-03 will rewrite to use a fixture that implements the repo methods directly. |
+| `test_preview_stream_falls_back_and_schedules_lazy_proxy` | tests/test_segments_preview_proxy.py | Same `_FakeRepo` mock-chain breakage. |
+
+Same kind of breakage Plan 80-01 / 81-01 documented and deferred to their respective `-03` test-rewrite plans.
+
+### Pre-existing (NOT introduced by this plan)
+
+| Test | File | Reason |
+|------|------|--------|
+| `test_segment_combined_score_zero` | tests/test_video_processor.py | Asserts `Segment.to_dict()` keys missing `avg_brightness` and `gemini_estimated`. Failure is in `app/services/video_processor.py`'s to_dict; this plan did not touch `app/services/`. Pre-existing baseline. |
+| `test_segment_to_dict_keys` | tests/test_video_processor.py | Same — `to_dict` schema drift, unrelated to Phase 82. |
+
+These pre-existing baseline failures are documented here for transparency; they belong in `deferred-items.md` per Phase 81 81-03 precedent and are not Phase 82 blockers.
+
+## Advisor-flagged hygiene cleanup (post-shipment)
+
+Per advisor feedback, `list_video_segments` (route at L1378) had a defensive wart: the per-video `repo.get_source_video(video_id)` lookup ran even when `result.data` was empty, loading cross-profile source-video metadata into memory (response shape unchanged — the name is never used because the list comprehension iterates over `[]`). Guarded inline: the `repo.get_source_video` call is now skipped when `result.data` is empty, and includes an ownership check on the returned video before extracting the name. This is a 7-line defensive cleanup, NOT a security fix (response shape was already correct), but it removes a tiny in-memory cross-profile data flow surface. Applied as part of the final metadata commit alongside the SUMMARY.
+
 ## Self-Check
 
 Run:
