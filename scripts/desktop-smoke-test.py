@@ -232,6 +232,8 @@ ENDPOINTS: list[dict] = [
     # Profiles (2) — trailing slash REQUIRED on list endpoint
     {"method": "GET",  "path": "/api/v1/profiles/",                       "json": None},
     {"method": "GET",  "path": "/api/v1/profiles/templates",              "json": None},
+    # Desktop ML (1) — Phase 86 bundle download endpoint; returns SSE body or event: error (no 5xx)
+    {"method": "POST", "path": "/api/v1/desktop/ml/download",             "json": {}},
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -454,10 +456,10 @@ def main() -> None:
     for row in library_rows:
         _print_row(row["method"], row["path"], row["status"])
 
-    # (f) Walk flat endpoint table (9 stateless: segments + assembly + routes + profiles)
+    # (f) Walk flat endpoint table (10 stateless: segments + assembly + routes + profiles + desktop ML)
     flat_rows = _walk(client, ENDPOINTS)
 
-    # Combine all rows: 6 pipeline + 7 library + 9 flat = 22 total
+    # Combine all rows: 6 pipeline + 7 library + 10 flat = 23 total
     all_rows = pipeline_rows + library_rows + flat_rows
 
     # (f) Collect failures (status >= 500 — the FUNC-01 backslide gate)
