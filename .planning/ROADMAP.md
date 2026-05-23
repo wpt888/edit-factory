@@ -363,6 +363,32 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
 **Plans**: 1 plan (planned 2026-05-23):
   - 90-01-PLAN.md — Full landing page replacing Phase 89 placeholder: 7 section components (Hero/Features/Pricing/Screenshots/Comparison/FAQ/Footer) under marketing/components/sections/, 3 new Shadcn primitives (badge + separator byte-copied from frontend/, accordion authored from canonical template because frontend/ has no accordion.tsx — DECISION CONFLICT D-12 documented), 4 new deps (@radix-ui/react-accordion + @radix-ui/react-separator + lighthouse + chrome-launcher), Playwright spec landing.spec.ts with 3 tests (section rendering, Lighthouse ≥ 90/95 against next build + next start on port 3099 — DECISION CONFLICT D-16-server-mode documented, MANDATORY full-page screenshot > 100000 bytes). Honors D-01..D-18 except 3 surfaced conflicts.
 
+### Phase 91: Lemon Squeezy checkout + webhook
+
+**Goal**: Each pricing tier (Starter / Pro / Cloud Sync) opens a Lemon Squeezy hosted checkout when its CTA is clicked. A webhook handler at `marketing/app/api/lemon-squeezy/webhook/route.ts` verifies the X-Signature HMAC-SHA256 (using `LEMON_SQUEEZY_WEBHOOK_SECRET`), persists the order in the marketing Supabase `orders` table, generates a license key in the format `EF13-XXXX-XXXX-XXXX-XXXX`, and sends a confirmation email via Resend with the license key + download links. Idempotency is keyed on Lemon Squeezy's `X-Event-Id` header so retries do not double-create orders or license keys.
+
+**Depends on**: Phase 89 (provides the marketing app + Supabase server client + Pricing section with placeholder `/signup?plan=*` hrefs that Phase 91 replaces with Lemon Squeezy hosted checkout URLs). Phase 90 (provides the landing page where the Pricing CTAs live).
+
+**Requirements**: MARK-03, MARK-04.
+
+**Success Criteria**:
+  1. Clicking "Buy Starter" / "Buy Pro" / "Add Cloud Sync" on the landing page opens a Lemon Squeezy hosted checkout for the matching variant (no `/signup?plan=*` 404s remain).
+  2. The webhook is signature-verified — invalid X-Signature returns 401 without writing to Supabase; missing signing secret returns 500 (fail-closed, never 200).
+  3. A new row appears in `marketing.orders` Supabase table with the generated license key, the buyer's email, the Lemon Squeezy order id, the subscription_tier mapped from the variant id, and the X-Event-Id (used as the unique-constraint key for idempotency).
+  4. A confirmation email arrives at the buyer's address with the license key, the download links (placeholder URLs in Phase 91; real GitHub Release links wired in Phase 96), and activation instructions.
+  5. Replaying the same webhook payload returns 200 without creating a second order row (idempotency confirmed).
+  6. All three webhook events (`order_created` for Starter+Pro one-time; `subscription_created` for Cloud Sync recurring) write the correct row shape and trigger the correct email.
+
+**Manual prerequisites** (NOT autonomous-loop solvable — must be provisioned before the executor can run end-to-end tests; planner must structure tests to xfail gracefully when these env vars are absent):
+  - (M1) Provision the SEPARATE marketing Supabase project via Web UI; wire `MARKETING_SUPABASE_URL` + `MARKETING_SUPABASE_KEY` + `NEXT_PUBLIC_MARKETING_SUPABASE_URL` + `NEXT_PUBLIC_MARKETING_SUPABASE_ANON_KEY` into `marketing/.env.local`.
+  - (M2) Provision a Lemon Squeezy store via Web UI; create 3 products + variants (Starter $79 one-time / Pro $149 one-time / Cloud Sync $39/yr subscription); capture `LEMON_SQUEEZY_STORE_ID` + `LEMON_SQUEEZY_STARTER_VARIANT_ID` + `LEMON_SQUEEZY_PRO_VARIANT_ID` + `LEMON_SQUEEZY_CLOUD_SYNC_VARIANT_ID` + `LEMON_SQUEEZY_API_KEY` + `LEMON_SQUEEZY_WEBHOOK_SECRET` into `marketing/.env.local`.
+  - (M3) Provision a Resend account; create an API key + verified sender domain; capture `RESEND_API_KEY` + `RESEND_FROM_EMAIL` into `marketing/.env.local`.
+  - (M4) Apply Phase 91 Supabase migration (creates `orders` table with idempotency-unique-constraint on `lemon_squeezy_event_id`) via Supabase SQL editor or `supabase db push`.
+
+**Plans**: 2 plans (Wave 1 → 2, sequential because Plan 91-02 webhook handler reads the locked variant-id → tier mapping from Plan 91-01's pricing wiring):
+  - 91-01-PLAN.md — Pricing.tsx rewiring + Lemon Squeezy hosted-checkout URL generation: replace `<a href="/signup?plan=*">` with hosted checkout URLs of shape `https://[STORE].lemonsqueezy.com/buy/[VARIANT_ID]` (env-var driven via build-time-substituted `NEXT_PUBLIC_LEMON_SQUEEZY_*_VARIANT_ID` for the 3 variants + `NEXT_PUBLIC_LEMON_SQUEEZY_STORE_SLUG`); fallback to original `/signup?plan=*` when env vars are absent so the dev landing page does not break; Playwright test asserts both modes; lib/lemon-squeezy.ts utility for URL construction.
+  - 91-02-PLAN.md — Webhook handler `marketing/app/api/lemon-squeezy/webhook/route.ts` + Supabase orders schema migration + Resend email helper + integration tests: HMAC-SHA256 signature verification using `crypto.timingSafeEqual` (NOT `===` — timing-attack safe), event-type routing (`order_created` vs `subscription_created`), variant-id → tier mapping, license key generation (`EF13-` prefix + 16 hex chars in 4 groups via `crypto.randomBytes`), Supabase insert with idempotency unique constraint on `lemon_squeezy_event_id`, Resend email with locked subject + body template, mock-Lemon-Squeezy test fixtures (with env-var-absence xfail markers per M-prerequisites).
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
