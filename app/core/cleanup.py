@@ -138,27 +138,46 @@ def cleanup_old_jobs(days: int, dry_run: bool) -> int:
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
     if dry_run:
-        # Preview: count matching jobs without deleting
+        # Preview: count matching jobs without deleting.
+        # Migrated Phase 83-01: typed repo.list_jobs with QueryFilters replaces
+        # the raw PostgREST jobs select chain. storage.supabase IS the repo
+        # (property at app/services/job_storage.py:33-35 returns
+        # _legacy_supabase or _repo). No new ABC method required — existing
+        # list_jobs covers lt + in_ primitives on both backends (verified:
+        # supabase_repo.py:32-46, sqlite_repo.py:243-265).
+        # In-memory fallback semantics PRESERVED + extended: when repo is None
+        # OR the typed call raises, we fall through to the snapshot-based count.
         terminal_statuses = {"failed", "completed", "cancelled"}
         count = 0
         repo = storage.supabase
-        raw_client = repo.get_client() if repo else None
-        if raw_client:
+        used_repo = False
+        if repo is not None:
             try:
-                result = raw_client.table("jobs").select("id,status,created_at")\
-                    .lt("created_at", cutoff.isoformat()).execute()
-                matching = [r for r in (result.data or []) if r.get("status") in terminal_statuses]
-                count = len(matching)
-                for row in matching:
+                from app.repositories.models import QueryFilters as _QueryFilters
+                result = repo.list_jobs(
+                    filters=_QueryFilters(
+                        lt={"created_at": cutoff.isoformat()},
+                        in_={"status": sorted(list(terminal_statuses))},
+                        limit=10_000,
+                    )
+                )
+                rows = result.data or []
+                count = len(rows)
+                for row in rows:
                     logger.info(
                         "Would delete job",
                         extra={"job_id": row.get("id"), "status": row.get("status"),
                                "created_at": row.get("created_at")}
                     )
+                used_repo = True
             except Exception as exc:
                 logger.warning("Could not query jobs for dry-run", extra={"error": str(exc)})
-        else:
-            # In-memory fallback — snapshot under lock to avoid concurrent modification
+                # Fall through to in-memory snapshot below.
+                used_repo = False
+
+        if not used_repo:
+            # In-memory fallback — snapshot under lock to avoid concurrent modification.
+            # Triggered when repo is None OR the typed list_jobs call raised above.
             with storage.update_lock:
                 snapshot = list(storage.memory_store.items())
             for job_id, job in snapshot:
