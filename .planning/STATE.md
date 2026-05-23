@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Executing Phase 87
-stopped_at: Phase 86 Plans 86-01 + 86-02 both SHIPPED. POST SSE endpoint for ML bundle download (`/api/v1/desktop/ml/install`) with SHA256 + atomic unpack + HTTP Range resume + asyncio.Lock-guarded 409 concurrent-install rejection. React installer component with 6-state machine mounted at settings page. Playwright SSE-mock test + 3 screenshot states. 86-REVIEW.md filed with 1 CRITICAL (tarslip in `_unpack_and_promote`) + 3 warnings + 3 info — all advisory, none block Phase 87.
-last_updated: "2026-05-23T10:23:34.031Z"
+status: Phase 87 verified — PASSED (6/6 must-haves)
+stopped_at: Phase 87 Plan 87-01 SHIPPED + VERIFIED. `app/api/ml_gating.py` exports `require_ml_installed`/`require_tier`/`_enforce_ml_installed`/`_TIER_ORDER`. `/clone-voice` route gated by `Depends(require_ml_installed("voice_clone"))` + `Depends(require_tier("pro"))`. `/generate-from-segments` inline `_enforce_ml_installed("voice_mute")` after `mute_source_voice=True` body parse — anti-pattern grep confirms NO `Depends(require_ml_installed("voice_mute"))` exists. 7 SQLite tests pass under `DATA_BACKEND=sqlite`. Code review status: issues_found (0 critical, 0 warning, 3 info — IN-01 silent tier-typo default, IN-02 missing `tier=None` test, IN-03 log level mismatch — all advisory, none block Phase 88). Verifier PASSED 6/6 must_haves. ML-04 + ML-05 SATISFIED in REQUIREMENTS.md.
+last_updated: "2026-05-23T11:30:00.000Z"
 progress:
-  total_phases: 5
-  completed_phases: 4
-  total_plans: 12
-  completed_plans: 11
-  percent: 92
+  total_phases: 19
+  completed_phases: 8
+  total_plans: 16
+  completed_plans: 16
+  percent: 42
 ---
 
 # Project State
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale, distributed as a true downloadable desktop product priced for indie creators.
-**Current focus:** Phase 87 — ml-feature-flags-subscription-gating-in-backend
+**Current focus:** Phase 88 — installer-slimming-base-bundle (next phase in v13)
 
 ## Current Position
 
-Phase: 87 (ml-feature-flags-subscription-gating-in-backend) — EXECUTING
-Plan: 1 of 1
-Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 7/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81–83 SHIPPED 2026-05-23 — verification deferred, Phase 84 + 85 SHIPPED + VERIFIED 2026-05-23, Phase 86 SHIPPED 2026-05-23 — verification deferred). Phase 86 closed Track B (Optional ML — Wave 3a) by shipping `app/api/desktop_ml_routes.py` POST SSE endpoint (SHA256 + atomic unpack + HTTP Range resume + asyncio.Lock-guarded 409 concurrent-install rejection) and `frontend/src/components/ml-bundle-installer.tsx` (6-state machine driven by raw fetch + ReadableStream, mounted at `frontend/src/app/settings/page.tsx`). Playwright screenshots for 3 states captured per MANDATORY visual testing rule.
-Next action: `/gsd-plan-phase 87` (autonomous). Phase 87 targets ML feature flags + subscription gating in backend per v13-ROADMAP line 133 — Goal: `412 Precondition Failed` for missing `<base_dir>/ml/.installed` marker (`ML-04`), `402 Payment Required` (or `412` with `requires_tier`) for sub-Pro JWT claims (`ML-05`). Depends on Phase 86 (DONE) + Phase 95 (defer tier-check wiring to 95 if 87 ships first). Manual follow-ups outstanding from prior phases: (a) flip FUNC-02 + FUNC-06 to `[x]` in `.planning/milestones/v13-REQUIREMENTS.md`; (b) add "Desktop SQLite-mode smoke harness" as required status check on `main` branch protection; (c) Phase 81 + 82 + 83 + 86 verifications remain deferred manual gates — can be batched. Phase 86 code-review findings (CR-01 CRITICAL tarslip in `_unpack_and_promote` line 278-279, plus W-01..W-03 warnings + I-01..I-03 info items) are candidates for Phase 86.1 gap closure if user prioritizes — CR-01 is exploitable via `ML_BUNDLE_BASE_URL` env override so security-conscious users should triage before Phase 88. None of these block Phase 87 planning.
+Phase: 88 (installer-slimming-base-bundle) — READY TO PLAN
+Plan: 0 of ~1–2
+Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 8/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81–83 SHIPPED 2026-05-23 — verification deferred, Phase 84 + 85 SHIPPED + VERIFIED 2026-05-23, Phase 86 SHIPPED 2026-05-23 — verification deferred, Phase 87 SHIPPED + VERIFIED 2026-05-23). Phase 87 closed ML-04 + ML-05 by introducing `app/api/ml_gating.py` (4 exports: `require_ml_installed`, `require_tier`, `_enforce_ml_installed`, `_TIER_ORDER`) and wiring it into `/clone-voice` (clean Depends) + `/generate-from-segments` (inline body-field-asymmetry pattern). 7 pytest tests pass under `DATA_BACKEND=sqlite`. Code review status: issues_found (0 critical, 0 warning, 3 info — all advisory). Verifier PASSED 6/6 must_haves.
+Next action: `/gsd-plan-phase 88` (autonomous). Phase 88 targets installer slimming (base bundle ≤ 550MB target per v13 scope decisions). Manual follow-ups outstanding from prior phases: (a) flip FUNC-02 + FUNC-06 to `[x]` in `.planning/milestones/v13-REQUIREMENTS.md`; (b) add "Desktop SQLite-mode smoke harness" as required status check on `main` branch protection; (c) Phase 81 + 82 + 83 + 86 verifications remain deferred manual gates — can be batched. Phase 86 code-review findings (CR-01 CRITICAL tarslip in `_unpack_and_promote` line 278-279) remains a Phase 86.1 gap-closure candidate — exploitable via `ML_BUNDLE_BASE_URL` env override, security-conscious users should triage before Phase 88 ships. Phase 87 code-review findings (IN-01..IN-03, all info-level) are non-blocking and can be folded into Phase 95 (subscription tier wiring) when JWT claim is populated.
 
 Sources:
 
@@ -42,7 +42,7 @@ Sources:
 - Total plans completed: 153 (across v2-v12)
 - Total phases completed: 79
 - Total milestones shipped: 12
-- v13 progress: 7/19 phases (14/15 plans, 37%)
+- v13 progress: 8/19 phases (16/16 plans of phases 80-87, 42%)
 
 **By Milestone:**
 
@@ -67,6 +67,7 @@ Sources:
 | Phase 83 P83-01 | single session | 4 tasks | 2 modified + 3 created (audit + summary + sqlite tests) |
 | Phase 86 P86-01 | single session | ? tasks | `app/api/desktop_ml_routes.py` + `tests/test_desktop_ml_routes.py` + `scripts/desktop-smoke-test.py` + `requirements.txt` |
 | Phase 86 P86-02 | single session | ? tasks | `frontend/src/components/ml-bundle-installer.tsx` + `frontend/src/app/settings/page.tsx` + 2 Playwright spec files |
+| Phase 87 P87-01 | ~13min | 3 tasks | `app/api/ml_gating.py` + `tests/test_ml_gating.py` (created) + `app/api/tts_routes.py` + `app/api/library_routes.py` (modified); 7 SQLite tests pass; verifier PASSED 6/6 |
 
 ## Accumulated Context
 
@@ -96,6 +97,7 @@ Earlier project decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 82]: Plan 82-03 SHIPPED — tests/test_api_segments_sqlite.py with 28 SQLite per-route integration tests (1 fixture smoke + 27 route tests, all passing the dual gate under DATA_BACKEND=sqlite). 3 new schema-aware seed helpers added to tests/conftest.py (_seed_source_video, _seed_segment, _seed_product_group — every helper uses ONLY columns present in supabase/sqlite_schema.sql per Phase 81 81-03 lesson). 2 xfail-strict markers on tests/test_segments_preview_proxy.py (the migration-induced _FakeRepo.get_source_video AttributeError breakages predicted by Phase 82-01 SUMMARY § Known Test Breakages — empirically confirmed). deferred-items.md with all 5 sections: Schema Drift (3 sub-sections: editai_segments + editai_source_videos + editai_product_groups column gaps), Tests Skipped (10 routes with rationale), Tests Broken by Phase 82 Migration (2 xfail-strict, citing the SQLite test that supersedes each), Pre-Existing Baseline Failures (41 orthogonal failures within Phase 81 baseline variance), Out of Scope (5 follow-up items including the one-line v.get('name') or v.get('filename') route-builder defensive fix that would collapse most of Section 1.2 drift to clean 200s). 3 atomic commits (10d319a, 9f9a40f, 12a46a2). All 13 verification gates PASS. Phase 80 (23) and Phase 81 (16) SQLite baselines preserved. Plan 82-02 grep gates re-verified at 0. Phase 82 fully shipped.
 - [Phase 83]: Plan 83-01 SHIPPED — combined `get_client()` count across `app/services/assembly_service.py` + `app/core/cleanup.py` driven from 2 to exactly 0. All four grep gates (get_client + 6-var ride-along × 2 files) green at 0. 4 atomic task commits (`4e60c0b` docs ROUTES-AUDIT.md, `f659081` refactor assembly_service.py dedup → repo.list_tts_assets, `066cb9b` refactor cleanup.py dry-run → repo.list_jobs, `507545c` test SQLite tests). **Zero new ABC methods added** — FUNC-03 closed by documented coverage in ROUTES-AUDIT.md Section 6 (empirical `_apply_filters` citations on both backends at supabase_repo.py:32-46 + sqlite_repo.py:243-265). 5 new SQLite tests pass (1 fixture sanity + 2 cleanup dry-run + 2 dedup) with module-level autouse `_reset_job_storage_singleton` fixture mitigating the JobStorage eager-_repo-capture singleton diagnostic. Behavior preservation gates all pass (try/except blocks + warning strings + non-dry-run path UNCHANGED). One deliberate defensiveness improvement on cleanup.py dry-run only: in-memory fallback now also fires when `repo.list_jobs` raises (case b), in addition to the original `repo is None` case (case a). Phase 80 (23) + Phase 81 (16) + Phase 82 (28) SQLite baselines all preserved at 100% (67 total). All 13 plan must_haves GREEN. No deviations from plan.
 - [Phase 86]: Plans 86-01 + 86-02 both SHIPPED. **86-01** delivered `app/api/desktop_ml_routes.py` with POST SSE endpoint (`/api/v1/desktop/ml/install`), `GET /status`, `DELETE /uninstall`. SSE event names match LD-05/10/21/22/29 locked decisions exactly. SHA256 verification + atomic unpack via tempdir-then-rename + HTTP Range resume on interrupted downloads + asyncio.Lock guards 409 concurrent-install rejection. Bundle path resolution honors `ML_BUNDLE_BASE_DIR` env override (defaults to `~/.editfactory/ml`). Smoke harness `scripts/desktop-smoke-test.py` extended to walk these 3 endpoints. **86-02** delivered `frontend/src/components/ml-bundle-installer.tsx` (6-state machine: idle → downloading → verifying → unpacking → installed | error) driven by raw `fetch()` + `ReadableStream` (NOT EventSource — required because POST + SSE response stream + Authorization header all need to coexist). Mounted at `frontend/src/app/settings/page.tsx`. Playwright SSE-mock test + 3 screenshot states (idle, downloading-mid-progress, installed). **Code review (86-REVIEW.md)** logged 1 CRITICAL + 3 warnings + 3 info: CR-01 tarslip in `_unpack_and_promote` (`app/api/desktop_ml_routes.py:278-279`, bare `tar.extractall(staging_dir)` with no `filter=` arg, exploitable via `ML_BUNDLE_BASE_URL` env-controlled redirect) — fix is `tar.extractall(staging_dir, filter='data')` on Python 3.12+ or manual member-path validation on 3.11. Status: advisory, not blocking Phase 87. Candidate for Phase 86.1 gap closure.
+- [Phase 87]: Plan 87-01 SHIPPED + VERIFIED — ML-04 + ML-05 closed by introducing `app/api/ml_gating.py` (`require_ml_installed`, `require_tier`, `_enforce_ml_installed`, `_TIER_ORDER`) and wiring it into 2 routes with asymmetric pattern. `/clone-voice` (`app/api/tts_routes.py:369-370`) uses clean route-level deps `Depends(require_ml_installed("voice_clone"))` + `Depends(require_tier("pro"))`. `/generate-from-segments` (`app/api/library_routes.py:1169-1170`) uses INLINE `_enforce_ml_installed("voice_mute")` AFTER `if request.mute_source_voice:` body parse — because FastAPI `Depends()` cannot read body fields. Anti-pattern grep confirms `Depends(require_ml_installed("voice_mute"))` returns 0 matches. 7 pytest cases in `tests/test_ml_gating.py` pass under `DATA_BACKEND=sqlite` (3.86s); dual JWT-binding monkeypatch (`ml_gating.verify_jwt_token` AND `auth.verify_jwt_token`) + autouse `app.dependency_overrides[get_profile_context]` short-circuit. Dev/desktop bypass mirrors `auth.py:118-127` exactly — `auth_disabled OR desktop_mode` checked BEFORE JWT decode. Response shapes locked: 412 → `{"error":"ml_not_installed","feature":"<name>"}`, 402 → `{"error":"tier_insufficient","requires_tier":"<tier>"}`. **Code review (87-REVIEW.md)** logged 0 CRITICAL + 0 WARNING + 3 INFO (IN-01 silent tier-typo default, IN-02 missing `tier=None` test, IN-03 log level mismatch with auth.py). **Verifier PASSED 6/6 must_haves** in 87-VERIFICATION.md. ML-04 + ML-05 SATISFIED in REQUIREMENTS.md. AuthUser dataclass NOT modified to carry `subscription_tier` — Phase 95 territory; `require_tier()` re-decodes JWT independently. /clone-voice decodes JWT twice (`get_profile_context` + `require_tier`) accepted as v1 cost; consolidation deferred to Phase 95.
 
 ### Pending Todos
 
@@ -119,13 +121,15 @@ New for v13:
 
 ## Session Continuity
 
-Last session: 2026-05-23T00:00:00.000Z
-Stopped at: Phase 86 Plans 86-01 + 86-02 both SHIPPED. POST SSE endpoint for ML bundle download (`/api/v1/desktop/ml/install`) with SHA256 + atomic unpack + HTTP Range resume + asyncio.Lock-guarded 409 concurrent-install rejection. React installer component with 6-state machine mounted at settings page. Playwright SSE-mock test + 3 screenshot states. 86-REVIEW.md filed with 1 CRITICAL (tarslip in `_unpack_and_promote`) + 3 warnings + 3 info — all advisory, none block Phase 87.
-Resume file: None — next iteration will invoke `/gsd-plan-phase 87` against an empty phase directory.
-Next action: `/gsd-plan-phase 87` (autonomous). Phase 87 targets ML feature flags + subscription gating in backend per v13-ROADMAP line 133. Goal: routes returning `412 Precondition Failed` for missing `<base_dir>/ml/.installed` marker (ML-04) + `402 Payment Required` for sub-Pro JWT claims (ML-05). Depends on Phase 86 (DONE) + Phase 95 (defer tier-check wiring to 95 if 87 ships first). Phase 81 + 82 + 83 + 86 verifications (`/gsd-verify-phase 81/82/83/86`) remain deferred manual gates — can be batched. CR-01 tarslip is a Phase 86.1 gap-closure candidate but does not block Phase 87.
+Last session: 2026-05-23T11:30:00.000Z
+Stopped at: Phase 87 Plan 87-01 SHIPPED + VERIFIED. `app/api/ml_gating.py` introduced (4 exports). `/clone-voice` clean-Depends gated by both `require_ml_installed("voice_clone")` + `require_tier("pro")`. `/generate-from-segments` inline `_enforce_ml_installed("voice_mute")` after `mute_source_voice` body-field parse — anti-pattern grep confirms NO Depends(require_ml_installed("voice_mute")). 7 SQLite tests pass; verifier PASSED 6/6 must_haves; code review status: issues_found (0 critical / 0 warning / 3 info — all advisory).
+Resume file: None — next iteration will invoke `/gsd-plan-phase 88` against an empty phase directory.
+Next action: `/gsd-plan-phase 88` (autonomous). Phase 88 targets installer-slimming-base-bundle (base installer ≤ 550MB target per v13 scope decisions). Phase 81 + 82 + 83 + 86 + 87 verifications: 87 verified PASSED this iteration; 81 + 82 + 83 + 86 remain deferred manual gates — can be batched. CR-01 tarslip (Phase 86) remains a Phase 86.1 gap-closure candidate. IN-01..IN-03 (Phase 87 info-level) can be folded into Phase 95 (subscription tier wiring) when JWT claim is populated.
 
 ---
-*Last updated: 2026-05-23T00:00:00.000Z — Phase 86 SHIPPED, STATE cursor advanced to Phase 87 (no code changes this iteration; cursor-only update so the next autonomous iteration enters `/gsd-plan-phase 87`). 86-REVIEW.md CR-01 critical tarslip noted as Phase 86.1 gap-closure candidate.*
+*Last updated: 2026-05-23T11:30:00.000Z — Phase 87 SHIPPED + VERIFIED (Plan 87-01 complete, ML-04 + ML-05 closed, 7 SQLite tests pass, code review 0 critical/0 warning/3 info advisory, verifier PASSED 6/6 must_haves). STATE.md frontmatter manually restored after recurring `gsd-tools phase complete` corruption (sets `Milestone complete` + percent=100 + total_phases=5 even when phase is 8/19 of an active milestone — same defect pattern as Phase 84 + 85 transitions). Next iteration enters `/gsd-plan-phase 88`.*
+
+*Earlier: 2026-05-23T00:00:00.000Z — Phase 86 SHIPPED, STATE cursor advanced to Phase 87 (no code changes this iteration; cursor-only update so the next autonomous iteration enters `/gsd-plan-phase 87`). 86-REVIEW.md CR-01 critical tarslip noted as Phase 86.1 gap-closure candidate.*
 
 *Earlier: 2026-05-23T08:00:00.000Z — Phase 83 SHIPPED, Plan 83-01 complete (1/1 plans, 4 task commits + 1 metadata commit, FUNC-01 + FUNC-03 closed for non-route layers, zero new ABC methods)*
 
