@@ -399,22 +399,34 @@ _PRODUCT_GROUP_COLORS = [
 
 
 def _assign_product_group(
-    supabase, video_id: str, profile_id: str,
+    video_id: str, profile_id: str,
     seg_start: float, seg_end: float
 ) -> Optional[str]:
     """Auto-assign segment to product group if >50% overlap.
 
     Returns the group label if assigned, None otherwise.
-    """
-    if not supabase:
-        return None
-    groups = supabase.table("editai_product_groups")\
-        .select("label, start_time, end_time")\
-        .eq("source_video_id", video_id)\
-        .eq("profile_id", profile_id)\
-        .execute()
 
-    if not groups.data:
+    Phase 82-02: signature refactored to drop the `supabase` first arg.
+    Body uses get_repository() internally and runs through repo.list_product_groups.
+    Defensive try/except returns None on any backend error (SQLite schema drift
+    on editai_product_groups is documented as a deferred item for Plan 82-03).
+    """
+    try:
+        repo = get_repository()
+        if not repo:
+            return None
+        groups_result = repo.list_product_groups(
+            profile_id,
+            QueryFilters(
+                eq={"source_video_id": video_id},
+                select="label, start_time, end_time",
+            ),
+        )
+    except Exception as e:
+        logger.warning(f"_assign_product_group: list_product_groups failed for video {video_id}: {e}")
+        return None
+
+    if not groups_result.data:
         return None
 
     seg_duration = seg_end - seg_start
@@ -424,7 +436,7 @@ def _assign_product_group(
     best_label = None
     best_overlap = 0.0
 
-    for g in groups.data:
+    for g in groups_result.data:
         overlap_start = max(seg_start, g["start_time"])
         overlap_end = min(seg_end, g["end_time"])
         overlap = max(0, overlap_end - overlap_start)
@@ -437,19 +449,31 @@ def _assign_product_group(
     return best_label
 
 
-def _reassign_all_segments(supabase, video_id: str, profile_id: str):
-    """Reassign all segments for a video to their matching product groups."""
-    if not supabase:
-        return
-    segments = supabase.table("editai_segments")\
-        .select("id, start_time, end_time, keywords, product_group")\
-        .eq("source_video_id", video_id)\
-        .eq("profile_id", profile_id)\
-        .execute()
+def _reassign_all_segments(video_id: str, profile_id: str):
+    """Reassign all segments for a video to their matching product groups.
 
-    for seg in segments.data:
+    Phase 82-02: signature refactored to drop the `supabase` first arg.
+    Body uses get_repository() internally and routes all DB access through
+    repo.list_segments + repo.update_segment.
+    """
+    try:
+        repo = get_repository()
+        if not repo:
+            return
+        segments_result = repo.list_segments(
+            profile_id,
+            QueryFilters(
+                eq={"source_video_id": video_id},
+                select="id, start_time, end_time, keywords, product_group",
+            ),
+        )
+    except Exception as e:
+        logger.warning(f"_reassign_all_segments: list_segments failed for video {video_id}: {e}")
+        return
+
+    for seg in segments_result.data:
         new_label = _assign_product_group(
-            supabase, video_id, profile_id,
+            video_id, profile_id,
             seg["start_time"], seg["end_time"]
         )
         old_group = seg.get("product_group")
@@ -463,10 +487,10 @@ def _reassign_all_segments(supabase, video_id: str, profile_id: str):
             kw.append(new_label)
         update_fields["keywords"] = kw
 
-        supabase.table("editai_segments")\
-            .update(update_fields)\
-            .eq("id", seg["id"])\
-            .execute()
+        try:
+            repo.update_segment(seg["id"], update_fields)
+        except Exception as e:
+            logger.warning(f"_reassign_all_segments: update_segment failed for seg {seg['id']}: {e}")
 
 
 # ============== SOURCE VIDEOS ENDPOINTS ==============
@@ -1265,23 +1289,11 @@ async def create_segment(
     """Create a new segment for a source video."""
     logger.info(f"[Profile {profile.profile_id}] Creating segment for source video: {video_id}")
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Verify source video exists and belongs to profile
-    video_result = supabase.table("editai_source_videos")\
-        .select("file_path, name, duration")\
-        .eq("id", video_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not video_result.data:
+    # Verify source video exists and belongs to profile (T-82-01-01 IDOR pattern)
+    source_video = repo.get_source_video(video_id)
+    if not source_video or source_video.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Source video not found")
-
-    source_video = video_result.data[0]
 
     # Validate times against video duration
     _validate_time_range(segment.start_time, segment.end_time, source_video.get("duration"))
@@ -1300,7 +1312,7 @@ async def create_segment(
     _generate_thumbnail(Path(normalize_path(source_video["file_path"])), thumbnail_path, midpoint)
 
     try:
-        result = supabase.table("editai_segments").insert({
+        repo.create_segment({
             "id": segment_id,
             "source_video_id": video_id,
             "profile_id": profile.profile_id,
@@ -1312,10 +1324,10 @@ async def create_segment(
             "usage_count": 0,
             "is_favorite": False,
             "single_use": segment.single_use
-        }).execute()
+        })
 
-        # Auto-assign product group if groups exist
-        assigned_group = await asyncio.to_thread(_assign_product_group, supabase, video_id, profile.profile_id, segment.start_time, segment.end_time)
+        # Auto-assign product group if groups exist (helper now takes no supabase arg)
+        assigned_group = await asyncio.to_thread(_assign_product_group, video_id, profile.profile_id, segment.start_time, segment.end_time)
         product_group_label = assigned_group or segment.product_group
 
         # If assigned, store in DB and add label as keyword
@@ -1325,7 +1337,7 @@ async def create_segment(
             if product_group_label not in kw:
                 kw.append(product_group_label)
                 update_fields["keywords"] = kw
-            supabase.table("editai_segments").update(update_fields).eq("id", segment_id).execute()
+            repo.update_segment(segment_id, update_fields)
 
         _refresh_segments_count(repo, video_id, profile.profile_id)
 
@@ -1628,11 +1640,6 @@ async def update_segment(
 ):
     """Update segment (keywords, times, notes)."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     # Build update dict with only provided fields
     update_data = {}
@@ -1652,43 +1659,37 @@ async def update_segment(
 
     # Validate times: fetch existing segment + video duration for cross-check
     if update.start_time is not None or update.end_time is not None:
-        existing = supabase.table("editai_segments")\
-            .select("start_time, end_time, source_video_id")\
-            .eq("id", segment_id)\
-            .eq("profile_id", profile.profile_id)\
-            .execute()
-        if not existing.data:
+        # Ownership check (T-82-01-01 IDOR pattern)
+        existing = repo.get_segment(segment_id)
+        if not existing or existing.get("profile_id") != profile.profile_id:
             raise HTTPException(status_code=404, detail="Segment not found")
 
-        effective_start = update.start_time if update.start_time is not None else existing.data[0]["start_time"]
-        effective_end = update.end_time if update.end_time is not None else existing.data[0]["end_time"]
+        effective_start = update.start_time if update.start_time is not None else existing["start_time"]
+        effective_end = update.end_time if update.end_time is not None else existing["end_time"]
 
         if effective_start < 0:
             raise HTTPException(status_code=400, detail="Start time must be >= 0")
 
-        video_result = supabase.table("editai_source_videos")\
-            .select("duration")\
-            .eq("id", existing.data[0]["source_video_id"])\
-            .execute()
-        video_duration = video_result.data[0].get("duration") if video_result.data else None
+        video = repo.get_source_video(existing["source_video_id"])
+        video_duration = video.get("duration") if video else None
 
         _validate_time_range(effective_start, effective_end, video_duration)
+    else:
+        # Even when times aren't changed, ownership must be checked before update
+        existing = repo.get_segment(segment_id)
+        if not existing or existing.get("profile_id") != profile.profile_id:
+            raise HTTPException(status_code=404, detail="Segment not found")
 
-    result = supabase.table("editai_segments")\
-        .update(update_data)\
-        .eq("id", segment_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
+    updated = repo.update_segment(segment_id, update_data)
 
-    if not result.data:
+    if not updated:
         raise HTTPException(status_code=404, detail="Segment not found")
 
     # Re-check product group assignment if times changed
     if update.start_time is not None or update.end_time is not None:
-        updated = result.data[0]
         new_label = await asyncio.to_thread(
             _assign_product_group,
-            supabase, updated["source_video_id"], profile.profile_id,
+            updated["source_video_id"], profile.profile_id,
             updated["start_time"], updated["end_time"]
         )
         if new_label != updated.get("product_group"):
@@ -1700,7 +1701,7 @@ async def update_segment(
             if new_label and new_label not in kw:
                 kw.append(new_label)
             pg_update["keywords"] = kw
-            supabase.table("editai_segments").update(pg_update).eq("id", segment_id).execute()
+            repo.update_segment(segment_id, pg_update)
 
     # Fetch updated segment
     return await get_segment(segment_id, profile)
@@ -1975,39 +1976,30 @@ async def create_product_group(
 ):
     """Create a product group for a source video."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Verify source video
-    video = supabase.table("editai_source_videos")\
-        .select("id, duration")\
-        .eq("id", video_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-    if not video.data:
+    # Verify source video (T-82-01-01 IDOR pattern)
+    video = repo.get_source_video(video_id)
+    if not video or video.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Source video not found")
 
     # Validate times against video duration
-    _validate_time_range(group.start_time, group.end_time, video.data[0].get("duration"))
+    _validate_time_range(group.start_time, group.end_time, video.get("duration"))
 
     # Auto-assign color from palette if not provided
     if not group.color:
-        existing = supabase.table("editai_product_groups")\
-            .select("color")\
-            .eq("source_video_id", video_id)\
-            .eq("profile_id", profile.profile_id)\
-            .execute()
-        used_colors = {g["color"] for g in existing.data if g.get("color")}
+        existing_result = repo.list_product_groups(
+            profile.profile_id,
+            QueryFilters(eq={"source_video_id": video_id}, select="color"),
+        )
+        existing_rows = existing_result.data
+        used_colors = {g["color"] for g in existing_rows if g.get("color")}
         group.color = next(
             (c for c in _PRODUCT_GROUP_COLORS if c not in used_colors),
-            _PRODUCT_GROUP_COLORS[len(existing.data) % len(_PRODUCT_GROUP_COLORS)]
+            _PRODUCT_GROUP_COLORS[len(existing_rows) % len(_PRODUCT_GROUP_COLORS)]
         )
 
     group_id = str(uuid.uuid4())
-    result = supabase.table("editai_product_groups").insert({
+    repo.create_product_group({
         "id": group_id,
         "source_video_id": video_id,
         "profile_id": profile.profile_id,
@@ -2015,18 +2007,25 @@ async def create_product_group(
         "start_time": group.start_time,
         "end_time": group.end_time,
         "color": group.color,
-    }).execute()
+    })
 
-    # Reassign all segments for this video
-    await asyncio.to_thread(_reassign_all_segments, supabase, video_id, profile.profile_id)
+    # Reassign all segments for this video (helper now takes no supabase arg)
+    await asyncio.to_thread(_reassign_all_segments, video_id, profile.profile_id)
 
     # Count segments in this group
-    seg_count = supabase.table("editai_segments")\
-        .select("id", count="exact")\
-        .eq("source_video_id", video_id)\
-        .eq("profile_id", profile.profile_id)\
-        .eq("product_group", group.label)\
-        .execute()
+    seg_count_result = repo.table_query(
+        "editai_segments",
+        "select",
+        filters=QueryFilters(
+            select="id",
+            count="exact",
+            eq={
+                "source_video_id": video_id,
+                "profile_id": profile.profile_id,
+                "product_group": group.label,
+            },
+        ),
+    )
 
     return ProductGroupResponse(
         id=group_id,
@@ -2035,7 +2034,7 @@ async def create_product_group(
         start_time=group.start_time,
         end_time=group.end_time,
         color=group.color,
-        segments_count=seg_count.count or 0,
+        segments_count=seg_count_result.count or 0,
         created_at=datetime.now(timezone.utc).isoformat()
     )
 
@@ -2097,11 +2096,6 @@ async def update_product_group(
 ):
     """Update a product group."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     update_data = {}
     if update.label is not None:
@@ -2116,17 +2110,11 @@ async def update_product_group(
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    # Get current group to know old label and video_id
-    current = supabase.table("editai_product_groups")\
-        .select("*")\
-        .eq("id", group_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not current.data:
+    # Get current group to know old label and video_id (T-82-01-01 IDOR pattern)
+    old = repo.get_product_group(group_id)
+    if not old or old.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Product group not found")
 
-    old = current.data[0]
     old_label = old["label"]
 
     # Validate times if being updated
@@ -2137,50 +2125,51 @@ async def update_product_group(
         if effective_start < 0:
             raise HTTPException(status_code=400, detail="Start time must be >= 0")
 
-        video_result = supabase.table("editai_source_videos")\
-            .select("duration")\
-            .eq("id", old["source_video_id"])\
-            .execute()
-        video_duration = video_result.data[0].get("duration") if video_result.data else None
+        video = repo.get_source_video(old["source_video_id"])
+        video_duration = video.get("duration") if video else None
 
         _validate_time_range(effective_start, effective_end, video_duration)
 
-    result = supabase.table("editai_product_groups")\
-        .update(update_data)\
-        .eq("id", group_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
+    g = repo.update_product_group(group_id, update_data)
 
-    if not result.data:
+    if not g:
         raise HTTPException(status_code=404, detail="Product group not found")
 
     # If label changed, update segments that had the old label
     if update.label and update.label != old_label:
-        segments = supabase.table("editai_segments")\
-            .select("id, keywords")\
-            .eq("source_video_id", old["source_video_id"])\
-            .eq("profile_id", profile.profile_id)\
-            .eq("product_group", old_label)\
-            .execute()
-        for seg in segments.data:
+        segments_result = repo.list_segments(
+            profile.profile_id,
+            QueryFilters(
+                eq={
+                    "source_video_id": old["source_video_id"],
+                    "product_group": old_label,
+                },
+                select="id, keywords",
+            ),
+        )
+        for seg in segments_result.data:
             kw = list(seg.get("keywords") or [])
             if old_label in kw:
                 kw[kw.index(old_label)] = update.label
-            supabase.table("editai_segments")\
-                .update({"product_group": update.label, "keywords": kw})\
-                .eq("id", seg["id"]).execute()
+            repo.update_segment(seg["id"], {"product_group": update.label, "keywords": kw})
 
-    # If time range changed, reassign
+    # If time range changed, reassign (helper now takes no supabase arg)
     if update.start_time is not None or update.end_time is not None:
-        await asyncio.to_thread(_reassign_all_segments, supabase, old["source_video_id"], profile.profile_id)
+        await asyncio.to_thread(_reassign_all_segments, old["source_video_id"], profile.profile_id)
 
-    g = result.data[0]
-    seg_count = supabase.table("editai_segments")\
-        .select("id", count="exact")\
-        .eq("source_video_id", g["source_video_id"])\
-        .eq("profile_id", profile.profile_id)\
-        .eq("product_group", g["label"])\
-        .execute()
+    seg_count_result = repo.table_query(
+        "editai_segments",
+        "select",
+        filters=QueryFilters(
+            select="id",
+            count="exact",
+            eq={
+                "source_video_id": g["source_video_id"],
+                "profile_id": profile.profile_id,
+                "product_group": g["label"],
+            },
+        ),
+    )
 
     return ProductGroupResponse(
         id=g["id"],
@@ -2189,7 +2178,7 @@ async def update_product_group(
         start_time=g["start_time"],
         end_time=g["end_time"],
         color=g.get("color"),
-        segments_count=seg_count.count or 0,
+        segments_count=seg_count_result.count or 0,
         created_at=g["created_at"]
     )
 
@@ -2201,47 +2190,33 @@ async def delete_product_group(
 ):
     """Delete a product group and unassign its segments."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Get group info
-    group = supabase.table("editai_product_groups")\
-        .select("*")\
-        .eq("id", group_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not group.data:
+    # Get group info (T-82-01-01 IDOR pattern)
+    g = repo.get_product_group(group_id)
+    if not g or g.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Product group not found")
 
-    g = group.data[0]
-
     # Clear product_group from affected segments
-    segments = supabase.table("editai_segments")\
-        .select("id, keywords")\
-        .eq("source_video_id", g["source_video_id"])\
-        .eq("profile_id", profile.profile_id)\
-        .eq("product_group", g["label"])\
-        .execute()
+    segments_result = repo.list_segments(
+        profile.profile_id,
+        QueryFilters(
+            eq={
+                "source_video_id": g["source_video_id"],
+                "product_group": g["label"],
+            },
+            select="id, keywords",
+        ),
+    )
 
-    for seg in segments.data:
+    for seg in segments_result.data:
         kw = [k for k in (seg.get("keywords") or []) if k != g["label"]]
-        supabase.table("editai_segments")\
-            .update({"product_group": None, "keywords": kw})\
-            .eq("id", seg["id"]).execute()
+        repo.update_segment(seg["id"], {"product_group": None, "keywords": kw})
 
     # Delete group
-    supabase.table("editai_product_groups")\
-        .delete()\
-        .eq("id", group_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
+    repo.delete_product_group(group_id)
 
-    # Reassign remaining segments (might match other groups)
-    await asyncio.to_thread(_reassign_all_segments, supabase, g["source_video_id"], profile.profile_id)
+    # Reassign remaining segments (might match other groups; helper now takes no supabase arg)
+    await asyncio.to_thread(_reassign_all_segments, g["source_video_id"], profile.profile_id)
 
     return {"status": "deleted", "id": group_id}
 
@@ -2253,22 +2228,14 @@ async def reassign_product_groups(
 ):
     """Batch reassign all segments to product groups based on overlap."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Verify video
-    video = supabase.table("editai_source_videos")\
-        .select("id")\
-        .eq("id", video_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-    if not video.data:
+    # Verify video (T-82-01-01 IDOR pattern)
+    video = repo.get_source_video(video_id)
+    if not video or video.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    await asyncio.to_thread(_reassign_all_segments, supabase, video_id, profile.profile_id)
+    # Helper now takes no supabase arg
+    await asyncio.to_thread(_reassign_all_segments, video_id, profile.profile_id)
 
     return {"status": "reassigned", "video_id": video_id}
 
