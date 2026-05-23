@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Executing Phase 82 (Plan 82-02 SHIPPED)
-stopped_at: Plan 82-02 SHIPPED — segments_routes.py all three Phase-82 grep gates at exactly 0 (SC-1 get_client 15→0; SC-4 ride-along 42→0; by-product Database-not-available 25→0). Both helpers refactored (`_assign_product_group` 3-caller and `_reassign_all_segments` 4-caller — supabase first arg dropped at all 7 caller sites). 5 atomic commits (chunk 1 5bfc724 background tasks + simple inserts + extract + match-srt; chunk 2 172c7a1 helpers + product-groups fat fns + create/update segment; chunk 3 ee5411f assign_segments_to_project + get_project_segments; chunk 4 b109728 grep gates to 0 + comment cleanup; metadata a9be077). 21 distinct repo.* methods, all defined in base.py. update_segment + delete_product_group + update_product_group + get_project_segments + assign_segments_to_project all migrated as Pattern C units. Plan 82-03 next (per-route SQLite tests + deferred-items.md).
-last_updated: "2026-05-23T03:00:03.477Z"
+status: Phase 82 SHIPPED — ready to execute Phase 83
+stopped_at: Plan 82-03 SHIPPED — Phase 82 fully sealed. tests/test_api_segments_sqlite.py with 28 SQLite per-route integration tests (1 fixture smoke + 27 route tests, all passing the dual gate). 3 new seed helpers added to conftest.py (_seed_source_video, _seed_segment, _seed_product_group — schema-aware). deferred-items.md with all 5 sections cataloging schema drift (editai_segments + editai_source_videos + editai_product_groups column gaps), 10 skipped routes (multipart/schema-drift redundancy), 2 xfail-strict markers on tests/test_segments_preview_proxy.py (the migration-induced _FakeRepo breakages predicted by Phase 82-01 SUMMARY), 41 orthogonal pre-existing failures (within Phase 81 baseline variance), and 5 follow-up items. 3 atomic commits (10d319a, 9f9a40f, 12a46a2). Phase 80 + 81 baselines preserved (23 + 16 passed). Plan 82-02 grep gates re-verified at 0.
+last_updated: "2026-05-23T06:30:00.000Z"
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 9
-  completed_plans: 8
-  percent: 89
+  completed_plans: 9
+  percent: 100
 ---
 
 # Project State
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 ## Current Position
 
-Phase: 82 (segments-routes-repository-migration) — EXECUTING (Plan 82-02 SHIPPED)
-Plan: 3 of 3 (82-03 next)
-Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 2/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred to next batch). Phase 82 in flight: Plan 82-01 SHIPPED 2026-05-23, Plan 82-02 SHIPPED 2026-05-23, Plan 82-03 next.
-Next action: `/gsd-execute-phase 82` (resume) to ship Plan 82-03 (per-route SQLite integration tests for every migrated route in segments_routes.py + schema-drift deferred-items.md cataloging the keywords/product_group SQLite column gaps + xfail-strict markers on pre-existing mock-chain tests broken by the migration). After Plan 82-03 lands, segments_routes.py is fully sealed (all 3 grep gates already at 0 per Plan 82-02). Phase 81 verification (`/gsd-verify-phase 81`) remains a deferred manual gate.
+Phase: 82 (segments-routes-repository-migration) — SHIPPED 2026-05-23 (3/3 plans complete)
+Plan: 3 of 3 COMPLETE
+Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 3/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred, Phase 82 SHIPPED 2026-05-23 — verification deferred). Phase 82 all plans complete: 82-01 SHIPPED 2026-05-23, 82-02 SHIPPED 2026-05-23, 82-03 SHIPPED 2026-05-23.
+Next action: `/gsd-discuss-phase 83` to begin Phase 83 (segments background services migration), OR `/gsd-verify-phase 82` for manual verification gate (Phase 81 verification also remains a deferred manual gate). With Phase 82 sealed, app/api/segments_routes.py has all 3 grep gates at exactly 0 (get_client, ride-along, Database not available) and 28 dual-gate SQLite integration tests guarding regressions.
 
 Sources:
 
@@ -90,6 +90,7 @@ Earlier project decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 81]: Plan 81-03 SHIPPED — 14 SQLite per-route pytest cases (tests/test_api_pipeline_sqlite.py, 14/14 pass) + 2 E2E scaffold tests (tests/test_pipeline_e2e_sqlite.py — test_pipeline_full_flow_no_503 passes, test_pipeline_full_flow_produces_mp4 xfail-deferred-to-Phase-85 per B-81-04). 5 broken pipeline tests xfailed with explicit Phase-81/Plan-81-03 reasons (4 migration-induced + 1 pre-existing baseline drift). Pipeline test suite green: 3 passed + 5 xfailed + 0 failed. 3 atomic commits (9c655d3, d740727, cda4cb8). 44 baseline failures in orthogonal subsystems documented as deferred-items.md (NOT Phase 81 blockers — verified pre-existing via stash). All 3 Phase 81 grep gates remain at 0. Phase 81 ready for verification.
 - [Phase 82]: Plan 82-01 SHIPPED — segments_routes.py get_client() count 37 → 15 (within target band [13, 19]) across 22 Pattern A/B migrations in 3 chunks (Chunk 1: source-videos CRUD + waveform + voice-detection 8 sites in e891f3b; Chunk 2: segments read/delete/toggle/bulk-transforms + per-segment helpers 13 sites in 1e76b91; Chunk 3: list_product_groups in 47aeef6). 2 new ABC methods (`get_product_group`, `update_product_group`) added on both backends — base.py + supabase_repo.py + sqlite_repo.py — with 6/6 RED→GREEN tests in tests/test_repository_segments_phase82.py. ROUTES-AUDIT.md catalogs all 37 guards + 76 ride-alongs + helper-caller table (3-caller `_assign_product_group` + 4-caller `_reassign_all_segments`, both deferred to 82-02). T-82-01-01 IDOR ownership pattern applied at every new `repo.get_source_video / get_segment / get_product_group` site. T-82-01-02 silent-skip accepted threat for bulk_update_transforms per-id loop. Plan-checker BLOCKER 1/2 corrections preserved: update_segment + delete_product_group NOT migrated (deferred to 82-02 as Pattern C with helper dependency). 6 atomic commits (a5b533a docs, 3303bbe RED, 629493f GREEN, e891f3b chunk 1, 1e76b91 chunk 2, 47aeef6 chunk 3). No deviations from plan — all advisor-flagged nuances (bulk_update_transforms add-mode raise-404 preservation, set-mode per-id loop, test-env probe) handled inline.
 - [Phase 82]: Plan 82-02 SHIPPED — segments_routes.py all three Phase-82 grep gates at exactly 0 (get_client = 0, expanded ride-along = 0, Database not available = 0). Helpers _assign_product_group + _reassign_all_segments refactored to drop supabase first arg; all 7 caller sites updated. 4 atomic chunked commits (5bfc724, 172c7a1, ee5411f, b109728). 21 distinct repo.* methods, all defined in base.py. Chunk-order swap from plan (helpers in Chunk 2 instead of Chunk 3) eliminated transitional None first-arg per advisor recommendation. Gate 8 reformulated per advisor analysis: 4 of 7 callers use asyncio.to_thread so _helper( regex returns 3 (2 def + 1 internal recursion); to_thread arity validated separately. T-82-02-01..T-82-02-08 all honored. Two hardening adjustments: update_segment gained ownership check in times-not-changed branch, extract_segment gained T-82-01-01 ownership check + downstream source-video ownership.
+- [Phase 82]: Plan 82-03 SHIPPED — tests/test_api_segments_sqlite.py with 28 SQLite per-route integration tests (1 fixture smoke + 27 route tests, all passing the dual gate under DATA_BACKEND=sqlite). 3 new schema-aware seed helpers added to tests/conftest.py (_seed_source_video, _seed_segment, _seed_product_group — every helper uses ONLY columns present in supabase/sqlite_schema.sql per Phase 81 81-03 lesson). 2 xfail-strict markers on tests/test_segments_preview_proxy.py (the migration-induced _FakeRepo.get_source_video AttributeError breakages predicted by Phase 82-01 SUMMARY § Known Test Breakages — empirically confirmed). deferred-items.md with all 5 sections: Schema Drift (3 sub-sections: editai_segments + editai_source_videos + editai_product_groups column gaps), Tests Skipped (10 routes with rationale), Tests Broken by Phase 82 Migration (2 xfail-strict, citing the SQLite test that supersedes each), Pre-Existing Baseline Failures (41 orthogonal failures within Phase 81 baseline variance), Out of Scope (5 follow-up items including the one-line v.get('name') or v.get('filename') route-builder defensive fix that would collapse most of Section 1.2 drift to clean 200s). 3 atomic commits (10d319a, 9f9a40f, 12a46a2). All 13 verification gates PASS. Phase 80 (23) and Phase 81 (16) SQLite baselines preserved. Plan 82-02 grep gates re-verified at 0. Phase 82 fully shipped.
 
 ### Pending Todos
 
@@ -113,10 +114,10 @@ New for v13:
 
 ## Session Continuity
 
-Last session: 2026-05-23T03:00:03.472Z
-Stopped at: Plan 82-02 SHIPPED — segments_routes.py all three Phase-82 grep gates at exactly 0 (SC-1=0, SC-4=0, by-product=0); both helpers refactored (supabase first arg dropped at all 7 caller sites); 5 atomic commits (5bfc724, 172c7a1, ee5411f, b109728, a9be077). Phase 82 at 2/3 plans.
-Resume file: .planning/phases/82-segments-routes-repository-migration/82-03-PLAN.md (test-only plan — per-route SQLite integration tests + deferred-items.md schema-drift catalog).
-Next action: `/gsd-execute-phase 82` (resume) to ship Plan 82-03. After Plan 82-03 lands, Phase 82 is ready for verification; advance to Phase 83.
+Last session: 2026-05-23T06:30:00.000Z
+Stopped at: Plan 82-03 SHIPPED — Phase 82 fully sealed (3/3 plans complete). tests/test_api_segments_sqlite.py with 28 dual-gate SQLite per-route tests + 3 new schema-aware seed helpers in conftest.py + 2 xfail-strict markers on migration-induced mock-chain breakages + deferred-items.md with all 5 sections. 3 atomic commits (10d319a, 9f9a40f, 12a46a2). All 13 verification gates PASS. Phase 80/81 baselines preserved (23 + 16). Plan 82-02 grep gates re-verified at 0.
+Resume file: None (Phase 82 complete; choose `/gsd-discuss-phase 83` for next phase OR `/gsd-verify-phase 82` for manual verification).
+Next action: `/gsd-discuss-phase 83` to begin Phase 83 (segments background services migration). Phase 81 + Phase 82 verifications (`/gsd-verify-phase 81` + `/gsd-verify-phase 82`) remain deferred manual gates — can be batched.
 
 ---
-*Last updated: 2026-05-23 after Plan 82-02 SHIPPED (segments_routes.py all 3 grep gates at 0; 2 helpers refactored; 5 atomic commits including metadata)*
+*Last updated: 2026-05-23 after Plan 82-03 SHIPPED — Phase 82 fully shipped (3/3 plans complete; segments_routes.py sealed as repo-ABC-only with 28 SQLite dual-gate tests; deferred-items.md catalogs schema drift + 5 follow-up items)*

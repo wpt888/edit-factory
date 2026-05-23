@@ -192,10 +192,11 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
   - [x] 81-01-PLAN.md — Audit + upsert_pipeline ABC + Pattern A/B migration (2026-05-23; see 81-01-SUMMARY.md; get_client() count: 24 → 5; W-81-01 helper refactor done)
   - [x] 81-02-PLAN.md — Pattern C/D + multi-site fns + get_pipeline_status escape hatch removal (2026-05-23; see 81-02-SUMMARY.md; all 3 Phase 81 grep gates at 0; three fat units migrated as units; concurrency primitives preserved)
   - [x] 81-03-PLAN.md — Per-route SQLite pytest cases + E2E scaffold + xfail repairs (2026-05-23; see 81-03-SUMMARY.md; 14 SQLite tests pass + 2 E2E scaffold + 5 broken pipeline tests xfailed with Phase-81 reasons)
-- [ ] Phase 82: Segments routes repository migration (1/3 plans complete — Plan 82-01 SHIPPED 2026-05-23)
+- [x] Phase 82: Segments routes repository migration (3/3 plans complete — SHIPPED 2026-05-23, ready for verification) (completed 2026-05-23)
+ (completed 2026-05-23)
   - [x] 82-01-PLAN.md — Audit (ROUTES-AUDIT.md) + 2 new ABC methods (get_product_group + update_product_group) on both backends with 6/6 RED→GREEN tests + Pattern A/B migration of 22 sites in 3 chunks (2026-05-23; see 82-01-SUMMARY.md; get_client count 37 → 15 within target band [13, 19]; T-82-01-01 IDOR pattern applied)
-  - [x] 82-02-PLAN.md — Pattern C/D + fat multi-site fns + helper refactors (`_assign_product_group` 3-caller + `_reassign_all_segments` 4-caller drop supabase arg); drives all 3 grep gates to 0
-  - [ ] 82-03-PLAN.md — Per-route SQLite tests + deferred-items.md (schema drift)
+  - [x] 82-02-PLAN.md — Pattern C/D + fat multi-site fns + helper refactors (2026-05-23; see 82-02-SUMMARY.md; all 3 Phase-82 grep gates at exactly 0; 4 atomic chunked commits)
+  - [x] 82-03-PLAN.md — Per-route SQLite tests + deferred-items.md schema-drift catalog (2026-05-23; see 82-03-SUMMARY.md; 28 SQLite dual-gate tests + 3 new seed helpers + 2 xfail-strict markers; all 13 verification gates PASS; Phase 80/81 baselines preserved)
 - [ ] Phase 83: Background services repository migration (~1–2 plans)
 - [ ] Phase 84: Cross-platform paths & FFmpeg discovery (~1 plan)
 - [ ] Phase 85: Desktop smoke-test harness (CI gate) (~1 plan)
@@ -296,10 +297,10 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
 | 64-79 | v12 | 29/29 | Complete | 2026-03-09 |
 | 80 | v13 | 3/3 | Complete (verified PASSED) | 2026-05-23 |
 | 81 | v13 | 3/3 | SHIPPED — ready for verification (Plan 81-03 SHIPPED 2026-05-23) | — |
-| 82 | v13 | 2/3 | In Progress|  |
+| 82 | v13 | 3/3 | Complete   | 2026-05-23 |
 | 83-98 | v13 | 0/~22 | Active | — |
 
 ---
-*Last updated: 2026-05-23 after Plan 82-01 SHIPPED (segments_routes.py 37 → 15 get_client; 2 new ABC methods get_product_group + update_product_group on both backends with 6/6 RED→GREEN tests; ROUTES-AUDIT.md complete; T-82-01-01 IDOR pattern applied; 6 atomic commits a5b533a / 3303bbe / 629493f / e891f3b / 1e76b91 / 47aeef6)*
+*Last updated: 2026-05-23 after Plan 82-03 SHIPPED — Phase 82 fully shipped (3/3 plans complete; 28 SQLite dual-gate tests in tests/test_api_segments_sqlite.py; deferred-items.md catalogs schema drift + 5 follow-up items; all 13 verification gates PASS)*
 
 *Earlier: 2026-05-23 after Plan 81-03 completion (14 SQLite per-route tests + E2E scaffold + 5 broken pipeline tests xfailed; pipeline test suite green: 3 passed + 5 xfailed + 0 failed; 3 atomic task commits 9c655d3 / d740727 / cda4cb8; all 3 Phase 81 grep gates remain at 0)*
