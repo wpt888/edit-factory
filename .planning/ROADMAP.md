@@ -197,7 +197,8 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
   - [x] 82-01-PLAN.md — Audit (ROUTES-AUDIT.md) + 2 new ABC methods (get_product_group + update_product_group) on both backends with 6/6 RED→GREEN tests + Pattern A/B migration of 22 sites in 3 chunks (2026-05-23; see 82-01-SUMMARY.md; get_client count 37 → 15 within target band [13, 19]; T-82-01-01 IDOR pattern applied)
   - [x] 82-02-PLAN.md — Pattern C/D + fat multi-site fns + helper refactors (2026-05-23; see 82-02-SUMMARY.md; all 3 Phase-82 grep gates at exactly 0; 4 atomic chunked commits)
   - [x] 82-03-PLAN.md — Per-route SQLite tests + deferred-items.md schema-drift catalog (2026-05-23; see 82-03-SUMMARY.md; 28 SQLite dual-gate tests + 3 new seed helpers + 2 xfail-strict markers; all 13 verification gates PASS; Phase 80/81 baselines preserved)
-- [ ] Phase 83: Background services repository migration (~1–2 plans)
+- [ ] Phase 83: Background services repository migration (1 plan)
+  - [ ] 83-01-PLAN.md — Audit (ROUTES-AUDIT.md with FUNC-03 reuse disposition) + assembly_service.py dedup migration + cleanup.py dry-run migration + SQLite tests (4 tasks; 2 get_client sites; zero new ABC methods required — existing list_tts_assets + list_jobs cover both via existing eq/lt/in_ filter primitives)
 - [ ] Phase 84: Cross-platform paths & FFmpeg discovery (~1 plan)
 - [ ] Phase 85: Desktop smoke-test harness (CI gate) (~1 plan)
 
