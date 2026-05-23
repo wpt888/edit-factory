@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Plan 82-02 SHIPPED — segments_routes.py all three Phase-82 grep gates at exactly 0; helpers refactored; 4 atomic commits (5bfc724, 172c7a1, ee5411f, b109728). Plan 82-03 next (per-route SQLite tests + deferred-items.md).
+status: Executing Phase 82 (Plan 82-02 SHIPPED)
+stopped_at: Plan 82-02 SHIPPED — segments_routes.py all three Phase-82 grep gates at exactly 0 (SC-1 get_client 15→0; SC-4 ride-along 42→0; by-product Database-not-available 25→0). Both helpers refactored (`_assign_product_group` 3-caller and `_reassign_all_segments` 4-caller — supabase first arg dropped at all 7 caller sites). 5 atomic commits (chunk 1 5bfc724 background tasks + simple inserts + extract + match-srt; chunk 2 172c7a1 helpers + product-groups fat fns + create/update segment; chunk 3 ee5411f assign_segments_to_project + get_project_segments; chunk 4 b109728 grep gates to 0 + comment cleanup; metadata a9be077). 21 distinct repo.* methods, all defined in base.py. update_segment + delete_product_group + update_product_group + get_project_segments + assign_segments_to_project all migrated as Pattern C units. Plan 82-03 next (per-route SQLite tests + deferred-items.md).
 last_updated: "2026-05-23T03:00:03.477Z"
 progress:
   total_phases: 3
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 ## Current Position
 
-Phase: 82 (segments-routes-repository-migration) — EXECUTING
-Plan: 2 of 3
-Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 2/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred to next batch). Phase 82 in flight: Plan 82-01 SHIPPED 2026-05-23, Plan 82-02 next.
-Next action: `/gsd-execute-phase 82` (resume) to ship Plan 82-02 (Pattern C fat-fn migration: update_segment + delete_product_group + 5 BG/insert paths + create_segment + extract_segment + create/update product groups + reassign + match-srt + assign_segments_to_project + get_project_segments; helper refactors `_assign_product_group` 3-caller + `_reassign_all_segments` 4-caller drop their `supabase` first arg; drives all three grep gates to 0). Plan 82-03 (per-route SQLite tests + deferred-items.md) follows. Phase 81 verification (`/gsd-verify-phase 81`) remains a deferred manual gate.
+Phase: 82 (segments-routes-repository-migration) — EXECUTING (Plan 82-02 SHIPPED)
+Plan: 3 of 3 (82-03 next)
+Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 2/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred to next batch). Phase 82 in flight: Plan 82-01 SHIPPED 2026-05-23, Plan 82-02 SHIPPED 2026-05-23, Plan 82-03 next.
+Next action: `/gsd-execute-phase 82` (resume) to ship Plan 82-03 (per-route SQLite integration tests for every migrated route in segments_routes.py + schema-drift deferred-items.md cataloging the keywords/product_group SQLite column gaps + xfail-strict markers on pre-existing mock-chain tests broken by the migration). After Plan 82-03 lands, segments_routes.py is fully sealed (all 3 grep gates already at 0 per Plan 82-02). Phase 81 verification (`/gsd-verify-phase 81`) remains a deferred manual gate.
 
 Sources:
 
@@ -114,9 +114,9 @@ New for v13:
 ## Session Continuity
 
 Last session: 2026-05-23T03:00:03.472Z
-Stopped at: Plan 82-02 SHIPPED — segments_routes.py all three Phase-82 grep gates at exactly 0; helpers refactored; 4 atomic commits (5bfc724, 172c7a1, ee5411f, b109728). Plan 82-03 next (per-route SQLite tests + deferred-items.md).
-Resume file: None
-Next action: `/gsd-execute-phase 82` (resume) to ship Plan 82-02 (drives all 3 grep gates to 0 in segments_routes.py). Plan 82-03 (per-route SQLite tests + deferred-items.md) follows.
+Stopped at: Plan 82-02 SHIPPED — segments_routes.py all three Phase-82 grep gates at exactly 0 (SC-1=0, SC-4=0, by-product=0); both helpers refactored (supabase first arg dropped at all 7 caller sites); 5 atomic commits (5bfc724, 172c7a1, ee5411f, b109728, a9be077). Phase 82 at 2/3 plans.
+Resume file: .planning/phases/82-segments-routes-repository-migration/82-03-PLAN.md (test-only plan — per-route SQLite integration tests + deferred-items.md schema-drift catalog).
+Next action: `/gsd-execute-phase 82` (resume) to ship Plan 82-03. After Plan 82-03 lands, Phase 82 is ready for verification; advance to Phase 83.
 
 ---
-*Last updated: 2026-05-23 after Plan 82-01 SHIPPED (segments_routes.py 37 → 15 get_client; 2 new ABC methods on both backends; T-82-01-01 IDOR applied; 6 atomic commits)*
+*Last updated: 2026-05-23 after Plan 82-02 SHIPPED (segments_routes.py all 3 grep gates at 0; 2 helpers refactored; 5 atomic commits including metadata)*
