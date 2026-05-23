@@ -1,0 +1,131 @@
+name: Installer Size (CI Gate)
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  installer-size:
+    name: Windows NSIS installer <= 550 MB
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            electron/package-lock.json
+            frontend/package-lock.json
+
+      - name: Create Python venv and install requirements
+        shell: pwsh
+        run: |
+          python -m venv venv
+          .\venv\Scripts\Activate.ps1
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download Windows FFmpeg (BtbN gpl build)
+        shell: pwsh
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          $zip = "$env:RUNNER_TEMP\ffmpeg.zip"
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          Write-Host "Extracting to ffmpeg/"
+          Expand-Archive -Path $zip -DestinationPath "ffmpeg" -Force
+          # Verify the path electron-builder expects exists
+          if (-not (Test-Path "ffmpeg\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe")) {
+            Write-Error "FFmpeg binary missing at expected path after extract"
+            exit 1
+          }
+          Write-Host "FFmpeg ready at ffmpeg\ffmpeg-master-latest-win64-gpl\bin\"
+
+      - name: Install frontend dependencies and build standalone bundle
+        shell: pwsh
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+          if (-not (Test-Path ".next\standalone")) {
+            Write-Error "Next.js standalone output missing after build - check frontend/next.config.ts output: 'standalone'"
+            exit 1
+          }
+
+      - name: Install electron dependencies and build NSIS installer
+        shell: pwsh
+        working-directory: electron
+        run: |
+          npm ci
+          npm run dist
+
+      - name: Measure installer size and enforce 550 MB threshold
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Path "electron\dist\editfactory-setup-*.exe" | Select-Object -First 1
+          if (-not $installer) {
+            Write-Error "No installer found at electron\dist\editfactory-setup-*.exe - electron-builder output missing"
+            exit 1
+          }
+          $sizeBytes = $installer.Length
+          $sizeMB = [math]::Round($sizeBytes / 1MB, 2)
+          $thresholdBytes = 576716800
+          $thresholdMB = 550
+          Write-Host "Installer: $($installer.Name)"
+          Write-Host "Size: $sizeBytes bytes ($sizeMB MB binary)"
+          Write-Host "Threshold: $thresholdBytes bytes ($thresholdMB MB binary)"
+          if ($sizeBytes -gt $thresholdBytes) {
+            Write-Error "FAIL: installer is $sizeMB MB which exceeds the $thresholdMB MB limit (ML-01). PR is blocked. Check electron/package.json extraResources filter for newly-bundled heavy packages."
+            exit 1
+          }
+          Write-Host "PASS: installer is within ML-01 size budget."
+          # Emit a summary line for the Actions UI
+          "installer_name=$($installer.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "installer_size_bytes=$sizeBytes" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "installer_size_mb=$sizeMB" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Defense-in-depth - assert NO PyTorch/Whisper/Coqui in installer payload
+        shell: pwsh
+        run: |
+          # Use 7-Zip (pre-installed on windows-latest) to list the NSIS installer contents.
+          # NSIS installers are 7z-compatible archives - 7z can enumerate paths without
+          # actually installing. We grep for the directory names that would indicate the
+          # ML exclusion filter was bypassed.
+          $installer = Get-ChildItem -Path "electron\dist\editfactory-setup-*.exe" | Select-Object -First 1
+          Write-Host "Listing installer contents via 7z..."
+          $listing = & 7z l $installer.FullName 2>&1 | Out-String
+          $forbidden = @("torch/", "torchaudio/", "torchvision/", "whisper/", "TTS/", "Cython/", "nvidia/", "triton/")
+          $violations = @()
+          foreach ($pattern in $forbidden) {
+            if ($listing -match [regex]::Escape($pattern)) {
+              $violations += $pattern
+            }
+          }
+          if ($violations.Count -gt 0) {
+            Write-Error "FAIL: installer contains forbidden ML directories: $($violations -join ', '). The extraResources exclusion filter in electron/package.json was bypassed."
+            exit 1
+          }
+          Write-Host "PASS: no PyTorch / Whisper / Coqui / Cython / nvidia / triton directories detected in installer."
+
+      - name: Upload installer as artifact (for inspection on PR review)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nsis-installer
+          path: electron/dist/editfactory-setup-*.exe
+          retention-days: 14
+          if-no-files-found: warn
