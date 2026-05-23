@@ -2756,11 +2756,10 @@ async def adopt_library_tts(
             detail=f"Invalid variant_index: {variant_index}"
         )
 
-    # Fetch the TTS asset from the library
+    # Fetch the TTS asset from the library. Plan 81-02 cleanup: get_repository() never
+    # returns None under DATA_BACKEND=sqlite (FUNC-01) so the legacy `if not repo: raise 503`
+    # guard was dead code and has been removed (mirrors Phase 80 80-02 dead-guard cleanup).
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-
     try:
         asset = repo.get_tts_asset(request.asset_id)
     except Exception as e:
@@ -4787,63 +4786,75 @@ async def get_pipeline_status(pipeline_id: str):
     # produce A|A then B|B rows.
     meta_variants.sort(key=lambda v: (v.variant_index, v.visual_version or ""))
 
-    # Recovery: look up missing clip_ids from editai_clips for completed variants
+    # Recovery: look up missing clip_ids from editai_clips for completed variants.
+    # Plan 81-02 Task 4 — migrated from the direct supabase import escape hatch
+    # to repo.list_clips. The B-81-01 disposition closes the get_pipeline_status
+    # escape hatch entirely.
     if _clip_id_recovery_needed:
         library_project_id = pipeline.get("library_project_id")
         if library_project_id:
             try:
-                from app.db import get_supabase
-                supabase_lib = get_supabase()
-                if supabase_lib:
-                    for vid in _clip_id_recovery_needed:
+                repo_status = get_repository()
+                for vid in _clip_id_recovery_needed:
+                    try:
+                        # Query with visual_version=NULL for standard (non-meta) clips.
+                        # list_clips eq does not natively support IS NULL, so we filter
+                        # client-side for visual_version is None after fetching matching
+                        # rows by project_id + variant_index + is_deleted=False.
+                        _clip_result = repo_status.list_clips(
+                            library_project_id,
+                            QueryFilters(
+                                eq={"variant_index": vid, "is_deleted": False},
+                                select="id, visual_version",
+                                limit=10,
+                            ),
+                        )
+                        _matching = [
+                            r for r in (_clip_result.data or [])
+                            if r.get("visual_version") is None
+                        ]
+                        if _matching:
+                            recovered_id = _matching[0]["id"]
+                            # Update the variant in the response
+                            for v in variants:
+                                if v.variant_index == vid and not v.visual_version:
+                                    v.clip_id = recovered_id
+                                    break
+                            # Persist recovery to render_jobs so future calls don't need lookup
+                            if vid in pipeline.get("render_jobs", {}):
+                                pipeline["render_jobs"][vid]["clip_id"] = recovered_id
+                            logger.info(f"Recovered clip_id {recovered_id} for variant {vid}")
+                    except Exception as clip_err:
+                        logger.warning(f"clip_id recovery failed for variant {vid}: {clip_err}")
+
+                # Also recover meta multiplication clip_ids
+                for mv in meta_variants:
+                    if mv.status == "completed" and not mv.clip_id and mv.visual_version:
                         try:
-                            # Query with visual_version=NULL for standard (non-meta) clips
-                            clip_result = supabase_lib.table("editai_clips")\
-                                .select("id")\
-                                .eq("project_id", library_project_id)\
-                                .eq("variant_index", vid)\
-                                .is_("visual_version", "null")\
-                                .eq("is_deleted", False)\
-                                .limit(1)\
-                                .execute()
-                            if clip_result.data and len(clip_result.data) > 0:
-                                recovered_id = clip_result.data[0]["id"]
-                                # Update the variant in the response
-                                for v in variants:
-                                    if v.variant_index == vid and not v.visual_version:
-                                        v.clip_id = recovered_id
-                                        break
-                                # Persist recovery to render_jobs so future calls don't need lookup
-                                if vid in pipeline.get("render_jobs", {}):
-                                    pipeline["render_jobs"][vid]["clip_id"] = recovered_id
-                                logger.info(f"Recovered clip_id {recovered_id} for variant {vid}")
-                        except Exception as clip_err:
-                            logger.warning(f"clip_id recovery failed for variant {vid}: {clip_err}")
+                            _meta_clip_result = repo_status.list_clips(
+                                library_project_id,
+                                QueryFilters(
+                                    eq={
+                                        "variant_index": mv.variant_index,
+                                        "visual_version": mv.visual_version,
+                                        "is_deleted": False,
+                                    },
+                                    select="id",
+                                    limit=1,
+                                ),
+                            )
+                            if _meta_clip_result.data:
+                                _recovered_meta_id = _meta_clip_result.data[0]["id"]
+                                mv.clip_id = _recovered_meta_id
+                                _meta_jk = f"{mv.variant_index}_{mv.visual_version}"
+                                if _meta_jk in pipeline.get("render_jobs", {}):
+                                    pipeline["render_jobs"][_meta_jk]["clip_id"] = _recovered_meta_id
+                                logger.info(f"Recovered meta clip_id {_recovered_meta_id} for variant {mv.variant_index} ver={mv.visual_version}")
+                        except Exception as meta_clip_err:
+                            logger.warning(f"Meta clip_id recovery failed for {mv.variant_index}_{mv.visual_version}: {meta_clip_err}")
 
-                    # Also recover meta multiplication clip_ids
-                    for mv in meta_variants:
-                        if mv.status == "completed" and not mv.clip_id and mv.visual_version:
-                            try:
-                                meta_clip_result = supabase_lib.table("editai_clips")\
-                                    .select("id")\
-                                    .eq("project_id", library_project_id)\
-                                    .eq("variant_index", mv.variant_index)\
-                                    .eq("visual_version", mv.visual_version)\
-                                    .eq("is_deleted", False)\
-                                    .limit(1)\
-                                    .execute()
-                                if meta_clip_result.data and len(meta_clip_result.data) > 0:
-                                    _recovered_meta_id = meta_clip_result.data[0]["id"]
-                                    mv.clip_id = _recovered_meta_id
-                                    _meta_jk = f"{mv.variant_index}_{mv.visual_version}"
-                                    if _meta_jk in pipeline.get("render_jobs", {}):
-                                        pipeline["render_jobs"][_meta_jk]["clip_id"] = _recovered_meta_id
-                                    logger.info(f"Recovered meta clip_id {_recovered_meta_id} for variant {mv.variant_index} ver={mv.visual_version}")
-                            except Exception as meta_clip_err:
-                                logger.warning(f"Meta clip_id recovery failed for {mv.variant_index}_{mv.visual_version}: {meta_clip_err}")
-
-                    # Persist recovered clip_ids to DB
-                    _db_update_render_jobs(pipeline_id, pipeline.get("render_jobs", {}))
+                # Persist recovered clip_ids to DB
+                _db_update_render_jobs(pipeline_id, pipeline.get("render_jobs", {}))
             except Exception as recovery_err:
                 logger.warning(f"clip_id recovery batch failed: {recovery_err}")
 
@@ -4969,8 +4980,8 @@ async def sync_pipeline_to_library(
 
     repo = get_repository()
     # Plan 81-02 Task 3 — repo is always usable under DATA_BACKEND=sqlite (FUNC-01);
-    # the legacy `supabase = repo.get_client()` guard + `if not supabase: raise 503`
-    # block was dead code and has been removed (mirrors Phase 80's dead-503-guard pattern).
+    # the legacy bare-client guard and its 503 fallback were dead code and have
+    # been removed (mirrors Phase 80's dead-503-guard pattern).
     # Load profile defaults so we can reconstruct the effective subtitle style
     # for clips that have no explicit per-key override. This mirrors what
     # do_render writes via _save_clip_to_library so recovery sync produces
@@ -5155,7 +5166,7 @@ async def sync_pipeline_to_library(
         _em_lookup = (vid, _visual_ver)
         if _em_lookup in existing_map:
             existing_id = existing_map[_em_lookup]
-            # Plan 81-02 Task 3.D — repo.update_clip replaces supabase.table().update().eq().execute().
+            # Plan 81-02 Task 3.D — repo.update_clip migration.
             repo.update_clip(existing_id, {
                 "raw_video_path": str(_raw_assembly_path) if _raw_assembly_path else str(final_video_path),
                 "final_video_path": str(final_video_path),
@@ -5182,7 +5193,7 @@ async def sync_pipeline_to_library(
             }
             if clip_supports_visual_version:
                 clip_insert_payload["visual_version"] = _visual_ver
-            # Plan 81-02 Task 3.E — repo.create_clip replaces supabase.table().insert().execute().
+            # Plan 81-02 Task 3.E — repo.create_clip migration.
             try:
                 created_clip = repo.create_clip(clip_insert_payload)
             except Exception as clip_insert_err:
