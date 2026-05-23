@@ -219,8 +219,8 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
 **Track C — Marketing/Billing Web App (Wave 3b/4):**
 - [x] Phase 89: Marketing app scaffolding (`marketing/`) (~1 plan)
  (completed 2026-05-23)
-- [ ] Phase 90: Landing page + pricing (1 plan planned — 2026-05-23)
-  - [ ] 90-01-PLAN.md — Full landing page composition (Hero+Features+Pricing+Screenshots+Comparison+FAQ+Footer) + Lighthouse ≥ 90/95 against production build + CLAUDE.md MANDATORY screenshot
+- [x] Phase 90: Landing page + pricing (1 plan planned — 2026-05-23) (completed 2026-05-23)
+  - [x] 90-01-PLAN.md — Full landing page composition (Hero+Features+Pricing+Screenshots+Comparison+FAQ+Footer) + Lighthouse ≥ 90/95 against production build + CLAUDE.md MANDATORY screenshot
 - [ ] Phase 91: Lemon Squeezy checkout + webhook (~2 plans)
 - [ ] Phase 92: Account dashboard (~2 plans)
 
