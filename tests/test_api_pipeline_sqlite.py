@@ -187,6 +187,77 @@ def test_pipeline_check_render_skip_returns_non_503(sqlite_backend):
     assert r.status_code in (200, 404, 400)
 
 
+def test_pipeline_tts_returns_non_503(sqlite_backend, monkeypatch, tmp_path):
+    """POST /tts/{pipeline_id}/{variant_index} — Plan 81-01 site #18 (list_tts_assets dedup)
+    reaches repo without 503. Mocks TTS provider so no real ElevenLabs call is made."""
+    client, repo, profile_id = sqlite_backend
+    # Seed pipeline with scripts so the route doesn't 400 on empty scripts
+    p = _seed_pipeline(repo, profile_id, scripts=["hello world test"])
+
+    # Mock TTS provider — try multiple import paths since the wiring varies
+    def _mocked_synth(self, text, *args, **kwargs):
+        return (str(tmp_path / "tts.mp3"), 1.0, "1\n00:00:00,000 --> 00:00:01,000\n" + text + "\n")
+
+    for target in [
+        "app.services.tts_provider.TTSProvider.synthesize",
+        "app.services.elevenlabs_tts.ElevenLabsTTS.synthesize",
+        "app.services.edge_tts.EdgeTTSProvider.synthesize",
+    ]:
+        try:
+            monkeypatch.setattr(target, _mocked_synth, raising=True)
+        except (AttributeError, ImportError, ModuleNotFoundError):
+            continue
+
+    r = client.post(
+        f"/api/v1/pipeline/tts/{p['id']}/0",
+        json={
+            "elevenlabs_model": "eleven_flash_v2_5",
+            "voice_id": "test-voice",
+            "words_per_subtitle": 2,
+        },
+        headers=HEADERS,
+    )
+    _assert_not_db_unavailable(r)
+    # 200/202 happy path; 400 if TTS provider gate fails; 500 if disk/key issue.
+    # The load-bearing assertion is the dual gate (not 503), which is asserted above.
+    assert r.status_code in (200, 202, 400, 404, 500)
+
+
+def test_pipeline_render_preview_returns_non_503(sqlite_backend, monkeypatch, tmp_path):
+    """POST /render-preview/{pipeline_id}/{variant_index} — Plan 81-01/02 site
+    reaches repo + segment matcher without 503. Mocks FFmpeg."""
+    client, repo, profile_id = sqlite_backend
+    # Provide an existing TTS audio file on disk so the route doesn't 400 on missing audio
+    tts_audio = tmp_path / "fixture_tts.mp3"
+    tts_audio.write_bytes(b"fake mp3 audio")
+    p = _seed_pipeline(
+        repo,
+        profile_id,
+        scripts=["hello world test"],
+        tts_previews={"0": {"audio_path": str(tts_audio), "audio_duration": 1.0}},
+    )
+
+    from subprocess import CompletedProcess
+    monkeypatch.setattr(
+        "app.services.ffmpeg_semaphore.safe_ffmpeg_run",
+        lambda cmd, timeout, label: CompletedProcess(args=cmd, returncode=0, stdout="", stderr=""),
+    )
+
+    r = client.post(
+        f"/api/v1/pipeline/render-preview/{p['id']}/0",
+        json={
+            "match_overrides": [],
+            "min_segment_duration": 3.0,
+            "words_per_subtitle": 2,
+        },
+        headers=HEADERS,
+    )
+    _assert_not_db_unavailable(r)
+    # 200/202 happy dispatch path; 400 acceptable for missing segments / business rule;
+    # 500 acceptable for downstream errors. The load-bearing assertion is the dual gate.
+    assert r.status_code in (200, 202, 400, 404, 500)
+
+
 def test_pipeline_render_returns_non_503(sqlite_backend, monkeypatch):
     """POST /render/{pipeline_id} — reaches _save_clip_to_library (Plan 81-02 Task 2)
     without 503 or NameError on supabase_lib."""
