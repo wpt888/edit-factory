@@ -2,6 +2,7 @@ import { Card, CardHeader, CardContent, CardFooter, CardTitle, CardDescription }
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { getCheckoutUrl } from "@/lib/lemon-squeezy";
 
 export function Pricing() {
   return (
@@ -31,7 +32,7 @@ export function Pricing() {
             </CardContent>
             <CardFooter>
               <Button asChild className="w-full">
-                <a href="/signup?plan=starter">Buy Starter</a>
+                <a href={getCheckoutUrl("starter")}>Buy Starter</a>
               </Button>
             </CardFooter>
           </Card>
@@ -56,7 +57,7 @@ export function Pricing() {
             </CardContent>
             <CardFooter>
               <Button asChild className="w-full">
-                <a href="/signup?plan=pro">Buy Pro</a>
+                <a href={getCheckoutUrl("pro")}>Buy Pro</a>
               </Button>
             </CardFooter>
           </Card>
@@ -80,7 +81,7 @@ export function Pricing() {
             </CardContent>
             <CardFooter>
               <Button asChild variant="outline" className="w-full">
-                <a href="/signup?plan=cloud-sync">Add Cloud Sync</a>
+                <a href={getCheckoutUrl("cloud_sync")}>Add Cloud Sync</a>
               </Button>
             </CardFooter>
           </Card>

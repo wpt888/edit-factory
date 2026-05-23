@@ -8,7 +8,10 @@
     "start": "next start --port 3001",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "npx playwright test"
+    "test": "npx playwright test",
+    "test:checkout": "npm run test:checkout:without-env && npm run test:checkout:with-env",
+    "test:checkout:with-env": "npx playwright test tests/checkout-with-env.spec.ts",
+    "test:checkout:without-env": "npx playwright test tests/checkout-without-env.spec.ts"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.4",

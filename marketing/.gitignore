@@ -5,8 +5,13 @@
 test-results/
 playwright-report/
 
-# Per-run screenshots are ignored, but committed named phase artifacts survive
-# (e.g. phase-90-landing.png is the CLAUDE.md MANDATORY proof per Phase 90 verification).
+# Per-run screenshots are ignored, but committed named phase artifacts survive.
+# Named exceptions (alphabetized):
+#   - phase-*-landing.png: Phase 90 MANDATORY CLAUDE.md screenshot
+#   - phase-91-*.png:      Phase 91 Plan 91-01 checkout MANDATORY screenshot
+#   - phase-91-*.json:     Phase 91 Plan 91-02 webhook proof-of-execution artifact
 screenshots/*
 !screenshots/.gitkeep
 !screenshots/phase-*-landing.png
+!screenshots/phase-91-*.png
+!screenshots/phase-91-*.json
