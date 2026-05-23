@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 85 PLANNED — ready to execute (1 plan, 6 tasks, 1 wave)
-stopped_at: "Phase 85 Plan 85-01 PLANNED end-to-end. gsd-planner produced .planning/phases/85-desktop-smoke-test-harness/85-01-PLAN.md (926 lines, 6 tasks, single wave, atomic single-plan phase per v13-ROADMAP line 119). gsd-plan-checker verdict: PASS 49/50 with 4 non-blocking advisory notes (cosmetic endpoint-count off-by-one in a header comment; minor fake-UUID-fallback inline doc; harmless `spec.get(True) or spec.get('on')` YAML dead-code clause; files-modified manifest cleanliness verified). All 22 endpoint paths in the plan's table spot-checked against live `@router.*` decorators in app/api/pipeline_routes.py, library_routes.py, segments_routes.py, assembly_routes.py, routes.py, profile_routes.py — no drift. Plan ships scripts/desktop-smoke-test.py (TestClient-based, SQLite mode, mocks FFmpeg + Gemini + TTS, 5xx-only rejection, per-row status table to stdout) + .github/workflows/desktop-smoke.yml (Python 3.11 pin matching ci.yml:21 to sidestep host Py 3.14 scipy-wheel gap, on: pull_request: branches: [main]) + tests/test_pipeline_e2e_sqlite.py xfail-reason update (B-81-04 → cite Phase 85 as canonical FUNC-02 closer) + 85-01-SUMMARY.md. Closes FUNC-02 + FUNC-06."
-last_updated: "2026-05-23T11:00:00.000Z"
+status: Executing Phase 85
+stopped_at: Phase 83 Plan 83-01 SHIPPED end-to-end. Combined `get_client()` count across `app/services/assembly_service.py` + `app/core/cleanup.py` driven from 2 → 0. 4 atomic task commits (`4e60c0b`, `f659081`, `066cb9b`, `507545c`) + 1 metadata commit. All 13 plan must_haves GREEN. 5 new SQLite tests pass + Phase 80/81/82 baselines preserved (67 tests). Zero new ABC methods — FUNC-03 closed by documented coverage. No deviations from plan.
+last_updated: "2026-05-23T06:39:45.595Z"
 progress:
-  total_phases: 19
-  completed_phases: 5
-  total_plans: 13
-  completed_plans: 11
-  percent: 26
+  total_phases: 3
+  completed_phases: 3
+  total_plans: 9
+  completed_plans: 9
+  percent: 100
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale, distributed as a true downloadable desktop product priced for indie creators.
-**Current focus:** Phase 85 — desktop smoke-test harness (CI gate); Phase 84 sealed.
+**Current focus:** Phase 85 — desktop-smoke-test-harness
 
 ## Current Position
 
-Phase: 85 (desktop-smoke-test-harness) — PLANNED 2026-05-23, ready to execute (gsd-plan-checker PASS 49/50)
-Plan: 0 of 1 executed (85-01 — desktop smoke harness + CI gate; 6 tasks, 1 wave, atomic single-plan phase)
+Phase: 85 (desktop-smoke-test-harness) — EXECUTING
+Plan: 1 of 1
 Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 5/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81–83 SHIPPED 2026-05-23 — verification deferred, Phase 84 SHIPPED + VERIFIED 2026-05-23, Phase 85 PLANNED 2026-05-23). Phase 85 will close FUNC-02 + FUNC-06 by shipping `scripts/desktop-smoke-test.py` (TestClient harness walking 22 endpoints across 6 routers, 5xx-only rejection) + `.github/workflows/desktop-smoke.yml` (Python 3.11 pin, on: pull_request).
 Next action: `/gsd-execute-phase 85` (autonomous). Plan file: `.planning/phases/85-desktop-smoke-test-harness/85-01-PLAN.md`. Phase 81 + 82 + 83 verifications (`/gsd-verify-phase 81/82/83`) remain deferred manual gates — can be batched.
 

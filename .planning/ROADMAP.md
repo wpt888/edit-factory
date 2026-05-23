@@ -201,8 +201,8 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
   - [x] 83-01-PLAN.md — Audit (ROUTES-AUDIT.md with FUNC-03 reuse disposition) + assembly_service.py dedup migration + cleanup.py dry-run migration + SQLite tests (2026-05-23; see 83-01-SUMMARY.md; combined `get_client()` count 2 → 0 across both files; zero new ABC methods — FUNC-03 closed by documented coverage; 5 new SQLite tests pass + Phase 80/81/82 baselines preserved at 67 tests; 4 atomic task commits `4e60c0b`/`f659081`/`066cb9b`/`507545c`)
 - [x] Phase 84: Cross-platform paths & FFmpeg discovery (1 plan planned — 2026-05-23) (completed 2026-05-23)
   - [x] 84-01-PLAN.md — Cross-platform _get_app_base_dir (win32/darwin/linux branches + dev fallback) + _resolve_ffmpeg_path pure resolver with env → bundled → PATH order + per-target electron extraResources (win + mac, no linux) + manual-fetch READMEs + 16 new tests (8 base_dir + 8 ffmpeg resolver)
-- [ ] Phase 85: Desktop smoke-test harness (CI gate) (1 plan planned — 2026-05-23)
-  - [ ] 85-01-PLAN.md — scripts/desktop-smoke-test.py (TestClient-based, SQLite mode, mocks FFmpeg/Gemini/TTS, walks 22 endpoints across 6 routers, 5xx-only rejection) + .github/workflows/desktop-smoke.yml (Python 3.11 pin, on: pull_request: branches: [main]) + xfail-reason update in tests/test_pipeline_e2e_sqlite.py + SUMMARY.md — closes FUNC-02 + FUNC-06
+- [x] Phase 85: Desktop smoke-test harness (CI gate) (1 plan planned — 2026-05-23) (completed 2026-05-23)
+  - [x] 85-01-PLAN.md — scripts/desktop-smoke-test.py (TestClient-based, SQLite mode, mocks FFmpeg/Gemini/TTS, walks 22 endpoints across 6 routers, 5xx-only rejection) + .github/workflows/desktop-smoke.yml (Python 3.11 pin, on: pull_request: branches: [main]) + xfail-reason update in tests/test_pipeline_e2e_sqlite.py + SUMMARY.md — closes FUNC-02 + FUNC-06
 
 **Track B — Optional ML (Wave 3a, parallel):**
 - [ ] Phase 86: ML bundle download endpoint + UI (~2 plans)
