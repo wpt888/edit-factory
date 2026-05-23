@@ -222,6 +222,80 @@ def _seed_export_preset(repo, name="TikTok", **overrides):
 ENDPOINTS: list[dict] = []
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Pipeline walk (FUNC-02 spine — 4-step sequential walk with ID capture)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _run_pipeline_walk(client) -> list[dict]:
+    """Walk the 6 pipeline endpoints in order, capturing pipeline_id from step 1.
+
+    Returns a list of result rows: [{"method": ..., "path": ..., "status": ...}].
+
+    Pipeline steps exercised:
+    1. POST /generate  — creates pipeline, captures pipeline_id
+    2. GET  /list
+    3. POST /tts/{id}/0
+    4. POST /render-preview/{id}/0
+    5. POST /render/{id}
+    6. GET  /status/{id}
+    """
+    rows: list[dict] = []
+
+    # 1. generate
+    r = client.post(
+        "/api/v1/pipeline/generate",
+        json={"idea": "smoke test", "variant_count": 1, "provider": "gemini"},
+        headers=HEADERS,
+    )
+    rows.append({"method": "POST", "path": "/api/v1/pipeline/generate", "status": r.status_code})
+    pipeline_id = None
+    try:
+        pipeline_id = r.json().get("pipeline_id")
+    except Exception:
+        pass
+
+    # 2. list (no pipeline_id needed)
+    r = client.get("/api/v1/pipeline/list", headers=HEADERS)
+    rows.append({"method": "GET", "path": "/api/v1/pipeline/list", "status": r.status_code})
+
+    # If step 1 failed to produce a pipeline_id (e.g., Gemini key gate short-circuits),
+    # synthesize a fake UUID so the remaining 3-4 steps still HIT THE ROUTE and prove
+    # no 5xx. A 404 from a missing pipeline is acceptable; 5xx is not.
+    if not pipeline_id:
+        pipeline_id = f"smoke-fallback-{uuid.uuid4().hex[:8]}"
+
+    # 3. tts
+    r = client.post(
+        f"/api/v1/pipeline/tts/{pipeline_id}/0",
+        json={"elevenlabs_model": "eleven_flash_v2_5", "voice_id": "test-voice", "words_per_subtitle": 2},
+        headers=HEADERS,
+    )
+    rows.append({"method": "POST", "path": f"/api/v1/pipeline/tts/{{id}}/0", "status": r.status_code})
+
+    # 4. render-preview
+    r = client.post(
+        f"/api/v1/pipeline/render-preview/{pipeline_id}/0",
+        json={"match_overrides": [], "min_segment_duration": 3.0, "words_per_subtitle": 2},
+        headers=HEADERS,
+    )
+    rows.append({"method": "POST", "path": f"/api/v1/pipeline/render-preview/{{id}}/0", "status": r.status_code})
+
+    # 5. render
+    r = client.post(
+        f"/api/v1/pipeline/render/{pipeline_id}",
+        json={"variant_indices": [0], "preset_name": "TikTok", "voice_id": "test-voice"},
+        headers=HEADERS,
+    )
+    rows.append({"method": "POST", "path": f"/api/v1/pipeline/render/{{id}}", "status": r.status_code})
+
+    # 6. status
+    r = client.get(f"/api/v1/pipeline/status/{pipeline_id}", headers=HEADERS)
+    rows.append({"method": "GET", "path": f"/api/v1/pipeline/status/{{id}}", "status": r.status_code})
+
+    return rows
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -290,13 +364,21 @@ def main() -> None:
     print(f"    SQLite mode | AUTH_DISABLED | tmp: {_TMP_BASE}", flush=True)
     print("", flush=True)
 
-    # (d) Walk endpoints (ENDPOINTS is empty at this stage — populated in Tasks 3+4)
-    all_rows: list[dict] = _walk(client, ENDPOINTS)
+    # (d) Walk pipeline (6 endpoints — the FUNC-02 spine)
+    pipeline_rows = _run_pipeline_walk(client)
+    for row in pipeline_rows:
+        _print_row(row["method"], row["path"], row["status"])
 
-    # (e) Collect failures (status >= 500 — the FUNC-01 backslide gate)
+    # (e) Walk remaining flat endpoint table (populated in Task 4)
+    flat_rows = _walk(client, ENDPOINTS)
+
+    # Combine all rows
+    all_rows = pipeline_rows + flat_rows
+
+    # (f) Collect failures (status >= 500 — the FUNC-01 backslide gate)
     failures = [r for r in all_rows if r["status"] >= 500]
 
-    # (f) Print summary
+    # (g) Print summary
     print("", flush=True)
     print(f"=== {len(all_rows)} endpoints hit, {len(failures)} failures ===", flush=True)
 
