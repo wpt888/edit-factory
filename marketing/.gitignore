@@ -4,4 +4,9 @@
 # Playwright test artifacts (per-run, not source).
 test-results/
 playwright-report/
-screenshots/
+
+# Per-run screenshots are ignored, but committed named phase artifacts survive
+# (e.g. phase-90-landing.png is the CLAUDE.md MANDATORY proof per Phase 90 verification).
+screenshots/*
+!screenshots/.gitkeep
+!screenshots/phase-*-landing.png
