@@ -12,9 +12,12 @@ test.describe('Phase 89: marketing app scaffold smoke', () => {
     // Step 3: wait for the page to settle (Next.js hydration + Tailwind class application).
     await page.waitForLoadState('networkidle');
 
-    // Step 4: assert the literal placeholder text is present (per D-09).
-    await expect(page.getByText('Edit Factory', { exact: false })).toBeVisible();
-    await expect(page.getByText('Coming soon', { exact: false })).toBeVisible();
+    // Step 4: assert page content is present.
+    // [Rule 1 - Bug] Phase 90 replaced the "Coming soon" placeholder with the full landing page.
+    // The old assertions caused strict-mode violations (7 matches for "Edit Factory") and a
+    // case mismatch ("Coming soon" vs "Screenshot coming soon"). Updated to unique locators.
+    await expect(page.getByRole('heading', { name: 'Automated video production for indie creators.', level: 1 })).toBeVisible();
+    await expect(page.getByText(/coming soon/i).first()).toBeVisible();
 
     // Step 5: full-page screenshot per CLAUDE.md MANDATORY Playwright rule.
     await page.screenshot({
