@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v13
-milestone_name: Desktop Production-Ready & Monetization
-status: Phase 90 PLANNED (Plan 90-01 ready for execution — landing-page+pricing, 1 plan / 3 tasks / 16 files. Plan-checker iter 1 found 1 BLOCKER (port 3099 collision with Phase 89 autonomous fallback) + 2 WARNINGs (16 files single-plan, duplicate child_process imports); revision iter 2 fixed BLOCKER (PROD_PORT = PLAYWRIGHT_PORT + 1000) + ISS-90-03 (consolidated import with `type ChildProcess`); orchestrator accepted ISS-90-02 (verbatim-locked content per CONTEXT D-01). Checker iter 2 PASSED with zero regressions. Plan commit 9ca8512. STATE.md frontmatter manually restored after 8th consecutive gsd-tools state planned-phase corruption (gsd-tools wrote milestone=v1.0 / milestone_name=milestone / total_phases=8 / completed_phases=7 / total_plans=15 / completed_plans=14 / percent=93). Next iteration enters /gsd-execute-phase 90."
-stopped_at: "Phase 90 PLANNED (Plan 90-01 created via autonomous-loop planner with 18 pre-locked decisions D-01..D-18 in 90-CONTEXT.md substituting for forbidden /gsd-discuss-phase; planner produced 90-01-PLAN.md 939 lines with 3 tasks + 16 files_modified + threat model T-90-01..06 + 12 must_haves truths + 3 surfaced DECISION CONFLICTS all with orchestrator-accepted resolutions: D-12 accordion authored from canonical Shadcn 2.x (frontend/ lacks source), D-13 +1 peer dep @radix-ui/react-separator, D-16 Lighthouse against next-start production build on PROD_PORT = PLAYWRIGHT_PORT + 1000. Plan-checker revision loop converged at iter 2/3: iter 1 produced 1 BLOCKER (ISS-90-01 port 3099 collision with Phase 89 documented autonomous fallback per 89-01-SUMMARY L186/L212) + 2 WARNINGs (ISS-90-02 16-file count borderline-blocker but mitigated by verbatim-locked content per D-01, ISS-90-03 duplicate child_process imports risk new ESLint warning beyond Phase 89 baseline of 5); revision iter 2 fixed both addressable issues (ISS-90-01 via PROD_PORT formula at 7 locations, ISS-90-03 via single consolidated `import { spawn, execSync, type ChildProcess } from 'node:child_process'`); iter 2 verification PASSED with zero regressions (frontmatter unchanged, must_haves unchanged, threat model unchanged, T1+T2 unchanged). Plan tractability borderline at 16 files but content is verbatim-locked (D-05..D-11 prescribe section copy + D-10-Answers prescribes 6 FAQ Q+A verbatim); executor judgment burden minimized. Commit 9ca8512 (1335 insertions / 393 deletions = plan body + ROADMAP plan-progress update)."
-last_updated: "2026-05-23T18:30:00.000Z"
+milestone: v1.0
+milestone_name: milestone
+status: Executing Phase 90
+stopped_at: "Phase 90 PLANNED (Plan 90-01 ready for execution — landing-page+pricing, 1 plan / 3 tasks / 16 files, plan-checker PASSED iter 2/3 after surgical revision fixed 1 BLOCKER + 1 WARNING from iter 1 with zero regressions). 18 pre-locked decisions D-01..D-18 in 90-CONTEXT.md substitute for forbidden /gsd-discuss-phase. 3 surfaced DECISION CONFLICTS all orchestrator-accepted: D-12 accordion authored from canonical Shadcn 2.x (frontend/ lacks accordion.tsx source), D-13 +1 peer dep @radix-ui/react-separator (escape clause from D-13), D-16 Lighthouse against next-start production build on PROD_PORT = parseInt(PLAYWRIGHT_PORT ?? '3001', 10) + 1000 to avoid Phase 89 autonomous fallback 3099. Plan commit 9ca8512 (1335 insertions / 393 deletions = 90-01-PLAN.md 939 lines + ROADMAP plan-progress update). Earlier commit 1db76d7 covered ROADMAP Phase 90 detail mirror + 90-CONTEXT.md creation."
+last_updated: "2026-05-23T14:00:12.554Z"
 progress:
-  total_phases: 19
-  completed_phases: 10
-  total_plans: 20
-  completed_plans: 19
-  percent: 53
+  total_phases: 8
+  completed_phases: 7
+  total_plans: 15
+  completed_plans: 14
+  percent: 93
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale, distributed as a true downloadable desktop product priced for indie creators.
-**Current focus:** Phase 90 — landing-page (wave 3b body)
+**Current focus:** Phase 90 — landing-page-pricing
 
 ## Current Position
 
-Phase: 90 (landing-page-pricing) — PLANNED (Plan 90-01 ready for execution; next: `/gsd-execute-phase 90`)
-Plan: 90-01-PLAN.md (1 plan / 3 tasks / 16 files, plan-checker PASSED iter 2/3)
+Phase: 90 (landing-page-pricing) — EXECUTING
+Plan: 1 of 1
 Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, **10/19 phases complete = 53%** (Phase 80 verified PASSED 2026-05-23, Phase 81–83 SHIPPED 2026-05-23 — verification deferred, Phase 84 + 85 SHIPPED + VERIFIED 2026-05-23, Phase 86 SHIPPED 2026-05-23 — verification deferred, Phase 87 SHIPPED + VERIFIED 2026-05-23, Phase 88 SHIPPED + VERIFIED 2026-05-23, **Phase 89 SHIPPED + VERIFIED 2026-05-23** — executor 6 commits 8bb070f→8f06f66, verifier PASSED 10/10 must-haves with all 15 D-01..D-15 honored, MARK-01 + MARK-06 closed; **Phase 90 PLANNED 2026-05-23** — 1 plan / 3 tasks / 16 files, plan-checker PASSED iter 2/3, 3 surfaced DECISION CONFLICTS all orchestrator-accepted). Phase 90 wave 3b body — landing page UI work building ON Phase 89 scaffolding under `marketing/`.
 Next action: `/gsd-execute-phase 90` (autonomous). Per autonomous loop Step 2 lifecycle: Phase 90 HAS `*-PLAN.md` (90-01-PLAN.md) but NO matching `*-SUMMARY.md` → next iteration runs execute-phase. Plan 90-01 covers MARK-02 in single wave/plan:
   T1: copy Shadcn primitives (accordion authored from canonical Shadcn 2.x template since frontend/ lacks accordion.tsx, badge+separator byte-copy from frontend/) + 4 npm deps (@radix-ui/react-accordion + @radix-ui/react-separator + lighthouse + chrome-launcher);
@@ -142,9 +142,11 @@ Last session: 2026-05-23T18:30:00.000Z
 Stopped at: Phase 90 PLANNED (Plan 90-01 ready for execution — landing-page+pricing, 1 plan / 3 tasks / 16 files, plan-checker PASSED iter 2/3 after surgical revision fixed 1 BLOCKER + 1 WARNING from iter 1 with zero regressions). 18 pre-locked decisions D-01..D-18 in 90-CONTEXT.md substitute for forbidden /gsd-discuss-phase. 3 surfaced DECISION CONFLICTS all orchestrator-accepted: D-12 accordion authored from canonical Shadcn 2.x (frontend/ lacks accordion.tsx source), D-13 +1 peer dep @radix-ui/react-separator (escape clause from D-13), D-16 Lighthouse against next-start production build on PROD_PORT = parseInt(PLAYWRIGHT_PORT ?? '3001', 10) + 1000 to avoid Phase 89 autonomous fallback 3099. Plan commit 9ca8512 (1335 insertions / 393 deletions = 90-01-PLAN.md 939 lines + ROADMAP plan-progress update). Earlier commit 1db76d7 covered ROADMAP Phase 90 detail mirror + 90-CONTEXT.md creation.
 Resume file: None
 Next action: `/gsd-execute-phase 90` (autonomous). Per autonomous loop Step 2 lifecycle: Phase 90 HAS *-PLAN.md but NO matching *-SUMMARY.md → next iteration runs execute-phase. Plan 90-01 covers MARK-02 in single wave/plan with 3 tasks:
+
   - T1: copy Shadcn primitives (badge.tsx + separator.tsx byte-copy from frontend/, accordion.tsx authored from canonical Shadcn 2.x template since frontend/ lacks source) + 4 new npm deps + 1 transitive peer
   - T2: compose 7 section components in marketing/components/sections/ (hero, features, pricing, screenshots, comparison, faq, footer) per locked D-05..D-11 verbatim copy + 1 'use client' (faq.tsx only) + replace marketing/app/page.tsx
   - T3: marketing/tests/landing.spec.ts with 3 tests using computed PROD_PORT to avoid Phase 89 autonomous fallback 3099 + MANDATORY screenshot artifact size > 100000 bytes
+
 Expected execution wall clock ~30-50min (npm install ~3-5min for 4 new deps + executor authoring + Lighthouse run ~30-60s against production build).
 Manual follow-ups outstanding (NOT autonomous-loop blockers): Phase 85 branch-protection check, Phase 88 branch-protection check (post-merge), Phase 81/82/83/86 verifications batchable, provision separate Supabase project + wire MARKETING_SUPABASE_* env vars into `marketing/.env.local` (consumed by Phase 91, NOT Phase 90 since landing page is UI-only). CR-01 tarslip (Phase 86) Phase 86.1 candidate. IN-01..IN-03 (Phase 87) foldable into Phase 95. 89-REVIEW.md WR-01 deprecated cookie API + WR-02 service-role key in cookie-aware factory (marketing/lib/supabase.ts) NOT regressed in Phase 90 (landing page is unauthenticated; Phase 90 does NOT touch supabase.ts) — fold into Phase 92 (account dashboard) or Phase 95.
 
