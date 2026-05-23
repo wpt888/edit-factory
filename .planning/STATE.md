@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 82 SHIPPED — ready to execute Phase 83
-stopped_at: Plan 82-03 SHIPPED — Phase 82 fully sealed. tests/test_api_segments_sqlite.py with 28 SQLite per-route integration tests (1 fixture smoke + 27 route tests, all passing the dual gate). 3 new seed helpers added to conftest.py (_seed_source_video, _seed_segment, _seed_product_group — schema-aware). deferred-items.md with all 5 sections cataloging schema drift (editai_segments + editai_source_videos + editai_product_groups column gaps), 10 skipped routes (multipart/schema-drift redundancy), 2 xfail-strict markers on tests/test_segments_preview_proxy.py (the migration-induced _FakeRepo breakages predicted by Phase 82-01 SUMMARY), 41 orthogonal pre-existing failures (within Phase 81 baseline variance), and 5 follow-up items. 3 atomic commits (10d319a, 9f9a40f, 12a46a2). Phase 80 + 81 baselines preserved (23 + 16 passed). Plan 82-02 grep gates re-verified at 0.
-last_updated: "2026-05-23T06:30:00.000Z"
+status: Phase 83 (background services repository migration) — READY TO PLAN
+stopped_at: Phase 82 SHIPPED (3/3 plans complete) — advanced STATE to Phase 83. Next autonomous step: /gsd-plan-phase 83. Phase 83 has no plan files yet; per ROADMAP it targets background services repository migration (~1–2 plans).
+last_updated: "2026-05-23T07:00:00.000Z"
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 3
   total_plans: 9
   completed_plans: 9
-  percent: 100
+  percent: 75
 ---
 
 # Project State
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 ## Current Position
 
-Phase: 82 (segments-routes-repository-migration) — SHIPPED 2026-05-23 (3/3 plans complete)
-Plan: 3 of 3 COMPLETE
+Phase: 83 (background-services-repository-migration) — READY TO PLAN
+Plan: 0 of ~1–2 (no plans authored yet)
 Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 3/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred, Phase 82 SHIPPED 2026-05-23 — verification deferred). Phase 82 all plans complete: 82-01 SHIPPED 2026-05-23, 82-02 SHIPPED 2026-05-23, 82-03 SHIPPED 2026-05-23.
-Next action: `/gsd-discuss-phase 83` to begin Phase 83 (segments background services migration), OR `/gsd-verify-phase 82` for manual verification gate (Phase 81 verification also remains a deferred manual gate). With Phase 82 sealed, app/api/segments_routes.py has all 3 grep gates at exactly 0 (get_client, ride-along, Database not available) and 28 dual-gate SQLite integration tests guarding regressions.
+Next action: `/gsd-plan-phase 83` — autonomous loop will plan Phase 83 (background services repository migration). Per ROADMAP this targets the residual `get_client()` / Supabase calls in non-route layers (background tasks, services) so the SQLite backend can drive the full desktop product. Phase 81 + Phase 82 verifications (`/gsd-verify-phase 81` + `/gsd-verify-phase 82`) remain deferred manual gates — can be batched.
 
 Sources:
 
@@ -114,10 +114,12 @@ New for v13:
 
 ## Session Continuity
 
-Last session: 2026-05-23T06:30:00.000Z
-Stopped at: Plan 82-03 SHIPPED — Phase 82 fully sealed (3/3 plans complete). tests/test_api_segments_sqlite.py with 28 dual-gate SQLite per-route tests + 3 new schema-aware seed helpers in conftest.py + 2 xfail-strict markers on migration-induced mock-chain breakages + deferred-items.md with all 5 sections. 3 atomic commits (10d319a, 9f9a40f, 12a46a2). All 13 verification gates PASS. Phase 80/81 baselines preserved (23 + 16). Plan 82-02 grep gates re-verified at 0.
-Resume file: None (Phase 82 complete; choose `/gsd-discuss-phase 83` for next phase OR `/gsd-verify-phase 82` for manual verification).
-Next action: `/gsd-discuss-phase 83` to begin Phase 83 (segments background services migration). Phase 81 + Phase 82 verifications (`/gsd-verify-phase 81` + `/gsd-verify-phase 82`) remain deferred manual gates — can be batched.
+Last session: 2026-05-23T07:00:00.000Z
+Stopped at: Phase 82 sealed at 06:30 UTC; this 07:00 UTC iteration advanced STATE.md cursor from Phase 82 → Phase 83 (per autonomous loop rule "phase has all plans + summaries → update STATE to N+1 and stop"). No new code changes this iteration.
+Resume file: None — next iteration will invoke `/gsd-plan-phase 83` against an empty phase directory.
+Next action: `/gsd-plan-phase 83` (autonomous). Phase 83 targets background services / non-route Supabase residue per ROADMAP line 200. Phase 81 + Phase 82 verifications (`/gsd-verify-phase 81` + `/gsd-verify-phase 82`) remain deferred manual gates — can be batched.
 
 ---
-*Last updated: 2026-05-23 after Plan 82-03 SHIPPED — Phase 82 fully shipped (3/3 plans complete; segments_routes.py sealed as repo-ABC-only with 28 SQLite dual-gate tests; deferred-items.md catalogs schema drift + 5 follow-up items)*
+*Last updated: 2026-05-23T07:00:00.000Z — Phase 82 SHIPPED, STATE cursor advanced to Phase 83 (no code changes this iteration; cursor-only update so the next autonomous iteration enters `/gsd-plan-phase 83`)*
+
+*Earlier: 2026-05-23 after Plan 82-03 SHIPPED — Phase 82 fully shipped (3/3 plans complete; segments_routes.py sealed as repo-ABC-only with 28 SQLite dual-gate tests; deferred-items.md catalogs schema drift + 5 follow-up items)*
