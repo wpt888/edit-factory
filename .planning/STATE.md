@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
+status: Executing Phase 86
 stopped_at: Phase 83 Plan 83-01 SHIPPED end-to-end. Combined `get_client()` count across `app/services/assembly_service.py` + `app/core/cleanup.py` driven from 2 → 0. 4 atomic task commits (`4e60c0b`, `f659081`, `066cb9b`, `507545c`) + 1 metadata commit. All 13 plan must_haves GREEN. 5 new SQLite tests pass + Phase 80/81/82 baselines preserved (67 tests). Zero new ABC methods — FUNC-03 closed by documented coverage. No deviations from plan.
-last_updated: "2026-05-23T07:36:31.157Z"
+last_updated: "2026-05-23T07:42:20.334Z"
 progress:
   total_phases: 4
   completed_phases: 3
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale, distributed as a true downloadable desktop product priced for indie creators.
-**Current focus:** Phase 86 — ML bundle download endpoint + UI (Track B Wave 3a parallel start); Phase 85 SHIPPED + VERIFIED.
+**Current focus:** Phase 86 — ml-bundle-download-endpoint-ui
 
 ## Current Position
 
-Phase: 86 (ml-bundle-download) — NOT YET PLANNED; next iteration will invoke `/gsd-plan-phase 86`
-Plan: 0 of ~2 planned
+Phase: 86 (ml-bundle-download-endpoint-ui) — EXECUTING
+Plan: 1 of 2
 Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 6/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81–83 SHIPPED 2026-05-23 — verification deferred, Phase 84 + Phase 85 SHIPPED + VERIFIED 2026-05-23). Phase 85 closed FUNC-02 + FUNC-06 by shipping `scripts/desktop-smoke-test.py` (TestClient harness walking 22 endpoints across 6 routers, 5xx-only rejection) + `.github/workflows/desktop-smoke.yml` (Python 3.11 pin, on: pull_request + push to main). Verifier PASSED 5/5 must-haves.
 Next action: `/gsd-plan-phase 86` (autonomous). Phase 86 begins Track B (Optional ML — Wave 3a parallel). Manual follow-ups outstanding: (a) flip FUNC-02 + FUNC-06 to `[x]` in `.planning/milestones/v13-REQUIREMENTS.md` lines 13/17 and update traceability rows 107/111 from "Pending" to "Closed (Phase 85)"; (b) add "Desktop SQLite-mode smoke harness" as a required status check on `main` branch protection (GitHub UI); (c) Phase 81 + 82 + 83 verifications (`/gsd-verify-phase 81/82/83`) remain deferred manual gates — can be batched. Phase 85 advisory code-review findings (MD-01 add `timeout-minutes: 10` to CI job; MD-02 print rows inline during stateful walks; LW-01 warn when zero patches applied in mocks) are candidates for Phase 85.1 gap closure if user prioritizes — none block Phase 86.
 
