@@ -33,6 +33,7 @@
       ]
     },
     "nsis": {
+      "artifactName": "editfactory-setup-${version}.exe",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
