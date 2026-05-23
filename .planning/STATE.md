@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 85 SHIPPED + VERIFIED — ready to advance to Phase 86
-stopped_at: "Phase 85 Plan 85-01 SHIPPED + VERIFIED end-to-end. Executor (gsd-executor) delivered all 6 tasks in 6 atomic commits (02e7c08 skeleton, 064c55d mocks, 9eede32 pipeline-walk, 24fa620 library-walk + flat table, 61ecd53 CI workflow, 30eb533 xfail update + SUMMARY). Worktree merged fast-forward. Code review (gsd-code-reviewer, standard depth) returned status: warnings — 2 medium (MD-01 missing timeout-minutes on CI job, MD-02 stateful walks buffer rows before printing — audit trail lost on mid-walk kill) + 1 low + 2 info, all advisory. Phase verification (gsd-verifier) returned status: passed, 5/5 must-haves verified (SQLite-mode exit 0, per-endpoint audit line, 5xx rejection logic, CI workflow with Python 3.11 pin, xfail reason update with Phase 85 citation preserving B-81-04). Endpoint breadth confirmed: 6 pipeline + 7 library + 9 flat = 22 endpoints across 6 routers. Runtime gate deferred to CI (host Py 3.14 lacks scipy wheel — same accepted pattern as Phase 84). Closes FUNC-02 + FUNC-06."
-last_updated: "2026-05-23T12:00:00.000Z"
+status: Ready to execute
+stopped_at: Phase 83 Plan 83-01 SHIPPED end-to-end. Combined `get_client()` count across `app/services/assembly_service.py` + `app/core/cleanup.py` driven from 2 → 0. 4 atomic task commits (`4e60c0b`, `f659081`, `066cb9b`, `507545c`) + 1 metadata commit. All 13 plan must_haves GREEN. 5 new SQLite tests pass + Phase 80/81/82 baselines preserved (67 tests). Zero new ABC methods — FUNC-03 closed by documented coverage. No deviations from plan.
+last_updated: "2026-05-23T07:36:31.157Z"
 progress:
-  total_phases: 19
-  completed_phases: 6
-  total_plans: 13
-  completed_plans: 12
-  percent: 32
+  total_phases: 4
+  completed_phases: 3
+  total_plans: 11
+  completed_plans: 9
+  percent: 82
 ---
 
 # Project State
