@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 83 (background services repository migration) — READY TO PLAN
-stopped_at: Phase 82 SHIPPED (3/3 plans complete) — advanced STATE to Phase 83. Next autonomous step: /gsd-plan-phase 83. Phase 83 has no plan files yet; per ROADMAP it targets background services repository migration (~1–2 plans).
-last_updated: "2026-05-23T07:00:00.000Z"
+status: Phase 83 PLANNED — Ready to execute (1 plan in 1 wave)
+stopped_at: "Phase 83 plan 83-01-PLAN.md authored (4 tasks, FUNC-01 + FUNC-03 covered, zero new ABC methods — reuses list_tts_assets + list_jobs filter primitives). Plan-checker returned 0 blockers + 1 warning + 1 info. Targeted revision applied (JobStorage singleton autouse fixture baked into Task 4 test template; case-(b) rationale relabel)."
+last_updated: "2026-05-23T07:30:00.000Z"
 progress:
-  total_phases: 4
+  total_phases: 19
   completed_phases: 3
-  total_plans: 9
+  total_plans: 10
   completed_plans: 9
-  percent: 75
+  percent: 16
 ---
 
 # Project State
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale, distributed as a true downloadable desktop product priced for indie creators.
-**Current focus:** Phase 82 — segments-routes-repository-migration
+**Current focus:** Phase 83 — background-services-repository-migration (PLANNED, ready to execute)
 
 ## Current Position
 
-Phase: 83 (background-services-repository-migration) — READY TO PLAN
-Plan: 0 of ~1–2 (no plans authored yet)
-Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 3/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred, Phase 82 SHIPPED 2026-05-23 — verification deferred). Phase 82 all plans complete: 82-01 SHIPPED 2026-05-23, 82-02 SHIPPED 2026-05-23, 82-03 SHIPPED 2026-05-23.
-Next action: `/gsd-plan-phase 83` — autonomous loop will plan Phase 83 (background services repository migration). Per ROADMAP this targets the residual `get_client()` / Supabase calls in non-route layers (background tasks, services) so the SQLite backend can drive the full desktop product. Phase 81 + Phase 82 verifications (`/gsd-verify-phase 81` + `/gsd-verify-phase 82`) remain deferred manual gates — can be batched.
+Phase: 83 (background-services-repository-migration) — PLANNED, READY TO EXECUTE
+Plan: 1 plan authored (83-01-PLAN.md, 4 tasks, single wave)
+Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 3/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred, Phase 82 SHIPPED 2026-05-23 — verification deferred). Phase 83 planned 2026-05-23 (1 plan, 4 tasks, 0 new ABC methods — reuses list_tts_assets + list_jobs filter primitives; FUNC-03 closed by documented-coverage rather than additions).
+Next action: `/gsd-execute-phase 83` — autonomous loop will execute the single plan 83-01 (audit + assembly_service.py dedup migration + cleanup.py dry-run migration + SQLite tests). Phase 81 + Phase 82 verifications (`/gsd-verify-phase 81` + `/gsd-verify-phase 82`) remain deferred manual gates — can be batched. Plan-checker noted 0 blockers + 1 warning + 1 info; warning (JobStorage singleton autouse fixture in test template) and info (case-(b) rationale relabel) applied via touch-up commit 8dd0a0a.
 
 Sources:
 
