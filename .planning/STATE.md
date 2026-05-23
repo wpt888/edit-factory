@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v13
 milestone_name: Desktop Production-Ready & Monetization
-status: Phase 88 SHIPPED — READY FOR VERIFICATION (2 task commits + 1 metadata commit pending; ML-01 closed via dual guard)
-stopped_at: "Completed Phase 88 Plan 88-01 (1 plan, 2 tasks, 2 commits). ML-01 closed via dual guard: state-shape (nsis.artifactName + grep-asserted 8-pattern ML exclusion filter at electron/package.json:71-75) + CI regression-gate (.github/workflows/installer-size.yml, windows-latest, 10 steps, exit 1 on size > 576716800 OR forbidden ML dir in 7z l output). Manual follow-ups: branch-protection rule for installer-size check on main (mirrors Phase 85 outstanding) + first-run CI verification on post-merge PR. Phase 88 ready for /gsd-verify-phase 88."
-last_updated: "2026-05-23T11:49:42.751Z"
+status: Phase 88 SHIPPED + VERIFIED — ML-01 closed (dual guard: nsis.artifactName + 8-pattern ML exclusion filter + windows-latest CI size gate at 576716800 bytes + 7z forbidden-pattern defense-in-depth). Verifier PASSED 5/5 must-haves. Advancing to Phase 89.
+stopped_at: "Phase 88 COMPLETE. Plan 88-01 SHIPPED + VERIFIED (1 plan, 2 tasks, 3 commits: 1a0f4ba electron/package.json nsis.artifactName + ML-filter grep-assertion / 36da3fd .github/workflows/installer-size.yml / bb134f3 SUMMARY + STATE + ROADMAP + REQUIREMENTS). Verifier PASSED 5/5 must-haves: (1) Installer ≤ 576716800 bytes gate at line 86, exit 1 at line 93; (2) all 8 ML exclusion patterns present (torch/torchaudio/torchvision/whisper/TTS/Cython/nvidia/triton) in electron/package.json extraResources filter; (3) no ml/ subdirectory in extraResources (Phase 86 bundle is runtime-only opt-in download); (4) PR-breaching threshold fails with exit 1 — workflow triggers on pull_request+push to main, runs on windows-latest, 5 total exit 1 paths; (5) deterministic editfactory-setup-*.exe artifactName + version-agnostic glob used 3x. Manual follow-ups (NOT autonomous-loop blockers): (a) add 'Windows NSIS installer ≤ 550 MB' as required status check on main branch protection (mirrors still-outstanding Phase 85 'Desktop SQLite-mode smoke harness' follow-up — both need GitHub Web UI navigation); (b) first-run-CI verification on next post-merge PR is empirical proof point per phase convention; (c) Phase 81 + 82 + 83 + 86 verifications remain deferred manual gates. CR-01 tarslip (Phase 86) remains Phase 86.1 gap-closure candidate. IN-01..IN-03 (Phase 87) foldable into Phase 95. STATE.md frontmatter manually restored after recurring gsd-tools phase-complete corruption — 5th consecutive occurrence at this transition family (Phase 84/85/86/87 + planned-phase variant Phase 88 planning + phase-complete variant Phase 88 completion). Next iteration enters /gsd-plan-phase 89 or /gsd-discuss-phase 89 (per workflow)."
+last_updated: "2026-05-23T12:30:00.000Z"
 progress:
   total_phases: 19
   completed_phases: 9
   total_plans: 18
-  completed_plans: 17
+  completed_plans: 18
   percent: 47
 ---
 
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale, distributed as a true downloadable desktop product priced for indie creators.
-**Current focus:** Phase 88 — installer-slimming-base-bundle (next phase in v13)
+**Current focus:** Phase 89 — next phase in v13 (Phase 88 COMPLETE)
 
 ## Current Position
 
-Phase: 88 (installer-slimming-verification) — PLANNED, READY TO EXECUTE
-Plan: 1 of 1 planned (88-01-PLAN.md, 2 tasks, autonomous, requirements: [ML-01])
-Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 8/19 phases complete + Phase 88 PLANNED (Phase 80 verified PASSED 2026-05-23, Phase 81–83 SHIPPED 2026-05-23 — verification deferred, Phase 84 + 85 SHIPPED + VERIFIED 2026-05-23, Phase 86 SHIPPED 2026-05-23 — verification deferred, Phase 87 SHIPPED + VERIFIED 2026-05-23). Phase 88 plan (88-01) targets ML-01: assert ML exclusion filter intact in `electron/package.json` (lines 71-75) + create `.github/workflows/installer-size.yml` that builds Windows NSIS installer on `windows-latest`, downloads FFmpeg from BtbN canonical URL, runs `cd electron && npm run dist`, fails build if installer > 576716800 bytes (550 binary MB), and runs defense-in-depth `7z l` check rejecting torch/torchaudio/torchvision/whisper/TTS/Cython/nvidia/triton directories. Mirror Phase 85's `desktop-smoke.yml` for `on:` triggers (pull_request + push to main). Verifier PASSED 10/10 dimensions first pass — 0 BLOCKER / 0 WARNING / 4 INFO advisory only.
-Next action: `/gsd-execute-phase 88` (autonomous). Per autonomous loop Step 2 lifecycle: phase HAS PLAN file but NO matching SUMMARY file → next iteration runs `/gsd-execute-phase 88`. Manual follow-ups outstanding from prior phases (NOT autonomous-loop blockers): (a) flip FUNC-02 + FUNC-06 to `[x]` in `.planning/milestones/v13-REQUIREMENTS.md`; (b) add "Desktop SQLite-mode smoke harness" as required status check on `main` branch protection; (c) once Phase 88 executes + merges + first CI run goes green, add "Windows NSIS installer ≤ 550 MB" as ALSO-required status check on `main`; (d) Phase 81 + 82 + 83 + 86 verifications remain deferred manual gates — can be batched. Phase 86 code-review findings (CR-01 CRITICAL tarslip in `_unpack_and_promote` line 278-279) remains a Phase 86.1 gap-closure candidate — exploitable via `ML_BUNDLE_BASE_URL` env override, security-conscious users should triage. Phase 87 code-review findings (IN-01..IN-03, all info-level) can be folded into Phase 95.
+Phase: 89 (next phase in v13) — Phase 88 SHIPPED + VERIFIED
+Plan: Not yet planned
+Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, **9/19 phases complete** (Phase 80 verified PASSED 2026-05-23, Phase 81–83 SHIPPED 2026-05-23 — verification deferred, Phase 84 + 85 SHIPPED + VERIFIED 2026-05-23, Phase 86 SHIPPED 2026-05-23 — verification deferred, Phase 87 SHIPPED + VERIFIED 2026-05-23, **Phase 88 SHIPPED + VERIFIED 2026-05-23** — ML-01 closed via dual guard: nsis.artifactName + 8-pattern ML exclusion filter intact in electron/package.json + windows-latest CI workflow `.github/workflows/installer-size.yml` enforcing ≤ 576716800 byte threshold + `7z l` defense-in-depth forbidden-pattern grep. Verifier PASSED 5/5 must-haves; 0 BLOCKER / 0 WARNING / 2 INFO advisory).
+Next action: `/gsd-plan-phase 89` (autonomous). Per autonomous loop Step 2 lifecycle: Phase 88 has all plans executed (matching SUMMARY) AND verifier passed → STATE.md advanced to Phase 89. Manual follow-ups outstanding from prior phases (NOT autonomous-loop blockers): (a) flip FUNC-02 + FUNC-06 to `[x]` in `.planning/milestones/v13-REQUIREMENTS.md`; (b) add "Desktop SQLite-mode smoke harness" as required status check on `main` branch protection (Phase 85); (c) **NEW**: add "Windows NSIS installer ≤ 550 MB" as ALSO-required status check on `main` (Phase 88 — first-run-CI proof point lands on next post-merge PR); (d) Phase 81 + 82 + 83 + 86 verifications remain deferred manual gates — can be batched. Phase 86 code-review findings (CR-01 CRITICAL tarslip in `_unpack_and_promote` line 278-279) remains a Phase 86.1 gap-closure candidate. Phase 87 code-review findings (IN-01..IN-03, all info-level) foldable into Phase 95.
 
 Sources:
 
@@ -39,10 +39,10 @@ Sources:
 
 **Velocity:**
 
-- Total plans completed: 153 (across v2-v12)
+- Total plans completed: 154 (across v2-v12)
 - Total phases completed: 79
 - Total milestones shipped: 12
-- v13 progress: 8/19 phases (16/17 plans executed of phases 80-87 + Phase 88 PLANNED, 42% phases-complete)
+- v13 progress: 9/19 phases (18/18 plans executed of phases 80-88, **47% phases-complete** — Phase 88 SHIPPED + VERIFIED 2026-05-23, ML-01 closed)
 
 **By Milestone:**
 
