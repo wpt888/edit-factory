@@ -1542,9 +1542,9 @@ async def list_product_groups_bulk(
 
     NOTE (Phase 82 schema drift): the SQLite editai_product_groups table differs from
     Supabase — it lacks source_video_id / label / start_time / end_time / color columns.
-    This route returns 500 in SQLite mode, accepted per Phase 80 / 81 dual-gate precedent
-    (status != 503 AND "Database not available" not in response). 82-03 documents this
-    as a deferred item.
+    This route returns 500 in SQLite mode, accepted per the Phase 80 / 81 dual-gate
+    precedent (status != 503 AND the dead 503 message string not present in response).
+    82-03 documents this as a deferred item.
     """
     repo = get_repository()
 
