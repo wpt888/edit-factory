@@ -206,9 +206,9 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
   - [x] 85-01-PLAN.md — scripts/desktop-smoke-test.py (TestClient-based, SQLite mode, mocks FFmpeg/Gemini/TTS, walks 22 endpoints across 6 routers, 5xx-only rejection) + .github/workflows/desktop-smoke.yml (Python 3.11 pin, on: pull_request: branches: [main]) + xfail-reason update in tests/test_pipeline_e2e_sqlite.py + SUMMARY.md — closes FUNC-02 + FUNC-06
 
 **Track B — Optional ML (Wave 3a, parallel):**
-- [ ] Phase 86: ML bundle download endpoint + UI (2 plans planned — 2026-05-23)
-  - [ ] 86-01-PLAN.md — Backend: POST /api/v1/desktop/ml/download SSE endpoint + range resume + SHA256 verify + atomic unpack + .installed marker + 6 pytest cases (mocks upstream) + smoke harness extension (closes ML-02)
-  - [ ] 86-02-PLAN.md — Frontend: <MLBundleInstaller /> component (SSE via fetch+ReadableStream, NOT EventSource) + settings page mount + Playwright SSE-mock test + MANDATORY 3-state Playwright screenshots per CLAUDE.md (closes ML-03)
+- [x] Phase 86: ML bundle download endpoint + UI (2 plans planned — 2026-05-23) (completed 2026-05-23)
+  - [x] 86-01-PLAN.md — Backend: POST /api/v1/desktop/ml/download SSE endpoint + range resume + SHA256 verify + atomic unpack + .installed marker + 6 pytest cases (mocks upstream) + smoke harness extension (closes ML-02)
+  - [x] 86-02-PLAN.md — Frontend: <MLBundleInstaller /> component (SSE via fetch+ReadableStream, NOT EventSource) + settings page mount + Playwright SSE-mock test + MANDATORY 3-state Playwright screenshots per CLAUDE.md (closes ML-03)
 - [ ] Phase 87: ML feature flags & subscription gating in backend (~1 plan)
 - [ ] Phase 88: Installer slimming verification (~1 plan)
 
