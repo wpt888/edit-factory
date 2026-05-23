@@ -302,10 +302,14 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
 | 81 | v13 | 3/3 | SHIPPED — ready for verification (Plan 81-03 SHIPPED 2026-05-23) | — |
 | 82 | v13 | 3/3 | Complete   | 2026-05-23 |
 | 83 | v13 | 1/1 | SHIPPED — ready for verification | 2026-05-23 |
-| 84-98 | v13 | 0/~21 | Active | — |
+| 84 | v13 | 1/1 | Complete (verified PASSED) | 2026-05-23 |
+| 85 | v13 | 1/1 | Complete (verified PASSED) | 2026-05-23 |
+| 86-98 | v13 | 0/~19 | Active | — |
 
 ---
-*Last updated: 2026-05-23 after Plan 83-01 SHIPPED — Phase 83 fully shipped (1/1 plans complete; combined `get_client()` count 2 → 0 across assembly_service.py + cleanup.py; zero new ABC methods — FUNC-03 closed by documented coverage; 5 new SQLite tests pass + Phase 80/81/82 baselines preserved at 67 tests; 4 atomic task commits `4e60c0b`/`f659081`/`066cb9b`/`507545c`; all 13 plan must_haves GREEN)*
+*Last updated: 2026-05-23 after Plan 85-01 SHIPPED + VERIFIED — Phase 85 fully shipped (1/1 plans complete; closes FUNC-02 + FUNC-06; `scripts/desktop-smoke-test.py` walks 22 endpoints across 6 routers under DATA_BACKEND=sqlite with mocked FFmpeg/Gemini/TTS, 5xx-only rejection; `.github/workflows/desktop-smoke.yml` pins Python 3.11 + triggers on pull_request + push to main; xfail reason in tests/test_pipeline_e2e_sqlite.py cites Phase 85 while preserving B-81-04; verifier PASSED 5/5 must-haves; code review status: warnings — 2 medium + 1 low + 2 info, all advisory)*
+
+*Earlier: 2026-05-23 after Plan 83-01 SHIPPED — Phase 83 fully shipped (1/1 plans complete; combined `get_client()` count 2 → 0 across assembly_service.py + cleanup.py; zero new ABC methods — FUNC-03 closed by documented coverage; 5 new SQLite tests pass + Phase 80/81/82 baselines preserved at 67 tests; 4 atomic task commits `4e60c0b`/`f659081`/`066cb9b`/`507545c`; all 13 plan must_haves GREEN)*
 
 *Earlier: 2026-05-23 after Plan 82-03 SHIPPED — Phase 82 fully shipped (3/3 plans complete; 28 SQLite dual-gate tests in tests/test_api_segments_sqlite.py; deferred-items.md catalogs schema drift + 5 follow-up items; all 13 verification gates PASS)*
 
