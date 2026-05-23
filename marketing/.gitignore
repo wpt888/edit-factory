@@ -1,0 +1,6 @@
+# TypeScript incremental compile cache (regenerated per build).
+*.tsbuildinfo
+
+# Playwright test artifacts (per-run, not source).
+test-results/
+playwright-report/
