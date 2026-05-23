@@ -2343,30 +2343,19 @@ async def assign_segments_to_project(
     """Assign segments to a project."""
     logger.info(f"[Profile {profile.profile_id}] Assigning {len(segment_ids)} segments to project: {project_id}")
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Verify project exists and belongs to profile
-    project = supabase.table("editai_projects")\
-        .select("id")\
-        .eq("id", project_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not project.data:
+    # Verify project exists and belongs to profile (T-82-01-01 IDOR pattern)
+    project = repo.get_project(project_id)
+    if not project or project.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Verify all segments belong to the same profile
+    # Verify all segments belong to the same profile via batch ownership check
     if segment_ids:
-        owned_segments = supabase.table("editai_segments")\
-            .select("id")\
-            .in_("id", segment_ids)\
-            .eq("profile_id", profile.profile_id)\
-            .execute()
-        owned_ids = {s["id"] for s in (owned_segments.data or [])}
+        owned_result = repo.list_segments(
+            profile.profile_id,
+            QueryFilters(in_={"id": segment_ids}, select="id"),
+        )
+        owned_ids = {s["id"] for s in (owned_result.data or [])}
         unauthorized = [sid for sid in segment_ids if sid not in owned_ids]
         if unauthorized:
             raise HTTPException(
@@ -2375,19 +2364,16 @@ async def assign_segments_to_project(
             )
 
     # Clear existing assignments
-    supabase.table("editai_project_segments")\
-        .delete()\
-        .eq("project_id", project_id)\
-        .execute()
+    repo.delete_project_segments(project_id)
 
     # Insert new assignments
     for i, seg_id in enumerate(segment_ids):
-        supabase.table("editai_project_segments").insert({
+        repo.create_project_segment({
             "project_id": project_id,
             "segment_id": seg_id,
             "sequence_order": i,
             "is_manual_selection": True
-        }).execute()
+        })
 
     return {
         "status": "assigned",
@@ -2403,32 +2389,36 @@ async def get_project_segments(
 ):
     """Get segments assigned to a project."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Verify project belongs to profile
-    project = supabase.table("editai_projects")\
-        .select("id")\
-        .eq("id", project_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not project.data:
+    # Verify project belongs to profile (T-82-01-01 IDOR pattern)
+    project = repo.get_project(project_id)
+    if not project or project.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    result = supabase.table("editai_project_segments")\
-        .select("*, editai_segments(*, editai_source_videos(name))")\
-        .eq("project_id", project_id)\
-        .order("sequence_order")\
-        .execute()
+    # Composed fetch (Phase 80 80-02 nested-join composition pattern)
+    # Replaces PostgREST nested join "*, editai_segments(*, editai_source_videos(name))"
+    # with per-row repo.get_segment + repo.get_source_video lookups (cached per id).
+    ps_rows = repo.list_project_segments(
+        project_id,
+        QueryFilters(order_by="sequence_order"),
+    ).data
+
+    segments_cache: dict = {}
+    sources_cache: dict = {}
+    for ps in ps_rows:
+        seg_id = ps.get("segment_id")
+        if seg_id and seg_id not in segments_cache:
+            segments_cache[seg_id] = repo.get_segment(seg_id) or {}
+        src_id = (segments_cache.get(seg_id) or {}).get("source_video_id")
+        if src_id and src_id not in sources_cache:
+            sources_cache[src_id] = repo.get_source_video(src_id) or {}
 
     segments = []
-    for ps in result.data:
-        s = ps.get("editai_segments", {})
+    for ps in ps_rows:
+        seg_id = ps.get("segment_id")
+        s = segments_cache.get(seg_id) or {}
         if s:
+            src = sources_cache.get(s.get("source_video_id")) or {}
             # Use project-level transform override if present, else segment default
             effective_transforms = ps.get("transforms") or s.get("transforms")
             segments.append(SegmentResponse(
@@ -2446,7 +2436,7 @@ async def get_project_segments(
                 transforms=effective_transforms,
                 product_group=s.get("product_group"),
                 created_at=s["created_at"],
-                source_video_name=s.get("editai_source_videos", {}).get("name")
+                source_video_name=src.get("name")
             ))
 
     return segments
