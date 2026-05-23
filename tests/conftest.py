@@ -3,6 +3,7 @@ Shared pytest fixtures for Edit Factory backend tests.
 """
 import os
 import sys
+import uuid
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -281,3 +282,93 @@ def _seed_export_preset(repo, name: str = "instagram_reels", **overrides) -> dic
         **overrides,
     }
     return repo.create_export_preset(preset_data)
+
+
+# ──────────────────────────────────────────────
+# Phase 82 segment seed helpers (Plan 82-03)
+# ──────────────────────────────────────────────
+#
+# These helpers seed rows in the editai_source_videos, editai_segments, and
+# editai_product_groups tables using ONLY columns present in
+# supabase/sqlite_schema.sql.
+#
+# Schema awareness (Phase 81 81-03 lesson — schema-aware seeding prevents
+# `sqlite3.OperationalError: no such column` at seed time):
+#   * editai_source_videos: id, filename, file_path, duration, width, height,
+#     file_size, status, preview_proxy_*, segment_count, profile_id, timestamps.
+#     NO `name`, `fps`, `thumbnail_path`, `file_size_bytes` columns.
+#   * editai_segments: id, source_video_id, start_time, end_time, duration,
+#     thumbnail_path, video_path, score, label, is_selected, profile_id, timestamps.
+#     NO `keywords`, `product_group`, `transforms`, `is_favorite`, `is_single_use`,
+#     `notes`, `usage_count`, `extracted_video_path` columns.
+#   * editai_product_groups: id, profile_id, name, description, product_ids,
+#     timestamps. NO `source_video_id`, `label`, `start_time`, `end_time`,
+#     `color` columns (SQLite product_groups is a DIFFERENT entity from the
+#     Supabase region-annotation model).
+
+
+def _seed_source_video(repo, profile_id: str, **overrides) -> dict:
+    """Seed an editai_source_videos row.
+
+    Uses ONLY columns present in the SQLite schema:
+    id, filename, file_path, duration, width, height, file_size, status,
+    profile_id, timestamps.
+    """
+    data = {
+        "id": str(uuid.uuid4()),
+        "filename": "test.mp4",
+        "file_path": "/tmp/test.mp4",
+        "duration": 10.0,
+        "width": 1920,
+        "height": 1080,
+        "file_size": 1024,
+        "status": "ready",
+        "profile_id": profile_id,
+        **overrides,
+    }
+    return repo.create_source_video(data)
+
+
+def _seed_segment(repo, profile_id: str, source_video_id: str, **overrides) -> dict:
+    """Seed an editai_segments row.
+
+    Uses ONLY columns present in the SQLite schema:
+    id, source_video_id, start_time, end_time, duration, thumbnail_path,
+    video_path, score, label, is_selected, profile_id, timestamps.
+
+    NOTE: SQLite editai_segments has NO keywords / product_group / transforms /
+    is_favorite / is_single_use / notes / usage_count / extracted_video_path
+    columns. Tests touching those routes return 500 in SQLite mode — accepted
+    per the Phase 82 dual gate.
+    """
+    data = {
+        "id": str(uuid.uuid4()),
+        "source_video_id": source_video_id,
+        "start_time": 0.0,
+        "end_time": 2.0,
+        "duration": 2.0,
+        "profile_id": profile_id,
+        **overrides,
+    }
+    return repo.create_segment(data)
+
+
+def _seed_product_group(repo, profile_id: str, **overrides) -> dict:
+    """Seed an editai_product_groups row.
+
+    Uses ONLY columns present in the SQLite schema:
+    id, profile_id, name, description, product_ids, timestamps.
+
+    NOTE: SQLite editai_product_groups is a DIFFERENT entity from Supabase's
+    region-annotation product_groups — it has name/description/product_ids
+    instead of source_video_id/label/start_time/end_time/color. Tests using
+    product-group region semantics (create/update/list/delete in
+    segments_routes.py) will return 500 in SQLite mode. Accepted per dual gate.
+    """
+    data = {
+        "id": str(uuid.uuid4()),
+        "profile_id": profile_id,
+        "name": "Test Group",
+        **overrides,
+    }
+    return repo.create_product_group(data)
