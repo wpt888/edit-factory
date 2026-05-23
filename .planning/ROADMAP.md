@@ -302,6 +302,18 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
   - 86-01-PLAN.md — Backend ML bundle download endpoint (POST /api/v1/desktop/ml/download with SSE, range resume, SHA256, atomic unpack)
   - 86-02-PLAN.md — Frontend <MLBundleInstaller /> + settings UI + MANDATORY Playwright screenshots
 
+### Phase 87: ML feature flags & subscription gating in backend
+
+**Goal**: Backend routes that require the ML bundle return `412 Precondition Failed` with a structured error when the `<base_dir>/ml/.installed` marker is absent. Routes that require Pro tier return `402 Payment Required` (or `412` with `requires_tier`) when the JWT's `subscription_tier` is below Pro.
+
+**Depends on**: Phase 86, Phase 95 (for tier check). Defer tier check wiring to 95 if 87 runs first.
+**Requirements**: ML-04, ML-05.
+**Success Criteria**:
+  1. Calling a voice-mute or voice-clone route without the ML bundle installed returns `412` with `{ "error": "ml_not_installed", "feature": "<name>" }`.
+  2. Calling a Pro-only feature with a Starter subscription claim returns `402` with `{ "error": "tier_insufficient", "requires_tier": "pro" }`.
+
+**Plans**: 1 plan.
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
