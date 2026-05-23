@@ -4968,10 +4968,9 @@ async def sync_pipeline_to_library(
         raise HTTPException(status_code=403, detail="Access denied to this pipeline")
 
     repo = get_repository()
-    supabase = repo.get_client() if repo else None
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
-
+    # Plan 81-02 Task 3 — repo is always usable under DATA_BACKEND=sqlite (FUNC-01);
+    # the legacy `supabase = repo.get_client()` guard + `if not supabase: raise 503`
+    # block was dead code and has been removed (mirrors Phase 80's dead-503-guard pattern).
     # Load profile defaults so we can reconstruct the effective subtitle style
     # for clips that have no explicit per-key override. This mirrors what
     # do_render writes via _save_clip_to_library so recovery sync produces
@@ -5037,57 +5036,60 @@ async def sync_pipeline_to_library(
     pipeline_name = (pipeline.get("name") or pipeline.get("idea", ""))[:80].strip() or f"Pipeline {pipeline_id[:8]}"
     legacy_name = f"Pipeline: {pipeline.get('idea', '')[:80]}"
     with _library_project_lock:
-        existing = supabase.table("editai_projects")\
-            .select("id")\
-            .eq("profile_id", profile.profile_id)\
-            .eq("name", pipeline_name)\
-            .limit(1)\
-            .execute()
+        # Lookup-or-create the library project. Plan 81-02 Task 3.B —
+        # repo.get_project_by_name composes profile_id + name; fall back to legacy
+        # "Pipeline: {idea}" naming for older projects before attempting create.
+        existing_proj = repo.get_project_by_name(profile.profile_id, pipeline_name)
 
-        # Fall back to legacy "Pipeline: {idea}" name for older projects
-        if not existing.data and pipeline_name != legacy_name:
-            existing = supabase.table("editai_projects")\
-                .select("id")\
-                .eq("profile_id", profile.profile_id)\
-                .eq("name", legacy_name)\
-                .limit(1)\
-                .execute()
+        if not existing_proj and pipeline_name != legacy_name:
+            existing_proj = repo.get_project_by_name(profile.profile_id, legacy_name)
 
-        if existing.data:
-            library_project_id = existing.data[0]["id"]
+        if existing_proj:
+            library_project_id = existing_proj["id"]
         else:
-            proj_result = supabase.table("editai_projects").insert({
-                "profile_id": profile.profile_id,
-                "name": pipeline_name,
-                "description": f"Auto-generated from pipeline {pipeline_id}",
-                "status": "completed",
-            }).execute()
-            if not proj_result.data:
-                raise HTTPException(status_code=500, detail="Failed to create library project")
-            library_project_id = proj_result.data[0]["id"]
+            try:
+                created_proj = repo.create_project({
+                    "profile_id": profile.profile_id,
+                    "name": pipeline_name,
+                    "description": f"Auto-generated from pipeline {pipeline_id}",
+                    "status": "completed",
+                })
+            except Exception as create_err:
+                # Race: another worker created it between the lookup and insert.
+                _retry_proj = repo.get_project_by_name(profile.profile_id, pipeline_name)
+                if _retry_proj:
+                    library_project_id = _retry_proj["id"]
+                    created_proj = None
+                else:
+                    raise
+            else:
+                if not (created_proj and created_proj.get("id")):
+                    raise HTTPException(status_code=500, detail="Failed to create library project")
+                library_project_id = created_proj["id"]
 
     # Check which clips already exist (fetch id + variant_index + visual_version for update)
+    # Plan 81-02 Task 3.C — repo.list_clips composes project_id + eq(is_deleted=False).
     clip_supports_visual_version = True
     try:
-        existing_clips = supabase.table("editai_clips")\
-            .select("id, variant_index, visual_version")\
-            .eq("project_id", library_project_id)\
-            .eq("is_deleted", False)\
-            .execute()
+        existing_clips_result = repo.list_clips(
+            library_project_id,
+            QueryFilters(eq={"is_deleted": False}, select="id, variant_index, visual_version"),
+        )
+        existing_clips_data = existing_clips_result.data or []
     except Exception as existing_clips_err:
         if _is_missing_column_error(existing_clips_err, "visual_version"):
             clip_supports_visual_version = False
             logger.warning("visual_version column missing, retrying sync lookup without it")
-            existing_clips = supabase.table("editai_clips")\
-                .select("id, variant_index")\
-                .eq("project_id", library_project_id)\
-                .eq("is_deleted", False)\
-                .execute()
+            existing_clips_result = repo.list_clips(
+                library_project_id,
+                QueryFilters(eq={"is_deleted": False}, select="id, variant_index"),
+            )
+            existing_clips_data = existing_clips_result.data or []
         else:
             raise
     # Key by (variant_index, visual_version) to differentiate A/B versions
     existing_map = {}
-    for c in (existing_clips.data or []):
+    for c in existing_clips_data:
         _em_key = (c["variant_index"], c.get("visual_version") if clip_supports_visual_version else None)
         existing_map[_em_key] = c["id"]
 
@@ -5153,14 +5155,15 @@ async def sync_pipeline_to_library(
         _em_lookup = (vid, _visual_ver)
         if _em_lookup in existing_map:
             existing_id = existing_map[_em_lookup]
-            supabase.table("editai_clips").update({
+            # Plan 81-02 Task 3.D — repo.update_clip replaces supabase.table().update().eq().execute().
+            repo.update_clip(existing_id, {
                 "raw_video_path": str(_raw_assembly_path) if _raw_assembly_path else str(final_video_path),
                 "final_video_path": str(final_video_path),
                 "thumbnail_path": str(thumb_path) if thumb_path else None,
                 "duration": duration,
                 "final_status": "completed",
                 "is_deleted": False,
-            }).eq("id", existing_id).execute()
+            })
             clip_id_to_set = existing_id
             logger.info(f"Pipeline {pipeline_id} variant {vid} ver={_visual_ver}: updated existing clip {existing_id}")
         else:
@@ -5179,18 +5182,19 @@ async def sync_pipeline_to_library(
             }
             if clip_supports_visual_version:
                 clip_insert_payload["visual_version"] = _visual_ver
+            # Plan 81-02 Task 3.E — repo.create_clip replaces supabase.table().insert().execute().
             try:
-                clip_result = supabase.table("editai_clips").insert(clip_insert_payload).execute()
+                created_clip = repo.create_clip(clip_insert_payload)
             except Exception as clip_insert_err:
                 if _is_missing_column_error(clip_insert_err, "visual_version"):
                     clip_supports_visual_version = False
                     logger.warning("visual_version column missing, retrying sync INSERT without it")
                     clip_insert_payload.pop("visual_version", None)
-                    clip_result = supabase.table("editai_clips").insert(clip_insert_payload).execute()
+                    created_clip = repo.create_clip(clip_insert_payload)
                 else:
                     raise
-            if clip_result.data and len(clip_result.data) > 0:
-                clip_id_to_set = clip_result.data[0].get("id")
+            if created_clip and created_clip.get("id"):
+                clip_id_to_set = created_clip["id"]
 
         # BUG-PR-15: Protect render_jobs mutations under state lock
         sync_state_lock = _get_pipeline_state_lock(pipeline_id)
@@ -5225,18 +5229,24 @@ async def sync_pipeline_to_library(
                 if isinstance(_ss_value, dict) and _ss_value:
                     _content_payload["subtitle_settings"] = _ss_value
                 if len(_content_payload) > 1:
-                    supabase.table("editai_clip_content").upsert(
-                        _content_payload, on_conflict="clip_id"
-                    ).execute()
+                    # Plan 81-02 Task 3.F — table_query upsert with on_conflict='clip_id'
+                    # because update_clip_content is UPDATE-only on both backends (Phase 80 lesson).
+                    repo.table_query(
+                        "editai_clip_content",
+                        "upsert",
+                        data=_content_payload,
+                        filters=QueryFilters(on_conflict="clip_id"),
+                    )
                     logger.info(f"Pipeline {pipeline_id} variant {vid}: saved clip_content for clip {clip_id_to_set}")
             except Exception as cc_err:
                 logger.warning(f"Pipeline {pipeline_id} variant {vid}: failed to save clip_content: {cc_err}")
 
-        # Increment usage_count for segments used in this variant (skip if already done by render)
+        # Increment usage_count for segments used in this variant (skip if already done by render).
+        # W-81-01 signature: first arg is None (ignored — helper goes through get_repository()).
         try:
             used_seg_ids = pipeline.get("segment_usage", {}).get(str(vid), [])
             if used_seg_ids and not job.get("usage_incremented"):
-                _increment_segment_usage(supabase, used_seg_ids)
+                _increment_segment_usage(None, used_seg_ids)
                 job["usage_incremented"] = True
                 logger.info(
                     f"Pipeline {pipeline_id} variant {vid}: incremented "
@@ -5255,17 +5265,16 @@ async def sync_pipeline_to_library(
     if synced > 0:
         _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
 
-    # Update project variants_count
+    # Update project variants_count. Plan 81-02 Task 3.G — repo.count_clips composes
+    # profile_id (outer scope) + eq(project_id, is_deleted). project_id alone uniquely
+    # scopes clips since projects are owned by profiles, so the profile_id wrap is
+    # consistent with the Supabase semantics.
     if synced > 0:
-        total_clips = supabase.table("editai_clips")\
-            .select("id", count="exact")\
-            .eq("project_id", library_project_id)\
-            .eq("is_deleted", False)\
-            .execute()
-        supabase.table("editai_projects")\
-            .update({"variants_count": total_clips.count or synced})\
-            .eq("id", library_project_id)\
-            .execute()
+        total_clips_count = repo.count_clips(
+            profile.profile_id,
+            QueryFilters(eq={"project_id": library_project_id, "is_deleted": False}),
+        )
+        repo.update_project(library_project_id, {"variants_count": total_clips_count or synced})
 
     return {
         "synced": synced,
