@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 82 PLANNED (3/3 plans drafted, plan-checker PASSED on iter 2) — ready to execute
-stopped_at: Phase 82 planning complete — 3 plans (82-01 audit + Pattern A/B; 82-02 Pattern C fat-fn + helper refactor; 82-03 SQLite per-route tests). Plan-checker iter 1 found 3 BLOCKERS (update_segment + delete_product_group mis-classified Pattern A/B → reclassified to 82-02 as Pattern C; helper-caller counts wrong → corrected to 3 + 4 callers); iter 2 PASSED. Next action `/gsd-execute-phase 82`.
-last_updated: "2026-05-23T02:00:00.000Z"
+status: Executing Phase 82 (Plan 82-01 SHIPPED)
+stopped_at: Plan 82-01 SHIPPED — segments_routes.py get_client() count driven from 37 to 15 (within target band [13, 19]) across 6 atomic commits (audit a5b533a, RED 3303bbe, GREEN 629493f, chunk 1 e891f3b, chunk 2 1e76b91, chunk 3 47aeef6). 2 new ABC methods (`get_product_group`, `update_product_group`) added on both backends with 6/6 RED→GREEN tests passing. ROUTES-AUDIT.md catalogs all 37 guards + 76 ride-alongs + helper-caller table (3 + 4 callers verified). Plan 82-02 contract: 15 residual sites + 2 helpers + 5 fat-fn units. T-82-01-01 IDOR ownership pattern applied at every new repo.get_* site. Update_segment + delete_product_group preserved for 82-02 (Pattern C with helper dependency).
+last_updated: "2026-05-23T03:00:00.000Z"
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 9
-  completed_plans: 6
-  percent: 67
+  completed_plans: 7
+  percent: 78
 ---
 
 # Project State
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale, distributed as a true downloadable desktop product priced for indie creators.
-**Current focus:** Phase 82 — segments-routes-repository-migration (Phase 81 SHIPPED 2026-05-23)
+**Current focus:** Phase 82 — segments-routes-repository-migration
 
 ## Current Position
 
-Phase: 82 (segments-routes-repository-migration) — PLANNED (3 plans drafted, plan-checker PASSED iter 2)
-Plan: 0 of 3 (executing next)
-Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 2/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred to next batch). Next functional gate: Phase 82 execution.
-Next action: `/gsd-execute-phase 82` to ship Plan 82-01 (audit + ABC additions + Pattern A/B migration of ~22 of 37 guards). Plan 82-02 (Pattern C fat-fn migration including update_segment + delete_product_group + helper refactor) and Plan 82-03 (per-route SQLite tests + deferred-items.md) follow sequentially. Phase 81 verification (`/gsd-verify-phase 81`) remains a deferred manual gate.
+Phase: 82 (segments-routes-repository-migration) — EXECUTING (Plan 82-01 SHIPPED)
+Plan: 2 of 3 (82-02 next)
+Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 2/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred to next batch). Phase 82 in flight: Plan 82-01 SHIPPED 2026-05-23, Plan 82-02 next.
+Next action: `/gsd-execute-phase 82` (resume) to ship Plan 82-02 (Pattern C fat-fn migration: update_segment + delete_product_group + 5 BG/insert paths + create_segment + extract_segment + create/update product groups + reassign + match-srt + assign_segments_to_project + get_project_segments; helper refactors `_assign_product_group` 3-caller + `_reassign_all_segments` 4-caller drop their `supabase` first arg; drives all three grep gates to 0). Plan 82-03 (per-route SQLite tests + deferred-items.md) follows. Phase 81 verification (`/gsd-verify-phase 81`) remains a deferred manual gate.
 
 Sources:
 
@@ -87,6 +87,7 @@ Earlier project decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 81]: Plan 81-01 SHIPPED — pipeline_routes.py get_client() count 24 → 5 across 4 chunks (sites 1-4 in 8febdc8; 5,7-11 in 1106d51; 12-17 in f291f53; 18,19,24 + W-81-01 helper refactor in 99a0cdd). Plus 1 new ABC method `upsert_pipeline` (6/6 tests pass) and ROUTES-AUDIT.md cataloging all 24 guards + 52 in-body ride-alongs across 6 variable names. Residual = exactly the 5 Plan 81-02 sites (6, 20, 21, 22, 23) + the 2-call get_pipeline_status escape hatch.
 - [Phase 81]: Plan 81-02 SHIPPED — all three Phase 81 grep gates in pipeline_routes.py now at exactly 0: get_client() = 0 (SC-1), expanded ride-along grep across 6 variable names = 0 (SC-4 expanded), `from app.db import get_supabase` = 0 (SC-4 third gate). 4 atomic task commits (d889653, 6d6e05b, 9a7fc0b, a8742b8). _save_clip_to_library + sync_pipeline_to_library + get_pipeline_status recovery migrated as units. Concurrency primitives preserved (render_jobs_lock 28→27 from intentional dead-else removal only). W-81-01 signature compliance at both call sites. Two Rule-1 dead-503-guard removals (sync_pipeline_to_library + adopt_library_tts). 3 tests need mock-chain rewrites in Plan 81-03 (test_pipeline_library_persistence, test_pipeline_tts_restore, test_pipeline_subtitle_frame_preview).
 - [Phase 81]: Plan 81-03 SHIPPED — 14 SQLite per-route pytest cases (tests/test_api_pipeline_sqlite.py, 14/14 pass) + 2 E2E scaffold tests (tests/test_pipeline_e2e_sqlite.py — test_pipeline_full_flow_no_503 passes, test_pipeline_full_flow_produces_mp4 xfail-deferred-to-Phase-85 per B-81-04). 5 broken pipeline tests xfailed with explicit Phase-81/Plan-81-03 reasons (4 migration-induced + 1 pre-existing baseline drift). Pipeline test suite green: 3 passed + 5 xfailed + 0 failed. 3 atomic commits (9c655d3, d740727, cda4cb8). 44 baseline failures in orthogonal subsystems documented as deferred-items.md (NOT Phase 81 blockers — verified pre-existing via stash). All 3 Phase 81 grep gates remain at 0. Phase 81 ready for verification.
+- [Phase 82]: Plan 82-01 SHIPPED — segments_routes.py get_client() count 37 → 15 (within target band [13, 19]) across 22 Pattern A/B migrations in 3 chunks (Chunk 1: source-videos CRUD + waveform + voice-detection 8 sites in e891f3b; Chunk 2: segments read/delete/toggle/bulk-transforms + per-segment helpers 13 sites in 1e76b91; Chunk 3: list_product_groups in 47aeef6). 2 new ABC methods (`get_product_group`, `update_product_group`) added on both backends — base.py + supabase_repo.py + sqlite_repo.py — with 6/6 RED→GREEN tests in tests/test_repository_segments_phase82.py. ROUTES-AUDIT.md catalogs all 37 guards + 76 ride-alongs + helper-caller table (3-caller `_assign_product_group` + 4-caller `_reassign_all_segments`, both deferred to 82-02). T-82-01-01 IDOR ownership pattern applied at every new `repo.get_source_video / get_segment / get_product_group` site. T-82-01-02 silent-skip accepted threat for bulk_update_transforms per-id loop. Plan-checker BLOCKER 1/2 corrections preserved: update_segment + delete_product_group NOT migrated (deferred to 82-02 as Pattern C with helper dependency). 6 atomic commits (a5b533a docs, 3303bbe RED, 629493f GREEN, e891f3b chunk 1, 1e76b91 chunk 2, 47aeef6 chunk 3). No deviations from plan — all advisor-flagged nuances (bulk_update_transforms add-mode raise-404 preservation, set-mode per-id loop, test-env probe) handled inline.
 
 ### Pending Todos
 
@@ -110,10 +111,10 @@ New for v13:
 
 ## Session Continuity
 
-Last session: 2026-05-23T02:00:00Z
-Stopped at: Phase 82 planning shipped — 3 plans drafted on disk (.planning/phases/82-segments-routes-repository-migration/82-01-PLAN.md, 82-02-PLAN.md, 82-03-PLAN.md), plan-checker PASSED on iter 2 after blocker fix-up (update_segment + delete_product_group reclassified from Pattern A/B → 82-02 Pattern C; helper-caller counts corrected). Inline Phase 82 block added to .planning/ROADMAP.md (un-collapse pattern recurring across v13 phases). ROADMAP.md noted as updated to 3-plan structure (planner deviated from 2-plan original ROADMAP estimate, with documented context-budget rationale).
-Resume file: .planning/phases/82-segments-routes-repository-migration/82-01-PLAN.md (Wave 1 starts here).
-Next action: `/gsd-execute-phase 82` to ship Plan 82-01 (Pattern A/B migration of ~22 of 37 guards + 2 new ABC methods update_product_group / get_product_group). Plans 82-02 and 82-03 execute sequentially.
+Last session: 2026-05-23T03:00:00Z
+Stopped at: Plan 82-01 SHIPPED — segments_routes.py get_client() count 37 → 15 across 22 Pattern A/B migrations + 2 new ABC methods (get_product_group + update_product_group) on both backends with 6/6 tests. ROUTES-AUDIT.md complete. T-82-01-01 IDOR pattern at all new repo.get_* sites. 6 atomic commits: a5b533a (audit) + 3303bbe (RED) + 629493f (GREEN) + e891f3b (chunk 1: 8 sites) + 1e76b91 (chunk 2: 13 sites) + 47aeef6 (chunk 3: 1 site). update_segment + delete_product_group preserved for 82-02.
+Resume file: .planning/phases/82-segments-routes-repository-migration/82-02-PLAN.md (Wave 2 — Pattern C fat-fn migration + helper refactor).
+Next action: `/gsd-execute-phase 82` (resume) to ship Plan 82-02 (drives all 3 grep gates to 0 in segments_routes.py). Plan 82-03 (per-route SQLite tests + deferred-items.md) follows.
 
 ---
-*Last updated: 2026-05-23 after Phase 82 planning shipped (3 plans drafted, plan-checker PASSED iter 2)*
+*Last updated: 2026-05-23 after Plan 82-01 SHIPPED (segments_routes.py 37 → 15 get_client; 2 new ABC methods on both backends; T-82-01-01 IDOR applied; 6 atomic commits)*
