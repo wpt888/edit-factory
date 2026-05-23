@@ -68,6 +68,150 @@ close_repository()
 HEADERS = {"X-Profile-Id": "test-profile-001"}
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Mock helpers (using plain setattr — no monkeypatch available outside pytest)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Duplicated from tests/test_pipeline_e2e_sqlite.py and tests/conftest.py —
+# keep in sync if the canonical source changes. The script intentionally does
+# not import from `tests/` because `tests/` is not always on the Python path
+# in CI. This is a deliberate cross-tree decoupling — DO NOT change it to
+# an import.
+
+
+def _install_ffmpeg_mock(tmp_path: Path) -> None:
+    """Replace safe_ffmpeg_run with a stub that creates placeholder output files
+    and returns a successful CompletedProcess. Mutates module-level attrs of
+    BOTH app.services.ffmpeg_semaphore AND app.api.pipeline_routes (pipeline_routes
+    imports safe_ffmpeg_run by symbol on module load — patching only the source
+    module misses the alias)."""
+    def _mocked_ffmpeg(cmd, *args, **kwargs):
+        for arg in cmd:
+            if not isinstance(arg, str):
+                continue
+            lowered = arg.lower()
+            if lowered.endswith((".mp4", ".jpg", ".mp3", ".wav", ".png")):
+                out_path = Path(arg)
+                if out_path.is_absolute() and not out_path.exists():
+                    try:
+                        out_path.parent.mkdir(parents=True, exist_ok=True)
+                        if lowered.endswith(".mp4"):
+                            out_path.write_bytes(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isomavc1")
+                        else:
+                            out_path.touch()
+                    except (OSError, PermissionError):
+                        pass
+        return CompletedProcess(args=cmd, returncode=0, stdout="12.34", stderr="")
+
+    import app.services.ffmpeg_semaphore as _ffsem
+    _ffsem.safe_ffmpeg_run = _mocked_ffmpeg
+    try:
+        import app.api.pipeline_routes as _plr
+        _plr.safe_ffmpeg_run = _mocked_ffmpeg
+    except (AttributeError, ImportError):
+        pass
+
+
+def _install_script_generator_mock() -> None:
+    """Stub Gemini/script-generator entry points so the harness needs no API keys."""
+    def _mocked_generate(*args, **kwargs):
+        return [{"text": "test script with keyword test", "tts_text": "test script with keyword test"}]
+
+    for target_module, attr_name in [
+        ("app.services.script_generator", "ScriptGenerator"),
+        ("app.services.gemini_service", "GeminiService"),
+    ]:
+        try:
+            import importlib
+            mod = importlib.import_module(target_module)
+            cls = getattr(mod, attr_name, None)
+            if cls is None:
+                continue
+            for method_name in ("generate_scripts", "generate"):
+                if hasattr(cls, method_name):
+                    setattr(cls, method_name, _mocked_generate)
+        except (ImportError, ModuleNotFoundError, AttributeError):
+            continue
+
+
+def _install_tts_mock(tmp_path: Path) -> None:
+    """Stub TTS providers to return a deterministic short SRT + fixture audio path."""
+    fixture_audio = tmp_path / "fixture_tts.mp3"
+    fixture_audio.write_bytes(b"fake mp3 audio content")
+
+    def _mocked_synthesize(self, text, *args, **kwargs):
+        return (
+            str(fixture_audio),
+            1.0,
+            "1\n00:00:00,000 --> 00:00:01,000\n" + text + "\n",
+        )
+
+    for target_module, attr_name in [
+        ("app.services.tts_provider", "TTSProvider"),
+        ("app.services.elevenlabs_tts", "ElevenLabsTTS"),
+        ("app.services.edge_tts", "EdgeTTSProvider"),
+    ]:
+        try:
+            import importlib
+            mod = importlib.import_module(target_module)
+            cls = getattr(mod, attr_name, None)
+            if cls is None:
+                continue
+            if hasattr(cls, "synthesize"):
+                setattr(cls, "synthesize", _mocked_synthesize)
+        except (ImportError, ModuleNotFoundError, AttributeError):
+            continue
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Seed helpers (duplicated from tests/conftest.py — see note above)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _seed_source_video(repo, profile_id, **overrides):
+    """Create a minimal source_video record in the SQLite repo."""
+    data = {
+        "id": str(uuid.uuid4()),
+        "filename": "test.mp4",
+        "file_path": "/tmp/test.mp4",
+        "duration": 10.0,
+        "width": 1920,
+        "height": 1080,
+        "file_size": 1024,
+        "status": "ready",
+        "profile_id": profile_id,
+        **overrides,
+    }
+    return repo.create_source_video(data)
+
+
+def _seed_segment(repo, profile_id, source_video_id, **overrides):
+    """Create a minimal segment record in the SQLite repo."""
+    data = {
+        "id": str(uuid.uuid4()),
+        "source_video_id": source_video_id,
+        "start_time": 0.0,
+        "end_time": 2.0,
+        "duration": 2.0,
+        "profile_id": profile_id,
+        **overrides,
+    }
+    return repo.create_segment(data)
+
+
+def _seed_export_preset(repo, name="TikTok", **overrides):
+    """Create a minimal export preset record in the SQLite repo."""
+    data = {
+        "name": name,
+        "is_default": 0,
+        "width": 1080,
+        "height": 1920,
+        "fps": 30,
+        **overrides,
+    }
+    return repo.create_export_preset(data)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Endpoint table (populated in Tasks 3 and 4)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -130,6 +274,16 @@ def main() -> None:
         })
     except Exception:
         pass  # idempotent — profile may already exist
+
+    # Install mocks BEFORE any route calls so all service stubs are in place
+    _install_ffmpeg_mock(_TMP_BASE)
+    _install_script_generator_mock()
+    _install_tts_mock(_TMP_BASE)
+
+    # Seed prerequisites: source video → segment → export preset
+    source_video = _seed_source_video(repo, profile_id)
+    _seed_segment(repo, profile_id, source_video["id"])
+    _seed_export_preset(repo, "TikTok")
 
     # (c) Print banner
     print("=== Edit Factory desktop smoke harness ===", flush=True)
