@@ -2,6 +2,7 @@
 Edit Factory - Configuration
 """
 import os
+import sys
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
@@ -11,22 +12,59 @@ APP_VERSION = get_version()
 
 
 def _get_app_base_dir() -> Path:
-    """Returns %APPDATA%\\EditFactory in desktop mode, project root in dev."""
+    """Returns the OS-appropriate user-data directory in desktop mode, project root in dev.
+
+    Resolves per platform when DESKTOP_MODE is truthy:
+    - Windows (sys.platform == 'win32'): %APPDATA%\\EditFactory
+    - macOS   (sys.platform == 'darwin'): ~/Library/Application Support/EditFactory
+    - Linux   (sys.platform.startswith('linux')): $XDG_CONFIG_HOME/EditFactory if XDG_CONFIG_HOME is non-empty, else ~/.config/EditFactory
+
+    When DESKTOP_MODE is not truthy (dev/WSL/CI), returns project root.
+    """
     import logging as _logging
     _logger = _logging.getLogger(__name__)
-    if os.getenv("DESKTOP_MODE", "").lower() in ("true", "1", "yes"):
+
+    desktop = os.getenv("DESKTOP_MODE", "").lower() in ("true", "1", "yes")
+    if not desktop:
+        return Path(__file__).parent.parent
+
+    base: Path | None = None
+    if sys.platform == "win32":
         appdata = os.getenv("APPDATA")
         if appdata:
             base = Path(appdata) / "EditFactory"
-            try:
-                base.mkdir(parents=True, exist_ok=True)
-            except OSError as e:
-                _logger.warning(f"Could not create base dir {base}: {e}")
-            return base
         else:
             _logger.warning("DESKTOP_MODE is set but APPDATA env var is missing — falling back to project root")
-    # Dev / WSL / CI: use project root (existing behaviour)
-    return Path(__file__).parent.parent
+    elif sys.platform == "darwin":
+        home = Path.home()
+        base = home / "Library" / "Application Support" / "EditFactory"
+    elif sys.platform.startswith("linux"):
+        xdg = os.getenv("XDG_CONFIG_HOME")
+        if xdg:  # non-empty string only — empty treated as unset per XDG spec
+            base = Path(xdg) / "EditFactory"
+        else:
+            base = Path.home() / ".config" / "EditFactory"
+    else:
+        _logger.warning(f"DESKTOP_MODE is set but platform {sys.platform!r} is unknown — falling back to project root")
+
+    if base is None:
+        return Path(__file__).parent.parent
+
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        _logger.warning(f"Could not create base dir {base}: {e}")
+    return base
+
+
+def get_base_dir() -> Path:
+    """Public accessor for the resolved base dir. Re-evaluates each call (does NOT cache).
+
+    NOTE: The module-level `_BASE_DIR` constant captures the value at import time
+    and is what `Settings.base_dir` uses. `get_base_dir()` is provided for callers
+    that need a fresh resolution (e.g. after env var changes mid-process).
+    """
+    return _get_app_base_dir()
 
 
 _BASE_DIR = _get_app_base_dir()
