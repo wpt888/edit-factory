@@ -217,8 +217,10 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
   - [x] 88-01-PLAN.md — Lock nsis.artifactName + assert ML exclusion filter in electron/package.json + new .github/workflows/installer-size.yml CI gate (windows-latest, threshold 576716800 bytes binary 550 MB, 7z defense-in-depth on installer payload)
 
 **Track C — Marketing/Billing Web App (Wave 3b/4):**
-- [x] Phase 89: Marketing app scaffolding (`marketing/`) (~1 plan) (completed 2026-05-23)
-- [ ] Phase 90: Landing page + pricing (~1–2 plans)
+- [x] Phase 89: Marketing app scaffolding (`marketing/`) (~1 plan)
+ (completed 2026-05-23)
+- [ ] Phase 90: Landing page + pricing (1 plan planned — 2026-05-23)
+  - [ ] 90-01-PLAN.md — Full landing page composition (Hero+Features+Pricing+Screenshots+Comparison+FAQ+Footer) + Lighthouse ≥ 90/95 against production build + CLAUDE.md MANDATORY screenshot
 - [ ] Phase 91: Lemon Squeezy checkout + webhook (~2 plans)
 - [ ] Phase 92: Account dashboard (~2 plans)
 
@@ -358,7 +360,8 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
   4. Pricing table reflects locked v13 product decisions: Starter $79 one-time, Pro $149 one-time, Cloud Sync $39/yr (per STATE.md Decisions L84).
   5. MANDATORY Playwright screenshot per CLAUDE.md captures the rendered landing page at full-page resolution.
 
-**Plans**: 1–2 plans.
+**Plans**: 1 plan (planned 2026-05-23):
+  - 90-01-PLAN.md — Full landing page replacing Phase 89 placeholder: 7 section components (Hero/Features/Pricing/Screenshots/Comparison/FAQ/Footer) under marketing/components/sections/, 3 new Shadcn primitives (badge + separator byte-copied from frontend/, accordion authored from canonical template because frontend/ has no accordion.tsx — DECISION CONFLICT D-12 documented), 4 new deps (@radix-ui/react-accordion + @radix-ui/react-separator + lighthouse + chrome-launcher), Playwright spec landing.spec.ts with 3 tests (section rendering, Lighthouse ≥ 90/95 against next build + next start on port 3099 — DECISION CONFLICT D-16-server-mode documented, MANDATORY full-page screenshot > 100000 bytes). Honors D-01..D-18 except 3 surfaced conflicts.
 
 ## Progress
 
