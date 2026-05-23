@@ -210,7 +210,8 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
   - [x] 86-01-PLAN.md — Backend: POST /api/v1/desktop/ml/download SSE endpoint + range resume + SHA256 verify + atomic unpack + .installed marker + 6 pytest cases (mocks upstream) + smoke harness extension (closes ML-02)
   - [x] 86-02-PLAN.md — Frontend: <MLBundleInstaller /> component (SSE via fetch+ReadableStream, NOT EventSource) + settings page mount + Playwright SSE-mock test + MANDATORY 3-state Playwright screenshots per CLAUDE.md (closes ML-03)
 - [x] Phase 87: ML feature flags & subscription gating in backend (~1 plan) (completed 2026-05-23)
-- [ ] Phase 88: Installer slimming verification (~1 plan)
+- [ ] Phase 88: Installer slimming verification (1 plan planned — 2026-05-23)
+  - [ ] 88-01-PLAN.md — Lock nsis.artifactName + assert ML exclusion filter in electron/package.json + new .github/workflows/installer-size.yml CI gate (windows-latest, threshold 576716800 bytes binary 550 MB, 7z defense-in-depth on installer payload)
 
 **Track C — Marketing/Billing Web App (Wave 3b/4):**
 - [ ] Phase 89: Marketing app scaffolding (`marketing/`) (~1 plan)
@@ -313,6 +314,19 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
   2. Calling a Pro-only feature with a Starter subscription claim returns `402` with `{ "error": "tier_insufficient", "requires_tier": "pro" }`.
 
 **Plans**: 1 plan.
+
+### Phase 88: Installer slimming verification
+
+**Goal**: The Windows NSIS installer is ≤ 550 MB without PyTorch/Whisper/Coqui — verified via an automated CI check that fails the build if size exceeds the threshold.
+
+**Depends on**: Phase 86.
+**Requirements**: ML-01.
+**Success Criteria**:
+  1. Building the installer produces `editfactory-setup-13.0.0.exe` ≤ 550 MB.
+  2. A CI step measures installer size and fails the build if > 550 MB.
+
+**Plans**: 1 plan (planned 2026-05-23):
+  - 88-01-PLAN.md — Add `nsis.artifactName: "editfactory-setup-${version}.exe"` + assert intact ML exclusion filter (torch, torchaudio, torchvision, nvidia, triton, whisper, TTS, Cython) on `extraResources[from=../venv]` in electron/package.json; new `.github/workflows/installer-size.yml` on `windows-latest` (Python 3.11 + Node 20, BtbN FFmpeg download, full Python-venv + frontend-standalone + electron-builder pipeline, hard threshold 576716800 bytes = binary 550 MB, 7z-based defense-in-depth grep against forbidden ML directories in installer payload, installer artifact upload for PR review).
 
 ## Progress
 
