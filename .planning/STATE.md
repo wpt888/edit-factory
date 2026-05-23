@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 81 SHIPPED — advancing to Phase 82 (planning)
-stopped_at: Phase 81 Plan 81-03 SHIPPED — all 3 plans complete, all 3 grep gates remain at 0. Test suite: 3 passed + 5 xfailed + 0 failed. Verification (`/gsd-verify-phase 81`) deferred — autonomous loop advances to Phase 82 planning. Next action `/gsd-plan-phase 82`.
-last_updated: "2026-05-23T13:00:00.000Z"
+status: Phase 82 PLANNED (3/3 plans drafted, plan-checker PASSED on iter 2) — ready to execute
+stopped_at: Phase 82 planning complete — 3 plans (82-01 audit + Pattern A/B; 82-02 Pattern C fat-fn + helper refactor; 82-03 SQLite per-route tests). Plan-checker iter 1 found 3 BLOCKERS (update_segment + delete_product_group mis-classified Pattern A/B → reclassified to 82-02 as Pattern C; helper-caller counts wrong → corrected to 3 + 4 callers); iter 2 PASSED. Next action `/gsd-execute-phase 82`.
+last_updated: "2026-05-23T02:00:00.000Z"
 progress:
   total_phases: 3
   completed_phases: 2
-  total_plans: 6
+  total_plans: 9
   completed_plans: 6
-  percent: 100
+  percent: 67
 ---
 
 # Project State
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 ## Current Position
 
-Phase: 82 (segments-routes-repository-migration) — NOT STARTED (Phase 81 complete; advancing per autonomous loop)
-Plan: 0 of N
-Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 2/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred to next batch). Next functional gate: Phase 82.
-Next action: `/gsd-plan-phase 82` to draft plans for segments_routes.py repository migration (~2-3 plans expected per ROADMAP.md line 195). Phase 81 verification (`/gsd-verify-phase 81`) is a manual gate that the autonomous loop intentionally skips — it can run later as a milestone-level audit.
+Phase: 82 (segments-routes-repository-migration) — PLANNED (3 plans drafted, plan-checker PASSED iter 2)
+Plan: 0 of 3 (executing next)
+Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 2/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred to next batch). Next functional gate: Phase 82 execution.
+Next action: `/gsd-execute-phase 82` to ship Plan 82-01 (audit + ABC additions + Pattern A/B migration of ~22 of 37 guards). Plan 82-02 (Pattern C fat-fn migration including update_segment + delete_product_group + helper refactor) and Plan 82-03 (per-route SQLite tests + deferred-items.md) follow sequentially. Phase 81 verification (`/gsd-verify-phase 81`) remains a deferred manual gate.
 
 Sources:
 
@@ -110,10 +110,10 @@ New for v13:
 
 ## Session Continuity
 
-Last session: 2026-05-23T01:01:39Z
-Stopped at: Phase 81 Plan 81-03 SHIPPED — 14 SQLite per-route tests (all green) + E2E scaffold (1 passing non-503 smoke + 1 xfail-deferred-to-Phase-85 producer) + 5 broken pipeline tests xfailed with Phase-81 reasons. Phase 81 ready for verification; all 3 grep gates at 0.
-Resume file: .planning/phases/81-pipeline-routes-repository-migration/81-03-SUMMARY.md (full closure for Phase 81)
-Next action: `/gsd-verify-phase 81` to run regression gate + verify_phase_goal. After verification PASSES, advance to Phase 82 (segments_routes.py repository migration).
+Last session: 2026-05-23T02:00:00Z
+Stopped at: Phase 82 planning shipped — 3 plans drafted on disk (.planning/phases/82-segments-routes-repository-migration/82-01-PLAN.md, 82-02-PLAN.md, 82-03-PLAN.md), plan-checker PASSED on iter 2 after blocker fix-up (update_segment + delete_product_group reclassified from Pattern A/B → 82-02 Pattern C; helper-caller counts corrected). Inline Phase 82 block added to .planning/ROADMAP.md (un-collapse pattern recurring across v13 phases). ROADMAP.md noted as updated to 3-plan structure (planner deviated from 2-plan original ROADMAP estimate, with documented context-budget rationale).
+Resume file: .planning/phases/82-segments-routes-repository-migration/82-01-PLAN.md (Wave 1 starts here).
+Next action: `/gsd-execute-phase 82` to ship Plan 82-01 (Pattern A/B migration of ~22 of 37 guards + 2 new ABC methods update_product_group / get_product_group). Plans 82-02 and 82-03 execute sequentially.
 
 ---
-*Last updated: 2026-05-23 after Plan 81-03 completion (Task 3 committed in cda4cb8; SUMMARY.md created)*
+*Last updated: 2026-05-23 after Phase 82 planning shipped (3 plans drafted, plan-checker PASSED iter 2)*

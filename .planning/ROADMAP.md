@@ -257,6 +257,25 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
   - 81-02-PLAN.md — Pattern C/D + fat multi-site function migration (_save_clip_to_library + sync_pipeline_to_library + check_render_skip + render_variants/remake_variant subroutines); drives both grep gates to 0 across 6 variable names (supabase, _sb, _supa, _supa_render, supabase_chk, supabase_lib)
   - 81-03-PLAN.md — Per-route SQLite pytest cases (reusing Phase 80 sqlite_backend fixture) + E2E pipeline test (test_pipeline_full_flow_produces_mp4) + xfail repairs in tests/test_pipeline_routes.py
 
+### Phase 82: Segments routes repository migration
+
+**Goal**: Every `repo.get_client()` call in `app/api/segments_routes.py` (37 sites covering source-videos CRUD + stream + preview-stream + waveform + voice-detection, segments CRUD + transforms + extract + favorite + single-use, product-groups CRUD, match-srt, frames) is replaced with typed repository methods or `table_query(QueryFilters)` calls. Segments and source videos can be created, listed, edited, deleted, streamed, and matched against TTS SRT phrases under `DATA_BACKEND=sqlite`.
+
+**Depends on**: Phase 80 (migration pattern established + ABC has the required base methods: list/get/create/update/delete for segments, source_videos, project_segments; increment_segment_usage from Phase 80).
+**Requirements**: FUNC-01, FUNC-03.
+**Success Criteria**:
+  1. Zero `repo.get_client()` calls remain in `segments_routes.py` — `grep -c "get_client()" app/api/segments_routes.py` returns `0`.
+  2. A `ROUTES-AUDIT.md` artifact in the phase directory lists each migrated call site with the pattern (A/B/C/D from ARCHITECTURE.md §1) and the repository method used.
+  3. New ABC methods (if any are required for product-groups, match-srt, or transform routes) are added to `app/repositories/base.py` and implemented in both `SupabaseRepository` and `SQLiteRepository` — no `NotImplementedError` paths.
+  4. Expanded ride-along grep gate passes: `grep -cE "(supabase|_sb|_supa|_supa_render|supabase_chk|supabase_lib)\.(table|rpc)\(" app/api/segments_routes.py` returns `0` (re-using Phase 81's 6 variable-name gate; current count is 76).
+  5. Uploading a source video, extracting segments, and matching them against an SRT phrase succeeds end-to-end in SQLite mode — covered by a per-route pytest file `tests/test_api_segments_sqlite.py` that reuses the Phase 80 `sqlite_backend` fixture.
+  6. Existing routes still work in Supabase mode — regression test suite passes; baseline failures (if any) documented in `deferred-items.md` per the Phase 81 pattern.
+
+**Plans**: 3 plans (Wave 1 → 2 → 3, sequential because all modify app/api/segments_routes.py). Split from the original 2-plan estimate during planning — 82-02 as a single plan would have exceeded the ~50% context budget (Pattern C fat-fn migration + helper refactor + 76 ride-along migrations + per-route SQLite test authoring). The 3-plan structure mirrors Phase 80 / Phase 81 exactly.
+  - 82-01-PLAN.md — Audit (ROUTES-AUDIT.md) + 2 new ABC methods (`update_product_group`, `get_product_group`) on both backends with RED/GREEN tests + Pattern A/B migration covering source-videos CRUD, segments CRUD, per-segment helpers (favorite, single-use, transforms, voice-detection, waveform, frames, stream), list/delete product groups, list_video_segments, list_all_segments, reset-usage (~20-25 of the 37 guards). Residual count drops to [12, 18].
+  - 82-02-PLAN.md — Pattern C/D + fat multi-site functions (background tasks, create_segment, match-srt, extract, create_product_group, update_product_group, reassign_product_groups, assign_segments_to_project, get_project_segments) + helper refactors (`_assign_product_group`, `_reassign_all_segments` drop their supabase param per Phase 80 W-80-02 / Phase 81 W-81-01 pattern) + drive BOTH grep gates to 0 (get_client AND 6-var ride-along). 4 chunked commits per Hard Constraint #2.
+  - 82-03-PLAN.md — Per-route SQLite pytest cases in `tests/test_api_segments_sqlite.py` (≥ 22 tests reusing the Phase 80 `sqlite_backend` fixture + new seed helpers `_seed_source_video` / `_seed_segment` / `_seed_product_group`) + xfail repairs for mock-chain breakages + `deferred-items.md` documenting schema drift (SQLite editai_segments lacks `keywords`/`product_group`/`transforms`/etc; SQLite editai_product_groups is a different entity than Supabase's region-annotation product_groups). Status-set widening per Phase 80 80-03 / Phase 81 81-03 precedent.
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -277,4 +296,6 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
 | 82-98 | v13 | 0/~25 | Active | — |
 
 ---
-*Last updated: 2026-05-23 after Plan 81-03 completion (14 SQLite per-route tests + E2E scaffold + 5 broken pipeline tests xfailed; pipeline test suite green: 3 passed + 5 xfailed + 0 failed; 3 atomic task commits 9c655d3 / d740727 / cda4cb8; all 3 Phase 81 grep gates remain at 0)*
+*Last updated: 2026-05-23 after Phase 82 planning (3-plan split: audit+Pattern A/B → Pattern C/D+fat-fn → SQLite tests; ABC adds `update_product_group` + `get_product_group`; schema drift documented for 82-03)*
+
+*Earlier: 2026-05-23 after Plan 81-03 completion (14 SQLite per-route tests + E2E scaffold + 5 broken pipeline tests xfailed; pipeline test suite green: 3 passed + 5 xfailed + 0 failed; 3 atomic task commits 9c655d3 / d740727 / cda4cb8; all 3 Phase 81 grep gates remain at 0)*
