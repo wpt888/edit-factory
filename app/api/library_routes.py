@@ -23,6 +23,7 @@ from app.config import get_settings
 from app.services.file_storage import get_file_storage
 from app.services.media_manager import get_media_manager
 from app.api.auth import ProfileContext, get_profile_context
+from app.api.ml_gating import _enforce_ml_installed
 from app.api.validators import (
     validate_upload_size, validate_tts_text_length,
     validate_file_mime_type, ALLOWED_VIDEO_MIMES,
@@ -1162,6 +1163,11 @@ async def generate_from_segments(
 
     settings = get_settings()
     settings.ensure_dirs()
+
+    # ML-04 gate: conditional inline check (mute_source_voice is a request body field,
+    # so FastAPI Depends() cannot read it — must check after body parse).
+    if request.mute_source_voice:
+        _enforce_ml_installed("voice_mute")
 
     # Verify the project exists and belongs to the profile
     project_data = verify_project_ownership(project_id, profile.profile_id)

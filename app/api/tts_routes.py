@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends, Request
 
 from app.api.auth import ProfileContext, get_profile_context
+from app.api.ml_gating import require_ml_installed, require_tier
 from app.api.validators import validate_tts_text_length, validate_file_mime_type, ALLOWED_AUDIO_MIMES
 from app.core.rate_limit import limiter
 from app.config import get_settings
@@ -364,7 +365,9 @@ async def clone_voice_endpoint(
     request: Request,
     voice_name: str = Form(...),
     audio_file: UploadFile = File(...),
-    profile: ProfileContext = Depends(get_profile_context)
+    profile: ProfileContext = Depends(get_profile_context),
+    _ml: None = Depends(require_ml_installed("voice_clone")),
+    _tier: None = Depends(require_tier("pro")),
 ):
     """
     Clone a voice from an audio sample.
