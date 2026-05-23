@@ -206,11 +206,14 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
   - [x] 85-01-PLAN.md — scripts/desktop-smoke-test.py (TestClient-based, SQLite mode, mocks FFmpeg/Gemini/TTS, walks 22 endpoints across 6 routers, 5xx-only rejection) + .github/workflows/desktop-smoke.yml (Python 3.11 pin, on: pull_request: branches: [main]) + xfail-reason update in tests/test_pipeline_e2e_sqlite.py + SUMMARY.md — closes FUNC-02 + FUNC-06
 
 **Track B — Optional ML (Wave 3a, parallel):**
-- [x] Phase 86: ML bundle download endpoint + UI (2 plans planned — 2026-05-23) (completed 2026-05-23)
+- [x] Phase 86: ML bundle download endpoint + UI (2 plans planned — 2026-05-23)
+ (completed 2026-05-23)
   - [x] 86-01-PLAN.md — Backend: POST /api/v1/desktop/ml/download SSE endpoint + range resume + SHA256 verify + atomic unpack + .installed marker + 6 pytest cases (mocks upstream) + smoke harness extension (closes ML-02)
   - [x] 86-02-PLAN.md — Frontend: <MLBundleInstaller /> component (SSE via fetch+ReadableStream, NOT EventSource) + settings page mount + Playwright SSE-mock test + MANDATORY 3-state Playwright screenshots per CLAUDE.md (closes ML-03)
-- [x] Phase 87: ML feature flags & subscription gating in backend (~1 plan) (completed 2026-05-23)
-- [x] Phase 88: Installer slimming verification (1 plan planned — 2026-05-23) (completed 2026-05-23)
+- [x] Phase 87: ML feature flags & subscription gating in backend (~1 plan)
+ (completed 2026-05-23)
+- [x] Phase 88: Installer slimming verification (1 plan planned — 2026-05-23)
+ (completed 2026-05-23)
   - [x] 88-01-PLAN.md — Lock nsis.artifactName + assert ML exclusion filter in electron/package.json + new .github/workflows/installer-size.yml CI gate (windows-latest, threshold 576716800 bytes binary 550 MB, 7z defense-in-depth on installer payload)
 
 **Track C — Marketing/Billing Web App (Wave 3b/4):**
@@ -327,6 +330,20 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
 
 **Plans**: 1 plan (planned 2026-05-23):
   - 88-01-PLAN.md — Add `nsis.artifactName: "editfactory-setup-${version}.exe"` + assert intact ML exclusion filter (torch, torchaudio, torchvision, nvidia, triton, whisper, TTS, Cython) on `extraResources[from=../venv]` in electron/package.json; new `.github/workflows/installer-size.yml` on `windows-latest` (Python 3.11 + Node 20, BtbN FFmpeg download, full Python-venv + frontend-standalone + electron-builder pipeline, hard threshold 576716800 bytes = binary 550 MB, 7z-based defense-in-depth grep against forbidden ML directories in installer payload, installer artifact upload for PR review).
+
+### Phase 89: Marketing app scaffolding
+
+**Goal**: A new `marketing/` subfolder contains a Next.js 15 App Router app, independent of the existing `frontend/`. Local dev runs at port 3001, independent `package.json`, Tailwind + Shadcn/UI matching the desktop design system. Supabase Auth is wired to a SEPARATE Supabase project (not the existing one).
+
+**Depends on**: Nothing — fully independent track.
+**Requirements**: MARK-01, MARK-06.
+**Success Criteria**:
+  1. `marketing/package.json` exists with Next.js 15, Tailwind, Shadcn dependencies.
+  2. `npm run dev` in `marketing/` starts a server on port 3001 with a placeholder home page.
+  3. Supabase client in `marketing/lib/supabase.ts` uses env vars `MARKETING_SUPABASE_URL` and `MARKETING_SUPABASE_KEY` (distinct from existing app).
+
+**Plans**: 1 plan (planned 2026-05-23):
+  - [ ] 89-01-PLAN.md - Greenfield scaffold of `marketing/` Next.js 16 App Router app (16 new files, zero modifications outside marketing/): package.json with locked port 3001 (`next dev --port 3001`) + Next.js ^16.1.1 / React 19.2.1 / Tailwind ^4 / @supabase/ssr / sonner / @radix-ui/react-slot, App Router shell (layout.tsx + page.tsx with server-rendered "Edit Factory - Coming soon" placeholder + globals.css mirroring desktop OKLCH design tokens), Shadcn Button + Card primitives copied byte-for-byte from frontend/src/components/ui/, lib/utils.ts (cn helper) + lib/supabase.ts (`getMarketingSupabase()` server helper consuming MARKETING_SUPABASE_URL/KEY + `getMarketingBrowserClient()` consuming NEXT_PUBLIC_MARKETING_SUPABASE_URL/ANON_KEY, both throw on missing env per D-12), .env.example documenting current + future-phase placeholders, Playwright config + scaffold-smoke.spec.ts (asserts HTTP 200 + literal "Edit Factory" / "Coming soon" text + writes screenshot per CLAUDE.md MANDATORY rule). Version-bump decision: Next.js 16.1.1 instead of requirement-text "Next.js 15" per D-01 (matches existing frontend stack). Manual follow-ups documented in SUMMARY: provision marketing Supabase project + wire .env.local (autonomous loop cannot navigate Supabase Web UI).
 
 ## Progress
 
