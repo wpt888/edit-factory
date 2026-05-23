@@ -140,15 +140,16 @@ def _seed_segment_with_keyword(repo, profile_id, keyword="test"):
 
 @pytest.mark.timeout(60)
 @pytest.mark.xfail(
-    reason="Phase 81 SC-2 escape hatch — full mp4 emergence + clip persistence is "
-           "deferred to Phase 85 (FUNC-06 desktop smoke-test harness) per "
-           "REQUIREMENTS.md §B-81-04 disposition. The combinatorial challenge of "
-           "FastAPI BackgroundTasks timing + multi-service mock orchestration "
-           "(Gemini + TTS + FFmpeg) + path discovery from variable FFmpeg command "
-           "shapes is out of Phase 81's scope. The non-503 assertions at each "
-           "route step are exercised by tests/test_api_pipeline_sqlite.py — "
-           "those tests prove the dual gate without requiring end-to-end mp4 "
-           "emergence.",
+    reason="Phase 85 plan 85-01 closes FUNC-02 via scripts/desktop-smoke-test.py "
+           "+ .github/workflows/desktop-smoke.yml — the canonical CI release gate. "
+           "This pytest case stays xfail-not-strict on purpose: it documents the "
+           "developer-facing E2E mp4-emergence contract but is not the load-bearing "
+           "FUNC-02 proof. The Phase 81 B-81-04 escape hatch (BackgroundTasks timing "
+           "+ multi-service mock orchestration + variable FFmpeg command shapes) was "
+           "addressed by the scripts harness's no-5xx-only contract — it does not "
+           "require mp4 emergence, only that every migrated route returns a non-5xx "
+           "under DATA_BACKEND=sqlite. See "
+           ".planning/phases/85-desktop-smoke-test-harness/85-01-SUMMARY.md.",
     strict=False,
 )
 def test_pipeline_full_flow_produces_mp4(sqlite_backend, monkeypatch, tmp_path):
