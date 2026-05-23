@@ -80,6 +80,7 @@ from app.api.tts_library_routes import router as tts_library_router
 from app.api.image_generate_routes import router as image_generate_router
 from app.api.schedule_routes import router as schedule_router
 from app.api.assembly_routes import router as assembly_router
+from app.api.desktop_ml_routes import router as desktop_ml_router
 
 from app.core.logging_config import setup_logging
 setup_logging()
@@ -418,6 +419,7 @@ app.include_router(association_router, prefix="/api/v1", tags=["Associations"])
 app.include_router(tts_library_router, prefix="/api/v1", tags=["TTS Library"])
 app.include_router(image_generate_router, prefix="/api/v1", tags=["AI Image Generation"])
 app.include_router(assembly_router, prefix="/api/v1", tags=["Script-to-Video Assembly"])
+app.include_router(desktop_ml_router, prefix="/api/v1", tags=["Desktop ML"])
 
 # Desktop-only routes (license, version, settings) — gated behind DESKTOP_MODE
 if settings.desktop_mode:
