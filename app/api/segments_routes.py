@@ -2072,29 +2072,35 @@ async def list_product_groups(
     video_id: str,
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """List all product groups for a source video."""
-    repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
+    """List all product groups for a source video.
 
-    result = supabase.table("editai_product_groups")\
-        .select("*")\
-        .eq("source_video_id", video_id)\
-        .eq("profile_id", profile.profile_id)\
-        .order("start_time")\
-        .execute()
+    NOTE (Phase 82 schema drift): the SQLite editai_product_groups table differs
+    from Supabase — it lacks source_video_id / label / start_time / end_time / color
+    columns. This route returns 500 in SQLite mode, accepted per Phase 80 / 81
+    dual-gate precedent. 82-03 documents this as a deferred item.
+    """
+    repo = get_repository()
+
+    result = repo.list_product_groups(
+        profile.profile_id,
+        QueryFilters(eq={"source_video_id": video_id}, order_by="start_time"),
+    )
 
     groups = []
     for g in result.data:
-        seg_count = supabase.table("editai_segments")\
-            .select("id", count="exact")\
-            .eq("source_video_id", video_id)\
-            .eq("profile_id", profile.profile_id)\
-            .eq("product_group", g["label"])\
-            .execute()
+        seg_count_result = repo.table_query(
+            "editai_segments",
+            "select",
+            filters=QueryFilters(
+                select="id",
+                count="exact",
+                eq={
+                    "source_video_id": video_id,
+                    "profile_id": profile.profile_id,
+                    "product_group": g["label"],
+                },
+            ),
+        )
 
         groups.append(ProductGroupResponse(
             id=g["id"],
@@ -2103,7 +2109,7 @@ async def list_product_groups(
             start_time=g["start_time"],
             end_time=g["end_time"],
             color=g.get("color"),
-            segments_count=seg_count.count or 0,
+            segments_count=seg_count_result.count or 0,
             created_at=g["created_at"]
         ))
 
