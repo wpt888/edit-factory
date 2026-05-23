@@ -210,8 +210,8 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
   - [x] 86-01-PLAN.md — Backend: POST /api/v1/desktop/ml/download SSE endpoint + range resume + SHA256 verify + atomic unpack + .installed marker + 6 pytest cases (mocks upstream) + smoke harness extension (closes ML-02)
   - [x] 86-02-PLAN.md — Frontend: <MLBundleInstaller /> component (SSE via fetch+ReadableStream, NOT EventSource) + settings page mount + Playwright SSE-mock test + MANDATORY 3-state Playwright screenshots per CLAUDE.md (closes ML-03)
 - [x] Phase 87: ML feature flags & subscription gating in backend (~1 plan) (completed 2026-05-23)
-- [ ] Phase 88: Installer slimming verification (1 plan planned — 2026-05-23)
-  - [ ] 88-01-PLAN.md — Lock nsis.artifactName + assert ML exclusion filter in electron/package.json + new .github/workflows/installer-size.yml CI gate (windows-latest, threshold 576716800 bytes binary 550 MB, 7z defense-in-depth on installer payload)
+- [x] Phase 88: Installer slimming verification (1 plan planned — 2026-05-23) (completed 2026-05-23)
+  - [x] 88-01-PLAN.md — Lock nsis.artifactName + assert ML exclusion filter in electron/package.json + new .github/workflows/installer-size.yml CI gate (windows-latest, threshold 576716800 bytes binary 550 MB, 7z defense-in-depth on installer payload)
 
 **Track C — Marketing/Billing Web App (Wave 3b/4):**
 - [ ] Phase 89: Marketing app scaffolding (`marketing/`) (~1 plan)

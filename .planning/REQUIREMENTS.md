@@ -18,7 +18,7 @@ Requirements for Desktop Production-Ready & Monetization. Each maps to roadmap p
 
 ### Optional ML Bundle (Track B)
 
-- [ ] **ML-01**: The base installer remains ≤ 550 MB by excluding PyTorch / Whisper / Coqui XTTS from `extraResources`.
+- [x] **ML-01**: The base installer remains ≤ 550 MB by excluding PyTorch / Whisper / Coqui XTTS from `extraResources`.
 - [ ] **ML-02**: A new endpoint `POST /desktop/ml/download` fetches the platform-specific ML bundle (~1.5 GB) from a GitHub Release asset, streams progress via SSE, verifies SHA256, unpacks into `<base_dir>/ml/`, and writes a `.installed` marker.
 - [ ] **ML-03**: The desktop UI exposes "Install Advanced Voice Features" with a progress bar and resume-on-failure behavior.
 - [ ] **ML-04**: Routes that require ML return `412 Precondition Failed` with `{ "error": "ml_not_installed", "feature": "<name>" }` when the marker is absent — frontend shows an install CTA instead of a generic error.
@@ -109,7 +109,7 @@ Which phases cover which requirements. Filled in during roadmap creation.
 | FUNC-04 | 84 | Pending |
 | FUNC-05 | 84 | Pending |
 | FUNC-06 | 85 | Pending |
-| ML-01 | 88 | Pending |
+| ML-01 | 88 | Complete |
 | ML-02 | 86 | Pending |
 | ML-03 | 86 | Pending |
 | ML-04 | 87 | Pending |
