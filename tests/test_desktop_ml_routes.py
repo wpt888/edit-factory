@@ -36,9 +36,16 @@ _STUBS_NEEDED = [
     "google.genai.client",
     "google",
 ]
-for _mod_name in _STUBS_NEEDED:
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = MagicMock()
+try:
+    from google import genai as _genai_probe  # noqa: F401
+except (ImportError, TypeError):
+    # TypeError = Python 3.13 regression in google-genai 1.56.0
+    # (function() argument 'code' must be code, not str)
+    # Only install stubs when the real import fails — prevents sys.modules
+    # pollution from affecting other test files that use the real module.
+    for _mod_name in _STUBS_NEEDED:
+        if _mod_name not in sys.modules:
+            sys.modules[_mod_name] = MagicMock()
 
 # Also stub optional heavy ML deps that may be absent
 for _opt_mod in [
@@ -86,6 +93,16 @@ except AttributeError:
 # Import the app (triggers full import chain)
 from app.main import app  # noqa: E402
 
+# Reset the repository singleton immediately after importing app.main.
+# app.main initializes the SQLiteRepository at import time; leaving that
+# singleton alive would cause test_api_routes.py health tests to see
+# "ok" (SQLite reachable) instead of "degraded" when run after this file.
+try:
+    from app.repositories.factory import close_repository as _close_repo
+    _close_repo()
+except Exception:
+    pass
+
 # ---------------------------------------------------------------------------
 # Autouse fixture: reset module-level download flag between tests
 # ---------------------------------------------------------------------------
@@ -107,6 +124,13 @@ def _reset_download_flag():
     try:
         from sse_starlette.sse import AppStatus
         AppStatus.should_exit_event = None
+    except Exception:
+        pass
+    # Reset the repository singleton so this test's SQLiteRepository state
+    # does not leak into other test files (e.g. test_api_routes.py health check).
+    try:
+        from app.repositories.factory import close_repository
+        close_repository()
     except Exception:
         pass
 
