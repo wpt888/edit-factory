@@ -2597,15 +2597,23 @@ class AssemblyService:
                 if saved_asset_id:
                     lib_rel = f"media/tts/{profile_id}/{saved_asset_id}.mp3"
                 else:
-                    # Dedup hit — look up existing asset and reuse its path
+                    # Dedup hit — look up existing asset and reuse its path.
+                    # Migrated Phase 83-01: typed repo.list_tts_assets with QueryFilters
+                    # replaces the raw editai_tts_assets PostgREST select chain; no new
+                    # ABC method required (existing list_tts_assets covers eq + limit
+                    # primitives on both backends).
                     try:
                         from app.repositories.factory import get_repository as _get_repository
+                        from app.repositories.models import QueryFilters as _QueryFilters
                         _repo = _get_repository()
-                        _sb = _repo.get_client() if _repo else None
-                        if _sb:
-                            _existing = _sb.table("editai_tts_assets").select("id, mp3_path")\
-                                .eq("profile_id", profile_id).eq("status", "ready")\
-                                .eq("tts_text", cleaned_text.strip()).limit(1).execute()
+                        if _repo:
+                            _existing = _repo.list_tts_assets(
+                                profile_id,
+                                _QueryFilters(
+                                    eq={"status": "ready", "tts_text": cleaned_text.strip()},
+                                    limit=1,
+                                ),
+                            )
                             if _existing.data and _existing.data[0].get("mp3_path"):
                                 lib_rel = _existing.data[0]["mp3_path"]
                     except Exception as _dedup_err:
