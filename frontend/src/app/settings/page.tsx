@@ -20,6 +20,7 @@ import { useProfile } from "@/contexts/profile-context"
 import { ConfirmDialog } from "@/components/dialogs/confirm-dialog"
 import { ApiKeyManager } from "@/components/api-key-manager"
 import { friendlyPlatformName } from "@/lib/platforms"
+import { MLBundleInstaller } from "@/components/ml-bundle-installer"
 
 interface Voice {
   voice_id: string
@@ -1656,6 +1657,8 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
       )}
+
+      <MLBundleInstaller />
 
       {appVersion && (
         <div className="text-center text-xs text-muted-foreground mt-8 pb-4">
