@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 81 SHIPPED — ready for verification
-stopped_at: Phase 81 Plan 81-03 SHIPPED — 14 SQLite per-route tests (all green) + 2 E2E scaffold tests (1 passing non-503 smoke + 1 xfail-deferred-to-Phase-85 producer) + 5 broken pipeline tests xfailed with Phase-81 reasons. Phase 81 test suite green: 3 passed + 5 xfailed + 0 failed. Three grep gates remain at 0.
-last_updated: "2026-05-23T01:01:39Z"
+status: Phase 81 SHIPPED — advancing to Phase 82 (planning)
+stopped_at: Phase 81 Plan 81-03 SHIPPED — all 3 plans complete, all 3 grep gates remain at 0. Test suite: 3 passed + 5 xfailed + 0 failed. Verification (`/gsd-verify-phase 81`) deferred — autonomous loop advances to Phase 82 planning. Next action `/gsd-plan-phase 82`.
+last_updated: "2026-05-23T13:00:00.000Z"
 progress:
-  total_phases: 2
-  completed_phases: 1
+  total_phases: 3
+  completed_phases: 2
   total_plans: 6
   completed_plans: 6
   percent: 100
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale, distributed as a true downloadable desktop product priced for indie creators.
-**Current focus:** Phase 81 — pipeline-routes-repository-migration
+**Current focus:** Phase 82 — segments-routes-repository-migration (Phase 81 SHIPPED 2026-05-23)
 
 ## Current Position
 
-Phase: 81 (pipeline-routes-repository-migration) — SHIPPED (all 3 plans complete)
-Plan: 3 of 3
-Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 1/19 phases complete (Phase 80 verified PASSED on 2026-05-23); Phase 81 ready for verification.
-Next action: `/gsd-verify-phase 81` to run regression gate + verify_phase_goal. After verification PASSES, advance to Phase 82 (segments_routes.py repository migration).
+Phase: 82 (segments-routes-repository-migration) — NOT STARTED (Phase 81 complete; advancing per autonomous loop)
+Plan: 0 of N
+Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 2/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred to next batch). Next functional gate: Phase 82.
+Next action: `/gsd-plan-phase 82` to draft plans for segments_routes.py repository migration (~2-3 plans expected per ROADMAP.md line 195). Phase 81 verification (`/gsd-verify-phase 81`) is a manual gate that the autonomous loop intentionally skips — it can run later as a milestone-level audit.
 
 Sources:
 
