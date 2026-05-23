@@ -28,7 +28,7 @@ Requirements for Desktop Production-Ready & Monetization. Each maps to roadmap p
 
 - [ ] **MARK-01**: A new `marketing/` subfolder contains a Next.js 15 App Router app, independent of the existing `frontend/`. Local dev port 3001 (does not collide with the existing app on 3000).
 - [ ] **MARK-02**: Landing page with hero, feature grid, pricing table (Starter $79 one-time, Pro $149 one-time, Cloud Sync $39/yr), screenshots, FAQ. Lighthouse Performance ≥ 90, Accessibility ≥ 95.
-- [ ] **MARK-03**: Lemon Squeezy embedded checkout for each of the three tiers — purchase issues a license key emailed to the buyer.
+- [x] **MARK-03**: Lemon Squeezy embedded checkout for each of the three tiers — purchase issues a license key emailed to the buyer.
 - [ ] **MARK-04**: Lemon Squeezy webhook handler at `marketing/app/api/lemon-squeezy/webhook/route.ts` verifies the signing secret, persists the order, generates a license key, and stores subscription_tier in Supabase.
 - [ ] **MARK-05**: `/account` dashboard shows subscription status, plan, renewal date, billing portal handoff. `/account/downloads` shows latest Windows + macOS installer links pulled from GitHub Releases. `/account/license` shows the active key, instance count, and a deactivate-instance action.
 - [ ] **MARK-06**: Auth is Supabase, in a SEPARATE Supabase project from the existing app's Supabase. Zero shared users between marketing.editfactory.app and the existing web app.
@@ -116,7 +116,7 @@ Which phases cover which requirements. Filled in during roadmap creation.
 | ML-05 | 87 | Pending |
 | MARK-01 | 89 | Pending |
 | MARK-02 | 90 | Pending |
-| MARK-03 | 91 | Pending |
+| MARK-03 | 91 | Complete |
 | MARK-04 | 91 | Pending |
 | MARK-05 | 92 | Pending |
 | MARK-06 | 89 | Pending |
