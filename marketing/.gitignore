@@ -4,3 +4,4 @@
 # Playwright test artifacts (per-run, not source).
 test-results/
 playwright-report/
+screenshots/
