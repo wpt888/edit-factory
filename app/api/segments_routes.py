@@ -954,21 +954,13 @@ async def list_source_videos(
 ):
     """List all source videos for the current profile."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     logger.info(f"[Profile {profile.profile_id}] Listing source videos")
 
-    result = supabase.table("editai_source_videos")\
-        .select("*")\
-        .eq("profile_id", profile.profile_id)\
-        .order("created_at", desc=True)\
-        .limit(limit)\
-        .offset(offset)\
-        .execute()
+    result = repo.list_source_videos(
+        profile.profile_id,
+        QueryFilters(order_by="created_at", order_desc=True, limit=limit, offset=offset),
+    )
 
     return [_source_video_response(v) for v in result.data]
 
@@ -980,23 +972,12 @@ async def get_source_video(
 ):
     """Get source video details."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    result = supabase.table("editai_source_videos")\
-        .select("*")\
-        .eq("id", video_id)\
-        .eq("profile_id", profile.profile_id)\
-        .limit(1)\
-        .execute()
-
-    if not result.data:
+    video = repo.get_source_video(video_id)
+    if not video or video.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    return _source_video_response(result.data[0])
+    return _source_video_response(video)
 
 
 @router.patch("/source-videos/{video_id}", response_model=SourceVideoResponse)
@@ -1007,11 +988,6 @@ async def update_source_video(
 ):
     """Update source video name or description."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     update_data = body.model_dump(exclude_none=True)
     if not update_data:
@@ -1020,16 +996,16 @@ async def update_source_video(
     if "name" in update_data and not update_data["name"].strip():
         raise HTTPException(status_code=400, detail="Name cannot be empty")
 
-    result = supabase.table("editai_source_videos")\
-        .update(update_data)\
-        .eq("id", video_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not result.data:
+    # Ownership check (T-82-01-01 IDOR pattern)
+    existing = repo.get_source_video(video_id)
+    if not existing or existing.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    return _source_video_response(result.data[0])
+    updated = repo.update_source_video(video_id, update_data)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Source video not found")
+
+    return _source_video_response(updated)
 
 
 @router.delete("/source-videos/{video_id}")
@@ -1040,39 +1016,23 @@ async def delete_source_video(
     """Delete source video and all its segments."""
     logger.info(f"[Profile {profile.profile_id}] Deleting source video: {video_id}")
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Get video info first (scoped to profile)
-    result = supabase.table("editai_source_videos")\
-        .select("file_path, thumbnail_path, preview_proxy_path")\
-        .eq("id", video_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not result.data:
+    # Get video info first + ownership check (T-82-01-01 IDOR pattern)
+    video_data = repo.get_source_video(video_id)
+    if not video_data or video_data.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    video_data = result.data[0]
-
-    # Get all segments to delete their files
-    segments = supabase.table("editai_segments")\
-        .select("extracted_video_path, thumbnail_path")\
-        .eq("source_video_id", video_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
+    # Get all segments to delete their files (scoped to source_video_id + profile)
+    segments_result = repo.list_segments(
+        profile.profile_id,
+        QueryFilters(eq={"source_video_id": video_id}, select="extracted_video_path, thumbnail_path"),
+    )
 
     # Delete from database first (cascade will handle segments)
-    supabase.table("editai_source_videos").delete()\
-        .eq("id", video_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
+    repo.delete_source_video(video_id)
 
     # Delete segment files only after DB delete succeeds
-    for seg in segments.data:
+    for seg in segments_result.data:
         if seg.get("extracted_video_path"):
             Path(seg["extracted_video_path"]).unlink(missing_ok=True)
         if seg.get("thumbnail_path"):
@@ -1097,27 +1057,14 @@ async def stream_source_video(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Stream source video for playback."""
-    effective_profile_id = profile.profile_id
-
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    result = await asyncio.to_thread(
-        lambda: supabase.table("editai_source_videos")
-            .select("file_path")
-            .eq("id", video_id)
-            .eq("profile_id", effective_profile_id)
-            .execute()
-    )
-
-    if not result.data:
+    # Ownership check (T-82-01-01 IDOR pattern)
+    video = await asyncio.to_thread(repo.get_source_video, video_id)
+    if not video or video.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    video_path = Path(normalize_path(result.data[0]["file_path"]))
+    video_path = Path(normalize_path(video["file_path"]))
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found")
 
@@ -1134,24 +1081,12 @@ async def preview_stream_source_video(
     effective_profile_id = profile.profile_id
 
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    result = await asyncio.to_thread(
-        lambda: supabase.table("editai_source_videos")
-            .select("file_path, status, preview_proxy_path, preview_proxy_status")
-            .eq("id", video_id)
-            .eq("profile_id", effective_profile_id)
-            .execute()
-    )
-
-    if not result.data:
+    # Ownership check (T-82-01-01 IDOR pattern)
+    video_data = await asyncio.to_thread(repo.get_source_video, video_id)
+    if not video_data or video_data.get("profile_id") != effective_profile_id:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    video_data = result.data[0]
     original_path = Path(normalize_path(video_data["file_path"]))
     if not original_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found")
@@ -1172,10 +1107,10 @@ async def preview_stream_source_video(
     )
     if should_start_lazy_proxy:
         try:
-            supabase.table("editai_source_videos").update({
+            repo.update_source_video(video_id, {
                 "preview_proxy_status": "pending",
                 "preview_proxy_error": None,
-            }).eq("id", video_id).eq("profile_id", effective_profile_id).execute()
+            })
         except Exception as e:
             logger.warning(f"Failed to mark lazy preview proxy pending for {video_id}: {e}")
         background_tasks.add_task(
@@ -1271,29 +1206,18 @@ async def get_source_video_waveform(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Get audio waveform data for visualization."""
-    effective_profile_id = profile.profile_id
-
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    result = supabase.table("editai_source_videos")\
-        .select("file_path, duration")\
-        .eq("id", video_id)\
-        .eq("profile_id", effective_profile_id)\
-        .execute()
-
-    if not result.data:
+    # Ownership check (T-82-01-01 IDOR pattern)
+    video = repo.get_source_video(video_id)
+    if not video or video.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    video_path = Path(normalize_path(result.data[0]["file_path"]))
+    video_path = Path(normalize_path(video["file_path"]))
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found")
 
-    duration = result.data[0].get("duration") or 0
+    duration = video.get("duration") or 0
 
     import asyncio
     waveform = await asyncio.to_thread(_extract_waveform, str(video_path), samples, duration)
@@ -1317,22 +1241,13 @@ async def get_source_video_voice_detection(
     Uses Silero VAD to detect speech segments.
     """
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    result = supabase.table("editai_source_videos")\
-        .select("file_path")\
-        .eq("id", video_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not result.data:
+    # Ownership check (T-82-01-01 IDOR pattern)
+    video = repo.get_source_video(video_id)
+    if not video or video.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Source video not found")
 
-    video_path = Path(normalize_path(result.data[0]["file_path"]))
+    video_path = Path(normalize_path(video["file_path"]))
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found")
 
