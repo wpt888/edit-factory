@@ -219,7 +219,8 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
 **Track C — Marketing/Billing Web App (Wave 3b/4):**
 - [x] Phase 89: Marketing app scaffolding (`marketing/`) (~1 plan)
  (completed 2026-05-23)
-- [x] Phase 90: Landing page + pricing (1 plan planned — 2026-05-23) (completed 2026-05-23)
+- [x] Phase 90: Landing page + pricing (1 plan planned — 2026-05-23)
+ (completed 2026-05-23)
   - [x] 90-01-PLAN.md — Full landing page composition (Hero+Features+Pricing+Screenshots+Comparison+FAQ+Footer) + Lighthouse ≥ 90/95 against production build + CLAUDE.md MANDATORY screenshot
 - [ ] Phase 91: Lemon Squeezy checkout + webhook (~2 plans)
 - [ ] Phase 92: Account dashboard (~2 plans)
@@ -386,8 +387,8 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
   - (M4) Apply Phase 91 Supabase migration (creates `orders` table with idempotency-unique-constraint on `lemon_squeezy_event_id`) via Supabase SQL editor or `supabase db push`.
 
 **Plans**: 2 plans (Wave 1 → 2, sequential because Plan 91-02 webhook handler reads the locked variant-id → tier mapping from Plan 91-01's pricing wiring):
-  - 91-01-PLAN.md — Pricing.tsx rewiring + Lemon Squeezy hosted-checkout URL generation: replace `<a href="/signup?plan=*">` with hosted checkout URLs of shape `https://[STORE].lemonsqueezy.com/buy/[VARIANT_ID]` (env-var driven via build-time-substituted `NEXT_PUBLIC_LEMON_SQUEEZY_*_VARIANT_ID` for the 3 variants + `NEXT_PUBLIC_LEMON_SQUEEZY_STORE_SLUG`); fallback to original `/signup?plan=*` when env vars are absent so the dev landing page does not break; Playwright test asserts both modes; lib/lemon-squeezy.ts utility for URL construction.
-  - 91-02-PLAN.md — Webhook handler `marketing/app/api/lemon-squeezy/webhook/route.ts` + Supabase orders schema migration + Resend email helper + integration tests: HMAC-SHA256 signature verification using `crypto.timingSafeEqual` (NOT `===` — timing-attack safe), event-type routing (`order_created` vs `subscription_created`), variant-id → tier mapping, license key generation (`EF13-` prefix + 16 hex chars in 4 groups via `crypto.randomBytes`), Supabase insert with idempotency unique constraint on `lemon_squeezy_event_id`, Resend email with locked subject + body template, mock-Lemon-Squeezy test fixtures (with env-var-absence xfail markers per M-prerequisites).
+  - [ ] 91-01-PLAN.md — Pricing.tsx rewiring + Lemon Squeezy hosted-checkout URL generation: replace `<a href="/signup?plan=*">` with hosted checkout URLs of shape `https://[STORE].lemonsqueezy.com/buy/[VARIANT_ID]` (env-var driven via build-time-substituted `NEXT_PUBLIC_LEMON_SQUEEZY_*_VARIANT_ID` for the 3 variants + `NEXT_PUBLIC_LEMON_SQUEEZY_STORE_SLUG`); fallback to original `/signup?plan=*` when env vars are absent so the dev landing page does not break; Playwright test asserts both modes; lib/lemon-squeezy.ts utility for URL construction. AUTHORED 2026-05-23 (Wave 1, autonomous, MARK-03).
+  - [ ] 91-02-PLAN.md — Webhook handler `marketing/app/api/lemon-squeezy/webhook/route.ts` + Supabase orders schema migration + Resend email helper + integration tests: HMAC-SHA256 signature verification using `crypto.timingSafeEqual` (NOT `===` — timing-attack safe), event-type routing (`order_created` vs `subscription_created`), variant-id → tier mapping, license key generation (`EF13-` prefix + 16 hex chars in 4 groups via `crypto.randomBytes`), Supabase insert with idempotency unique constraint on `lemon_squeezy_event_id`, Resend email with locked subject + body template, mock-Lemon-Squeezy test fixtures (with env-var-absence xfail markers per M-prerequisites). AUTHORED 2026-05-23 (Wave 2, depends_on [91-01], autonomous: false due to schema-push checkpoint, MARK-04).
 
 ## Progress
 
