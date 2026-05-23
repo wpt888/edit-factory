@@ -1004,241 +1004,252 @@ async def _save_clip_to_library(
         job["library_saved"] = False
     try:
         repo_lib = get_repository()
-        supabase_lib = repo_lib.get_client() if repo_lib else None
-        if supabase_lib:
-            # Step A: Get or create a library project (locked to prevent duplicates)
-            library_project_id = pipeline.get("library_project_id")
+        # Plan 81-02 Task 2 — repo is always usable under DATA_BACKEND=sqlite (FUNC-01);
+        # the legacy `if supabase_lib:` guard and `else: library_error = "Supabase unavailable"`
+        # branch were dead code and have been collapsed. The outer try/except still wraps the
+        # body so failures populate job["library_error"] as before (T-81-02-02 disposition).
+        # Step A: Get or create a library project (locked to prevent duplicates)
+        library_project_id = pipeline.get("library_project_id")
 
-            if not library_project_id:
-                with _library_project_lock:
-                    library_project_id = pipeline.get("library_project_id")
-                    if not library_project_id:
-                        pipeline_name = (pipeline.get("name") or pipeline.get("idea", ""))[:80].strip() or f"Pipeline {pipeline_id[:8]}"
-                        project_payload = {
-                            "profile_id": profile_id,
-                            "name": pipeline_name,
-                            "description": f"Auto-generated from pipeline {pipeline_id}",
-                            "status": "completed",
-                            "pipeline_id": pipeline_id,
-                        }
-                        try:
-                            proj_result = supabase_lib.table("editai_projects").insert(project_payload).execute()
-                            if proj_result.data:
-                                library_project_id = proj_result.data[0]["id"]
-                        except Exception as insert_err:
-                            insert_err_str = str(insert_err)
-                            if "pipeline_id" in insert_err_str:
-                                logger.warning(
-                                    "editai_projects insert rejected pipeline_id; retrying without pipeline linkage"
-                                )
-                                project_payload.pop("pipeline_id", None)
-                                proj_result = supabase_lib.table("editai_projects").insert(project_payload).execute()
-                                if proj_result.data:
-                                    library_project_id = proj_result.data[0]["id"]
-                            if not library_project_id:
-                                logger.debug(
-                                    f"Project insert conflict, fetching existing: {insert_err}"
-                                )
-                                existing = supabase_lib.table("editai_projects")\
-                                    .select("id")\
-                                    .eq("profile_id", profile_id)\
-                                    .eq("name", pipeline_name)\
-                                    .limit(1)\
-                                    .execute()
-                                if existing.data:
-                                    library_project_id = existing.data[0]["id"]
-                                else:
-                                    raise
+        if not library_project_id:
+            with _library_project_lock:
+                library_project_id = pipeline.get("library_project_id")
+                if not library_project_id:
+                    pipeline_name = (pipeline.get("name") or pipeline.get("idea", ""))[:80].strip() or f"Pipeline {pipeline_id[:8]}"
+                    project_payload = {
+                        "profile_id": profile_id,
+                        "name": pipeline_name,
+                        "description": f"Auto-generated from pipeline {pipeline_id}",
+                        "status": "completed",
+                        "pipeline_id": pipeline_id,
+                    }
+                    try:
+                        created_proj = repo_lib.create_project(project_payload)
+                        if created_proj and created_proj.get("id"):
+                            library_project_id = created_proj["id"]
+                    except Exception as insert_err:
+                        insert_err_str = str(insert_err)
+                        if "pipeline_id" in insert_err_str:
+                            logger.warning(
+                                "editai_projects insert rejected pipeline_id; retrying without pipeline linkage"
+                            )
+                            project_payload.pop("pipeline_id", None)
+                            try:
+                                created_proj = repo_lib.create_project(project_payload)
+                                if created_proj and created_proj.get("id"):
+                                    library_project_id = created_proj["id"]
+                            except Exception:
+                                pass
+                        if not library_project_id:
+                            logger.debug(
+                                f"Project insert conflict, fetching existing: {insert_err}"
+                            )
+                            existing_proj = repo_lib.get_project_by_name(profile_id, pipeline_name)
+                            if existing_proj:
+                                library_project_id = existing_proj["id"]
+                            else:
+                                raise
 
-                        if library_project_id:
-                            pipeline["library_project_id"] = library_project_id
+                    if library_project_id:
+                        pipeline["library_project_id"] = library_project_id
 
-            if library_project_id:
-                # Step B: Generate thumbnail
-                thumb_path = None
-                try:
-                    thumb_dir = final_video_path.parent / "thumbnails"
-                    thumb_dir.mkdir(parents=True, exist_ok=True)
-                    thumb_path = thumb_dir / f"{final_video_path.stem}_thumb.jpg"
-                    await asyncio.to_thread(safe_ffmpeg_run, [
-                        "ffmpeg", "-y", "-ss", "1", "-i", str(final_video_path),
-                        "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "3",
-                        str(thumb_path)
-                    ], 30, "thumbnail")
-                    if thumb_path.exists():
-                        with render_jobs_lock:
-                            job["thumbnail_path"] = str(thumb_path)
-                    else:
-                        thumb_path = None
-                except Exception as thumb_err:
-                    logger.warning(f"Thumbnail generation failed: {thumb_err}")
+        if library_project_id:
+            # Step B: Generate thumbnail
+            thumb_path = None
+            try:
+                thumb_dir = final_video_path.parent / "thumbnails"
+                thumb_dir.mkdir(parents=True, exist_ok=True)
+                thumb_path = thumb_dir / f"{final_video_path.stem}_thumb.jpg"
+                await asyncio.to_thread(safe_ffmpeg_run, [
+                    "ffmpeg", "-y", "-ss", "1", "-i", str(final_video_path),
+                    "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "3",
+                    str(thumb_path)
+                ], 30, "thumbnail")
+                if thumb_path.exists():
+                    with render_jobs_lock:
+                        job["thumbnail_path"] = str(thumb_path)
+                else:
                     thumb_path = None
+            except Exception as thumb_err:
+                logger.warning(f"Thumbnail generation failed: {thumb_err}")
+                thumb_path = None
 
-                # Step C: Get video duration
-                duration = None
-                try:
-                    dur_result = await asyncio.to_thread(safe_ffmpeg_run, [
-                        "ffprobe", "-v", "error", "-show_entries",
-                        "format=duration",
-                        "-of", "default=noprint_wrappers=1:nokey=1",
-                        str(final_video_path)
-                    ], 30, "duration probe")
-                    if dur_result.returncode == 0:
-                        try:
-                            duration = float(dur_result.stdout.strip())
-                        except ValueError:
-                            logger.warning(f"ffprobe returned non-numeric duration: {dur_result.stdout.strip()!r}")
-                except Exception as dur_err:
-                    logger.warning(f"Duration probe failed: {dur_err}")
+            # Step C: Get video duration
+            duration = None
+            try:
+                dur_result = await asyncio.to_thread(safe_ffmpeg_run, [
+                    "ffprobe", "-v", "error", "-show_entries",
+                    "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(final_video_path)
+                ], 30, "duration probe")
+                if dur_result.returncode == 0:
+                    try:
+                        duration = float(dur_result.stdout.strip())
+                    except ValueError:
+                        logger.warning(f"ffprobe returned non-numeric duration: {dur_result.stdout.strip()!r}")
+            except Exception as dur_err:
+                logger.warning(f"Duration probe failed: {dur_err}")
 
-                # Step D: Upsert clip row (update if already exists for this variant)
-                clip_supports_visual_version = True
+            # Step D: Upsert clip row (update if already exists for this variant)
+            clip_supports_visual_version = True
+            _list_filters_eq: Dict[str, Any] = {
+                "variant_index": vid,
+                "is_deleted": False,
+            }
+            if visual_version:
+                _list_filters_eq["visual_version"] = visual_version
+            try:
+                _list_result = repo_lib.list_clips(
+                    library_project_id,
+                    QueryFilters(eq=dict(_list_filters_eq), select="id, visual_version", limit=10),
+                )
+                # When visual_version is None, the original PostgREST query used `.is_("visual_version", "null")`.
+                # list_clips eq does not honor IS NULL — filter client-side here.
+                if visual_version:
+                    existing_clip_data = (_list_result.data or [])[:1]
+                else:
+                    existing_clip_data = [
+                        r for r in (_list_result.data or [])
+                        if r.get("visual_version") is None
+                    ][:1]
+            except Exception as clip_query_err:
+                if _is_missing_column_error(clip_query_err, "visual_version"):
+                    clip_supports_visual_version = False
+                    logger.warning("visual_version column missing, retrying clip lookup without it")
+                    _list_filters_eq.pop("visual_version", None)
+                    _list_result = repo_lib.list_clips(
+                        library_project_id,
+                        QueryFilters(eq=dict(_list_filters_eq), select="id", limit=10),
+                    )
+                    existing_clip_data = (_list_result.data or [])[:1]
+                else:
+                    raise
+            if not existing_clip_data:
+                insert_payload = {
+                    "project_id": library_project_id,
+                    "profile_id": profile_id,
+                    "variant_index": vid,
+                    "variant_name": f"variant_{vid + 1}" + (f"_{visual_version}" if visual_version else ""),
+                    "raw_video_path": str(raw_assembly_path) if raw_assembly_path else str(final_video_path),
+                    "final_video_path": str(final_video_path),
+                    "thumbnail_path": str(thumb_path) if thumb_path else None,
+                    "duration": duration,
+                    "is_selected": False,
+                    "is_deleted": False,
+                    "final_status": "completed",
+                }
+                if clip_supports_visual_version:
+                    insert_payload["visual_version"] = visual_version
                 try:
-                    _clip_query = supabase_lib.table("editai_clips")\
-                        .select("id")\
-                        .eq("project_id", library_project_id)\
-                        .eq("variant_index", vid)\
-                        .eq("is_deleted", False)
-                    if visual_version:
-                        _clip_query = _clip_query.eq("visual_version", visual_version)
-                    else:
-                        _clip_query = _clip_query.is_("visual_version", "null")
-                    existing_clip = _clip_query.limit(1).execute()
-                except Exception as clip_query_err:
-                    if _is_missing_column_error(clip_query_err, "visual_version"):
-                        clip_supports_visual_version = False
-                        logger.warning("visual_version column missing, retrying clip lookup without it")
-                        existing_clip = supabase_lib.table("editai_clips")\
-                            .select("id")\
-                            .eq("project_id", library_project_id)\
-                            .eq("variant_index", vid)\
-                            .eq("is_deleted", False)\
-                            .limit(1)\
-                            .execute()
+                    insert_payload["render_fingerprint"] = render_fingerprint
+                    created_clip = repo_lib.create_clip(insert_payload)
+                except Exception as _fp_err:
+                    if _is_missing_column_error(_fp_err, "render_fingerprint"):
+                        logger.warning("render_fingerprint column missing, retrying INSERT without it")
+                        insert_payload.pop("render_fingerprint", None)
+                        created_clip = repo_lib.create_clip(insert_payload)
+                    elif _is_missing_column_error(_fp_err, "visual_version"):
+                        logger.warning("visual_version column missing, retrying INSERT without it")
+                        insert_payload.pop("visual_version", None)
+                        created_clip = repo_lib.create_clip(insert_payload)
                     else:
                         raise
-                if not existing_clip.data:
-                    insert_payload = {
-                        "project_id": library_project_id,
-                        "profile_id": profile_id,
-                        "variant_index": vid,
-                        "variant_name": f"variant_{vid + 1}" + (f"_{visual_version}" if visual_version else ""),
-                        "raw_video_path": str(raw_assembly_path) if raw_assembly_path else str(final_video_path),
-                        "final_video_path": str(final_video_path),
-                        "thumbnail_path": str(thumb_path) if thumb_path else None,
-                        "duration": duration,
-                        "is_selected": False,
-                        "is_deleted": False,
-                        "final_status": "completed",
-                    }
-                    if clip_supports_visual_version:
-                        insert_payload["visual_version"] = visual_version
-                    try:
-                        insert_payload["render_fingerprint"] = render_fingerprint
-                        clip_result = supabase_lib.table("editai_clips").insert(insert_payload).execute()
-                    except Exception as _fp_err:
-                        if _is_missing_column_error(_fp_err, "render_fingerprint"):
-                            logger.warning("render_fingerprint column missing, retrying INSERT without it")
-                            insert_payload.pop("render_fingerprint", None)
-                            clip_result = supabase_lib.table("editai_clips").insert(insert_payload).execute()
-                        elif _is_missing_column_error(_fp_err, "visual_version"):
-                            logger.warning("visual_version column missing, retrying INSERT without it")
-                            insert_payload.pop("visual_version", None)
-                            clip_result = supabase_lib.table("editai_clips").insert(insert_payload).execute()
-                        else:
-                            raise
-                    if clip_result.data and len(clip_result.data) > 0:
-                        with render_jobs_lock:
-                            job["clip_id"] = clip_result.data[0].get("id")
-                else:
-                    # Existing clip — UPDATE with new video path and metadata
-                    existing_id = existing_clip.data[0].get("id")
+                if created_clip and created_clip.get("id"):
                     with render_jobs_lock:
-                        job["clip_id"] = existing_id
-                    update_payload = {
-                        "raw_video_path": str(raw_assembly_path) if raw_assembly_path else str(final_video_path),
-                        "final_video_path": str(final_video_path),
-                        "thumbnail_path": str(thumb_path) if thumb_path else None,
-                        "duration": duration,
-                        "final_status": "completed",
-                        "is_deleted": False,
-                    }
-                    try:
-                        update_payload["render_fingerprint"] = render_fingerprint
-                        supabase_lib.table("editai_clips").update(update_payload).eq("id", existing_id).execute()
-                    except Exception as _fp_err:
-                        if _is_missing_column_error(_fp_err, "render_fingerprint"):
-                            logger.warning("render_fingerprint column missing, retrying UPDATE without it")
-                            update_payload.pop("render_fingerprint", None)
-                            supabase_lib.table("editai_clips").update(update_payload).eq("id", existing_id).execute()
-                        else:
-                            raise
-                    logger.info(
-                        f"Updated existing clip {existing_id} with new video path"
-                    )
-
+                        job["clip_id"] = created_clip["id"]
+            else:
+                # Existing clip — UPDATE with new video path and metadata
+                existing_id = existing_clip_data[0].get("id")
                 with render_jobs_lock:
-                    job["library_saved"] = True
-
-                # Save script text, SRT, and caption to clip_content
-                _clip_id = job.get("clip_id")
-                if _clip_id:
-                    try:
-                        _script_text = pipeline.get("scripts", [])[vid] if vid < len(pipeline.get("scripts", [])) else None
-                        _tts_data = pipeline.get("tts_previews", {}).get(vid) or pipeline.get("tts_previews", {}).get(str(vid), {})
-                        _srt = _tts_data.get("srt_content") if _tts_data else None
-                        _audio_path = _tts_data.get("audio_path") if _tts_data else None
-                        _caption = pipeline.get("selected_captions", {}).get(str(vid))
-                        _content_payload = {"clip_id": _clip_id}
-                        if _script_text:
-                            _content_payload["tts_text"] = _script_text
-                        if _srt:
-                            _content_payload["srt_content"] = _srt
-                        if _audio_path:
-                            _content_payload["tts_audio_path"] = _audio_path
-                        if str(vid) in pipeline.get("selected_captions", {}):
-                            _content_payload["caption"] = _caption or ""
-                        if subtitle_settings:
-                            _content_payload["subtitle_settings"] = subtitle_settings
-                        if voice_settings:
-                            _content_payload["voice_settings"] = voice_settings
-                        if segment_composition:
-                            _content_payload["segment_composition"] = segment_composition
-                        if len(_content_payload) > 1:
-                            supabase_lib.table("editai_clip_content").upsert(
-                                _content_payload, on_conflict="clip_id"
-                            ).execute()
-                            logger.info(f"Saved clip_content for clip {_clip_id} (variant {vid})")
-                    except Exception as cc_err:
-                        logger.warning(f"Failed to save clip_content for variant {vid}: {cc_err}")
-
+                    job["clip_id"] = existing_id
+                update_payload = {
+                    "raw_video_path": str(raw_assembly_path) if raw_assembly_path else str(final_video_path),
+                    "final_video_path": str(final_video_path),
+                    "thumbnail_path": str(thumb_path) if thumb_path else None,
+                    "duration": duration,
+                    "final_status": "completed",
+                    "is_deleted": False,
+                }
+                try:
+                    update_payload["render_fingerprint"] = render_fingerprint
+                    repo_lib.update_clip(existing_id, update_payload)
+                except Exception as _fp_err:
+                    if _is_missing_column_error(_fp_err, "render_fingerprint"):
+                        logger.warning("render_fingerprint column missing, retrying UPDATE without it")
+                        update_payload.pop("render_fingerprint", None)
+                        repo_lib.update_clip(existing_id, update_payload)
+                    else:
+                        raise
                 logger.info(
-                    f"[Profile {profile_id}] Pipeline {pipeline_id} "
-                    f"variant {vid} saved to library project {library_project_id}"
+                    f"Updated existing clip {existing_id} with new video path"
                 )
 
-                # Increment usage_count for segments used in this variant
+            with render_jobs_lock:
+                job["library_saved"] = True
+
+            # Save script text, SRT, and caption to clip_content
+            _clip_id = job.get("clip_id")
+            if _clip_id:
                 try:
-                    used_seg_ids = pipeline.get("segment_usage", {}).get(str(vid), [])
-                    if used_seg_ids and supabase_lib and not job.get("usage_incremented"):
-                        _increment_segment_usage(supabase_lib, used_seg_ids)
-                        with render_jobs_lock:
-                            job["usage_incremented"] = True
-                        logger.info(
-                            f"[Profile {profile_id}] Incremented usage_count "
-                            f"for {len(used_seg_ids)} segments (variant {vid})"
+                    _script_text = pipeline.get("scripts", [])[vid] if vid < len(pipeline.get("scripts", [])) else None
+                    _tts_data = pipeline.get("tts_previews", {}).get(vid) or pipeline.get("tts_previews", {}).get(str(vid), {})
+                    _srt = _tts_data.get("srt_content") if _tts_data else None
+                    _audio_path = _tts_data.get("audio_path") if _tts_data else None
+                    _caption = pipeline.get("selected_captions", {}).get(str(vid))
+                    _content_payload = {"clip_id": _clip_id}
+                    if _script_text:
+                        _content_payload["tts_text"] = _script_text
+                    if _srt:
+                        _content_payload["srt_content"] = _srt
+                    if _audio_path:
+                        _content_payload["tts_audio_path"] = _audio_path
+                    if str(vid) in pipeline.get("selected_captions", {}):
+                        _content_payload["caption"] = _caption or ""
+                    if subtitle_settings:
+                        _content_payload["subtitle_settings"] = subtitle_settings
+                    if voice_settings:
+                        _content_payload["voice_settings"] = voice_settings
+                    if segment_composition:
+                        _content_payload["segment_composition"] = segment_composition
+                    if len(_content_payload) > 1:
+                        # update_clip_content is UPDATE-only on both backends (Phase 80 lesson) —
+                        # use table_query upsert with on_conflict="clip_id" instead.
+                        repo_lib.table_query(
+                            "editai_clip_content",
+                            "upsert",
+                            data=_content_payload,
+                            filters=QueryFilters(on_conflict="clip_id"),
                         )
-                except Exception as usage_err:
-                    logger.warning(
-                        f"[Profile {profile_id}] Failed to increment segment "
-                        f"usage_count for variant {vid}: {usage_err}"
+                        logger.info(f"Saved clip_content for clip {_clip_id} (variant {vid})")
+                except Exception as cc_err:
+                    logger.warning(f"Failed to save clip_content for variant {vid}: {cc_err}")
+
+            logger.info(
+                f"[Profile {profile_id}] Pipeline {pipeline_id} "
+                f"variant {vid} saved to library project {library_project_id}"
+            )
+
+            # Increment usage_count for segments used in this variant.
+            # W-81-01 signature: first arg is None (ignored — helper goes through get_repository()).
+            try:
+                used_seg_ids = pipeline.get("segment_usage", {}).get(str(vid), [])
+                if used_seg_ids and not job.get("usage_incremented"):
+                    _increment_segment_usage(None, used_seg_ids)
+                    with render_jobs_lock:
+                        job["usage_incremented"] = True
+                    logger.info(
+                        f"[Profile {profile_id}] Incremented usage_count "
+                        f"for {len(used_seg_ids)} segments (variant {vid})"
                     )
-            else:
-                with render_jobs_lock:
-                    job["library_error"] = "Failed to create or find library project"
+            except Exception as usage_err:
+                logger.warning(
+                    f"[Profile {profile_id}] Failed to increment segment "
+                    f"usage_count for variant {vid}: {usage_err}"
+                )
         else:
             with render_jobs_lock:
-                job["library_error"] = "Supabase unavailable"
+                job["library_error"] = "Failed to create or find library project"
     except Exception as lib_err:
         with render_jobs_lock:
             job["library_error"] = str(lib_err)
