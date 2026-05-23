@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
+status: Executing Phase 87
 stopped_at: Phase 86 Plans 86-01 + 86-02 both SHIPPED. POST SSE endpoint for ML bundle download (`/api/v1/desktop/ml/install`) with SHA256 + atomic unpack + HTTP Range resume + asyncio.Lock-guarded 409 concurrent-install rejection. React installer component with 6-state machine mounted at settings page. Playwright SSE-mock test + 3 screenshot states. 86-REVIEW.md filed with 1 CRITICAL (tarslip in `_unpack_and_promote`) + 3 warnings + 3 info — all advisory, none block Phase 87.
-last_updated: "2026-05-23T10:17:06.192Z"
+last_updated: "2026-05-23T10:23:34.031Z"
 progress:
   total_phases: 5
   completed_phases: 4
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale, distributed as a true downloadable desktop product priced for indie creators.
-**Current focus:** Phase 86 — ml-bundle-download-endpoint-ui
+**Current focus:** Phase 87 — ml-feature-flags-subscription-gating-in-backend
 
 ## Current Position
 
-Phase: 87 (ml-feature-flags-subscription-gating-backend) — READY TO PLAN
-Plan: 0 of ~1
+Phase: 87 (ml-feature-flags-subscription-gating-in-backend) — EXECUTING
+Plan: 1 of 1
 Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 7/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81–83 SHIPPED 2026-05-23 — verification deferred, Phase 84 + 85 SHIPPED + VERIFIED 2026-05-23, Phase 86 SHIPPED 2026-05-23 — verification deferred). Phase 86 closed Track B (Optional ML — Wave 3a) by shipping `app/api/desktop_ml_routes.py` POST SSE endpoint (SHA256 + atomic unpack + HTTP Range resume + asyncio.Lock-guarded 409 concurrent-install rejection) and `frontend/src/components/ml-bundle-installer.tsx` (6-state machine driven by raw fetch + ReadableStream, mounted at `frontend/src/app/settings/page.tsx`). Playwright screenshots for 3 states captured per MANDATORY visual testing rule.
 Next action: `/gsd-plan-phase 87` (autonomous). Phase 87 targets ML feature flags + subscription gating in backend per v13-ROADMAP line 133 — Goal: `412 Precondition Failed` for missing `<base_dir>/ml/.installed` marker (`ML-04`), `402 Payment Required` (or `412` with `requires_tier`) for sub-Pro JWT claims (`ML-05`). Depends on Phase 86 (DONE) + Phase 95 (defer tier-check wiring to 95 if 87 ships first). Manual follow-ups outstanding from prior phases: (a) flip FUNC-02 + FUNC-06 to `[x]` in `.planning/milestones/v13-REQUIREMENTS.md`; (b) add "Desktop SQLite-mode smoke harness" as required status check on `main` branch protection; (c) Phase 81 + 82 + 83 + 86 verifications remain deferred manual gates — can be batched. Phase 86 code-review findings (CR-01 CRITICAL tarslip in `_unpack_and_promote` line 278-279, plus W-01..W-03 warnings + I-01..I-03 info items) are candidates for Phase 86.1 gap closure if user prioritizes — CR-01 is exploitable via `ML_BUNDLE_BASE_URL` env override so security-conscious users should triage before Phase 88. None of these block Phase 87 planning.
 

@@ -209,7 +209,7 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
 - [x] Phase 86: ML bundle download endpoint + UI (2 plans planned — 2026-05-23) (completed 2026-05-23)
   - [x] 86-01-PLAN.md — Backend: POST /api/v1/desktop/ml/download SSE endpoint + range resume + SHA256 verify + atomic unpack + .installed marker + 6 pytest cases (mocks upstream) + smoke harness extension (closes ML-02)
   - [x] 86-02-PLAN.md — Frontend: <MLBundleInstaller /> component (SSE via fetch+ReadableStream, NOT EventSource) + settings page mount + Playwright SSE-mock test + MANDATORY 3-state Playwright screenshots per CLAUDE.md (closes ML-03)
-- [ ] Phase 87: ML feature flags & subscription gating in backend (~1 plan)
+- [x] Phase 87: ML feature flags & subscription gating in backend (~1 plan) (completed 2026-05-23)
 - [ ] Phase 88: Installer slimming verification (~1 plan)
 
 **Track C — Marketing/Billing Web App (Wave 3b/4):**
