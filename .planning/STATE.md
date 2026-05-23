@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 84 PLANNED — ready to execute
-stopped_at: "Phase 84 Plan 84-01 PLANNED. Single plan covering: (1) cross-platform `_get_app_base_dir` win32/darwin/linux branches + dev fallback, (2) pure `_resolve_ffmpeg_path` resolver with `FFMPEG_BINARY env → bundled (RESOURCES_PATH or repo dev) → shutil.which` order, (3) per-target electron `extraResources` for win + mac (Linux electron OUT OF SCOPE per REQUIREMENTS.md line 87 — Linux runs from source), (4) 16 new tests (8 base_dir + 8 ffmpeg resolver). Plan checker iter 1 found 2 BLOCKERS (test pollution from host repo's win64-gpl bin) + 1 WARNING (truth #6 wording ambiguity) — all fixed in revision iter 1, plan committed at `7cd6224`. Re-verification iter 2 PASSED. macOS ffmpeg binary remains a manual-fetch blocker addressed via `ffmpeg/ffmpeg-mac/README.md` artifact + graceful Homebrew fallthrough."
-last_updated: "2026-05-23T09:00:00.000Z"
+status: Executing Phase 84
+stopped_at: Phase 83 Plan 83-01 SHIPPED end-to-end. Combined `get_client()` count across `app/services/assembly_service.py` + `app/core/cleanup.py` driven from 2 → 0. 4 atomic task commits (`4e60c0b`, `f659081`, `066cb9b`, `507545c`) + 1 metadata commit. All 13 plan must_haves GREEN. 5 new SQLite tests pass + Phase 80/81/82 baselines preserved (67 tests). Zero new ABC methods — FUNC-03 closed by documented coverage. No deviations from plan.
+last_updated: "2026-05-23T05:22:33.280Z"
 progress:
-  total_phases: 19
-  completed_phases: 4
-  total_plans: 11
-  completed_plans: 10
-  percent: 21
+  total_phases: 3
+  completed_phases: 3
+  total_plans: 9
+  completed_plans: 9
+  percent: 100
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale, distributed as a true downloadable desktop product priced for indie creators.
-**Current focus:** Phase 84 — cross-platform paths & FFmpeg discovery (next; Phase 83 sealed)
+**Current focus:** Phase 84 — cross-platform-paths-and-ffmpeg-discovery
 
 ## Current Position
 
-Phase: 83 (background-services-repository-migration) — SHIPPED 2026-05-23
-Plan: 1 of 1 complete
+Phase: 84 (cross-platform-paths-and-ffmpeg-discovery) — EXECUTING
+Plan: 1 of 1
 Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 4/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred, Phase 82 SHIPPED 2026-05-23 — verification deferred, Phase 83 SHIPPED 2026-05-23 — ready for milestone audit). Phase 83 Plan 83-01 closed FUNC-01 for non-route layers and FUNC-03 by documented coverage (zero new ABC methods — existing list_tts_assets + list_jobs cover both sites via existing eq/lt/in_/limit filter primitives).
 Next action: `/gsd-plan-phase 84` (autonomous). Phase 84 targets cross-platform paths & FFmpeg discovery per ROADMAP line 202 — no dependency on Phase 83. Phase 81 + Phase 82 + Phase 83 verifications (`/gsd-verify-phase 81/82/83`) remain deferred manual gates — can be batched.
 
