@@ -188,10 +188,10 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
   - [x] 80-01-PLAN.md — Audit + new ABC methods + Pattern A/B migration (2026-05-22; see 80-01-SUMMARY.md; get_client() count: 27 → 9)
   - [x] 80-02-PLAN.md — Pattern C/D migration + helper refactor + dead-code removal (2026-05-22; see 80-02-SUMMARY.md; both grep gates at 0)
   - [x] 80-03-PLAN.md — Per-route SQLite integration tests + xfail repairs (2026-05-22; see 80-03-SUMMARY.md; 23 SQLite tests pass, 11 xfail-marked, 0 regressions)
-- [ ] Phase 81: Pipeline routes repository migration (1/3 plans complete — Plan 81-01 SHIPPED 2026-05-23)
+- [ ] Phase 81: Pipeline routes repository migration (2/3 plans complete — Plan 81-02 SHIPPED 2026-05-23)
   - [x] 81-01-PLAN.md — Audit + upsert_pipeline ABC + Pattern A/B migration (2026-05-23; see 81-01-SUMMARY.md; get_client() count: 24 → 5; W-81-01 helper refactor done)
-  - [ ] 81-02-PLAN.md — Pattern C/D + multi-site fns + get_pipeline_status escape hatch removal (drives both expanded grep gates + third get_supabase import gate to 0)
-  - [ ] 81-03-PLAN.md — Per-route SQLite pytest cases + xfail repairs for mock-chain breakages (3 known broken tests inherited from Plan 81-01)
+  - [x] 81-02-PLAN.md — Pattern C/D + multi-site fns + get_pipeline_status escape hatch removal (2026-05-23; see 81-02-SUMMARY.md; all 3 Phase 81 grep gates at 0; three fat units migrated as units; concurrency primitives preserved)
+  - [ ] 81-03-PLAN.md — Per-route SQLite pytest cases + xfail repairs for mock-chain breakages (3 known broken tests inherited from Plans 81-01/81-02)
 - [ ] Phase 82: Segments routes repository migration (~2–3 plans)
 - [ ] Phase 83: Background services repository migration (~1–2 plans)
 - [ ] Phase 84: Cross-platform paths & FFmpeg discovery (~1 plan)
@@ -273,8 +273,8 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
 | 55-63 | v11 | 22/22 | Complete | 2026-03-03 |
 | 64-79 | v12 | 29/29 | Complete | 2026-03-09 |
 | 80 | v13 | 3/3 | Complete (verified PASSED) | 2026-05-23 |
-| 81 | v13 | 1/3 | In progress (Plan 81-01 SHIPPED 2026-05-23) | — |
+| 81 | v13 | 2/3 | In progress (Plan 81-02 SHIPPED 2026-05-23) | — |
 | 82-98 | v13 | 0/~25 | Active | — |
 
 ---
-*Last updated: 2026-05-23 after Plan 81-01 completion (get_client() in pipeline_routes.py: 24 → 5; ROUTES-AUDIT + upsert_pipeline ABC + 19 sub-migrations shipped)*
+*Last updated: 2026-05-23 after Plan 81-02 completion (all three Phase 81 grep gates in pipeline_routes.py at exactly 0; three fat units _save_clip_to_library + sync_pipeline_to_library + get_pipeline_status recovery migrated as units; 4 atomic task commits d889653 / 6d6e05b / 9a7fc0b / a8742b8)*

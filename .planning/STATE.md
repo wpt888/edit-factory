@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Executing Phase 81 (Plan 81-01 complete; Plans 81-02, 81-03 pending)
-stopped_at: Phase 81 Plan 81-01 SHIPPED — pipeline_routes.py get_client() count 24 -> 5 (residual = Plan 81-02 contract)
-last_updated: "2026-05-23T00:00:00.000Z"
+status: Executing Phase 81
+stopped_at: Phase 81 Plan 81-02 SHIPPED — all three Phase 81 grep gates in pipeline_routes.py at exactly 0 (get_client = 0, expanded ride-along = 0, get_supabase import = 0). The three fat units (_save_clip_to_library, sync_pipeline_to_library, get_pipeline_status recovery) migrated as units. Next action: Plan 81-03 (test rewrite).
+last_updated: "2026-05-23T12:00:00.000Z"
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 6
-  completed_plans: 4
-  percent: 67
+  completed_plans: 5
+  percent: 83
 ---
 
 # Project State
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 ## Current Position
 
 Phase: 81 (pipeline-routes-repository-migration) — EXECUTING
-Plan: 1 of 3 — **Plan 81-01 SHIPPED 2026-05-23**; Plans 81-02 (Pattern C/D + multi-site fns + get_pipeline_status body) and 81-03 (test rewriting + xfail markers) pending
+Plan: 2 of 3 (Plan 81-02 SHIPPED — all 3 grep gates at 0; awaiting Plan 81-03)
 Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 1/19 phases complete (Phase 80 verified PASSED on 2026-05-23).
-Next action: `/gsd-execute-phase 81` to execute Plan 81-02 (pipeline_routes.py Pattern C/D migration).
+Next action: `/gsd-execute-phase 81` to execute Plan 81-03 (pytest cases + E2E pipeline test scaffold). Mock-chain rewrites needed for: test_pipeline_library_persistence.py, test_pipeline_tts_restore.py, test_pipeline_subtitle_frame_preview.py. Plus one pre-existing signature drift in test_pipeline_preview_route.py.
 
 Sources:
 
@@ -61,6 +61,7 @@ Sources:
 | v12 Desktop Product MVP | 16 (64-79) | 29 | Shipped 2026-03-09 |
 | **v13 Desktop Production-Ready & Monetization** | **19 (80-98)** | **~28–32 (est.)** | **Active — opened 2026-05-22** |
 | Phase 80 P02 | 75min | 3 tasks | 5 files |
+| Phase 81 P02 | ~1 session | 4 tasks | 1 file |
 
 ## Accumulated Context
 
@@ -83,6 +84,7 @@ Earlier project decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 80]: Plan 80-02: get_client() count driven to 0 in library_routes.py; both grep gates pass (get_client = 0 AND supabase.table/.rpc = 0); deviations driven by second-gate necessity (5 unenumerated calls in _generate_from_segments_task, full _regenerate_voiceover_task migration, dead 503 guard removal)
 - [Phase 80]: Plan 80-03: sqlite_backend fixture + 23 per-route SQLite integration tests in test_api_library_sqlite.py (all pass) + 11 xfail markers on broken Supabase-mocked tests; 0 regressions in wider suite. 3 route-side bugs (tts_text vs script_text column mismatch, missing timedelta import, missing Request param on SlowAPI route) filed as follow-up work — out of scope for Phase 80.
 - [Phase 81]: Plan 81-01 SHIPPED — pipeline_routes.py get_client() count 24 → 5 across 4 chunks (sites 1-4 in 8febdc8; 5,7-11 in 1106d51; 12-17 in f291f53; 18,19,24 + W-81-01 helper refactor in 99a0cdd). Plus 1 new ABC method `upsert_pipeline` (6/6 tests pass) and ROUTES-AUDIT.md cataloging all 24 guards + 52 in-body ride-alongs across 6 variable names. Residual = exactly the 5 Plan 81-02 sites (6, 20, 21, 22, 23) + the 2-call get_pipeline_status escape hatch.
+- [Phase 81]: Plan 81-02 SHIPPED — all three Phase 81 grep gates in pipeline_routes.py now at exactly 0: get_client() = 0 (SC-1), expanded ride-along grep across 6 variable names = 0 (SC-4 expanded), `from app.db import get_supabase` = 0 (SC-4 third gate). 4 atomic task commits (d889653, 6d6e05b, 9a7fc0b, a8742b8). _save_clip_to_library + sync_pipeline_to_library + get_pipeline_status recovery migrated as units. Concurrency primitives preserved (render_jobs_lock 28→27 from intentional dead-else removal only). W-81-01 signature compliance at both call sites. Two Rule-1 dead-503-guard removals (sync_pipeline_to_library + adopt_library_tts). 3 tests need mock-chain rewrites in Plan 81-03 (test_pipeline_library_persistence, test_pipeline_tts_restore, test_pipeline_subtitle_frame_preview).
 
 ### Pending Todos
 
@@ -106,10 +108,10 @@ New for v13:
 
 ## Session Continuity
 
-Last session: 2026-05-23T00:00:00.000Z
-Stopped at: Phase 81 Plan 81-01 SHIPPED — get_client() count in pipeline_routes.py driven from 24 → 5 (Plan 81-02 contract residual). All four migration chunks committed; SUMMARY.md created.
-Resume file: .planning/phases/81-pipeline-routes-repository-migration/81-01-SUMMARY.md (handoff to Plan 81-02)
-Next action: `/gsd-execute-phase 81` to execute Plan 81-02 (Pattern C/D sites: _save_clip_to_library, check_render_skip, render_variants, remake_variant, sync_pipeline_to_library + the get_pipeline_status body escape hatch).
+Last session: 2026-05-23T12:00:00.000Z
+Stopped at: Phase 81 Plan 81-02 SHIPPED — all three Phase 81 grep gates in pipeline_routes.py at exactly 0. Three fat units migrated as units; concurrency primitives preserved; W-81-01 signature compliance honored.
+Resume file: .planning/phases/81-pipeline-routes-repository-migration/81-02-SUMMARY.md (handoff to Plan 81-03)
+Next action: `/gsd-execute-phase 81` to execute Plan 81-03 (pytest cases + E2E pipeline test scaffold; rewrite mock-chain tests for test_pipeline_library_persistence, test_pipeline_tts_restore, test_pipeline_subtitle_frame_preview to mock repo ABC methods directly).
 
 ---
-*Last updated: 2026-05-23 after Plan 81-01 completion (chunk 4 committed in 99a0cdd; SUMMARY.md created)*
+*Last updated: 2026-05-23 after Plan 81-02 completion (Task 4 committed in a8742b8; SUMMARY.md created)*
