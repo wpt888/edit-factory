@@ -16,7 +16,7 @@
 - [ ] **Phase 81: Pipeline routes repository migration** — Replace all 24 sites in `app/api/pipeline_routes.py` (~2–3 plans)
 - [ ] **Phase 82: Segments routes repository migration** — Replace all 37 sites in `app/api/segments_routes.py` (~2–3 plans)
 - [ ] **Phase 83: Background services repository migration** — `app/services/assembly_service.py` + `app/core/cleanup.py` (~1–2 plans)
-- [ ] **Phase 84: Cross-platform paths & FFmpeg discovery** — Windows/macOS/Linux base_dir resolution + per-target FFmpeg bundling (~1 plan)
+- [x] **Phase 84: Cross-platform paths & FFmpeg discovery** — Windows/macOS/Linux base_dir resolution + per-target FFmpeg bundling (1 plan, SHIPPED 2026-05-23)
 - [ ] **Phase 85: Desktop smoke-test harness (CI gate)** — Automated end-to-end run under `DATA_BACKEND=sqlite` that fails the build on any 503 (~1 plan)
 - [ ] **Phase 86: ML bundle download endpoint + UI** — `POST /desktop/ml/download` + frontend installer flow with progress and resume (~2 plans)
 - [ ] **Phase 87: ML feature flags & subscription gating in backend** — `412` for missing bundle, `402` for missing tier (~1 plan)

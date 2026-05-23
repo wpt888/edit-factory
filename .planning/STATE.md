@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Milestone complete
-stopped_at: Phase 83 Plan 83-01 SHIPPED end-to-end. Combined `get_client()` count across `app/services/assembly_service.py` + `app/core/cleanup.py` driven from 2 → 0. 4 atomic task commits (`4e60c0b`, `f659081`, `066cb9b`, `507545c`) + 1 metadata commit. All 13 plan must_haves GREEN. 5 new SQLite tests pass + Phase 80/81/82 baselines preserved (67 tests). Zero new ABC methods — FUNC-03 closed by documented coverage. No deviations from plan.
-last_updated: "2026-05-23T06:11:43.397Z"
+status: Phase 84 SHIPPED — ready for Phase 85
+stopped_at: "Phase 84 Plan 84-01 SHIPPED end-to-end. Cross-platform base_dir resolver (win32/darwin/linux) + FFmpeg discovery (env → bundled → system PATH) extracted to a stdlib-only `app/ffmpeg_setup.py` to bypass the Py 3.14 scipy-wheel gap. 16 new tests (8 base_dir + 8 ffmpeg resolver) — 15 pass + 1 expected skip (no-ffmpeg-anywhere test self-skips because repo ships win64-gpl/bin). Code review surfaced 2 advisory warnings (WR-01 bundled-dir-without-binary-presence-check; WR-02 dead imports in app/main.py) — non-blocking, recorded for follow-up. Verifier returned status: passed with 12/12 must-haves. electron/package.json now has per-target win.extraResources + mac.extraResources; Linux electron target intentionally absent per v13 scope."
+last_updated: "2026-05-23T10:00:00.000Z"
 progress:
-  total_phases: 3
-  completed_phases: 3
-  total_plans: 9
-  completed_plans: 9
-  percent: 100
+  total_phases: 19
+  completed_phases: 5
+  total_plans: 12
+  completed_plans: 11
+  percent: 26
 ---
 
 # Project State
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 **Core value:** Automated video production from any input — get social-media-ready videos at scale, distributed as a true downloadable desktop product priced for indie creators.
-**Current focus:** Phase 84 — cross-platform-paths-and-ffmpeg-discovery
+**Current focus:** Phase 85 — desktop smoke-test harness (CI gate); Phase 84 sealed.
 
 ## Current Position
 
-Phase: 84
-Plan: Not started
-Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 4/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81 SHIPPED 2026-05-23 — verification deferred, Phase 82 SHIPPED 2026-05-23 — verification deferred, Phase 83 SHIPPED 2026-05-23 — ready for milestone audit). Phase 83 Plan 83-01 closed FUNC-01 for non-route layers and FUNC-03 by documented coverage (zero new ABC methods — existing list_tts_assets + list_jobs cover both sites via existing eq/lt/in_/limit filter primitives).
-Next action: `/gsd-plan-phase 84` (autonomous). Phase 84 targets cross-platform paths & FFmpeg discovery per ROADMAP line 202 — no dependency on Phase 83. Phase 81 + Phase 82 + Phase 83 verifications (`/gsd-verify-phase 81/82/83`) remain deferred manual gates — can be batched.
+Phase: 84 (cross-platform-paths-and-ffmpeg-discovery) — SHIPPED 2026-05-23 with verifier status: passed (12/12 must-haves)
+Plan: 1 of 1 complete (84-01 — cross-platform paths + FFmpeg discovery)
+Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, 5/19 phases complete (Phase 80 verified PASSED 2026-05-23, Phase 81–83 SHIPPED 2026-05-23 — verification deferred, Phase 84 SHIPPED + VERIFIED 2026-05-23). Phase 84 closed FUNC-04 + FUNC-05 by adding cross-platform `_get_app_base_dir` (win32/darwin/linux) + extracting `_resolve_ffmpeg_path` into a stdlib-only `app/ffmpeg_setup.py` module (env → bundled → system PATH order per v13-ROADMAP line 101).
+Next action: `/gsd-plan-phase 85` (autonomous). Phase 85 builds `scripts/desktop-smoke-test.py` + `.github/workflows/desktop-smoke.yml` to fail CI on any 5xx in SQLite mode (FUNC-02 + FUNC-06; depends on Phases 80–84, all now SHIPPED). Phase 81 + 82 + 83 verifications (`/gsd-verify-phase 81/82/83`) remain deferred manual gates — can be batched.
 
 Sources:
 
