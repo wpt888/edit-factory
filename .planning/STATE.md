@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 83 SHIPPED — ready for milestone audit
-stopped_at: "Phase 83 fully shipped — Plan 83-01 executed end-to-end. Combined get_client() count across assembly_service.py + cleanup.py: 2 → 0. 4 atomic task commits (4e60c0b docs, f659081 assembly_service, 066cb9b cleanup, 507545c tests) + 1 metadata commit. Zero new ABC methods added — FUNC-03 closed by documented coverage. 5 new SQLite tests pass + 67 Phase 80/81/82 baseline tests preserved."
-last_updated: "2026-05-23T08:00:00.000Z"
+status: Phase 84 PLANNED — ready to execute
+stopped_at: "Phase 84 Plan 84-01 PLANNED. Single plan covering: (1) cross-platform `_get_app_base_dir` win32/darwin/linux branches + dev fallback, (2) pure `_resolve_ffmpeg_path` resolver with `FFMPEG_BINARY env → bundled (RESOURCES_PATH or repo dev) → shutil.which` order, (3) per-target electron `extraResources` for win + mac (Linux electron OUT OF SCOPE per REQUIREMENTS.md line 87 — Linux runs from source), (4) 16 new tests (8 base_dir + 8 ffmpeg resolver). Plan checker iter 1 found 2 BLOCKERS (test pollution from host repo's win64-gpl bin) + 1 WARNING (truth #6 wording ambiguity) — all fixed in revision iter 1, plan committed at `7cd6224`. Re-verification iter 2 PASSED. macOS ffmpeg binary remains a manual-fetch blocker addressed via `ffmpeg/ffmpeg-mac/README.md` artifact + graceful Homebrew fallthrough."
+last_updated: "2026-05-23T09:00:00.000Z"
 progress:
   total_phases: 19
   completed_phases: 4
-  total_plans: 10
+  total_plans: 11
   completed_plans: 10
   percent: 21
 ---
