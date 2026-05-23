@@ -199,13 +199,16 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
   - [x] 82-03-PLAN.md — Per-route SQLite tests + deferred-items.md schema-drift catalog (2026-05-23; see 82-03-SUMMARY.md; 28 SQLite dual-gate tests + 3 new seed helpers + 2 xfail-strict markers; all 13 verification gates PASS; Phase 80/81 baselines preserved)
 - [x] Phase 83: Background services repository migration (1/1 plans complete — SHIPPED 2026-05-23, ready for verification)
   - [x] 83-01-PLAN.md — Audit (ROUTES-AUDIT.md with FUNC-03 reuse disposition) + assembly_service.py dedup migration + cleanup.py dry-run migration + SQLite tests (2026-05-23; see 83-01-SUMMARY.md; combined `get_client()` count 2 → 0 across both files; zero new ABC methods — FUNC-03 closed by documented coverage; 5 new SQLite tests pass + Phase 80/81/82 baselines preserved at 67 tests; 4 atomic task commits `4e60c0b`/`f659081`/`066cb9b`/`507545c`)
-- [x] Phase 84: Cross-platform paths & FFmpeg discovery (1 plan planned — 2026-05-23) (completed 2026-05-23)
+- [x] Phase 84: Cross-platform paths & FFmpeg discovery (1 plan planned — 2026-05-23)
+ (completed 2026-05-23)
   - [x] 84-01-PLAN.md — Cross-platform _get_app_base_dir (win32/darwin/linux branches + dev fallback) + _resolve_ffmpeg_path pure resolver with env → bundled → PATH order + per-target electron extraResources (win + mac, no linux) + manual-fetch READMEs + 16 new tests (8 base_dir + 8 ffmpeg resolver)
 - [x] Phase 85: Desktop smoke-test harness (CI gate) (1 plan planned — 2026-05-23) (completed 2026-05-23)
   - [x] 85-01-PLAN.md — scripts/desktop-smoke-test.py (TestClient-based, SQLite mode, mocks FFmpeg/Gemini/TTS, walks 22 endpoints across 6 routers, 5xx-only rejection) + .github/workflows/desktop-smoke.yml (Python 3.11 pin, on: pull_request: branches: [main]) + xfail-reason update in tests/test_pipeline_e2e_sqlite.py + SUMMARY.md — closes FUNC-02 + FUNC-06
 
 **Track B — Optional ML (Wave 3a, parallel):**
-- [ ] Phase 86: ML bundle download endpoint + UI (~2 plans)
+- [ ] Phase 86: ML bundle download endpoint + UI (2 plans planned — 2026-05-23)
+  - [ ] 86-01-PLAN.md — Backend: POST /api/v1/desktop/ml/download SSE endpoint + range resume + SHA256 verify + atomic unpack + .installed marker + 6 pytest cases (mocks upstream) + smoke harness extension (closes ML-02)
+  - [ ] 86-02-PLAN.md — Frontend: <MLBundleInstaller /> component (SSE via fetch+ReadableStream, NOT EventSource) + settings page mount + Playwright SSE-mock test + MANDATORY 3-state Playwright screenshots per CLAUDE.md (closes ML-03)
 - [ ] Phase 87: ML feature flags & subscription gating in backend (~1 plan)
 - [ ] Phase 88: Installer slimming verification (~1 plan)
 
@@ -282,6 +285,22 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
   - 82-01-PLAN.md — Audit (ROUTES-AUDIT.md) + 2 new ABC methods (`update_product_group`, `get_product_group`) on both backends with RED/GREEN tests + Pattern A/B migration covering source-videos CRUD, segments CRUD, per-segment helpers (favorite, single-use, transforms, voice-detection, waveform, frames, stream), list/delete product groups, list_video_segments, list_all_segments, reset-usage (~20-25 of the 37 guards). Residual count drops to [12, 18].
   - 82-02-PLAN.md — Pattern C/D + fat multi-site functions (background tasks, create_segment, match-srt, extract, create_product_group, update_product_group, reassign_product_groups, assign_segments_to_project, get_project_segments) + helper refactors (`_assign_product_group`, `_reassign_all_segments` drop their supabase param per Phase 80 W-80-02 / Phase 81 W-81-01 pattern) + drive BOTH grep gates to 0 (get_client AND 6-var ride-along). 4 chunked commits per Hard Constraint #2.
   - 82-03-PLAN.md — Per-route SQLite pytest cases in `tests/test_api_segments_sqlite.py` (≥ 22 tests reusing the Phase 80 `sqlite_backend` fixture + new seed helpers `_seed_source_video` / `_seed_segment` / `_seed_product_group`) + xfail repairs for mock-chain breakages + `deferred-items.md` documenting schema drift (SQLite editai_segments lacks `keywords`/`product_group`/`transforms`/etc; SQLite editai_product_groups is a different entity than Supabase's region-annotation product_groups). Status-set widening per Phase 80 80-03 / Phase 81 81-03 precedent.
+
+### Phase 86: ML bundle download endpoint + UI
+
+**Goal**: A new backend endpoint `POST /desktop/ml/download` fetches a platform-specific ML bundle (~1.5 GB) from a GitHub Release asset, streams progress via Server-Sent Events, verifies SHA256, unpacks into `<base_dir>/ml/`, and writes a `.installed` marker. A frontend settings screen exposes "Install Advanced Voice Features" with a progress bar and resume-on-failure.
+
+**Depends on**: Phase 84 (needs `base_dir` resolution).
+**Requirements**: ML-02, ML-03.
+**Success Criteria**:
+  1. `POST /desktop/ml/download` returns SSE progress events ending with `status: "installed"`.
+  2. After successful install, `<base_dir>/ml/.installed` exists with the bundle version inside.
+  3. Interrupting the download and re-invoking the endpoint resumes via HTTP Range — does not redownload completed bytes.
+  4. Frontend shows progress bar live and a final success toast.
+
+**Plans**: 2 plans (planned 2026-05-23):
+  - 86-01-PLAN.md — Backend ML bundle download endpoint (POST /api/v1/desktop/ml/download with SSE, range resume, SHA256, atomic unpack)
+  - 86-02-PLAN.md — Frontend <MLBundleInstaller /> + settings UI + MANDATORY Playwright screenshots
 
 ## Progress
 
