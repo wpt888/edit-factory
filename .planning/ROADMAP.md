@@ -194,7 +194,7 @@ Full details: `.planning/milestones/v12-ROADMAP.md`
   - [x] 81-03-PLAN.md — Per-route SQLite pytest cases + E2E scaffold + xfail repairs (2026-05-23; see 81-03-SUMMARY.md; 14 SQLite tests pass + 2 E2E scaffold + 5 broken pipeline tests xfailed with Phase-81 reasons)
 - [ ] Phase 82: Segments routes repository migration (1/3 plans complete — Plan 82-01 SHIPPED 2026-05-23)
   - [x] 82-01-PLAN.md — Audit (ROUTES-AUDIT.md) + 2 new ABC methods (get_product_group + update_product_group) on both backends with 6/6 RED→GREEN tests + Pattern A/B migration of 22 sites in 3 chunks (2026-05-23; see 82-01-SUMMARY.md; get_client count 37 → 15 within target band [13, 19]; T-82-01-01 IDOR pattern applied)
-  - [ ] 82-02-PLAN.md — Pattern C/D + fat multi-site fns + helper refactors (`_assign_product_group` 3-caller + `_reassign_all_segments` 4-caller drop supabase arg); drives all 3 grep gates to 0
+  - [x] 82-02-PLAN.md — Pattern C/D + fat multi-site fns + helper refactors (`_assign_product_group` 3-caller + `_reassign_all_segments` 4-caller drop supabase arg); drives all 3 grep gates to 0
   - [ ] 82-03-PLAN.md — Per-route SQLite tests + deferred-items.md (schema drift)
 - [ ] Phase 83: Background services repository migration (~1–2 plans)
 - [ ] Phase 84: Cross-platform paths & FFmpeg discovery (~1 plan)
@@ -296,7 +296,7 @@ Vision/scope/architecture: `.planning/v13-desktop-production/`.
 | 64-79 | v12 | 29/29 | Complete | 2026-03-09 |
 | 80 | v13 | 3/3 | Complete (verified PASSED) | 2026-05-23 |
 | 81 | v13 | 3/3 | SHIPPED — ready for verification (Plan 81-03 SHIPPED 2026-05-23) | — |
-| 82 | v13 | 1/3 | In progress (Plan 82-01 SHIPPED 2026-05-23 — get_client 37 → 15; 2 new ABC methods on both backends; 6 atomic commits) | — |
+| 82 | v13 | 2/3 | In Progress|  |
 | 83-98 | v13 | 0/~22 | Active | — |
 
 ---
