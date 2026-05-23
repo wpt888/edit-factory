@@ -1384,20 +1384,20 @@ async def list_video_segments(
 ):
     """List all segments for a source video."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    result = supabase.table("editai_segments")\
-        .select("*, editai_source_videos(name)")\
-        .eq("source_video_id", video_id)\
-        .eq("profile_id", profile.profile_id)\
-        .order("start_time")\
-        .limit(limit)\
-        .offset(offset)\
-        .execute()
+    result = repo.list_segments(
+        profile.profile_id,
+        QueryFilters(
+            eq={"source_video_id": video_id},
+            order_by="start_time",
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+    # Compose source_video_name via per-video lookup (replaces PostgREST nested join)
+    source_video = repo.get_source_video(video_id)
+    source_video_name = source_video.get("name") if source_video else None
 
     return [
         SegmentResponse(
@@ -1415,7 +1415,7 @@ async def list_video_segments(
             transforms=s.get("transforms"),
             product_group=s.get("product_group"),
             created_at=s["created_at"],
-            source_video_name=s.get("editai_source_videos", {}).get("name")
+            source_video_name=source_video_name,
         )
         for s in result.data
     ]
@@ -1434,35 +1434,45 @@ async def list_all_segments(
 ):
     """List all segments (library view) with optional filters, scoped to current profile."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    query = supabase.table("editai_segments")\
-        .select("*, editai_source_videos(name)")\
-        .eq("profile_id", profile.profile_id)
-
+    # Compose QueryFilters from optional query params
+    eq_filters: dict = {}
     if source_video_id:
-        query = query.eq("source_video_id", source_video_id)
-
+        eq_filters["source_video_id"] = source_video_id
     if favorites_only:
-        query = query.eq("is_favorite", True)
+        eq_filters["is_favorite"] = True
 
+    contains_filters: dict = {}
     if keyword:
-        # PostgreSQL array contains
-        query = query.contains("keywords", [keyword])
+        contains_filters["keywords"] = [keyword]
 
     # Fetch extra rows to compensate for post-query duration filtering
     fetch_limit = limit * 3 if (min_duration or max_duration) else limit
-    result = query.order("created_at", desc=True).limit(fetch_limit).offset(offset).execute()
+    result = repo.list_segments(
+        profile.profile_id,
+        QueryFilters(
+            eq=eq_filters,
+            contains=contains_filters,
+            order_by="created_at",
+            order_desc=True,
+            limit=fetch_limit,
+            offset=offset,
+        ),
+    )
+
+    # Compose source video names via per-id lookup (replaces PostgREST nested join)
+    source_video_names: dict = {}
+    unique_video_ids = {s["source_video_id"] for s in result.data if s.get("source_video_id")}
+    for vid in unique_video_ids:
+        sv = repo.get_source_video(vid)
+        if sv:
+            source_video_names[vid] = sv.get("name")
 
     segments = []
     for s in result.data:
         duration = s["end_time"] - s["start_time"]
 
-        # Filter by duration (post-query since Supabase doesn't support computed columns)
+        # Filter by duration (post-query since the underlying store doesn't support computed columns)
         if min_duration and duration < min_duration:
             continue
         if max_duration and duration > max_duration:
@@ -1486,7 +1496,7 @@ async def list_all_segments(
             transforms=s.get("transforms"),
             product_group=s.get("product_group"),
             created_at=s["created_at"],
-            source_video_name=s.get("editai_source_videos", {}).get("name")
+            source_video_name=source_video_names.get(s["source_video_id"]),
         ))
 
     return segments
@@ -1502,22 +1512,19 @@ async def reset_segment_usage(
     Optionally filter by source_video_id to reset only segments from a specific video.
     """
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    query = supabase.table("editai_segments")\
-        .update({"usage_count": 0})\
-        .eq("profile_id", profile.profile_id)\
-        .gt("usage_count", 0)
-
+    # Bulk-update via escape hatch: WHERE profile_id = X AND usage_count > 0 [AND source_video_id = Y]
+    eq_filters: dict = {"profile_id": profile.profile_id}
     if source_video_id:
-        query = query.eq("source_video_id", source_video_id)
+        eq_filters["source_video_id"] = source_video_id
 
-    result = query.execute()
-    reset_count = len(result.data) if result.data else 0
+    update_result = repo.table_query(
+        "editai_segments",
+        "update",
+        data={"usage_count": 0},
+        filters=QueryFilters(eq=eq_filters, gt={"usage_count": 0}),
+    )
+    reset_count = len(update_result.data) if update_result.data else 0
 
     logger.info(
         f"[Profile {profile.profile_id}] Reset usage_count for {reset_count} segments"
@@ -1537,13 +1544,14 @@ async def list_product_groups_bulk(
     Avoids N+1 queries when the pipeline page needs groups for all selected source videos.
     Must be placed before /{segment_id} to avoid the catch-all parameterized route matching
     the literal string "product-groups-bulk".
+
+    NOTE (Phase 82 schema drift): the SQLite editai_product_groups table differs from
+    Supabase — it lacks source_video_id / label / start_time / end_time / color columns.
+    This route returns 500 in SQLite mode, accepted per Phase 80 / 81 dual-gate precedent
+    (status != 503 AND "Database not available" not in response). 82-03 documents this
+    as a deferred item.
     """
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     ids = [vid.strip() for vid in source_video_ids.split(",") if vid.strip()]
     if not ids:
@@ -1552,22 +1560,21 @@ async def list_product_groups_bulk(
         raise HTTPException(status_code=400, detail="Too many IDs (max 50)")
 
     try:
-        result = supabase.table("editai_product_groups")\
-            .select("*")\
-            .in_("source_video_id", ids)\
-            .eq("profile_id", profile.profile_id)\
-            .order("start_time")\
-            .execute()
+        result = repo.list_product_groups(
+            profile.profile_id,
+            QueryFilters(in_={"source_video_id": ids}, order_by="start_time"),
+        )
 
         group_labels = [g["label"] for g in result.data]
-        seg_counts = {}
+        seg_counts: dict = {}
         if group_labels:
-            count_result = supabase.table("editai_segments")\
-                .select("product_group", count="exact")\
-                .in_("source_video_id", ids)\
-                .eq("profile_id", profile.profile_id)\
-                .in_("product_group", group_labels)\
-                .execute()
+            count_result = repo.list_segments(
+                profile.profile_id,
+                QueryFilters(
+                    in_={"source_video_id": ids, "product_group": group_labels},
+                    select="product_group",
+                ),
+            )
             for row in (count_result.data or []):
                 key = row.get("product_group")
                 seg_counts[key] = seg_counts.get(key, 0) + 1
@@ -1598,22 +1605,19 @@ async def get_segment(
 ):
     """Get segment details."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    result = supabase.table("editai_segments")\
-        .select("*, editai_source_videos(name)")\
-        .eq("id", segment_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not result.data:
+    # Ownership check (T-82-01-01 IDOR pattern)
+    s = repo.get_segment(segment_id)
+    if not s or s.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Segment not found")
 
-    s = result.data[0]
+    # Compose source_video_name via per-video lookup (replaces PostgREST nested join)
+    source_video_name = None
+    if s.get("source_video_id"):
+        sv = repo.get_source_video(s["source_video_id"])
+        if sv:
+            source_video_name = sv.get("name")
+
     return SegmentResponse(
         id=s["id"],
         source_video_id=s["source_video_id"],
@@ -1629,7 +1633,7 @@ async def get_segment(
         transforms=s.get("transforms"),
         product_group=s.get("product_group"),
         created_at=s["created_at"],
-        source_video_name=s.get("editai_source_videos", {}).get("name")
+        source_video_name=source_video_name,
     )
 
 
@@ -1727,30 +1731,16 @@ async def delete_segment(
     """Delete a segment."""
     logger.info(f"[Profile {profile.profile_id}] Deleting segment: {segment_id}")
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Get segment data first (scoped to profile)
-    result = supabase.table("editai_segments")\
-        .select("source_video_id, extracted_video_path, thumbnail_path")\
-        .eq("id", segment_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not result.data:
+    # Ownership check (T-82-01-01 IDOR pattern)
+    seg = repo.get_segment(segment_id)
+    if not seg or seg.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Segment not found")
 
-    seg = result.data[0]
     source_video_id = seg["source_video_id"]
 
     # Delete from database
-    supabase.table("editai_segments").delete()\
-        .eq("id", segment_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
+    repo.delete_segment(segment_id)
 
     _refresh_segments_count(repo, source_video_id, profile.profile_id)
 
@@ -1770,30 +1760,14 @@ async def toggle_favorite(
 ):
     """Toggle favorite status for a segment."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Get current status (scoped to profile)
-    result = supabase.table("editai_segments")\
-        .select("is_favorite")\
-        .eq("id", segment_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not result.data:
+    # Ownership check (T-82-01-01 IDOR pattern)
+    seg = repo.get_segment(segment_id)
+    if not seg or seg.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Segment not found")
 
-    current = result.data[0]["is_favorite"]
-    new_status = not current
-
-    supabase.table("editai_segments")\
-        .update({"is_favorite": new_status})\
-        .eq("id", segment_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
+    new_status = not seg.get("is_favorite", False)
+    repo.update_segment(segment_id, {"is_favorite": new_status})
 
     return {"id": segment_id, "is_favorite": new_status}
 
@@ -1805,29 +1779,14 @@ async def toggle_single_use(
 ):
     """Toggle single_use status for a segment."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    result = supabase.table("editai_segments")\
-        .select("single_use")\
-        .eq("id", segment_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not result.data:
+    # Ownership check (T-82-01-01 IDOR pattern)
+    seg = repo.get_segment(segment_id)
+    if not seg or seg.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Segment not found")
 
-    current = result.data[0].get("single_use", False)
-    new_status = not current
-
-    supabase.table("editai_segments")\
-        .update({"single_use": new_status})\
-        .eq("id", segment_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
+    new_status = not seg.get("single_use", False)
+    repo.update_segment(segment_id, {"single_use": new_status})
 
     return {"id": segment_id, "single_use": new_status}
 
@@ -1840,22 +1799,13 @@ async def update_segment_transforms(
 ):
     """Update transforms for a segment (quick dedicated endpoint)."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    result = supabase.table("editai_segments")\
-        .update({
-            "transforms": transforms.model_dump(),
-        })\
-        .eq("id", segment_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not result.data:
+    # Ownership check (T-82-01-01 IDOR pattern)
+    seg = repo.get_segment(segment_id)
+    if not seg or seg.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Segment not found")
+
+    repo.update_segment(segment_id, {"transforms": transforms.model_dump()})
 
     return {"id": segment_id, "transforms": transforms.model_dump()}
 
@@ -1865,13 +1815,14 @@ async def bulk_update_transforms(
     request: BulkTransformRequest,
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Apply transforms to multiple segments at once (set or add mode)."""
+    """Apply transforms to multiple segments at once (set or add mode).
+
+    NOTE (T-82-01-02 — accepted): per-id loop with silent skip of non-owned
+    segment IDs preserves observable behavior of the pre-migration
+    `in_(ids).eq(profile_id)` chain (rows for other profiles are never
+    returned or updated). No 403 for partial unauthorized list.
+    """
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     if not request.segment_ids:
         return {"updated": 0, "segments": []}
@@ -1879,18 +1830,17 @@ async def bulk_update_transforms(
     new_transforms = request.transforms.model_dump()
 
     if request.mode == "add":
-        # Fetch current transforms for all segments
-        existing = supabase.table("editai_segments")\
-            .select("id, transforms")\
-            .in_("id", request.segment_ids)\
-            .eq("profile_id", profile.profile_id)\
-            .execute()
+        # Fetch owned segments via in_ + profile-scoped list_segments
+        existing_result = repo.list_segments(
+            profile.profile_id,
+            QueryFilters(in_={"id": request.segment_ids}, select="id, transforms"),
+        )
 
-        if not existing.data:
+        if not existing_result.data:
             raise HTTPException(status_code=404, detail="No segments found")
 
         results = []
-        for seg in existing.data:
+        for seg in existing_result.data:
             current = seg.get("transforms") or {}
             merged = {
                 "rotation": (current.get("rotation", 0) + new_transforms["rotation"]) % 360,
@@ -1901,23 +1851,21 @@ async def bulk_update_transforms(
                 "flip_v": current.get("flip_v", False) ^ new_transforms["flip_v"],
                 "opacity": max(0.0, min(1.0, current.get("opacity", 1.0) + (new_transforms["opacity"] - 1.0))),
             }
-            supabase.table("editai_segments")\
-                .update({"transforms": merged})\
-                .eq("id", seg["id"])\
-                .eq("profile_id", profile.profile_id)\
-                .execute()
+            repo.update_segment(seg["id"], {"transforms": merged})
             results.append({"id": seg["id"], "transforms": merged})
 
         return {"updated": len(results), "segments": results}
     else:
-        # "set" mode — apply same transforms to all
-        result = supabase.table("editai_segments")\
-            .update({"transforms": new_transforms})\
-            .in_("id", request.segment_ids)\
-            .eq("profile_id", profile.profile_id)\
-            .execute()
+        # "set" mode — per-id loop with ownership check (T-82-01-02 silent skip)
+        updated_segments = []
+        for sid in request.segment_ids:
+            seg = repo.get_segment(sid)
+            if not seg or seg.get("profile_id") != profile.profile_id:
+                # Silent skip — preserves pre-migration in_+eq(profile_id) semantics
+                continue
+            repo.update_segment(sid, {"transforms": new_transforms})
+            updated_segments.append({"id": sid, "transforms": new_transforms})
 
-        updated_segments = [{"id": s["id"], "transforms": new_transforms} for s in (result.data or [])]
         return {"updated": len(updated_segments), "segments": updated_segments}
 
 
@@ -1930,30 +1878,22 @@ async def update_project_segment_transforms(
 ):
     """Update per-project transform overrides for a segment."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Verify project belongs to profile
-    project = supabase.table("editai_projects")\
-        .select("id")\
-        .eq("id", project_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not project.data:
+    # Verify project belongs to profile (T-82-01-01 IDOR pattern)
+    project = repo.get_project(project_id)
+    if not project or project.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    result = supabase.table("editai_project_segments")\
-        .update({"transforms": transforms.model_dump()})\
-        .eq("project_id", project_id)\
-        .eq("segment_id", segment_id)\
-        .execute()
-
-    if not result.data:
+    # Find the matching project-segment assignment via list + filter
+    assignments = repo.list_project_segments(
+        project_id,
+        QueryFilters(eq={"segment_id": segment_id}, select="id"),
+    )
+    if not assignments.data:
         raise HTTPException(status_code=404, detail="Project-segment assignment not found")
+
+    ps_id = assignments.data[0]["id"]
+    repo.update_project_segment(ps_id, {"transforms": transforms.model_dump()})
 
     return {"project_id": project_id, "segment_id": segment_id, "transforms": transforms.model_dump()}
 
@@ -2031,22 +1971,11 @@ async def stream_segment(
 ):
     """Stream a segment (extracted or from source)."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    result = supabase.table("editai_segments")\
-        .select("extracted_video_path, start_time, end_time, editai_source_videos(file_path)")\
-        .eq("id", segment_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not result.data:
+    # Ownership check (T-82-01-01 IDOR pattern)
+    seg = repo.get_segment(segment_id)
+    if not seg or seg.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Segment not found")
-
-    seg = result.data[0]
 
     # If extracted file exists, serve it
     if seg.get("extracted_video_path"):
@@ -2592,32 +2521,19 @@ async def extract_segment_frames(
 ):
     """Extract candidate thumbnail frames from a segment's source video."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Lookup segment
-    seg_result = supabase.table("editai_segments")\
-        .select("source_video_id, start_time, end_time")\
-        .eq("id", segment_id)\
-        .eq("profile_id", profile.profile_id)\
-        .limit(1)\
-        .execute()
-    if not seg_result.data:
+    # Lookup segment + ownership check (T-82-01-01 IDOR pattern)
+    seg = repo.get_segment(segment_id)
+    if not seg or seg.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Segment not found")
-    seg = seg_result.data[0]
 
     # Lookup source video file path
-    vid_result = supabase.table("editai_source_videos")\
-        .select("file_path")\
-        .eq("id", seg["source_video_id"])\
-        .limit(1)\
-        .execute()
-    if not vid_result.data:
+    # (no ownership re-check on source — segment ownership is sufficient because
+    # segments only exist for owned source videos per the schema)
+    sv = repo.get_source_video(seg["source_video_id"])
+    if not sv:
         raise HTTPException(status_code=404, detail="Source video not found")
-    video_path = normalize_path(vid_result.data[0]["file_path"])
+    video_path = normalize_path(sv["file_path"])
     if not Path(video_path).exists():
         raise HTTPException(status_code=404, detail="Source video file not found on disk")
 
