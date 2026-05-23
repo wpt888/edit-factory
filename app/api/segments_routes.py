@@ -302,25 +302,18 @@ def _generate_preview_proxy_background(video_id: str, source_path: Path, profile
     if not repo:
         logger.error(f"[BG-Proxy] No DB for source video {video_id}")
         return
-    supabase = repo.get_client()
-    if not supabase:
-        logger.error(f"[BG-Proxy] No DB client for source video {video_id}")
-        return
 
     try:
-        supabase.table("editai_source_videos").update({
+        repo.update_source_video(video_id, {
             "preview_proxy_status": "pending",
             "preview_proxy_error": None,
-        }).eq("id", video_id).eq("profile_id", profile_id).execute()
+        })
     except Exception as e:
         logger.warning(f"[BG-Proxy] Failed to mark proxy pending for {video_id}: {e}")
 
     proxy_update = _generate_preview_proxy(video_id, source_path)
     try:
-        supabase.table("editai_source_videos").update(proxy_update)\
-            .eq("id", video_id)\
-            .eq("profile_id", profile_id)\
-            .execute()
+        repo.update_source_video(video_id, proxy_update)
     except Exception as e:
         logger.error(f"[BG-Proxy] Failed to save proxy status for {video_id}: {e}")
 
@@ -488,7 +481,6 @@ def _process_source_video_background(
     if not repo:
         logger.error(f"[BG] No DB for source video {video_id}")
         return
-    supabase = repo.get_client()
 
     source_dir = video_path.parent
     current_path = video_path
@@ -529,7 +521,7 @@ def _process_source_video_background(
         proxy_update = _generate_preview_proxy(video_id, current_path)
 
         # Update DB with metadata and set status=ready
-        supabase.table("editai_source_videos").update({
+        repo.update_source_video(video_id, {
             "file_path": str(current_path),
             "thumbnail_path": str(thumbnail_path) if thumbnail_path.exists() else None,
             "duration": video_info.get("duration"),
@@ -539,16 +531,14 @@ def _process_source_video_background(
             "file_size_bytes": video_info.get("file_size_bytes"),
             "status": "ready",
             **proxy_update,
-        }).eq("id", video_id).execute()
+        })
 
         logger.info(f"[BG] Source video {video_id} ready")
 
     except Exception as e:
         logger.error(f"[BG] Failed to process source video {video_id}: {e}")
         try:
-            supabase.table("editai_source_videos").update({
-                "status": "error",
-            }).eq("id", video_id).execute()
+            repo.update_source_video(video_id, {"status": "error"})
         except Exception:
             pass
 
@@ -724,11 +714,6 @@ async def add_local_source_video(
     avoiding slow HTTP uploads and disk duplication.
     """
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     local_path = Path(body.file_path)
 
@@ -751,7 +736,7 @@ async def add_local_source_video(
 
     now_iso = datetime.now(timezone.utc).isoformat()
     try:
-        supabase.table("editai_source_videos").insert({
+        repo.create_source_video({
             "id": video_id,
             "profile_id": profile.profile_id,
             "name": name,
@@ -767,7 +752,7 @@ async def add_local_source_video(
             "status": "processing",
             "preview_proxy_status": "pending",
             "preview_proxy_error": None,
-        }).execute()
+        })
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to save video record")
 
@@ -808,7 +793,6 @@ def _process_local_video_background(
     if not repo:
         logger.error(f"[BG-Local] No DB for source video {video_id}")
         return
-    supabase = repo.get_client()
 
     try:
         # Get video metadata
@@ -823,7 +807,7 @@ def _process_local_video_background(
 
         proxy_update = _generate_preview_proxy(video_id, video_path)
 
-        supabase.table("editai_source_videos").update({
+        repo.update_source_video(video_id, {
             "file_path": str(video_path),
             "thumbnail_path": str(thumbnail_path) if thumbnail_path.exists() else None,
             "duration": video_info.get("duration"),
@@ -833,16 +817,14 @@ def _process_local_video_background(
             "file_size_bytes": video_info.get("file_size_bytes"),
             "status": "ready",
             **proxy_update,
-        }).eq("id", video_id).execute()
+        })
 
         logger.info(f"[BG-Local] Source video {video_id} ready")
 
     except Exception as e:
         logger.error(f"[BG-Local] Failed to process source video {video_id}: {e}")
         try:
-            supabase.table("editai_source_videos").update({
-                "status": "error",
-            }).eq("id", video_id).execute()
+            repo.update_source_video(video_id, {"status": "error"})
         except Exception:
             pass
 
@@ -864,11 +846,6 @@ async def upload_source_video(
     Poll GET /source-videos/{id} until status='ready'.
     """
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     logger.info(f"[Profile {profile.profile_id}] Uploading source video: {name}")
 
@@ -902,7 +879,7 @@ async def upload_source_video(
     # Insert DB record immediately with status=processing
     now_iso = datetime.now(timezone.utc).isoformat()
     try:
-        supabase.table("editai_source_videos").insert({
+        repo.create_source_video({
             "id": video_id,
             "profile_id": profile.profile_id,
             "name": name,
@@ -918,7 +895,7 @@ async def upload_source_video(
             "status": "processing",
             "preview_proxy_status": "pending",
             "preview_proxy_error": None,
-        }).execute()
+        })
     except Exception as e:
         video_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Failed to save video")
@@ -1913,24 +1890,18 @@ async def extract_segment(
     """Extract segment to a separate video file."""
     logger.info(f"[Profile {profile.profile_id}] Extracting segment: {segment_id}")
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
-    # Get segment and source video info (scoped to profile)
-    result = supabase.table("editai_segments")\
-        .select("*, editai_source_videos(file_path)")\
-        .eq("id", segment_id)\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
-
-    if not result.data:
+    # Ownership check (T-82-01-01 IDOR pattern)
+    seg = repo.get_segment(segment_id)
+    if not seg or seg.get("profile_id") != profile.profile_id:
         raise HTTPException(status_code=404, detail="Segment not found")
 
-    seg = result.data[0]
-    source_path = Path(normalize_path(seg["editai_source_videos"]["file_path"]))
+    # Fetch source video — segment ownership implies source-video ownership per schema
+    source_video = repo.get_source_video(seg["source_video_id"])
+    if not source_video:
+        raise HTTPException(status_code=404, detail="Source video not found")
+
+    source_path = Path(normalize_path(source_video["file_path"]))
 
     if not source_path.exists():
         raise HTTPException(status_code=404, detail="Source video file not found")
@@ -1952,13 +1923,9 @@ async def extract_segment(
                 seg["end_time"]
             )
             if success:
-                supabase.table("editai_segments")\
-                    .update({
-                        "extracted_video_path": str(output_path)
-                    })\
-                    .eq("id", segment_id)\
-                    .eq("profile_id", profile.profile_id)\
-                    .execute()
+                repo.update_segment(segment_id, {
+                    "extracted_video_path": str(output_path)
+                })
                 logger.info(f"[Profile {profile.profile_id}] Segment {segment_id} extraction completed successfully")
             else:
                 logger.error(f"[Profile {profile.profile_id}] Segment {segment_id} extraction failed (FFmpeg returned non-zero)")
@@ -2315,20 +2282,15 @@ async def match_segments_to_srt(
 ):
     """Match segments to SRT content based on keywords, scoped to current profile."""
     repo = get_repository()
-    if not repo:
-        raise HTTPException(status_code=503, detail="Database not available")
-    supabase = repo.get_client()
-    if not supabase:
-        raise HTTPException(status_code=503, detail="Database not available")
 
     # Parse SRT content
     srt_entries = _parse_srt(request.srt_content)
 
     # Get all segments with keywords (scoped to profile)
-    result = supabase.table("editai_segments")\
-        .select("id, keywords")\
-        .eq("profile_id", profile.profile_id)\
-        .execute()
+    result = repo.list_segments(
+        profile.profile_id,
+        QueryFilters(select="id, keywords"),
+    )
 
     matches = []
 
