@@ -33,6 +33,9 @@ const NEXT_STANDALONE_DIR = isDev
   ? path.join(PROJECT_ROOT, 'frontend', '.next', 'standalone')
   : path.join(process.resourcesPath, 'frontend', 'standalone');
 
+// Flat standalone layout — outputFileTracingRoot in frontend/next.config.ts
+// pins the workspace root so server.js stays at .next/standalone/server.js
+// (no nested frontend/ subdir), matching where postbuild.js copies assets.
 const NEXT_SERVER = path.join(NEXT_STANDALONE_DIR, 'server.js');
 
 // Backend CWD — must be project root so `app.main:app` resolves
@@ -196,36 +199,25 @@ function httpPost(url) {
   });
 }
 
-// WIZD-01 / LICS-02 / LICS-04: Determine startup URL based on first-run state and license
+// Determine startup URL based on the simple desktop test-login state.
+// (Replaces the old first-run/license gate — see /desktop/auth on the backend.)
 async function checkStartupState() {
-  const SETUP_URL = 'http://localhost:3000/setup';
+  const LOGIN_URL = 'http://localhost:3000/login';
   const APP_URL   = 'http://localhost:3000';
 
   try {
-    // Step 1: Check first-run state (WIZD-01)
-    const settingsData = await httpGetJson(
-      'http://127.0.0.1:8000/api/v1/desktop/settings'
+    const status = await httpGetJson(
+      'http://127.0.0.1:8000/api/v1/desktop/auth/status'
     );
-    if (!settingsData || settingsData.first_run_complete !== true) {
-      console.log('[launcher] First run detected — routing to setup wizard');
-      return SETUP_URL;
-    }
-
-    // Step 2: Validate license on subsequent launches (LICS-02 / LICS-04)
-    const licenseStatus = await httpPost(
-      'http://127.0.0.1:8000/api/v1/desktop/license/validate'
-    );
-    if (licenseStatus === 200) {
+    if (status && status.logged_in === true) {
       return APP_URL;
     }
-    // 403 = expired/invalid, 404 = not activated (LICS-04)
-    console.log(`[launcher] License check returned ${licenseStatus} — routing to setup`);
-    return SETUP_URL;
-
+    console.log('[launcher] Not logged in — routing to login');
+    return LOGIN_URL;
   } catch (err) {
-    // Network error — graceful degradation (backend has its own 7-day grace period)
-    console.warn('[launcher] Startup state check failed (non-fatal):', err.message);
-    return APP_URL;
+    // Backend unreachable — fail closed to the login screen.
+    console.warn('[launcher] Auth status check failed (non-fatal):', err.message);
+    return LOGIN_URL;
   }
 }
 

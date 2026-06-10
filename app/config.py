@@ -130,6 +130,11 @@ class Settings(BaseSettings):
     # Desktop mode
     desktop_mode: bool = False  # Set to True when running as Electron desktop app
 
+    # Desktop test login (temporary UI gate until website-based user accounts exist).
+    # Overridable via DESKTOP_TEST_USER / DESKTOP_TEST_PASSWORD in .env.
+    desktop_test_user: str = "1234"
+    desktop_test_password: str = "1234"
+
     # File storage backend: "local" (default) or "supabase"
     file_storage_backend: str = "local"
 

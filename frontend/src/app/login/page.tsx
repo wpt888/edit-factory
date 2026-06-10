@@ -4,6 +4,7 @@ import { Suspense, useState, useRef, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { apiPost, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,6 +18,9 @@ import {
 } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, Film, AlertCircle, CheckCircle2 } from "lucide-react";
+
+// Desktop build uses a simple local username/password gate instead of Supabase.
+const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
 
 export default function LoginPage() {
   return (
@@ -42,6 +46,34 @@ function LoginContent() {
     e.preventDefault();
     setError(null);
     setLoading(true);
+
+    // Desktop test gate: validate against the local backend, not Supabase.
+    if (DESKTOP_MODE) {
+      try {
+        await apiPost(
+          "/desktop/auth/login",
+          { username: email, password },
+          { skipAuth: true }
+        );
+        if (!isMountedRef.current) return;
+        const next = searchParams.get("next");
+        const destination =
+          next && next.startsWith("/") && !next.startsWith("//")
+            ? next
+            : "/librarie";
+        router.push(destination);
+      } catch (err) {
+        if (!isMountedRef.current) return;
+        if (err instanceof ApiError && err.status === 401) {
+          setError("User sau parolă greșite");
+        } else {
+          setError("Eroare de conectare. Încearcă din nou.");
+        }
+      } finally {
+        if (isMountedRef.current) setLoading(false);
+      }
+      return;
+    }
 
     try {
       const supabase = createClient();
@@ -182,28 +214,30 @@ function LoginContent() {
                 </Alert>
               )}
               <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
+                <Label htmlFor="email">{DESKTOP_MODE ? "User" : "Email"}</Label>
                 <Input
                   id="email"
-                  type="email"
-                  placeholder="name@example.com"
+                  type={DESKTOP_MODE ? "text" : "email"}
+                  placeholder={DESKTOP_MODE ? "1234" : "name@example.com"}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
                   disabled={loading}
-                  autoComplete="email"
+                  autoComplete={DESKTOP_MODE ? "username" : "email"}
                 />
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="password">Password</Label>
-                  <button
-                    type="button"
-                    onClick={() => { setForgotMode(true); setError(null); }}
-                    className="text-xs text-primary hover:underline"
-                  >
-                    Forgot password?
-                  </button>
+                  {!DESKTOP_MODE && (
+                    <button
+                      type="button"
+                      onClick={() => { setForgotMode(true); setError(null); }}
+                      className="text-xs text-primary hover:underline"
+                    >
+                      Forgot password?
+                    </button>
+                  )}
                 </div>
                 <Input
                   id="password"
@@ -228,12 +262,14 @@ function LoginContent() {
                   "Sign In"
                 )}
               </Button>
-              <p className="text-sm text-muted-foreground text-center">
-                Don&apos;t have an account?{" "}
-                <Link href="/signup" className="text-primary hover:underline">
-                  Sign up
-                </Link>
-              </p>
+              {!DESKTOP_MODE && (
+                <p className="text-sm text-muted-foreground text-center">
+                  Don&apos;t have an account?{" "}
+                  <Link href="/signup" className="text-primary hover:underline">
+                    Sign up
+                  </Link>
+                </p>
+              )}
             </CardFooter>
           </form>
         )}

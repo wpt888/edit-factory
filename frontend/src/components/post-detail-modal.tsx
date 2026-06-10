@@ -18,8 +18,8 @@ import { Button } from "@/components/ui/button";
 import { Trash2, Film, ExternalLink, Loader2 } from "lucide-react";
 import { apiDelete } from "@/lib/api";
 import { toast } from "sonner";
-import type { PostizPost, ScheduleItem } from "./PostizMonthlyCalendar";
-import { shortPlatformLabel } from "./PostizMonthlyCalendar";
+import type { PostizPost, ScheduleItem } from "./schedule/postiz-monthly-calendar";
+import { shortPlatformLabel } from "./schedule/postiz-monthly-calendar";
 import { friendlyPlatformName } from "@/lib/platforms";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";

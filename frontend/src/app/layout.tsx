@@ -5,7 +5,7 @@ import { NavBarWrapper } from "@/components/navbar-wrapper";
 import { Toaster } from "sonner";
 import { ProfileProvider } from "@/contexts/profile-context";
 import { AuthProvider } from "@/components/auth-provider";
-import { LicenseGuard } from "@/components/license-guard";
+import { DesktopAuthGuard } from "@/components/desktop-auth-guard";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -66,9 +66,9 @@ export default function RootLayout({
         <ProfileProvider>
           <AuthProvider>
             <NavBarWrapper />
-            <LicenseGuard>
+            <DesktopAuthGuard>
               {children}
-            </LicenseGuard>
+            </DesktopAuthGuard>
           </AuthProvider>
         </ProfileProvider>
         <Toaster
