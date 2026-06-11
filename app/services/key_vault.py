@@ -51,9 +51,13 @@ class KeyVault:
         """Get Fernet instance for encryption/decryption.
 
         Priority:
-        1. ELEVENLABS_ENCRYPTION_KEY setting
-        2. Derive from SUPABASE_KEY setting
-        3. Machine-specific fallback (hostname + salt file)
+        1. ELEVENLABS_ENCRYPTION_KEY setting (explicit user intent)
+        2. Desktop mode: machine-local key (hostname + random salt file) —
+           an offline-first app must not couple its vault to a cloud
+           credential (F7); legacy SUPABASE_KEY-encrypted vaults are migrated
+           transparently in get_key()
+        3. Web: derive from SUPABASE_KEY setting
+        4. Machine-specific fallback
         """
         try:
             settings = get_settings()
@@ -72,14 +76,36 @@ class KeyVault:
                     derived = hashlib.sha256(enc_key.encode("utf-8")).digest()
                     return Fernet(base64.urlsafe_b64encode(derived))
 
-        # 2. Derive from SUPABASE_KEY
+        # 2. Desktop: machine-local key, never the cloud credential
+        if settings is not None and getattr(settings, "desktop_mode", False):
+            return self._get_machine_fernet()
+
+        # 3. Derive from SUPABASE_KEY (web deployments)
         supa_key = getattr(settings, "supabase_key", "") if settings else ""
         if supa_key:
             derived = hashlib.sha256(supa_key.encode()).digest()
             return Fernet(base64.urlsafe_b64encode(derived))
 
-        # 3. Machine-specific fallback (desktop mode without Supabase)
+        # 4. Machine-specific fallback (no Supabase configured)
         return self._get_machine_fernet()
+
+    def _legacy_fernets(self) -> List[Fernet]:
+        """Fernets older vault files may have been encrypted with.
+
+        Used only as decrypt fallbacks so switching the primary derivation
+        (e.g. desktop machine-local key) migrates entries instead of losing
+        them.
+        """
+        fernets: List[Fernet] = []
+        try:
+            settings = get_settings()
+        except Exception:
+            settings = None
+        supa_key = getattr(settings, "supabase_key", "") if settings else ""
+        if supa_key:
+            derived = hashlib.sha256(supa_key.encode()).digest()
+            fernets.append(Fernet(base64.urlsafe_b64encode(derived)))
+        return fernets
 
     def _get_machine_fernet(self) -> Fernet:
         """Derive Fernet key from machine hostname + a persisted random salt."""
@@ -157,8 +183,19 @@ class KeyVault:
             try:
                 f = self._get_fernet()
                 return f.decrypt(encrypted.encode("utf-8")).decode("utf-8")
-            except Exception as e:
-                logger.warning(f"Failed to decrypt key '{name}': {e}")
+            except Exception:
+                # Migration path: the entry may have been encrypted under a
+                # legacy derivation (e.g. SUPABASE_KEY before the desktop
+                # machine-local key). Try those and re-encrypt on success.
+                for legacy in self._legacy_fernets():
+                    try:
+                        plaintext = legacy.decrypt(encrypted.encode("utf-8")).decode("utf-8")
+                    except Exception:
+                        continue
+                    logger.info(f"Re-encrypting vault key '{name}' under the current vault key")
+                    self.store_key(name, plaintext)
+                    return plaintext
+                logger.warning(f"Failed to decrypt key '{name}' with current or legacy vault keys")
                 return None
 
         # Backward compat: check config.json for plaintext keys

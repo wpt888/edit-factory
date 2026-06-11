@@ -373,13 +373,26 @@ class AssemblyService:
 
         ALLOWED_VOICE_KEYS = {"stability", "similarity_boost", "style", "use_speaker_boost", "speed"}
         safe_settings = {k: v for k, v in (voice_settings or {}).items() if k in ALLOWED_VOICE_KEYS}
-        tts_result, timestamps = await tts_service.generate_audio_with_timestamps(
-            text=script_text,
-            voice_id=voice_id,
-            output_path=raw_audio_path,
-            model_id=elevenlabs_model,
-            **safe_settings
-        )
+        try:
+            tts_result, timestamps = await tts_service.generate_audio_with_timestamps(
+                text=script_text,
+                voice_id=voice_id,
+                output_path=raw_audio_path,
+                model_id=elevenlabs_model,
+                **safe_settings
+            )
+        except Exception as el_err:
+            # F7 offline path: ElevenLabs unavailable (no key, quota, network)
+            # must not kill the pipeline — Edge TTS is free and local-friendly.
+            # Character timings are estimated uniformly over the audio duration;
+            # subtitle timing fidelity is approximate but the deterministic
+            # matching/render flow stays fully functional without any API key.
+            logger.warning(
+                f"ElevenLabs TTS failed ({str(el_err)[:200]}) — falling back to Edge TTS (free)"
+            )
+            timestamps = await self._generate_edge_tts_fallback(
+                script_text, profile_id, raw_audio_path
+            )
 
         # Apply silence removal (same params as _render_final_clip_task)
         logger.info("Applying silence removal to TTS audio")
@@ -422,6 +435,47 @@ class AssemblyService:
         raw_audio_path.unlink(missing_ok=True)
 
         return (trimmed_audio_path, audio_duration, timestamps)
+
+    async def _generate_edge_tts_fallback(
+        self,
+        script_text: str,
+        profile_id: str,
+        raw_audio_path: Path,
+    ) -> dict:
+        """Generate TTS via Edge (free) and return ESTIMATED character timestamps.
+
+        Edge TTS has no character-level alignment API, so timings are spread
+        uniformly across the measured audio duration — good enough for the
+        subtitle/matching flow when no ElevenLabs key is available (F7
+        offline path).
+        """
+        from app.services.tts.edge import EdgeTTSService
+
+        # Respect the profile's configured Edge voice when present
+        edge_voice = "en-US-GuyNeural"
+        try:
+            repo = get_repository()
+            profile_row = repo.get_profile(profile_id) if repo else None
+            edge_cfg = ((profile_row or {}).get("tts_settings") or {}).get("edge") or {}
+            edge_voice = edge_cfg.get("voice") or edge_voice
+        except Exception:
+            pass
+
+        edge = EdgeTTSService(output_dir=raw_audio_path.parent, default_voice=edge_voice)
+        result = await edge.generate_audio(
+            text=script_text, voice_id=edge_voice, output_path=raw_audio_path
+        )
+        duration = result.duration_seconds or await self._get_audio_duration(raw_audio_path)
+        if not duration or duration <= 0:
+            raise RuntimeError("Edge TTS fallback produced no measurable audio")
+
+        chars = list(script_text)
+        n = max(1, len(chars))
+        return {
+            "characters": chars,
+            "character_start_times_seconds": [duration * i / n for i in range(n)],
+            "character_end_times_seconds": [duration * (i + 1) / n for i in range(n)],
+        }
 
     async def generate_srt_from_timestamps(
         self,
