@@ -812,3 +812,26 @@ CREATE TABLE IF NOT EXISTS image_prompt_templates (
 );
 
 CREATE INDEX IF NOT EXISTS idx_image_prompt_templates_profile_id ON image_prompt_templates(profile_id);
+
+-- =====================================================
+-- TABLE: editai_wiki_pages
+-- Source: migration 046 (internal Markdown knowledge base)
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS editai_wiki_pages (
+    id              TEXT PRIMARY KEY,
+    profile_id      TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    slug            TEXT NOT NULL,
+    category        TEXT,
+    content_md      TEXT DEFAULT '',
+    sort_order      INTEGER DEFAULT 0,
+
+    created_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+
+    FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wiki_pages_profile_slug ON editai_wiki_pages(profile_id, slug);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_profile_category ON editai_wiki_pages(profile_id, category, sort_order);

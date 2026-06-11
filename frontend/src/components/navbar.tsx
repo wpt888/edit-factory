@@ -49,6 +49,7 @@ import {
   ImageIcon,
   CalendarClock,
   Calendar,
+  BookOpen,
   LogOut,
 } from "lucide-react";
 
@@ -186,6 +187,21 @@ export function NavBar() {
                 </NavigationMenuItem>
               )}
 
+              {/* Wiki top-level tab (always — internal knowledge base) */}
+              <NavigationMenuItem>
+                <NavigationMenuLink asChild>
+                  <Link
+                    href="/wiki"
+                    className={`inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors hover:bg-accent ${
+                      pathname.startsWith("/wiki") ? "text-foreground bg-accent/50" : "text-muted-foreground"
+                    }`}
+                  >
+                    <BookOpen className="size-4" />
+                    Wiki
+                  </Link>
+                </NavigationMenuLink>
+              </NavigationMenuItem>
+
               {/* Settings gear dropdown */}
               <NavigationMenuItem>
                 <DropdownMenu>
@@ -270,6 +286,16 @@ export function NavBar() {
                       Calendar
                     </Link>
                   )}
+                  <Link
+                    href="/wiki"
+                    onClick={() => setMobileOpen(false)}
+                    className={`flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors hover:bg-accent ${
+                      pathname.startsWith("/wiki") ? "bg-accent text-accent-foreground font-medium" : "text-muted-foreground"
+                    }`}
+                  >
+                    <BookOpen className="size-4 shrink-0" />
+                    Wiki
+                  </Link>
                   {user && (
                     <button
                       onClick={() => { signOut(); setMobileOpen(false); }}

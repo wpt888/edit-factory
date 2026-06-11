@@ -76,6 +76,7 @@ from app.api.tts_library_routes import router as tts_library_router
 from app.api.assembly_routes import router as assembly_router
 from app.api.batch_routes import router as batch_router
 from app.api.desktop_ml_routes import router as desktop_ml_router
+from app.api.wiki_routes import router as wiki_router
 
 from app.core.logging_config import setup_logging
 setup_logging()
@@ -410,6 +411,7 @@ app.include_router(tts_library_router, prefix="/api/v1", tags=["TTS Library"])
 app.include_router(assembly_router, prefix="/api/v1", tags=["Script-to-Video Assembly"])
 app.include_router(batch_router, prefix="/api/v1", tags=["Batch Pipeline"])
 app.include_router(desktop_ml_router, prefix="/api/v1", tags=["Desktop ML"])
+app.include_router(wiki_router, prefix="/api/v1", tags=["Wiki"])
 
 # Web-SaaS-only routes — not mounted in desktop mode (MVP desktop trim, F1).
 # Code is kept intact; the desktop app simply doesn't expose publishing/scheduling,
