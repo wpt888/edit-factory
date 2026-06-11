@@ -5365,6 +5365,63 @@ async def restore_previews(
     return {"previews": result_previews, "available_segments": all_available_segments}
 
 
+class SaveMatchesRequest(BaseModel):
+    """Persist Step-3 timeline edits (F3): the edited matches for one variant."""
+    matches: List[dict]
+    visual_version: Optional[str] = None
+
+
+@router.put("/{pipeline_id}/matches/{variant_index}")
+async def save_matches(
+    pipeline_id: str,
+    variant_index: int,
+    body: SaveMatchesRequest,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """
+    Persist edited timeline matches for a variant (F3 — pipeline persistence).
+
+    Before this endpoint, Step-3 timeline edits lived only in frontend state and
+    were lost on restart/navigation; the persisted previews kept the original
+    auto-match. Writes into previews[key].preview_data.matches so the existing
+    /restore-previews flow returns the edited timeline on resume.
+    """
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    if pipeline.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=403, detail="Access denied to this pipeline")
+
+    preview_key = _build_preview_key(variant_index, body.visual_version)
+    state_lock = _get_pipeline_state_lock(pipeline_id, profile.profile_id)
+    with state_lock:
+        previews = pipeline.setdefault("previews", {})
+        # DB-loaded plain-variant keys are ints, freshly computed ones are strings
+        entry = previews.get(preview_key)
+        if entry is None and body.visual_version is None:
+            entry = previews.get(variant_index)
+        if not isinstance(entry, dict) or "preview_data" not in entry:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No preview exists for variant {preview_key} — generate a preview first",
+            )
+        pd = entry["preview_data"]
+        pd["matches"] = body.matches
+        matched = sum(1 for m in body.matches if m.get("segment_id"))
+        pd["matched_count"] = matched
+        pd["unmatched_count"] = len(body.matches) - matched
+        entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+    # Persist outside the lock (DB I/O should not hold the state lock)
+    _db_save_pipeline(pipeline_id, pipeline)
+    return {
+        "status": "saved",
+        "preview_key": preview_key,
+        "match_count": len(body.matches),
+    }
+
+
 @router.get("/audio/{pipeline_id}/{variant_index}")
 async def get_pipeline_audio(
     pipeline_id: str,

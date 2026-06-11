@@ -1313,6 +1313,8 @@ function PipelinePage() {
 
   // Stable per-index callback refs for TimelineEditor props
   const matchesChangeHandlers = useRef<Record<string, (matches: MatchPreview[]) => void>>({});
+  // F3: debounce timers for persisting timeline edits per preview key
+  const matchesSaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const getMatchesChangeHandler = useCallback((previewKey: string) => {
     if (!matchesChangeHandlers.current[previewKey]) {
       matchesChangeHandlers.current[previewKey] = (updatedMatches: MatchPreview[]) => {
@@ -1328,6 +1330,28 @@ function PipelinePage() {
             }
           };
         });
+
+        // F3: persist timeline edits (debounced) so a backend/app restart
+        // restores the edited timeline, not the original auto-match.
+        const pid = pipelineIdRef.current;
+        if (!pid) return;
+        if (matchesSaveTimers.current[previewKey]) {
+          clearTimeout(matchesSaveTimers.current[previewKey]);
+        }
+        matchesSaveTimers.current[previewKey] = setTimeout(() => {
+          delete matchesSaveTimers.current[previewKey];
+          const baseVariant = parseInt(previewKey, 10);
+          if (!Number.isFinite(baseVariant)) return;
+          const underscoreIdx = previewKey.indexOf("_");
+          const visualVersion = underscoreIdx > 0 ? previewKey.slice(underscoreIdx + 1) : undefined;
+          apiPut(`/pipeline/${pid}/matches/${baseVariant}`, {
+            matches: updatedMatches,
+            visual_version: visualVersion,
+          }).catch(() => {
+            // Best-effort persistence — edits remain in local state and are
+            // still sent as match_overrides at render time.
+          });
+        }, 800);
       };
     }
     return matchesChangeHandlers.current[previewKey];

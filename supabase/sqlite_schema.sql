@@ -384,7 +384,7 @@ CREATE INDEX IF NOT EXISTS idx_product_groups_profile_id ON editai_product_group
 
 -- =====================================================
 -- TABLE: editai_pipelines
--- Source: migration 016 + 021 + 033 + 040
+-- Source: migration 016 + 021 + 033 + 035 + 040 + 042
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS editai_pipelines (
@@ -404,6 +404,16 @@ CREATE TABLE IF NOT EXISTS editai_pipelines (
     preview_renders TEXT NOT NULL DEFAULT '{}',
     segment_usage   TEXT NOT NULL DEFAULT '{}',
     captions        TEXT NOT NULL DEFAULT '{}',
+
+    -- Selected captions per variant (from 035)
+    selected_captions TEXT DEFAULT '{}',
+
+    -- Desired script duration in seconds (no numbered migration; used by
+    -- _db_save_pipeline and /pipeline/list since v12)
+    target_script_duration REAL,
+
+    -- Per-Meta-version subtitle overrides (from 042)
+    subtitle_settings_by_key TEXT,
 
     -- Source video IDs (from 021)
     source_video_ids TEXT DEFAULT '[]',

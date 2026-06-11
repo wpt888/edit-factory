@@ -36,6 +36,8 @@ _JSON_COLUMNS = frozenset({
     # `sqlite3.ProgrammingError: type 'dict' is not supported` on the bind.
     "tts_previews", "preview_renders", "segment_usage", "captions",
     "context_products",
+    # F3 — pipeline persistence columns (migrations 035/042 equivalents)
+    "selected_captions", "subtitle_settings_by_key",
 })
 
 
@@ -90,6 +92,7 @@ class SQLiteRepository(DataRepository):
         # from the original sqlite_schema.sql snapshot. Sqlite's ALTER TABLE
         # ADD COLUMN is idempotent only when guarded — we check pragma first.
         self._ensure_phase80_columns()
+        self._ensure_pipeline_columns()
 
     def _ensure_phase80_columns(self) -> None:
         """Add `editai_segments.usage_count` if missing (mirrors migration 034).
@@ -113,6 +116,40 @@ class SQLiteRepository(DataRepository):
                     self._col_cache.pop("editai_segments", None)
         except Exception as e:
             logger.warning(f"Could not ensure usage_count column on editai_segments: {e}")
+
+    def _ensure_pipeline_columns(self) -> None:
+        """Add editai_pipelines columns missing from older DBs (F3 fix).
+
+        Mirrors Supabase migrations 035 (selected_captions) and 042
+        (subtitle_settings_by_key) plus target_script_duration. Without these,
+        every _db_save_pipeline upsert failed on SQLite — its
+        column-degradation retry can only strip one error per attempt, so
+        pipeline state silently never persisted in desktop mode.
+        """
+        wanted = {
+            "selected_captions": "TEXT DEFAULT '{}'",
+            "target_script_duration": "REAL",
+            "subtitle_settings_by_key": "TEXT",
+        }
+        try:
+            cur = self._conn.execute('PRAGMA table_info("editai_pipelines")')
+            cols = {row[1] for row in cur.fetchall()}
+            missing = {name: ddl for name, ddl in wanted.items() if name not in cols}
+            if not missing:
+                return
+            with self._write_lock:
+                for name, ddl in missing.items():
+                    self._conn.execute(
+                        f'ALTER TABLE "editai_pipelines" ADD COLUMN "{name}" {ddl}'
+                    )
+                self._conn.commit()
+            logger.info(
+                "editai_pipelines migrated in place: added %s", ", ".join(missing)
+            )
+            if hasattr(self, "_col_cache"):
+                self._col_cache.pop("editai_pipelines", None)
+        except Exception as e:
+            logger.warning(f"Could not ensure pipeline columns on editai_pipelines: {e}")
 
     # ── Table name helper ──────────────────────────────
 
