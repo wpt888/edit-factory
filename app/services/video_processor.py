@@ -42,6 +42,19 @@ except ImportError:
     AnalyzedSegment = None
 
 
+def gemini_vision_allowed() -> bool:
+    """Whether Gemini Vision frame analysis may run: requires both a usable API
+    key (GEMINI_AVAILABLE) and the policy switch (off by default in desktop mode
+    — settings.gemini_vision_active). Deterministic scoring is the fallback."""
+    if not GEMINI_AVAILABLE:
+        return False
+    try:
+        from app.config import get_settings
+        return get_settings().gemini_vision_active
+    except Exception:
+        return True
+
+
 def refresh_gemini_availability() -> bool:
     """Re-check Gemini API key availability (e.g. after user saves new keys).
 
@@ -1508,7 +1521,7 @@ class VideoProcessorService:
             video_path = Path(video_path)
 
             # Video analysis
-            if use_gemini and GEMINI_AVAILABLE:
+            if use_gemini and gemini_vision_allowed():
                 report_progress("Analyzing video with AI (Gemini)")
                 analysis = self.analyze_video_with_gemini(
                     video_path,
@@ -1822,7 +1835,7 @@ class VideoProcessorService:
                 video_info = analyzer.get_video_info()
 
                 # Use Gemini AI for intelligent selection if we have context
-                if context_text and GEMINI_AVAILABLE:
+                if context_text and gemini_vision_allowed():
                     report_progress("AI Analysis with Gemini")
                     logger.info(f"Using Gemini AI for context-based frame selection: {context_text[:100]}...")
                     try:

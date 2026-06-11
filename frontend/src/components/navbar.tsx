@@ -52,7 +52,21 @@ import {
   LogOut,
 } from "lucide-react";
 
-const navGroups = [
+const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
+
+// Web-SaaS-only destinations hidden in the desktop build (MVP desktop trim, F1).
+// Their backend routers are not mounted in desktop mode, so the pages would
+// only show errors. Code stays — the web build still renders everything.
+const WEB_ONLY_HREFS = new Set([
+  "/create-image",
+  "/schedule",
+  "/products",
+  "/product-video",
+  "/batch-generate",
+  "/calendar",
+]);
+
+const allNavGroups = [
   {
     label: "Create",
     items: [
@@ -78,6 +92,17 @@ const navGroups = [
     ],
   },
 ];
+
+const navGroups = DESKTOP_MODE
+  ? allNavGroups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => !WEB_ONLY_HREFS.has(item.href)),
+      }))
+      .filter((group) => group.items.length > 0)
+  : allNavGroups;
+
+const SHOW_CALENDAR = !DESKTOP_MODE;
 
 const settingsGroup = {
   label: "Settings",
@@ -143,20 +168,22 @@ export function NavBar() {
                 </NavigationMenuItem>
               ))}
 
-              {/* Calendar top-level tab */}
-              <NavigationMenuItem>
-                <NavigationMenuLink asChild>
-                  <Link
-                    href="/calendar"
-                    className={`inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors hover:bg-accent ${
-                      pathname === "/calendar" ? "text-foreground bg-accent/50" : "text-muted-foreground"
-                    }`}
-                  >
-                    <Calendar className="size-4" />
-                    Calendar
-                  </Link>
-                </NavigationMenuLink>
-              </NavigationMenuItem>
+              {/* Calendar top-level tab (web only — Postiz publishing) */}
+              {SHOW_CALENDAR && (
+                <NavigationMenuItem>
+                  <NavigationMenuLink asChild>
+                    <Link
+                      href="/calendar"
+                      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors hover:bg-accent ${
+                        pathname === "/calendar" ? "text-foreground bg-accent/50" : "text-muted-foreground"
+                      }`}
+                    >
+                      <Calendar className="size-4" />
+                      Calendar
+                    </Link>
+                  </NavigationMenuLink>
+                </NavigationMenuItem>
+              )}
 
               {/* Settings gear dropdown */}
               <NavigationMenuItem>
@@ -230,16 +257,18 @@ export function NavBar() {
                       onNavigate={() => setMobileOpen(false)}
                     />
                   ))}
-                  <Link
-                    href="/calendar"
-                    onClick={() => setMobileOpen(false)}
-                    className={`flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors hover:bg-accent ${
-                      pathname === "/calendar" ? "bg-accent text-accent-foreground font-medium" : "text-muted-foreground"
-                    }`}
-                  >
-                    <Calendar className="size-4 shrink-0" />
-                    Calendar
-                  </Link>
+                  {SHOW_CALENDAR && (
+                    <Link
+                      href="/calendar"
+                      onClick={() => setMobileOpen(false)}
+                      className={`flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors hover:bg-accent ${
+                        pathname === "/calendar" ? "bg-accent text-accent-foreground font-medium" : "text-muted-foreground"
+                      }`}
+                    >
+                      <Calendar className="size-4 shrink-0" />
+                      Calendar
+                    </Link>
+                  )}
                   {user && (
                     <button
                       onClick={() => { signOut(); setMobileOpen(false); }}

@@ -4,6 +4,7 @@ Edit Factory - Configuration
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
@@ -134,6 +135,19 @@ class Settings(BaseSettings):
     # Overridable via DESKTOP_TEST_USER / DESKTOP_TEST_PASSWORD in .env.
     desktop_test_user: str = "1234"
     desktop_test_password: str = "1234"
+
+    # Gemini Vision frame analysis at upload. None = auto: enabled on web,
+    # disabled in desktop mode (product vision: AI only for scripts + voiceover;
+    # deterministic motion/variance/blur scoring covers segment selection).
+    # Set GEMINI_VISION_ENABLED=true/false to override either way.
+    gemini_vision_enabled: Optional[bool] = None
+
+    @property
+    def gemini_vision_active(self) -> bool:
+        """Effective Gemini Vision policy (key availability is checked separately)."""
+        if self.gemini_vision_enabled is not None:
+            return self.gemini_vision_enabled
+        return not self.desktop_mode
 
     # File storage backend: "local" (default) or "supabase"
     file_storage_backend: str = "local"

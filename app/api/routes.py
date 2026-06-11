@@ -600,12 +600,16 @@ async def process_job(job_id: str):
             return
 
         if result["status"] == "success":
-            # Add analysis fallback indicator when Gemini is not available
-            from app.services.video_processor import GEMINI_AVAILABLE
-            if not GEMINI_AVAILABLE:
+            # Add analysis fallback indicator when Gemini Vision is not used
+            # (missing API key, or disabled by policy — e.g. desktop mode)
+            from app.services.video_processor import GEMINI_AVAILABLE, gemini_vision_allowed
+            if not gemini_vision_allowed():
                 result["analysis_fallback"] = "local_scoring"
-                result["analysis_fallback_reason"] = "No Gemini API key configured"
-                logger.info("Using local motion scoring — Gemini API key not configured")
+                result["analysis_fallback_reason"] = (
+                    "No Gemini API key configured" if not GEMINI_AVAILABLE
+                    else "Gemini Vision disabled (desktop mode)"
+                )
+                logger.info("Using local motion scoring — %s", result["analysis_fallback_reason"])
             else:
                 result["analysis_fallback"] = None
 

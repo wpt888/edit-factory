@@ -64,21 +64,15 @@ from app.core.rate_limit import limiter
 from app.api.routes import router as api_router
 from app.api.library_routes import router as library_router
 from app.api.segments_routes import router as segments_router
-from app.api.postiz_routes import router as postiz_router
-from app.api.buffer_routes import router as buffer_router
 from app.api.profile_routes import router as profile_router
 from app.api import tts_routes
 from app.api.pipeline_routes import router as pipeline_router
 from app.api.elevenlabs_accounts_routes import router as elevenlabs_accounts_router
 from app.api.api_key_vault_routes import router as api_key_vault_router
-from app.api.feed_routes import router as feed_router
 from app.api.product_routes import router as product_router
 from app.api.product_generate_routes import router as product_generate_router
-from app.api.catalog_routes import router as catalog_router
 from app.api.association_routes import router as association_router
 from app.api.tts_library_routes import router as tts_library_router
-from app.api.image_generate_routes import router as image_generate_router
-from app.api.schedule_routes import router as schedule_router
 from app.api.assembly_routes import router as assembly_router
 from app.api.desktop_ml_routes import router as desktop_ml_router
 
@@ -403,23 +397,36 @@ elif settings.desktop_mode:
 app.include_router(api_router, prefix="/api/v1", tags=["Video Processing"])
 app.include_router(library_router, prefix="/api/v1", tags=["Library & Workflow"])
 app.include_router(segments_router, prefix="/api/v1", tags=["Segments & Manual Selection"])
-app.include_router(postiz_router, prefix="/api/v1", tags=["Postiz Publishing"])
-app.include_router(buffer_router, prefix="/api/v1", tags=["Buffer Publishing"])
-app.include_router(schedule_router, prefix="/api/v1", tags=["Smart Schedule"])
 app.include_router(profile_router, prefix="/api/v1")
 app.include_router(tts_routes.router, prefix="/api/v1")
 app.include_router(pipeline_router, prefix="/api/v1", tags=["Multi-Variant Pipeline"])
 app.include_router(elevenlabs_accounts_router, prefix="/api/v1", tags=["ElevenLabs Accounts"])
 app.include_router(api_key_vault_router, prefix="/api/v1", tags=["API Key Vault"])
-app.include_router(feed_router, prefix="/api/v1", tags=["feeds"])
 app.include_router(product_router, prefix="/api/v1", tags=["Products"])
 app.include_router(product_generate_router, prefix="/api/v1", tags=["Product Video Generation"])
-app.include_router(catalog_router, prefix="/api/v1", tags=["Catalog"])
 app.include_router(association_router, prefix="/api/v1", tags=["Associations"])
 app.include_router(tts_library_router, prefix="/api/v1", tags=["TTS Library"])
-app.include_router(image_generate_router, prefix="/api/v1", tags=["AI Image Generation"])
 app.include_router(assembly_router, prefix="/api/v1", tags=["Script-to-Video Assembly"])
 app.include_router(desktop_ml_router, prefix="/api/v1", tags=["Desktop ML"])
+
+# Web-SaaS-only routes — not mounted in desktop mode (MVP desktop trim, F1).
+# Code is kept intact; the desktop app simply doesn't expose publishing/scheduling,
+# feed sync, catalog, or fal.ai image generation. Imports stay inside the guard so
+# the desktop app doesn't pay their import cost (or import errors) at startup.
+if not settings.desktop_mode:
+    from app.api.postiz_routes import router as postiz_router
+    from app.api.buffer_routes import router as buffer_router
+    from app.api.schedule_routes import router as schedule_router
+    from app.api.feed_routes import router as feed_router
+    from app.api.catalog_routes import router as catalog_router
+    from app.api.image_generate_routes import router as image_generate_router
+
+    app.include_router(postiz_router, prefix="/api/v1", tags=["Postiz Publishing"])
+    app.include_router(buffer_router, prefix="/api/v1", tags=["Buffer Publishing"])
+    app.include_router(schedule_router, prefix="/api/v1", tags=["Smart Schedule"])
+    app.include_router(feed_router, prefix="/api/v1", tags=["feeds"])
+    app.include_router(catalog_router, prefix="/api/v1", tags=["Catalog"])
+    app.include_router(image_generate_router, prefix="/api/v1", tags=["AI Image Generation"])
 
 # Desktop-only routes (license, version, settings) — gated behind DESKTOP_MODE
 if settings.desktop_mode:
