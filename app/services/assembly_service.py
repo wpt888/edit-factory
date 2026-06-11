@@ -1425,10 +1425,20 @@ class AssemblyService:
         # Extract each segment clip in parallel, throttled by semaphore.
         # Preview mode uses a dedicated semaphore so it never queues behind production.
         from app.services.segment_transforms import SegmentTransform
-        from app.services.ffmpeg_semaphore import acquire_prep_slot, acquire_preview_prep_slot
+        from app.services.ffmpeg_semaphore import acquire_prep_slot, acquire_preview_prep_slot, is_nvenc_available
+        from app.services import segment_cache
         # Pre-allocate ordered results list (None = failed)
         # Thread-safe: asyncio.gather runs coroutines on single thread
         results: List[Optional[Path]] = [None] * len(timeline)
+
+        # F2: GPU decode for extraction when NVENC (and thus NVDEC) is present.
+        # Plain -hwaccel cuda decodes on GPU but hands CPU frames to the filter
+        # chain, and FFmpeg silently falls back to software decode when the
+        # codec isn't supported — safe to apply unconditionally.
+        _hwaccel_args = ["-hwaccel", "cuda"] if is_nvenc_available() else []
+
+        # F2: per-segment cache hit/miss counters (logged after extraction)
+        _cache_stats = {"hit": 0, "miss": 0}
 
         async def extract_segment(i: int, entry: TimelineEntry):
             segment_file = temp_dir / f"segment_{i:03d}.mp4"
@@ -1478,8 +1488,27 @@ class AssemblyService:
                     else get_prep_codec_params(include_audio=False)
                 )
 
+                # F2: per-segment cache — identical extractions are reused across
+                # renders, so an iterative edit only re-extracts what it changed.
+                cache_key = segment_cache.make_key(
+                    source_video_path=entry.source_video_path,
+                    start_time=entry.start_time,
+                    end_time=entry.end_time,
+                    needed_duration=needed_duration,
+                    use_loop=use_loop,
+                    transform_filters=transform_filters,
+                    codec_params=_codec_params,
+                    fps=TARGET_FPS,
+                )
+                if cache_key and await asyncio.to_thread(segment_cache.lookup, cache_key, segment_file):
+                    results[i] = segment_file
+                    _cache_stats["hit"] += 1
+                    logger.info(f"Segment {i}: cache HIT ({cache_key[:12]})")
+                    return
+                _cache_stats["miss"] += 1
+
                 async with await _slot_fn():
-                    cmd = ["ffmpeg", "-y"]
+                    cmd = ["ffmpeg", "-y", *_hwaccel_args]
 
                     if use_loop:
                         # Extract just the segment to a temp file, then loop it
@@ -1487,6 +1516,7 @@ class AssemblyService:
                         segment_raw = temp_dir / f"segment_{i:03d}_raw.mp4"
                         extract_cmd = [
                             "ffmpeg", "-y", "-threads", "4",
+                            *_hwaccel_args,
                             "-ss", str(entry.start_time),
                             "-i", entry.source_video_path,
                             "-t", str(segment_duration),
@@ -1540,6 +1570,9 @@ class AssemblyService:
 
                 if result.returncode == 0 and segment_file.exists():
                     results[i] = segment_file
+                    # F2: publish to the segment cache for future renders
+                    if cache_key:
+                        await asyncio.to_thread(segment_cache.store, cache_key, segment_file)
                 else:
                     logger.error(f"Failed to extract segment {i}: {result.stderr}")
             finally:
@@ -1552,6 +1585,10 @@ class AssemblyService:
 
         logger.info(f"Extracting {len(timeline)} segments in parallel (throttled by global prep semaphore)")
         await asyncio.gather(*(extract_segment(i, entry) for i, entry in enumerate(timeline)))
+        logger.info(
+            f"Segment cache: {_cache_stats['hit']} hits, {_cache_stats['miss']} misses "
+            f"({len(timeline)} segments)"
+        )
 
         # Apply PiP overlays to extracted segments (before collecting into segment_files)
         if pip_overlays and match_results:

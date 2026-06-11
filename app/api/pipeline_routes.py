@@ -5775,6 +5775,53 @@ async def get_preview_status(
     )
 
 
+@router.get("/preview-progress/{pipeline_id}/{variant_index}")
+async def stream_preview_progress(
+    pipeline_id: str,
+    variant_index: int,
+    visual_version: Optional[str] = None,
+):
+    """
+    SSE stream of preview render progress (F2 — replaces 2s polling).
+
+    Emits a ``progress`` event whenever the render state changes (checked every
+    300ms) and closes after a terminal ``completed``/``failed`` event. Clients
+    use ``EventSource``; intentionally public like /preview-status (the
+    pipeline UUID acts as capability token).
+    """
+    from sse_starlette.sse import EventSourceResponse
+
+    pipeline = _get_pipeline_or_load(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    preview_key = _build_preview_key(variant_index, visual_version)
+
+    async def _events():
+        last_payload = None
+        # Hard cap mirrors the 5-minute render timeout (+ margin) so a dead
+        # render task can't hold the connection open forever.
+        for _ in range(int(360 / 0.3)):
+            render_state = pipeline.get("preview_renders", {}).get(preview_key) or {}
+            payload = {
+                "status": render_state.get("status", "not_started"),
+                "progress": render_state.get("progress", 0),
+                "current_step": render_state.get("current_step", ""),
+                "matches_fingerprint": render_state.get("matches_fingerprint"),
+                "error": render_state.get("error"),
+                "preview_limitations": render_state.get("preview_limitations"),
+            }
+            if payload != last_payload:
+                last_payload = payload
+                yield {"event": "progress", "data": _json.dumps(payload)}
+            if payload["status"] in ("completed", "failed"):
+                return
+            await asyncio.sleep(0.3)
+        yield {"event": "error", "data": _json.dumps({"error": "progress stream timed out"})}
+
+    return EventSourceResponse(_events())
+
+
 @router.get("/preview-video/{pipeline_id}/{variant_index}")
 async def get_preview_video(
     pipeline_id: str,

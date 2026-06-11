@@ -149,6 +149,11 @@ class Settings(BaseSettings):
             return self.gemini_vision_enabled
         return not self.desktop_mode
 
+    # Per-segment extraction cache (F2): reuses extracted segment files across
+    # renders so an iterative edit only re-extracts what changed.
+    segment_cache_enabled: bool = True
+    segment_cache_max_gb: float = 5.0
+
     # File storage backend: "local" (default) or "supabase"
     file_storage_backend: str = "local"
 

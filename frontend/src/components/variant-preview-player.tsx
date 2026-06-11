@@ -78,6 +78,7 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   const [limitations, setLimitations] = useState<string[]>([]);
   const [videoReady, setVideoReady] = useState(false);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
   const cancelledRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -85,12 +86,16 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   const matchesRef = useRef(matches);
   useEffect(() => { matchesRef.current = matches; }, [matches]);
 
-  // Stop polling on unmount or close
+  // Stop progress tracking (SSE + polling fallback) on unmount or close
   const stopPolling = useCallback(() => {
     cancelledRef.current = true;
     if (pollTimeoutRef.current) {
       clearTimeout(pollTimeoutRef.current);
       pollTimeoutRef.current = null;
+    }
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
   }, []);
 
@@ -187,47 +192,87 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
           return;
         }
 
-        // Start polling for status using setTimeout chain to prevent overlapping polls (FE-02)
-        if (cancelledRef.current) return; // Bug #133: check before starting poll
-        let pollAttempts = 0;
-        const MAX_POLL_ATTEMPTS = 90; // 3 minutes at 2s interval
-        const pollStatus = async () => {
-          if (cancelledRef.current) return;
-          pollAttempts++;
-          if (pollAttempts > MAX_POLL_ATTEMPTS) {
-            setStatus("failed");
-            setError("Preview render timed out. Please try again.");
-            return;
-          }
-          try {
-            const statusResp = await apiGet(
-              `/pipeline/preview-status/${pipelineId}/${variantIndex}`
-              + (visualVersion ? `?visual_version=${encodeURIComponent(visualVersion)}` : "")
-            );
-            const statusData = await statusResp.json();
-            setProgress(statusData.progress ?? 0);
-            setCurrentStep(statusData.current_step ?? "");
+        if (cancelledRef.current) return; // Bug #133: check before starting tracking
 
-            if (statusData.status === "completed") {
-              setStatus("completed");
-              if (statusData.preview_limitations) setLimitations(statusData.preview_limitations);
-              stopPolling();
-              return;
-            } else if (statusData.status === "failed") {
+        const visualVersionQuery = visualVersion
+          ? `?visual_version=${encodeURIComponent(visualVersion)}`
+          : "";
+
+        const applyProgress = (statusData: {
+          status?: string;
+          progress?: number;
+          current_step?: string;
+          error?: string | null;
+          preview_limitations?: string[] | null;
+        }): boolean => {
+          setProgress(statusData.progress ?? 0);
+          setCurrentStep(statusData.current_step ?? "");
+          if (statusData.status === "completed") {
+            setStatus("completed");
+            if (statusData.preview_limitations) setLimitations(statusData.preview_limitations);
+            stopPolling();
+            return true;
+          }
+          if (statusData.status === "failed") {
+            setStatus("failed");
+            setError(statusData.error ?? "Preview render failed");
+            stopPolling();
+            return true;
+          }
+          return false;
+        };
+
+        // Fallback: setTimeout polling chain (FE-02) — used when SSE is unavailable
+        const startPolling = () => {
+          let pollAttempts = 0;
+          const MAX_POLL_ATTEMPTS = 90; // 3 minutes at 2s interval
+          const pollStatus = async () => {
+            if (cancelledRef.current) return;
+            pollAttempts++;
+            if (pollAttempts > MAX_POLL_ATTEMPTS) {
               setStatus("failed");
-              setError(statusData.error ?? "Preview render failed");
-              stopPolling();
+              setError("Preview render timed out. Please try again.");
               return;
             }
-          } catch {
-            // Polling error — keep trying
-          }
-          // Re-schedule only if not cancelled
-          if (!cancelledRef.current) {
-            pollTimeoutRef.current = setTimeout(pollStatus, 2000);
-          }
+            try {
+              const statusResp = await apiGet(
+                `/pipeline/preview-status/${pipelineId}/${variantIndex}${visualVersionQuery}`
+              );
+              const statusData = await statusResp.json();
+              if (applyProgress(statusData)) return;
+            } catch {
+              // Polling error — keep trying
+            }
+            // Re-schedule only if not cancelled
+            if (!cancelledRef.current) {
+              pollTimeoutRef.current = setTimeout(pollStatus, 2000);
+            }
+          };
+          pollTimeoutRef.current = setTimeout(pollStatus, 2000);
         };
-        pollTimeoutRef.current = setTimeout(pollStatus, 2000);
+
+        // Primary: SSE progress stream (F2) — instant updates, no 2s polling
+        try {
+          const es = new EventSource(
+            `${API_URL}/pipeline/preview-progress/${pipelineId}/${variantIndex}${visualVersionQuery}`
+          );
+          eventSourceRef.current = es;
+          let terminal = false;
+          es.addEventListener("progress", (e) => {
+            try {
+              terminal = applyProgress(JSON.parse((e as MessageEvent).data)) || terminal;
+            } catch {
+              // Malformed event — ignore; polling fallback kicks in on error
+            }
+          });
+          es.onerror = () => {
+            es.close();
+            if (eventSourceRef.current === es) eventSourceRef.current = null;
+            if (!terminal && !cancelledRef.current) startPolling();
+          };
+        } catch {
+          startPolling();
+        }
       } catch (err: unknown) {
         setStatus("failed");
         setError(err instanceof Error ? err.message : "Failed to start preview render");
