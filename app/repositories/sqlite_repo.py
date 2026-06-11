@@ -38,6 +38,8 @@ _JSON_COLUMNS = frozenset({
     "context_products",
     # F3 — pipeline persistence columns (migrations 035/042 equivalents)
     "selected_captions", "subtitle_settings_by_key",
+    # F5 — segment columns written as JSON by segment CRUD routes
+    "keywords", "transforms",
 })
 
 
@@ -93,6 +95,8 @@ class SQLiteRepository(DataRepository):
         # ADD COLUMN is idempotent only when guarded — we check pragma first.
         self._ensure_phase80_columns()
         self._ensure_pipeline_columns()
+        self._ensure_source_video_columns()
+        self._ensure_segment_columns()
 
     def _ensure_phase80_columns(self) -> None:
         """Add `editai_segments.usage_count` if missing (mirrors migration 034).
@@ -150,6 +154,97 @@ class SQLiteRepository(DataRepository):
                 self._col_cache.pop("editai_pipelines", None)
         except Exception as e:
             logger.warning(f"Could not ensure pipeline columns on editai_pipelines: {e}")
+
+    def _ensure_source_video_columns(self) -> None:
+        """Add editai_source_videos columns missing from older DBs (F5 fix).
+
+        The repository writes name/description/thumbnail_path/fps/
+        file_size_bytes/segments_count (Supabase production parity), but the
+        original sqlite_schema.sql snapshot only had the legacy
+        filename/file_size/segment_count trio — so create_source_video failed
+        with "no column named name" on every desktop SQLite install.
+        """
+        wanted = {
+            "name": "TEXT",
+            "description": "TEXT",
+            "thumbnail_path": "TEXT",
+            "fps": "REAL",
+            "file_size_bytes": "INTEGER",
+            "segments_count": "INTEGER DEFAULT 0",
+        }
+        try:
+            cur = self._conn.execute('PRAGMA table_info("editai_source_videos")')
+            cols = {row[1] for row in cur.fetchall()}
+            missing = {name: ddl for name, ddl in wanted.items() if name not in cols}
+            if not missing:
+                return
+            with self._write_lock:
+                for name, ddl in missing.items():
+                    self._conn.execute(
+                        f'ALTER TABLE "editai_source_videos" ADD COLUMN "{name}" {ddl}'
+                    )
+                # Backfill new columns from their legacy counterparts so
+                # pre-migration rows keep rendering correctly.
+                if "name" in missing:
+                    self._conn.execute(
+                        'UPDATE "editai_source_videos" SET "name" = "filename" '
+                        'WHERE "name" IS NULL AND "filename" IS NOT NULL'
+                    )
+                if "file_size_bytes" in missing:
+                    self._conn.execute(
+                        'UPDATE "editai_source_videos" SET "file_size_bytes" = "file_size" '
+                        'WHERE "file_size_bytes" IS NULL'
+                    )
+                if "segments_count" in missing:
+                    self._conn.execute(
+                        'UPDATE "editai_source_videos" SET "segments_count" = COALESCE("segment_count", 0) '
+                        'WHERE "segments_count" IS NULL OR "segments_count" = 0'
+                    )
+                self._conn.commit()
+            logger.info(
+                "editai_source_videos migrated in place: added %s", ", ".join(missing)
+            )
+            if hasattr(self, "_col_cache"):
+                self._col_cache.pop("editai_source_videos", None)
+        except Exception as e:
+            logger.warning(f"Could not ensure source video columns: {e}")
+
+    def _ensure_segment_columns(self) -> None:
+        """Add editai_segments columns missing from older DBs (F5 fix).
+
+        The segment CRUD routes write keywords/notes/transforms/product_group/
+        is_favorite/single_use/extracted_video_path, none of which existed in
+        the original sqlite_schema.sql snapshot — so creating a segment failed
+        with "no column named keywords" on desktop SQLite installs.
+        """
+        wanted = {
+            "keywords": "TEXT DEFAULT '[]'",
+            "notes": "TEXT",
+            "transforms": "TEXT",
+            "product_group": "TEXT",
+            "is_favorite": "INTEGER DEFAULT 0",
+            "single_use": "INTEGER DEFAULT 0",
+            "extracted_video_path": "TEXT",
+        }
+        try:
+            cur = self._conn.execute('PRAGMA table_info("editai_segments")')
+            cols = {row[1] for row in cur.fetchall()}
+            missing = {name: ddl for name, ddl in wanted.items() if name not in cols}
+            if not missing:
+                return
+            with self._write_lock:
+                for name, ddl in missing.items():
+                    self._conn.execute(
+                        f'ALTER TABLE "editai_segments" ADD COLUMN "{name}" {ddl}'
+                    )
+                self._conn.commit()
+            logger.info(
+                "editai_segments migrated in place: added %s", ", ".join(missing)
+            )
+            if hasattr(self, "_col_cache"):
+                self._col_cache.pop("editai_segments", None)
+        except Exception as e:
+            logger.warning(f"Could not ensure segment columns: {e}")
 
     # ── Table name helper ──────────────────────────────
 
@@ -713,6 +808,32 @@ class SQLiteRepository(DataRepository):
 
         cur = self._conn.execute(sql, params)
         rows = [self._row_to_dict(r) for r in cur.fetchall()]
+
+        # Emulate the Supabase embedded join `editai_source_videos(file_path, ...)`.
+        # Callers (assembly_service segment loading, library available-segments)
+        # read seg["editai_source_videos"]["file_path"]; without this the SQLite
+        # backend returned plain rows and every segment looked path-less
+        # ("No usable segments found").
+        sv_ids = {r["source_video_id"] for r in rows if r.get("source_video_id")}
+        if sv_ids:
+            sv_table = self._t("editai_source_videos")
+            placeholders = ", ".join("?" for _ in sv_ids)
+            sv_cur = self._conn.execute(
+                f'SELECT "id", "file_path", "name", "duration" '
+                f'FROM "{sv_table}" WHERE "id" IN ({placeholders})',
+                list(sv_ids),
+            )
+            sv_map = {
+                r2["id"]: {
+                    "file_path": r2["file_path"],
+                    "name": r2["name"],
+                    "duration": r2["duration"],
+                }
+                for r2 in sv_cur.fetchall()
+            }
+            for r in rows:
+                r["editai_source_videos"] = sv_map.get(r.get("source_video_id"))
+
         return QueryResult(data=rows, count=len(rows))
 
     def get_segment(self, segment_id: str) -> Optional[Dict[str, Any]]:

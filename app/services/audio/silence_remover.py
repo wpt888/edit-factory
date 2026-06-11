@@ -3,6 +3,12 @@ Silence Remover Service
 Removes long pauses from audio (TTS) while keeping words intact.
 Uses Silero VAD for precise speech detection.
 """
+# Lazy annotations: VoiceDetector/VoiceSegment are undefined names when the
+# gated ML import fails, and eager annotation evaluation (e.g. the
+# `-> Optional[VoiceDetector]` return type) raised NameError at import time,
+# breaking the FFmpeg fallback this module promises.
+from __future__ import annotations
+
 import logging
 import subprocess
 import tempfile

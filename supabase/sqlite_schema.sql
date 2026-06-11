@@ -210,6 +210,15 @@ CREATE TABLE IF NOT EXISTS editai_segments (
     label           TEXT,
     is_selected     INTEGER DEFAULT 0,
 
+    -- Columns the repository/routes write (Supabase production parity)
+    keywords        TEXT DEFAULT '[]',
+    notes           TEXT,
+    transforms      TEXT,
+    product_group   TEXT,
+    is_favorite     INTEGER DEFAULT 0,
+    single_use      INTEGER DEFAULT 0,
+    extracted_video_path TEXT,
+
     -- Profile (from 008)
     profile_id      TEXT,
 
@@ -240,6 +249,15 @@ CREATE TABLE IF NOT EXISTS editai_source_videos (
     preview_proxy_error TEXT,
     preview_proxy_created_at TEXT,
     segment_count   INTEGER DEFAULT 0,
+
+    -- Columns the repository code writes (parity with Supabase production
+    -- schema; the filename/file_size/segment_count trio above is legacy)
+    name            TEXT,
+    description     TEXT,
+    thumbnail_path  TEXT,
+    fps             REAL,
+    file_size_bytes INTEGER,
+    segments_count  INTEGER DEFAULT 0,
 
     -- Profile (from 008)
     profile_id      TEXT,

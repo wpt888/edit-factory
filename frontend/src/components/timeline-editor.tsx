@@ -262,7 +262,12 @@ export function TimelineEditor({
     // from independent matching, but the render uses only the first entry's segment.
     const prevIdx = previewActiveIndexRef.current;
     const prevMatch = matchesRef.current[prevIdx];
+    // prevIdx !== matchIdx guard: on activation this is a self-compare
+    // (prevIdx === matchIdx === 0), which used to short-circuit as "same
+    // merge group" and return before video.play() — freezing the first
+    // segment until the first group transition.
     const sameMergeGroup =
+      prevIdx !== matchIdx &&
       prevMatch &&
       match.merge_group != null &&
       prevMatch.merge_group != null &&
@@ -1062,13 +1067,14 @@ export function TimelineEditor({
               </Button>
             ) : (
               <Button
-                variant="outline"
+                variant="default"
                 size="sm"
-                className="h-7 text-xs gap-1.5 border-primary text-primary hover:bg-primary/10"
+                className="h-7 text-xs gap-1.5"
                 onClick={activatePreview}
+                title="Instant composite preview — plays source segments directly, no render"
               >
                 <Play className="h-3 w-3" />
-                Play Preview
+                Instant Preview
               </Button>
             )}
           </div>

@@ -321,7 +321,9 @@ def _generate_preview_proxy_background(video_id: str, source_path: Path, profile
 def _source_video_response(v: dict) -> SourceVideoResponse:
     return SourceVideoResponse(
         id=v["id"],
-        name=v["name"],
+        # Legacy SQLite rows used filename/file_size/segment_count (schema
+        # drift, deferred-items.md Section 1) — fall back so they still render
+        name=v.get("name") or v.get("filename") or "",
         description=v.get("description"),
         file_path=v["file_path"],
         thumbnail_path=v.get("thumbnail_path"),
@@ -329,8 +331,8 @@ def _source_video_response(v: dict) -> SourceVideoResponse:
         width=v.get("width"),
         height=v.get("height"),
         fps=v.get("fps"),
-        file_size_bytes=v.get("file_size_bytes"),
-        segments_count=v.get("segments_count", 0),
+        file_size_bytes=v.get("file_size_bytes") or v.get("file_size"),
+        segments_count=v.get("segments_count") or v.get("segment_count") or 0,
         status=v.get("status", "ready"),
         preview_proxy_path=v.get("preview_proxy_path"),
         preview_proxy_status=v.get("preview_proxy_status"),

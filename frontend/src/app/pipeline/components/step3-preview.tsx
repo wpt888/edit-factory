@@ -492,7 +492,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                               setPlayingAudio(null);
                               setPreviewVariant(card.key);
                             }}
-                            title="Preview variant with video"
+                            title="High-fidelity preview (FFmpeg render — slower; use the instant player in the timeline below for editing)"
                           >
                             <Eye className="h-4 w-4" />
                           </Button>
