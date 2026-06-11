@@ -71,6 +71,7 @@ const allNavGroups = [
     label: "Create",
     items: [
       { label: "Pipeline", href: "/pipeline", icon: Clapperboard, desc: "Video processing pipeline" },
+      { label: "Batch", href: "/batch", icon: ListChecks, desc: "Batch video generation" },
       { label: "Segments", href: "/segments", icon: Scissors, desc: "Manual segment selection" },
       { label: "AI Image", href: "/create-image", icon: ImageIcon, desc: "Generate AI product images" },
     ],

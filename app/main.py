@@ -74,6 +74,7 @@ from app.api.product_generate_routes import router as product_generate_router
 from app.api.association_routes import router as association_router
 from app.api.tts_library_routes import router as tts_library_router
 from app.api.assembly_routes import router as assembly_router
+from app.api.batch_routes import router as batch_router
 from app.api.desktop_ml_routes import router as desktop_ml_router
 
 from app.core.logging_config import setup_logging
@@ -407,6 +408,7 @@ app.include_router(product_generate_router, prefix="/api/v1", tags=["Product Vid
 app.include_router(association_router, prefix="/api/v1", tags=["Associations"])
 app.include_router(tts_library_router, prefix="/api/v1", tags=["TTS Library"])
 app.include_router(assembly_router, prefix="/api/v1", tags=["Script-to-Video Assembly"])
+app.include_router(batch_router, prefix="/api/v1", tags=["Batch Pipeline"])
 app.include_router(desktop_ml_router, prefix="/api/v1", tags=["Desktop ML"])
 
 # Web-SaaS-only routes — not mounted in desktop mode (MVP desktop trim, F1).
