@@ -162,6 +162,8 @@ frontend/.playwright-mcp/
 
 # Local databases
 data.db
+data.db-shm
+data.db-wal
 
 # One-off test/verification scripts
 verify_encoding_integration.py
