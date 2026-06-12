@@ -22,7 +22,10 @@
     "appId": "com.editfactory.app",
     "productName": "Edit Factory",
     "win": {
-      "target": "nsis",
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "icon": "build/icon.ico",
       "extraResources": [
         {
@@ -41,6 +44,11 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Edit Factory",
       "uninstallDisplayName": "Edit Factory ${version}"
+    },
+    "portable": {
+      "artifactName": "EditFactory-portable-${version}.exe",
+      "unpackDirName": "EditFactory",
+      "requestExecutionLevel": "user"
     },
     "publish": {
       "provider": "github",
