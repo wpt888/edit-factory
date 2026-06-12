@@ -3,7 +3,7 @@
 // Spawns FastAPI backend + Next.js frontend, polls for readiness,
 // opens BrowserWindow, manages tray icon, handles graceful shutdown.
 
-const { app, BrowserWindow, Tray, Menu, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, dialog, ipcMain, nativeImage } = require('electron');
 const { spawn, spawnSync } = require('child_process');
 const http = require('http');
 const path = require('path');
@@ -43,8 +43,12 @@ const BACKEND_CWD = isDev
   ? PROJECT_ROOT
   : process.resourcesPath;
 
-// Icon path
-const ICON_PATH = path.join(__dirname, '..', 'build', 'icon.ico');
+// Icon path. In packaged mode the icon lives in resources/ (shipped via
+// extraResources) — electron-builder excludes build/ from app.asar, so a
+// build/icon.ico path inside the asar does NOT exist and new Tray() throws.
+const ICON_PATH = isDev
+  ? path.join(__dirname, '..', 'build', 'icon.ico')
+  : path.join(process.resourcesPath, 'icon.ico');
 
 // ---------- Constants ----------
 const BACKEND_PORT = 8000;
@@ -156,6 +160,10 @@ function startBackend() {
         ...process.env,
         DESKTOP_MODE: 'true',
         DATA_BACKEND: 'sqlite',
+        // settings.host is read from HOST (default 0.0.0.0), separate from the
+        // uvicorn --host bind. Desktop mode refuses any non-localhost host, so
+        // pin it — the packaged app has no .env to supply HOST=127.0.0.1.
+        HOST: '127.0.0.1',
         ...(isDev ? {} : { RESOURCES_PATH: process.resourcesPath }),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -378,13 +386,18 @@ function waitForServices() {
 
 // ---------- SHELL-03: System tray ----------
 function createTray() {
-  // Use brand icon — warn if missing (run generate-icon.js to create)
-  const iconExists = fs.existsSync(ICON_PATH);
-  if (!iconExists) {
-    console.error('[launcher] WARN: icon.ico not found at:', ICON_PATH, '— run: node electron/build/generate-icon.js');
+  // Build the tray image from a guaranteed-valid source: new Tray() throws on
+  // a missing path (Electron 34), and the tray is essential here — window close
+  // hides to tray, so without it the app becomes unreachable.
+  let trayImage = nativeImage.createEmpty();
+  if (fs.existsSync(ICON_PATH)) {
+    const loaded = nativeImage.createFromPath(ICON_PATH);
+    if (!loaded.isEmpty()) trayImage = loaded;
+  } else {
+    logLine('launcher', `WARN: icon.ico not found at: ${ICON_PATH} — tray will use a blank icon`);
   }
 
-  tray = new Tray(ICON_PATH);
+  tray = new Tray(trayImage);
   tray.setToolTip('Edit Factory — Starting...');
 
   const contextMenu = Menu.buildFromTemplate([
@@ -605,25 +618,27 @@ app.whenReady().then(async () => {
   logLine('launcher', `Dev mode: ${isDev}`);
   logLine('launcher', `Project root: ${PROJECT_ROOT}`);
 
-  // SHELL-05: Clean up orphaned processes from previous launches
-  cleanupOrphans();
-
-  // Hidden app menu (no bar, accelerators only) + native dialog IPC
-  setupApplicationMenu();
-  registerIpcHandlers();
-
-  // SHELL-03: Create tray icon
-  createTray();
-
-  // SHELL-02: Create hidden window
-  createWindow();
-
-  // SHELL-01: Spawn services
-  startBackend();
-  startFrontend();
-
-  // SHELL-02: Wait for services, then show window
+  // Whole startup wrapped so a throw is LOGGED + shown, never a silent zombie
+  // process with no window (the original "opens but no window" bug).
   try {
+    // SHELL-05: Clean up orphaned processes from previous launches
+    cleanupOrphans();
+
+    // Hidden app menu (no bar, accelerators only) + native dialog IPC
+    setupApplicationMenu();
+    registerIpcHandlers();
+
+    // SHELL-03: Create tray icon
+    createTray();
+
+    // SHELL-02: Create hidden window
+    createWindow();
+
+    // SHELL-01: Spawn services
+    startBackend();
+    startFrontend();
+
+    // SHELL-02: Wait for services, then show window
     await waitForServices();
     servicesReady = true;
     logLine('launcher', 'Services ready — checking startup state...');
@@ -639,8 +654,8 @@ app.whenReady().then(async () => {
     // UPDT-01: Check for updates after services are confirmed running
     setupAutoUpdater();
   } catch (err) {
-    logLine('launcher', `Startup failed: ${err.message}`);
-    dialog.showErrorBox('Startup Failed', err.message);
+    logLine('launcher', `Startup failed: ${err.stack || err.message}`);
+    dialog.showErrorBox('Startup Failed', String(err.stack || err.message));
     isQuitting = true;
     await cleanup();
     app.exit(1);

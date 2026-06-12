@@ -29,6 +29,10 @@
       "icon": "build/icon.ico",
       "extraResources": [
         {
+          "from": "build/icon.ico",
+          "to": "icon.ico"
+        },
+        {
           "from": "../ffmpeg/ffmpeg-master-latest-win64-gpl/bin",
           "to": "ffmpeg/bin",
           "filter": ["ffmpeg.exe", "ffprobe.exe"]

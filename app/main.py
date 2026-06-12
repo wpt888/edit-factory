@@ -264,7 +264,10 @@ async def lifespan(app: FastAPI):
     settings.ensure_dirs()
     if settings.auth_disabled and not settings.debug:
         raise RuntimeError("AUTH_DISABLED=true is not allowed in non-debug mode. Set DEBUG=true for development or disable AUTH_DISABLED.")
-    if not settings.auth_disabled and not settings.supabase_jwt_secret:
+    if not settings.auth_disabled and not settings.desktop_mode and not settings.supabase_jwt_secret:
+        # Desktop mode bypasses auth entirely (see auth.py: auth_disabled OR
+        # desktop_mode), so a JWT secret is not required there — the packaged
+        # app has no .env to supply one.
         raise RuntimeError("SUPABASE_JWT_SECRET is empty — JWT auth will reject all tokens. Set the secret or AUTH_DISABLED=true for development.")
     if settings.desktop_mode and not settings.debug and settings.host not in ("127.0.0.1", "localhost"):
         raise RuntimeError(
