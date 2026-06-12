@@ -98,6 +98,10 @@
         "filter": ["**/*", "!**/__pycache__/**", "!**/*.pyc"]
       },
       {
+        "from": "../supabase/sqlite_schema.sql",
+        "to": "supabase/sqlite_schema.sql"
+      },
+      {
         "from": "resources/node",
         "to": "node",
         "filter": ["**/*"]
