@@ -67,11 +67,11 @@ export function WikiSidebar({
           <Input
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
-            placeholder="Caută pagini…"
+            placeholder="Caută notițe…"
             className="pl-8"
           />
         </div>
-        <Button size="icon" variant="default" onClick={onNew} disabled={creating} title="Pagină nouă">
+        <Button size="icon" variant="default" onClick={onNew} disabled={creating} title="Notiță nouă">
           <Plus className="size-4" />
         </Button>
       </div>
@@ -79,7 +79,7 @@ export function WikiSidebar({
       <ScrollArea className="flex-1 -mx-1 px-1">
         {groups.length === 0 ? (
           <p className="px-2 py-6 text-center text-sm text-muted-foreground">
-            {pages.length === 0 ? "Nicio pagină încă." : "Niciun rezultat."}
+            {pages.length === 0 ? "Nicio notiță încă." : "Niciun rezultat."}
           </p>
         ) : (
           <div className="flex flex-col gap-1">

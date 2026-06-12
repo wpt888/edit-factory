@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { WikiSidebar, type WikiPageSummary } from "@/components/wiki/wiki-sidebar";
 import { WikiMarkdown } from "@/components/wiki/wiki-markdown";
-import { BookOpen, Pencil, Save, Trash2, X, Loader2 } from "lucide-react";
+import { NotebookPen, Pencil, Save, Trash2, X, Loader2 } from "lucide-react";
 
 interface WikiPageFull extends WikiPageSummary {
   content_md: string;
@@ -60,7 +60,7 @@ export default function WikiPage() {
       setPages(data);
       return data;
     } catch (err) {
-      handleApiError(err, "Nu am putut încărca paginile wiki");
+      handleApiError(err, "Nu am putut încărca notițele");
       return [];
     } finally {
       setLoadingList(false);
@@ -84,7 +84,7 @@ export default function WikiPage() {
       const data: WikiPageFull = await res.json();
       setCurrent(data);
     } catch (err) {
-      handleApiError(err, "Nu am putut încărca pagina");
+      handleApiError(err, "Nu am putut încărca notița");
       setCurrent(null);
     } finally {
       setLoadingPage(false);
@@ -95,7 +95,7 @@ export default function WikiPage() {
     setCreating(true);
     try {
       const res = await apiPost("/wiki", {
-        title: "Pagină nouă",
+        title: "Notiță nouă",
         category: "",
         content_md: "",
       });
@@ -109,7 +109,7 @@ export default function WikiPage() {
       setDraftMd(created.content_md || "");
       setEditing(true);
     } catch (err) {
-      handleApiError(err, "Nu am putut crea pagina");
+      handleApiError(err, "Nu am putut crea notița");
     } finally {
       setCreating(false);
     }
@@ -136,9 +136,9 @@ export default function WikiPage() {
       setCurrent(updated);
       setEditing(false);
       await loadList();
-      toast.success("Pagină salvată");
+      toast.success("Notiță salvată");
     } catch (err) {
-      handleApiError(err, "Nu am putut salva pagina");
+      handleApiError(err, "Nu am putut salva notița");
     } finally {
       setSaving(false);
     }
@@ -148,21 +148,21 @@ export default function WikiPage() {
     if (!current) return;
     try {
       await apiDelete(`/wiki/${current.id}`);
-      toast.success("Pagină ștearsă");
+      toast.success("Notiță ștearsă");
       setCurrent(null);
       setSelectedId(null);
       setEditing(false);
       await loadList();
     } catch (err) {
-      handleApiError(err, "Nu am putut șterge pagina");
+      handleApiError(err, "Nu am putut șterge notița");
     }
   }, [current, loadList]);
 
   return (
     <div className="container mx-auto p-6">
       <div className="mb-4 flex items-center gap-2">
-        <BookOpen className="size-6 text-primary" />
-        <h1 className="text-2xl font-bold">Wiki</h1>
+        <NotebookPen className="size-6 text-primary" />
+        <h1 className="text-2xl font-bold">Notițe</h1>
         <Badge variant="secondary" className="ml-1">
           {currentProfile?.name || "—"}
         </Badge>
@@ -268,7 +268,7 @@ export default function WikiPage() {
                   </Button>
                   <AlertDialog>
                     <AlertDialogTrigger asChild>
-                      <Button variant="ghost" size="icon" title="Șterge pagina">
+                      <Button variant="ghost" size="icon" title="Șterge notița">
                         <Trash2 className="size-4 text-destructive" />
                       </Button>
                     </AlertDialogTrigger>
@@ -310,20 +310,20 @@ function EmptyState({
 }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-      <BookOpen className="size-12 text-muted-foreground/40" />
+      <NotebookPen className="size-12 text-muted-foreground/40" />
       <div>
         <p className="font-medium">
-          {hasPages ? "Selectează o pagină" : "Knowledge base gol"}
+          {hasPages ? "Selectează o notiță" : "Nicio notiță încă"}
         </p>
         <p className="text-sm text-muted-foreground">
           {hasPages
-            ? "Alege o pagină din stânga sau creează una nouă."
-            : "Creează prima pagină de documentație."}
+            ? "Alege o notiță din stânga sau creează una nouă."
+            : "Salvează aici prompturi, idei și notițe de lucru."}
         </p>
       </div>
       <Button onClick={onNew} disabled={creating}>
         {creating ? <Loader2 className="mr-1 size-4 animate-spin" /> : null}
-        Pagină nouă
+        Notiță nouă
       </Button>
     </div>
   );

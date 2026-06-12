@@ -7,6 +7,10 @@ touching any other wiki content. Seeds the page set into the "Default" profile
 
 Usage:
     DESKTOP_MODE=true DATA_BACKEND=sqlite python scripts/seed_wiki_docs.py
+    DESKTOP_MODE=true DATA_BACKEND=sqlite python scripts/seed_wiki_docs.py --remove
+
+--remove deletes the managed pages (matched by slug) from ALL profiles,
+leaving user-created notes untouched.
 
 The pages document phases F0-F7 of the desktop MVP. This script is the
 version-controlled source of truth for that documentation — the wiki rows
@@ -481,6 +485,23 @@ Idempotent — înlocuiește paginile gestionate fără a atinge alt conținut.
 ]
 
 
+def remove_managed_pages(repo, profiles) -> int:
+    """Delete the seeded pages (by managed slug) from every profile."""
+    managed_slugs = {_slugify(title) for _, _, title, _ in PAGES}
+    removed = 0
+    for profile in profiles:
+        existing = repo.table_query(
+            TABLE, "select",
+            filters=QueryFilters(select="id, slug", eq={"profile_id": profile["id"]}),
+        ).data or []
+        for row in existing:
+            if row.get("slug") in managed_slugs:
+                repo.table_query(TABLE, "delete", filters=QueryFilters(eq={"id": row["id"]}))
+                removed += 1
+    print(f"Removed {removed} managed wiki pages across {len(profiles)} profile(s).")
+    return 0
+
+
 def main() -> int:
     repo = get_repository()
     if not repo:
@@ -495,6 +516,9 @@ def main() -> int:
     if not profiles:
         print("ERROR: no profiles exist — create one in the app first", file=sys.stderr)
         return 1
+
+    if "--remove" in sys.argv[1:]:
+        return remove_managed_pages(repo, profiles)
     target = next((p for p in profiles if (p.get("name") or "").lower() == "default"), profiles[0])
     profile_id = target["id"]
     print(f"Seeding wiki for profile '{target.get('name')}' ({profile_id})")

@@ -49,7 +49,7 @@ import {
   ImageIcon,
   CalendarClock,
   Calendar,
-  BookOpen,
+  NotebookPen,
   LogOut,
 } from "lucide-react";
 
@@ -187,7 +187,7 @@ export function NavBar() {
                 </NavigationMenuItem>
               )}
 
-              {/* Wiki top-level tab (always — internal knowledge base) */}
+              {/* Notițe top-level tab (always — prompts, ideas, personal notes) */}
               <NavigationMenuItem>
                 <NavigationMenuLink asChild>
                   <Link
@@ -196,8 +196,8 @@ export function NavBar() {
                       pathname.startsWith("/wiki") ? "text-foreground bg-accent/50" : "text-muted-foreground"
                     }`}
                   >
-                    <BookOpen className="size-4" />
-                    Wiki
+                    <NotebookPen className="size-4" />
+                    Notițe
                   </Link>
                 </NavigationMenuLink>
               </NavigationMenuItem>
@@ -293,8 +293,8 @@ export function NavBar() {
                       pathname.startsWith("/wiki") ? "bg-accent text-accent-foreground font-medium" : "text-muted-foreground"
                     }`}
                   >
-                    <BookOpen className="size-4 shrink-0" />
-                    Wiki
+                    <NotebookPen className="size-4 shrink-0" />
+                    Notițe
                   </Link>
                   {user && (
                     <button
