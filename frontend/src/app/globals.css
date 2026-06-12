@@ -208,10 +208,13 @@ body {
   background: transparent;
 }
 
-/* Firefox (web builds) */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+/* Firefox only (web builds). Chromium 121+ also reads scrollbar-width and
+   then IGNORES ::-webkit-scrollbar styling, so this must not reach it. */
+@supports (-moz-appearance: none) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
 }
 
 /* =====================================================

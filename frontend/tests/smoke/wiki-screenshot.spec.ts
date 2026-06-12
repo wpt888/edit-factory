@@ -1,11 +1,11 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Visual verification of the Wiki / Knowledge Base feature.
+ * Visual verification of the Notițe (notes) feature — formerly Wiki.
  * Captures: empty state -> split-view Markdown editor -> rendered view.
- * Cleans up the demo page at the end so the KB stays empty.
+ * Cleans up the demo note at the end so the list stays empty.
  */
-test('wiki: empty state, editor, rendered markdown', async ({ page }) => {
+test('notite: empty state, editor, rendered markdown', async ({ page }) => {
   const SAMPLE = `# Ghid Pipeline
 
 Pipeline-ul rulează în **4 pași**:
@@ -34,8 +34,8 @@ Pipeline-ul rulează în **4 pași**:
   // 1. Empty state
   await page.screenshot({ path: 'screenshots/wiki-1-empty.png', fullPage: true });
 
-  // 2. Create a page -> enters edit (split) mode
-  await page.getByRole('button', { name: /Pagină nouă/i }).first().click();
+  // 2. Create a note -> enters edit (split) mode
+  await page.getByRole('button', { name: /Notiță nouă/i }).first().click();
   await page.waitForTimeout(1500);
 
   // Fill title, category, markdown
@@ -52,8 +52,8 @@ Pipeline-ul rulează în **4 pași**:
   await page.waitForTimeout(1500);
   await page.screenshot({ path: 'screenshots/wiki-3-rendered.png', fullPage: true });
 
-  // Cleanup: delete the demo page so the KB stays empty.
-  await page.getByRole('button', { name: /Șterge pagina/i }).click();
+  // Cleanup: delete the demo note so the list stays empty.
+  await page.getByRole('button', { name: /Șterge notița/i }).click();
   await page.waitForTimeout(500);
   await page.getByRole('button', { name: /^Șterge$/i }).click();
   await page.waitForTimeout(1000);
