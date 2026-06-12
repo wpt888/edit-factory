@@ -290,7 +290,8 @@ export function PipelineCaptionGenerator({
 
   // Send save request that survives page unload (keepalive: true)
   const sendSave = useCallback((data: Record<string, string>, keepalive = false) => {
-    const url = `${window.location.origin.replace(/:3001|:3000/, ':8000')}/api/v1/pipeline/selected-captions`;
+    // Map the frontend dev/desktop port to the backend (8000). 3947 = desktop shell.
+    const url = `${window.location.origin.replace(/:3947|:3001|:3000/, ':8000')}/api/v1/pipeline/selected-captions`;
     const body = JSON.stringify({ pipeline_id: pipelineId, selected_captions: data });
     if (keepalive && navigator.sendBeacon) {
       // sendBeacon is the most reliable for page unload

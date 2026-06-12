@@ -52,7 +52,10 @@ const ICON_PATH = isDev
 
 // ---------- Constants ----------
 const BACKEND_PORT = 8000;
-const FRONTEND_PORT = 3000;
+// Uncommon port: 3000 collides with other local dev servers (Next/React,
+// e.g. SITE_ZERO). cleanupOrphans() kills whatever holds this port on launch,
+// so it must NOT be a port other projects use.
+const FRONTEND_PORT = 3947;
 const BACKEND_HEALTH_URL = `http://127.0.0.1:${BACKEND_PORT}/api/v1/health`;
 const FRONTEND_HEALTH_URL = `http://127.0.0.1:${FRONTEND_PORT}`;
 const POLL_INTERVAL_MS = 500;
@@ -327,8 +330,8 @@ function httpPost(url) {
 // Determine startup URL based on the simple desktop test-login state.
 // (Replaces the old first-run/license gate — see /desktop/auth on the backend.)
 async function checkStartupState() {
-  const LOGIN_URL = 'http://localhost:3000/login';
-  const APP_URL   = 'http://localhost:3000';
+  const LOGIN_URL = `http://localhost:${FRONTEND_PORT}/login`;
+  const APP_URL   = `http://localhost:${FRONTEND_PORT}`;
 
   try {
     const status = await httpGetJson(

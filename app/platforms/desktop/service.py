@@ -3,7 +3,7 @@ Edit Factory - Desktop utilities.
 CLI for process cleanup, called by Electron launcher.
 
 Usage:
-    python -m app.platforms.desktop.service cleanup --ports 8000 3000
+    python -m app.platforms.desktop.service cleanup --ports 8000 3947
     python -m app.platforms.desktop.service ensure-dirs
 """
 import sys
@@ -76,8 +76,8 @@ def main():
         "cleanup", help="Kill orphaned processes on ports"
     )
     cleanup_parser.add_argument(
-        "--ports", nargs="+", type=int, default=[8000, 3000],
-        help="Ports to clean up (default: 8000 3000)"
+        "--ports", nargs="+", type=int, default=[8000, 3947],
+        help="Ports to clean up (default: 8000 3947 — frontend moved off 3000 to avoid dev-server collisions)"
     )
 
     # ensure-dirs command

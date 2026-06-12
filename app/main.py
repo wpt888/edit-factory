@@ -369,14 +369,25 @@ logger.info(f"CORS allowed origins: {allowed_origins}")
 
 app.add_middleware(SlowAPIMiddleware)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
+_cors_kwargs = dict(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Profile-Id"],
     expose_headers=["Content-Disposition", "Content-Length", "Content-Range", "X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"],
 )
+if settings.desktop_mode:
+    # The desktop frontend is a local Next server on an arbitrary localhost
+    # port (configurable in the Electron shell). The API is already
+    # localhost-only + auth-bypassed in desktop mode, so CORS is not a security
+    # boundary here — allow any localhost origin so the shell's port choice
+    # never breaks frontend→backend calls.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+        **_cors_kwargs,
+    )
+else:
+    app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, **_cors_kwargs)
 
 # Sentry crash reporting
 # Path 1: SENTRY_DSN env var — works in all modes (production server, dev, desktop)
