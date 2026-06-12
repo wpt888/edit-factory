@@ -51,6 +51,7 @@ import { PipOverlayPanel } from "@/components/pip-overlay-panel";
 import type { AssociationResponse } from "@/components/dialogs/product-picker-dialog";
 import { PipConfig, DEFAULT_PIP_CONFIG } from "@/components/dialogs/product-picker-dialog";
 import { apiGetWithRetry, apiPost, apiPatch, apiPut, apiDelete, apiUpload, handleApiError, API_URL } from "@/lib/api";
+import { pickLocalVideoFiles } from "@/lib/desktop";
 import { ApiError } from "@/lib/api-error";
 import { useRouter } from "next/navigation";
 import { useProfile } from "@/contexts/profile-context";
@@ -617,22 +618,23 @@ export default function SegmentsPage() {
     }
   };
 
-  // Open native file picker via backend
+  // Open native file picker (Electron bridge → web fallback)
   const [browsing, setBrowsing] = useState(false);
   const handleBrowseLocal = async () => {
     setBrowsing(true);
     try {
-      const res = await apiGetWithRetry("/segments/browse-local");
-      if (res.ok) {
-        const data = await res.json();
-        const paths: string[] = data.file_paths || (data.file_path ? [data.file_path] : []);
-        if (paths.length > 0) {
-          // Use first file for the dialog path field
-          setLocalPath(paths[0]);
-          if (!localName.trim()) {
-            const filename = paths[0].split(/[/\\]/).pop() || "";
-            setLocalName(filename.replace(/\.[^/.]+$/, ""));
-          }
+      const paths = await pickLocalVideoFiles();
+      if (paths === null) {
+        // No picker available — the manual path Input is right here
+        setLocalError("File picker unavailable — paste the full path below.");
+        return;
+      }
+      if (paths.length > 0) {
+        // Use first file for the dialog path field
+        setLocalPath(paths[0]);
+        if (!localName.trim()) {
+          const filename = paths[0].split(/[/\\]/).pop() || "";
+          setLocalName(filename.replace(/\.[^/.]+$/, ""));
         }
       }
     } catch {
@@ -1283,74 +1285,76 @@ export default function SegmentsPage() {
                 // Open native file picker (multi-select) then add video(s)
                 setBrowsing(true);
                 try {
-                  const res = await apiGetWithRetry("/segments/browse-local");
-                  if (res.ok) {
-                    const data = await res.json();
-                    const paths: string[] = data.file_paths || (data.file_path ? [data.file_path] : []);
-                    if (paths.length === 0) return;
-                    if (paths.length === 1) {
-                      // Single file — show dialog for name editing
-                      setLocalPath(paths[0]);
-                      const filename = paths[0].split(/[/\\]/).pop() || "";
-                      setLocalName(filename.replace(/\.[^/.]+$/, ""));
-                      setShowLocalDialog(true);
-                    } else {
-                      // Multiple files — add all directly using filenames
-                      setAddingLocal(true);
-                      const addedVideos: SourceVideo[] = [];
-                      for (const fp of paths) {
-                        const filename = fp.split(/[/\\]/).pop() || "";
-                        const name = filename.replace(/\.[^/.]+$/, "");
-                        try {
-                          const addRes = await apiPost("/segments/source-videos/local", {
-                            file_path: fp,
-                            name: name || undefined,
-                          });
-                          if (addRes.ok) {
-                            const newVideo = await addRes.json() as SourceVideo;
-                            addedVideos.push(newVideo);
-                            setSourceVideos((prev) => [newVideo, ...prev]);
-                            setSelectedVideo(newVideo);
-                          }
-                        } catch {
-                          // skip failed files, continue with rest
+                  const paths = await pickLocalVideoFiles();
+                  if (paths === null) {
+                    // No picker anywhere — open the dialog for manual path entry
+                    setLocalPath("");
+                    setShowLocalDialog(true);
+                    return;
+                  }
+                  if (paths.length === 0) return;
+                  if (paths.length === 1) {
+                    // Single file — show dialog for name editing
+                    setLocalPath(paths[0]);
+                    const filename = paths[0].split(/[/\\]/).pop() || "";
+                    setLocalName(filename.replace(/\.[^/.]+$/, ""));
+                    setShowLocalDialog(true);
+                  } else {
+                    // Multiple files — add all directly using filenames
+                    setAddingLocal(true);
+                    const addedVideos: SourceVideo[] = [];
+                    for (const fp of paths) {
+                      const filename = fp.split(/[/\\]/).pop() || "";
+                      const name = filename.replace(/\.[^/.]+$/, "");
+                      try {
+                        const addRes = await apiPost("/segments/source-videos/local", {
+                          file_path: fp,
+                          name: name || undefined,
+                        });
+                        if (addRes.ok) {
+                          const newVideo = await addRes.json() as SourceVideo;
+                          addedVideos.push(newVideo);
+                          setSourceVideos((prev) => [newVideo, ...prev]);
+                          setSelectedVideo(newVideo);
                         }
+                      } catch {
+                        // skip failed files, continue with rest
                       }
-                      setAddingLocal(false);
-                      // Poll all processing videos until ready
-                      const processingIds = new Set(
-                        addedVideos.filter((v) => v.status === "processing").map((v) => v.id)
-                      );
-                      if (processingIds.size > 0) {
-                        if (uploadPollRef.current) {
+                    }
+                    setAddingLocal(false);
+                    // Poll all processing videos until ready
+                    const processingIds = new Set(
+                      addedVideos.filter((v) => v.status === "processing").map((v) => v.id)
+                    );
+                    if (processingIds.size > 0) {
+                      if (uploadPollRef.current) {
+                        clearInterval(uploadPollRef.current);
+                        uploadPollRef.current = null;
+                      }
+                      uploadPollRef.current = setInterval(async () => {
+                        for (const vid of [...processingIds]) {
+                          try {
+                            const pollRes = await apiGetWithRetry(`/segments/source-videos/${vid}`);
+                            if (!pollRes.ok) { processingIds.delete(vid); continue; }
+                            const updated: SourceVideo = await pollRes.json();
+                            if (updated.status === "ready" || updated.status === "error") {
+                              processingIds.delete(vid);
+                              setSourceVideos((prev) =>
+                                prev.map((v) => (v.id === updated.id ? updated : v))
+                              );
+                              setSelectedVideo((prev) =>
+                                prev?.id === updated.id ? updated : prev
+                              );
+                            }
+                          } catch {
+                            processingIds.delete(vid);
+                          }
+                        }
+                        if (processingIds.size === 0 && uploadPollRef.current) {
                           clearInterval(uploadPollRef.current);
                           uploadPollRef.current = null;
                         }
-                        uploadPollRef.current = setInterval(async () => {
-                          for (const vid of [...processingIds]) {
-                            try {
-                              const pollRes = await apiGetWithRetry(`/segments/source-videos/${vid}`);
-                              if (!pollRes.ok) { processingIds.delete(vid); continue; }
-                              const updated: SourceVideo = await pollRes.json();
-                              if (updated.status === "ready" || updated.status === "error") {
-                                processingIds.delete(vid);
-                                setSourceVideos((prev) =>
-                                  prev.map((v) => (v.id === updated.id ? updated : v))
-                                );
-                                setSelectedVideo((prev) =>
-                                  prev?.id === updated.id ? updated : prev
-                                );
-                              }
-                            } catch {
-                              processingIds.delete(vid);
-                            }
-                          }
-                          if (processingIds.size === 0 && uploadPollRef.current) {
-                            clearInterval(uploadPollRef.current);
-                            uploadPollRef.current = null;
-                          }
-                        }, 2000);
-                      }
+                      }, 2000);
                     }
                   }
                 } catch {

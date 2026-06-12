@@ -681,6 +681,23 @@ async def find_local_file(
     return {"matches": safe_matches, "file_path": safe_matches[0]}
 
 
+_PICKER_SCRIPT = r"""
+import json, sys
+try:
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk(); root.withdraw(); root.attributes("-topmost", True)
+    paths = filedialog.askopenfilenames(
+        title="Select Video Files",
+        filetypes=[("Video files", "*.mp4 *.mov *.avi *.mkv *.wmv *.flv *.webm *.mpeg *.mpg *.3gp *.ogg"),
+                   ("All files", "*.*")])
+    root.destroy()
+    sys.stdout.write(json.dumps(list(paths)))
+except Exception:
+    sys.stdout.write("[]")
+"""
+
+
 @router.get("/browse-local")
 async def browse_local_file(
     request: Request,
@@ -688,38 +705,36 @@ async def browse_local_file(
 ):
     """Open a native file picker dialog and return the selected file path.
 
-    For local desktop usage only — opens a system file dialog on the server machine.
+    Web/dev only — the desktop shell provides its own native dialog via
+    Electron IPC. tkinter runs in a throwaway subprocess: on Windows a Tk
+    abort (0xC0000409) would otherwise kill the whole uvicorn process.
     """
-    import threading
+    import asyncio
+    import json as _json
+    import os as _os
+    import sys as _sys
 
-    result = {"paths": []}
+    if _os.getenv("DESKTOP_MODE", "").lower() in ("true", "1", "yes"):
+        raise HTTPException(
+            status_code=501,
+            detail="Native file dialog is provided by the desktop shell — update Edit Factory.",
+        )
 
-    def _pick_files():
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)
-            file_paths = filedialog.askopenfilenames(
-                title="Select Video Files",
-                filetypes=[
-                    ("Video files", "*.mp4 *.mov *.avi *.mkv *.wmv *.flv *.webm *.mpeg *.mpg *.3gp *.ogg"),
-                    ("All files", "*.*"),
-                ],
-            )
-            root.destroy()
-            result["paths"] = list(file_paths) if file_paths else []
-        except Exception as e:
-            logger.error(f"File picker error: {e}")
-            result["paths"] = []
+    proc = await asyncio.create_subprocess_exec(
+        _sys.executable, "-c", _PICKER_SCRIPT,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return {"file_path": None, "file_paths": []}
 
-    # tkinter must run on a separate thread (not asyncio event loop)
-    thread = threading.Thread(target=_pick_files)
-    thread.start()
-    thread.join(timeout=120)
-
-    paths = result["paths"]
+    try:
+        paths = _json.loads((out or b"[]").decode("utf-8", "replace").strip() or "[]")
+    except Exception:
+        paths = []
     if not paths:
         return {"file_path": None, "file_paths": []}
 
