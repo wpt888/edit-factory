@@ -21,7 +21,7 @@ from app.api.auth import ProfileContext, get_profile_context
 from app.api.validators import validate_file_mime_type, ALLOWED_VIDEO_MIMES
 from app.utils import sanitize_filename as _sanitize_filename, normalize_path
 from app.core.rate_limit import limiter
-from app.services.ffmpeg_semaphore import get_prep_codec_params, safe_ffmpeg_run
+from app.services.ffmpeg_semaphore import get_prep_codec_params, safe_ffmpeg_run, acquire_preview_slot
 
 import logging
 
@@ -2596,3 +2596,58 @@ async def serve_segment_file(
     media_type = media_types.get(suffix, "application/octet-stream")
 
     return FileResponse(path=str(full_path), media_type=media_type)
+
+
+@router.get("/source-videos/{video_id}/thumbnail")
+async def serve_source_video_thumbnail(
+    video_id: str,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Serve a source video's thumbnail, resolving against the CURRENT base_dir.
+
+    Self-healing + path-portable. The stored ``thumbnail_path`` may be an absolute
+    path from a previous environment (e.g. the project root in dev mode) that does
+    not exist under the current ``base_dir`` (e.g. %APPDATA%\\EditFactory in desktop
+    mode). Instead of trusting that path, we always recompute the expected location
+    from ``base_dir`` + ``video_id``; if the file is missing we regenerate it from the
+    original source video and persist the corrected path back to the DB so subsequent
+    loads are instant.
+    """
+    repo = get_repository()
+
+    video = await asyncio.to_thread(repo.get_source_video, video_id)
+    if not video or video.get("profile_id") != profile.profile_id:
+        raise HTTPException(status_code=404, detail="Source video not found")
+
+    settings = get_settings()
+    source_dir = settings.base_dir / "source_videos"
+    thumb_path = source_dir / f"{video_id}_thumb.jpg"
+
+    # Regenerate if the thumbnail is missing under the current base_dir.
+    if not thumb_path.exists():
+        src_raw = video.get("file_path")
+        src = Path(normalize_path(src_raw)) if src_raw else None
+        if not src or not src.exists():
+            # Original video unavailable on this machine — let the UI fall back to its icon.
+            raise HTTPException(status_code=404, detail="Thumbnail unavailable")
+
+        source_dir.mkdir(parents=True, exist_ok=True)
+        # Bound concurrency (preview semaphore) and run the sync FFmpeg call off the loop.
+        async with await acquire_preview_slot():
+            ok = await asyncio.to_thread(_generate_thumbnail, src, thumb_path, 1)
+        if not ok or not thumb_path.exists():
+            raise HTTPException(status_code=404, detail="Thumbnail unavailable")
+
+        # Heal the DB so the corrected path is used next time (one-time cost).
+        try:
+            await asyncio.to_thread(
+                repo.update_source_video, video_id, {"thumbnail_path": str(thumb_path)}
+            )
+        except Exception as e:
+            logger.warning(f"Could not persist healed thumbnail_path for {video_id}: {e}")
+
+    return FileResponse(
+        path=str(thumb_path),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=300"},
+    )

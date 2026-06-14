@@ -1596,18 +1596,21 @@ export default function SegmentsPage() {
                     }`}
                     onClick={() => video.status !== "processing" && setSelectedVideo(video)}
                   >
-                    {/* Thumbnail */}
-                    <div className="w-14 h-9 bg-muted rounded flex items-center justify-center overflow-hidden flex-shrink-0">
-                      {video.thumbnail_path ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={`${API_URL}/segments/files/${encodeURIComponent(video.thumbnail_path)}`}
-                          alt={video.name}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <Video className="h-4 w-4 text-muted-foreground" />
-                      )}
+                    {/* Thumbnail — icon is the base layer; the <img> overlays it and
+                        hides itself on error (missing/regenerable thumb) so we never
+                        show a broken-image placeholder. Served by-id so the URL is
+                        portable across base_dir changes (dev ↔ desktop). */}
+                    <div className="relative w-14 h-9 bg-muted rounded flex items-center justify-center overflow-hidden flex-shrink-0">
+                      <Video className="h-4 w-4 text-muted-foreground" />
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={`${API_URL}/segments/source-videos/${video.id}/thumbnail`}
+                        alt={video.name}
+                        className="absolute inset-0 w-full h-full object-cover"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).style.display = "none";
+                        }}
+                      />
                     </div>
 
                     {/* Info */}
