@@ -427,23 +427,28 @@ app.include_router(batch_router, prefix="/api/v1", tags=["Batch Pipeline"])
 app.include_router(desktop_ml_router, prefix="/api/v1", tags=["Desktop ML"])
 app.include_router(wiki_router, prefix="/api/v1", tags=["Wiki"])
 
+# Catalog browsing — available in BOTH web and desktop modes. Desktop now runs
+# on Supabase cloud (full catalog parity), so the catalog data is present and must
+# be reachable. catalog_routes has no web-only deps (auth + repository only), so it
+# is safe to import/mount in desktop mode.
+from app.api.catalog_routes import router as catalog_router
+app.include_router(catalog_router, prefix="/api/v1", tags=["Catalog"])
+
 # Web-SaaS-only routes — not mounted in desktop mode (MVP desktop trim, F1).
 # Code is kept intact; the desktop app simply doesn't expose publishing/scheduling,
-# feed sync, catalog, or fal.ai image generation. Imports stay inside the guard so
-# the desktop app doesn't pay their import cost (or import errors) at startup.
+# feed sync, or fal.ai image generation. Imports stay inside the guard so the
+# desktop app doesn't pay their import cost (or import errors) at startup.
 if not settings.desktop_mode:
     from app.api.postiz_routes import router as postiz_router
     from app.api.buffer_routes import router as buffer_router
     from app.api.schedule_routes import router as schedule_router
     from app.api.feed_routes import router as feed_router
-    from app.api.catalog_routes import router as catalog_router
     from app.api.image_generate_routes import router as image_generate_router
 
     app.include_router(postiz_router, prefix="/api/v1", tags=["Postiz Publishing"])
     app.include_router(buffer_router, prefix="/api/v1", tags=["Buffer Publishing"])
     app.include_router(schedule_router, prefix="/api/v1", tags=["Smart Schedule"])
     app.include_router(feed_router, prefix="/api/v1", tags=["feeds"])
-    app.include_router(catalog_router, prefix="/api/v1", tags=["Catalog"])
     app.include_router(image_generate_router, prefix="/api/v1", tags=["AI Image Generation"])
 
 # Desktop-only routes (license, version, settings) — gated behind DESKTOP_MODE
