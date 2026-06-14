@@ -21,6 +21,7 @@
   "build": {
     "appId": "com.editfactory.app",
     "productName": "Edit Factory",
+    "beforePack": "scripts/before-pack.js",
     "win": {
       "target": [
         "nsis",
@@ -100,6 +101,10 @@
       {
         "from": "../supabase/sqlite_schema.sql",
         "to": "supabase/sqlite_schema.sql"
+      },
+      {
+        "from": "credentials.env",
+        "to": "credentials.env"
       },
       {
         "from": "resources/node",

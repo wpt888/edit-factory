@@ -4,3 +4,5 @@ out/
 *.log
 resources/node/
 resources/*.zip
+# Generated at build time by scripts/before-pack.js — contains anon Supabase creds.
+credentials.env

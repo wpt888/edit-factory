@@ -147,6 +147,39 @@ function cleanupOrphans() {
   }
 }
 
+// ---------- DATA-01: Seed Supabase credentials on first packaged run ----------
+// Packaged desktop ships no .env. The backend reads %APPDATA%\EditFactory\.env as
+// its highest-priority config source (config.py settings_customise_sources), so we
+// copy the bundled credentials.env there once. This is what points the app at the
+// same Supabase cloud as the web app. Idempotent: never overwrites an existing .env,
+// so Settings-wizard edits (desktop/routes.py _write_env_keys) are preserved.
+function seedDesktopEnv() {
+  if (isDev) return;   // dev loads the project-root .env directly — nothing to seed
+  try {
+    const appData = process.env.APPDATA;
+    if (!appData) {
+      logLine('launcher', 'APPDATA missing — cannot seed credentials.env');
+      return;
+    }
+    const baseDir = path.join(appData, 'EditFactory');
+    const target = path.join(baseDir, '.env');
+    if (fs.existsSync(target)) {
+      logLine('launcher', 'AppData .env already present — leaving as-is');
+      return;
+    }
+    const source = path.join(process.resourcesPath, 'credentials.env');
+    if (!fs.existsSync(source)) {
+      logLine('launcher', `Bundled credentials.env not found at ${source} — skipping seed`);
+      return;
+    }
+    fs.mkdirSync(baseDir, { recursive: true });
+    fs.copyFileSync(source, target);
+    logLine('launcher', `Seeded credentials.env -> ${target}`);
+  } catch (err) {
+    logLine('launcher', `Credential seed failed (non-fatal): ${err.message}`);
+  }
+}
+
 // ---------- SHELL-01: Spawn backend ----------
 function startBackend() {
   logLine('launcher', 'Starting backend...');
@@ -162,7 +195,12 @@ function startBackend() {
       env: {
         ...process.env,
         DESKTOP_MODE: 'true',
-        DATA_BACKEND: 'sqlite',
+        // Cloud parity: desktop reads/writes the SAME Supabase cloud as the web
+        // app (real projects/clips + per-profile API keys), instead of an empty
+        // local SQLite DB. Credentials come from %APPDATA%\EditFactory\.env,
+        // seeded by seedDesktopEnv() in packaged mode and from the project .env
+        // in dev. Profile resolves to the cloud default profile (auth.py:310).
+        DATA_BACKEND: 'supabase',
         // settings.host is read from HOST (default 0.0.0.0), separate from the
         // uvicorn --host bind. Desktop mode refuses any non-localhost host, so
         // pin it — the packaged app has no .env to supply HOST=127.0.0.1.
@@ -636,6 +674,10 @@ app.whenReady().then(async () => {
 
     // SHELL-02: Create hidden window
     createWindow();
+
+    // DATA-01: Seed Supabase credentials into %APPDATA%\EditFactory\.env (first
+    // packaged run only) so the backend connects to the cloud, not local SQLite.
+    seedDesktopEnv();
 
     // SHELL-01: Spawn services
     startBackend();
