@@ -29,7 +29,7 @@ from app.core.rate_limit import limiter
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 from app.services.job_storage import get_job_storage
-from app.services.script_generator import get_script_generator
+from app.services.script_generator import get_script_generator_for_profile
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,7 @@ async def _generate_scripts_for_idea(
         except Exception as e:
             logger.warning(f"Batch: ai_instructions fetch failed: {e}")
 
-    generator = get_script_generator()
+    generator = get_script_generator_for_profile(profile_id)
     return await asyncio.to_thread(
         generator.generate_scripts,
         idea=idea,

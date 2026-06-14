@@ -30,7 +30,7 @@ from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 from app.utils import normalize_path
 from app.core.rate_limit import limiter
-from app.services.script_generator import get_script_generator
+from app.services.script_generator import get_script_generator_for_profile
 from app.services.assembly_service import get_assembly_service, strip_product_group_tags
 from app.services.meta_visual_profiles import META_PROFILES, META_PROFILES_BY_NAME, get_version_label
 from app.config import get_settings
@@ -2336,7 +2336,7 @@ async def regenerate_script(
         )
 
     try:
-        generator = get_script_generator()
+        generator = get_script_generator_for_profile(profile.profile_id)
         new_scripts = await asyncio.to_thread(
             generator.generate_scripts,
             idea=idea,
@@ -2623,7 +2623,7 @@ async def generate_pipeline(
     )
 
     try:
-        generator = get_script_generator()
+        generator = get_script_generator_for_profile(profile.profile_id)
         # SCR-03: Run synchronous AI call in a thread to avoid blocking the async event loop
         effective_context = _build_effective_pipeline_context(
             body.context,
