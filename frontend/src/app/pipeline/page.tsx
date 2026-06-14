@@ -2068,7 +2068,11 @@ function PipelinePage() {
         const data = await res.json();
         setVoices(data.voices || []);
       } catch (err) {
-        handleApiError(err, "Failed to load voices");
+        // Degrade silently: voice loading failures (e.g. no ElevenLabs key/voice
+        // configured for this profile) must not blanket the app with a toast on
+        // every page load. The voice picker simply stays empty until configured.
+        console.warn("Failed to load ElevenLabs voices:", err);
+        setVoices([]);
       } finally {
         setVoicesLoading(false);
       }

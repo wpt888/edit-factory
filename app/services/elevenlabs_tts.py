@@ -105,8 +105,8 @@ class ElevenLabsTTS:
 
         if not self.api_key:
             raise ValueError("ELEVENLABS_API_KEY is required")
-        if not self.voice_id:
-            raise ValueError("ELEVENLABS_VOICE_ID is required")
+        # voice_id is enforced at generation time (see _ensure_voice_id), not
+        # here, so the service can be constructed without one (e.g. for setup).
 
         # Ana Maria voice settings (extracted from user's ElevenLabs config)
         self.voice_settings = {
@@ -117,6 +117,14 @@ class ElevenLabsTTS:
         }
 
         logger.info(f"ElevenLabsTTS initialized with voice: {self.voice_id}, model: {self.model_id}")
+
+    def _ensure_voice_id(self) -> None:
+        """Require a voice_id before generating audio (deferred from __init__)."""
+        if not self.voice_id:
+            raise ValueError(
+                "ELEVENLABS_VOICE_ID is required — select an ElevenLabs voice "
+                "in Settings for this profile before generating audio."
+            )
 
     async def generate_audio(
         self,
@@ -141,6 +149,7 @@ class ElevenLabsTTS:
         Returns:
             Path to the generated audio file
         """
+        self._ensure_voice_id()
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -360,6 +369,7 @@ class ElevenLabsTTS:
         Returns:
             Tuple of (output_path, silence_removal_stats)
         """
+        self._ensure_voice_id()
         output_path = Path(output_path)
 
         # C7: Cache check at trimmed level to avoid temp dir + silence processing overhead

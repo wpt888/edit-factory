@@ -90,13 +90,31 @@ class ElevenLabsTTSService(TTSService):
                 logger.debug(f"Account manager key lookup failed, falling back to env: {e}")
 
         self.api_key = api_key or settings.elevenlabs_api_key
-        self._voice_id = voice_id or settings.elevenlabs_voice_id
+
+        # Resolve voice_id per-profile: explicit param > profile's
+        # tts_settings.elevenlabs.voice_id (Supabase) > global env fallback.
+        # This mirrors how assembly_service reads profile tts_settings.
+        resolved_voice = voice_id
+        if not resolved_voice and profile_id:
+            try:
+                from app.repositories.factory import get_repository
+                repo = get_repository()
+                profile_row = repo.get_profile(profile_id) if repo else None
+                resolved_voice = (
+                    ((profile_row or {}).get("tts_settings") or {})
+                    .get("elevenlabs", {})
+                    .get("voice_id")
+                )
+            except Exception as e:
+                logger.debug(f"Per-profile voice_id lookup failed, falling back to env: {e}")
+        self._voice_id = resolved_voice or settings.elevenlabs_voice_id
         self.model_id = model_id or getattr(settings, 'elevenlabs_model', 'eleven_flash_v2_5')
 
+        # Only the API key is required to construct the service (e.g. to list
+        # voices). voice_id is required only at generation time — see
+        # generate_audio — so the user can browse/pick a voice before one is set.
         if not self.api_key:
             raise ValueError("ELEVENLABS_API_KEY is required")
-        if not self._voice_id:
-            raise ValueError("ELEVENLABS_VOICE_ID is required")
 
         # Ana Maria voice settings (extracted from user's ElevenLabs config)
         self.voice_settings = {
@@ -194,6 +212,15 @@ class ElevenLabsTTSService(TTSService):
         Returns:
             TTSResult with audio path, duration, and cost
         """
+        # voice_id is enforced here (not in __init__) so the service can be
+        # constructed for read-only operations like list_voices without one.
+        voice_id = voice_id or self._voice_id
+        if not voice_id:
+            raise ValueError(
+                "ELEVENLABS_VOICE_ID is required — select an ElevenLabs voice "
+                "in Settings for this profile before generating audio."
+            )
+
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -396,6 +423,15 @@ class ElevenLabsTTSService(TTSService):
                 "character_end_times_seconds": [0.05, 0.09, 0.14, ...]
             }
         """
+        # voice_id is enforced here (not in __init__) so the service can be
+        # constructed for read-only operations like list_voices without one.
+        voice_id = voice_id or self._voice_id
+        if not voice_id:
+            raise ValueError(
+                "ELEVENLABS_VOICE_ID is required — select an ElevenLabs voice "
+                "in Settings for this profile before generating audio."
+            )
+
         if len(text) > ELEVENLABS_MAX_CHARS:
             raise ValueError(f"Text too long ({len(text)} chars, max {ELEVENLABS_MAX_CHARS})")
 

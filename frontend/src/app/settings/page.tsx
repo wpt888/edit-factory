@@ -232,8 +232,11 @@ export default function SettingsPage() {
         const ttsSettings = data.tts_settings || {}
 
         setProvider("elevenlabs")
-        if (ttsSettings.voice_id) {
-          setVoiceId(ttsSettings.voice_id)
+        // Prefer the nested per-profile voice (tts_settings.elevenlabs.voice_id),
+        // fall back to the legacy top-level field.
+        const loadedVoiceId = ttsSettings.elevenlabs?.voice_id || ttsSettings.voice_id
+        if (loadedVoiceId) {
+          setVoiceId(loadedVoiceId)
         }
 
         const postizSettings = ttsSettings.postiz || {}
@@ -337,7 +340,9 @@ export default function SettingsPage() {
           setVoiceId("")
         }
       } catch (error) {
-        handleApiError(error, "Error loading voices")
+        // Degrade gracefully: the user is on Settings to configure a voice/key,
+        // so a blocking toast is counterproductive. Leave the picker empty.
+        console.warn("Failed to load voices:", error)
         setVoices([])
       } finally {
         setLoadingVoices(false)
@@ -399,10 +404,20 @@ export default function SettingsPage() {
 
       const selectedVoice = voices.find(v => v.voice_id === voiceId)
 
+      // Backend resolves the per-profile voice from tts_settings.elevenlabs.voice_id
+      // (see ElevenLabsTTSService.__init__). Write it nested while preserving any
+      // existing elevenlabs tuning; keep the top-level voice_id for legacy readers.
+      const existingElevenlabs = (existingTts.elevenlabs ?? {}) as Record<string, unknown>
+
       const ttsSettings: TTSSettings = {
         ...existingTts,
         provider: "elevenlabs",
         voice_id: voiceId,
+        elevenlabs: {
+          ...existingElevenlabs,
+          voice_id: voiceId,
+          ...(selectedVoice ? { voice_name: selectedVoice.name } : {}),
+        },
         postiz: {
           api_url: postizUrl,
           api_key: postizKey,
