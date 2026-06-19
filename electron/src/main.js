@@ -3,7 +3,7 @@
 // Spawns FastAPI backend + Next.js frontend, polls for readiness,
 // opens BrowserWindow, manages tray icon, handles graceful shutdown.
 
-const { app, BrowserWindow, Tray, Menu, dialog, ipcMain, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, dialog, ipcMain, nativeImage, shell } = require('electron');
 const { spawn, spawnSync } = require('child_process');
 const http = require('http');
 const path = require('path');
@@ -94,6 +94,7 @@ function logLine(tag, msg) {
 
 // ---------- State ----------
 let mainWindow = null;
+let splashWindow = null;  // Branded splash shown during the 30-60s cold start
 let tray = null;          // Module-level — prevents GC (Pitfall 1)
 let backendProcess = null;
 let frontendProcess = null;
@@ -387,6 +388,46 @@ async function checkStartupState() {
   }
 }
 
+// Branded splash window: shown immediately on launch so the user sees life
+// during the 30-60s two-runtime cold start instead of a hidden/frozen window.
+function createSplash() {
+  splashWindow = new BrowserWindow({
+    width: 440,
+    height: 300,
+    frame: false,
+    resizable: false,
+    movable: true,
+    show: true,
+    center: true,
+    alwaysOnTop: true,
+    backgroundColor: '#0b0b0f',
+    title: 'Edit Factory',
+    icon: ICON_PATH,
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+  });
+  splashWindow.loadFile(path.join(__dirname, 'splash.html')).catch((e) => {
+    logLine('launcher', `Splash load failed (non-fatal): ${e.message}`);
+  });
+  splashWindow.on('closed', () => { splashWindow = null; });
+}
+
+function closeSplash() {
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    try { splashWindow.close(); } catch { /* already gone */ }
+  }
+  splashWindow = null;
+}
+
+function updateSplash(backOk, frontOk, elapsed) {
+  if (!splashWindow || splashWindow.isDestroyed()) return;
+  // A coarse time-based creep (capped) keeps the bar inching forward between
+  // the two real milestones (API ready, UI ready) so it never looks frozen.
+  const pct = Math.min(90, Math.round((elapsed / MAX_WAIT_MS) * 100));
+  splashWindow.webContents
+    .executeJavaScript(`window.__setStatus && window.__setStatus(${!!backOk}, ${!!frontOk}, ${pct})`)
+    .catch(() => {});
+}
+
 function waitForServices() {
   return new Promise((resolve, reject) => {
     let elapsed = 0;
@@ -409,6 +450,9 @@ function waitForServices() {
         else status.push('UI starting...');
         tray.setToolTip(`Edit Factory — ${status.join(', ')}`);
       }
+
+      // Update the branded splash progress bar
+      updateSplash(backOk, frontOk, elapsed);
 
       if (backOk && frontOk) {
         clearInterval(interval);
@@ -536,6 +580,15 @@ function createWindow() {
 
   // Hidden menu keeps accelerators; bar never shows (Alt does not reveal it)
   mainWindow.setMenuBarVisibility(false);
+
+  // External links (target="_blank" — e.g. "Get a free Gemini key →") open in
+  // the system browser, not a bare Electron window. In-app navigation only.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
 
   // Hide window instead of closing — tray keeps app alive
   mainWindow.on('close', (event) => {
@@ -672,6 +725,9 @@ app.whenReady().then(async () => {
     // SHELL-03: Create tray icon
     createTray();
 
+    // Branded splash — visible immediately so the cold start never looks frozen
+    createSplash();
+
     // SHELL-02: Create hidden window
     createWindow();
 
@@ -693,13 +749,17 @@ app.whenReady().then(async () => {
 
     logLine('launcher', `Loading: ${startupUrl}`);
     mainWindow.loadURL(startupUrl);
-    mainWindow.once('ready-to-show', () => mainWindow.show());
+    mainWindow.once('ready-to-show', () => {
+      mainWindow.show();
+      closeSplash();  // Hand off from splash to the real window
+    });
     tray.setToolTip('Edit Factory');
 
     // UPDT-01: Check for updates after services are confirmed running
     setupAutoUpdater();
   } catch (err) {
     logLine('launcher', `Startup failed: ${err.stack || err.message}`);
+    closeSplash();  // Don't leave the splash hanging over the error dialog
     dialog.showErrorBox('Startup Failed', String(err.stack || err.message));
     isQuitting = true;
     await cleanup();

@@ -179,7 +179,8 @@ class ElevenLabsTTSService(TTSService):
                         provider="elevenlabs",
                         requires_cloning=False,
                         cost_per_1k_chars=self.cost_per_1k_chars,
-                        category=v.get("category", "premade")
+                        category=v.get("category", "premade"),
+                        preview_url=v.get("preview_url"),
                     ))
 
                 # Sort: user voices (cloned/generated) first, then premade

@@ -24,8 +24,15 @@ logger = logging.getLogger(__name__)
 
 # Max concurrent FINAL FFmpeg render processes (the heavy encode step).
 # Library, Pipeline, and Product routes all share this single gate.
-# Set to 1 to prevent WSL2 OOM crashes — renders queue instead of running in parallel.
-MAX_CONCURRENT_RENDERS = int(os.environ.get("MAX_CONCURRENT_RENDERS", "1"))
+#
+# Wave 2.1: the default now ADAPTS to hardware instead of being pinned to 1.
+#   - explicit env MAX_CONCURRENT_RENDERS always wins (set "1" to force serial)
+#   - GPU (NVENC) present -> 2, or 3 with >=12 GB VRAM: NVENC sessions are light
+#     (~1.5-2 GB each) so a couple run comfortably in parallel
+#   - CPU-only -> 1 (libx264 2-pass is heavy; parallel CPU encodes just thrash)
+# 0 here means "decide lazily once the event loop / GPU probe is available".
+_RENDER_CONCURRENCY_ENV = os.environ.get("MAX_CONCURRENT_RENDERS")
+MAX_CONCURRENT_RENDERS = int(_RENDER_CONCURRENCY_ENV) if _RENDER_CONCURRENCY_ENV else 0
 _ffmpeg_render_semaphore: asyncio.Semaphore | None = None
 
 # Max concurrent PREPARATORY FFmpeg processes (trim, extend, silence removal,
@@ -53,12 +60,50 @@ async def init_semaphores() -> None:
     logger.info("FFmpeg semaphores initialized")
 
 
+def _detect_gpu_vram_gb() -> float:
+    """Best-effort total VRAM (GB) of the largest NVIDIA GPU; 0.0 if unknown."""
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            vals = [float(x) for x in out.stdout.split() if x.strip().replace(".", "").isdigit()]
+            if vals:
+                return max(vals) / 1024.0  # MiB -> GiB
+    except Exception:
+        pass
+    return 0.0
+
+
+def compute_render_concurrency() -> int:
+    """Adaptive default for concurrent final renders (Wave 2.1).
+
+    Honors an explicit MAX_CONCURRENT_RENDERS env override; otherwise scales with
+    the GPU: NVENC present -> 2 (3 with big VRAM), CPU-only -> 1.
+    """
+    if _RENDER_CONCURRENCY_ENV:
+        try:
+            return max(1, int(_RENDER_CONCURRENCY_ENV))
+        except ValueError:
+            pass
+    if is_nvenc_available():
+        return 3 if _detect_gpu_vram_gb() >= 12.0 else 2
+    return 1
+
+
 async def _get_render_semaphore() -> asyncio.Semaphore:
     """Lazily create render semaphore in the running event loop."""
-    global _ffmpeg_render_semaphore
+    global _ffmpeg_render_semaphore, MAX_CONCURRENT_RENDERS
     if _ffmpeg_render_semaphore is None:
         async with _semaphore_init_lock:
             if _ffmpeg_render_semaphore is None:
+                if not MAX_CONCURRENT_RENDERS:
+                    MAX_CONCURRENT_RENDERS = compute_render_concurrency()
+                logger.info(
+                    f"Render concurrency = {MAX_CONCURRENT_RENDERS} "
+                    f"(NVENC={is_nvenc_available()})"
+                )
                 _ffmpeg_render_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RENDERS)
     return _ffmpeg_render_semaphore
 
@@ -194,6 +239,107 @@ def safe_ffmpeg_run(
         )
     finally:
         unregister_process(proc)
+
+
+def safe_ffmpeg_run_with_progress(
+    cmd: list,
+    total_duration: float,
+    on_progress=None,
+    timeout: int = 1800,
+    operation: str = "ffmpeg",
+) -> subprocess.CompletedProcess:
+    """Run an FFmpeg encode while streaming REAL progress.
+
+    Injects ``-progress pipe:1 -nostats`` and parses ffmpeg's progress stream to
+    invoke ``on_progress(fraction)`` (0.0-1.0) as the encode advances — this is
+    what replaces the fake "jumps to 85% then freezes" progress bar.
+
+    stderr is redirected to a temp file (not a pipe) so reading stdout cannot
+    deadlock on a full stderr buffer; its contents are returned in the result
+    for error reporting. A watchdog timer guarantees a hard timeout even though
+    we read line-by-line instead of using ``communicate(timeout=...)``.
+
+    Falls back to plain ``safe_ffmpeg_run`` when no usable duration/callback is
+    supplied, so callers can pass ``on_progress=None`` unconditionally.
+    """
+    from app.services.ffmpeg_registry import (
+        register_process,
+        unregister_process,
+        was_killed_by_cancel,
+    )
+    import time
+    import tempfile
+    import threading
+
+    if on_progress is None or not total_duration or total_duration <= 0:
+        return safe_ffmpeg_run(cmd, timeout=timeout, operation=operation)
+
+    # Inject progress flags right after the executable (+ optional "-y"), before
+    # inputs/output. Build a new list — never mutate the caller's cmd.
+    insert_at = 2 if len(cmd) >= 2 and cmd[1] == "-y" else 1
+    run_cmd = cmd[:insert_at] + ["-progress", "pipe:1", "-nostats"] + cmd[insert_at:]
+
+    stderr_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
+    proc = subprocess.Popen(
+        run_cmd,
+        stdout=subprocess.PIPE,
+        stderr=stderr_file,
+        text=True,
+    )
+    register_process(proc)
+
+    timed_out = {"v": False}
+
+    def _on_timeout():
+        timed_out["v"] = True
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    watchdog = threading.Timer(timeout, _on_timeout)
+    watchdog.daemon = True
+    watchdog.start()
+
+    last_frac = -1.0
+    try:
+        # ffmpeg emits a progress block (~every 0.5s while encoding); each ends
+        # with a "progress=continue|end" line. Parse out_time to a fraction.
+        for line in proc.stdout:
+            line = line.strip()
+            if line.startswith("out_time_us=") or line.startswith("out_time_ms="):
+                # Both keys are microseconds in ffmpeg's progress output.
+                try:
+                    secs = int(line.split("=", 1)[1]) / 1_000_000.0
+                except ValueError:
+                    continue
+                frac = max(0.0, min(0.999, secs / total_duration))
+                if frac - last_frac >= 0.01:  # throttle to ~1% steps
+                    last_frac = frac
+                    try:
+                        on_progress(frac)
+                    except Exception:
+                        pass
+        proc.wait(timeout=30)
+        if timed_out["v"]:
+            raise RuntimeError(f"{operation} timed out after {timeout}s")
+        if was_killed_by_cancel(proc):
+            raise RuntimeError(f"{operation} was cancelled by user")
+        stderr_file.seek(0)
+        stderr_text = stderr_file.read()
+        return subprocess.CompletedProcess(
+            args=run_cmd,
+            returncode=proc.returncode,
+            stdout="",
+            stderr=stderr_text,
+        )
+    finally:
+        watchdog.cancel()
+        unregister_process(proc)
+        try:
+            stderr_file.close()
+        except Exception:
+            pass
 
 
 # =============================================================================

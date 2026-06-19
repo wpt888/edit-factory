@@ -419,6 +419,12 @@ function SetupPageContent() {
                      "Test"}
                   </Button>
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  Gemini are un tier gratuit generos.{" "}
+                  <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                    Ia o cheie gratuită →
+                  </a>
+                </p>
               </div>
 
               {/* ElevenLabs — dimmed when Free TTS selected */}
@@ -470,6 +476,12 @@ function SetupPageContent() {
                        "Test"}
                     </Button>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Voci premium · ~$0.22 / 1000 caractere.{" "}
+                    <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                      Ia o cheie ElevenLabs →
+                    </a>
+                  </p>
                 </div>
               )}
 

@@ -480,7 +480,8 @@ class AssemblyService:
     async def generate_srt_from_timestamps(
         self,
         timestamps: dict,
-        max_words_per_phrase: int = 2
+        max_words_per_phrase: int = 2,
+        karaoke: bool = False
     ) -> str:
         """
         Generate SRT content from ElevenLabs timestamps.
@@ -488,13 +489,14 @@ class AssemblyService:
         Args:
             timestamps: ElevenLabs alignment dict
             max_words_per_phrase: Max words per subtitle entry (default: 2)
+            karaoke: Emit per-word {\\k} timing tags for karaoke captions
 
         Returns:
             SRT-formatted string
         """
         from app.services.tts_subtitle_generator import generate_srt_from_timestamps
 
-        srt_content = generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
+        srt_content = generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase, karaoke=karaoke)
 
         logger.info(f"Generated SRT with {len(srt_content.split(chr(10) + chr(10)))} entries")
 
@@ -1884,12 +1886,12 @@ class AssemblyService:
                 from app.services.tts_cache import srt_cache_lookup, srt_cache_store
                 _vs = voice_settings or {}
                 _vs_hash = f"{_vs.get('stability', 0.5):.2f}_{_vs.get('similarity_boost', 0.75):.2f}_{_vs.get('speed', 1.0):.2f}"
-                _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "wpf": max_words_per_phrase, "vs": _vs_hash}
+                _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "wpf": max_words_per_phrase, "vs": _vs_hash, "karaoke": bool((subtitle_settings or {}).get("karaoke", False))}
                 cached_srt = srt_cache_lookup(_srt_cache_key)
                 if cached_srt:
                     srt_content = cached_srt
                 elif timestamps:
-                    srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
+                    srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase, karaoke=bool((subtitle_settings or {}).get("karaoke", False)))
                     if srt_content:
                         srt_cache_store(_srt_cache_key, srt_content)
                 else:
@@ -1903,7 +1905,7 @@ class AssemblyService:
                         voice_settings=voice_settings,
                         temp_dir=temp_dir
                     )
-                    srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
+                    srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase, karaoke=bool((subtitle_settings or {}).get("karaoke", False)))
 
             if not srt_content:
                 raise RuntimeError("SRT subtitle generation failed — no content produced")
@@ -2279,6 +2281,12 @@ class AssemblyService:
                 saturation=saturation,
                 _preview_mode=_preview_mode,
                 force_cpu=force_cpu,
+                # Real encode progress fills the 85%->99% band (replaces the
+                # fake freeze at 85%). _report no-ops when no on_progress consumer.
+                on_encode_progress=(
+                    (lambda f: _report("Rendering final video", min(99, 85 + int(round(14 * f)))))
+                    if on_progress else None
+                ),
             )
 
             logger.info(f"Assembly complete: {final_output_path}")
@@ -2490,7 +2498,7 @@ class AssemblyService:
         # Include voice_settings hash — different speed/stability produces different timing
         _vs = voice_settings or {}
         _vs_hash = f"{_vs.get('stability', 0.5):.2f}_{_vs.get('similarity_boost', 0.75):.2f}_{_vs.get('speed', 1.0):.2f}"
-        _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "wpf": max_words_per_phrase, "vs": _vs_hash}
+        _srt_cache_key = {"text": cleaned_text, "voice_id": voice_id or "", "model_id": elevenlabs_model, "provider": "elevenlabs_ts", "wpf": max_words_per_phrase, "vs": _vs_hash, "karaoke": bool((subtitle_settings or {}).get("karaoke", False))}
 
         srt_content = ""
         if reuse_srt_content:
@@ -2504,7 +2512,7 @@ class AssemblyService:
             if cached_srt:
                 srt_content = cached_srt
             elif timestamps:
-                srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
+                srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase, karaoke=bool((subtitle_settings or {}).get("karaoke", False)))
                 if srt_content:
                     srt_cache_store(_srt_cache_key, srt_content)
             else:
@@ -2518,7 +2526,7 @@ class AssemblyService:
                     voice_id=voice_id,
                     voice_settings=voice_settings
                 )
-                srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase)
+                srt_content = await self.generate_srt_from_timestamps(timestamps, max_words_per_phrase=max_words_per_phrase, karaoke=bool((subtitle_settings or {}).get("karaoke", False)))
                 if srt_content:
                     srt_cache_store(_srt_cache_key, srt_content)
 

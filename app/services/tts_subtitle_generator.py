@@ -91,10 +91,43 @@ def _seconds_to_srt_time(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{milliseconds:03d}"
 
 
+def _escape_ass_text(text: str) -> str:
+    """Escape a word for safe embedding in SRT text alongside ASS override tags.
+
+    Mirrors ``sanitize_srt_for_ffmpeg`` for a single token: backslashes and
+    braces are escaped so user text cannot inject ASS tags, while leaving the
+    karaoke ``{\\k..}`` tags we add ourselves intact.
+    """
+    return text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+
+
+def _build_karaoke_cue_text(words: List[dict], phrase_end: float) -> str:
+    """Build a karaoke-tagged cue body: ``{\\kNN}word {\\kNN}word ...``.
+
+    Each word gets an ASS ``\\k`` syllable-timing tag (centiseconds) sized to
+    the gap until the NEXT word starts, so the highlight advances exactly in
+    step with the voice and naturally holds through short pauses. libass honors
+    ``\\k`` tags embedded in SRT cue text (same mechanism as the ``{\\q2}`` wrap
+    override used elsewhere), so no ASS-file switch is needed.
+    """
+    parts: List[str] = []
+    n = len(words)
+    for i, w in enumerate(words):
+        w_start = w["start"]
+        w_end = w["end"]
+        next_start = words[i + 1]["start"] if i + 1 < n else phrase_end
+        # Active duration = until the next word begins (absorbs inter-word pauses).
+        dur = max(next_start, w_end) - w_start
+        cs = max(1, int(round(dur * 100)))
+        parts.append(f"{{\\k{cs}}}{_escape_ass_text(w['text'])}")
+    return " ".join(parts)
+
+
 def generate_srt_from_timestamps(
     timestamps: Optional[dict],
     max_chars_per_phrase: int = 40,
-    max_words_per_phrase: int = 7
+    max_words_per_phrase: int = 7,
+    karaoke: bool = False
 ) -> str:
     """
     Generate SRT subtitle content from ElevenLabs character-level timestamps.
@@ -103,6 +136,11 @@ def generate_srt_from_timestamps(
     1. Characters to words (split on spaces and punctuation)
     2. Words to phrases (max 40 chars or 7 words per subtitle entry)
     3. Phrases to SRT format (sequential numbering with HH:MM:SS,mmm timing)
+
+    When ``karaoke=True``, each cue's words carry ASS ``\\k`` syllable-timing
+    tags so the burn-in path can highlight words in sync with the voice
+    (word-level karaoke captions). The per-word timing — already computed in
+    step 1 — is preserved through to the cue text instead of being discarded.
 
     Args:
         timestamps: ElevenLabs alignment dict with structure:
@@ -224,7 +262,8 @@ def generate_srt_from_timestamps(
             phrases.append({
                 "text": current_phrase_text,
                 "start": current_phrase_start,
-                "end": current_phrase_end
+                "end": current_phrase_end,
+                "words": list(current_phrase_words),
             })
             # Reset accumulator
             current_phrase_words = []
@@ -249,7 +288,8 @@ def generate_srt_from_timestamps(
             phrases.append({
                 "text": current_phrase_text,
                 "start": current_phrase_start,
-                "end": current_phrase_end
+                "end": current_phrase_end,
+                "words": list(current_phrase_words),
             })
             # Reset accumulator
             current_phrase_words = []
@@ -262,7 +302,8 @@ def generate_srt_from_timestamps(
         phrases.append({
             "text": current_phrase_text,
             "start": current_phrase_start,
-            "end": current_phrase_end
+            "end": current_phrase_end,
+            "words": list(current_phrase_words),
         })
 
     # Step 3: Phrases to SRT (with minimum duration enforcement and merge for zero-duration)
@@ -274,7 +315,8 @@ def generate_srt_from_timestamps(
     for i, phrase in enumerate(phrases):
         start = phrase["start"]
         end = phrase["end"]
-        text = phrase["text"]
+        # Karaoke cues carry per-word {\k..} timing tags; plain cues stay as-is.
+        text = _build_karaoke_cue_text(phrase["words"], phrase["end"]) if karaoke else phrase["text"]
 
         # Enforce minimum duration
         if end - start < MIN_DURATION:
@@ -337,5 +379,8 @@ def generate_srt_from_timestamps(
 
     logger.info(f"Generated SRT with {srt_index - 1} subtitle entries from {len(words)} words ({len(characters)} characters)")
 
-    srt_content = sanitize_srt_for_ffmpeg(srt_content)
+    # Karaoke cues already escape each word individually and must keep their
+    # {\k..} tags — the blanket brace/backslash sanitizer would corrupt them.
+    if not karaoke:
+        srt_content = sanitize_srt_for_ffmpeg(srt_content)
     return srt_content

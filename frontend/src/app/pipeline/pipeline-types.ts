@@ -141,6 +141,7 @@ export interface Voice {
   name: string;
   language?: string;
   category?: string;
+  preview_url?: string | null;
 }
 
 export interface ContextProduct {

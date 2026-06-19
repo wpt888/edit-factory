@@ -29,7 +29,7 @@ from app.api.validators import (
     validate_file_mime_type, ALLOWED_VIDEO_MIMES,
 )
 from app.core.rate_limit import limiter
-from app.services.encoding_presets import get_preset, EncodingPreset
+from app.services.encoding_presets import get_preset, EncodingPreset, apply_quality_mode, get_default_quality_mode
 from app.services.audio.normalizer import measure_loudness, build_loudnorm_filter
 from app.services.video_effects.filters import VideoFilters, DenoiseConfig, SharpenConfig, ColorConfig
 from app.services.video_effects.subtitle_styler import build_subtitle_filter
@@ -53,7 +53,7 @@ _MAX_CANCELLED = 200
 # Global semaphore shared across ALL routes (library, pipeline, product)
 from app.services.ffmpeg_semaphore import (
     acquire_render_slot, acquire_prep_slot, safe_ffmpeg_run, check_disk_space,
-    is_nvenc_available, get_prep_codec_params,
+    is_nvenc_available, get_prep_codec_params, safe_ffmpeg_run_with_progress,
 )
 # Keep legacy name for backwards compat with product_generate_routes import
 _ffmpeg_render_semaphore = None  # DEPRECATED — use acquire_render_slot() instead
@@ -4403,6 +4403,13 @@ async def _render_with_preset(
     # Preview mode: skip loudnorm, use ultrafast codec
     _preview_mode: bool = False,
     force_cpu: bool = False,
+    # Optional encode-progress callback: receives a fraction 0.0-1.0 as ffmpeg
+    # encodes. Used to drive a real (not fake) progress bar during the final
+    # render. None = no streaming (plain safe_ffmpeg_run).
+    on_encode_progress=None,
+    # Render quality/speed mode (Wave 2.1): "speed" | "balanced" | "max".
+    # None = use the configured default (env RENDER_QUALITY_MODE, else balanced).
+    quality_mode: Optional[str] = None,
 ):
     """
     Randează video-ul final cu preset optimizat pentru social media.
@@ -4583,6 +4590,14 @@ async def _render_with_preset(
 
         logger.info(f"Using encoding preset: {encoding_preset.name} (platform: {encoding_preset.platform}, mode: {encoding_preset.encoding_mode})")
 
+        # Wave 2.1: resolve the effective encode path from the render quality mode.
+        # balanced/speed + GPU -> NVENC single-pass (3-5x faster, frees CPU);
+        # max -> CPU libx264 2-pass. This is what stops the GPU from being wasted.
+        _qmode = (quality_mode or get_default_quality_mode())
+        _gpu_ok = (not force_cpu) and is_nvenc_available()
+        encoding_preset = apply_quality_mode(encoding_preset, _qmode, gpu_available=_gpu_ok)
+        logger.info(f"Render quality mode: {_qmode} (gpu_available={_gpu_ok}) -> encoding_mode={encoding_preset.encoding_mode}")
+
         # Use GPU encoding when NVENC is available (much faster + frees CPU)
         _use_gpu = False if force_cpu else is_nvenc_available()
         if force_cpu:
@@ -4664,7 +4679,9 @@ async def _render_with_preset(
             pass1_cmd.extend(["-an", "-f", "null", os.devnull])
 
             logger.info(f"Pass 1 command: {' '.join(pass1_cmd)}")
-            result1 = await asyncio.to_thread(safe_ffmpeg_run, pass1_cmd, 1200, "VBR 2-pass: pass 1")
+            # Pass 1 (analysis) maps to the first 45% of the encode progress band.
+            _p1_cb = (lambda f: on_encode_progress(f * 0.45)) if on_encode_progress else None
+            result1 = await asyncio.to_thread(safe_ffmpeg_run_with_progress, pass1_cmd, _audio_dur, _p1_cb, 1200, "VBR 2-pass: pass 1")
             if result1.returncode != 0:
                 raise RuntimeError(f"FFmpeg 2-pass (pass 1) failed: {result1.stderr}")
 
@@ -4711,7 +4728,9 @@ async def _render_with_preset(
             pass2_cmd.append(str(output_path))
 
             logger.info(f"Pass 2 command: {' '.join(pass2_cmd)}")
-            result2 = await asyncio.to_thread(safe_ffmpeg_run, pass2_cmd, 1800, "VBR 2-pass: pass 2")
+            # Pass 2 (final encode) maps to the remaining 45%-100% of the band.
+            _p2_cb = (lambda f: on_encode_progress(0.45 + f * 0.55)) if on_encode_progress else None
+            result2 = await asyncio.to_thread(safe_ffmpeg_run_with_progress, pass2_cmd, _audio_dur, _p2_cb, 1800, "VBR 2-pass: pass 2")
             if result2.returncode != 0:
                 raise RuntimeError(f"FFmpeg 2-pass (pass 2) failed: {result2.stderr}")
 
@@ -4761,7 +4780,9 @@ async def _render_with_preset(
 
         logger.info(f"Rendering with command: {' '.join(cmd)}")
 
-        result = await asyncio.to_thread(safe_ffmpeg_run, cmd, 1200, "final render")
+        # Stream real progress when a callback + known duration are available;
+        # the helper falls back to plain safe_ffmpeg_run otherwise.
+        result = await asyncio.to_thread(safe_ffmpeg_run_with_progress, cmd, _audio_dur, on_encode_progress, 1200, "final render")
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg render failed: {result.stderr}")
 

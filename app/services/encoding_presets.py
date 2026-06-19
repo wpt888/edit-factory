@@ -3,11 +3,26 @@ Encoding Presets Service.
 Provides platform-specific video encoding configurations with Pydantic validation.
 """
 import logging
+import os
 from typing import Literal, Optional
 from pydantic import BaseModel, Field
 from app.services.video_effects.filters import VideoFilters
 
 logger = logging.getLogger(__name__)
+
+# Render quality / speed mode (Wave 2.1). Controls the encode path:
+#   "speed"    -> fastest (NVENC p3 no-multipass, or CPU veryfast 1-pass)
+#   "balanced" -> NVENC single-pass fullres-multipass when a GPU is present
+#                 (3-5x faster than CPU 2-pass, near-identical quality);
+#                 falls back to CPU 2-pass with no GPU. DEFAULT.
+#   "max"      -> CPU libx264 2-pass (highest quality, slowest)
+VALID_QUALITY_MODES = ("speed", "balanced", "max")
+
+
+def get_default_quality_mode() -> str:
+    """Default render quality mode (env RENDER_QUALITY_MODE, else 'balanced')."""
+    mode = (os.environ.get("RENDER_QUALITY_MODE") or "balanced").lower()
+    return mode if mode in VALID_QUALITY_MODES else "balanced"
 
 
 class EncodingPreset(BaseModel):
@@ -47,6 +62,12 @@ class EncodingPreset(BaseModel):
     video_profile: Literal["baseline", "main", "high"] = "main"
     video_level: str = "4.1"
 
+    # NVENC (GPU) tuning — only used when use_gpu=True (Wave 2.1).
+    # p1 (fastest) .. p7 (best quality); p5 ~ libx264 medium at a fraction of the time.
+    nvenc_preset: Literal["p1", "p2", "p3", "p4", "p5", "p6", "p7"] = "p5"
+    # fullres multipass approximates 2-pass quality in a single GPU launch.
+    nvenc_multipass: Literal["disabled", "qres", "fullres"] = "fullres"
+
     def needs_two_pass(self) -> bool:
         """Return True if this preset requires 2-pass encoding."""
         return self.encoding_mode == "vbr_2pass"
@@ -73,12 +94,28 @@ class EncodingPreset(BaseModel):
         is_vbr = self.encoding_mode in ("vbr_1pass", "vbr_2pass")
 
         if use_gpu:
-            # GPU encoding with NVENC
+            # GPU encoding with NVENC (Wave 2.1) — VBR with a quality target and a
+            # bitrate ceiling, plus optional fullres multipass for ~2-pass quality.
             params.extend([
                 "-c:v", "h264_nvenc",
-                "-preset", "p4",  # NVENC preset (p1-p7, p4 is balanced)
-                "-cq", str(self.crf),  # Constant quality mode for NVENC
+                "-preset", self.nvenc_preset,
+                "-rc", "vbr",
+                "-cq", str(self.crf),  # Constant-quality target for NVENC VBR
             ])
+            if self.nvenc_multipass and self.nvenc_multipass != "disabled":
+                params.extend(["-multipass", self.nvenc_multipass])
+            if is_vbr:
+                # Cap the bitrate so file sizes stay platform-friendly.
+                maxrate_kbps = int(self.target_bitrate_kbps * 1.5)
+                bufsize_kbps = self.target_bitrate_kbps * 2
+                params.extend([
+                    "-b:v", f"{self.target_bitrate_kbps}k",
+                    "-maxrate", f"{maxrate_kbps}k",
+                    "-bufsize", f"{bufsize_kbps}k",
+                ])
+            else:
+                # CRF-style: let -cq drive quality without a hard bitrate target.
+                params.extend(["-b:v", "0"])
         else:
             # CPU encoding with libx264
             params.extend([
@@ -154,6 +191,46 @@ class EncodingPreset(BaseModel):
 
         logger.debug(f"Generated FFmpeg params for {self.name} (GPU: {use_gpu}, pass: {pass_number})")
         return params
+
+
+def apply_quality_mode(preset: EncodingPreset, quality_mode: str, gpu_available: bool) -> EncodingPreset:
+    """Resolve the effective encode path for a render quality mode (Wave 2.1).
+
+    The presets all default to ``vbr_2pass`` (CPU-only). This returns a copy with
+    the encoding tuned for the chosen speed/quality trade-off and the hardware:
+
+      * ``max``                -> CPU libx264 2-pass (highest quality, slowest)
+      * ``balanced``/``speed`` + GPU -> NVENC single-pass (3-5x faster); the
+        single-pass render path then automatically uses NVENC because
+        ``needs_two_pass()`` becomes False.
+      * ``speed`` (no GPU)     -> fast CPU single-pass (veryfast, VBR 1-pass)
+      * ``balanced`` (no GPU)  -> CPU 2-pass (unchanged quality)
+
+    Keeping CPU 2-pass behind an explicit ``max`` choice is what frees the
+    default render to use the GPU the user already owns.
+    """
+    mode = (quality_mode or "balanced").lower()
+    if mode not in VALID_QUALITY_MODES:
+        mode = "balanced"
+
+    if mode == "max":
+        if preset.encoding_mode != "vbr_2pass":
+            return preset.model_copy(update={"encoding_mode": "vbr_2pass"})
+        return preset
+
+    if gpu_available:
+        # NVENC single-pass. fullres multipass for balanced; none for speed.
+        return preset.model_copy(update={
+            "encoding_mode": "vbr_1pass",
+            "nvenc_preset": "p3" if mode == "speed" else "p5",
+            "nvenc_multipass": "disabled" if mode == "speed" else "fullres",
+        })
+
+    # No GPU available.
+    if mode == "speed":
+        return preset.model_copy(update={"encoding_mode": "vbr_1pass", "preset": "veryfast"})
+    # balanced on CPU keeps the (slower) 2-pass quality.
+    return preset.model_copy(update={"encoding_mode": "vbr_2pass"})
 
 
 # Platform-specific presets

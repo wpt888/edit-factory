@@ -21,6 +21,7 @@ class TTSVoice:
     requires_cloning: bool = False
     cost_per_1k_chars: float = 0.0
     category: Optional[str] = None  # "cloned", "generated", "premade", etc.
+    preview_url: Optional[str] = None  # Short sample clip URL for in-app audition
 
 
 @dataclass

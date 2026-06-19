@@ -24,6 +24,11 @@ export interface SubtitleSettings {
 
   // Text opacity (0-100, default 100 = fully opaque)
   opacity?: number;
+
+  // Word-level animated karaoke (Wave 1.3): words highlight in sync with the
+  // voice via per-word ASS {\k} timing tags. Pairs with highlightColor.
+  karaoke?: boolean;            // Default false
+  highlightColor?: string;      // Hex of the "sung"/active word, default "#FFFF00"
 }
 
 // User-saved named preset (distinct from hardcoded CAPTION_PRESETS).
@@ -326,11 +331,11 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
   {
     id: "karaoke",
     name: "Karaoke",
-    description: "Yellow text with strong black outline. Classic karaoke/lyric style.",
+    description: "Cuvintele se evidențiază în sincron cu vocea (alb → galben). Stil Submagic/CapCut.",
     settings: {
       fontSize: 48,
       fontFamily: "var(--font-anton), Anton, sans-serif",
-      textColor: "#FFFF00",
+      textColor: "#FFFFFF",
       outlineColor: "#000000",
       outlineWidth: 3,
       positionY: 88,
@@ -342,6 +347,8 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
       enableGlow: false,
       glowBlur: 0,
       adaptiveSizing: false,
+      karaoke: true,
+      highlightColor: "#FFFF00",
     },
     previewStyle: {
       backgroundColor: "#1a0a2e",

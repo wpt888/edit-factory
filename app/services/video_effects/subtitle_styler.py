@@ -55,18 +55,33 @@ class SubtitleStyleConfig:
     # Text opacity (0-100, default 100)
     opacity: int = 100
 
+    # Karaoke (word-level highlight) — pairs with {\k} tags in the cue text.
+    # When enabled, PrimaryColour is the "already sung / highlighted" colour and
+    # SecondaryColour is the base colour words start in.
+    karaoke: bool = False
+    highlight_color: str = "&H0000FFFF"  # Yellow (ASS &H00BBGGRR) — sung word
+
     # Video resolution
     video_width: int = 1080
     video_height: int = 1920
 
     def to_force_style_string(self) -> str:
         """Generate FFmpeg force_style parameter string."""
-        # Always apply opacity to PrimaryColour alpha channel
-        # ASS alpha: 00=opaque, FF=transparent
-        primary = self.primary_color
-        if primary.startswith("&H"):
-            ass_alpha = int((100 - self.opacity) / 100 * 255)
-            primary = f"&H{ass_alpha:02X}{primary[4:]}"
+        # Always apply opacity to the alpha channel of the active text colour.
+        # ASS alpha: 00=opaque, FF=transparent.
+        ass_alpha = int((100 - self.opacity) / 100 * 255)
+
+        def _with_alpha(color: str) -> str:
+            return f"&H{ass_alpha:02X}{color[4:]}" if color.startswith("&H") and len(color) >= 6 else color
+
+        # Karaoke: words start in the base colour (Secondary) and flip to the
+        # highlight colour (Primary) as the \k clock passes each word.
+        if self.karaoke:
+            primary = _with_alpha(self.highlight_color)
+            secondary = _with_alpha(self.primary_color)
+        else:
+            primary = _with_alpha(self.primary_color)
+            secondary = None
 
         style_parts = [
             f"PlayResX={self.video_width}",
@@ -74,6 +89,10 @@ class SubtitleStyleConfig:
             f"FontName={self.font_family}",
             f"FontSize={self.font_size}",
             f"PrimaryColour={primary}",
+        ]
+        if secondary is not None:
+            style_parts.append(f"SecondaryColour={secondary}")
+        style_parts += [
             f"Bold={self.bold}",
             f"Alignment={self.alignment}",
             f"MarginV={self.margin_v}",
@@ -186,6 +205,8 @@ class SubtitleStyleConfig:
             glow_blur=int(settings.get('glowBlur', 0)),
             border_style=settings.get('borderStyle', 1),
             opacity=int(settings.get('opacity', 100)),
+            karaoke=bool(settings.get('karaoke', False)),
+            highlight_color=hex_to_ass(settings.get('highlightColor', '#FFFF00')),
             video_width=video_width,
             video_height=video_height,
         )

@@ -154,7 +154,8 @@ async def list_voices(
                     "name": voice.name,
                     "language": voice.language,
                     "gender": voice.gender,
-                    "category": voice.category
+                    "category": voice.category,
+                    "preview_url": voice.preview_url,
                 }
                 for voice in voices
             ]

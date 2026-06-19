@@ -24,9 +24,55 @@ export function SubtitleEnhancementControls({
   const shadowEnabled = (settings.shadowDepth ?? 0) > 0
   const glowEnabled = settings.enableGlow ?? false
   const adaptiveEnabled = settings.adaptiveSizing ?? false
+  const karaokeEnabled = settings.karaoke ?? false
 
   return (
     <div className="space-y-4">
+      {/* Karaoke (word-level highlight) Section (Wave 1.3) */}
+      <div className="space-y-2">
+        <div className="flex items-center space-x-2">
+          <Checkbox
+            id="enable-karaoke"
+            checked={karaokeEnabled}
+            onCheckedChange={(checked) => {
+              updateSettings(
+                checked
+                  ? { karaoke: true, highlightColor: settings.highlightColor ?? "#FFFF00" }
+                  : { karaoke: false }
+              )
+            }}
+            disabled={disabled}
+          />
+          <Label
+            htmlFor="enable-karaoke"
+            className="text-sm font-medium cursor-pointer"
+          >
+            Karaoke (evidențiere pe cuvinte)
+          </Label>
+        </div>
+
+        {karaokeEnabled && (
+          <div className="ml-6 space-y-2">
+            <div className="flex items-center gap-2">
+              <Label htmlFor="karaoke-highlight" className="text-xs text-muted-foreground">
+                Culoare cuvânt activ
+              </Label>
+              <input
+                id="karaoke-highlight"
+                type="color"
+                value={settings.highlightColor ?? "#FFFF00"}
+                onChange={(e) => updateSettings({ highlightColor: e.target.value })}
+                disabled={disabled}
+                className="h-6 w-10 cursor-pointer rounded border border-input bg-transparent p-0"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Cuvintele se colorează în sincron cu vocea (stil Submagic/CapCut). Folosește timing-ul exact din TTS.
+            </p>
+          </div>
+        )}
+      </div>
+
       {/* Shadow Effect Section (SUB-01) */}
       <div className="space-y-2">
         <div className="flex items-center space-x-2">

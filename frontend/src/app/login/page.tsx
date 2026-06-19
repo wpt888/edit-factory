@@ -218,7 +218,7 @@ function LoginContent() {
                 <Input
                   id="email"
                   type={DESKTOP_MODE ? "text" : "email"}
-                  placeholder={DESKTOP_MODE ? "1234" : "name@example.com"}
+                  placeholder={DESKTOP_MODE ? "Username" : "name@example.com"}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
@@ -250,6 +250,11 @@ function LoginContent() {
                   autoComplete="current-password"
                 />
               </div>
+              {DESKTOP_MODE && (
+                <p className="text-xs text-muted-foreground">
+                  Cont local implicit: utilizator <span className="font-medium">1234</span>, parolă <span className="font-medium">1234</span>.
+                </p>
+              )}
             </CardContent>
             <CardFooter className="flex flex-col gap-4">
               <Button type="submit" className="w-full" disabled={loading}>

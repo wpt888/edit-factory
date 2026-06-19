@@ -55,6 +55,7 @@ import {
 } from "../pipeline-utils";
 import { ElevenCreditsBadge } from "./eleven-credits-badge";
 import type { Dispatch, SetStateAction } from "react";
+import { useRef, useState } from "react";
 import type { PreviewData, PreviewKey, Voice } from "../pipeline-types";
 
 // Mirrors the inline ttsResults state shape in PipelinePage (page.tsx).
@@ -194,6 +195,43 @@ export function Step2TTS({ ctx }: { ctx: any }) {
     setIsResettingUsage,
     handlePreviewAll,
   }: Step2Ctx = ctx;
+
+  // Voice audition: play the selected voice's ElevenLabs preview sample inline,
+  // so users can hear a voice BEFORE generating TTS (was: no preview at all).
+  const auditionAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [auditioningVoiceId, setAuditioningVoiceId] = useState<string | null>(null);
+
+  const stopAudition = () => {
+    if (auditionAudioRef.current) {
+      auditionAudioRef.current.pause();
+      auditionAudioRef.current = null;
+    }
+    setAuditioningVoiceId(null);
+  };
+
+  const handleAuditionVoice = () => {
+    // Toggle off if the same voice is already playing.
+    if (auditioningVoiceId === voiceId) {
+      stopAudition();
+      return;
+    }
+    stopAudition();
+    const v = (voices as Voice[]).find((x) => x.voice_id === voiceId);
+    if (!v?.preview_url) {
+      toast.error("Această voce nu are un sample de previzualizare");
+      return;
+    }
+    const audio = new Audio(v.preview_url);
+    auditionAudioRef.current = audio;
+    setAuditioningVoiceId(voiceId);
+    audio.onended = stopAudition;
+    audio.onerror = () => {
+      stopAudition();
+      toast.error("Nu am putut reda sample-ul vocii");
+    };
+    audio.play().catch(() => stopAudition());
+  };
+
   return (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -320,6 +358,19 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                         })()}
                       </SelectContent>
                     </Select>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={handleAuditionVoice}
+                      disabled={!voiceId || voiceId === "default"}
+                      title={auditioningVoiceId === voiceId ? "Oprește" : "Ascultă un sample al vocii"}
+                    >
+                      {auditioningVoiceId === voiceId ? (
+                        <Pause className="h-4 w-4" />
+                      ) : (
+                        <Volume2 className="h-4 w-4" />
+                      )}
+                    </Button>
                     <Button
                       variant={voiceId === defaultVoiceId ? "outline" : "secondary"}
                       size="icon"

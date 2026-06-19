@@ -1,0 +1,2210 @@
+[
+ {
+  "subsystem": "electron-shell-lifecycle",
+  "summary": "The Electron shell is the most mature, production-minded part of the codebase reviewed: it spawns a two-runtime sidecar (uvicorn backend on :8000 + bundled portable Node serving Next standalone on :3947), polls both health endpoints, auto-restarts each service with exponential backoff and a stable-uptime budget, holds a single-instance lock, runs a psutil-based orphan cleanup on launch and shutdown, ships a system tray with close-to-tray, wires a native multi-select video picker over a contextIsolated bridge, seeds Supabase credentials into %APPDATA% on first run, rotates logs, and has a working electron-updater flow. The big gaps are desktop-feel polish (no splash/progress window during a 30-60s cold start, no code signing so users hit SmartScreen), a UI-only auth gate (1234/1234) while a real LicenseService exists but is never enforced at startup, and a very heavy footprint (full venv + portable Node + ffmpeg shipped as extraResources). For a one-time-purchase consumer desktop app aimed at non-technical sellers, the engineering is solid but the first-run/install/update experience is not yet at the level of a polished native app.",
+  "user_flow": "User downloads editfactory-setup-x.x.x.exe (or portable EXE) from a GitHub draft release. On launch Electron acquires the single-instance lock, runs cleanupOrphans() (kills anything on 8000/3947), creates a hidden 1400x900 window plus tray icon, seeds %APPDATA%/EditFactory/.env from bundled credentials.env, then spawns uvicorn and the Node frontend. For up to 60s the window stays hidden while the launcher polls /api/v1/health and the frontend root every 500ms; the only progress signal is the tray tooltip (\"API starting... / UI ready\"). Once both are up, checkStartupState() calls /desktop/auth/status and routes to /login (test gate 1234/1234) or the app. Closing the window hides to tray rather than quitting; Quit from the tray triggers graceful cleanup (kill children + psutil sweep + 500ms settle). If the backend dies it auto-restarts up to 3x; after that a dialog offers Restart/Quit. Auto-update downloads in the background and prompts Restart Now/Later when ready.",
+  "features_present": [
+   {
+    "name": "Two-runtime sidecar spawn with health-gated window",
+    "description": "main.js:184-328,390-426 spawns uvicorn + bundled portable Node, polls /api/v1/health and frontend root every 500ms up to 60s, shows the window only when both are ready. Clean separation of dev (system node/venv) vs packaged (resourcesPath) paths.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Service auto-restart with exponential backoff",
+    "description": "main.js:224-271,309-327 restarts backend/frontend up to 3x (1s/2s/4s), resets the counter after 60s stable uptime, and after exhaustion shows a Restart/Quit dialog for the backend. Genuinely good crash resilience.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Single-instance lock + second-instance focus",
+    "description": "main.js:114-132 bails before cleanupOrphans on a second launch (preventing it from killing the first instance's backend) and surfaces the existing window on relaunch.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Orphan/port cleanup via psutil",
+    "description": "main.js:135-148 + service.py:16-57 kill whatever holds 8000/3947 (incl. child trees) on launch and shutdown. Pragmatic recovery from hard crashes.",
+    "maturity": "partial"
+   },
+   {
+    "name": "System tray with close-to-tray lifecycle",
+    "description": "main.js:429-473,541-646 keeps the app alive in tray on window close, tray tooltip reflects startup progress, double-click/menu reopen. Tray image loaded defensively to avoid the Electron 34 throw-on-missing-icon.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Native file-picker bridge",
+    "description": "preload.js exposes window.editFactory.selectVideoFiles over contextIsolation:true; main.js:499-520 validates sender origin (localhost only) and returns absolute paths. Correct security posture.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Auto-update (electron-updater)",
+    "description": "main.js:587-639 background-downloads from GitHub releases and prompts Restart Now/Later; autoInstallOnAppQuit=false so install timing is user-controlled. Functional but no in-app progress UI and ships unsigned.",
+    "maturity": "partial"
+   },
+   {
+    "name": "First-run credential seeding",
+    "description": "main.js:156-181 + before-pack.js copy anon Supabase creds into %APPDATA%/.env once, idempotently, so the packaged app reaches the same cloud as web without a committed .env.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Crash diagnostics logging",
+    "description": "main.js:64-93 tees backend/frontend stdout+stderr to userData/logs/editfactory.log with 5MB rotation (one generation). Essential field debugging; dialogs cite the log path.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Backend startup recovery + cleanup",
+    "description": "main.py:251-335 lifespan recovers stuck projects/clips/jobs, marks stale jobs failed, purges old jobs, cleans temp/output files, enlarges the threadpool, and starts periodic trash cleanup. Strong server-side resilience that complements the shell.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Desktop auth gate",
+    "description": "routes.py:202-227 username/password gate (default 1234/1234) persisted to config.json; checkStartupState() routes to /login. Explicitly a temporary UI gate, not security — backend API auth is fully bypassed in desktop_mode.",
+    "maturity": "stub-or-broken"
+   },
+   {
+    "name": "License service",
+    "description": "routes.py:45-83 expose activate/status/validate backed by a LicenseService writing license.json. Endpoints exist but are NOT enforced at startup (checkStartupState only checks the 1234 login), so the one-time-purchase business model has no actual gate yet.",
+    "maturity": "stub-or-broken"
+   }
+  ],
+  "strengths": [
+   {
+    "point": "Crash resilience is genuinely well thought out: exponential-backoff restarts with a stable-uptime budget, orphan cleanup on both launch and shutdown, single-instance lock that avoids self-fratricide, and a backend lifespan that recovers stuck jobs/projects on every boot.",
+    "why_it_matters": "A two-process sidecar app is the hardest desktop pattern to keep alive; this handles the common failure modes (hard crash leaving orphan ports, backend death mid-render) better than most indie Electron apps and avoids the classic 'opens but no window' zombie."
+   },
+   {
+    "point": "Security posture of the native bridge is correct: contextIsolation:true, no nodeIntegration, a minimal preload surface, and sender-origin validation on the IPC handler.",
+    "why_it_matters": "Many Electron apps leak full Node into the renderer; this one is locked down, which matters because the app handles a user's local filesystem and API keys."
+   },
+   {
+    "point": "Field observability: every backend/frontend line is teed to a rotating log in userData, and every error dialog cites the log path.",
+    "why_it_matters": "For a BYOAK product sold to non-technical users with no telemetry backend, a local log file is the only realistic support channel."
+   },
+   {
+    "point": "Clean dev/packaged duality across every path (python/uvicorn/node/icon/credentials), with the frontend on an uncommon port (3947) specifically to avoid colliding with other local dev servers.",
+    "why_it_matters": "Reduces the most common 'works on my machine, breaks when packaged' class of bugs and avoids killing an unrelated dev server on 3000."
+   }
+  ],
+  "ux_friction": [
+   {
+    "issue": "No splash/progress window during the 30-60s cold start — the window is hidden and the ONLY feedback is a tray tooltip the user is unlikely to be hovering over.",
+    "severity": "high",
+    "evidence": "main.js:527 show:false; window only shown after waitForServices() (main.js:687-696); progress lives in tray.setToolTip (main.js:404-411).",
+    "fix_idea": "Show a lightweight branded splash BrowserWindow immediately on whenReady with a determinate-ish progress bar ('Starting engine... / Starting UI...') driven by the same poll, then swap to the main window. This single change is the biggest perceived-quality win."
+   },
+   {
+    "issue": "App ships unsigned (NSIS + portable, no win.certificateFile / signing config), so every user hits a Windows SmartScreen 'unknown publisher' wall on install and on each auto-update.",
+    "severity": "high",
+    "evidence": "package.json:21-63 has no codeSigning/certificate fields; requestExecutionLevel user portable; provider github releaseType draft.",
+    "fix_idea": "Add an EV/OV code-signing cert (or at minimum Azure Trusted Signing) to electron-builder. For a $79-149 paid product, an 'unknown publisher' warning kills install-conversion and erodes trust."
+   },
+   {
+    "issue": "Auto-update has no visible UI during checking/downloading — all events only console.log, so a multi-hundred-MB update downloads silently with no progress and no way to trigger a manual check.",
+    "severity": "medium",
+    "evidence": "main.js:594-609 download-progress/checking/available only console.log; only update-downloaded shows a dialog. No 'Check for updates' menu item.",
+    "fix_idea": "Surface download progress (tray tooltip or a small toast), add a tray/menu 'Check for updates...' item, and show 'You are up to date' feedback so users trust the updater."
+   },
+   {
+    "issue": "Desktop login is a hardcoded 1234/1234 gate and the real LicenseService is never enforced at startup, so there is currently no functioning purchase/license gate for the one-time-purchase model.",
+    "severity": "medium",
+    "evidence": "routes.py:178-210 test gate; checkStartupState (main.js:370-388) only checks /desktop/auth/status, never /license/validate.",
+    "fix_idea": "Wire checkStartupState (or a frontend guard) to call /license/validate and route to an activation screen when unlicensed; keep the 1234 gate behind a dev flag only."
+   },
+   {
+    "issue": "Backend port is hardcoded to 8000 and cleanupOrphans kills whatever is listening there — if a user runs another tool on 8000, EF silently kills it (and vice-versa, EF can't start if 8000 is held by a process it can't kill).",
+    "severity": "medium",
+    "evidence": "main.js:54 BACKEND_PORT=8000; cleanupOrphans (main.js:135-148) kills by port unconditionally; frontend already moved off 3000 for exactly this reason (comment main.js:55-58).",
+    "fix_idea": "Dynamically pick a free backend port (probe, then pass to uvicorn and the frontend's API base URL) instead of a fixed 8000, or at least verify the process on 8000 is actually an EF process before killing it."
+   },
+   {
+    "issue": "60s startup timeout produces a raw error string with no remediation path; on a slow first run (cold venv import, AV scanning) a legitimate launch can hit it.",
+    "severity": "low",
+    "evidence": "main.js:417-422 rejects with a bare message; whenReady catch shows showErrorBox with err.stack (main.js:701-707).",
+    "fix_idea": "Raise/parametrize the timeout for first run, and make the failure dialog offer 'View Log / Retry' instead of dumping a stack trace at a non-technical user."
+   }
+  ],
+  "scaling_bottlenecks": [
+   {
+    "issue": "Installer/footprint is very large: extraResources ships the entire venv plus a portable Node runtime plus ffmpeg/ffprobe.",
+    "severity": "medium",
+    "evidence": "package.json:85-114 copies ../venv (with many heavy excludes like torch/whisper/TTS still implying a big base), ../frontend/.next/standalone, ../app, and resources/node.",
+    "impact": "Download/install size likely hundreds of MB to >1GB, slowing first-time conversion, making every auto-update a large re-download (no delta if unsigned/blockmap issues), and increasing AV-scan time on launch which compounds the startup-timeout risk."
+   },
+   {
+    "issue": "In-memory pipeline state is lost on backend restart, and the shell's own auto-restart will silently wipe Step 2-3 work without warning the user.",
+    "severity": "high",
+    "evidence": "Backend restart loop (main.js:224-271) restarts uvicorn on crash; pipeline working state is in-memory per CLAUDE.md/known pain points; lifespan recovers projects/clips/jobs but not live pipeline previews.",
+    "impact": "At higher usage (longer sessions, more variants), a single backend hiccup during a render silently discards a user's in-progress pipeline; the auto-restart hides the crash, so the user just sees their work vanish with no explanation."
+   },
+   {
+    "issue": "Single hardcoded backend/frontend port pair limits running multiple windows/instances and is fragile on shared machines (agencies, multi-seat).",
+    "severity": "low",
+    "evidence": "main.js:54-58 fixed ports; single-instance lock forces one instance only.",
+    "impact": "Agencies running per-client profiles or power users wanting parallel renders in separate windows cannot; everything funnels through one backend process and one window."
+   },
+   {
+    "issue": "Update channel is a manual GitHub draft release with no staged rollout or rollback.",
+    "severity": "low",
+    "evidence": "package.json:58-63 provider github releaseType draft; main.js:636 checkForUpdates with no channel/staging.",
+    "impact": "As the user base grows, a bad release auto-pushes to everyone at once with no canary/rollback, and draft releases require manual promotion which is easy to get wrong."
+   }
+  ],
+  "missing_features": [
+   {
+    "feature": "Branded splash/loading window with real startup progress",
+    "user_value": "Eliminates the 'is it frozen?' dead time on cold start and makes the app feel native and trustworthy from second one.",
+    "effort": "S",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Code signing for installer + auto-update (Authenticode / Trusted Signing)",
+    "user_value": "Removes the SmartScreen 'unknown publisher' wall that kills install conversion and scares non-technical buyers of a paid product.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Real license activation gate wired into startup (replace 1234/1234)",
+    "user_value": "Makes the one-time-purchase business model actually enforceable; gives buyers a proper activation/recovery flow (the LicenseService already exists, just unused).",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Dynamic free-port selection for backend (and propagate to frontend API base)",
+    "user_value": "Stops EF from killing unrelated processes on 8000 and lets it start on machines where 8000 is taken — fewer mysterious launch failures.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "In-app update UX: download progress, 'Check for updates' menu item, 'up to date' feedback, release notes",
+    "user_value": "Users trust and control updates instead of a silent multi-hundred-MB background download; matches CapCut/Descript update polish.",
+    "effort": "S",
+    "priority": "delight"
+   },
+   {
+    "feature": "GPU/NVENC and ffmpeg preflight surfaced in UI at first run",
+    "user_value": "Sets render-speed expectations and warns about missing GPU encoding before the user waits on a slow CPU render — turns a silent fallback into informed setup.",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "Launch-at-login / auto-start + 'minimize to tray on startup' option",
+    "user_value": "For high-volume faceless creators running batches, the app behaves like an always-available production tool rather than something to relaunch each session.",
+    "effort": "S",
+    "priority": "delight"
+   },
+   {
+    "feature": "Crash-report opt-in with bundled log upload (the crash-reporting toggle exists but only sets a flag)",
+    "user_value": "Gives the solo dev real field telemetry to fix crashes for non-technical users who can't find a log file; routes.py:357 toggle is currently inert.",
+    "effort": "M",
+    "priority": "later"
+   },
+   {
+    "feature": "Pipeline working-state persistence so backend auto-restart doesn't lose Step 2-3 work",
+    "user_value": "A backend hiccup (which the shell silently restarts) no longer wipes a user's in-progress variants mid-session — directly protects the core workflow.",
+    "effort": "L",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "macOS parity (signing/notarization, dmg, mac ffmpeg) is configured but unproven",
+    "user_value": "Opens the Mac creator market; currently only Windows is realistically shippable.",
+    "effort": "L",
+    "priority": "later"
+   }
+  ]
+ },
+ {
+  "subsystem": "onboarding-auth-keys-profiles",
+  "summary": "This slice covers desktop first-run setup (3-step wizard: license, API keys, crash-reporting), a UI-only login gate (default 1234/1234), Lemon Squeezy license activation with a 72h offline grace period, BYOAK API-key entry, an optional ~1.5GB ML bundle installer, and multi-profile management. The plumbing is surprisingly complete and defensively coded (test-before-save, redacted hints, graceful degradation, abort handling), but it is built for a technical operator, not the stated non-technical e-commerce seller. The single biggest problem is that the onboarding wizard requires the user to paste a Supabase URL + anon key — a concept the target audience has never heard of — and there are zero \"get your key here\" deep links or guidance. A second serious problem is two parallel, disconnected key-storage systems: keys entered in the setup wizard (file vault + .env) never surface in the in-app per-profile key manager (Supabase vault), so an ElevenLabs key entered at onboarding does not appear in the ElevenLabs accounts panel and is not the key used by per-profile rendering. Overall maturity: solid engineering on individual pieces, but the end-to-end \"install to ready\" journey for a non-technical user is incomplete and confusing.",
+  "user_flow": "First launch (desktop) → DesktopAuthGuard checks /desktop/auth/status → not logged in → redirect to /login → user types 1234/1234 → backend persists desktop_logged_in flag to config.json → redirect to /librarie. On the way, LicenseGuard calls /desktop/license/status; a 404 (no license) pushes the user to /setup. Setup wizard Step 1: paste Lemon Squeezy license key → /desktop/license/activate calls Lemon Squeezy, stores instance_id to license.json → auto-advance. Step 2: paste Supabase URL + anon key (required), optionally Gemini + ElevenLabs keys (or pick \"Use Free TTS / Edge\"), each with a Test button hitting /desktop/test-connection. Step 3: crash-reporting toggle (default off) → Finish writes keys to the file vault + AppData .env and marks first_run_complete → redirect to /librarie. Later, the user opens Settings to pick a voice, add per-profile keys (separate ApiKeyManager / ElevenLabs accounts vault), configure Postiz/Buffer, set a quota, and optionally install the ML bundle. Profile switching is a header dropdown; \"Create New Profile\" opens a name/description dialog.",
+  "features_present": [
+   {
+    "name": "3-step setup wizard (license / keys / crash-reporting)",
+    "description": "frontend/src/app/setup/page.tsx — progress bar, per-service Test buttons with idle/testing/ok/error states, Free-TTS preset, edit mode (?mode=edit) that pre-fills redacted hints, first-run guard that redirects already-activated users to /librarie.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Lemon Squeezy license activation + offline grace period",
+    "description": "app/services/credentials/license.py — activate/validate/status against Lemon Squeezy, instance binding to hostname, 72h offline grace, 24h revalidation interval, license.json persistence. LicenseGuard re-checks every 30 min and shows a blocking 'License Expired' overlay with retry/re-key.",
+    "maturity": "solid"
+   },
+   {
+    "name": "BYOAK API-key entry with validate-before-save",
+    "description": "Setup wizard + /desktop/test-connection live-validate Supabase/Gemini/ElevenLabs against the real providers. ApiKeyManager (per-profile) calls /api-keys/{service}/validate and refuses to persist a key that fails auth.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Encrypted key vault (file-based)",
+    "description": "app/services/key_vault.py — Fernet-encrypted keys.vault, machine-local salt derivation in desktop mode (decoupled from cloud creds), transparent migration of legacy SUPABASE_KEY-encrypted entries and plaintext config.json keys. Redacted ***last4 hints.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Per-profile multi-key vault (Supabase-backed)",
+    "description": "app/api/api_key_vault_routes.py + services/credentials/vault.py — up to 3 keys/service for gemini/fal/etc, primary selection, env fallback, reveal-secret, cache invalidation on mutation. ElevenLabs has its own parallel multi-account manager with quota/tier display and failover.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Multi-profile management",
+    "description": "profile_routes.py CRUD + set-default + dashboard; ProfileSwitcher dropdown; CreateProfileDialog. Ownership checks, CASCADE delete, can't-delete-default guard.",
+    "maturity": "partial"
+   },
+   {
+    "name": "Desktop login gate",
+    "description": "desktop-auth-guard.tsx + /desktop/auth/login — username/password gate, fail-closed redirect to /login, never renders protected children while unauthenticated. Explicitly documented as a UI-only test gate (1234/1234), not real API security.",
+    "maturity": "stub-or-broken"
+   },
+   {
+    "name": "Optional ML bundle installer",
+    "description": "ml-bundle-installer.tsx — SSE-streamed download with percent/MB progress, SHA256 verify, unpack, resume, cancel/abort, 409/400/500 handling, installed-version probe. Backend probe is a documented TODO/temporary endpoint.",
+    "maturity": "partial"
+   },
+   {
+    "name": "Crash reporting opt-in",
+    "description": "Default-off toggle in wizard Step 3 and Settings; runtime toggle via /desktop/crash-reporting with before_send scrubbing of keys.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Profile activity dashboard + cost quota",
+    "description": "profile_routes.py /dashboard returns project/clip/render counts and ElevenLabs/Gemini cost totals; Settings shows quota progress bar; monthly_quota_usd blocks TTS when exceeded.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Web auth (Supabase) login/signup/forgot-password",
+    "description": "login/signup pages use Supabase Auth SDK with email confirmation, password reset, open-redirect-safe next param. Parallel path to desktop mode.",
+    "maturity": "solid"
+   }
+  ],
+  "strengths": [
+   {
+    "point": "Validate-before-persist everywhere",
+    "why_it_matters": "Both the setup wizard (/desktop/test-connection) and the per-profile ApiKeyManager hit the real provider before saving (api-key-manager.tsx:73-79). A non-technical user who pastes a wrong/expired key gets an immediate clear error instead of a silent failure three steps later in a render. This is exactly the right pattern for BYOAK."
+   },
+   {
+    "point": "Free-TTS escape hatch in onboarding",
+    "why_it_matters": "setup/page.tsx:326-344 lets a user skip ElevenLabs entirely with one click (Edge TTS), so a buyer who only has a Gemini key — or none — can still reach a working app. Lowers the activation cliff for the cheapest BYOAK tier."
+   },
+   {
+    "point": "Genuine offline-first license design",
+    "why_it_matters": "license.py implements a 72h grace period and machine-local vault encryption (key_vault.py:79-90) so the app keeps working without internet and the vault is not coupled to a cloud credential. This directly supports the 'offline-after-setup' differentiator versus SaaS competitors."
+   },
+   {
+    "point": "Defensive React lifecycle handling",
+    "why_it_matters": "isMounted refs, AbortControllers, request-sequence guards (settings/page.tsx:479-485), and the auth guard never rendering protected children for one frame (desktop-auth-guard.tsx:58-67) prevent the class of crashes and stale-state bugs that plague long-lived desktop SPAs."
+   },
+   {
+    "point": "Transparent key migration",
+    "why_it_matters": "key_vault.py:186-213 re-encrypts legacy SUPABASE_KEY-derived and plaintext config.json keys on first read, so users upgrading across the documented encryption-key change don't lose their keys or have to re-enter them — important for a paid one-time-purchase product."
+   }
+  ],
+  "ux_friction": [
+   {
+    "issue": "Onboarding demands a Supabase URL + anon key, which the target non-technical e-commerce seller has never heard of and cannot obtain",
+    "severity": "high",
+    "evidence": "setup/page.tsx:347-390 marks Supabase URL and Anon Key as required (*) and blocks Step 2's Next button on supabaseStatus !== 'ok' (line 482). No explanation of what Supabase is, no signup link, no managed default.",
+    "fix_idea": "For desktop one-time-purchase, ship a managed/pre-provisioned Supabase project (or local SQLite default) so the user never sees this. If self-host is required, add a 'What is this? / Create a free Supabase project' wizard with screenshots and a deep link, and pre-fill from the license server."
+   },
+   {
+    "issue": "No 'get your API key here' deep links or guidance for Gemini/ElevenLabs",
+    "severity": "high",
+    "evidence": "setup/page.tsx:392-474 and api-key-manager.tsx:280-303 only show a password input and placeholder (AIza... / sk_...). Nothing tells a non-technical user where to create a Gemini or ElevenLabs key.",
+    "fix_idea": "Add inline 'Get a free Gemini key →' and 'Get an ElevenLabs key →' links opening the provider console, plus a one-line cost note ('~$0.22 / 1000 chars'). This is table stakes in CapCut/Creatify-style onboarding."
+   },
+   {
+    "issue": "Keys entered in onboarding are invisible in the in-app key manager (two disconnected vaults)",
+    "severity": "high",
+    "evidence": "Setup wizard saves to the file vault + .env via /desktop/settings (platforms/desktop/routes.py:306-348, MANAGED_KEYS in key_vault.py:33-40), but Settings ApiKeyManager and ElevenLabs accounts read the Supabase-backed per-profile vault (api_key_vault_routes.py, credentials/vault.py:25). An ElevenLabs key entered at setup never appears in the ElevenLabs accounts panel and is not the per-profile key used at render.",
+    "fix_idea": "Unify onto one vault, or at minimum seed the onboarding key into the default profile's per-profile vault and surface it in Settings so the user isn't confused about where their key 'went'."
+   },
+   {
+    "issue": "No voice selection during onboarding — user reaches the app unable to actually produce a video without a detour to Settings",
+    "severity": "medium",
+    "evidence": "setup/page.tsx never sets a voice; voice picking lives only in settings/page.tsx (loadVoices, lines 327-353). A fresh ElevenLabs user finishes setup with provider=elevenlabs but no voice_id.",
+    "fix_idea": "Add a Step 2b voice picker (or auto-select a sensible default voice) so 'Finish Setup' lands the user in a render-ready state."
+   },
+   {
+    "issue": "Default login credentials 1234/1234 with the placeholder literally showing '1234'",
+    "severity": "medium",
+    "evidence": "login/page.tsx:221 placeholder={DESKTOP_MODE ? '1234'} ; backend desktop_test_user/password default to 1234 (platforms/desktop/routes.py:206). Documented as a temporary gate.",
+    "fix_idea": "For a shipping paid product, either remove the gate entirely (it adds friction with zero security) or replace it with a license-derived identity. At minimum stop pre-advertising the password in the placeholder."
+   },
+   {
+    "issue": "Profile creation captures only name/description — no per-profile keys, voice, or branding at create time",
+    "severity": "medium",
+    "evidence": "create-profile-dialog.tsx:71-74 posts only name+description; ProfileCreate model (profile_routes.py:23-25) has no other fields. A new profile starts empty and silently falls back to .env, so multi-brand agencies must re-walk Settings for every profile.",
+    "fix_idea": "Add an optional 'copy settings/keys from current profile' checkbox and a guided first-key step on profile creation."
+   },
+   {
+    "issue": "License key field has no format validation or paste-friendly UX",
+    "severity": "low",
+    "evidence": "setup/page.tsx:269-278 accepts any string and only the remote activate call validates it; a mistyped key yields a generic network/activation error. No auto-trim of pasted whitespace beyond .trim(), no masked/segmented input.",
+    "fix_idea": "Client-side validate the UUID-segmented format shown in the placeholder and surface 'looks malformed' before the round-trip."
+   },
+   {
+    "issue": "Settings page is a ~1700-line monolith mixing onboarding-adjacent concerns (keys, voice, quota, Postiz, Buffer, templates, ML, crash reporting)",
+    "severity": "low",
+    "evidence": "settings/page.tsx is 1697 lines with ~30 useState hooks; a non-technical user faces a single very long scroll with no sectioned navigation.",
+    "fix_idea": "Split into tabbed sections (Account, Voice/TTS, AI Keys, Publishing, Branding, Advanced) so post-setup configuration is discoverable."
+   }
+  ],
+  "scaling_bottlenecks": [
+   {
+    "issue": "set-default profile is a two-step non-transactional update with an acknowledged race window",
+    "severity": "low",
+    "evidence": "profile_routes.py:389-393 clears is_default on others then sets it on one; the comment admits 'race window exists between these calls if concurrent requests target different profiles.'",
+    "impact": "Concurrent default-switches (or a crash between the two writes) can leave zero or two default profiles. Low frequency on single-user desktop, but corrupts the invariant the delete-guard relies on."
+   },
+   {
+    "issue": "Onboarding/desktop state lives in flat JSON files (config.json, license.json, keys.vault) under base_dir with no locking across the two writers",
+    "severity": "low",
+    "evidence": "platforms/desktop/routes.py _read_config/_write_text rewrites the whole config.json for every flag (first_run, desktop_logged_in, crash_reporting); key_vault uses its own lock but desktop routes write .env separately.",
+    "impact": "Concurrent writes (e.g. crash-reporting toggle during a settings save) can clobber unrelated keys via last-writer-wins on the whole-file rewrite. Fine for a single user, but fragile."
+   },
+   {
+    "issue": "License revalidation and key-vault decryption happen on the request path with per-call client construction",
+    "severity": "low",
+    "evidence": "license.py opens a new httpx.AsyncClient per validate; LicenseGuard polls every 30 min; key_vault._get_fernet re-derives and re-reads the vault file on every get_key.",
+    "impact": "Negligible at desktop single-user scale; would matter only if this code were reused server-side for many tenants. Noted for completeness, not a desktop concern."
+   },
+   {
+    "issue": "Per-profile vault caps at 3 keys/service and ElevenLabs at 3 accounts",
+    "severity": "low",
+    "evidence": "vault.py MAX_KEYS_PER_SERVICE=3; settings/page.tsx:1012 gates the add-account form at 3.",
+    "impact": "High-volume faceless creators / agencies rotating many ElevenLabs accounts for character-quota will hit the ceiling and cannot scale voiceover throughput without manual key juggling."
+   }
+  ],
+  "missing_features": [
+   {
+    "feature": "Zero-config data backend (managed/bundled Supabase or local SQLite default) so onboarding never asks for Supabase creds",
+    "user_value": "Removes the single hardest step for a non-technical buyer; turns 'install to ready' from an impossible ask into a one-screen flow. This is the make-or-break item for the stated audience.",
+    "effort": "L",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Provider-key acquisition guidance (deep links + screenshots + cost estimates) inside both onboarding and Settings",
+    "user_value": "Lets a Shopify seller who has never used an API actually obtain Gemini/ElevenLabs keys without leaving the app or googling. Best-in-class BYOAK tools (Creatify, n8n) all do this.",
+    "effort": "S",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Voice selection (with preview) as part of onboarding",
+    "user_value": "User finishes setup in a render-ready state and hears their narrator immediately, rather than discovering an empty voice picker on first render attempt.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Single unified key store surfaced consistently across onboarding and Settings",
+    "user_value": "Eliminates the 'where did my key go?' confusion and the silent mismatch between the key tested at setup and the key used at render. Critical for trust in a paid product.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "First-run guided tour / sample project after setup",
+    "user_value": "Shows the segment-select-once → idea → render loop on bundled sample footage so the user experiences the core value within 2 minutes, the way CapCut/Submagic onboard.",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "License/account portal: view plan, machine bindings, deactivate-and-move-machine, recover lost key",
+    "user_value": "A one-time-purchase buyer who reinstalls or changes PCs can self-serve instead of filing a support ticket; reduces refunds and churn.",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "Real authenticated identity replacing the 1234/1234 gate (or removing it)",
+    "user_value": "Either remove pointless friction or provide genuine per-user/license identity; current gate gives a false sense of security and looks unfinished in a paid app.",
+    "effort": "M",
+    "priority": "later"
+   },
+   {
+    "feature": "Onboarding completeness checklist / health panel ('Supabase ✓, Gemini ✓, Voice ✗, ML bundle optional')",
+    "user_value": "Gives a non-technical user a single at-a-glance 'am I ready?' status and one-click jumps to fix each gap, instead of discovering missing config mid-workflow.",
+    "effort": "S",
+    "priority": "delight"
+   },
+   {
+    "feature": "Import/export of profile config and keys between machines",
+    "user_value": "Agencies managing many client profiles can migrate or back up setup without re-entering every key and brand color per machine.",
+    "effort": "M",
+    "priority": "later"
+   },
+   {
+    "feature": "Per-profile branding/keys captured at profile-creation time",
+    "user_value": "Agencies spinning up a new client profile set it up once in the create dialog rather than re-walking the entire 1700-line Settings page.",
+    "effort": "S",
+    "priority": "later"
+   }
+  ]
+ },
+ {
+  "subsystem": "core-pipeline",
+  "summary": "The 4-step pipeline (idea -> N script variants -> TTS -> preview/match -> render) is the most mature, deeply-built subsystem in the product and largely delivers on the \"type an idea, get finished videos\" promise. It supports multi-variant generation, per-variant regenerate loops for both scripts and voiceover, a real timeline editor with keyword segment matching, meta-multiplication (2x visually-distinct variants for Instagram/Facebook), inline subtitle styling, interstitial slides, PiP overlays, and batch render with a render-skip cache. Contrary to the stated pain point, pipeline state is now persisted to editai_pipelines at every step (_db_save_pipeline is called after generate/TTS/preview/matches edits) and restored via _get_pipeline_or_load + the frontend ?id= URL restore, so a backend restart does NOT lose Step 2-3 work — only ephemeral progress percentages are lost. The two genuinely unsolved weaknesses are: (1) preview is a 30-300s server-side FFmpeg file render rather than in-player compositing, and (2) the whole experience lives in a single 3698-line page.tsx monolith plus a 6502-line router, which is a velocity/maintenance bottleneck more than a user-facing one. A parallel \"Simple Mode\" (simple-mode-pipeline.tsx) offers a 3-click preset->upload->download flow but is shallow and re-uploads a fresh video each run.",
+  "user_flow": "Advanced mode: user lands on /pipeline, types an idea + optional brand context, optionally attaches catalog products (which filters segment keywords to those product groups), picks variant count (1-10), target duration, and provider (Gemini/Claude), then clicks Generate. Backend pulls the profile's segment keywords from editai_segments, builds a duration-aware prompt, and returns N TTS-safe scripts; UI advances to Step 2. In Step 2 the user reviews/edits each script inline (DebouncedTextarea), can regenerate one or all scripts, sees live ElevenLabs credit balance, then generates TTS per-variant or \"Regenerate All TTS\"; Whisper produces SRT timing. In Step 3 each variant's SRT phrases are keyword-matched to segments and shown in a TimelineEditor where the user can swap/reorder/merge segments, tweak subtitle style, add interstitial slides and PiP overlays, then click \"Preview\" which fires a server-side FFmpeg render (540x960 ultrafast) and polls preview-status until an MP4 is ready to play in a dialog. Timeline edits auto-save (debounced PUT /matches). In Step 4 the user selects variants, a check-render call detects which can be skipped (cache hit), and a batch render kicks off background FFmpeg jobs polled via status. Simple mode: pick a style preset, drag a video, click Generate — it creates a project, uploads the video, auto-generates scripts, and renders all variants, then offers Download/Download All.",
+  "features_present": [
+   {
+    "name": "Multi-variant script generation",
+    "description": "Gemini/Claude generate 1-10 variants with duration-aware word targets, product-group keyword awareness, per-profile AI instructions, and 4-strategy parse fallback + TTS sanitization (app/services/script_generator.py:52, app/api/pipeline_routes.py:2524).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Per-variant + bulk regenerate loops",
+    "description": "Regenerate one script, all scripts (with AbortController cancel), one TTS, or all TTS without leaving Step 2/3 (page.tsx:2832,2865,2921,2988,3085).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Pipeline state persistence + restore",
+    "description": "Full pipeline (scripts, tts_previews, previews, preview_renders, matches, subtitle overrides) upserted to editai_pipelines at every mutation and reloaded via _get_pipeline_or_load; frontend restores from ?id= URL and DB on mount, including stale-temp-audio detection (pipeline_routes.py:707,1267,1371; page.tsx:548).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Keyword segment matching + timeline editor",
+    "description": "SRT phrases auto-matched to segments by keyword; user can edit/reorder/merge/swap in TimelineEditor with debounced persistence (page.tsx:480-516).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Server-side preview render with fingerprint cache",
+    "description": "Fast 540x960 CRF32 preview with a sha256 fingerprint over matches+TTS-mtime+slides+filters; cache hit returns instantly, per-preview asyncio lock prevents races (pipeline_routes.py:5564).",
+    "maturity": "partial"
+   },
+   {
+    "name": "Meta-multiplication (2x distinct variants)",
+    "description": "Generates Instagram + Facebook visually-distinct versions per variant to dodge duplicate-content penalties, with per-version subtitle style overrides (pipeline_routes.py:5591, _resolve_meta_preview_variant).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Batch render with skip-cache",
+    "description": "check-render detects already-rendered variants so re-renders skip unchanged work; renders run as background FFmpeg jobs under a concurrency semaphore (pipeline_routes.py:3397,3573; page.tsx:1669).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Style presets",
+    "description": "5 backend presets (energetic/showcase/calm/demo/cinematic) mapping to voice + pacing + subtitle params, mirrored in frontend types (app/services/pipeline_presets.py:13).",
+    "maturity": "partial"
+   },
+   {
+    "name": "Simple Mode (3-click flow)",
+    "description": "Preset -> upload -> generate -> download-all, with status polling and a 'switch to advanced' escape hatch on failure (simple-mode-pipeline.tsx).",
+    "maturity": "partial"
+   },
+   {
+    "name": "Subtitle styling / interstitials / PiP / video filters",
+    "description": "Per-variant subtitle settings, interstitial title slides, picture-in-picture overlays, and denoise/sharpen/color filters threaded through preview and render (pipeline_routes.py:5611-5647).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Manual script authoring path",
+    "description": "handleCreateManual seeds empty script slots via /pipeline/import so users can write scripts by hand without AI (page.tsx:1348).",
+    "maturity": "solid"
+   },
+   {
+    "name": "In-pipeline caption generator + scheduling",
+    "description": "Two large embedded components (pipeline-caption-generator.tsx ~645 lines, pipeline-schedule.tsx ~644 lines) extend the pipeline into captions and publish scheduling.",
+    "maturity": "partial"
+   }
+  ],
+  "strengths": [
+   {
+    "point": "State durability is already solved, despite the brief's assumption — every step writes to editai_pipelines and restores cleanly",
+    "why_it_matters": "The single scariest failure for a bulk-production tool (lose an hour of editing on a crash) is largely averted; this is a real moat over a naive in-memory competitor and should be marketed, not feared."
+   },
+   {
+    "point": "The fingerprint preview cache is genuinely clever — it keys on TTS mtime + per-segment match payload + filters, so unchanged previews return instantly",
+    "why_it_matters": "Bulk creators re-preview constantly; instant cache hits on unchanged variants are the difference between usable and painful at 10+ variants."
+   },
+   {
+    "point": "Script generation is hardened far beyond a demo: 4 parse-fallback strategies, TTS sanitization, safety-filter detection, retry-on-429/5xx, duration-aware word targets, per-profile keys",
+    "why_it_matters": "Non-technical sellers will paste messy ideas in any language; robust parsing/sanitization is what keeps the 'just works' promise from breaking on edge cases competitors stumble on."
+   },
+   {
+    "point": "Meta-multiplication is a real differentiator — auto-producing 2 visually-distinct cuts per script to dodge Meta duplicate-content penalties",
+    "why_it_matters": "No mainstream SaaS (OpusClip/Submagic) ships this; for high-volume faceless creators posting to IG+FB it's a concrete reason to buy."
+   },
+   {
+    "point": "Deterministic, local, zero-per-video FFmpeg assembly with a concurrency semaphore",
+    "why_it_matters": "Delivers the core BYOAK value prop — render 50 videos for the cost of 50 TTS calls, no upload, no per-export fee — which SaaS structurally cannot match."
+   }
+  ],
+  "ux_friction": [
+   {
+    "issue": "Preview is a 30-300s server-side file render, not in-player compositing; any single-segment edit changes the fingerprint and forces a full re-render",
+    "severity": "high",
+    "evidence": "pipeline_routes.py:5611-5654 builds the fingerprint over every match's segment_id/start/end/transforms; one swap invalidates it and triggers assemble_and_render_preview with a 300s timeout (5736-5765)",
+    "fix_idea": "Move to client-side preview: play the actual segment source files in sequence with WebVTT subtitle overlay and the TTS audio track in an HTML5/canvas player, reserving the FFmpeg render only for final export. At minimum, render previews incrementally/segment-diffed so a 1-clip edit re-renders 1 clip, not the whole timeline."
+   },
+   {
+    "issue": "No visible cross-variant progress or ETA during batch render/preview — only per-variant percentages, and progress is in-memory so a refresh shows blanks",
+    "severity": "medium",
+    "evidence": "_generation_progress/preview_renders progress is ephemeral; simple-mode overallProgress averages only variants already returned (simple-mode-pipeline.tsx:281), and restored pipelines lose live progress (pipeline_routes.py:1371 restores paths but not progress)",
+    "fix_idea": "Show an aggregate 'Rendering 3 of 8, ~2m left' bar driven by a persisted job table (jobs already exists) so progress survives refresh/restart and feels like a batch tool."
+   },
+   {
+    "issue": "Simple Mode re-uploads a fresh video and auto-generates a generic preset prompt every run, ignoring the creator's pre-selected segment library",
+    "severity": "high",
+    "evidence": "simple-mode-pipeline.tsx:191-207 uploads uploadedFile to a new project then calls /pipeline/generate with presetToPrompt(preset) — a canned string, not the user's idea or their existing segment library",
+    "fix_idea": "Make Simple Mode operate on the existing segment library + an idea box (the product's actual value prop is 'select segments once, mass-produce'); the upload-per-run model contradicts the vision and confuses non-technical users."
+   },
+   {
+    "issue": "Render proceeds on un-previewed variants behind only a window.confirm warning, risking unexpected cuts",
+    "severity": "medium",
+    "evidence": "page.tsx:1677-1683 uses a native confirm() when a selected variant has no matches; if dismissed-through, match_overrides are missing and the render auto-matches differently than the user will expect",
+    "fix_idea": "Auto-preview (or auto-match server-side) any selected-but-unpreviewed variant before render, or block render until all selected variants have a confirmed timeline; replace native confirm with an inline checklist."
+   },
+   {
+    "issue": "Everything is gated behind AI key setup with no template/example-driven first run",
+    "severity": "medium",
+    "evidence": "generate_pipeline hard-requires gemini/anthropic keys (script_generator.py:489-494) and there's no sample-idea or one-click demo path; a buyer with no key configured hits an error wall",
+    "fix_idea": "Ship a 'Try with sample idea' + bundled example segments so a new non-technical buyer reaches a finished video before configuring BYOAK, then prompt for keys."
+   },
+   {
+    "issue": "4-step linear wizard with no global 'what changed / needs re-render' indicator across variants",
+    "severity": "low",
+    "evidence": "Step state is a single integer (page.tsx:94) and staleness is tracked per-TTS only (restoredTts stale flag, page.tsx:585); editing a script in Step 2 doesn't visibly flag its Step 3 preview as stale",
+    "fix_idea": "Add per-variant status chips (script edited / TTS stale / preview stale / rendered) visible across all steps so bulk users know exactly which of 10 variants need attention."
+   }
+  ],
+  "scaling_bottlenecks": [
+   {
+    "issue": "All pipeline working state lives in a process-global _pipelines dict capped at 1000 entries with oldest-first eviction",
+    "severity": "medium",
+    "evidence": "_MAX_PIPELINE_ENTRIES = 1000 (pipeline_routes.py:273); _evict_old_pipelines drops oldest by created_at (528-548). DB-backed reload mitigates correctness, but an evicted active pipeline silently reloads mid-session",
+    "impact": "For a single desktop user this is fine; if ever multi-tenant/cloud, 1000 concurrent pipelines across users will thrash the cache and every evicted-then-touched pipeline pays a full DB round-trip + disk-existence checks on each access (1271-1371)."
+   },
+   {
+    "issue": "Preview and render are server-side FFmpeg jobs serialized by a global semaphore on one machine",
+    "severity": "high",
+    "evidence": "acquire_preview_slot()/acquire_render_slot() gate all FFmpeg; render-preview holds a per-preview asyncio lock and 300s timeout (pipeline_routes.py:5729,5765); CLAUDE.md notes a single FFmpeg concurrency pool",
+    "impact": "At 10x volume (a seller batching 50 SKUs x 3 variants x 2 meta-versions = 300 renders) jobs queue head-of-line on one CPU/GPU; there is no distributed queue, no priority, and a desktop user's UI blocks behind the semaphore. This is the hard ceiling on 'mass production'."
+   },
+   {
+    "issue": "page.tsx is a 3698-line monolith and pipeline_routes.py is 6502 lines holding 40+ endpoints",
+    "severity": "medium",
+    "evidence": "wc -l: page.tsx 3698, pipeline_routes.py 6502; the page holds ~60+ useState hooks for all 4 steps (page.tsx:94-219)",
+    "impact": "Not user-facing, but it caps iteration speed and makes regressions likely as features (captions, scheduling, meta) keep accreting into the same files; every new variant feature risks a 60-state re-render storm."
+   },
+   {
+    "issue": "Per-variant TTS is generated sequentially per request with no batching/queue, and full DB upsert of the entire pipeline blob on every mutation",
+    "severity": "medium",
+    "evidence": "_db_save_pipeline serializes previews+render_jobs+tts_previews+preview_renders+captions JSON on every step (pipeline_routes.py:723-761); called ~15 distinct places",
+    "impact": "At high variant counts the whole pipeline JSON (which grows with previews/captions/overrides) is rewritten on each small edit, so a 10-variant pipeline with captions does large redundant upserts; timeline auto-save (debounced 800ms) compounds this under active editing."
+   },
+   {
+    "issue": "ElevenLabs character cost scales linearly with no pre-render cost estimate or guardrail in the pipeline UI",
+    "severity": "low",
+    "evidence": "Cost noted at ~$0.22/1000 chars (CLAUDE.md); Step 2 shows live credit balance (page.tsx:154) but there's no per-batch projected-cost preview before 'Regenerate All TTS' across N variants",
+    "impact": "A seller batching hundreds of scripts can burn their BYOAK ElevenLabs credits unexpectedly; at 10x this becomes the dominant variable cost with no visibility before the spend."
+   }
+  ],
+  "missing_features": [
+   {
+    "feature": "In-player (client-side) preview instead of server FFmpeg file render",
+    "user_value": "Instant, scrubbable preview of timeline + subtitles + voiceover so edits feel real-time like CapCut/Descript, eliminating the 30-300s wait that kills the edit loop",
+    "effort": "L",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "True bulk/batch pipeline: one idea (or a CSV/product-feed of ideas) -> dozens of finished videos in one queue with an aggregate dashboard",
+    "user_value": "This IS the stated vision ('mass production'); today the flow is one-idea-at-a-time per pipeline. A seller with 50 SKUs needs a queue, not 50 manual wizard runs",
+    "effort": "L",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Pre-render cost + duration estimate ('this batch will use ~12,400 ElevenLabs chars / ~$2.70 and ~8 min')",
+    "user_value": "BYOAK users need spend visibility before committing a batch; prevents bill shock and builds trust in the zero-per-video pitch",
+    "effort": "S",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Per-variant staleness/status indicators visible across all 4 steps",
+    "user_value": "When juggling 10 variants, users instantly see which need re-TTS or re-preview; removes guesswork and accidental stale renders",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Hook/CTA/template library + brand-voice presets that steer the AI prompt",
+    "user_value": "Best-in-class (Submagic/OpusClip) auto-apply viral hooks and consistent brand voice; sellers want repeatable on-brand output, not a blank idea box",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "Resume/'continue where you left off' surfaced prominently (state is already persisted)",
+    "user_value": "The persistence exists but is only reachable via ?id= URL; a visible 'Recent pipelines / resume' rail turns a hidden strength into a loved feature",
+    "effort": "S",
+    "priority": "delight"
+   },
+   {
+    "feature": "Sample-idea / demo-without-keys onboarding path",
+    "user_value": "Lets a non-technical buyer reach a finished video before BYOAK setup, dramatically improving activation/refund rates",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "A/B-oriented multi-variant output (auto-label hook style per variant, suggest best performer)",
+    "user_value": "Variant generation exists but variants aren't differentiated by strategy; labeling 'curiosity hook / problem-solution / social-proof' makes the multi-variant feature purposeful for testing",
+    "effort": "M",
+    "priority": "later"
+   },
+   {
+    "feature": "Auto-music / trending-audio bed with ducking under voiceover",
+    "user_value": "Every competitor ships background music; its absence makes outputs feel flat versus TikTok-native content",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "Distributed/queued render backend (or at least a persisted job queue with priority) decoupled from the request lifecycle",
+    "user_value": "Lets large batches run reliably overnight and survive restarts without head-of-line blocking the UI; required to honor 'mass production' at scale",
+    "effort": "L",
+    "priority": "later"
+   }
+  ]
+ },
+ {
+  "subsystem": "segments-ingestion-matching",
+  "summary": "This slice covers getting a creator's own footage in, marking reusable segments with keywords, and picking those segments for a generated script. Ingestion is genuinely good for a desktop app: drag-and-drop resolves the real local path (no upload/copy), a native file picker exists, and metadata/thumbnail/preview-proxy run in the background. The \"select once, reuse forever\" library exists with usage_count, favorites, single-use flags, notes, and per-segment visual transforms. The big gaps are in intelligence and transparency: tagging is 100% manual (the GeminiVideoAnalyzer that could auto-suggest tags/segments is built but only wired into the legacy library pipeline, never into this page), and keyword-to-script matching is a naive case-insensitive substring check with no synonyms, no semantics, and an invisible round-robin fallback the user can't see or steer. Overall maturity is solid-but-mechanical: the plumbing is mature, the \"AI does the boring part\" promise is largely unfulfilled in this slice.",
+  "user_flow": "1) User opens the Segments page and adds source footage by dragging a file in (frontend/src/app/segments/page.tsx:519 handleDrop → POST /segments/find-local locates it on disk by name+size and registers the path without uploading), or via native picker (GET /segments/browse-local), or manual upload fallback. 2) Background task extracts metadata + thumbnail + preview proxy (segments_routes.py:823). 3) User selects a video, scrubs the timeline in video-segment-player.tsx (which overlays a waveform and Silero voice-detection regions to help find speech), and drags to mark a start/end. 4) A popup (simple-segment-popup.tsx) asks for keywords (manually typed, with comma/semicolon paste and 7 generic quick-add chips), optional notes, and a \"use once\" toggle. 5) The segment is saved (POST /source-videos/{id}/segments) into a profile-scoped library shown in a \"current video\" or \"all segments\" grid (capped at 500, client-side filtered by keyword/favorite/search). 6) Later, in the pipeline, the generated script's SRT phrases are matched to these segments by substring keyword match with round-robin auto-fill (assembly_service.py:503 match_srt_to_segments) to assemble the video. There is no step where AI proposes segments or tags — the user does all marking and labeling by hand.",
+  "features_present": [
+   {
+    "name": "No-upload local ingestion (drag-drop + path resolution)",
+    "description": "Dragging a file resolves its real disk path via /find-local (name+size search across user dirs then drives) and registers it in place; /source-videos/local stores the path with no copy/transcode. Native picker (/browse-local) and a traditional upload fallback also exist. Ideal for a privacy/local-first desktop app.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Background metadata + thumbnail + preview proxy",
+    "description": "_process_local_video_background extracts duration/dimensions/fps, generates a thumbnail, and builds a preview proxy without transcoding the original. Frontend polls source-video status until ready.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Waveform + voice-activity overlay on the timeline",
+    "description": "video-segment-player.tsx fetches a downsampled waveform and Silero VAD voice regions and renders them on the scrub timeline, so a user can visually find where speech happens before cutting a segment.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Manual segment marking + keyword popup",
+    "description": "Drag-to-select start/end then simple-segment-popup.tsx captures keywords (Enter/comma/semicolon, paste-split), notes, and single-use. clip-tag-editor.tsx provides a separate tag-chip editor (max 20).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Reusable segment library with usage signals",
+    "description": "Profile-scoped library with usage_count, is_favorite, single_use, notes, product_group, and per-segment transforms. Library view supports keyword/favorite/duration/search filters and reset-usage.",
+    "maturity": "partial"
+   },
+   {
+    "name": "Per-segment visual transforms",
+    "description": "segment_transforms.py builds FFmpeg filter chains for rotation/scale/pan/flip/opacity, with segment-default vs project-override merge. Clean, deterministic, identity-short-circuited.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Per-segment extraction cache",
+    "description": "segment_cache.py is a content-addressed (source path+mtime+size+cut+transforms+codec) LRU cache so an iterative edit re-extracts only touched segments. Crash-safe atomic writes, GB cap eviction.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Keyword-to-SRT matching with round-robin fallback",
+    "description": "assembly_service.match_srt_to_segments does substring keyword matching, then a sophisticated round-robin auto-fill with cooldown, source-video interleaving, overlap avoidance, single-use tracking, and product-group scoping.",
+    "maturity": "partial"
+   },
+   {
+    "name": "Fuzzy keyword matcher (keyword_matcher.py)",
+    "description": "A separate matcher with diacritics normalization, prefix/suffix/fuzzy SequenceMatcher scoring and dedup — but it is used only for the legacy secondary-video flow (video_processor.py), NOT for the main pipeline matching, which uses plain substring.",
+    "maturity": "stub-or-broken"
+   },
+   {
+    "name": "Gemini video analyzer",
+    "description": "GeminiVideoAnalyzer scores frames and returns scored/tagged best-moment segments, with batch offset handling and cost logging. Fully built but only wired into the legacy video_processor library flow, never surfaced in the Segments tagging UI.",
+    "maturity": "partial"
+   },
+   {
+    "name": "Product-group segmentation",
+    "description": "Segments can be grouped (product_group) so matching can scope to a product; group CRUD + reassign endpoints exist. Supports the e-commerce multi-SKU audience.",
+    "maturity": "partial"
+   }
+  ],
+  "strengths": [
+   {
+    "point": "True local-first ingestion with zero upload",
+    "why_it_matters": "The /find-local path-resolution + /source-videos/local in-place registration is the concrete delivery of the privacy/no-upload differentiator vs OpusClip/HeyGen. For a 50-500 SKU seller with gigabytes of footage, not copying or uploading is a massive UX and cost win."
+   },
+   {
+    "point": "Waveform + Silero voice-activity overlay during segment selection",
+    "why_it_matters": "This is genuinely best-in-class assist for manual cutting — competitors charge for VAD-based silence detection. It directly reduces the effort of the once-only marking step the whole product depends on."
+   },
+   {
+    "point": "The round-robin matcher is unusually thoughtful",
+    "why_it_matters": "Cooldown-based reuse spacing, source-video interleaving, overlap-time avoidance, single-use tracking and per-variant offset (assembly_service.py:503-880) mean generated videos don't repeat the same clip back-to-back. This is the deterministic 'everything-else' engine the vision promises, and it works."
+   },
+   {
+    "point": "Content-addressed segment cache",
+    "why_it_matters": "segment_cache.py keys on everything that changes the output bytes, so a one-segment edit doesn't re-extract the whole timeline — the right architecture to eventually fix the slow-preview pain point in this slice's territory."
+   }
+  ],
+  "ux_friction": [
+   {
+    "issue": "Tagging is 100% manual — no AI tag/segment suggestions despite an analyzer existing",
+    "severity": "high",
+    "evidence": "simple-segment-popup.tsx:229 offers only 7 hardcoded generic chips (intro/product/demo/...); grep for 'analyze|gemini|suggest|transcri' in frontend/src/app/segments/page.tsx returns NO matches; GeminiVideoAnalyzer (gemini_analyzer.py) is only referenced from video_processor.py, never this page.",
+    "fix_idea": "Add an 'Auto-tag / Suggest segments' button that runs GeminiVideoAnalyzer (or a local transcript) on the source video and pre-populates candidate segments with keywords the user can accept/edit. This is the single biggest lever to make 'select once' feel magical instead of tedious."
+   },
+   {
+    "issue": "Keyword matching is naive substring with no synonyms/lemmas/semantics",
+    "severity": "high",
+    "evidence": "assembly_service.py:782 `if keyword_lower in srt_text_lower` and confidence is a flat 1.0/0.7 (line 785). The diacritics-aware fuzzy matcher in keyword_matcher.py is NOT used here. A keyword 'shoe' won't match script word 'sneakers'/'footwear'; 'run' substring-matches 'running' but also 'runway'.",
+    "fix_idea": "Route the main pipeline through keyword_matcher (fuzzy + diacritics) and add a lightweight synonym/embedding layer so the user doesn't have to brainstorm every surface form of a word. Show match confidence in the timeline."
+   },
+   {
+    "issue": "Match results are opaque — user can't see why a clip was chosen or that round-robin filled a gap",
+    "severity": "high",
+    "evidence": "match_srt_to_segments returns MatchResult with is_auto/keyword but the segments page has no match-preview; the user only discovers a bad pick after a 30-80s render. Round-robin auto-fill (assembly_service.py:854) is invisible.",
+    "fix_idea": "Surface a per-phrase match panel ('matched on keyword X' vs 'auto-filled, no keyword') with the chosen clip thumbnail and a one-click swap, before rendering."
+   },
+   {
+    "issue": "Generic quick-add chips don't reflect the user's own footage or product vocabulary",
+    "severity": "medium",
+    "evidence": "simple-segment-popup.tsx:229 list is hardcoded; ClipTagEditor has no autocomplete from existing tags.",
+    "fix_idea": "Populate quick-add and an autocomplete dropdown from the profile's most-used existing keywords so tagging stays consistent across a 500-SKU library."
+   },
+   {
+    "issue": "Library view is a flat 500-cap grid with client-side filtering only",
+    "severity": "medium",
+    "evidence": "page.tsx:288 fetches '/segments/?limit=500' once; filteredSegments (page.tsx:301) filters in JS. No pagination UI, no server-side keyword search beyond a single eq filter.",
+    "fix_idea": "Add server-side paginated search + facet counts by keyword/source video; show 'used in N videos' and 'last used' so creators can curate their reusable bank."
+   },
+   {
+    "issue": "No bulk segment operations or scene auto-split",
+    "severity": "medium",
+    "evidence": "Segments are created one drag at a time via the popup; no 'auto-split into scenes' or multi-select tag-apply in page.tsx handlers.",
+    "fix_idea": "Add FFmpeg scene-detection (or reuse VAD) to propose a full set of candidate cuts in one pass, plus multi-select to apply a keyword to many segments at once."
+   }
+  ],
+  "scaling_bottlenecks": [
+   {
+    "issue": "N+1 source-video name lookups on every segment list",
+    "severity": "medium",
+    "evidence": "segments_routes.py:1477-1481 loops unique_video_ids calling repo.get_source_video(vid) per id; same pattern in get_project_segments (2415+). With Supabase this is one round-trip per distinct source video per list call.",
+    "impact": "At 10x footage (hundreds of source videos), the library list and project-segment composition incur hundreds of serial Supabase calls, making the Segments page and pipeline assembly noticeably slow."
+   },
+   {
+    "issue": "Whole library loaded and filtered client-side, capped at 500",
+    "severity": "medium",
+    "evidence": "page.tsx:288 '/segments/?limit=500' with no pagination; filteredSegments filters in JS (page.tsx:301).",
+    "impact": "A serious creator with thousands of reusable segments silently loses everything past 500 (they simply won't appear for matching/curation), and the browser holds/filters the full array on every keystroke."
+   },
+   {
+    "issue": "Matching is O(srt_entries * segments * keywords) substring scan per variant",
+    "severity": "low",
+    "evidence": "assembly_service.py:771-793 nested loops over search_segments x keywords for each SRT entry, repeated per variant_index.",
+    "impact": "With many variants and a large segment bank this grows quadratically; fine at MVP scale but will need an inverted keyword index if libraries reach thousands of segments."
+   },
+   {
+    "issue": "/find-local can walk entire drives",
+    "severity": "low",
+    "evidence": "segments_routes.py:638-666 falls back to os.walk over every drive (depth 6) when a file isn't in common dirs.",
+    "impact": "On a machine with large external drives a single mis-resolved drop can stall the request for many seconds; acceptable now but should be cancellable/time-boxed."
+   }
+  ],
+  "missing_features": [
+   {
+    "feature": "AI auto-segment + auto-tag from the source video",
+    "user_value": "Turns the tedious once-only marking into 'review and accept' — the analyzer already exists, it just needs a button on the Segments page that proposes cuts with keywords. This is the difference between a labeling chore and a delightful 'AI did it for me' moment.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Transcript/speech-based segment suggestion",
+    "user_value": "For talking-head footage, auto-cut on sentences (reuse the existing VAD/Whisper timing) and seed keywords from the spoken words, so segments align to natural beats.",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "Semantic / synonym-aware matching with visible confidence",
+    "user_value": "A creator shouldn't have to list every word form; 'sneaker' should match 'shoe/footwear'. Showing confidence lets them trust the auto-assembly instead of re-rendering blindly.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Pre-render match preview with one-click swap",
+    "user_value": "See which clip each script line got (keyword vs auto-fill) and swap before paying the 30-80s render cost — removes the worst loop in the whole product for this slice.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Keyword autocomplete from existing library + tag taxonomy",
+    "user_value": "Keeps tags consistent across hundreds of SKUs so matching actually fires; prevents the 'shoes' vs 'shoe' vs 'sneaker' fragmentation that silently breaks matching.",
+    "effort": "S",
+    "priority": "delight"
+   },
+   {
+    "feature": "Bulk multi-select tag/delete/favorite + scene auto-split",
+    "user_value": "Lets a high-volume creator tag dozens of segments at once and turn a long source video into candidate cuts in one pass instead of dragging each manually.",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "Reuse insight: 'used in N videos / last used / never used'",
+    "user_value": "Helps creators curate their reusable bank, find dead weight, and trust the 'reuse forever' promise; surfaces underused great clips.",
+    "effort": "S",
+    "priority": "later"
+   },
+   {
+    "feature": "Server-side paginated/faceted segment search",
+    "user_value": "Makes the library usable past 500 segments and fast at 10x scale, which the target 50-500 SKU audience will hit quickly.",
+    "effort": "M",
+    "priority": "later"
+   }
+  ]
+ },
+ {
+  "subsystem": "timeline-editor-preview",
+  "summary": "This slice covers two parallel preview systems plus the manual editing surface. (1) A genuinely impressive \"Instant Preview\" in timeline-editor.tsx that composites source segments client-side by pooling muted <video> elements per source-video-id and driving them off a master audio clock via requestAnimationFrame (frontend/src/components/timeline-editor.tsx:327-353, 255-323). This sidesteps the 30-80s render-file latency entirely for the common case. (2) A server-file preview (variant-preview-player.tsx) that POSTs match overrides, polls/SSEs a fingerprinted FFmpeg render at 540x960, and plays the resulting MP4 — this is the slow path that still owns final-fidelity review (transforms, PiP, color, denoise). Editing power is modest: segment swap, drag-to-swap-assignment, +/-0.5s duration nudges, merge-group-aware grouping, and interstitial image slides with Ken Burns. The maturity is high on playback engineering (lots of careful seek/grace/merge-group handling) but the editor itself is a \"segment-mapping\" tool, not a real NLE timeline — there is no trim-within-segment, no ripple, no multi-track, no per-segment transition picker, and transforms/PiP/logo are batch-config dialogs rather than direct on-canvas manipulation. Against CapCut/Descript/Submagic this is a constrained, opinionated bulk-production editor, not a free-form editor — which is on-brand, but several table-stakes editing affordances are missing.",
+  "features_present": [
+   {
+    "name": "Instant client-side composite preview",
+    "description": "Plays source segments directly in pooled muted <video> elements synced to a master audio clock via rAF (~60fps segment switching), with merge-group awareness, seek-grace windows, segment-end enforcement, and next-segment preload. No render wait. timeline-editor.tsx:327-505, 552-702.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Server-side render preview (final-fidelity)",
+    "description": "POST /pipeline/render-preview with full match overrides, fingerprint cache, SSE progress + polling fallback, 540x960 output, limitations banner. variant-preview-player.tsx:114-291; pipeline_routes.py:5564-5797.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Timeline + List dual view",
+    "description": "Horizontal proportional-width strip grouped by merge_group, plus a vertical list with drag handles, status badges, confidence, and product-group tags. timeline-editor.tsx:1417-2116.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Segment swap / assign dialog",
+    "description": "Keyword search, same-source vs all-source filter, proximity +/-2 exclusion to avoid repeats, propagates swap to whole merge group. timeline-editor.tsx:704-821, 2118-2229.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Drag-to-swap assignment",
+    "description": "Native HTML5 DnD swaps the segment mapping between two positions (SRT text/timing stays put). timeline-editor.tsx:825-897.",
+    "maturity": "partial"
+   },
+   {
+    "name": "Duration override per phrase",
+    "description": "+/-0.5s nudge buttons clamped 0.5-10s; shows adjusted vs natural SRT duration. timeline-editor.tsx:901-909, 1948-1993. No drag-resize of the block itself.",
+    "maturity": "partial"
+   },
+   {
+    "name": "Interstitial image slides",
+    "description": "Insert product-image slides between blocks with duration 0.5-5s and Ken Burns directions. URL-only input, no upload/picker. timeline-editor.tsx:911-943, 1444-1743.",
+    "maturity": "partial"
+   },
+   {
+    "name": "Global + per-segment transforms",
+    "description": "Rotation/scale/pan/flip/opacity via sliders with click-to-edit values; global panel offers set-vs-add modes. CSS-preview only in segment player; not visible in the instant timeline preview. global-transform-panel.tsx, segment-transform-panel.tsx.",
+    "maturity": "partial"
+   },
+   {
+    "name": "PiP overlay config",
+    "description": "Position (4 corners), size (S/M/L), animation (static/fade/kenburns) presets. Discrete choices only — no free placement or sizing. pip-overlay-panel.tsx.",
+    "maturity": "partial"
+   },
+   {
+    "name": "Logo drag overlay",
+    "description": "Drag + scale logo over a still image with quick-position presets and real-coordinate mapping. Works on generated images, NOT on the video timeline. logo-drag-overlay.tsx.",
+    "maturity": "partial"
+   },
+   {
+    "name": "Source video segment marker (creation surface)",
+    "description": "Rich pro-grade marking tool: waveform, voice-region detection overlay, zoomable timeline, frame-step, J/K/L speed, mark/group hotkeys, segment resize handles, fullscreen. video-segment-player.tsx.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Subtitle overlay in instant preview",
+    "description": "Live CSS-rendered subtitle honoring fontSize/outline/shadow/glow/opacity/positionY scaled from ASS PlayRes 1920. timeline-editor.tsx:1142-1187.",
+    "maturity": "solid"
+   }
+  ],
+  "user_flow": "A user reaches Step 3 (Preview & Match) after TTS. The timeline auto-fills each SRT phrase with a keyword-matched segment (green=matched, amber=unmatched, grey=auto-filled). The user scans the horizontal strip, clicks a block to open an inline mini-player (a single seeking <video>) plus details/swap/duration controls, or switches to List view to drag handles and nudge durations. To fix a bad match they open the swap dialog, search by keyword, optionally filter to the same source, and pick a replacement (which propagates to the whole merge group). To sanity-check the whole video without a render they click \"Instant Preview\": pooled videos and the TTS audio start, and blocks highlight as playback advances; they can scrub, skip segment-to-segment, click a block to seek, or expand to a larger dialog. For final-fidelity review (transforms, PiP, color, denoise baked in) they open the VariantPreviewPlayer, which triggers a server FFmpeg render, shows a progress bar for 30-80s, then plays a 540x960 MP4 with a \"resolution/loudness differ from export\" note. Transforms, PiP, and logo are configured in separate side panels/dialogs, not by manipulating the preview canvas directly.",
+  "strengths": [
+   {
+    "point": "Instant in-browser composite preview is a genuine differentiator",
+    "why_it_matters": "It eliminates the 30-80s render wait for the most common review action (does the timeline look right?). The pooled-video + master-audio-clock + rAF architecture (timeline-editor.tsx:327-353) is what OpusClip/Submagic users wish they had — most SaaS editors force a server round-trip per edit. For bulk producers iterating on dozens of videos, this is the single biggest UX win in the product."
+   },
+   {
+    "point": "Playback engineering is unusually careful",
+    "why_it_matters": "Seek-grace windows, merge-group transition detection, segment-end enforcement at 60fps instead of 4Hz timeupdate, activation-id invalidation to kill stale async work, and per-source preload hints (timeline-editor.tsx:236-241, 401-449, 552-671) show real attention to the subtle stalls/black-frames that plague homemade players. This is the hard part and it is done well."
+   },
+   {
+    "point": "Fingerprint-cached server preview avoids redundant renders",
+    "why_it_matters": "The sha256 fingerprint over matches + visual settings + audio mtime (pipeline_routes.py:5650-5667) returns a cache hit instantly when nothing changed, and the per-pipeline preview lock prevents concurrent FFmpeg races. This keeps the slow path from being slower than it needs to be."
+   },
+   {
+    "point": "Merge-group-aware editing keeps preview and render in agreement",
+    "why_it_matters": "Swaps propagate to all entries in a merge group (timeline-editor.tsx:790-821) because the render collapses a group to its first segment. Getting this right means the instant preview actually matches the exported video — a correctness property many quick-preview hacks get wrong."
+   },
+   {
+    "point": "The source-video marking tool (video-segment-player.tsx) is pro-grade",
+    "why_it_matters": "Waveform, voice-activity overlay, zoomable timeline with wheel zoom, frame-stepping, J/K/L, I/O/C/G hotkeys, and drag-resize handles rival a real NLE's clip view. This makes the 'select important segments once' core promise credible."
+   }
+  ],
+  "ux_friction": [
+   {
+    "issue": "Two separate preview systems with different fidelity confuse 'what will I actually get'",
+    "severity": "high",
+    "evidence": "Instant Preview (timeline-editor.tsx:1056-1093) shows NO transforms, PiP, logo, color, denoise, interstitial Ken Burns, or transitions — it just plays raw source segments + CSS subtitles. The accurate preview is the 30-80s server render (variant-preview-player.tsx). A user who tweaks rotation/PiP and watches Instant Preview sees none of it and may ship wrong.",
+    "fix_idea": "Render transforms/PiP/logo via CSS in the instant player (the segment player already does CSS transforms at video-segment-player.tsx:1024-1045 — reuse it), and add a clear badge: 'Instant preview = layout only; click Full Preview for final look.'"
+   },
+   {
+    "issue": "No trim-within-segment in the editor",
+    "severity": "high",
+    "evidence": "Duration is only adjustable via +/-0.5s buttons clamped to 0.5-10s (timeline-editor.tsx:901-909); there is no way to choose WHICH 2s of a 5s segment plays. segment_start_time/end_time come from matching and are not user-editable here.",
+    "fix_idea": "Add drag handles on the timeline block (the source player already implements resize at video-segment-player.tsx:811-878 — port the interaction) so users can slide the in/out point within the matched segment."
+   },
+   {
+    "issue": "Transforms / PiP / logo are blind batch dialogs, not direct manipulation",
+    "severity": "high",
+    "evidence": "global-transform-panel.tsx and pip-overlay-panel.tsx are slider/preset panels with no live preview of the result on the actual video; logo-drag-overlay.tsx only works over a still image, not the video. PiP is locked to 4 corners + 3 sizes (pip-overlay-panel.tsx:20-31).",
+    "fix_idea": "Composite transforms/PiP/logo onto the instant-preview canvas with draggable handles (CapCut/Veed standard). At minimum, free X/Y/size for PiP instead of corner presets."
+   },
+   {
+    "issue": "Interstitial slide image is a raw URL text field with no upload or picker",
+    "severity": "medium",
+    "evidence": "timeline-editor.tsx:1651-1659 — user must paste 'https://...'; non-technical e-commerce sellers cannot easily get a URL for a local product photo.",
+    "fix_idea": "Add a file-upload / product-image picker (a product-picker-dialog already exists per the PiP import) and let users drop a local image."
+   },
+   {
+    "issue": "Instant preview is gated behind a click and rebuilds state each time",
+    "severity": "medium",
+    "evidence": "canPreview requires pipelineId+profileId+>=1 video match; audio preloads but activation runs a multi-stage rAF/canplay/seek dance (timeline-editor.tsx:552-671) that can take a moment on first play, and there is no scrub-thumbnail or frame preview before pressing play.",
+    "fix_idea": "Auto-activate a paused first frame so the user sees the opening shot immediately, and show segment thumbnails on the scrub bar."
+   },
+   {
+    "issue": "No transition picker despite 'transitions' being a charter feature",
+    "severity": "medium",
+    "evidence": "No transition UI anywhere in this slice; blocks are hard cuts. The pipeline mentions transitions but the editor exposes no per-cut control.",
+    "fix_idea": "Add a between-block transition affordance (the '+' insert pattern at timeline-editor.tsx:1429-1441 is a natural host) with crossfade/whip/slide presets."
+   },
+   {
+    "issue": "Drag-to-swap semantics are non-obvious",
+    "severity": "low",
+    "evidence": "Dragging a block swaps segment ASSIGNMENTS but leaves SRT text/timing in place (timeline-editor.tsx:855-889); the tooltip says 'Drag to swap segment assignment' (line 1923) but users expect reordering clips, not swapping mappings.",
+    "fix_idea": "Clarify with a drag ghost label ('Swap clip for #3 <-> #5') or offer a real reorder mode."
+   },
+   {
+    "issue": "Server preview has no scrubbable timeline tying frames back to blocks",
+    "severity": "low",
+    "evidence": "variant-preview-player.tsx:380-392 renders a plain <video controls>; there is no marker overlay mapping playback position to the editable blocks, so a user who spots a problem must guess which block to fix.",
+    "fix_idea": "Overlay block boundaries / clickable chapter markers on the server-preview scrubber."
+   }
+  ],
+  "scaling_bottlenecks": [
+   {
+    "issue": "Instant preview mounts one <video> per unique source video, all eagerly created",
+    "severity": "high",
+    "evidence": "timeline-editor.tsx:1106-1125 maps over uniqueSourceVideoIds and renders a <video> for each; a bulk video drawing on 30-50 distinct source clips creates 30-50 simultaneous media elements + decoders. preload is 'auto' only for active+next (236-241) but all elements still exist and hold network/decoder handles.",
+    "impact": "On a long timeline with many sources, browser hits the per-page media-element/decoder limit (~16-75 depending on platform), causing failed loads, audio desync, or tab crashes — exactly the 'bulk production' case the product targets."
+   },
+   {
+    "issue": "Server preview render is a full FFmpeg job behind a 5-min timeout and a single preview slot",
+    "severity": "high",
+    "evidence": "pipeline_routes.py:5729 acquire_preview_slot() serializes preview renders; each is a real assemble_and_render_preview producing a 540x960 file (5736-5766). At 10x users on one desktop sidecar, previews queue head-of-line behind each other and full renders.",
+    "impact": "Multiple variants/users reviewing in parallel serialize into a 30-80s-each queue; the in-memory _pipelines dict + per-pipeline locks also mean a backend restart drops all in-flight preview state (consistent with the known in-memory-pipeline pain point)."
+   },
+   {
+    "issue": "Whole-timeline fingerprint invalidates on any single-block edit",
+    "severity": "medium",
+    "evidence": "matches_fingerprint hashes the entire match_overrides array + all visual settings (pipeline_routes.py:5650-5654); changing one segment's duration_override or swapping one clip changes the hash, forcing a full re-render of the entire video for the server preview.",
+    "impact": "Iterative single-block edits each trigger a fresh 30-80s render with zero reuse of unchanged segments — review cost scales linearly with edit count, punishing the careful editor."
+   },
+   {
+    "issue": "rAF loops + 60fps segment enforcement run continuously during preview",
+    "severity": "low",
+    "evidence": "timeline-editor.tsx:406-449 runs a requestAnimationFrame enforcement loop (slowed to 100ms setTimeout only when paused) and a second rAF tracking loop (327-353) while preview is active.",
+    "impact": "Acceptable for one preview, but on lower-end seller laptops with many pooled videos the combined rAF + decode load can drop frames and heat the machine; not a server-scaling issue but a per-client one."
+   },
+   {
+    "issue": "matchesRef + per-render serialization of full overrides on every preview POST",
+    "severity": "low",
+    "evidence": "variant-preview-player.tsx:130-146 serializes the entire matches array (including transforms blobs) on each render request; large timelines produce large payloads.",
+    "impact": "Minor at current sizes; grows with very long scripts but unlikely to be a primary limiter."
+   }
+  ],
+  "missing_features": [
+   {
+    "feature": "Transforms/PiP/logo composited live into the instant (no-render) preview",
+    "user_value": "Users see the actual final look — rotation, zoom, PiP, logo, color — without a 30-80s render, closing the fidelity gap between the two preview systems and preventing wrong exports.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Drag-to-trim in/out point within a matched segment",
+    "user_value": "Pick which part of a 5s clip plays instead of only nudging total duration; essential for getting the right beat/visual and matching CapCut-level control.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Direct on-canvas PiP/logo placement (free X/Y/size) on the video",
+    "user_value": "Drag-and-resize overlays where you want them instead of 4-corner/3-size presets — table stakes vs CapCut/Veed/Creatify.",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "Local image upload / product picker for interstitial slides",
+    "user_value": "Non-technical e-commerce sellers can insert their own product photos without finding a URL.",
+    "effort": "S",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Per-cut transition picker (crossfade/whip/slide)",
+    "user_value": "Hard cuts look amateur for social; quick transition presets between blocks raise perceived production value, matching Submagic/CapCut output.",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "Incremental / segment-level preview caching",
+    "user_value": "Re-rendering only the changed block instead of the whole video makes iterative editing fast and cheap, removing the linear-cost-per-edit penalty.",
+    "effort": "L",
+    "priority": "later"
+   },
+   {
+    "feature": "Lazy/windowed video-element pooling in instant preview",
+    "user_value": "Keeps long timelines with many source clips from exhausting browser decoders/crashing — directly protects the bulk-production use case.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Chapter/block markers overlaid on the server-preview scrubber",
+    "user_value": "When a problem is spotted in full preview, click the marker to jump straight to the offending block to fix it.",
+    "effort": "S",
+    "priority": "delight"
+   },
+   {
+    "feature": "Undo/redo for editing actions (swap, drag, duration, slide insert)",
+    "user_value": "Editing confidence — recover instantly from a mis-swap or accidental drag; expected in any editor.",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "Keyboard shortcuts in the timeline editor (the source player has them; the editor doesn't)",
+    "user_value": "Power users editing dozens of videos can space-to-play, arrow-to-step, and hotkey-swap without mousing — major throughput gain for high-volume creators.",
+    "effort": "S",
+    "priority": "delight"
+   },
+   {
+    "feature": "Per-segment volume / ducking and background-music track",
+    "user_value": "Add music under the voiceover with ducking — a near-universal short-form requirement absent from this slice.",
+    "effort": "L",
+    "priority": "later"
+   },
+   {
+    "feature": "Persist instant-preview playback position / paused first frame on open",
+    "user_value": "Immediate visual of the opening shot and no need to re-press play after every edit; smoother review loop.",
+    "effort": "S",
+    "priority": "later"
+   }
+  ]
+ },
+ {
+  "subsystem": "tts-voice-captions",
+  "summary": "This slice covers voiceover (ElevenLabs multi-account with 402 quota failover + Edge-TTS free fallback, plus Coqui/Kokoro stubs) and burned-in captions/subtitles. The voiceover engine is genuinely strong: per-profile encrypted multi-key vault, auto-failover across up to 3 accounts on quota exhaustion, TTS caching to avoid re-billing, silence trimming, and character-level ElevenLabs timestamps that drive perfectly-synced SRT generation (no Whisper needed). Caption rendering is the weak half: it is static ASS force_style burn-in (font, color, outline, shadow, glow, adaptive sizing, position) with NO word-level karaoke highlighting, NO animation/pop, and NO emoji — the exact features Submagic/CapCut/Opus built their reputation on. Voice selection UX is partial: a real voice picker exists in pipeline Step 2 (premade vs custom grouping, default-voice star) but there is no in-app voice audition, no stability/style/speed controls in the UI, and the standalone TTS Library lets you pick a model but not a voice at all. Overall maturity: voiceover solid, captions partial and visibly behind best-in-class.",
+  "features_present": [
+   {
+    "name": "ElevenLabs multi-account with auto-failover",
+    "description": "Up to 3 encrypted API keys per profile (Fernet, derived from SUPABASE_KEY), ordered primary-first, with automatic 402 quota failover that records the error and rotates to the next key mid-generation (elevenlabs_account_manager.py + tts/elevenlabs.py:362-395). Per-account subscription/credit display with 5-min TTL auto-refresh.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Edge-TTS free fallback",
+    "description": "Microsoft Edge neural voices, zero cost, with retry + empty-file guard and word-boundary SRT generation (edge_tts_service.py). Genuine graceful degradation when ElevenLabs unavailable — strong for the BYOAK no-cost story.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Character-level timestamp -> SRT subtitle generation",
+    "description": "Uses ElevenLabs alignment (character_start/end_times) to build phrase-grouped SRT with perfect audio sync, max 40 chars / 7 words per cue, sentence-aware splitting, min-duration enforcement and word-count validation (tts_subtitle_generator.py). Avoids Whisper entirely on the ElevenLabs path.",
+    "maturity": "solid"
+   },
+   {
+    "name": "TTS caching",
+    "description": "Fingerprint cache keyed on text+voice+model+settings avoids re-billing identical generations at both raw and silence-trimmed levels (elevenlabs_tts.py:156-162, tts/elevenlabs.py:454). Directly supports the zero-per-video-cost value prop.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Silence trimming with timestamp remapping",
+    "description": "Removes dead air from generated audio and remaps caption timestamps into the trimmed timeline so subtitles stay synced (tts_subtitle_generator.remap_timestamps_dict + silence_remover).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Caption styling (ASS force_style)",
+    "description": "Font family/size, text/outline color, outline width, shadow depth, glow (faked via wider semi-transparent outline), adaptive font sizing for long lines, position, opacity, per-resolution scaling via original_size, and 6+ hardcoded presets including a static 'karaoke' yellow style (subtitle_styler.py, video-processing.ts).",
+    "maturity": "partial"
+   },
+   {
+    "name": "Voice picker in pipeline Step 2",
+    "description": "Lists provider voices grouped into custom vs premade, shows language, lets user set a per-profile default voice (star), and persists it (step2-tts.tsx:288-339). Functional but minimal.",
+    "maturity": "partial"
+   },
+   {
+    "name": "TTS Library (standalone reusable assets)",
+    "description": "CRUD over persisted MP3+SRT assets, batch grouping by creation time, duplicate detection, failed-asset cleanup, waveform scrubber, SRT viewer/copy, cost estimate, polling for generating status (tts-library/page.tsx). Good asset management.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Voice Activity Detection (Silero VAD)",
+    "description": "Detects and mutes human voice in source footage so original audio doesn't fight the voiceover (voice_detector.py). Useful, but depends on torch which may not be installed in a packaged desktop build (SILERO_AVAILABLE gate).",
+    "maturity": "partial"
+   },
+   {
+    "name": "Voice cloning + extra providers",
+    "description": "Coqui XTTS voice cloning endpoint (tier+ML gated, 6s min sample) and Kokoro/Coqui listed as providers. Cloning is pro-gated and the cloned voice is only logged, not persisted to profile (tts_routes.py:443-446 'will be implemented'). Effectively a stub.",
+    "maturity": "stub-or-broken"
+   }
+  ],
+  "user_flow": "In the main pipeline a creator writes an idea, gets N script variants, then in Step 2 picks a voice from a dropdown (premade vs custom groups, can star a default) and generates voiceover per variant; ElevenLabs returns audio + character timestamps that become a synced SRT, silence is trimmed, and the result is cached. In Step 3 they review captions whose look is controlled by a styling panel (font/color/outline/shadow/glow/position/adaptive) and one of ~6 presets, then render burns the SRT into the video via FFmpeg ASS. Separately, the TTS Library page lets them mass-create standalone voiceover assets (text + model only — no voice choice), audition them via a waveform scrubber, view/copy the SRT, edit text (auto-regenerates), and bulk-clean failed/duplicate assets. Multi-account ElevenLabs keys are managed in Settings; when the primary key hits its quota mid-batch, generation silently fails over to the next key.",
+  "strengths": [
+   {
+    "point": "Multi-account quota failover is real and automatic",
+    "why_it_matters": "High-volume faceless creators and agencies running 50-500 videos routinely blow through a single ElevenLabs character quota. Auto-rotating across 3 keys mid-batch (tts/elevenlabs.py:362-395) without user intervention is a genuine differentiator most SaaS competitors don't expose because they bill you instead."
+   },
+   {
+    "point": "Captions are generated from ElevenLabs character timestamps, not ASR",
+    "why_it_matters": "Submagic/Opus rely on Whisper transcription which drifts and misspells. Driving SRT directly from the TTS engine's own alignment (tts_subtitle_generator.py) yields word-perfect text and tight sync for free — a quiet but real quality edge."
+   },
+   {
+    "point": "Aggressive caching + free Edge-TTS fallback deliver on the zero-per-video-cost promise",
+    "why_it_matters": "The whole BYOAK pitch ($79 once, no per-video fee) depends on not re-billing. The fingerprint cache plus a genuinely good free fallback voice path make 'generate 100 variants for $0' believable."
+   },
+   {
+    "point": "TTS Library asset management is mature",
+    "why_it_matters": "Reusable voiceover assets with batch grouping, duplicate detection, waveform scrubbing and bulk cleanup is exactly the bulk-production workflow the product targets — most consumer tools force you to regenerate every time."
+   }
+  ],
+  "ux_friction": [
+   {
+    "issue": "No word-level karaoke highlighting or caption animation — captions are static blocks",
+    "severity": "high",
+    "evidence": "subtitle_styler.py produces a single ASS force_style with PrimaryColour/Outline/Shadow only; the 'karaoke' preset (video-processing.ts:327) is just static yellow text. No \\k tags, no per-word color flip, no pop/bounce. The character timestamps that would enable true word highlighting already exist in tts_subtitle_generator but are collapsed to phrase cues.",
+    "fix_idea": "Emit ASS with \\k karaoke tags or per-word \\t color transitions using the already-available character_start/end times; offer 2-3 animated presets (word-by-word highlight, pop, slide-up). This is the single biggest gap vs Submagic/CapCut."
+   },
+   {
+    "issue": "No in-app voice audition before committing a voice",
+    "severity": "high",
+    "evidence": "step2-tts.tsx voice Select (line 288) lists names only; there is no preview/play button per voice. Users must generate a full variant to hear a voice. ElevenLabs offers preview_url per voice that is never surfaced.",
+    "fix_idea": "Add a play button next to each voice that streams the ElevenLabs preview_url (or generates a cached 1-line sample), so users pick a voice in seconds instead of by trial-and-error full renders."
+   },
+   {
+    "issue": "TTS Library cannot choose a voice — only a model",
+    "severity": "high",
+    "evidence": "tts-library/page.tsx create dialog (lines 619-633) exposes only an ELEVENLABS_MODELS dropdown; voice is whatever the profile default is. The standalone bulk-creation surface, the one built for mass production, gives no voice control.",
+    "fix_idea": "Add a voice selector (and provider toggle for Edge-TTS) to the TTS Library create/edit dialogs, mirroring Step 2."
+   },
+   {
+    "issue": "Voice settings (stability/similarity/style/speed) are hardcoded, not user-editable",
+    "severity": "medium",
+    "evidence": "elevenlabs_tts.py:112-117 hardcodes a single 'Ana Maria' voice_settings profile; generate_audio accepts overrides but no frontend control passes them. Competitors expose at least a stability/style slider and speed.",
+    "fix_idea": "Surface stability/style/speed sliders (with sensible presets like 'expressive' vs 'stable') in Step 2 and TTS Library; they already flow through to the API."
+   },
+   {
+    "issue": "No emoji, no keyword emphasis, no multi-style-per-clip captions",
+    "severity": "medium",
+    "evidence": "SubtitleSettings (video-processing.ts:3-27) has no emoji, bold-keyword, or active-word fields. Submagic's core hook is auto-emoji + emphasized keywords. Nothing in subtitle_styler supports it.",
+    "fix_idea": "Add an optional emoji/keyword-emphasis pass (LLM tags important words) rendered with inline ASS color/size overrides."
+   },
+   {
+    "issue": "Captions render to a file (30-80s) rather than previewing live in the player",
+    "severity": "medium",
+    "evidence": "All styling goes through build_subtitle_filter -> FFmpeg burn-in; there is no CSS/canvas live overlay of the chosen style over the player. Caption tweaks require a full re-render to see.",
+    "fix_idea": "Render captions as a CSS/DOM overlay in the preview player using the same SubtitleSettings, so style changes are instant; only burn in at final render."
+   },
+   {
+    "issue": "Voice list has no search/filter by language, gender, or accent",
+    "severity": "low",
+    "evidence": "step2-tts.tsx splits voices into custom/premade groups but offers no text search; ElevenLabs accounts can have dozens of voices. tts_routes /voices accepts a language filter but the UI never uses gender/category beyond grouping.",
+    "fix_idea": "Add a search box + language/gender filter chips above the voice dropdown."
+   }
+  ],
+  "scaling_bottlenecks": [
+   {
+    "issue": "ElevenLabs concurrency is unbounded per-request with 120s client timeout; no global TTS rate/concurrency limit",
+    "severity": "medium",
+    "evidence": "_call_elevenlabs_api (elevenlabs_tts.py:31-41) opens a fresh AsyncClient per call with no semaphore; /tts/generate is rate-limited at 20/min per IP but bulk pipeline/library generation bypasses that. A 100-variant batch fires many concurrent ElevenLabs calls.",
+    "impact": "At 10x volume, bursts hit ElevenLabs per-key concurrency limits (429) and exhaust quotas fast; retries (tenacity 3x exp backoff) amplify load. Failover helps for 402 but not for 429 throttling."
+   },
+   {
+    "issue": "Account-error lookup decrypts every key linearly to find which account failed",
+    "severity": "low",
+    "evidence": "record_error (elevenlabs_account_manager.py:251-264) fetches all accounts and Fernet-decrypts each to match the failed key. Max 3 accounts so fine now, but it is O(n) decrypt per error.",
+    "impact": "Negligible at MAX_ACCOUNTS_PER_PROFILE=3, but if the cap is raised for agencies it becomes a hot path doing crypto on every quota failure."
+   },
+   {
+    "issue": "Edge-TTS uses a fixed 4-worker module-level ThreadPoolExecutor shared process-wide",
+    "severity": "medium",
+    "evidence": "edge_tts_service.py:19 _executor = ThreadPoolExecutor(max_workers=4) is a single global; all sync Edge-TTS calls across all profiles funnel through 4 threads with 120s timeouts.",
+    "impact": "With many users/profiles on the free path simultaneously, Edge-TTS requests queue and time out at 10x concurrency; the free fallback becomes a bottleneck exactly when the paid path is failing over."
+   },
+   {
+    "issue": "Subtitle generation re-reads/rewrites the SRT file in place for wrap-style injection on every render",
+    "severity": "low",
+    "evidence": "build_subtitle_filter calls _inject_wrap_style_override_in_srt (subtitle_styler.py:396) which read_text + write_text the SRT each render.",
+    "impact": "Minor disk churn per render; at high render throughput adds avoidable I/O and risks races if the same SRT is rendered concurrently for multiple variants."
+   }
+  ],
+  "missing_features": [
+   {
+    "feature": "Word-level karaoke / animated captions (active-word highlight, pop, slide)",
+    "user_value": "This is THE feature creators judge a short-form tool by; Submagic and CapCut win on it. The timing data already exists, so it's the highest-leverage addition to make captions competitive.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "In-app voice preview/audition (play sample per voice)",
+    "user_value": "Lets users choose a voice in seconds instead of generating full variants; removes the single most annoying step in voice selection.",
+    "effort": "S",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Auto-emoji and keyword emphasis in captions",
+    "user_value": "Signature Submagic engagement booster; bold/colored keywords and contextual emojis materially lift retention on Reels/TikTok.",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "Live caption preview overlay in the player (CSS/DOM, no re-render)",
+    "user_value": "Style tweaks become instant instead of a 30-80s render each; turns caption design from painful to fun and removes a core friction point.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Voice + provider selection and per-voice settings in the TTS Library",
+    "user_value": "The bulk-production surface currently can't pick a voice or tune stability/style/speed — agencies need per-asset voice control for multi-brand work.",
+    "effort": "S",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Voice search/filter by language, gender, accent + favorites",
+    "user_value": "ElevenLabs libraries have hundreds of voices; without filtering the dropdown is unusable for power users.",
+    "effort": "S",
+    "priority": "delight"
+   },
+   {
+    "feature": "Persist cloned voices to profile and reuse across pipeline/library",
+    "user_value": "Voice cloning is built but the cloned voice is only logged, not saved — finishing it gives faceless creators a consistent branded voice, a real HeyGen/Creatify-class capability.",
+    "effort": "M",
+    "priority": "later"
+   },
+   {
+    "feature": "Multi-language / auto-translate voiceover + captions",
+    "user_value": "E-commerce sellers targeting multiple markets want one script rendered in several languages; ElevenLabs multilingual models make this cheap to add.",
+    "effort": "L",
+    "priority": "delight"
+   },
+   {
+    "feature": "Global TTS concurrency semaphore + 429 backoff/failover",
+    "user_value": "Protects bulk batches from ElevenLabs throttling and quota burn at scale, making 100+ video runs reliable rather than flaky.",
+    "effort": "S",
+    "priority": "later"
+   },
+   {
+    "feature": "Per-caption manual timing/text editor (drag cue boundaries, fix a word)",
+    "user_value": "Even perfect TTS sync occasionally needs a tweak; an inline cue editor (like Descript/Veed) prevents a full regenerate just to fix one subtitle.",
+    "effort": "M",
+    "priority": "delight"
+   }
+  ]
+ },
+ {
+  "subsystem": "batch-bulk-generation",
+  "summary": "There are TWO parallel, unconnected batch systems. (1) Idea-based \"Batch Pipeline\" (app/api/batch_routes.py mounted at /pipeline/batch + frontend/src/app/batch/page.tsx): paste up to 20 ideas, a single background worker processes them strictly sequentially (script -> TTS -> SRT -> keyword match) to \"ready_for_review\", then the user must click Review or \"Approve & Render\" per item. (2) Product-feed batch (app/api/product_generate_routes.py /products/batch-generate + frontend/src/app/batch-generate/page.tsx): select products from a feed/catalog, one sequential worker runs the full 6-stage product-video pipeline per product end-to-end (including render). Both persist to JobStorage (Supabase + in-memory fallback) so state survives restart, and both isolate per-item failures with retry/resume. Maturity is solid-but-modest: it genuinely makes N videos unattended, but throughput is single-item-at-a-time, caps are tiny (20 ideas, page-limited product selection), there is no CSV/spreadsheet import, no auto-render for the idea batch, no SSE (only polling), and no cross-batch queue dashboard. It does NOT yet deliver the \"make 50 videos at once\" promise at competitive throughput.",
+  "user_flow": "Idea batch: user goes to /batch, pastes one idea per line (max 20), sets words-per-subtitle + optional target duration, clicks \"Start Batch\". A background worker (single-flight asyncio.Lock, app/api/batch_routes.py:41) processes items one at a time; the page polls /pipeline/batch/{id} every 2.5s (batch/page.tsx:192) showing per-item status badges (queued/generating_script/generating_preview/ready_for_review/failed). When an item is ready, the user clicks \"Review\" (jumps to /pipeline?step=3) or \"Approve & Render\" (batch/page.tsx:317, renders variant 0 with hardcoded TikTok preset), then polls render progress per pipeline. Failed items can be re-run via \"Resume failed\" (batch_routes.py:323). Product batch: user is on /products, checks products (selectAllOnPage only selects the current page, products/page.tsx:373), opens a BatchSettingsDialog, POSTs /products/batch-generate, and is redirected to /batch-generate?batch_id=... which polls /products/batch/{id}/status every 2s (use-batch-polling.ts) showing a per-product card grid with progress %, an overall progress bar, a \"Stop Batch\" button (cancels via /jobs/{id}/cancel), and a \"Retry N Failed\" button that re-submits only failed product_ids as a new batch.",
+  "features_present": [
+   {
+    "name": "Idea-based batch pipeline (paste N ideas)",
+    "description": "app/api/batch_routes.py: queues up to 20 ideas, each becomes a persisted pipeline processed to ready_for_review by a background worker. Clean per-item status model and progress string '{done}/{total} processed'.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Product-feed batch generation",
+    "description": "app/api/product_generate_routes.py:180 /products/batch-generate runs the full single-product 6-stage pipeline per selected product, end-to-end including render. Per-product child job records make each independently pollable.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Partial-failure isolation",
+    "description": "Both workers wrap each item in try/except that never re-raises (batch_routes.py:232, product_generate_routes.py:332 loop), so one failure does not abort the batch. Failed items keep their error message (truncated to 500 chars).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Resume / retry of failed items",
+    "description": "Idea batch: POST /pipeline/batch/{id}/resume re-queues queued/failed/stuck items, skips ready ones (batch_routes.py:323). Product batch: 'Retry N Failed' resubmits only failed product_ids as a fresh batch (batch-generate/page.tsx:166).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Restart-durable batch state",
+    "description": "Batches live in JobStorage with Supabase primary + in-memory fallback and eviction (job_storage.py); a half-finished idea batch can be resumed after a backend restart. This directly addresses the in-memory pipeline-dict pain point for the batch path.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Progress visibility (polling)",
+    "description": "Per-item status badges + overall progress bar + counts (completed/failed/total). Product batch shows per-product cards with % and live progress text.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Cancel / stop batch",
+    "description": "Product batch supports cooperative cancellation: worker checks job_storage.is_job_cancelled() between products (product_generate_routes.py:334) and the UI has a Stop Batch button. ",
+    "maturity": "partial"
+   },
+   {
+    "name": "Recent batches list",
+    "description": "batch/page.tsx right rail lists the 10 most recent idea batches with status/progress and lets you re-open one. Note: list_batches over-fetches 200 jobs then filters in Python (batch_routes.py:305).",
+    "maturity": "partial"
+   },
+   {
+    "name": "Shared batch settings",
+    "description": "BatchSettings (provider, voice_id, words_per_subtitle, target_duration, denoise/sharpen/color for products) applied uniformly to every item. Reasonable for uniform output.",
+    "maturity": "partial"
+   },
+   {
+    "name": "Buffer bulk publish (downstream of batch)",
+    "description": "app/api/buffer_routes.py /bulk-publish + buffer_service.py staggers multiple rendered clips to TikTok with interval scheduling and per-clip caption fallback from DB. This is the closest thing to a publishing queue.",
+    "maturity": "partial"
+   },
+   {
+    "name": "batch-upload-queue component",
+    "description": "frontend/src/components/batch-upload-queue.tsx is a 6-line null placeholder ('component removed, file kept to prevent Turbopack phantom dependency error'). Dead artifact; no upload-queue UI exists.",
+    "maturity": "stub-or-broken"
+   },
+   {
+    "name": "Auto-render in idea batch",
+    "description": "Idea batch stops at ready_for_review; rendering is a manual per-item click with a hardcoded 'TikTok' preset (batch/page.tsx:325). No 'generate AND render all' option, no per-item preset choice.",
+    "maturity": "stub-or-broken"
+   }
+  ],
+  "strengths": [
+   {
+    "point": "Real partial-failure resilience + resume",
+    "why_it_matters": "For mass production the #1 fear is 'item 37 of 50 crashed and killed the run'. Both workers isolate failures and offer resume/retry of only the failures, which is the correct, competitive behavior and better than naive scripts."
+   },
+   {
+    "point": "Batch state persisted in JobStorage (Supabase + memory fallback)",
+    "why_it_matters": "Long batches survive a backend restart and can be resumed — a meaningful differentiator given the rest of the app keeps pipeline working state in a volatile in-memory dict."
+   },
+   {
+    "point": "Sequential-by-design throttling respects the FFmpeg semaphore",
+    "why_it_matters": "Running one item at a time avoids oversubscribing CPU/GPU/TTS on a single desktop, so batches don't thrash a laptop. It's a defensible default even though it caps throughput."
+   },
+   {
+    "point": "Product-feed batch is true one-click mass production",
+    "why_it_matters": "Select products from a feed -> N finished videos with no per-item interaction. This is the closest the app gets to the core 'bulk from my catalog' promise and maps directly to the e-commerce-seller audience."
+   },
+   {
+    "point": "Clean, legible status model and per-item progress UI",
+    "why_it_matters": "Both pages give clear queued/processing/ready/failed states with inline errors, so a non-technical user can see exactly what happened to each video without logs."
+   }
+  ],
+  "ux_friction": [
+   {
+    "issue": "Two disconnected batch UIs with no shared queue / history dashboard",
+    "severity": "high",
+    "evidence": "/batch (idea, batch_routes.py) and /batch-generate (product, product_generate_routes.py) are entirely separate flows; batch-generate only shows a batch if batch_id is in the URL and has no list of past product batches.",
+    "fix_idea": "Build one unified 'Queue' page listing ALL batches (idea + product) with status, counts, throughput, and re-open; persist product batch history the way idea batches already are."
+   },
+   {
+    "issue": "Idea batch caps at 20 and product selection is page-limited",
+    "severity": "high",
+    "evidence": "BatchCreateRequest max_length=20 (batch_routes.py:57), MAX_IDEAS=20 (batch/page.tsx:30); products selectAllOnPage only selects the current page (products/page.tsx:373).",
+    "fix_idea": "Raise/remove the idea cap (chunk internally), add a true 'select all N matching' for products, and show 'X of Y total selected' so a 200-SKU seller can launch the whole catalog."
+   },
+   {
+    "issue": "No CSV / spreadsheet import for ideas or per-row settings",
+    "severity": "high",
+    "evidence": "No csv/xlsx parsing anywhere in batch pages or routes (grep found none); ideas come only from a free-text textarea, products only from a connected feed.",
+    "fix_idea": "Add CSV/Sheets upload mapping columns to idea, voice, duration, CTA, caption, schedule — this is table-stakes for OpusClip/Pictory-style bulk and is the most-requested mass-production input."
+   },
+   {
+    "issue": "Idea batch requires manual Review/Render per item — no auto-finish",
+    "severity": "high",
+    "evidence": "Items end at ready_for_review; user must click 'Approve & Render' per item with a hardcoded TikTok preset (batch/page.tsx:317-330).",
+    "fix_idea": "Add a 'render all on completion' toggle and a default preset per batch so 50 ideas become 50 finished files unattended; keep manual review as opt-in."
+   },
+   {
+    "issue": "Throughput is one item at a time; long batches feel stalled",
+    "severity": "medium",
+    "evidence": "_batch_worker_lock single-flight (batch_routes.py:41) and product loop awaits each _generate_product_video_task sequentially (product_generate_routes.py:376); no ETA or per-item timing shown.",
+    "fix_idea": "Allow a small configurable concurrency (e.g. 2) gated by the FFmpeg semaphore, and surface ETA / throughput (items/min) so the user trusts a 50-item run is progressing."
+   },
+   {
+    "issue": "Idea-batch cancellation is absent (only product batch can stop)",
+    "severity": "medium",
+    "evidence": "/pipeline/batch has no cancel endpoint; only product batch checks is_job_cancelled and has a Stop button (product_generate_routes.py:334, batch-generate/page.tsx:228).",
+    "fix_idea": "Add a cancel endpoint + Stop button to the idea batch worker mirroring the product path."
+   },
+   {
+    "issue": "Render progress tracking is brittle and per-tab",
+    "severity": "medium",
+    "evidence": "approveAndRender stores renderStates in component state with setTimeout polling (batch/page.tsx:148,302); navigating away or refreshing loses render tracking even though the render continues server-side.",
+    "fix_idea": "Persist render jobs to the batch record and rehydrate render state on load, like the item statuses already are."
+   },
+   {
+    "issue": "No EventSource/SSE — fixed-interval polling only",
+    "severity": "low",
+    "evidence": "use-batch-polling.ts header TODO admits the SSE endpoint was never built; idea batch polls every 2.5s, product every 2s.",
+    "fix_idea": "Add /batch/{id}/stream SSE (TODO already scoped) to cut latency and request volume for large grids."
+   },
+   {
+    "issue": "Output of a finished batch is not surfaced as downloadable results in one place",
+    "severity": "medium",
+    "evidence": "Idea batch 'Done' just shows a filename string (batch/page.tsx:531); product batch links to /librarie generally, not to this batch's outputs.",
+    "fix_idea": "Add a per-batch results view with thumbnails, bulk download/zip, and a 'send all to publish queue' action."
+   }
+  ],
+  "scaling_bottlenecks": [
+   {
+    "issue": "Strictly sequential processing across the whole backend process",
+    "severity": "high",
+    "evidence": "_batch_worker_lock asyncio.Lock allows one idea-batch worker process-wide (batch_routes.py:41); product loop awaits each item (product_generate_routes.py:376).",
+    "impact": "At 10x (50 videos), wall-clock = sum of all items; a 50-item idea batch at ~60-80s preview each is 50-65 minutes before anything is render-ready, and only ONE batch can run at a time per backend — a second user/profile's batch is fully serialized behind the first."
+   },
+   {
+    "issue": "Batches run in FastAPI BackgroundTasks, not a durable worker/queue",
+    "severity": "high",
+    "evidence": "background_tasks.add_task(_run_batch,...) (batch_routes.py:272) and same for product batch:245; no Celery/RQ. CLAUDE.md confirms BackgroundTasks-based job system.",
+    "impact": "A crash/restart mid-batch leaves the worker dead; idea batch needs a MANUAL /resume click and product batch has no resume at all — at higher volume this means frequent half-finished runs needing human intervention, undermining 'walk away' bulk."
+   },
+   {
+    "issue": "list_batches over-fetches and filters in Python",
+    "severity": "medium",
+    "evidence": "storage.list_jobs(limit=200) then Python filter by job_type=='pipeline_batch' then slice (batch_routes.py:305-308).",
+    "impact": "As total jobs grow, recent-batches list pulls 200 rows per refresh per profile and may miss older batches; no job_type filter at the DB layer means O(all-jobs) scans."
+   },
+   {
+    "issue": "Batch status recomputed by N+1 child-job reads on every poll",
+    "severity": "medium",
+    "evidence": "get_batch_status loops products and calls job_storage.get_job(child_id) per product each poll (product_generate_routes.py:286-296), polled every 2s.",
+    "impact": "A 50-product batch = 50 child-job lookups every 2 seconds per open tab; with several concurrent batches this multiplies DB/round-trip load and can throttle Supabase."
+   },
+   {
+    "issue": "In-memory progress + render tracking is not multi-instance safe",
+    "severity": "medium",
+    "evidence": "buffer_routes _publish_progress dict (buffer_routes.py:103) and batch render tracking live in process memory; CLAUDE.md notes _generation_progress dicts are in-memory only.",
+    "impact": "Fine for single desktop, but any move to a shared/multi-worker backend breaks progress visibility; also memory grows with batch volume until eviction caps kick in (_MAX_PROGRESS_ENTRIES=1000)."
+   },
+   {
+    "issue": "No backpressure / disk-space guard surfaced at batch level",
+    "severity": "low",
+    "evidence": "check_disk_space exists in single-product path (product_generate_routes.py:502) but the batch layer doesn't pre-check capacity for N outputs.",
+    "impact": "A 50-video catalog run can fill the disk mid-batch on a creator's laptop, failing later items with cryptic errors rather than warning up front."
+   }
+  ],
+  "missing_features": [
+   {
+    "feature": "CSV / Google Sheets bulk import (idea + per-row overrides: voice, duration, CTA, caption, schedule)",
+    "user_value": "A 200-SKU seller or agency can launch an entire content calendar from a spreadsheet in one paste/upload — the canonical mass-production input every competitor offers.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Unified Batch/Queue dashboard across idea + product batches with history, ETA, throughput, and re-open",
+    "user_value": "One place to see everything in flight and past runs; trust that a long run is progressing and resume/inspect any batch.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "'Generate AND auto-render all' for the idea batch with default preset/aspect per batch",
+    "user_value": "Turns 50 ideas into 50 finished files with zero per-item clicks — the actual 'walk away, come back to finished videos' promise.",
+    "effort": "S",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Bounded concurrency (e.g. 2-4 parallel items) gated by the FFmpeg semaphore, with throughput/ETA display",
+    "user_value": "Cuts a 50-video run from ~1 hour to a fraction while still protecting the machine; makes bulk feel fast vs OpusClip-style cloud throughput.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Durable queue with auto-resume on restart (no manual resume click), for BOTH batch types",
+    "user_value": "Crashes/restarts self-heal; product batches gain the resume the idea batch already has — essential for unattended large runs.",
+    "effort": "L",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Per-batch results view: thumbnail grid, bulk download/ZIP, and 'send all to publish queue'",
+    "user_value": "Closes the loop from bulk generation to bulk export/publishing without hunting in the Library one file at a time.",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "Batch cancel + pause/resume for the idea batch",
+    "user_value": "Stop a misconfigured 20-idea run immediately instead of waiting it out; parity with the product batch's Stop button.",
+    "effort": "S",
+    "priority": "delight"
+   },
+   {
+    "feature": "Per-row / per-item setting overrides (different voice, duration, hook, aspect ratio per item)",
+    "user_value": "Real campaigns aren't uniform; letting each row differ unlocks A/B hooks and multi-platform aspect ratios in one batch.",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "Scheduled / recurring batch runs (cron) tied directly to feed updates",
+    "user_value": "'Every morning, make a video for each new product in my feed' — true set-and-forget automation for sellers.",
+    "effort": "L",
+    "priority": "later"
+   },
+   {
+    "feature": "SSE streaming for batch progress (TODO already scoped in use-batch-polling.ts)",
+    "user_value": "Instant progress updates and far less request load for large grids; smoother feel.",
+    "effort": "S",
+    "priority": "later"
+   },
+   {
+    "feature": "Pre-flight estimate + disk/quota guard before starting a large batch",
+    "user_value": "Warns 'this will make 50 videos, ~3.2GB, est. 40 min' up front so the user isn't surprised by a half-failed run.",
+    "effort": "S",
+    "priority": "later"
+   }
+  ]
+ },
+ {
+  "subsystem": "render-assembly-engine",
+  "summary": "The render engine is a multi-stage FFmpeg pipeline: per-segment extraction/normalization (cached, GPU-decode aware) → concat (stream copy) → final encode with scale/crop, optional denoise/sharpen/color, burned subtitles, and two-pass loudnorm audio. It is mature and reliable on correctness (zombie-safe subprocess runner, disk pre-check, cancellation registry, per-segment cache, graceful CPU fallback), but its throughput ceiling is self-inflicted: every production render defaults to CPU-only VBR 2-pass (encoding_presets.py:45,69-70) and the global render semaphore is hard-pinned to 1 (ffmpeg_semaphore.py:28), so N variants encode strictly serially at ~2x single-pass cost on CPU even on machines with NVENC. NVENC is detected and used for segment extraction and previews but deliberately bypassed for the final encode. Progress is fake (step-based percentages, no ffmpeg -progress parsing), there is no HEVC/AV1 path, and no advanced NVENC rate-control tuning. For a product whose entire differentiator is \"bulk local production at zero per-video cost,\" the encode tier is the throughput bottleneck that most limits videos/hour.",
+  "features_present": [
+   {
+    "name": "Multi-stage assemble pipeline (extract → concat → encode)",
+    "description": "assemble_video extracts each timeline segment in parallel (throttled), normalizes to 1080x1920 (preview 540x960) CFR 30fps with consistent timescale, concats via demuxer stream-copy, then _render_with_preset does the final encode with filters+subtitles+audio (assembly_service.py:1448-1772, library_routes.py:4387-4771).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Per-segment extraction cache (F2)",
+    "description": "Content-addressed cache keyed on source path+in/out+duration+loop+transforms+codec+fps means an iterative single-segment edit only re-extracts the changed segment; logs hit/miss counts (assembly_service.py:1545-1644). Real throughput win for edit-render loops.",
+    "maturity": "solid"
+   },
+   {
+    "name": "GPU-accelerated decode + NVENC for prep/preview",
+    "description": "is_nvenc_available() cached; -hwaccel cuda applied to extraction when NVENC present (assembly_service.py:1492); prep and preview codec params use h264_nvenc p1/p4 when available (ffmpeg_semaphore.py:285-314).",
+    "maturity": "solid"
+   },
+   {
+    "name": "FFmpeg concurrency control (4 semaphores)",
+    "description": "Separate global gates for final render (1), prep (2), preview (2), preview-prep (3), all lazily bound to the event loop with a race-safe init lock and acquire timeout (ffmpeg_semaphore.py:28-130). Prevents OOM, isolates previews from production queues.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Zombie-safe subprocess runner + live cancellation registry",
+    "description": "safe_ffmpeg_run uses Popen+communicate with kill-and-drain on timeout (ffmpeg_semaphore.py:137-196); ffmpeg_registry tracks live processes per job_key via ContextVar so kill_job can terminate in-flight encodes cross-platform (ffmpeg_registry.py).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Platform encoding presets with VBR/CRF/2-pass + loudnorm",
+    "description": "Pydantic-validated presets for TikTok/Reels/Shorts/Generic with -14 LUFS two-pass loudnorm, profile/level, GOP, bitrate; to_ffmpeg_params builds CPU/GPU commands; DB preset overrides merged at render time (encoding_presets.py, library_routes.py:4570-4604).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Two-pass true-peak audio normalization",
+    "description": "measure_loudness then build_loudnorm_filter applied to real audio in final encode (skipped in preview) targeting -14 LUFS / -1.5 dBTP — broadcast-correct loudness, a genuine quality edge over naive concat tools (library_routes.py:4487-4538).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Video enhancement + subtitle burn-in",
+    "description": "Ordered denoise(hqdn3d)→sharpen(unsharp, chroma-safe)→color(eq) filter chain then burned subtitles with shadow/glow/adaptive styling via build_subtitle_filter (library_routes.py:4437-4478).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Disk pre-check + output validation",
+    "description": "check_disk_space (2GB default) before each render; post-encode assertion that output exists and is non-empty (ffmpeg_semaphore.py:321, library_routes.py:4768).",
+    "maturity": "solid"
+   },
+   {
+    "name": "Multi-variant render orchestration with cancellation",
+    "description": "Pipeline renders all variants via asyncio.gather, each wrapped in acquire_render_slot, with per-variant queued-cancel short-circuit before slot acquisition (pipeline_routes.py:4236-4286).",
+    "maturity": "partial"
+   },
+   {
+    "name": "Preview render (real MP4, half-res ultrafast)",
+    "description": "assemble_and_render_preview reuses the full pipeline at 540x960 CRF32 ultrafast, no loudnorm, dedicated preview semaphores — but still produces a server-side file rather than compositing in the player (assembly_service.py:2325-2432).",
+    "maturity": "partial"
+   },
+   {
+    "name": "Render progress reporting",
+    "description": "on_progress callback fires hardcoded step percentages (10/20/.../85) (assembly_service.py:1843-1849) — there is no ffmpeg -progress parsing, so the bar does not reflect real encode position and stalls on the long 2-pass step.",
+    "maturity": "stub-or-broken"
+   }
+  ],
+  "user_flow": "A creator finishes Step 3 (timeline matched) and clicks Render. The pipeline route builds one render task per selected variant, then enters _render_all_variants: each task waits for the single global render slot (MAX_CONCURRENT_RENDERS=1), so variants encode one at a time. Inside each render, assemble_and_render runs 7 steps — TTS/SRT (often reused), fetch segments, match/timeline, then assemble_video extracts every segment (cache hits skip work), concats, and finally _render_with_preset performs a CPU two-pass encode: pass 1 analyzes video to a null sink, pass 2 re-encodes with filters, burned subtitles and loudnorm audio. The UI polls a job and shows step-based progress that jumps to ~85% then sits silent through the multi-minute 2-pass encode. When all variants finish (serially), outputs land in output/<profile>/ and clips are marked completed. A user editing one segment and re-rendering benefits from the segment cache on extraction but still pays the full 2-pass encode again.",
+  "strengths": [
+   {
+    "point": "Per-segment extraction cache makes the edit→render loop genuinely incremental",
+    "why_it_matters": "The core differentiator is bulk/iterative production from a fixed footage library; reusing identical extractions across renders (assembly_service.py:1545-1644) is exactly the right optimization and most concat tools lack it."
+   },
+   {
+    "point": "Operationally hardened FFmpeg layer (zombie-safe runner, cancellation registry, disk pre-check, output validation)",
+    "why_it_matters": "Non-technical sellers running unattended batch jobs need renders that fail loudly and never leak processes/zombies or fill the disk; this is production-grade plumbing competitors hide behind a SaaS backend."
+   },
+   {
+    "point": "Broadcast-correct two-pass loudness + chroma-safe enhancement chain",
+    "why_it_matters": "-14 LUFS normalization and a locked denoise→sharpen→color order produce platform-consistent audio/video quality that rivals Premiere export, a real quality story for the $79/$149 positioning."
+   },
+   {
+    "point": "Clean separation of preview vs production semaphores and presets",
+    "why_it_matters": "Previews never starve behind heavy renders, so the interactive Step-3 experience stays responsive even while a batch is encoding."
+   },
+   {
+    "point": "Graceful CPU fallback everywhere NVENC is absent",
+    "why_it_matters": "BYOAK desktop users have wildly varying hardware; the engine still produces correct output on a GPU-less laptop, just slower."
+   }
+  ],
+  "ux_friction": [
+   {
+    "issue": "Render progress bar is fake — fixed step percentages, no real encode position",
+    "severity": "high",
+    "evidence": "assembly_service.py:1843-1849 fires hardcoded pcts (70/85); no '-progress' anywhere in the codebase. Bar jumps to ~85% then freezes through the entire 2-pass encode.",
+    "fix_idea": "Pipe ffmpeg '-progress pipe:1' and parse out_time/total_frames to drive a real percentage and live ETA; show pass 1 of 2 / pass 2 of 2 labels."
+   },
+   {
+    "issue": "Default 2-pass CPU encode makes every render feel slow with no user signal why",
+    "severity": "high",
+    "evidence": "All presets default encoding_mode='vbr_2pass' (encoding_presets.py:45,160-242) and 2-pass forces CPU (encoding_presets.py:69-70); UI only warns '~2x longer' (render-settings-panel.tsx:88-92).",
+    "fix_idea": "Default to NVENC single-pass VBR (or NVENC multipass) when a GPU is detected; reserve CPU 2-pass for an opt-in 'Maximum quality' toggle with an explicit time estimate."
+   },
+   {
+    "issue": "GPU Encoding toggle is silently disabled and confusing under the default preset",
+    "severity": "medium",
+    "evidence": "render-settings-panel.tsx:138-150 disables the GPU switch whenever 2-pass is selected (the default), so most users see GPU off with no actionable explanation beyond 'Disabled for VBR 2-pass'.",
+    "fix_idea": "Surface a single 'Speed vs Quality' choice (Fast=NVENC 1-pass, Balanced, Max=CPU 2-pass) instead of exposing the 2-pass↔GPU mutual exclusion as a disabled switch."
+   },
+   {
+    "issue": "No per-render time/ETA estimate before committing a batch",
+    "severity": "medium",
+    "evidence": "Render endpoints start immediately; no duration estimation from segment count × resolution × preset. Batch of variants is fully serial (pipeline_routes.py:4280-4283).",
+    "fix_idea": "Estimate seconds/variant from a quick benchmark of the host's encode speed and show 'N variants ≈ M min' before render, plus a running queue position."
+   },
+   {
+    "issue": "Whole-timeline re-encode on any single-segment change despite extraction cache",
+    "severity": "medium",
+    "evidence": "assemble_video re-concats and _render_with_preset re-encodes the full output every time; only extraction is cached (assembly_service.py:1545-1644, 1751-1768).",
+    "fix_idea": "Cache the concatenated+encoded body per merge-group and only re-encode changed spans, or cache final encode keyed on the same fingerprint when only subtitles/audio changed."
+   }
+  ],
+  "scaling_bottlenecks": [
+   {
+    "issue": "Global render concurrency hard-pinned to 1",
+    "severity": "high",
+    "evidence": "MAX_CONCURRENT_RENDERS default '1' (ffmpeg_semaphore.py:28); all library/pipeline/product renders share this single gate and asyncio.gather just queues on it (pipeline_routes.py:4280-4283).",
+    "impact": "At 10x volume (or 10 variants), renders are strictly serial — total wall time scales linearly with video count regardless of CPU cores or GPU headroom; a 20-video batch is a single-file queue."
+   },
+   {
+    "issue": "Production encode is CPU two-pass by default, ignoring available NVENC",
+    "severity": "high",
+    "evidence": "encoding presets default vbr_2pass and 2-pass forces use_gpu=False (encoding_presets.py:45,69-70); NVENC is only used for extraction/preview, never the final encode under the default.",
+    "impact": "Throughput at 10x is gated by libx264 medium 2-pass on -threads 4 (encoding_presets.py:143); a GPU that could do 3-5x realtime sits idle for the heaviest step, capping videos/hour far below the 'zero-cost local' promise."
+   },
+   {
+    "issue": "libx264 thread cap of 4 leaves multi-core hosts underused",
+    "severity": "medium",
+    "evidence": "to_ffmpeg_params hardcodes -threads 4 (encoding_presets.py:143) and segment extraction also uses -threads 4; combined with render concurrency 1, a 16-core machine runs one 4-thread encode.",
+    "impact": "On capable hardware throughput plateaus early; raising render concurrency or thread count would need OOM-aware autotuning that doesn't exist."
+   },
+   {
+    "issue": "Pipeline/assembly working state and progress live in in-memory dicts",
+    "severity": "high",
+    "evidence": "_assembly_jobs in-memory with eviction (assembly_routes.py:30-44); render_jobs/progress dicts in pipeline_routes; backend restart loses queued/in-flight render state.",
+    "impact": "At scale a single restart or crash mid-batch loses queue position and progress for all in-flight variants; no durable render queue means batches cannot be safely resumed."
+   },
+   {
+    "issue": "No durable render queue / worker model — renders run inside the request's asyncio loop",
+    "severity": "medium",
+    "evidence": "Renders are awaited inside route handlers behind semaphores (library_routes.py:3683, pipeline_routes.py:4260-4281); no Celery/RQ-style queue (CLAUDE.md confirms BackgroundTasks-only).",
+    "impact": "Cannot scale out to multiple worker processes or a GPU pool; throughput is bounded by one process's single render slot, and long batches block within the web app lifecycle."
+   }
+  ],
+  "missing_features": [
+   {
+    "feature": "GPU-first encode path with NVENC single-pass/multipass as the default when a GPU is present",
+    "user_value": "3-5x faster renders on the typical creator GPU, directly raising videos/hour — the core differentiator",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Real ffmpeg -progress parsing with live percentage + ETA",
+    "user_value": "Users trust the render isn't frozen and can plan batches; eliminates the #1 perceived-slowness complaint",
+    "effort": "S",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Adaptive render concurrency (raise MAX_CONCURRENT_RENDERS based on cores/VRAM, OOM-aware)",
+    "user_value": "Batch of N variants finishes in parallel instead of single-file, cutting total batch time several-fold on capable hardware",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Durable render queue with resumable jobs (persisted to Supabase/SQLite, survives restart)",
+    "user_value": "Unattended overnight batches survive crashes/restarts and resume where they left off — essential for 50-500 SKU sellers",
+    "effort": "L",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Final-encode result cache keyed on the existing fingerprint",
+    "user_value": "Re-rendering after a no-op or subtitle-only change is instant instead of a full re-encode",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "One-click 'Speed / Balanced / Max Quality' encode profile replacing the 2-pass↔GPU toggle puzzle",
+    "user_value": "Non-technical sellers pick an outcome, not codec internals; removes the confusing disabled GPU switch",
+    "effort": "S",
+    "priority": "delight"
+   },
+   {
+    "feature": "HEVC/AV1 output option for smaller files at equal quality",
+    "user_value": "Faster uploads and smaller storage for high-volume libraries; future-proofs Reels/Shorts quality",
+    "effort": "M",
+    "priority": "later"
+   },
+   {
+    "feature": "Host encode benchmark + per-batch time estimate shown before render",
+    "user_value": "Users know 'this batch ≈ 12 min' before committing, enabling planning and reducing abandons",
+    "effort": "S",
+    "priority": "delight"
+   },
+   {
+    "feature": "In-player/preview compositing (overlay subtitles+audio on cached segment clips client-side) instead of server re-render",
+    "user_value": "Sub-second preview after edits vs the current 30-80s server render, transforming the Step-3 edit loop",
+    "effort": "L",
+    "priority": "delight"
+   },
+   {
+    "feature": "Per-stage timing + render telemetry (extract vs encode vs loudnorm) surfaced to logs/UI",
+    "user_value": "Lets power users and support diagnose slow renders and prove the local-speed advantage",
+    "effort": "S",
+    "priority": "later"
+   }
+  ]
+ },
+ {
+  "subsystem": "library-projects-cost",
+  "summary": "The library slice is the most mature, production-feeling part of Edit Factory. /librarie/page.tsx (2817 lines) is a clip-centric grid with hover-to-play video previews, multi-select bulk operations (delete, Postiz upload, schedule), a 30-day trash with restore, infinite-scroll cursor pagination, tag editing/filtering, six status filters, inline rename, per-clip download of video/SRT/audio, and a parallel Images tab. The /usage page gives reasonable BYOAK cost transparency: budget tracking, today/total spend, per-ElevenLabs-account character quotas, live Gemini connection test, and a cost history table. The cost_tracker.py service dual-logs to Supabase + local JSON with profile scoping and monthly-quota checks. Overall maturity is solid for single-user volumes, but it is organized around individual CLIPS rather than PROJECTS/campaigns, has no bulk export/zip, no analytics or sorting, and several scaling cliffs (N+1 content fetches, fully client-side filtering, total recount per page) that bite at the dozens-to-hundreds-of-projects scale this audience requires.",
+  "user_flow": "A non-technical seller opens /librarie and lands on a clip grid scoped to the active profile. Clips load 50 at a time via infinite scroll. They can search by project/variant name, filter by subtitles/voiceover/Postiz status/TikTok/social/tag, hover a card to autoplay a muted preview after 500ms, click to multi-select, and use the bottom toolbar to bulk-delete, bulk-send to Postiz, or bulk-schedule (1 post/day cascade). Per clip they can play inline, download the MP4/SRT/MP3 individually, regenerate voiceover, remove audio, rename, tag, view script/caption, and tick manual QC/TikTok/downloaded-posted flags. Deleted clips go to a Trash tab with day-counters and restore. A separate Images tab manages AI-generated images with approve/publish/delete. For cost, the user navigates to /usage to set a budget, see today/total spend split by ElevenLabs vs Gemini, per-account character usage, and a recent cost-history table.",
+  "features_present": [
+   {
+    "name": "Clip grid with hover video preview",
+    "description": "9:16 cards (clip-hover-preview.tsx) that swap thumbnail for a muted/looping autoplay video after a 500ms hover delay, preload=none, graceful fallback on autoplay block.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Multi-select bulk operations",
+    "description": "Set-based selection with select-all-visible, keyboard Delete/Escape, bottom toolbar for bulk delete, bulk Postiz upload, and bulk schedule. Optimistic updates with rollback.",
+    "maturity": "solid"
+   },
+   {
+    "name": "30-day soft-delete trash",
+    "description": "Trash view with days-remaining badges (color-coded), restore, permanent delete, and empty-trash. Backed by /library/trash endpoints.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Cursor-based infinite scroll",
+    "description": "IntersectionObserver sentinel + created_at cursor pagination with dedup, synchronous loading guard, abort-on-profile-switch. (page.tsx:320-350, library_routes.py:2001)",
+    "maturity": "solid"
+   },
+   {
+    "name": "Tagging + tag filter",
+    "description": "Per-clip ClipTagEditor with optimistic save/rollback, /library/tags dropdown, server+client tag filtering.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Per-clip asset download",
+    "description": "Individual download of final MP4 (/library/files), SRT (/clips/{id}/srt), and TTS MP3 (/clips/{id}/audio) via blob or download query param.",
+    "maturity": "solid"
+   },
+   {
+    "name": "BYOAK cost dashboard (/usage)",
+    "description": "Budget input (localStorage), today/total spend split ElevenLabs/Gemini, per-account character quotas with progress bars, live Gemini connection test, balance links, cost-history table with show-all.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Cost tracker service",
+    "description": "cost_tracker.py dual-logs to Supabase api_costs + atomic local JSON (10k rotation), profile-scoped summaries, monthly-cost and quota-check helpers, FAL/Gemini/ElevenLabs operations.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Thumbnail picker",
+    "description": "thumbnail-picker.tsx lets user choose a clip thumbnail from matched segment thumbnails or load 6 extra candidate frames per segment, with reset-to-auto.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Status/QC workflow flags",
+    "description": "Manual checkboxes for QC-verified, downloaded-and-posted, TikTok/Instagram/YouTube/Facebook posted, plus auto Postiz status; cards color-code by completion state.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Images library tab",
+    "description": "Parallel grid for AI-generated images with approve toggle, bulk delete, inline/bulk publish to Postiz, schedule. (page.tsx:1320-1681)",
+    "maturity": "solid"
+   },
+   {
+    "name": "Export presets",
+    "description": "/library/export-presets returns profile-scoped + global presets, but the library UI never surfaces preset selection at export/download time.",
+    "maturity": "partial"
+   },
+   {
+    "name": "Orphan clip self-healing",
+    "description": "list_all_clips syncs orphaned rendered videos from disk (throttled 5min/profile) so manually-rendered files appear. (library_routes.py:2013-2024)",
+    "maturity": "partial"
+   },
+   {
+    "name": "Cost-to-clip attribution",
+    "description": "Costs are logged with job_id but the library never shows per-clip or per-project spend; usage page only aggregates by service. No way to see what a given video cost.",
+    "maturity": "stub-or-broken"
+   }
+  ],
+  "strengths": [
+   {
+    "point": "Genuinely fast asset triage UX",
+    "why_it_matters": "Hover-to-play previews + multi-select + keyboard shortcuts + optimistic updates make scanning and acting on many clips feel snappy, which is exactly the loop a high-volume faceless creator lives in."
+   },
+   {
+    "point": "Robust async hygiene",
+    "why_it_matters": "AbortController on profile switch, isMountedRef guards, synchronous pagination guard, optimistic-with-rollback mutations — this is rare maturity that prevents stale-data and race bugs at scale (page.tsx:170,497,912)."
+   },
+   {
+    "point": "Real soft-delete safety net",
+    "why_it_matters": "30-day trash with restore and color-coded countdowns protects non-technical users from catastrophic bulk-delete mistakes, a clear differentiator vs hard-delete tools."
+   },
+   {
+    "point": "BYOAK cost transparency is above baseline",
+    "why_it_matters": "Per-account ElevenLabs character quotas, live Gemini test, and balance links directly address the BYOAK fear of 'how much am I burning?' that the business model depends on."
+   },
+   {
+    "point": "Pragmatic graceful degradation in cost tracking",
+    "why_it_matters": "cost_tracker falls back to atomic local JSON with corruption recovery and log rotation, so cost visibility survives Supabase outages — fits the offline-after-setup desktop promise."
+   }
+  ],
+  "ux_friction": [
+   {
+    "issue": "No project/campaign grouping — library is a flat clip firehose",
+    "severity": "high",
+    "evidence": "page.tsx:2075 renders one flat grid of every clip; project_name is only a truncated subtitle line (2357). No way to collapse by project, see a project as a unit, or view 'all 12 variants of campaign X'.",
+    "fix_idea": "Add a Projects view mode that groups clips by project_id with collapsible sections, project-level thumbnail/count/spend, and a project filter. Critical for 50-500 SKU sellers."
+   },
+   {
+    "issue": "No bulk download / zip export",
+    "severity": "high",
+    "evidence": "No zip/archive endpoint exists (grep for zip/ZipFile/archive in library_routes.py = none); bulk toolbar only offers delete/Postiz/schedule (page.tsx:2013-2050). Downloads are one-file-at-a-time via window.open.",
+    "fix_idea": "Add 'Download selected as ZIP' to the bulk toolbar (server streams a zip of MP4s, optionally +SRT). This is table-stakes for agencies handing off deliverables."
+   },
+   {
+    "issue": "No sorting or date filtering",
+    "severity": "medium",
+    "evidence": "Server hard-codes order_by created_at desc (library_routes.py:2038); UI exposes no sort control and no date-range filter — only the 7 boolean/enum filters.",
+    "fix_idea": "Add sort dropdown (newest/oldest/duration/name/spend) and a date-range filter; pass through to the cursor query."
+   },
+   {
+    "issue": "Search/filters only see already-loaded clips",
+    "severity": "medium",
+    "evidence": "filteredClips useMemo filters the in-memory clips array (page.tsx:400-452); search by project/variant name only matches the pages fetched so far, so a user searching for an old project gets nothing until they scroll-load it.",
+    "fix_idea": "Push search + boolean filters to the /all-clips query (server-side) like tag already is, or load a lightweight index for client search."
+   },
+   {
+    "issue": "Cost dashboard shows no spend over time or per-video",
+    "severity": "medium",
+    "evidence": "usage/page.tsx renders only totals, today, and a flat recent-entries table; no daily/weekly chart despite BarChart3 icon import, and no per-clip cost despite job_id being logged.",
+    "fix_idea": "Add a simple spend-over-time sparkline/bar chart and surface per-clip estimated cost on the clip card (chars*rate + frames*rate)."
+   },
+   {
+    "issue": "Mixed Romanian/English microcopy",
+    "severity": "low",
+    "evidence": "Toasts and labels mix languages: 'Regenerare voice-over în curs' (page.tsx:651), 'Verificat QC ✓' (2431), 'Imagini' tab (1316) next to English 'Library'/'Delete selected'.",
+    "fix_idea": "Pick one locale (or add i18n); inconsistent language reads unfinished to non-technical buyers."
+   },
+   {
+    "issue": "Export presets exist but are invisible at export",
+    "severity": "low",
+    "evidence": "/library/export-presets endpoint returns presets (library_routes.py:2720) but the download buttons (page.tsx:2188) just fetch the rendered MP4 with no preset/aspect/format choice.",
+    "fix_idea": "Offer format/aspect options (or chosen preset) on the download action, or remove the dead endpoint to reduce confusion."
+   },
+   {
+    "issue": "Hardcoded Gemini cost estimate misleads budget",
+    "severity": "low",
+    "evidence": "usage/page.tsx:472 shows '~$1.20 (60 frames)' as a fixed string while cost_tracker uses GEMINI_COST_PER_IMAGE=0.000007 (per-frame cost is fractions of a cent). The displayed estimate is ~100x off and will alarm BYOAK users.",
+    "fix_idea": "Compute the per-video estimate from the actual constants, or remove the static figure."
+   }
+  ],
+  "scaling_bottlenecks": [
+   {
+    "issue": "N+1 content + project fetch per clip page",
+    "severity": "high",
+    "evidence": "list_all_clips loops repo.get_clip_content(clip['id']) for every clip and get_project per project_id (library_routes.py:2057-2068), explicitly annotated 'N+1 accepted for v13 desktop scale'.",
+    "impact": "A 50-clip page issues 50+ extra DB round-trips; at hundreds of clips and Supabase-cloud latency, page loads and infinite-scroll appends become multi-second, defeating the snappy UX."
+   },
+   {
+    "issue": "Full-table count on every first page + orphan sync",
+    "severity": "medium",
+    "evidence": "repo.count_clips runs each non-cursor load (2031) and _sync_orphan_clips scans disk (throttled 5min) before listing (2013-2024).",
+    "impact": "With thousands of clips the count and disk-walk add latency to the most common action (opening the library); throttle is per-process and lost on restart."
+   },
+   {
+    "issue": "Entire clip list held in browser memory; filtering is client-side",
+    "severity": "medium",
+    "evidence": "clips state accumulates every fetched page (page.tsx:293) and filteredClips re-derives over the whole array on every keystroke/filter (400-452).",
+    "impact": "Users with hundreds of clips and many tags/subtitles accumulate large arrays + repeated re-renders; search feels laggy and memory grows unbounded across a long session."
+   },
+   {
+    "issue": "Cost summary aggregates client-side over all rows",
+    "severity": "medium",
+    "evidence": "cost_tracker._get_summary_from_supabase selects every api_costs row (service,cost) and sums in Python (cost_tracker.py:267-312); get_all_entries pulls limit=1000.",
+    "impact": "A power user generating thousands of clips accumulates tens of thousands of cost rows; the /usage page transfers and sums them all per load. Needs a DB-side aggregate/RPC (already flagged DB-10)."
+   },
+   {
+    "issue": "Per-clip cost log writes serialize through one file lock",
+    "severity": "low",
+    "evidence": "_add_entry holds self._log_lock and rewrites the full JSON file on every cost event (cost_tracker.py:232-243).",
+    "impact": "Under bulk render (many TTS/Gemini calls in parallel) cost logging becomes a serialized full-file rewrite hotspot; fine at desktop scale but a ceiling for batch jobs."
+   }
+  ],
+  "missing_features": [
+   {
+    "feature": "Project/campaign-level library view",
+    "user_value": "Sellers with 50-500 SKUs need to see and act on a product/campaign as a unit (all its variants, its status, its spend) instead of a flat clip stream — this is the single biggest gap vs how the audience actually works.",
+    "effort": "L",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Bulk download as ZIP (MP4 + optional SRT)",
+    "user_value": "Agencies and sellers need to grab a whole batch of finished videos to hand off or upload manually; one-at-a-time download is a dealbreaker at volume.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Server-side search + sort + date filter",
+    "user_value": "Finding a specific past project among hundreds is impossible when search only matches loaded pages; sorting by date/duration/name/spend is expected of any asset manager.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Per-clip and per-project cost attribution",
+    "user_value": "BYOAK users want to know 'this 30-video batch cost me $X' and 'this video cost $Y' — costs are already logged with job_id, so surfacing them turns raw spend into actionable cost-per-deliverable.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Spend-over-time chart + budget alerts",
+    "user_value": "A simple daily/weekly spend chart and a 'you've hit 80% of budget' toast prevents the BYOAK surprise-bill anxiety that kills trust in the one-time-purchase model.",
+    "effort": "S",
+    "priority": "delight"
+   },
+   {
+    "feature": "Saved views / smart collections",
+    "user_value": "Let users save filter+tag combinations (e.g. 'Ready to post', 'Needs QC') as one-click views to manage a high-volume pipeline like CapCut/Descript libraries do.",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "Bulk tag / bulk rename / bulk re-render",
+    "user_value": "Selection toolbar only bulk-deletes/publishes/schedules; bulk-tagging and bulk re-render (a /clips/bulk-render endpoint already exists at line 3790 but is unused in this UI) would massively speed organizing and fixing a batch.",
+    "effort": "S",
+    "priority": "delight"
+   },
+   {
+    "feature": "Duplicate/near-duplicate detection in library",
+    "user_value": "High-volume generation produces visually similar outputs; flagging dupes (the codebase already has pHash for segments) helps users avoid posting repetitive content.",
+    "effort": "L",
+    "priority": "later"
+   },
+   {
+    "feature": "Storage usage / disk footprint visibility",
+    "user_value": "On a local desktop app, hundreds of rendered MP4s fill the drive; a storage meter + 'reclaim space' (the maintenance/cleanup endpoints exist but are UI-hidden) prevents silent disk-full failures.",
+    "effort": "S",
+    "priority": "later"
+   }
+  ]
+ },
+ {
+  "subsystem": "secondary-engines-ecommerce-schedule",
+  "summary": "This slice covers e-commerce product video, AI image generation, content scheduling/calendar, feeds/catalog/associations, and Postiz publishing. The product-video engine is functionally solid but architecturally narrow: it generates a single-image Ken Burns clip (1080x1920, text overlays, optional sale badge, TTS voiceover, optional ElevenLabs subtitles) per product and does NOT use the creator's own local footage — the very differentiator the product is built on. Batch generation exists and is robust (per-product error isolation, cancellable, persisted to JobStorage) but runs strictly sequentially. The scheduling subsystem is the most mature back-end (V2 per-platform variant routing, jitter, Meta A/B visual versions, calendar, plan execution). AI image generation (create-image) is the most polished end-to-end UX (multi-model nano-banana-pro, logo overlay, AI captions, publish + schedule inline). Postiz is deeply woven into nearly every engine despite being flagged out-of-MVP-scope — a real scope tension. Overall: capable plumbing, but product-video is not yet first-class enough to win e-commerce sellers versus Creatify/competitors.",
+  "user_flow": "E-commerce flow: User adds a product feed (RSS/XML URL) or syncs a catalog, then browses products on /products (catalog or feed tab, with search/sale/category/brand filters and pagination). For one product they click \"Generate Video\" -> routed to /product-video with product passed via URL query params -> pick voiceover mode (quick template vs elaborate AI), TTS provider (Edge free / ElevenLabs premium), duration (15/30/45/60s), encoding preset (TikTok/Reels/Shorts), CTA text, optional denoise/sharpen/color filters -> Generate -> polls a job through a 6-stage pipeline (setup, TTS, SRT, compose, render, library insert) -> \"View in Library\". For bulk: select many products via per-card checkboxes -> BatchSettingsDialog -> /batch-generate page polls batch status per product. Image flow: /create-image 3-step wizard (template/prompt -> generate -> logo/caption/publish). Schedule flow: /schedule selects rendered projects + Postiz integrations + per-platform times + jitter -> preview -> confirm plan -> plan executes and uploads/schedules to Postiz; /calendar shows a Postiz monthly calendar.",
+  "features_present": [
+   {
+    "name": "Product video generator (single)",
+    "description": "6-stage pipeline (product_generate_routes.py:481) composing a portrait Ken Burns video from ONE product image with text overlays, sale badge, TTS voiceover, optional ElevenLabs subtitles, then library insert. Quick-template or elaborate-AI voiceover.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Batch product video generation",
+    "description": "batch-generate endpoint (product_generate_routes.py:180) processes selected products sequentially with per-product error isolation (never re-raises, :391), cancellable, persisted via JobStorage; UI multi-select on /products with batch settings dialog.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Product video compositor",
+    "description": "FFmpeg compositor (product_video_compositor.py:506) with template-driven layout, zoompan Ken Burns, hex->ffmpeg color, sale-badge overlay via filter_complex, price formatting. Image-only — no video segment input.",
+    "maturity": "solid"
+   },
+   {
+    "name": "AI image generation",
+    "description": "create-image (1862-line page) + image_generate_routes.py (1342 lines): multi-model (nano-banana-pro default), aspect ratio, resolution, templates with localStorage persistence, logo overlay positioning, history, product-context injection. fal_image_service.py backs it.",
+    "maturity": "solid"
+   },
+   {
+    "name": "AI caption generation",
+    "description": "generate-caption (postiz_routes.py:840) uses Gemini with per-platform character limits, tone, language, hashtags, CTA. Pulls product context from the clip's project.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Content scheduling (V2 smart routing)",
+    "description": "schedule_service.py:156 build_schedule_plan with per-platform variant routing, jitter (seeded), Meta A/B visual-version validation, timezone-aware; schedule_routes.py preview/plans/progress/calendar/sync endpoints. Mature.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Feeds / catalog / products",
+    "description": "feed_routes.py CRUD + async sync with optimistic concurrency lock (:324); catalog_routes.py read views (v_catalog_products) with filters and approved-images; products page with catalog vs feed tabs.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Product-segment associations + PiP",
+    "description": "association_routes.py upserts catalog-product<->segment links with selected_image_urls and pip-config; batch fetch avoids N+1. Exists but is disconnected from the product-video generator.",
+    "maturity": "partial"
+   },
+   {
+    "name": "Postiz publishing",
+    "description": "postiz_routes.py (1217 lines): status/validate/integrations/upload/bulk-upload/publish/bulk-publish/progress/post-status/bulk-delete/generate-caption. Deeply integrated despite out-of-MVP flag.",
+    "maturity": "solid"
+   },
+   {
+    "name": "Calendar",
+    "description": "calendar/page.tsx is a 23-line shell that renders PostizMonthlyCalendar — entirely dependent on Postiz, no native calendar.",
+    "maturity": "partial"
+   }
+  ],
+  "strengths": [
+   {
+    "point": "Batch generation has genuine per-product error isolation and is persisted to Supabase JobStorage",
+    "why_it_matters": "product_generate_routes.py:391 guarantees one bad product never kills the batch, and batch state survives a backend restart (unlike the in-memory pipeline) — this is exactly the resilience an e-commerce seller running 200 SKUs overnight needs."
+   },
+   {
+    "point": "The scheduling engine is unusually sophisticated for an MVP",
+    "why_it_matters": "schedule_service.py implements per-platform posting times, seeded jitter to avoid spam-detection, and Meta A/B visual-version enforcement (:253) — features OpusClip/Pictory charge subscription tiers for. This is a strong moat if surfaced well."
+   },
+   {
+    "point": "AI image generation is a polished, self-contained end-to-end surface",
+    "why_it_matters": "create-image takes the user from template->image->logo->AI caption->publish/schedule in one wizard with localStorage-remembered preferences — it is the closest thing in this slice to a delightful, complete flow and proves the team can ship best-in-class UX."
+   },
+   {
+    "point": "Graceful TTS degradation (Edge free vs ElevenLabs premium) is wired through product video",
+    "why_it_matters": "A BYOAK e-commerce seller with no ElevenLabs key can still produce voiced product videos at zero marginal cost — directly supports the zero-per-video-cost positioning."
+   },
+   {
+    "point": "Feed sync uses optimistic concurrency locking",
+    "why_it_matters": "feed_routes.py:324-335 prevents double-sync races on the same feed, which matters once multiple profiles or scheduled syncs hit a 500-SKU catalog."
+   }
+  ],
+  "ux_friction": [
+   {
+    "issue": "Product video uses ONLY a single product image (Ken Burns) — it never touches the creator's local footage, which is the product's headline differentiator",
+    "severity": "high",
+    "evidence": "product_video_compositor.py:506 compose_product_video takes image_path only; product_generate_routes.py:541-567 resolves a single image and errors if absent. No segment/footage path anywhere in product_generate_routes.py.",
+    "fix_idea": "Offer a 'use my footage' mode that pulls keyword-matched segments (or the product-segment association + PiP that already exists) so product videos look like real UGC, not a slideshow. This is the gap between 'slideshow tool' and 'kills Creatify'."
+   },
+   {
+    "issue": "Product is passed to the generator entirely via URL query params (title/image/price/brand)",
+    "severity": "medium",
+    "evidence": "product-video/page.tsx:44-49 reads everything from searchParams; handleGenerate (:131) posts to /products/{id}/generate which re-fetches anyway.",
+    "fix_idea": "Pass only the product id and fetch full product server-side (already done at :520). URL-param passing breaks on truncation, special chars, and deep links, and shows stale data."
+   },
+   {
+    "issue": "No preview before committing to a full product-video render",
+    "severity": "medium",
+    "evidence": "product-video/page.tsx Generate goes straight to the 6-stage render; no thumbnail/storyboard preview of layout, template, or overlay positioning.",
+    "fix_idea": "Render a fast single-frame composite preview (the compositor already builds the overlay filter) so sellers can confirm text/badge placement before a 30-80s render — critical at batch scale."
+   },
+   {
+    "issue": "No template/style picker in the product-video UI despite the compositor supporting multiple templates and colors",
+    "severity": "medium",
+    "evidence": "product-video/page.tsx exposes only CTA + filters; template_name/primary_color/accent_color come silently from profile video_template_settings (product_generate_routes.py:737-740).",
+    "fix_idea": "Surface template thumbnails and brand-color pickers in the generate form so non-technical sellers can self-serve branding without editing profile JSON."
+   },
+   {
+    "issue": "Calendar page is a thin Postiz wrapper with no native fallback",
+    "severity": "medium",
+    "evidence": "calendar/page.tsx is 23 lines rendering PostizMonthlyCalendar; if Postiz is not configured the page is empty.",
+    "fix_idea": "Show locally-scheduled plans (schedule_routes /calendar already returns assignments) in the calendar even without Postiz, so the calendar has value before social setup."
+   },
+   {
+    "issue": "Edge TTS path silently produces NO subtitles",
+    "severity": "low",
+    "evidence": "product_generate_routes.py:709 comment 'Edge TTS: no timestamps, no subtitles'; UI hint at product-video/page.tsx:321 mentions it but easy to miss.",
+    "fix_idea": "Generate subtitles for Edge via Whisper timing (the pipeline already uses Whisper elsewhere) so the free tier isn't visibly inferior — captions drive retention on TikTok/Reels."
+   }
+  ],
+  "scaling_bottlenecks": [
+   {
+    "issue": "Batch product-video generation is strictly sequential",
+    "severity": "high",
+    "evidence": "product_generate_routes.py:332 'for product_job in product_jobs' awaits _generate_product_video_task one at a time; only FFmpeg itself is semaphore-throttled.",
+    "impact": "At 10x (e.g. 200 SKUs), a batch that is ~40s/video takes >2 hours wall-clock on a single chain even though the machine could render 2-4 concurrently. The killer e-commerce use case (bulk catalog) is the slowest path."
+   },
+   {
+    "issue": "Batch runs inside FastAPI BackgroundTasks, not a durable queue",
+    "severity": "high",
+    "evidence": "product_generate_routes.py:245 background_tasks.add_task(_batch_generate_task); same pattern as the rest of the app.",
+    "impact": "A backend restart mid-batch loses the in-flight loop (child job records persist, but nothing resumes the loop) — a 200-product overnight batch silently stalls with no auto-recovery."
+   },
+   {
+    "issue": "Batch status updates do read-modify-write on the whole batch record per product",
+    "severity": "medium",
+    "evidence": "_update_batch_product_status (product_generate_routes.py:418) fetches the full batch, mutates product_jobs array, writes it all back; called on every product start and finish.",
+    "impact": "With large batches the JSONB product_jobs array grows and every status flip rewrites the entire array — write amplification and a last-writer-wins race window grow with batch size."
+   },
+   {
+    "issue": "Per-product image re-download on every generation with no shared cache check across batch",
+    "severity": "medium",
+    "evidence": "product_generate_routes.py:550-564 downloads from image_link if local_image_path missing, into images/{feed_id}; runs per product inside the sequential task.",
+    "impact": "A 500-SKU feed re-fetches every remote image at render time rather than during feed sync, adding latency and external-bandwidth dependency to the render critical path at scale."
+   },
+   {
+    "issue": "Schedule plan execution and Postiz bulk-upload are the integration choke point",
+    "severity": "medium",
+    "evidence": "schedule_service.py execute_schedule_plan + postiz_routes.py bulk-upload/bulk-publish; all routed through one Postiz instance.",
+    "impact": "For a high-volume creator scheduling dozens of posts/day across platforms, throughput is bounded by Postiz API rate limits and the single Coolify container noted in memory — not horizontally scalable."
+   }
+  ],
+  "missing_features": [
+   {
+    "feature": "Footage-based product video (use creator's own clips, not just one image)",
+    "user_value": "Turns the slideshow generator into authentic UGC-style product videos — the actual reason a seller buys this over Creatify. The association/PiP system already links products to segments; connect it to the generator.",
+    "effort": "L",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Parallel batch rendering (N concurrent product videos)",
+    "user_value": "Cuts a 200-SKU overnight batch from hours to minutes, making bulk production — the primary audience's core need — actually viable.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Per-product caption/title overrides and bulk caption generation in batch",
+    "user_value": "Sellers want each product's post text tailored; today batch shares one CTA and captions are generated one-clip-at-a-time post-hoc. Bulk AI captions tied to product data would close the loop to publish.",
+    "effort": "M",
+    "priority": "mvp-critical"
+   },
+   {
+    "feature": "Storyboard/single-frame preview before render",
+    "user_value": "Lets sellers verify branding/layout once and trust the batch, avoiding 200 wasted renders with a wrong color or misplaced badge.",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "In-app template & brand-kit editor (logo, fonts, colors, badge style)",
+    "user_value": "Non-technical sellers can self-brand without editing profile JSON; brand consistency across a catalog is a top e-commerce requirement.",
+    "effort": "M",
+    "priority": "delight"
+   },
+   {
+    "feature": "Direct Shopify / TikTok Shop / Google Merchant feed connectors",
+    "user_value": "The target audience lives in Shopify/TikTok Shop; a one-click connector (vs generic RSS/XML URL) removes the biggest onboarding wall. A merchant skill already exists in this workspace.",
+    "effort": "L",
+    "priority": "delight"
+   },
+   {
+    "feature": "Auto product-image cleanup (background removal / upscaling) before composition",
+    "user_value": "Raw feed images are inconsistent; auto-cleanup makes every product video look professional and matches what Creatify/Pebblely offer.",
+    "effort": "M",
+    "priority": "later"
+   },
+   {
+    "feature": "Scheduled / recurring feed sync + auto-generate on new SKU",
+    "user_value": "A true set-and-forget engine: new product appears in feed -> video auto-generated -> auto-scheduled. This is the standing-ovation feature for a 500-SKU seller.",
+    "effort": "L",
+    "priority": "later"
+   },
+   {
+    "feature": "Native scheduling/calendar independent of Postiz",
+    "user_value": "Postiz is flagged out-of-MVP yet the calendar and much of scheduling depend on it; a native queue/calendar lets the scheduling moat ship without the Postiz dependency.",
+    "effort": "L",
+    "priority": "later"
+   }
+  ]
+ }
+]
