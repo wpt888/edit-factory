@@ -649,6 +649,223 @@ def compose_product_video(
         cleanup_textfiles(*tmp_paths)
 
 
+# ---------------------------------------------------------------------------
+# Footage-mode (Wave 4.1 / G6): assemble product video from the seller's OWN
+# keyword-matched local footage, with the product image as a PiP overlay.
+# ---------------------------------------------------------------------------
+
+# PiP size as a fraction of output width (1080px)
+PIP_SIZE_FRAC: dict[str, float] = {
+    "small": 0.28,
+    "medium": 0.38,
+    "large": 0.50,
+}
+
+# PiP corner placement. The text overlays occupy a top band (title + brand,
+# roughly y < PIP_TOP_BAND) and a bottom band (price + CTA, roughly the bottom
+# PIP_BOTTOM_BAND px). Corner offsets are pulled in from the edges so the PiP
+# card clears BOTH text bands in every corner (W/H = main video, w/h = overlay).
+PIP_MARGIN = 48
+PIP_TOP_BAND = 300      # keep top-corner PiPs below the title/brand band
+PIP_BOTTOM_BAND = 360   # keep bottom-corner PiPs above the price/CTA band
+
+
+def _pip_overlay_xy(position: str) -> str:
+    """Map a PiP corner name to an FFmpeg ``overlay`` x:y expression."""
+    m = PIP_MARGIN
+    if position == "top-left":
+        return f"{m}:{PIP_TOP_BAND}"
+    if position == "top-right":
+        return f"W-w-{m}:{PIP_TOP_BAND}"
+    if position == "bottom-left":
+        return f"{m}:H-h-{PIP_BOTTOM_BAND}"
+    # default + "bottom-right"
+    return f"W-w-{m}:H-h-{PIP_BOTTOM_BAND}"
+
+# White card border (px) drawn around the product image for separation from footage
+PIP_BORDER = 8
+
+# Hard cap on concat inputs so a product associated to many tiny segments cannot
+# explode the filter graph. 60 inputs comfortably fills a 60s video from ~1s clips.
+MAX_FOOTAGE_INPUTS = 60
+
+
+def compose_product_video_from_footage(
+    footage_clips: list[dict],
+    pip_image_path: Path,
+    output_path: Path,
+    product: dict,
+    config: CompositorConfig,
+    pip_config: dict,
+) -> None:
+    """Compose a portrait product video from the seller's OWN local footage.
+
+    Unlike :func:`compose_product_video` (single-image Ken Burns slideshow), this
+    builds the base layer from real keyword-matched video segments and overlays
+    the product image as a Picture-in-Picture (PiP) card. Source audio is muted —
+    the TTS voiceover is muxed later in Stage 5 (``_render_with_preset``).
+
+    The whole thing is ONE FFmpeg ``filter_complex`` pass:
+      1. Each footage clip is input-trimmed (``-ss start -t dur``), scaled +
+         letterboxed to 1080x1920, and normalized (SAR/fps).
+      2. Clips are cycled in order until their cumulative duration fills
+         ``config.duration_s``, then ``concat``-ed into a single base stream.
+      3. Text overlays (title/brand/price/CTA) are drawn on the base.
+      4. The product image is scaled to a PiP card (per ``pip_config.size``),
+         given a white border, optionally faded in, and overlaid in the corner
+         named by ``pip_config.position``.
+      5. ``-t config.duration_s`` trims the tail and ``-an`` drops all audio.
+
+    Args:
+        footage_clips: Ordered list of resolved footage clips. Each dict has:
+            ``path`` (str, absolute, OS-native), ``start`` (float seconds),
+            ``end`` (float seconds), ``trim`` (bool — True = input-trim the
+            source video to [start, end]; False = use the file whole, e.g. a
+            pre-extracted clip). ``end - start`` is treated as the clip's
+            nominal duration for the cycle-to-fill math either way.
+        pip_image_path: Path to the product image used as the PiP overlay.
+        output_path: Destination path for the silent composed MP4.
+        product: Product dict (title/brand/price/...) for the text overlays.
+        config: CompositorConfig — duration_s, cta_text, fps, template_name,
+            colors, font_family.
+        pip_config: PiP overlay config: ``enabled`` (bool), ``position`` (one of
+            top-left/top-right/bottom-left/bottom-right), ``size`` (small/medium/
+            large), ``animation`` (static/fade/kenburns).
+
+    Raises:
+        ValueError: If duration_s is invalid or footage_clips is empty.
+        FileNotFoundError: If the PiP image does not exist.
+        RuntimeError: If the FFmpeg subprocess fails.
+    """
+    if config.duration_s not in VALID_DURATIONS:
+        raise ValueError(
+            f"duration_s must be one of {sorted(VALID_DURATIONS)}, got {config.duration_s}"
+        )
+    if not footage_clips:
+        raise ValueError("footage_clips is empty — nothing to compose")
+    if not pip_image_path.exists():
+        raise FileNotFoundError(f"Product image (PiP) not found: {pip_image_path}")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fps = config.fps or FPS
+    template = TEMPLATES.get(config.template_name, TEMPLATES[DEFAULT_TEMPLATE])
+
+    # ---- 1. Cycle clips in order until they fill the target duration ----
+    ordered: list[dict] = []
+    cumulative = 0.0
+    i = 0
+    while cumulative < config.duration_s and len(ordered) < MAX_FOOTAGE_INPUTS:
+        clip = footage_clips[i % len(footage_clips)]
+        ordered.append(clip)
+        cumulative += max(0.1, float(clip["end"]) - float(clip["start"]))
+        i += 1
+
+    if cumulative < config.duration_s:
+        # Hit the input cap before filling duration — output will be slightly
+        # shorter than requested. Surface it instead of silently truncating.
+        logger.warning(
+            "Footage totals %.1fs but %ds requested (capped at %d clips); "
+            "output will be %.1fs",
+            cumulative, config.duration_s, MAX_FOOTAGE_INPUTS, cumulative,
+        )
+
+    n = len(ordered)
+
+    # ---- 2. Product text overlays (reuse the single-image code path) ----
+    is_on_sale, text_vf, tmp_paths = _build_text_overlays(
+        product,
+        config.cta_text,
+        template=template,
+        primary_color=config.primary_color,
+        accent_color=config.accent_color,
+        font_family=config.font_family,
+    )
+
+    try:
+        # ---- 3. Build the filter graph ----
+        graph: list[str] = []
+        for idx in range(n):
+            graph.append(
+                f"[{idx}:v]scale={W_OUT}:{H_OUT}:force_original_aspect_ratio=decrease,"
+                f"pad={W_OUT}:{H_OUT}:(ow-iw)/2:(oh-ih)/2:black,"
+                f"setsar=1,fps={fps}[v{idx}]"
+            )
+        concat_labels = "".join(f"[v{idx}]" for idx in range(n))
+        graph.append(f"{concat_labels}concat=n={n}:v=1:a=0[base]")
+
+        # Text overlays draw onto the concatenated base
+        graph.append(f"[base]{text_vf}[txt]")
+
+        # ---- 4. PiP product image ----
+        pip_index = n  # the image is the last input
+        size = str(pip_config.get("size", "medium")).lower()
+        position = str(pip_config.get("position", "bottom-right")).lower()
+        animation = str(pip_config.get("animation", "static")).lower()
+
+        frac = PIP_SIZE_FRAC.get(size, PIP_SIZE_FRAC["medium"])
+        pip_w = (int(W_OUT * frac) // 2) * 2  # force even width
+
+        pip_chain = (
+            f"[{pip_index}:v]scale={pip_w}:-2,"
+            f"pad=iw+{2 * PIP_BORDER}:ih+{2 * PIP_BORDER}:{PIP_BORDER}:{PIP_BORDER}:white"
+        )
+        if animation in ("fade", "kenburns"):
+            # A gentle alpha fade-in. kenburns on the PiP layer is deliberately
+            # NOT implemented (expensive per the audit) — approximate with fade.
+            if animation == "kenburns":
+                logger.info("PiP animation 'kenburns' approximated as 'fade' (cost).")
+            pip_chain += ",format=yuva420p,fade=t=in:st=0:d=0.6:alpha=1"
+        pip_chain += "[pip]"
+        graph.append(pip_chain)
+
+        overlay_xy = _pip_overlay_xy(position)
+        graph.append(f"[txt][pip]overlay={overlay_xy}[out]")
+
+        filter_complex = ";".join(graph)
+
+        # ---- 5. Assemble the command ----
+        cmd: list[str] = ["ffmpeg", "-y", "-threads", "4"]
+        for clip in ordered:
+            if clip.get("trim", True):
+                dur = max(0.1, float(clip["end"]) - float(clip["start"]))
+                cmd += ["-ss", f"{float(clip['start']):.3f}", "-t", f"{dur:.3f}",
+                        "-i", str(clip["path"])]
+            else:
+                cmd += ["-i", str(clip["path"])]
+        # PiP image input (looped, bounded by -t below)
+        cmd += ["-loop", "1", "-framerate", str(fps), "-i", str(pip_image_path)]
+        cmd += [
+            "-filter_complex", filter_complex,
+            "-map", "[out]",
+            "-t", str(config.duration_s),
+            "-an",  # mute source audio — TTS voiceover is muxed in Stage 5
+            *get_prep_codec_params(preset="veryfast", crf=20, include_audio=False),
+            "-pix_fmt", "yuv420p",
+            "-r", str(fps),
+            str(output_path),
+        ]
+
+        logger.info(
+            "Composing footage product video: clips=%d (cycled to %.1fs) "
+            "duration=%ds pip=%s/%s/%s output=%s",
+            n, cumulative, config.duration_s, size, position, animation,
+            output_path.name,
+        )
+
+        result = safe_ffmpeg_run(cmd, 600, "compose product video from footage")
+        if result.returncode != 0:
+            logger.error("FFmpeg (footage) failed:\n%s", result.stderr[-2000:])
+            raise RuntimeError(
+                f"FFmpeg failed (exit {result.returncode}): {result.stderr[-1000:]}"
+            )
+
+        logger.info("Footage composition complete: %s", output_path)
+
+    finally:
+        cleanup_textfiles(*tmp_paths)
+
+
 def benchmark_zoompan(image_path: Path, duration_s: int = 30) -> dict:
     """Benchmark zoompan vs simple-scale encode for documentation in STATE.md.
 

@@ -209,6 +209,85 @@ async def get_associations_batch(
     return {"associations": result_map}
 
 
+@router.get("/product/{product_id}")
+async def get_associations_for_product(
+    product_id: str,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """List the segments associated with a catalog product (footage-mode preview).
+
+    Reverse of the segment-keyed lookups: given a product, return the segments
+    whose footage the product-video generator (Wave 4.1 / G6) will assemble as the
+    base layer, plus a representative PiP config. Profile-scoped via the joined
+    segment. ``count == 0`` means the product falls back to the Ken Burns slideshow.
+
+    Returns:
+        {
+          "product_id": str,
+          "count": int,
+          "pip_config": {enabled, position, size, animation},
+          "segments": [{association_id, segment_id, keywords, start_time, end_time}, ...]
+        }
+    """
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    default_pip = {"enabled": True, "position": "bottom-right", "size": "medium", "animation": "static"}
+
+    try:
+        assoc_result = repo.table_query(ASSOC_TABLE, "select",
+            filters=QueryFilters(eq={"catalog_product_id": product_id}))
+    except Exception as exc:
+        logger.error("DB error fetching associations for product %s: %s", product_id, exc)
+        raise HTTPException(status_code=500, detail="Database error fetching associations")
+
+    associations = assoc_result.data or []
+    if not associations:
+        return {"product_id": product_id, "count": 0, "pip_config": default_pip, "segments": []}
+
+    # Profile-scope via the joined segments and enrich with segment metadata
+    segment_ids = [a["segment_id"] for a in associations if a.get("segment_id")]
+    seg_by_id: dict[str, dict] = {}
+    if segment_ids:
+        try:
+            seg_result = repo.table_query(SEGMENTS_TABLE, "select",
+                filters=QueryFilters(
+                    select="id, profile_id, keywords, start_time, end_time",
+                    in_={"id": segment_ids},
+                ))
+            for s in (seg_result.data or []):
+                seg_by_id[s["id"]] = s
+        except Exception as exc:
+            logger.error("DB error fetching segments for product %s: %s", product_id, exc)
+            raise HTTPException(status_code=500, detail="Database error fetching segments")
+
+    segments = []
+    pip_config = None
+    for a in associations:
+        seg = seg_by_id.get(a.get("segment_id", ""))
+        if not seg or seg.get("profile_id") != profile.profile_id:
+            continue
+        # Representative PiP config: prefer an explicitly enabled one
+        pc = a.get("pip_config")
+        if pc and (pip_config is None or pc.get("enabled")):
+            pip_config = pc
+        segments.append({
+            "association_id": a.get("id"),
+            "segment_id": a.get("segment_id"),
+            "keywords": seg.get("keywords") or [],
+            "start_time": seg.get("start_time"),
+            "end_time": seg.get("end_time"),
+        })
+
+    return {
+        "product_id": product_id,
+        "count": len(segments),
+        "pip_config": pip_config or default_pip,
+        "segments": segments,
+    }
+
+
 @router.get("/segment/{segment_id}")
 async def get_association_for_segment(
     segment_id: str,

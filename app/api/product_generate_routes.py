@@ -31,6 +31,7 @@ from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 from app.services.job_storage import get_job_storage
 from app.services.srt_validator import sanitize_srt_full
+from app.utils import normalize_path
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,123 @@ def _build_preset_dict(preset_name: str) -> dict:
         "audio_bitrate": ep.audio_bitrate,
         "extra_flags": "-movflags +faststart",
     }
+
+
+_DEFAULT_PIP_CONFIG = {
+    "enabled": True,
+    "position": "bottom-right",
+    "size": "medium",
+    "animation": "static",
+}
+
+
+def _resolve_product_footage(repo, product_id: str, profile_id: str) -> Optional[dict]:
+    """Resolve a product's associated local footage + PiP config (Wave 4.1 / G6).
+
+    Looks up ``segment_product_associations`` for this product, then resolves each
+    associated segment to a real video file on disk (the pre-extracted clip if one
+    exists, otherwise the source video to be input-trimmed to [start, end]).
+
+    This is the gate that decides footage-mode vs. the legacy Ken Burns slideshow:
+    returns a plan ONLY when at least one associated segment resolves to a file
+    that actually exists. Any other case (no associations, missing segments,
+    source video deleted, DB error) returns None so the caller falls back to the
+    single-image compositor — footage-mode never regresses existing behavior.
+
+    Note: associations are keyed on the *catalog* product id, so this naturally
+    matches ``source="catalog"`` products; feed-source ids won't match → None.
+
+    Returns:
+        ``{"clips": [{"path", "start", "end", "trim"}], "pip_config": dict}`` or None.
+    """
+    try:
+        assoc_result = repo.table_query(
+            "segment_product_associations", "select",
+            filters=QueryFilters(eq={"catalog_product_id": product_id}),
+        )
+    except Exception as exc:  # noqa: BLE001 — any failure → graceful fallback
+        logger.warning("[footage] Association lookup failed for product %s: %s", product_id, exc)
+        return None
+
+    associations = assoc_result.data or []
+    if not associations:
+        return None
+
+    # Pick the PiP config: prefer an explicitly enabled one, else the first
+    # present, else a sensible default.
+    pip_config: Optional[dict] = None
+    for a in associations:
+        pc = a.get("pip_config")
+        if pc:
+            pip_config = pc
+            if pc.get("enabled"):
+                break
+    if not pip_config:
+        pip_config = dict(_DEFAULT_PIP_CONFIG)
+
+    segment_ids = [a["segment_id"] for a in associations if a.get("segment_id")]
+    if not segment_ids:
+        return None
+
+    try:
+        seg_result = repo.table_query(
+            "editai_segments", "select",
+            filters=QueryFilters(
+                select="id, source_video_id, start_time, end_time, extracted_video_path, profile_id",
+                in_={"id": segment_ids},
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[footage] Segment lookup failed for product %s: %s", product_id, exc)
+        return None
+
+    segments = seg_result.data or []
+    clips: list[dict] = []
+    srcvid_cache: dict[str, Optional[dict]] = {}
+
+    for seg in segments:
+        # Profile scoping — never use another profile's footage
+        if seg.get("profile_id") != profile_id:
+            continue
+        try:
+            start = float(seg.get("start_time") or 0)
+            end = float(seg.get("end_time") or 0)
+        except (TypeError, ValueError):
+            continue
+        if end <= start:
+            continue
+
+        # Prefer a pre-extracted clip when present on disk (no re-trim needed)
+        extracted = seg.get("extracted_video_path")
+        if extracted:
+            ep = Path(normalize_path(extracted))
+            if ep.exists():
+                clips.append({"path": str(ep), "start": start, "end": end, "trim": False})
+                continue
+
+        # Otherwise resolve the source video and input-trim to [start, end]
+        svid = seg.get("source_video_id")
+        if not svid:
+            continue
+        if svid not in srcvid_cache:
+            try:
+                srcvid_cache[svid] = repo.get_source_video(svid)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[footage] get_source_video(%s) failed: %s", svid, exc)
+                srcvid_cache[svid] = None
+        sv = srcvid_cache[svid]
+        if not sv or not sv.get("file_path"):
+            continue
+        fp = Path(normalize_path(sv["file_path"]))
+        if not fp.exists():
+            logger.warning("[footage] Source video missing on disk, skipping: %s", fp)
+            continue
+        clips.append({"path": str(fp), "start": start, "end": end, "trim": True})
+
+    if not clips:
+        return None
+
+    return {"clips": clips, "pip_config": pip_config}
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +618,11 @@ async def _generate_product_video_task(
     # Import everything we need up front so any import error surfaces quickly
     from app.api.library_routes import _render_with_preset
     from app.services.ffmpeg_semaphore import acquire_render_slot, check_disk_space
-    from app.services.product_video_compositor import compose_product_video, CompositorConfig
+    from app.services.product_video_compositor import (
+        compose_product_video,
+        compose_product_video_from_footage,
+        CompositorConfig,
+    )
     from app.services.tts_subtitle_generator import generate_srt_from_timestamps
 
     try:
@@ -740,16 +862,39 @@ async def _generate_product_video_task(
             font_family=tmpl_cfg.get("font_family", ""),
         )
 
-        # compose_product_video is synchronous (FFmpeg subprocess) — throttled by global semaphore
+        # Wave 4.1 / G6: if this product has associated local footage, assemble the
+        # base from real keyword-matched segments with the product image as a PiP
+        # overlay; otherwise fall back to the single-image Ken Burns slideshow.
+        footage_plan = await asyncio.to_thread(
+            _resolve_product_footage, repo, product_id, profile_id
+        )
+
+        # compose_* are synchronous (FFmpeg subprocess) — throttled by global semaphore
         check_disk_space(settings.output_dir)
         async with await acquire_render_slot():
-            await asyncio.to_thread(
-                compose_product_video,
-                image_path=image_path,
-                output_path=composed_path,
-                product=product,
-                config=compositor_config,
-            )
+            if footage_plan:
+                logger.info(
+                    "[%s] Stage 4: FOOTAGE mode — %d clip(s), pip=%s",
+                    job_id, len(footage_plan["clips"]), footage_plan["pip_config"],
+                )
+                await asyncio.to_thread(
+                    compose_product_video_from_footage,
+                    footage_clips=footage_plan["clips"],
+                    pip_image_path=image_path,
+                    output_path=composed_path,
+                    product=product,
+                    config=compositor_config,
+                    pip_config=footage_plan["pip_config"],
+                )
+            else:
+                logger.info("[%s] Stage 4: SLIDESHOW mode (no footage associations)", job_id)
+                await asyncio.to_thread(
+                    compose_product_video,
+                    image_path=image_path,
+                    output_path=composed_path,
+                    product=product,
+                    config=compositor_config,
+                )
 
         logger.info("[%s] Composition complete: %s", job_id, composed_path)
         job_storage.update_job(job_id, {"progress": "70"}, profile_id=profile_id)

@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Progress } from "@/components/ui/progress";
-import { apiPost, apiGetWithRetry } from "@/lib/api";
+import { apiPost, apiGet, apiPatch, apiGetWithRetry } from "@/lib/api";
 import { useProfile } from "@/contexts/profile-context";
 import { useJobPolling, formatElapsedTime } from "@/hooks/use-job-polling";
 import { toast } from "sonner";
@@ -31,6 +31,8 @@ import {
   ChevronDown,
   ChevronUp,
   X,
+  Film,
+  Images,
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 
@@ -61,6 +63,13 @@ function ProductVideoContent() {
   const [enableColorCorrection, setEnableColorCorrection] = useState(false);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
 
+  // Footage-mode state (Wave 4.1 / G6) — does this product have associated clips?
+  type FootageSegment = { association_id: string; segment_id: string; keywords: string[] };
+  const [footageCount, setFootageCount] = useState<number | null>(null); // null = still loading
+  const [footageSegments, setFootageSegments] = useState<FootageSegment[]>([]);
+  const [pipPosition, setPipPosition] = useState<string>("bottom-right");
+  const [savingPip, setSavingPip] = useState(false);
+
   // Generation state
   const [isGenerating, setIsGenerating] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
@@ -90,6 +99,56 @@ function ProductVideoContent() {
 
     loadProfileDefaults();
   }, [currentProfile?.id]);
+
+  // Detect footage associations for this product → footage-mode vs slideshow
+  useEffect(() => {
+    if (!productId) return;
+    let cancelled = false;
+
+    const loadFootage = async () => {
+      try {
+        const res = await apiGet(`/associations/product/${productId}`);
+        if (!res.ok) {
+          if (!cancelled) setFootageCount(0);
+          return;
+        }
+        const data = await res.json();
+        if (cancelled) return;
+        setFootageCount(data?.count ?? 0);
+        setFootageSegments(data?.segments ?? []);
+        if (data?.pip_config?.position) setPipPosition(data.pip_config.position);
+      } catch {
+        if (!cancelled) setFootageCount(0);
+      }
+    };
+
+    loadFootage();
+    return () => { cancelled = true; };
+  }, [productId]);
+
+  // Persist a new PiP position across every associated segment
+  const handlePipPositionChange = async (position: string) => {
+    const prev = pipPosition;
+    setPipPosition(position); // optimistic
+    setSavingPip(true);
+    try {
+      await Promise.all(
+        footageSegments.map((s) =>
+          apiPatch(`/associations/${s.association_id}/pip-config`, {
+            enabled: true,
+            position,
+            size: "medium",
+            animation: "fade",
+          })
+        )
+      );
+    } catch {
+      setPipPosition(prev); // roll back on failure
+      toast.error("Failed to save overlay position");
+    } finally {
+      setSavingPip(false);
+    }
+  };
 
   // Default voice based on TTS provider
   const defaultVoice = ttsProvider === "edge" ? "ro-RO-EmilNeural" : "";
@@ -235,6 +294,70 @@ function ProductVideoContent() {
               </div>
             </CardContent>
           </Card>
+        )}
+
+        {/* Footage-mode card (Wave 4.1 / G6) */}
+        {productId && footageCount !== null && (
+          footageCount > 0 ? (
+            <Card className="mb-6 border-primary/40">
+              <CardContent className="p-4">
+                <div className="flex items-start gap-3">
+                  <Film className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0 space-y-3">
+                    <div>
+                      <p className="text-sm font-semibold">
+                        Footage mode — uses your own video
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        This product is matched to{" "}
+                        <span className="font-medium text-foreground">
+                          {footageCount} of your clip{footageCount === 1 ? "" : "s"}
+                        </span>
+                        . The video is assembled from your real footage with the product
+                        image overlaid as a Picture-in-Picture.
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="pip-position" className="text-xs font-medium">
+                        Product overlay position
+                      </Label>
+                      <Select
+                        value={pipPosition}
+                        onValueChange={handlePipPositionChange}
+                        disabled={isFormDisabled || savingPip}
+                      >
+                        <SelectTrigger id="pip-position" className="w-[200px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="top-left">Top left</SelectItem>
+                          <SelectItem value="top-right">Top right</SelectItem>
+                          <SelectItem value="bottom-left">Bottom left</SelectItem>
+                          <SelectItem value="bottom-right">Bottom right</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="mb-6">
+              <CardContent className="p-4">
+                <div className="flex items-start gap-3">
+                  <Images className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold">Slideshow mode</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      The video animates the product image (Ken Burns). To use your own
+                      footage, associate video segments with this product on the
+                      Segments page, then return here.
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )
         )}
 
         {/* Generation settings form */}
