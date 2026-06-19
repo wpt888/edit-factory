@@ -1301,6 +1301,21 @@ def _db_load_pipeline(pipeline_id: str) -> Optional[dict]:
                     logger.warning(f"Skipping invalid render_jobs key: {k}")
                     continue
 
+        # Wave 2.3: this load path only runs for pipelines NOT already live in
+        # this process, so any render job still mid-progress was interrupted by a
+        # previous crash/restart. Mark it clearly (re-render to resume) instead of
+        # leaving a frozen/vanishing progress bar.
+        for _rj in render_jobs.values():
+            if not isinstance(_rj, dict):
+                continue
+            _pct = _rj.get("progress") or 0
+            _step = str(_rj.get("current_step") or "").lower()
+            _terminal = _pct >= 100 or any(t in _step for t in ("complete", "failed", "cancel", "interrupt"))
+            if 0 < _pct < 100 and not _terminal:
+                _rj["current_step"] = "Render întrerupt — apasă Render din nou"
+                _rj["interrupted"] = True
+                logger.info(f"Pipeline {pipeline_id}: marked interrupted render job at {_pct}%")
+
         tts_previews = {}
         for k, v in (row.get("tts_previews") or {}).items():
             try:
@@ -3913,11 +3928,28 @@ async def render_variants(
                     f"will generate fresh audio"
                 )
 
-            # Progress callback: assembly_service calls this at each major step
+            # Progress callback: assembly_service calls this at each major step,
+            # and (Wave 2.1) continuously during the final encode.
+            _last_progress_persist = {"t": 0.0}
+
             def on_progress(step_name: str, pct: int):
                 with render_jobs_lock:
                     job["current_step"] = step_name
                     job["progress"] = pct
+                # Wave 2.3: persist progress DURING the long encode (throttled to
+                # ~once/5s) so a crash mid-render leaves an accurate last-known
+                # progress instead of a frozen/vanishing bar. Stage boundaries
+                # still persist immediately below; this fills the encode gap.
+                import time as _time
+                now = _time.monotonic()
+                if now - _last_progress_persist["t"] >= 5.0:
+                    _last_progress_persist["t"] = now
+                    with render_jobs_lock:
+                        _snapshot = dict(pipeline.get("render_jobs", {}))
+                    try:
+                        _db_update_render_jobs(pipeline_id, _snapshot)
+                    except Exception:
+                        pass
 
             # Extract overlay params for this variant
             # PIP-07: interstitial_slides may be keyed by str(vid) or int(vid) — try both with `or` fallback
