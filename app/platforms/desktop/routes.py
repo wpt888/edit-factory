@@ -146,11 +146,21 @@ async def get_desktop_settings():
     # For supabase_url, show full value (not a secret) — try vault first, then config fallback
     supabase_url = vault.get_key("supabase_url") or config.get("supabase_url", "")
 
+    # Wave 1.1: whether the backend ALREADY has working Supabase creds. Packaged
+    # desktop seeds credentials.env -> %APPDATA%\.env (read into settings), so the
+    # app is connected to the cloud before the wizard even runs. When true the
+    # onboarding wizard skips the (redundant, confusing) Supabase step entirely.
+    supabase_configured = bool(
+        (supabase_url or getattr(settings, "supabase_url", ""))
+        and (vault.get_key("supabase_key") or config.get("supabase_key") or getattr(settings, "supabase_key", ""))
+    )
+
     return {
         "gemini_api_key": vault.get_key_hint("gemini_api_key") or _hint(config.get("gemini_api_key", "")),
         "elevenlabs_api_key": vault.get_key_hint("elevenlabs_api_key") or _hint(config.get("elevenlabs_api_key", "")),
         "supabase_url": supabase_url,
         "supabase_key": vault.get_key_hint("supabase_key") or _hint(config.get("supabase_key", "")),
+        "supabase_configured": supabase_configured,
         "first_run_complete": config.get("first_run_complete", False),
         "crash_reporting_enabled": config.get("crash_reporting_enabled", False),
         "tts_provider": config.get("tts_provider", None),

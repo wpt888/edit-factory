@@ -43,6 +43,9 @@ function SetupPageContent() {
   const [geminiHint, setGeminiHint] = useState("")
   const [elevenlabsHint, setElevenlabsHint] = useState("")
   const [useFreeTts, setUseFreeTts] = useState(false)
+  // Wave 1.1: when the packaged desktop already has seeded Supabase creds, the
+  // wizard skips the (redundant, scary) Supabase step entirely.
+  const [supabaseSeeded, setSupabaseSeeded] = useState(false)
 
   // Step 3: Crash Reporting
   const [crashReporting, setCrashReporting] = useState(false)
@@ -120,6 +123,24 @@ function SetupPageContent() {
         // Failed to load — start from step 1
       })
   }, [isEditMode])
+
+  // Wave 1.1: detect seeded Supabase creds (packaged desktop seeds them into
+  // %APPDATA%\.env). When present, skip the redundant Supabase step so a
+  // non-technical user never has to paste a "Supabase anon key". Runs for
+  // first-run too, not just edit mode.
+  useEffect(() => {
+    if (process.env.NEXT_PUBLIC_DESKTOP_MODE !== "true") return
+    apiGet("/desktop/settings")
+      .then((res) => (res.ok ? res.json() : undefined))
+      .then((data: { supabase_configured?: boolean; supabase_url?: string } | undefined) => {
+        if (data?.supabase_configured) {
+          setSupabaseSeeded(true)
+          setSupabaseStatus("ok")
+          if (data.supabase_url) setSupabaseUrl(data.supabase_url)
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const handleActivate = async () => {
     if (!licenseKey.trim()) {
@@ -318,7 +339,9 @@ function SetupPageContent() {
             <CardHeader>
               <CardTitle>API Configuration</CardTitle>
               <CardDescription>
-                Connect your services. Supabase is required; others are optional.
+                {supabaseSeeded
+                  ? "Conectat la cloud. Adaugă cheile AI (opțional) pentru voci premium și generare de scripturi."
+                  : "Connect your services. Supabase is required; others are optional."}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
@@ -343,51 +366,64 @@ function SetupPageContent() {
                 {useFreeTts && <CheckCircle className="h-5 w-5 text-green-500 flex-shrink-0" />}
               </div>
 
-              {/* Supabase URL */}
-              <div className="space-y-2">
-                <Label htmlFor="supabase-url">
-                  Supabase URL <span className="text-red-500">*</span>
-                </Label>
-                <Input
-                  id="supabase-url"
-                  value={supabaseUrl}
-                  onChange={(e) => { setSupabaseUrl(e.target.value); setSupabaseStatus("idle") }}
-                  placeholder="https://your-project.supabase.co"
-                />
-              </div>
+              {supabaseSeeded ? (
+                /* Wave 1.1: creds already seeded — no Supabase ask for the user */
+                <div className="flex items-center gap-3 p-3 border border-green-500 bg-green-500/10 rounded-lg">
+                  <CheckCircle className="h-5 w-5 text-green-500 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium">Conectat la cloud</p>
+                    <p className="text-xs text-muted-foreground">Baza de date e deja configurată — nu trebuie să introduci nimic.</p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Supabase URL */}
+                  <div className="space-y-2">
+                    <Label htmlFor="supabase-url">
+                      Supabase URL <span className="text-red-500">*</span>
+                    </Label>
+                    <Input
+                      id="supabase-url"
+                      value={supabaseUrl}
+                      onChange={(e) => { setSupabaseUrl(e.target.value); setSupabaseStatus("idle") }}
+                      placeholder="https://your-project.supabase.co"
+                    />
+                  </div>
 
-              {/* Supabase Key */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="supabase-key">
-                    Supabase Anon Key <span className="text-red-500">*</span>
-                  </Label>
-                  {supabaseHint && (
-                    <span className="text-xs text-muted-foreground">Current: {supabaseHint}</span>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <Input
-                    id="supabase-key"
-                    type="password"
-                    value={supabaseKey}
-                    onChange={(e) => { setSupabaseKey(e.target.value); setSupabaseStatus("idle") }}
-                    placeholder={supabaseHint ? "Enter new key to update" : "eyJh..."}
-                    className="flex-1"
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => testConnection("supabase")}
-                    disabled={supabaseStatus === "testing" || !supabaseUrl.trim() || !supabaseKey.trim()}
-                  >
-                    {supabaseStatus === "testing" ? <Loader2 className="h-4 w-4 animate-spin" /> :
-                     supabaseStatus === "ok" ? <CheckCircle className="h-4 w-4 text-green-500" /> :
-                     supabaseStatus === "error" ? <AlertCircle className="h-4 w-4 text-red-500" /> :
-                     "Test"}
-                  </Button>
-                </div>
-              </div>
+                  {/* Supabase Key */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="supabase-key">
+                        Supabase Anon Key <span className="text-red-500">*</span>
+                      </Label>
+                      {supabaseHint && (
+                        <span className="text-xs text-muted-foreground">Current: {supabaseHint}</span>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        id="supabase-key"
+                        type="password"
+                        value={supabaseKey}
+                        onChange={(e) => { setSupabaseKey(e.target.value); setSupabaseStatus("idle") }}
+                        placeholder={supabaseHint ? "Enter new key to update" : "eyJh..."}
+                        className="flex-1"
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => testConnection("supabase")}
+                        disabled={supabaseStatus === "testing" || !supabaseUrl.trim() || !supabaseKey.trim()}
+                      >
+                        {supabaseStatus === "testing" ? <Loader2 className="h-4 w-4 animate-spin" /> :
+                         supabaseStatus === "ok" ? <CheckCircle className="h-4 w-4 text-green-500" /> :
+                         supabaseStatus === "error" ? <AlertCircle className="h-4 w-4 text-red-500" /> :
+                         "Test"}
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              )}
 
               {/* Gemini */}
               <div className="space-y-2">
