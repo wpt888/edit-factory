@@ -49,7 +49,17 @@ def _get_app_base_dir() -> Path:
         _logger.warning(f"DESKTOP_MODE is set but platform {sys.platform!r} is unknown — falling back to project root")
 
     if base is None:
-        return Path(__file__).parent.parent
+        # Desktop, but the platform's data dir couldn't be resolved (e.g. APPDATA
+        # unset). Fall back to a user-WRITABLE home dir, NOT the packaged install
+        # dir (process.resourcesPath via __file__), which can be read-only and make
+        # ensure_dirs() fail at startup (audit #33).
+        fallback = Path.home() / "EditFactory"
+        _logger.warning(f"DESKTOP_MODE base dir unresolved — falling back to {fallback}")
+        try:
+            fallback.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            _logger.warning(f"Could not create fallback dir {fallback}: {e}")
+        return fallback
 
     try:
         base.mkdir(parents=True, exist_ok=True)

@@ -3405,7 +3405,14 @@ async def preview_variant(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[Profile {profile.profile_id}] Preview failed for variant {variant_index}: {e}")
+        # Log the full traceback server-side — a bare message masked a NameError
+        # here once and surfaced only as an opaque "Preview service unavailable".
+        # The traceback (with profile + variant) is the correlation aid; the
+        # client message stays opaque so internal details aren't disclosed.
+        logger.error(
+            f"[Profile {profile.profile_id}] Preview failed for variant {variant_index}: {e}",
+            exc_info=True,
+        )
         raise HTTPException(status_code=503, detail="Preview service unavailable")
 
 

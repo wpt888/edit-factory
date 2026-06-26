@@ -27,6 +27,12 @@ export default function ResetPasswordPage() {
   const isMountedRef = useRef(true);
   useEffect(() => { return () => { isMountedRef.current = false; }; }, []);
 
+  // Desktop builds use the local login gate, not Supabase cloud accounts — bounce
+  // away from the cloud password-reset flow if reached by direct URL (audit #32).
+  useEffect(() => {
+    if (process.env.NEXT_PUBLIC_DESKTOP_MODE === "true") router.replace("/login");
+  }, [router]);
+
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);

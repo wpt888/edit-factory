@@ -1526,7 +1526,14 @@ class AssemblyService:
                 return
 
             if not Path(entry.source_video_path).exists():
-                logger.error(f"Source video missing: {entry.source_video_path}")
+                # Skip (don't abort the whole render) but make it loud: the final video
+                # will be SHORTER by this segment. Common on desktop when a project's
+                # source was added on another machine and its absolute path doesn't exist
+                # locally. The message names the file so the user can re-add/relocate it.
+                logger.error(
+                    f"Source video missing for segment {i} — SKIPPED, final video will be "
+                    f"incomplete. Re-add the file in Segments. Path: {entry.source_video_path}"
+                )
                 results[i] = None
                 return
 
@@ -1879,10 +1886,18 @@ class AssemblyService:
             # Step 2: Generate SRT from timestamps (with cache — use cleaned text for cache key)
             logger.info("Step 2/7: Generating SRT subtitles from timestamps")
             _report("Generating subtitles", 30)
-            if reuse_srt_content and skip_library_save:
+            # Karaoke guard: the preview/Step-2 SRT is always generated WITHOUT
+            # karaoke tags (preview has no subtitle_settings), so reusing it when
+            # karaoke is requested would silently drop the per-word {\k} highlight.
+            # Detect karaoke tags in the cached content and force regeneration on mismatch.
+            _want_karaoke = bool((subtitle_settings or {}).get("karaoke", False))
+            _reused_has_karaoke = bool(reuse_srt_content) and "{\\k" in reuse_srt_content
+            if reuse_srt_content and skip_library_save and (not _want_karaoke or _reused_has_karaoke):
                 srt_content = reuse_srt_content
                 logger.info("Step 2/7: Reusing existing SRT content")
             else:
+                if reuse_srt_content and _want_karaoke and not _reused_has_karaoke:
+                    logger.info("Step 2/7: Cached SRT lacks karaoke tags — regenerating for karaoke captions")
                 from app.services.tts_cache import srt_cache_lookup, srt_cache_store
                 _vs = voice_settings or {}
                 _vs_hash = f"{_vs.get('stability', 0.5):.2f}_{_vs.get('similarity_boost', 0.75):.2f}_{_vs.get('speed', 1.0):.2f}"
@@ -2011,7 +2026,10 @@ class AssemblyService:
                                 "end_time": seg["end_time"],
                                 "duration": seg["end_time"] - seg["start_time"],
                                 "keywords": seg.get("keywords") or [],
-                                "source_video_path": sv_path,
+                                # Normalize like the main build path (line ~1966) so a
+                                # WSL /mnt/... path stored on a web machine resolves on
+                                # Windows desktop, keeping exists()/ffmpeg consistent.
+                                "source_video_path": normalize_path(sv_path),
                                 "transforms": seg.get("transforms"),
                                 "thumbnail_path": seg.get("thumbnail_path"),
                                 "product_group": seg.get("product_group"),
@@ -2052,7 +2070,7 @@ class AssemblyService:
                                 "end_time": 0.0,
                                 "duration": 0.0,
                                 "keywords": [],
-                                "source_video_path": sv["file_path"],
+                                "source_video_path": normalize_path(sv["file_path"]),
                                 "transforms": None,
                                 "thumbnail_path": None,
                                 "product_group": None,
@@ -2454,7 +2472,8 @@ class AssemblyService:
         min_segment_duration: float = 3.0,
         avoid_segment_ids: Optional[set] = None,
         ultra_rapid_intro: bool = True,
-        reuse_srt_content: Optional[str] = None
+        reuse_srt_content: Optional[str] = None,
+        subtitle_settings: Optional[dict] = None
     ) -> dict:
         """
         Preview-only: TTS -> SRT -> match -> timeline (no rendering).

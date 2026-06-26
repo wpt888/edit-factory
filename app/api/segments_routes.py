@@ -2579,7 +2579,40 @@ async def serve_segment_file(
         raise HTTPException(status_code=403, detail="Invalid path")
 
     if not full_path.exists():
-        raise HTTPException(status_code=404, detail="File not found")
+        # Self-heal a missing SEGMENT thumbnail ({segment_id}_thumb.jpg) by
+        # regenerating it from the segment's source video — mirrors the
+        # source-video thumbnail self-heal above. Common on desktop for segments
+        # created on another machine whose thumbnail file never traveled (audit
+        # #25). Only thumbnails are healed; a missing video still 404s. Fully
+        # guarded + best-effort: any failure falls through to the original 404.
+        healed = False
+        name = full_path.name
+        if name.endswith("_thumb.jpg"):
+            segment_id = name[: -len("_thumb.jpg")]
+            try:
+                from app.repositories.models import QueryFilters
+                repo = get_repository()
+                res = await asyncio.to_thread(
+                    repo.table_query, "editai_segments", "select",
+                    filters=QueryFilters(
+                        select="id, start_time, end_time, editai_source_videos(file_path)",
+                        eq={"id": segment_id, "profile_id": profile.profile_id},
+                        limit=1,
+                    ),
+                )
+                row = (res.data or [None])[0]
+                src_raw = ((row or {}).get("editai_source_videos") or {}).get("file_path") if row else None
+                if src_raw:
+                    src = Path(normalize_path(src_raw))
+                    if src.exists():
+                        midpoint = (float(row.get("start_time") or 0) + float(row.get("end_time") or 0)) / 2.0
+                        full_path.parent.mkdir(parents=True, exist_ok=True)
+                        async with await acquire_preview_slot():
+                            healed = await asyncio.to_thread(_generate_thumbnail, src, full_path, midpoint)
+            except Exception as e:
+                logger.warning(f"Segment thumbnail self-heal failed for {name}: {e}")
+        if not (healed and full_path.exists()):
+            raise HTTPException(status_code=404, detail="File not found")
 
     # Determine media type
     suffix = full_path.suffix.lower()

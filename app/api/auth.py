@@ -298,23 +298,45 @@ async def get_profile_context(
         if cached:
             return cached
 
+        repo = _get_repo()
+        if not repo:
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        from app.repositories.models import QueryFilters
+
         if x_profile_id:
+            # Validate the explicit profile exists AND belongs to the desktop user,
+            # mirroring the web path. The desktop DB is the shared cloud (RLS-off), so
+            # a stale/foreign profile id in localStorage must not silently bind the
+            # request — and the per-profile encrypted API keys — to another account's
+            # profile.
+            result = repo.table_query("profiles", "select", filters=QueryFilters(select="id, user_id", eq={"id": x_profile_id}, limit=1))
+            if not result.data:
+                raise HTTPException(status_code=404, detail="Profile not found")
+            if result.data[0]["user_id"] != current_user.id:
+                raise HTTPException(status_code=403, detail="Access denied to this profile")
             ctx = ProfileContext(profile_id=x_profile_id, user_id=current_user.id)
             await _cache_set_profile(current_user.id, profile_key, ctx)
             return ctx
 
-        repo = _get_repo()
-        if repo:
-            try:
-                from app.repositories.models import QueryFilters
+        # No explicit profile: resolve the desktop user's OWN default first, then any
+        # of their profiles — filtering by user_id so we never adopt another account's
+        # default from the shared cloud DB. A global default is used only as a last
+        # resort (loudly logged), matching the dev-mode fallback chain above.
+        try:
+            result = repo.table_query("profiles", "select", filters=QueryFilters(select="id", eq={"user_id": current_user.id, "is_default": True}, limit=1))
+            if not result.data:
+                result = repo.table_query("profiles", "select", filters=QueryFilters(select="id", eq={"user_id": current_user.id}, limit=1))
+            if not result.data:
+                logger.warning("Desktop mode: no profile owned by the desktop user — falling back to a global default profile")
                 result = repo.table_query("profiles", "select", filters=QueryFilters(select="id", eq={"is_default": True}, limit=1))
-                if result.data:
-                    profile_id = result.data[0]["id"]
-                    ctx = ProfileContext(profile_id=profile_id, user_id=current_user.id)
-                    await _cache_set_profile(current_user.id, "default", ctx)
-                    return ctx
-            except Exception as e:
-                logger.warning(f"Desktop mode: could not query profiles table: {e}")
+            if result.data:
+                profile_id = result.data[0]["id"]
+                ctx = ProfileContext(profile_id=profile_id, user_id=current_user.id)
+                await _cache_set_profile(current_user.id, "default", ctx)
+                return ctx
+        except Exception as e:
+            logger.warning(f"Desktop mode: could not query profiles table: {e}")
 
         logger.error("Desktop mode: no DB profile found — refusing to fall back to placeholder UUID")
         raise HTTPException(

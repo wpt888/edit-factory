@@ -99,6 +99,7 @@ let tray = null;          // Module-level — prevents GC (Pitfall 1)
 let backendProcess = null;
 let frontendProcess = null;
 let isQuitting = false;
+let trayHintShown = false;  // one-time "still running in tray" balloon (audit #30)
 
 // Auto-restart state (backend + frontend resilience)
 const SERVICE_MAX_RESTARTS = 3;
@@ -134,18 +135,46 @@ app.on('second-instance', () => {
 
 // ---------- SHELL-05: Orphan cleanup on startup ----------
 function cleanupOrphans() {
-  logLine('launcher', 'Cleaning up orphaned processes...');
-  try {
-    const result = spawnSync(
-      PYTHON_EXE,
-      ['-m', 'app.platforms.desktop.service', 'cleanup', '--ports', String(BACKEND_PORT), String(FRONTEND_PORT)],
-      { cwd: BACKEND_CWD, timeout: 10000, encoding: 'utf-8' }
-    );
-    if (result.stdout) logLine('launcher', `Orphan cleanup: ${result.stdout.trim()}`);
-    if (result.stderr) logLine('launcher', `Orphan cleanup stderr: ${result.stderr.trim()}`);
-  } catch (err) {
-    logLine('launcher', `Orphan cleanup failed (non-fatal): ${err.message}`);
-  }
+  // In dev, DON'T sweep the backend port (8000): a developer commonly has the
+  // web app's backend (python run.py) running there, and killing it silently is
+  // a nasty footgun (audit #18). Only reclaim the desktop frontend port in dev.
+  // In packaged mode there's no such collision, so sweep both ports.
+  const ports = isDev
+    ? [String(FRONTEND_PORT)]
+    : [String(BACKEND_PORT), String(FRONTEND_PORT)];
+  logLine('launcher', `Cleaning up orphaned processes on ports ${ports.join(', ')} (async)...`);
+  return new Promise((resolve) => {
+    let out = '', err = '';
+    let proc;
+    try {
+      proc = spawn(
+        PYTHON_EXE,
+        ['-m', 'app.platforms.desktop.service', 'cleanup', '--ports', ...ports],
+        { cwd: BACKEND_CWD, encoding: 'utf-8', windowsHide: true }
+      );
+    } catch (e) {
+      logLine('launcher', `Orphan cleanup spawn failed (non-fatal): ${e.message}`);
+      return resolve();
+    }
+    if (proc.stdout) proc.stdout.on('data', (d) => { out += d; });
+    if (proc.stderr) proc.stderr.on('data', (d) => { err += d; });
+    const timer = setTimeout(() => {
+      try { proc.kill(); } catch { /* already done */ }
+      logLine('launcher', 'Orphan cleanup timed out (non-fatal)');
+      resolve();
+    }, 8000);
+    proc.on('close', () => {
+      clearTimeout(timer);
+      if (out.trim()) logLine('launcher', `Orphan cleanup: ${out.trim()}`);
+      if (err.trim()) logLine('launcher', `Orphan cleanup stderr: ${err.trim()}`);
+      resolve();
+    });
+    proc.on('error', (e) => {
+      clearTimeout(timer);
+      logLine('launcher', `Orphan cleanup failed (non-fatal): ${e.message}`);
+      resolve();
+    });
+  });
 }
 
 // ---------- DATA-01: Seed Supabase credentials on first packaged run ----------
@@ -178,6 +207,23 @@ function seedDesktopEnv() {
     logLine('launcher', `Seeded credentials.env -> ${target}`);
   } catch (err) {
     logLine('launcher', `Credential seed failed (non-fatal): ${err.message}`);
+  }
+}
+
+// DATA-02: Confirm the backend will actually have Supabase credentials before we
+// start it. Desktop forces DATA_BACKEND=supabase with NO SQLite fallback, so a
+// failed/empty seed would otherwise produce a silently broken data layer where
+// every project/clip/render op errors with no explanation (audit #22).
+function desktopCredentialsPresent() {
+  if (isDev) return true;  // dev uses the project-root .env (developer-managed)
+  try {
+    const envPath = path.join(process.env.APPDATA || '', 'EditFactory', '.env');
+    if (!fs.existsSync(envPath)) return false;
+    const txt = fs.readFileSync(envPath, 'utf-8');
+    const has = (k) => new RegExp(`^\\s*${k}\\s*=\\s*\\S`, 'm').test(txt);
+    return has('SUPABASE_URL') && has('SUPABASE_KEY');
+  } catch {
+    return false;
   }
 }
 
@@ -324,7 +370,36 @@ function startFrontend() {
       }, delay);
       return;
     }
-    logLine('launcher', 'Frontend restart budget exhausted');
+    // Retries exhausted.
+    if (!servicesReady) {
+      // Still starting up: let waitForServices()'s timeout raise the single
+      // "Startup Failed" dialog instead of stacking a second one here.
+      logLine('launcher', 'Frontend restart budget exhausted during startup');
+      return;
+    }
+
+    // Mirror the backend recovery dialog (audit #21) — otherwise a dead frontend
+    // leaves the window stale/blank with no way for the user to recover.
+    if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
+    dialog.showMessageBox(mainWindow || undefined, {
+      type: 'error',
+      title: 'Interface Stopped',
+      message: `The Edit Factory interface stopped unexpectedly (code: ${code}).`,
+      detail: `Automatic restarts failed, so the window may be blank or stale.\nLog file: ${LOG_FILE}`,
+      buttons: ['Restart Interface', 'Quit Edit Factory'],
+      defaultId: 0,
+      cancelId: 0,
+    }).then(({ response }) => {
+      if (response === 0) {
+        frontendRestartCount = 0;
+        startFrontend();
+        // Best-effort: reload the window once the frontend is back up.
+        setTimeout(() => { try { if (mainWindow) mainWindow.reload(); } catch { /* gone */ } }, 3000);
+      } else {
+        isQuitting = true;
+        app.quit();
+      }
+    });
   });
 }
 
@@ -369,8 +444,10 @@ function httpPost(url) {
 // Determine startup URL based on the simple desktop test-login state.
 // (Replaces the old first-run/license gate — see /desktop/auth on the backend.)
 async function checkStartupState() {
-  const LOGIN_URL = `http://localhost:${FRONTEND_PORT}/login`;
-  const APP_URL   = `http://localhost:${FRONTEND_PORT}`;
+  // 127.0.0.1 (not localhost) to match the frontend bind + health check — avoids
+  // an IPv6 ::1 resolution miss when the Next server only listens on IPv4 (audit #20).
+  const LOGIN_URL = `http://127.0.0.1:${FRONTEND_PORT}/login`;
+  const APP_URL   = `http://127.0.0.1:${FRONTEND_PORT}`;
 
   try {
     const status = await httpGetJson(
@@ -581,9 +658,21 @@ function createWindow() {
   // Hidden menu keeps accelerators; bar never shows (Alt does not reveal it)
   mainWindow.setMenuBarVisibility(false);
 
-  // External links (target="_blank" — e.g. "Get a free Gemini key →") open in
-  // the system browser, not a bare Electron window. In-app navigation only.
+  // window.open handling:
+  //  - Same-origin URLs (our backend/frontend on localhost) are almost always
+  //    file downloads (?download=true). Trigger a NATIVE download via
+  //    downloadURL() instead of launching the system browser pointed at
+  //    localhost (which is confusing and, for some endpoints, unreachable).
+  //  - Truly external links (e.g. "Get a free Gemini key →") open in the
+  //    system browser. Never open a bare Electron window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const u = new URL(url);
+      if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
+        mainWindow.webContents.downloadURL(url);
+        return { action: 'deny' };
+      }
+    } catch { /* unparseable URL — fall through to external handling */ }
     if (url.startsWith('http://') || url.startsWith('https://')) {
       shell.openExternal(url);
     }
@@ -595,6 +684,17 @@ function createWindow() {
     if (!isQuitting) {
       event.preventDefault();
       mainWindow.hide();
+      // One-time hint so users know closing the window did NOT quit the app —
+      // the backend/frontend (and any render) keep running in the tray (audit #30).
+      if (!trayHintShown && tray) {
+        trayHintShown = true;
+        try {
+          tray.displayBalloon({
+            title: 'Edit Factory still running',
+            content: 'Minimized to the system tray. Right-click the tray icon to Quit.',
+          });
+        } catch { /* balloons unsupported on this platform */ }
+      }
     }
   });
 
@@ -607,17 +707,12 @@ function createWindow() {
 async function cleanup() {
   logLine('launcher', 'Shutting down services...');
 
-  // Kill child processes directly
-  if (backendProcess) {
-    try { backendProcess.kill(); } catch (e) { /* already dead */ }
-    backendProcess = null;
-  }
-  if (frontendProcess) {
-    try { frontendProcess.kill(); } catch (e) { /* already dead */ }
-    frontendProcess = null;
-  }
-
-  // Fallback: psutil cleanup to catch uvicorn worker processes (Pitfall 5)
+  // Kill the process TREES by port FIRST, while uvicorn still holds the port.
+  // The port sweep kills uvicorn AND its recursive children — which is the only
+  // way to catch in-flight ffmpeg render subprocesses. If we killed
+  // backendProcess first, uvicorn (the port listener) would die and the
+  // port-based sweep could no longer find the now-orphaned ffmpeg children,
+  // leaving them running after the app exits (Pitfall 5 / audit #23).
   try {
     spawnSync(
       PYTHON_EXE,
@@ -626,6 +721,16 @@ async function cleanup() {
     );
   } catch (err) {
     logLine('launcher', `Cleanup fallback failed: ${err.message}`);
+  }
+
+  // Then kill the direct child handles in case anything survived the sweep.
+  if (backendProcess) {
+    try { backendProcess.kill(); } catch (e) { /* already dead */ }
+    backendProcess = null;
+  }
+  if (frontendProcess) {
+    try { frontendProcess.kill(); } catch (e) { /* already dead */ }
+    frontendProcess = null;
   }
 
   // Brief settle time for ports to release
@@ -715,9 +820,6 @@ app.whenReady().then(async () => {
   // Whole startup wrapped so a throw is LOGGED + shown, never a silent zombie
   // process with no window (the original "opens but no window" bug).
   try {
-    // SHELL-05: Clean up orphaned processes from previous launches
-    cleanupOrphans();
-
     // Hidden app menu (no bar, accelerators only) + native dialog IPC
     setupApplicationMenu();
     registerIpcHandlers();
@@ -725,7 +827,7 @@ app.whenReady().then(async () => {
     // SHELL-03: Create tray icon
     createTray();
 
-    // Branded splash — visible immediately so the cold start never looks frozen
+    // Branded splash — first thing visible; cold start can take 10-30s
     createSplash();
 
     // SHELL-02: Create hidden window
@@ -734,6 +836,31 @@ app.whenReady().then(async () => {
     // DATA-01: Seed Supabase credentials into %APPDATA%\EditFactory\.env (first
     // packaged run only) so the backend connects to the cloud, not local SQLite.
     seedDesktopEnv();
+
+    // DATA-02: Warn loudly (not silently) if the backend will have no Supabase
+    // credentials — desktop has no SQLite fallback, so every data op would fail.
+    if (!desktopCredentialsPresent()) {
+      logLine('launcher', 'WARNING: no SUPABASE_URL/KEY in %APPDATA%\\EditFactory\\.env — data features will not work until configured');
+      dialog.showMessageBox(undefined, {
+        type: 'warning',
+        title: 'Configuration Needed',
+        message: 'Edit Factory could not find its cloud credentials.',
+        detail: `Projects, clips and rendering need a Supabase connection. Open Settings → Cloud after the app loads to configure it.\n\nLog: ${LOG_FILE}`,
+        buttons: ['Continue Anyway'],
+      }).catch(() => { /* non-blocking */ });
+    }
+
+    // SHELL-05: Kill orphaned processes from a previous crashed session.
+    // Splash is already visible, so waiting here is fine — the user sees the
+    // progress bar instead of a blank screen. Services must not start until
+    // ports are free, otherwise uvicorn can fail to bind.
+    await cleanupOrphans();
+
+    // Brief settle so killed listeners fully release their ports before we bind
+    // (audit #29). On Windows, process exit != socket released immediately;
+    // without this, uvicorn can hit EADDRINUSE and bounce through its restart
+    // backoff, stalling the splash.
+    await new Promise((r) => setTimeout(r, 400));
 
     // SHELL-01: Spawn services
     startBackend();
@@ -747,11 +874,27 @@ app.whenReady().then(async () => {
     // WIZD-01 / LICS-02 / LICS-04: Determine correct startup URL
     const startupUrl = await checkStartupState();
 
-    logLine('launcher', `Loading: ${startupUrl}`);
-    mainWindow.loadURL(startupUrl);
-    mainWindow.once('ready-to-show', () => {
-      mainWindow.show();
+    // Robust load (audit #20): set up reveal handlers BEFORE loadURL so a
+    // failed or stuck load can never leave the frameless always-on-top splash
+    // hanging over a hidden main window. reveal() is idempotent.
+    let windowRevealed = false;
+    const reveal = () => {
+      if (windowRevealed) return;
+      windowRevealed = true;
+      try { mainWindow.show(); } catch { /* window already gone */ }
       closeSplash();  // Hand off from splash to the real window
+    };
+    mainWindow.once('ready-to-show', reveal);
+    mainWindow.webContents.on('did-fail-load', (_e, code, desc, failedUrl) => {
+      logLine('launcher', `Frontend load failed (${code} ${desc}) for ${failedUrl}`);
+      reveal();  // surface the window (even if blank) instead of an eternal splash
+    });
+    setTimeout(reveal, 15000);  // last-resort safety net against a stuck splash
+
+    logLine('launcher', `Loading: ${startupUrl}`);
+    Promise.resolve(mainWindow.loadURL(startupUrl)).catch((e) => {
+      logLine('launcher', `loadURL threw: ${e.message}`);
+      reveal();
     });
     tray.setToolTip('Edit Factory');
 

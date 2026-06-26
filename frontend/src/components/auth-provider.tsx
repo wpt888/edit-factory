@@ -42,7 +42,14 @@ interface AuthProviderProps {
 // HMR/Fast Refresh remounts or when the stored refresh_token is stale.
 // Matches the gate already present in middleware.ts:15 and the backend
 // auth_disabled branch in app/api/auth.py.
-const AUTH_DISABLED = process.env.NEXT_PUBLIC_AUTH_DISABLED === "true";
+// Also bypass in desktop builds: the desktop renderer never has a Supabase SSR
+// session (auth is the local /desktop/auth gate + 1234), and a clean/CI build
+// without baked Supabase env vars would otherwise crash createClient() at render.
+// Mirrors the desktop no-op in middleware.ts, so a fresh build behaves exactly
+// like the current one instead of white-screening.
+const AUTH_DISABLED =
+  process.env.NEXT_PUBLIC_AUTH_DISABLED === "true" ||
+  process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
 
 // TODO(you): fill in the dev user contract below.
 //

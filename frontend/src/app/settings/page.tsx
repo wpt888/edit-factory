@@ -1673,7 +1673,9 @@ export default function SettingsPage() {
         </Card>
       )}
 
-      <MLBundleInstaller />
+      {/* ML bundle is downloaded+installed locally — only meaningful on desktop.
+          On the web SaaS the model bundle lives on the server (audit #28). */}
+      {process.env.NEXT_PUBLIC_DESKTOP_MODE === "true" && <MLBundleInstaller />}
 
       {appVersion && (
         <div className="text-center text-xs text-muted-foreground mt-8 pb-4">

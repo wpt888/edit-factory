@@ -6,6 +6,15 @@ const PUBLIC_ROUTES = ["/login", "/signup", "/auth/callback", "/setup"]
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
+  // Desktop build: auth is the local backend gate (/desktop/auth + 1234 login),
+  // NOT a Supabase SSR session. Skip the Supabase auth gate entirely so a
+  // packaged/clean/CI build never redirect-loops to /login or returns 503 when
+  // the Supabase env vars aren't baked in. Inlined at build time from
+  // .env.production (NEXT_PUBLIC_DESKTOP_MODE=true) → deterministic.
+  if (process.env.NEXT_PUBLIC_DESKTOP_MODE === "true") {
+    return NextResponse.next()
+  }
+
   // Skip public routes — no auth required
   if (PUBLIC_ROUTES.some(route => pathname.startsWith(route))) {
     return NextResponse.next()

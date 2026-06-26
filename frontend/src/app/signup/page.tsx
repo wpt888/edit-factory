@@ -29,6 +29,13 @@ export default function SignupPage() {
   const isMountedRef = useRef(true);
   useEffect(() => { return () => { isMountedRef.current = false; }; }, []);
 
+  // Desktop builds use the local login gate, not Supabase cloud accounts. If this
+  // page is reached by direct URL on desktop, bounce to /login (audit #32) so the
+  // user can't create a phantom cloud account the desktop app never uses.
+  useEffect(() => {
+    if (process.env.NEXT_PUBLIC_DESKTOP_MODE === "true") router.replace("/login");
+  }, [router]);
+
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);

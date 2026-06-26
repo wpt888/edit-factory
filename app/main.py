@@ -434,22 +434,24 @@ app.include_router(wiki_router, prefix="/api/v1", tags=["Wiki"])
 from app.api.catalog_routes import router as catalog_router
 app.include_router(catalog_router, prefix="/api/v1", tags=["Catalog"])
 
-# Web-SaaS-only routes — not mounted in desktop mode (MVP desktop trim, F1).
-# Code is kept intact; the desktop app simply doesn't expose publishing/scheduling,
-# feed sync, or fal.ai image generation. Imports stay inside the guard so the
-# desktop app doesn't pay their import cost (or import errors) at startup.
-if not settings.desktop_mode:
-    from app.api.postiz_routes import router as postiz_router
-    from app.api.buffer_routes import router as buffer_router
-    from app.api.schedule_routes import router as schedule_router
-    from app.api.feed_routes import router as feed_router
-    from app.api.image_generate_routes import router as image_generate_router
+# Publishing / scheduling / feed sync / AI image generation.
+# Formerly web-only (desktop MVP trim F1); now mounted in BOTH web and desktop modes
+# for full desktop↔web parity (the desktop app must do everything web does, incl.
+# social publishing). Their imports were verified clean — only config/auth/repositories
+# + stdlib/httpx, no Redis/Celery at import time — so unconditional import is safe at
+# startup. Runtime config (POSTIZ_API_URL/KEY, Buffer, FAL_API_KEY) still gates whether
+# a given integration actually works, via the per-profile vault + Settings UI.
+from app.api.postiz_routes import router as postiz_router
+from app.api.buffer_routes import router as buffer_router
+from app.api.schedule_routes import router as schedule_router
+from app.api.feed_routes import router as feed_router
+from app.api.image_generate_routes import router as image_generate_router
 
-    app.include_router(postiz_router, prefix="/api/v1", tags=["Postiz Publishing"])
-    app.include_router(buffer_router, prefix="/api/v1", tags=["Buffer Publishing"])
-    app.include_router(schedule_router, prefix="/api/v1", tags=["Smart Schedule"])
-    app.include_router(feed_router, prefix="/api/v1", tags=["feeds"])
-    app.include_router(image_generate_router, prefix="/api/v1", tags=["AI Image Generation"])
+app.include_router(postiz_router, prefix="/api/v1", tags=["Postiz Publishing"])
+app.include_router(buffer_router, prefix="/api/v1", tags=["Buffer Publishing"])
+app.include_router(schedule_router, prefix="/api/v1", tags=["Smart Schedule"])
+app.include_router(feed_router, prefix="/api/v1", tags=["feeds"])
+app.include_router(image_generate_router, prefix="/api/v1", tags=["AI Image Generation"])
 
 # Desktop-only routes (license, version, settings) — gated behind DESKTOP_MODE
 if settings.desktop_mode:

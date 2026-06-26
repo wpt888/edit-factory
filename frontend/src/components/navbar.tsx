@@ -55,17 +55,11 @@ import {
 
 const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
 
-// Web-SaaS-only destinations hidden in the desktop build (MVP desktop trim, F1).
-// Their backend routers are not mounted in desktop mode, so the pages would
-// only show errors. Code stays — the web build still renders everything.
-const WEB_ONLY_HREFS = new Set([
-  "/create-image",
-  "/schedule",
-  "/products",
-  "/product-video",
-  "/batch-generate",
-  "/calendar",
-]);
+// Desktop now mounts ALL backend routers (full web↔desktop parity — see app/main.py),
+// so every destination works in the desktop build too. Nothing is hidden anymore.
+// Kept as an (empty) set + filter below so re-trimming a single page later stays a
+// one-line change instead of a refactor.
+const WEB_ONLY_HREFS = new Set<string>([]);
 
 const allNavGroups = [
   {
@@ -104,7 +98,8 @@ const navGroups = DESKTOP_MODE
       .filter((group) => group.items.length > 0)
   : allNavGroups;
 
-const SHOW_CALENDAR = !DESKTOP_MODE;
+// Calendar (Postiz publishing view) now works on desktop too — backend mounted.
+const SHOW_CALENDAR = true;
 
 const settingsGroup = {
   label: "Settings",
