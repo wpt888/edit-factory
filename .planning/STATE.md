@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: "Completed 91-01-PLAN.md (3 tasks: lemon-squeezy.ts utility + rewire pricing.tsx + 2 Playwright specs incl. MANDATORY 217KB screenshot). All 9 verification checks pass; tsc clean; lint 0 errors / 5 pre-existing Phase 89 warnings; default test suite 5 pass + 3 correctly-skipped. 4 deviations all auto-fixed (3 Rule-1 JSDoc/comment tweaks; 1 Rule-3 git-add-f workaround for nested-gitignore Git semantics). Plan 91-02 unblocked: variantIdToTier + LemonSqueezyTier + D-23 regex contracts ready for webhook handler import."
-last_updated: "2026-05-23T16:52:42.230Z"
+stopped_at: "Completed 91-02-PLAN.md (Tasks 1+3 executed, commits f1ce524 + d90b55d on feat/mvp-remediation-w0-w2; Task 2 checkpoint resolved as 'skip — Supabase project not provisioned yet' per plan's sanctioned third resume-signal). license-key.spec.ts 3/3 pass; webhook.spec.ts 8 skipped (D-17) + Test 9 fail-closed PASSED live (500 webhook_secret_not_configured); tsc clean; lint 0 errors / 5 pre-existing warnings. MARK-04 code-complete, empirical closure pending M1/M2/M3/M4 operator provisioning."
+last_updated: "2026-07-02T00:00:00.000Z"
 progress:
   total_phases: 9
   completed_phases: 8
@@ -24,8 +24,8 @@ See: .planning/PROJECT.md (updated 2026-05-22 with v13 active)
 
 ## Current Position
 
-Phase: 91 (lemon-squeezy-checkout-webhook) — EXECUTING
-Plan: 2 of 2
+Phase: 91 (lemon-squeezy-checkout-webhook) — CODE-COMPLETE 2026-07-02 (Plan 91-01 + 91-02 both executed; M4 schema-apply deferred to operator)
+Plan: 2 of 2 (done)
 Milestone: **v13 Desktop Production-Ready & Monetization** — OPENED 2026-05-22, **11/19 phases complete = 58%** (Phase 80 verified PASSED 2026-05-23, Phase 81–83 SHIPPED 2026-05-23 — verification deferred, Phase 84 + 85 SHIPPED + VERIFIED 2026-05-23, Phase 86 SHIPPED 2026-05-23 — verification deferred, Phase 87 SHIPPED + VERIFIED 2026-05-23, Phase 88 SHIPPED + VERIFIED 2026-05-23, Phase 89 SHIPPED + VERIFIED 2026-05-23, Phase 90 SHIPPED + VERIFIED + REVIEWED 2026-05-23 — MARK-02 closed). **Phase 91 PREP DONE this iteration** — ROADMAP detail section mirrored + 91-CONTEXT.md authored with 18 locked decisions D-01..D-18 + 4 manual prerequisites M1-M4 + 8 threats T-91-01..T-91-08; commit 0474085 (2 files changed, 379 insertions).
 Next action: `/gsd-plan-phase 91` (autonomous). Per autonomous loop Step 2 lifecycle: Phase 91 still has NO `*-PLAN.md` files (only 91-CONTEXT.md exists, which is the discuss-substitute artifact, not a plan) → next iteration runs plan-phase. The planner will consume 91-CONTEXT.md (379 lines, 18 decisions) and produce 91-01-PLAN.md (checkout URL wiring) FIRST per D-01 sequential split; iteration after that runs planner for 91-02 (webhook + Supabase + license-key + email). Phase 91 closes MARK-03 (Lemon Squeezy checkout button on pricing tiers) + MARK-04 (webhook handler stores entitlement in marketing Supabase).
 Iteration 79 + 89 + 91 PRE-PLAN-PHASE GUARDS ALL CLEARED THIS ITERATION:
@@ -138,6 +138,7 @@ Earlier project decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 91]: D-20 two-spec-file mechanism: per-test process.env mutations cannot reach the spawned next dev subprocess (playwright.config.ts:33-40). Therefore checkout-with-env.spec.ts + checkout-without-env.spec.ts are invoked via separate npm scripts with env vars set BEFORE invocation (inline VAR=x form on bash or $env:VAR='x' on PowerShell).
 - [Phase 91]: D-23 license-key regex locked here for Plan 91-02 cross-plan contract: /^EF13(-[0-9A-F]{4}){4}$/. Plan 91-02 Task 1 will assert against this regex.
 - [Phase 91]: Screenshot file requires 'git add -f' because root .gitignore line 114 'screenshots/' rule overrides marketing/.gitignore exception (Git's nested-gitignore rule cannot re-include files under an excluded directory). Phase 90 closure pattern carried forward; D-15 forbids modifying root .gitignore. Plan 91-02's phase-91-webhook-success.json will need the same treatment.
+- [Phase 91]: Plan 91-02 SHIPPED (code) 2026-07-02 — commits f1ce524 (Task 1: resend@^6.16.0 sole new dep + lib/supabase-service.ts + lib/license-key.ts + lib/email.ts + supabase/migrations/0001_create_orders_table.sql + tests/license-key.spec.ts 3/3 pass) + d90b55d (Task 3: app/api/lemon-squeezy/webhook/route.ts with D-06 timingSafeEqual + D-07 fail-closed + D-08 idempotency + D-10 retry + T-91-06 Resend-catch; tests/webhook.spec.ts 9 scenarios). Task 2 (M4 schema push) resolved via the plan's sanctioned "skip — Supabase project not provisioned yet" outcome: marketing/.env.local absent, M1/M2/M3 all unprovisioned, 8 DB-touching tests skip per D-17, Test 9 fail-closed passes live against the real route (500). All grep acceptance gates pass. Playwright ran on PLAYWRIGHT_PORT=3099 (3001 occupied by main EF frontend dev server). MARK-04 = code-complete; empirical closure + proof artifact (needs git add -f) blocked on operator M1→M4. Work committed on feat/mvp-remediation-w0-w2 (branch contains main; June remediation work cohabits — marketing/ subtree untouched by it). See 91-02-SUMMARY.md for the operator runbook.
 
 ### Pending Todos
 
@@ -161,7 +162,9 @@ New for v13:
 
 ## Session Continuity
 
-Last session: 2026-05-23T16:52:42.223Z
+Last session: 2026-07-02 — Plan 91-02 executed (Phase 91 code-complete). Next action: verify Phase 91 (batchable with deferred 81/82/83/86 verifications) then plan Phase 92 (account dashboard — Wave 4 sibling, depends on 91). Operator runbook for M1-M4 in 91-02-SUMMARY.md; until provisioned, MARK-04 stays code-complete-only.
+
+Earlier session: 2026-05-23T16:52:42.223Z
 Stopped at: Completed 91-01-PLAN.md (3 tasks: lemon-squeezy.ts utility + rewire pricing.tsx + 2 Playwright specs incl. MANDATORY 217KB screenshot). All 9 verification checks pass; tsc clean; lint 0 errors / 5 pre-existing Phase 89 warnings; default test suite 5 pass + 3 correctly-skipped. 4 deviations all auto-fixed (3 Rule-1 JSDoc/comment tweaks; 1 Rule-3 git-add-f workaround for nested-gitignore Git semantics). Plan 91-02 unblocked: variantIdToTier + LemonSqueezyTier + D-23 regex contracts ready for webhook handler import.
 Resume file: None
 Next action: `/gsd-plan-phase 91` (autonomous). Per autonomous loop Step 2 lifecycle: Phase 91 has 91-CONTEXT.md but NO `*-PLAN.md` files yet → next iteration runs plan-phase. The planner will consume 91-CONTEXT.md (substitute for forbidden /gsd-discuss-phase) and produce 91-01-PLAN.md FIRST per D-01 sequential split (checkout URL wiring, smaller scope, can ship + verify standalone). Iteration after that runs planner for 91-02 (webhook handler + Supabase migration + license-key + Resend email + integration tests). Two iterations of planner + one iteration of execute per plan = ~6 iterations to ship Phase 91.
