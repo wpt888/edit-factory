@@ -9,29 +9,29 @@ Requirements for Desktop Production-Ready & Monetization. Each maps to roadmap p
 
 ### Functional Desktop (Track A) — closes the v12 functional gap
 
-- [ ] **FUNC-01**: Every backend endpoint that currently calls `repo.get_client()` returns a typed repository result under `DATA_BACKEND=sqlite` — no route returns `503 Database not available` during a complete end-to-end smoke test.
-- [ ] **FUNC-02**: The full pipeline (upload source video → segment extraction → 3-step script→TTS→render flow → library save → tag/trash) completes successfully on a freshly installed desktop with no Supabase configured.
-- [ ] **FUNC-03**: Repository ABC gains the methods required by patterns currently handled via `.table().select()…` chains in `library_routes.py`, `pipeline_routes.py`, `segments_routes.py`, `assembly_service.py`, `core/cleanup.py`.
-- [ ] **FUNC-04**: `app/config.py` resolves a platform-appropriate `base_dir` on Windows, macOS, and Linux (`%APPDATA%\EditFactory\`, `~/Library/Application Support/EditFactory/`, `~/.config/EditFactory/`).
-- [ ] **FUNC-05**: FFmpeg resolver finds the binary on all three OSes — bundled binary in `extraResources` per-target, fallback to system PATH, fallback to `FFMPEG_BINARY` env var.
-- [ ] **FUNC-06**: A `scripts/desktop-smoke-test.py` (or Playwright spec) exercises every previously-broken route in SQLite mode and is wired into CI as a release gate.
+- [x] **FUNC-01**: Every backend endpoint that currently calls `repo.get_client()` returns a typed repository result under `DATA_BACKEND=sqlite` — no route returns `503 Database not available` during a complete end-to-end smoke test. *(Phases 80–83 + 85; `grep get_client app/` = 0 re-confirmed 2026-07-02; 67 SQLite route tests pass)*
+- [x] **FUNC-02**: The full pipeline (upload source video → segment extraction → 3-step script→TTS→render flow → library save → tag/trash) completes successfully on a freshly installed desktop with no Supabase configured. *(Phase 85 smoke harness SHIPPED+VERIFIED 2026-05-23)*
+- [x] **FUNC-03**: Repository ABC gains the methods required by patterns currently handled via `.table().select()…` chains in `library_routes.py`, `pipeline_routes.py`, `segments_routes.py`, `assembly_service.py`, `core/cleanup.py`. *(Phases 80–83; ROUTES-AUDIT.md artifacts)*
+- [x] **FUNC-04**: `app/config.py` resolves a platform-appropriate `base_dir` on Windows, macOS, and Linux (`%APPDATA%\EditFactory\`, `~/Library/Application Support/EditFactory/`, `~/.config/EditFactory/`). *(Phase 84 SHIPPED+VERIFIED 2026-05-23)*
+- [x] **FUNC-05**: FFmpeg resolver finds the binary on all three OSes — bundled binary in `extraResources` per-target, fallback to system PATH, fallback to `FFMPEG_BINARY` env var. *(Phase 84 SHIPPED+VERIFIED 2026-05-23)*
+- [x] **FUNC-06**: A `scripts/desktop-smoke-test.py` (or Playwright spec) exercises every previously-broken route in SQLite mode and is wired into CI as a release gate. *(Phase 85 SHIPPED+VERIFIED; branch-protection required-check remains a manual follow-up)*
 
 ### Optional ML Bundle (Track B)
 
-- [ ] **ML-01**: The base installer remains ≤ 550 MB by excluding PyTorch / Whisper / Coqui XTTS from `extraResources`.
+- [x] **ML-01**: The base installer remains ≤ 550 MB by excluding PyTorch / Whisper / Coqui XTTS from `extraResources`. *(Phase 88 SHIPPED+VERIFIED 2026-05-23; installer-size.yml CI gate; branch-protection required-check remains a manual follow-up)*
 - [ ] **ML-02**: A new endpoint `POST /desktop/ml/download` fetches the platform-specific ML bundle (~1.5 GB) from a GitHub Release asset, streams progress via SSE, verifies SHA256, unpacks into `<base_dir>/ml/`, and writes a `.installed` marker.
 - [ ] **ML-03**: The desktop UI exposes "Install Advanced Voice Features" with a progress bar and resume-on-failure behavior.
-- [ ] **ML-04**: Routes that require ML return `412 Precondition Failed` with `{ "error": "ml_not_installed", "feature": "<name>" }` when the marker is absent — frontend shows an install CTA instead of a generic error.
-- [ ] **ML-05**: Routes that require Pro tier return `402 Payment Required` (or `412` with `requires_tier: "pro"`) when the user's subscription claim is below Pro.
+- [x] **ML-04**: Routes that require ML return `412 Precondition Failed` with `{ "error": "ml_not_installed", "feature": "<name>" }` when the marker is absent — frontend shows an install CTA instead of a generic error. *(Phase 87 SHIPPED+VERIFIED 6/6 2026-05-23)*
+- [x] **ML-05**: Routes that require Pro tier return `402 Payment Required` (or `412` with `requires_tier: "pro"`) when the user's subscription claim is below Pro. *(Phase 87 SHIPPED+VERIFIED 6/6 2026-05-23)*
 
 ### Marketing & Billing Web App (Track C)
 
-- [ ] **MARK-01**: A new `marketing/` subfolder contains a Next.js 15 App Router app, independent of the existing `frontend/`. Local dev port 3001 (does not collide with the existing app on 3000).
-- [ ] **MARK-02**: Landing page with hero, feature grid, pricing table (Starter $79 one-time, Pro $149 one-time, Cloud Sync $39/yr), screenshots, FAQ. Lighthouse Performance ≥ 90, Accessibility ≥ 95.
-- [ ] **MARK-03**: Lemon Squeezy embedded checkout for each of the three tiers — purchase issues a license key emailed to the buyer.
-- [ ] **MARK-04**: Lemon Squeezy webhook handler at `marketing/app/api/lemon-squeezy/webhook/route.ts` verifies the signing secret, persists the order, generates a license key, and stores subscription_tier in Supabase.
+- [x] **MARK-01**: A new `marketing/` subfolder contains a Next.js 15 App Router app, independent of the existing `frontend/`. Local dev port 3001 (does not collide with the existing app on 3000). *(Phase 89 SHIPPED+VERIFIED 10/10 2026-05-23; Next.js 16 per D-01 version-bump rationale)*
+- [x] **MARK-02**: Landing page with hero, feature grid, pricing table (Starter $79 one-time, Pro $149 one-time, Cloud Sync $39/yr), screenshots, FAQ. Lighthouse Performance ≥ 90, Accessibility ≥ 95. *(Phase 90 SHIPPED+VERIFIED 12/12; Lighthouse 97/100)*
+- [ ] **MARK-03**: Lemon Squeezy embedded checkout for each of the three tiers — purchase issues a license key emailed to the buyer. *(CODE-COMPLETE 2026-07-02 — Plans 91-01+91-02 shipped; empirical closure blocked on operator M2 LS store + M3 Resend provisioning)*
+- [ ] **MARK-04**: Lemon Squeezy webhook handler at `marketing/app/api/lemon-squeezy/webhook/route.ts` verifies the signing secret, persists the order, generates a license key, and stores subscription_tier in Supabase. *(CODE-COMPLETE 2026-07-02 — signature verification + fail-closed + idempotency verified LIVE (6/9 scenarios); DB persistence blocked on operator M1+M4)*
 - [ ] **MARK-05**: `/account` dashboard shows subscription status, plan, renewal date, billing portal handoff. `/account/downloads` shows latest Windows + macOS installer links pulled from GitHub Releases. `/account/license` shows the active key, instance count, and a deactivate-instance action.
-- [ ] **MARK-06**: Auth is Supabase, in a SEPARATE Supabase project from the existing app's Supabase. Zero shared users between marketing.editfactory.app and the existing web app.
+- [x] **MARK-06**: Auth is Supabase, in a SEPARATE Supabase project from the existing app's Supabase. Zero shared users between marketing.editfactory.app and the existing web app. *(Phase 89 SHIPPED+VERIFIED — dual env-var contract enforced by grep gates; actual project provisioning is operator M1)*
 
 ### OAuth Device Flow (Track D)
 
@@ -103,23 +103,23 @@ Which phases cover which requirements. Filled in during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FUNC-01 | 80, 81, 82, 83, 85 | Pending |
-| FUNC-02 | 85 (smoke test gate) | Pending |
-| FUNC-03 | 80, 81, 82, 83 (ABC method additions) | Pending |
-| FUNC-04 | 84 | Pending |
-| FUNC-05 | 84 | Pending |
-| FUNC-06 | 85 | Pending |
-| ML-01 | 88 | Pending |
-| ML-02 | 86 | Pending |
-| ML-03 | 86 | Pending |
-| ML-04 | 87 | Pending |
-| ML-05 | 87 | Pending |
-| MARK-01 | 89 | Pending |
-| MARK-02 | 90 | Pending |
-| MARK-03 | 91 | Pending |
-| MARK-04 | 91 | Pending |
+| FUNC-01 | 80, 81, 82, 83, 85 | Satisfied 2026-05-23 |
+| FUNC-02 | 85 (smoke test gate) | Satisfied 2026-05-23 |
+| FUNC-03 | 80, 81, 82, 83 (ABC method additions) | Satisfied 2026-05-23 |
+| FUNC-04 | 84 | Satisfied 2026-05-23 |
+| FUNC-05 | 84 | Satisfied 2026-05-23 |
+| FUNC-06 | 85 | Satisfied 2026-05-23 |
+| ML-01 | 88 | Satisfied 2026-05-23 |
+| ML-02 | 86 | Shipped 2026-05-23 (verification deferred) |
+| ML-03 | 86 | Shipped 2026-05-23 (verification deferred) |
+| ML-04 | 87 | Satisfied 2026-05-23 |
+| ML-05 | 87 | Satisfied 2026-05-23 |
+| MARK-01 | 89 | Satisfied 2026-05-23 |
+| MARK-02 | 90 | Satisfied 2026-05-23 |
+| MARK-03 | 91 | Code-complete 2026-07-02 (M2+M3 operator gate) |
+| MARK-04 | 91 | Code-complete 2026-07-02 (M1+M4 operator gate) |
 | MARK-05 | 92 | Pending |
-| MARK-06 | 89 | Pending |
+| MARK-06 | 89 | Satisfied 2026-05-23 |
 | OAUTH-01 | 93 | Pending |
 | OAUTH-02 | 93 | Pending |
 | OAUTH-03 | 94 | Pending |
