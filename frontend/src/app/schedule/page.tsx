@@ -579,9 +579,9 @@ export default function SchedulePage() {
                 </div>
               )}
               {selectedMetaCount >= 2 && !preview && (
-                <div className="flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-2.5 text-sm">
-                  <ShieldCheck className="size-4 text-blue-600 dark:text-blue-400 shrink-0" />
-                  <span className="text-blue-800 dark:text-blue-300">
+                <div className="flex items-center gap-2 rounded-md border border-primary/25 bg-primary/10 p-2.5 text-sm">
+                  <ShieldCheck className="size-4 text-primary shrink-0" />
+                  <span className="text-foreground">
                     {selectedMetaCount} Meta platforms selected — preview will verify correct routing to Meta video versions
                   </span>
                 </div>

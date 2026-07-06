@@ -893,7 +893,7 @@ export default function SettingsPage() {
                         </span>
                       )}
                       {account.is_env_default && (
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border border-primary/25 bg-primary/10 text-foreground">
                           .env
                         </span>
                       )}
@@ -1095,7 +1095,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-3">
-            <span className="inline-flex items-center rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-sm font-semibold tracking-wide text-foreground">
+            <span className="inline-flex items-center rounded-md border border-primary/25 bg-primary/10 px-2.5 py-1 text-sm font-semibold tracking-wide text-foreground">
               Postiz
             </span>
             <span>Publishing</span>
@@ -1313,7 +1313,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-3">
-            <span className="inline-flex items-center rounded-md border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-sm font-semibold tracking-wide text-foreground">
+            <span className="inline-flex items-center rounded-md border border-primary/25 bg-primary/10 px-2.5 py-1 text-sm font-semibold tracking-wide text-foreground">
               Buffer
             </span>
             <span>Publishing</span>
@@ -1636,7 +1636,7 @@ export default function SettingsPage() {
               Crash Reporting
             </CardTitle>
             <CardDescription>
-              Help improve Edit Factory by automatically sending crash reports
+              Help improve Blipost by automatically sending crash reports
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1679,7 +1679,7 @@ export default function SettingsPage() {
 
       {appVersion && (
         <div className="text-center text-xs text-muted-foreground mt-8 pb-4">
-          Edit Factory v{appVersion}
+          Blipost v{appVersion}
         </div>
       )}
 

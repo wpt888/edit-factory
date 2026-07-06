@@ -15,7 +15,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Loader2, Film, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 
 export default function ResetPasswordPage() {
   const router = useRouter();
@@ -75,16 +75,16 @@ export default function ResetPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-muted/30 p-4">
-      <Card className="w-full max-w-md">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-ink p-4 text-paper">
+      <div className="pointer-events-none absolute inset-0 bg-grid-ink" />
+      <div className="pointer-events-none absolute inset-0 bg-noise" />
+      <div className="pointer-events-none absolute -bottom-32 -left-24 h-96 w-96 rounded-full bg-lime/15 blur-[110px]" />
+      <Card className="relative w-full max-w-md">
         <CardHeader className="space-y-1 text-center">
           <div className="flex justify-center mb-4">
-            <div className="flex items-center gap-2">
-              <Film className="h-8 w-8 text-primary" />
-              <span className="text-2xl font-bold">Edit Factory</span>
-            </div>
+            <span className="font-heading text-2xl font-bold tracking-tight">bli<span className="text-lime">post</span></span>
           </div>
-          <CardTitle className="text-2xl">Set New Password</CardTitle>
+          <CardTitle className="font-heading text-2xl font-bold tracking-tight">Set New Password</CardTitle>
           <CardDescription>
             Enter your new password below
           </CardDescription>
@@ -92,13 +92,13 @@ export default function ResetPasswordPage() {
         <form onSubmit={handleResetPassword}>
           <CardContent className="space-y-4">
             {error && (
-              <Alert variant="destructive">
+              <Alert variant="destructive" className="border-destructive/30 bg-destructive/10">
                 <AlertCircle className="h-4 w-4" />
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             )}
             {success ? (
-              <Alert>
+              <Alert className="border-primary/30 bg-primary/10">
                 <CheckCircle2 className="h-4 w-4" />
                 <AlertDescription>
                   Password updated successfully. Redirecting to login...

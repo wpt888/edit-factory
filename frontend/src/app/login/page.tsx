@@ -17,7 +17,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Loader2, Film, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 
 // Desktop build uses a simple local username/password gate instead of Supabase.
 const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
@@ -65,9 +65,9 @@ function LoginContent() {
       } catch (err) {
         if (!isMountedRef.current) return;
         if (err instanceof ApiError && err.status === 401) {
-          setError("User sau parolă greșite");
+          setError("Incorrect username or password");
         } else {
-          setError("Eroare de conectare. Încearcă din nou.");
+          setError("Connection error. Please try again.");
         }
       } finally {
         if (isMountedRef.current) setLoading(false);
@@ -132,16 +132,16 @@ function LoginContent() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-muted/30 p-4">
-      <Card className="w-full max-w-md">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-ink p-4 text-paper">
+      <div className="pointer-events-none absolute inset-0 bg-grid-ink" />
+      <div className="pointer-events-none absolute inset-0 bg-noise" />
+      <div className="pointer-events-none absolute -bottom-32 -left-24 h-96 w-96 rounded-full bg-lime/15 blur-[110px]" />
+      <Card className="relative w-full max-w-md">
         <CardHeader className="space-y-1 text-center">
           <div className="flex justify-center mb-4">
-            <div className="flex items-center gap-2">
-              <Film className="h-8 w-8 text-primary" />
-              <span className="text-2xl font-bold">Edit Factory</span>
-            </div>
+            <span className="font-heading text-2xl font-bold tracking-tight">bli<span className="text-lime">post</span></span>
           </div>
-          <CardTitle className="text-2xl">
+          <CardTitle className="font-heading text-2xl font-bold tracking-tight">
             {forgotMode ? "Reset Password" : "Welcome back!"}
           </CardTitle>
           <CardDescription>
@@ -154,13 +154,13 @@ function LoginContent() {
           <form onSubmit={handleForgotPassword}>
             <CardContent className="space-y-4">
               {error && (
-                <Alert variant="destructive">
+                <Alert variant="destructive" className="border-destructive/30 bg-destructive/10">
                   <AlertCircle className="h-4 w-4" />
                   <AlertDescription>{error}</AlertDescription>
                 </Alert>
               )}
               {resetSent ? (
-                <Alert>
+                <Alert className="border-primary/30 bg-primary/10">
                   <CheckCircle2 className="h-4 w-4" />
                   <AlertDescription>
                     Check your email for a password reset link
@@ -198,7 +198,7 @@ function LoginContent() {
               <button
                 type="button"
                 onClick={() => { setForgotMode(false); setResetSent(false); setError(null); }}
-                className="text-sm text-primary hover:underline"
+                className="text-sm font-medium text-foreground underline underline-offset-4"
               >
                 Back to sign in
               </button>
@@ -208,7 +208,7 @@ function LoginContent() {
           <form onSubmit={handleLogin}>
             <CardContent className="space-y-4">
               {error && (
-                <Alert variant="destructive">
+                <Alert variant="destructive" className="border-destructive/30 bg-destructive/10">
                   <AlertCircle className="h-4 w-4" />
                   <AlertDescription>{error}</AlertDescription>
                 </Alert>
@@ -233,7 +233,7 @@ function LoginContent() {
                     <button
                       type="button"
                       onClick={() => { setForgotMode(true); setError(null); }}
-                      className="text-xs text-primary hover:underline"
+                      className="text-xs font-medium text-foreground underline underline-offset-4"
                     >
                       Forgot password?
                     </button>
@@ -252,7 +252,7 @@ function LoginContent() {
               </div>
               {DESKTOP_MODE && (
                 <p className="text-xs text-muted-foreground">
-                  Cont local implicit: utilizator <span className="font-medium">1234</span>, parolă <span className="font-medium">1234</span>.
+                  Default local account: username <span className="font-medium">1234</span>, password <span className="font-medium">1234</span>.
                 </p>
               )}
             </CardContent>
@@ -270,7 +270,7 @@ function LoginContent() {
               {!DESKTOP_MODE && (
                 <p className="text-sm text-muted-foreground text-center">
                   Don&apos;t have an account?{" "}
-                  <Link href="/signup" className="text-primary hover:underline">
+                  <Link href="/signup" className="font-medium text-foreground underline underline-offset-4">
                     Sign up
                   </Link>
                 </p>

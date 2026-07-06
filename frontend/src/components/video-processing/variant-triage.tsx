@@ -139,7 +139,7 @@ export function VariantTriage({
                     className="w-full h-full object-cover"
                   />
                 ) : (
-                  <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-700 via-gray-800 to-gray-900">
+                  <div className="w-full h-full flex items-center justify-center bg-muted">
                     <Play className="h-12 w-12 text-white/50" />
                   </div>
                 )}

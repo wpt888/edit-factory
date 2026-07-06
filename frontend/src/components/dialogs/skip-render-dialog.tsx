@@ -72,17 +72,17 @@ export function SkipRenderDialog({
   const reasonLabel = (reason: string) => {
     switch (reason) {
       case "fingerprint_match":
-        return "Parametri identici";
+        return "Identical parameters";
       case "no_previous_render":
-        return "Fara render anterior";
+        return "No previous render";
       case "file_missing":
-        return "Fisier sters";
+        return "File deleted";
       case "fingerprint_mismatch":
-        return "Parametri modificati";
+        return "Parameters changed";
       case "render_exists_unverified":
-        return "Render existent (neverificat)";
+        return "Existing render (unverified)";
       case "still_processing":
-        return "In curs de randare";
+        return "Rendering in progress";
       default:
         return reason;
     }
@@ -94,12 +94,12 @@ export function SkipRenderDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <SkipForward className="h-5 w-5" />
-            Videoclipuri existente detectate
+            Existing videos detected
           </DialogTitle>
           <DialogDescription>
-            {skippable.length} din {checkResults.length} variante au deja un
-            render cu aceiasi parametri. Poti continua cu videoclipurile
-            existente sau randa totul din nou.
+            {skippable.length} of {checkResults.length} variants already have a
+            render with the same parameters. You can continue with the existing
+            videos or render everything again.
           </DialogDescription>
         </DialogHeader>
 
@@ -119,19 +119,19 @@ export function SkipRenderDialog({
                   <RefreshCw className="h-4 w-4 text-muted-foreground" />
                 )}
                 <span className="font-medium">
-                  Varianta {result.variant_index + 1}
+                  Variant {result.variant_index + 1}
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 {result.can_skip && result.reason === "fingerprint_match" ? (
                   <Badge variant="default" className="bg-green-600 hover:bg-green-700">
                     <CheckCircle className="h-3 w-3 mr-1" />
-                    Identic
+                    Identical
                   </Badge>
                 ) : result.can_skip && result.reason === "render_exists_unverified" ? (
                   <Badge variant="default" className="bg-yellow-600 hover:bg-yellow-700">
                     <CheckCircle className="h-3 w-3 mr-1" />
-                    Existent
+                    Existing
                   </Badge>
                 ) : (
                   <Badge variant="secondary">
@@ -145,15 +145,15 @@ export function SkipRenderDialog({
 
         <DialogFooter className="flex-col sm:flex-row gap-2">
           <Button variant="outline" onClick={onClose}>
-            Anuleaza
+            Cancel
           </Button>
           <Button variant="secondary" onClick={handleRenderAll}>
             <RefreshCw className="h-4 w-4 mr-2" />
-            Randeaza toate din nou
+            Render all again
           </Button>
           <Button onClick={handleConfirm}>
             <SkipForward className="h-4 w-4 mr-2" />
-            Continua cu existentele ({skipSet.size} skip)
+            Continue with existing ({skipSet.size} skipped)
           </Button>
         </DialogFooter>
       </DialogContent>

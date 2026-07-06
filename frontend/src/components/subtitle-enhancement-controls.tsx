@@ -47,7 +47,7 @@ export function SubtitleEnhancementControls({
             htmlFor="enable-karaoke"
             className="text-sm font-medium cursor-pointer"
           >
-            Karaoke (evidențiere pe cuvinte)
+            Karaoke (word-level highlight)
           </Label>
         </div>
 
@@ -55,7 +55,7 @@ export function SubtitleEnhancementControls({
           <div className="ml-6 space-y-2">
             <div className="flex items-center gap-2">
               <Label htmlFor="karaoke-highlight" className="text-xs text-muted-foreground">
-                Culoare cuvânt activ
+                Active word color
               </Label>
               <input
                 id="karaoke-highlight"
@@ -67,7 +67,7 @@ export function SubtitleEnhancementControls({
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              Cuvintele se colorează în sincron cu vocea (stil Submagic/CapCut). Folosește timing-ul exact din TTS.
+              Words color in sync with the voice (Submagic/CapCut style). Uses the exact timing from TTS.
             </p>
           </div>
         )}

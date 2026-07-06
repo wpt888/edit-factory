@@ -2,14 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';" />
-  <title>Edit Factory</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src file:;" />
+  <title>blipost</title>
   <style>
+    /* blipost brand — warm near-black ink + electric lime */
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body {
       width: 100%; height: 100%;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      color: #f5f5f7;
+      color: oklch(0.965 0.008 107);
       overflow: hidden;
       user-select: none;
       cursor: default;
@@ -18,21 +19,12 @@
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
       gap: 22px;
-      background: radial-gradient(120% 120% at 50% 0%, #1c1830 0%, #0b0b0f 60%, #060608 100%);
+      background: radial-gradient(120% 120% at 50% 0%, oklch(0.19 0.007 110) 0%, oklch(0.145 0.005 110) 60%, oklch(0.12 0.005 110) 100%);
     }
-    .mark {
-      font-size: 30px; font-weight: 700; letter-spacing: -0.5px;
-      display: flex; align-items: center; gap: 11px;
-    }
-    .dot {
-      width: 13px; height: 13px; border-radius: 4px;
-      background: linear-gradient(135deg, #8b5cf6, #ec4899);
-      box-shadow: 0 0 18px rgba(168, 85, 247, 0.7);
-      animation: pulse 1.4s ease-in-out infinite;
-    }
-    .mark .accent {
-      background: linear-gradient(135deg, #a78bfa, #f472b6);
-      -webkit-background-clip: text; background-clip: text; color: transparent;
+    .logo {
+      height: 34px; width: auto;
+      animation: pulse 1.6s ease-in-out infinite;
+      filter: drop-shadow(0 0 18px oklch(0.89 0.215 127 / 0.35));
     }
     .bar {
       width: 240px; height: 5px; border-radius: 99px;
@@ -40,20 +32,20 @@
     }
     .fill {
       height: 100%; width: 8%; border-radius: 99px;
-      background: linear-gradient(90deg, #8b5cf6, #ec4899);
+      background: linear-gradient(90deg, oklch(0.78 0.17 127), oklch(0.89 0.215 127));
       transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1);
     }
-    .status { font-size: 12.5px; color: #a1a1aa; letter-spacing: 0.2px; min-height: 16px; }
+    .status { font-size: 12.5px; color: oklch(0.68 0.015 110); letter-spacing: 0.2px; min-height: 16px; }
     @keyframes pulse {
-      0%, 100% { transform: scale(1); opacity: 1; }
-      50% { transform: scale(0.78); opacity: 0.55; }
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
     }
   </style>
 </head>
 <body>
-  <div class="mark"><span class="dot"></span>Edit&nbsp;<span class="accent">Factory</span></div>
+  <img class="logo" src="blipost-logo.png" alt="blipost" />
   <div class="bar"><div class="fill" id="fill"></div></div>
-  <div class="status" id="status">Pornește motorul…</div>
+  <div class="status" id="status">Starting engine…</div>
 
   <script>
     // Driven from main.js via webContents.executeJavaScript(window.__setStatus(...)).
@@ -62,10 +54,10 @@
       const fill = document.getElementById('fill');
       const status = document.getElementById('status');
       let target = 8;
-      let label = 'Pornește motorul…';
-      if (backOk && frontOk) { target = 100; label = 'Gata!'; }
-      else if (backOk)       { target = 70;  label = 'Motor pornit · pornește interfața…'; }
-      else                   { target = 35;  label = 'Pornește motorul…'; }
+      let label = 'Starting engine…';
+      if (backOk && frontOk) { target = 100; label = 'Ready!'; }
+      else if (backOk)       { target = 70;  label = 'Engine started · starting interface…'; }
+      else                   { target = 35;  label = 'Starting engine…'; }
       // Never go backwards; let a slow time-based creep nudge it so it never looks frozen.
       if (typeof pct === 'number') _creep = Math.max(_creep, Math.min(pct, target));
       const width = Math.max(_creep, target * 0.5, target === 100 ? 100 : 0);

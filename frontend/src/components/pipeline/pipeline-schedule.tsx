@@ -680,7 +680,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
               <div className="flex items-center justify-between rounded-md border border-border bg-muted/50 px-3 py-2">
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Save className="size-4" />
-                  Draft restaurat — setările anterioare au fost recuperate.
+                  Draft restored — your previous settings were recovered.
                 </div>
                 <Button
                   variant="ghost"
@@ -688,7 +688,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
                   className="text-xs h-7"
                   onClick={() => { clearDraft(); setDraftRestored(false); }}
                 >
-                  Șterge draft
+                  Discard draft
                 </Button>
               </div>
             )}
@@ -697,13 +697,13 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
             {loadingIntegrations ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" />
-                Se încarcă integrările... (poate dura câteva secunde)
+                Loading integrations... (this may take a few seconds)
               </div>
             ) : integrationError ? (
               <div className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
                 <div className="flex items-center gap-2 text-sm text-destructive">
                   <AlertCircle className="size-4" />
-                  Nu s-au putut încărca integrările Postiz. Verifică conexiunea la Postiz.
+                  Couldn't load Postiz integrations. Check your Postiz connection.
                 </div>
                 <Button
                   variant="outline"
@@ -712,7 +712,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
                   onClick={() => fetchIntegrations(true)}
                 >
                   <RefreshCw className="size-3" />
-                  Reîncearcă
+                  Retry
                 </Button>
               </div>
             ) : integrations.length > 0 ? (
@@ -791,15 +791,15 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
                   <div className="flex items-center gap-2 rounded-md border border-green-300 bg-green-50 dark:bg-green-950/30 dark:border-green-800 p-2.5 text-sm">
                     <ShieldCheck className="size-4 text-green-600 dark:text-green-400 shrink-0" />
                     <span className="text-green-800 dark:text-green-300">
-                      Versiuni video distincte confirmate pentru platformele Meta selectate
+                      Distinct video versions confirmed for the selected Meta platforms
                     </span>
                   </div>
                 )}
                 {selectedMetaCount >= 2 && !preview && (
-                  <div className="flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-2.5 text-sm">
-                    <ShieldCheck className="size-4 text-blue-600 dark:text-blue-400 shrink-0" />
-                    <span className="text-blue-800 dark:text-blue-300">
-                      {selectedMetaCount} platforme Meta selectate — preview-ul va verifica maparea corectă către versiunile video Meta
+                  <div className="flex items-center gap-2 rounded-md border border-primary/25 bg-primary/10 p-2.5 text-sm">
+                    <ShieldCheck className="size-4 text-primary shrink-0" />
+                    <span className="text-foreground">
+                      {selectedMetaCount} Meta platforms selected — the preview will verify correct mapping to the Meta video versions
                     </span>
                   </div>
                 )}
@@ -838,8 +838,8 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {jitterMinutes > 0
-                    ? `±${jitterMinutes} min random offset per postare pentru a evita detecția de bot`
-                    : "Fără jitter — toate postările la orele configurate exact"}
+                    ? `±${jitterMinutes} min random offset per post to avoid bot detection`
+                    : "No jitter — all posts at the exact configured times"}
                 </p>
               </div>
             )}
@@ -848,7 +848,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
             {loadingBuffer ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" />
-                Se încarcă canalele Buffer...
+                Loading Buffer channels...
               </div>
             ) : bufferChannels.length > 0 ? (
               <div className="space-y-2">
@@ -880,7 +880,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
                       )}
                       <span>{ch.name}</span>
                       <Badge variant="outline" className="text-xs">{ch.service}</Badge>
-                      <Badge variant="outline" className="text-xs text-blue-400 border-blue-400/50">Buffer</Badge>
+                      <Badge variant="outline" className="text-xs text-primary border-primary/40">Buffer</Badge>
                     </label>
                   ))}
                 </div>
@@ -892,7 +892,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
               <div className="flex items-center gap-2 rounded-md border border-yellow-300 bg-yellow-50 dark:bg-yellow-950/30 dark:border-yellow-800 p-2.5 text-sm">
                 <AlertCircle className="size-4 text-yellow-600 dark:text-yellow-400 shrink-0" />
                 <span className="text-yellow-800 dark:text-yellow-300">
-                  Unele clipuri nu au fost salvate încă în librărie. Smart Schedule va fi disponibil după finalizare.
+                  Some clips haven't been saved to the library yet. Smart Schedule will be available once that's done.
                 </span>
               </div>
             )}
@@ -952,10 +952,10 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
                         {preview.total_clips} clips
                       </Badge>
                       <Badge variant="secondary" className="text-sm px-3 py-1">
-                        {preview.total_days} {preview.total_days === 1 ? "zi" : "zile"}
+                        {preview.total_days} {preview.total_days === 1 ? "day" : "days"}
                       </Badge>
                       <Badge variant="secondary" className="text-sm px-3 py-1">
-                        {preview.collections_used} {preview.collections_used === 1 ? "colecție" : "colecții"}
+                        {preview.collections_used} {preview.collections_used === 1 ? "collection" : "collections"}
                       </Badge>
                     </div>
 
@@ -969,7 +969,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
                         onClick={() => setPreview(null)}
                         disabled={confirming}
                       >
-                        Modifică
+                        Edit
                       </Button>
                       <Button
                         onClick={handleConfirm}

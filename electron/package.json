@@ -1,7 +1,7 @@
 {
   "name": "edit-factory-shell",
   "version": "0.1.0",
-  "description": "Edit Factory Desktop Shell",
+  "description": "Blipost Desktop Shell",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
@@ -20,7 +20,7 @@
   },
   "build": {
     "appId": "com.editfactory.app",
-    "productName": "Edit Factory",
+    "productName": "Blipost",
     "beforePack": "scripts/before-pack.js",
     "win": {
       "target": [
@@ -41,18 +41,18 @@
       ]
     },
     "nsis": {
-      "artifactName": "editfactory-setup-${version}.exe",
+      "artifactName": "blipost-setup-${version}.exe",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Edit Factory",
-      "uninstallDisplayName": "Edit Factory ${version}"
+      "shortcutName": "Blipost",
+      "uninstallDisplayName": "Blipost ${version}"
     },
     "portable": {
-      "artifactName": "EditFactory-portable-${version}.exe",
-      "unpackDirName": "EditFactory",
+      "artifactName": "Blipost-portable-${version}.exe",
+      "unpackDirName": "Blipost",
       "requestExecutionLevel": "user"
     },
     "publish": {

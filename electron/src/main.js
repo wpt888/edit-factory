@@ -1,5 +1,5 @@
 // electron/src/main.js
-// Edit Factory Desktop Shell — Electron main process
+// Blipost Desktop Shell — Electron main process
 // Spawns FastAPI backend + Next.js frontend, polls for readiness,
 // opens BrowserWindow, manages tray icon, handles graceful shutdown.
 
@@ -300,9 +300,9 @@ function startBackend() {
     dialog.showMessageBox(mainWindow || undefined, {
       type: 'error',
       title: 'Backend Stopped',
-      message: `The Edit Factory backend stopped unexpectedly (code: ${code}).`,
+      message: `The Blipost backend stopped unexpectedly (code: ${code}).`,
       detail: `Automatic restarts failed. Any running render was interrupted.\nLog file: ${LOG_FILE}`,
-      buttons: ['Restart Backend', 'Quit Edit Factory'],
+      buttons: ['Restart Backend', 'Quit Blipost'],
       defaultId: 0,
       cancelId: 0,
     }).then(({ response }) => {
@@ -384,9 +384,9 @@ function startFrontend() {
     dialog.showMessageBox(mainWindow || undefined, {
       type: 'error',
       title: 'Interface Stopped',
-      message: `The Edit Factory interface stopped unexpectedly (code: ${code}).`,
+      message: `The Blipost interface stopped unexpectedly (code: ${code}).`,
       detail: `Automatic restarts failed, so the window may be blank or stale.\nLog file: ${LOG_FILE}`,
-      buttons: ['Restart Interface', 'Quit Edit Factory'],
+      buttons: ['Restart Interface', 'Quit Blipost'],
       defaultId: 0,
       cancelId: 0,
     }).then(({ response }) => {
@@ -477,8 +477,8 @@ function createSplash() {
     show: true,
     center: true,
     alwaysOnTop: true,
-    backgroundColor: '#0b0b0f',
-    title: 'Edit Factory',
+    backgroundColor: '#0a0a08', // blipost ink — oklch(0.145 0.005 110)
+    title: 'Blipost',
     icon: ICON_PATH,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
@@ -508,7 +508,7 @@ function updateSplash(backOk, frontOk, elapsed) {
 function waitForServices() {
   return new Promise((resolve, reject) => {
     let elapsed = 0;
-    if (tray) tray.setToolTip('Edit Factory — Starting...');
+    if (tray) tray.setToolTip('Blipost — Starting...');
 
     const interval = setInterval(async () => {
       elapsed += POLL_INTERVAL_MS;
@@ -525,7 +525,7 @@ function waitForServices() {
         else status.push('API starting...');
         if (frontOk) status.push('UI ready');
         else status.push('UI starting...');
-        tray.setToolTip(`Edit Factory — ${status.join(', ')}`);
+        tray.setToolTip(`Blipost — ${status.join(', ')}`);
       }
 
       // Update the branded splash progress bar
@@ -533,7 +533,7 @@ function waitForServices() {
 
       if (backOk && frontOk) {
         clearInterval(interval);
-        if (tray) tray.setToolTip('Edit Factory');
+        if (tray) tray.setToolTip('Blipost');
         resolve();
       } else if (elapsed >= MAX_WAIT_MS) {
         clearInterval(interval);
@@ -560,11 +560,11 @@ function createTray() {
   }
 
   tray = new Tray(trayImage);
-  tray.setToolTip('Edit Factory — Starting...');
+  tray.setToolTip('Blipost — Starting...');
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: 'Open Edit Factory',
+      label: 'Open Blipost',
       click: () => {
         if (mainWindow) {
           mainWindow.show();
@@ -646,7 +646,8 @@ function createWindow() {
     width: 1400,
     height: 900,
     show: false,  // Hidden until services are ready
-    title: 'Edit Factory',
+    backgroundColor: '#0a0a08', // blipost ink — matches app --background
+    title: 'Blipost',
     icon: ICON_PATH,
     webPreferences: {
       nodeIntegration: false,
@@ -690,7 +691,7 @@ function createWindow() {
         trayHintShown = true;
         try {
           tray.displayBalloon({
-            title: 'Edit Factory still running',
+            title: 'Blipost still running',
             content: 'Minimized to the system tray. Right-click the tray icon to Quit.',
           });
         } catch { /* balloons unsupported on this platform */ }
@@ -772,7 +773,7 @@ function setupAutoUpdater() {
     dialog.showMessageBox(mainWindow || undefined, {
       type: 'info',
       title: 'Update Ready',
-      message: `Edit Factory ${info.version} is ready to install.`,
+      message: `Blipost ${info.version} is ready to install.`,
       detail: 'Restart the app now to apply the update, or continue working and restart later.',
       buttons: ['Restart Now', 'Later'],
       defaultId: 0,
@@ -813,7 +814,7 @@ app.on('will-quit', (event) => {
 // ---------- Main startup ----------
 app.whenReady().then(async () => {
   initLogging();
-  logLine('launcher', 'Edit Factory starting...');
+  logLine('launcher', 'Blipost starting...');
   logLine('launcher', `Dev mode: ${isDev}`);
   logLine('launcher', `Project root: ${PROJECT_ROOT}`);
 
@@ -844,7 +845,7 @@ app.whenReady().then(async () => {
       dialog.showMessageBox(undefined, {
         type: 'warning',
         title: 'Configuration Needed',
-        message: 'Edit Factory could not find its cloud credentials.',
+        message: 'Blipost could not find its cloud credentials.',
         detail: `Projects, clips and rendering need a Supabase connection. Open Settings → Cloud after the app loads to configure it.\n\nLog: ${LOG_FILE}`,
         buttons: ['Continue Anyway'],
       }).catch(() => { /* non-blocking */ });
@@ -896,7 +897,7 @@ app.whenReady().then(async () => {
       logLine('launcher', `loadURL threw: ${e.message}`);
       reveal();
     });
-    tray.setToolTip('Edit Factory');
+    tray.setToolTip('Blipost');
 
     // UPDT-01: Check for updates after services are confirmed running
     setupAutoUpdater();

@@ -1540,7 +1540,7 @@ class VideoProcessorService:
 
             # Verify segments
             if not analysis.get("segments"):
-                raise ValueError("Nu s-au găsit segmente valide în video")
+                raise ValueError("No valid segments found in video")
 
             # Convert segments from dict to VideoSegment (preserve all scoring fields)
             all_segments = []

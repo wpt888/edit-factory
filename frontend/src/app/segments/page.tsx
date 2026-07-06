@@ -1947,7 +1947,7 @@ export default function SegmentsPage() {
                     variant="ghost"
                     size="icon"
                     className="h-5 w-5 flex-shrink-0"
-                    title={segment.single_use ? "Folosit o singură dată (activ)" : "Click pentru utilizare unică"}
+                    title={segment.single_use ? "Used only once (active)" : "Click to use only once"}
                     onClick={(e) => { e.stopPropagation(); handleToggleSingleUse(segment.id); }}
                   >
                     <Repeat1 className={`h-3 w-3 ${segment.single_use ? "text-orange-500" : "text-muted-foreground"}`} />
@@ -2316,11 +2316,11 @@ export default function SegmentsPage() {
               <div className="p-6 pb-4">
                 <div className="flex items-center gap-2 text-lg font-semibold text-yellow-500">
                   <AlertTriangle className="h-5 w-5" />
-                  Segmente suprapuse detectate
+                  Overlapping segments detected
                 </div>
                 <p className="text-sm text-muted-foreground mt-2">
-                  Segmentul nou ({formatTimeDetailed(overlapInfo.newSegment.start)} → {formatTimeDetailed(overlapInfo.newSegment.end)})
-                  se suprapune cu {overlapInfo.overlappingSegments.length} segment{overlapInfo.overlappingSegments.length > 1 ? "e" : ""} existent{overlapInfo.overlappingSegments.length > 1 ? "e" : ""}:
+                  The new segment ({formatTimeDetailed(overlapInfo.newSegment.start)} → {formatTimeDetailed(overlapInfo.newSegment.end)})
+                  overlaps with {overlapInfo.overlappingSegments.length} existing segment{overlapInfo.overlappingSegments.length > 1 ? "s" : ""}:
                 </p>
 
                 {/* List overlapping segments */}

@@ -149,11 +149,30 @@ export function TimelineEditor({
   const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
   const [previewDuration, setPreviewDuration] = useState(0);
   const [previewActiveIndex, setPreviewActiveIndex] = useState(0);
+  // Which of the two ping-pong <video> slots is currently visible/playing (0 or 1).
+  const [activeSlot, setActiveSlot] = useState(0);
 
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
-  const previewVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  // Ping-pong double-buffer: two fixed <video> slots instead of one element per
+  // source. The active slot plays the current segment (visible); the idle slot is
+  // pre-seeked & paused on the NEXT segment, so a boundary crossing is a pure
+  // visibility swap — no async seek at the seam (that seek was the stutter cause).
+  const previewSlotRefs = useRef<(HTMLVideoElement | null)[]>([null, null]);
+  const activeSlotRef = useRef(0);
+  const slotStateRef = useRef<Array<{
+    sourceVideoId: string | null;   // source currently loaded into the slot
+    segmentStartTime: number | null; // last offset the slot was seeked to
+    preparedForIndex: number | null; // matches[] index this slot is staged for
+    ready: boolean;                  // seeked + decoded → safe to show/play seamlessly
+  }>>([
+    { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false },
+    { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false },
+  ]);
+  // Marker so the rAF loop stages the idle slot once per current index, not every frame.
+  const preparedNextForIndexRef = useRef<number | null>(null);
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
   const isPreviewPlayingRef = useRef(false);
+  const isPreviewActiveRef = useRef(false);
   const previewActiveIndexRef = useRef(0);
   const previewSegmentEndTimeRef = useRef<number | undefined>(undefined);
   const pendingCanPlayRef = useRef<(() => void) | null>(null);
@@ -167,6 +186,7 @@ export function TimelineEditor({
   // Keep refs in sync (state → ref for use in callbacks)
   // Note: isPreviewPlayingRef is also set synchronously in togglePreviewPlayPause to avoid 1-frame stale reads
   useEffect(() => { isPreviewPlayingRef.current = isPreviewPlaying; }, [isPreviewPlaying]);
+  useEffect(() => { isPreviewActiveRef.current = isPreviewActive; }, [isPreviewActive]);
   useEffect(() => { previewActiveIndexRef.current = previewActiveIndex; }, [previewActiveIndex]);
   useEffect(() => { matchesRef.current = matches; }, [matches]);
 
@@ -188,7 +208,7 @@ export function TimelineEditor({
         audio.removeAttribute("src");
         audio.load();
       }
-      for (const vid of Object.values(previewVideoRefs.current)) {
+      for (const vid of previewSlotRefs.current) {
         if (vid) vid.pause();
       }
     };
@@ -200,51 +220,39 @@ export function TimelineEditor({
     }
   }, [isPreviewActive]);
 
-  // Unique source video IDs for video pooling
+  // Matches that have a usable video segment (drives canPreview). The old
+  // per-source video pool + prune effect are gone — we now use two fixed slots.
   const videoMatches = matches.filter((m) => m.segment_id && m.source_video_id);
-  const uniqueSourceVideoIds = Array.from(
-    new Set(videoMatches.map((m) => m.source_video_id!))
-  );
-  const videoIdsKey = uniqueSourceVideoIds.join(",");
-
-  // Prune stale entries from previewVideoRefs when source video IDs change
-  useEffect(() => {
-    const validIds = new Set(uniqueSourceVideoIds);
-    for (const key of Object.keys(previewVideoRefs.current)) {
-      if (!validIds.has(key)) {
-        const vid = previewVideoRefs.current[key];
-        if (vid) {
-          vid.pause();
-          vid.removeAttribute("src");
-          vid.load();
-        }
-        delete previewVideoRefs.current[key];
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoIdsKey]);
 
   // Can we show the preview? Need pipelineId, profileId, and at least one video match
   const canPreview = !!(pipelineId && variantIndex !== undefined && profileId && videoMatches.length > 0);
-  const nextPreviewSourceVideoId = useMemo(() => {
-    for (let i = previewActiveIndex + 1; i < matches.length; i += 1) {
-      const sourceVideoId = matches[i]?.source_video_id;
-      if (sourceVideoId) return sourceVideoId;
+  // Next index that triggers a REAL video cut (different merge group than the
+  // segment at `curIdx`). Phrases inside one merge group share a single video
+  // segment, so they never become a staging target — the picture stays put while
+  // only the subtitle advances.
+  const findNextTransitionIndex = useCallback((curIdx: number): number | null => {
+    const ms = matchesRef.current;
+    const cur = ms[curIdx];
+    for (let i = curIdx + 1; i < ms.length; i += 1) {
+      const m = ms[i];
+      if (!m) continue;
+      const sameGroup =
+        cur &&
+        m.merge_group != null &&
+        cur.merge_group != null &&
+        m.merge_group === cur.merge_group;
+      if (!sameGroup) return i;
     }
     return null;
-  }, [matches, previewActiveIndex]);
-  const getPreviewVideoPreload = useCallback((sourceVideoId: string) => {
-    const activeSourceVideoId = matches[previewActiveIndex]?.source_video_id;
-    return sourceVideoId === activeSourceVideoId || sourceVideoId === nextPreviewSourceVideoId
-      ? "auto"
-      : "none";
-  }, [matches, nextPreviewSourceVideoId, previewActiveIndex]);
+  }, []);
   const getPreviewStreamUrl = useCallback((sourceVideoId: string) => {
     if (!profileId) return "";
     return `${API_URL}/segments/source-videos/${sourceVideoId}/preview-stream?profile_id=${profileId}`;
   }, [profileId]);
 
-  // --- Continuous preview helpers (same pattern as VariantPreviewPlayer) ---
+  // --- Continuous (live, client-side) preview helpers ---
+  // NOTE: this is a client-side segment stitcher driven by the TTS audio clock,
+  // NOT the same as VariantPreviewPlayer (which plays one server-rendered mp4).
 
   const findActiveMatch = useCallback((time: number): number => {
     const ms = matchesRef.current;
@@ -252,75 +260,160 @@ export function TimelineEditor({
     return idx >= 0 ? idx : previewActiveIndexRef.current;
   }, []);
 
-  const syncPreviewVideo = useCallback((matchIdx: number) => {
-    const match = matchesRef.current[matchIdx];
-    if (!match?.source_video_id || match.segment_start_time == null) return;
-
-    // Check if we're staying within the same merge group.
-    // Within a merge group, multiple SRT phrases share the same video segment.
-    // Only check merge_group equality — entries may have different segment_ids
-    // from independent matching, but the render uses only the first entry's segment.
-    const prevIdx = previewActiveIndexRef.current;
-    const prevMatch = matchesRef.current[prevIdx];
-    // prevIdx !== matchIdx guard: on activation this is a self-compare
-    // (prevIdx === matchIdx === 0), which used to short-circuit as "same
-    // merge group" and return before video.play() — freezing the first
-    // segment until the first group transition.
-    const sameMergeGroup =
-      prevIdx !== matchIdx &&
-      prevMatch &&
-      match.merge_group != null &&
-      prevMatch.merge_group != null &&
-      match.merge_group === prevMatch.merge_group;
-
-    if (sameMergeGroup) {
-      // Same merge group — just update the index, don't seek.
-      // MUST also update React state so the display toggle CSS re-renders.
-      setPreviewActiveIndex(matchIdx);
-      previewActiveIndexRef.current = matchIdx;
-      return;
-    }
-
-    // Update active index state + ref so display toggle re-renders
-    setPreviewActiveIndex(matchIdx);
-    previewActiveIndexRef.current = matchIdx;
-
-    for (const vid of Object.values(previewVideoRefs.current)) {
-      if (vid) vid.pause();
-    }
-
-    const activeVideo = previewVideoRefs.current[match.source_video_id];
-    if (!activeVideo) return;
-
-    // Set segment end boundary — cap by merge_group_duration if available.
-    if (match.merge_group_duration != null && match.segment_start_time != null) {
+  // Compute the active segment's end boundary (cap by merge_group_duration if set).
+  const setSegmentEndBoundary = useCallback((match: MatchPreview | undefined) => {
+    if (match?.merge_group_duration != null && match.segment_start_time != null) {
       const mergeEnd = match.segment_start_time + match.merge_group_duration;
       previewSegmentEndTimeRef.current = match.segment_end_time != null
         ? Math.min(mergeEnd, match.segment_end_time)
         : mergeEnd;
     } else {
-      previewSegmentEndTimeRef.current = match.segment_end_time ?? undefined;
-    }
-
-    // Wait for seek to complete before playing — prevents showing frames
-    // from the old position during the async seek (50-150ms window).
-    seekGraceTimestampRef.current = performance.now();
-    const alreadyAtTarget = Math.abs(activeVideo.currentTime - match.segment_start_time) < 0.05;
-    if (alreadyAtTarget) {
-      if (isPreviewPlayingRef.current) {
-        activeVideo.play().catch(() => {});
-      }
-    } else {
-      const onSeeked = () => {
-        activeVideo.removeEventListener("seeked", onSeeked);
-        if (isPreviewPlayingRef.current) {
-          activeVideo.play().catch(() => {});
-        }
-      };
-      activeVideo.addEventListener("seeked", onSeeked);
-      activeVideo.currentTime = match.segment_start_time;
+      previewSegmentEndTimeRef.current = match?.segment_end_time ?? undefined;
     }
   }, []);
+
+  // Point a slot's <video> at a source, reloading only when it actually changes
+  // (keeps the warm buffer for the common same-source case).
+  const loadSlotSource = useCallback((slot: number, sourceVideoId: string) => {
+    const el = previewSlotRefs.current[slot];
+    const st = slotStateRef.current[slot];
+    if (!el) return;
+    if (st.sourceVideoId !== sourceVideoId) {
+      el.pause();
+      el.src = getPreviewStreamUrl(sourceVideoId);
+      el.load();
+      st.sourceVideoId = sourceVideoId;
+      st.segmentStartTime = null;
+    }
+  }, [getPreviewStreamUrl]);
+
+  // Seek a slot's <video> to `targetTime` while paused; invoke onReady once the
+  // frame at that time is decoded (so it can be shown/played with no seam).
+  const seekSlotTo = useCallback((slot: number, targetTime: number, onReady: () => void) => {
+    const el = previewSlotRefs.current[slot];
+    if (!el) return;
+    const doSeek = () => {
+      if (el.readyState >= 2 && Math.abs(el.currentTime - targetTime) < 0.05) {
+        onReady();
+        return;
+      }
+      const onSeeked = () => {
+        el.removeEventListener("seeked", onSeeked);
+        onReady();
+      };
+      el.addEventListener("seeked", onSeeked);
+      el.currentTime = targetTime;
+    };
+    if (el.readyState >= 1) {
+      doSeek();
+    } else {
+      const onMeta = () => {
+        el.removeEventListener("loadedmetadata", onMeta);
+        doSeek();
+      };
+      el.addEventListener("loadedmetadata", onMeta);
+    }
+  }, []);
+
+  // Stage the IDLE slot for a future segment: load + pre-seek + mark ready. The
+  // slot stays PAUSED — a paused, seeked video already paints its target frame,
+  // so committing later is just a visibility flip + play (no seek at the seam).
+  const prepareSlot = useCallback((slot: number, idx: number) => {
+    const match = matchesRef.current[idx];
+    const el = previewSlotRefs.current[slot];
+    if (!el || !match?.source_video_id || match.segment_start_time == null) return;
+    const st = slotStateRef.current[slot];
+    st.preparedForIndex = idx;
+    st.ready = false;
+    loadSlotSource(slot, match.source_video_id);
+    const targetTime = match.segment_start_time;
+    seekSlotTo(slot, targetTime, () => {
+      st.segmentStartTime = targetTime;
+      st.ready = true;
+    });
+  }, [loadSlotSource, seekSlotTo]);
+
+  // Make the ACTIVE slot show segment `idx` via a direct seek — the one acceptable
+  // seek, used for startup, explicit user jumps, and re-staging after a remount.
+  // Does NOT own previewActiveIndex; callers set that.
+  const seatActiveSlot = useCallback((idx: number, shouldPlay: boolean) => {
+    const match = matchesRef.current[idx];
+    const slot = activeSlotRef.current;
+    const el = previewSlotRefs.current[slot];
+    setSegmentEndBoundary(match);
+    // Only the active slot ever plays — keep the idle one paused.
+    const idleEl = previewSlotRefs.current[slot ^ 1];
+    if (idleEl) idleEl.pause();
+    slotStateRef.current[slot ^ 1].ready = false;
+    if (!el || !match?.source_video_id || match.segment_start_time == null) {
+      if (el) el.pause(); // no video for this segment → fallback UI shows
+      return;
+    }
+    loadSlotSource(slot, match.source_video_id);
+    const targetTime = match.segment_start_time;
+    const st = slotStateRef.current[slot];
+    st.preparedForIndex = idx;
+    seekGraceTimestampRef.current = performance.now();
+    seekSlotTo(slot, targetTime, () => {
+      st.segmentStartTime = targetTime;
+      st.ready = true;
+      if (shouldPlay && isPreviewPlayingRef.current) {
+        el.play().catch(() => {});
+      }
+    });
+  }, [loadSlotSource, seekSlotTo, setSegmentEndBoundary]);
+
+  // Apply the visibility swap IMPERATIVELY (no React-render delay) by toggling
+  // opacity/z-index. Both <video> layers stay display:block so the incoming
+  // (idle) slot keeps a live GPU layer + decoded frame — Chromium tears down and
+  // throttles `display:none` videos, which is what made the seam freeze.
+  const applySlotVisibility = useCallback((newActive: number) => {
+    const a = previewSlotRefs.current[newActive];
+    const b = previewSlotRefs.current[newActive ^ 1];
+    if (a) { a.style.opacity = "1"; a.style.zIndex = "1"; }
+    if (b) { b.style.opacity = "0"; b.style.zIndex = "0"; }
+  }, []);
+
+  // Automatic boundary transition: swap to the pre-staged idle slot (no seek).
+  // Owns advancing previewActiveIndex. Falls back to a direct seat if the idle
+  // slot wasn't ready in time (very short segment / slow load) — never worse
+  // than the pre-fix behavior.
+  const commitTransition = useCallback((nextIdx: number) => {
+    const match = matchesRef.current[nextIdx];
+
+    // Advance index/state + boundary first, so subtitle + counter track the
+    // picture even when the next segment has no video.
+    setPreviewActiveIndex(nextIdx);
+    previewActiveIndexRef.current = nextIdx;
+    setSegmentEndBoundary(match);
+
+    if (!match?.source_video_id || match.segment_start_time == null) {
+      for (const vid of previewSlotRefs.current) { if (vid) vid.pause(); }
+      return;
+    }
+
+    const idleSlot = activeSlotRef.current ^ 1;
+    const st = slotStateRef.current[idleSlot];
+    if (st.preparedForIndex === nextIdx && st.ready) {
+      // Seamless: idle slot already decoded the first frame at the right offset.
+      const newEl = previewSlotRefs.current[idleSlot];
+      const oldEl = previewSlotRefs.current[activeSlotRef.current];
+      activeSlotRef.current = idleSlot;
+      // Flip visibility imperatively FIRST (instant, GPU-composited) — the idle
+      // slot already holds its decoded first frame, so this paints with no gap.
+      applySlotVisibility(idleSlot);
+      setActiveSlot(idleSlot);
+      // seekGraceTimestampRef now covers the play()/clock-resync moment so the
+      // end-enforcement loop doesn't pause the freshly-shown slot a frame early.
+      seekGraceTimestampRef.current = performance.now();
+      if (isPreviewPlayingRef.current) newEl?.play().catch(() => {});
+      if (oldEl) oldEl.pause();
+      st.ready = false; // consumed
+    } else {
+      // Staging missed the deadline — degrade to seeking the active slot in place.
+      seatActiveSlot(nextIdx, true);
+    }
+  }, [setSegmentEndBoundary, seatActiveSlot, applySlotVisibility]);
 
   // rAF loop — tracks audio.currentTime at ~60fps for near-instant segment switching
   // This replaces timeupdate (which only fires ~4Hz) to eliminate ~250ms segment switch lag
@@ -338,19 +431,44 @@ export function TimelineEditor({
       }
 
       const newIdx = findActiveMatch(time);
-      if (newIdx !== previewActiveIndexRef.current) {
-        // Always delegate to syncPreviewVideo — it handles merge-group
-        // transitions, seeking, boundary updates, and same-group skipping.
-        // DO NOT update previewActiveIndexRef here — syncPreviewVideo reads
-        // the OLD value to detect merge-group transitions.
-        syncPreviewVideo(newIdx);
+      const curIdx = previewActiveIndexRef.current;
+      if (newIdx !== curIdx) {
+        // Detect merge-group siblings against the OLD index BEFORE advancing.
+        const prev = matchesRef.current[curIdx];
+        const cur = matchesRef.current[newIdx];
+        const sameMergeGroup =
+          prev &&
+          cur &&
+          prev.merge_group != null &&
+          cur.merge_group != null &&
+          prev.merge_group === cur.merge_group;
+        if (sameMergeGroup) {
+          // Within a merge group: advance the subtitle/counter, keep the frame.
+          setPreviewActiveIndex(newIdx);
+          previewActiveIndexRef.current = newIdx;
+        } else {
+          // Real cut: swap to the pre-staged idle slot (no seek at the seam).
+          commitTransition(newIdx);
+        }
+        preparedNextForIndexRef.current = null; // re-stage for the new "next"
+      }
+
+      // Stage the idle slot for the next real cut, once per settled index. Segments
+      // are ~2-3s, so there's ample time to load + seek before the boundary.
+      const settledIdx = previewActiveIndexRef.current;
+      if (preparedNextForIndexRef.current !== settledIdx) {
+        const nextIdx = findNextTransitionIndex(settledIdx);
+        if (nextIdx != null) {
+          prepareSlot(activeSlotRef.current ^ 1, nextIdx);
+        }
+        preparedNextForIndexRef.current = settledIdx;
       }
 
       previewRafIdRef.current = requestAnimationFrame(loop);
     };
     if (previewRafIdRef.current != null) cancelAnimationFrame(previewRafIdRef.current);
     previewRafIdRef.current = requestAnimationFrame(loop);
-  }, [findActiveMatch, syncPreviewVideo]);
+  }, [findActiveMatch, commitTransition, findNextTransitionIndex, prepareSlot]);
 
   const stopPreviewRafLoop = useCallback(() => {
     if (previewRafIdRef.current != null) {
@@ -373,7 +491,7 @@ export function TimelineEditor({
       setIsPreviewPlaying(false);
       isPreviewPlayingRef.current = false;
       stopPreviewRafLoop();
-      for (const vid of Object.values(previewVideoRefs.current)) {
+      for (const vid of previewSlotRefs.current) {
         if (vid) vid.pause();
       }
     };
@@ -420,14 +538,15 @@ export function TimelineEditor({
       // completed yet, so currentTime is stale from the previous segment.
       const inGrace = performance.now() - seekGraceTimestampRef.current < 200;
       if (!inGrace) {
-        for (const vid of Object.values(previewVideoRefs.current)) {
-          if (!vid || vid.paused) continue;
-          if (
-            previewSegmentEndTimeRef.current != null &&
-            vid.currentTime >= previewSegmentEndTimeRef.current
-          ) {
-            vid.pause();
-          }
+        // Only the active slot plays; the idle slot is intentionally paused.
+        const vid = previewSlotRefs.current[activeSlotRef.current];
+        if (
+          vid &&
+          !vid.paused &&
+          previewSegmentEndTimeRef.current != null &&
+          vid.currentTime >= previewSegmentEndTimeRef.current
+        ) {
+          vid.pause();
         }
       }
       segmentEnforceRafRef.current = requestAnimationFrame(enforceLoop);
@@ -445,8 +564,7 @@ export function TimelineEditor({
         segmentEnforceTimeoutRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPreviewActive, videoIdsKey]);
+  }, [isPreviewActive]);
 
   const togglePreviewPlayPause = useCallback(() => {
     const audio = previewAudioRef.current;
@@ -455,7 +573,7 @@ export function TimelineEditor({
     if (isPreviewPlayingRef.current) {
       audio.pause();
       stopPreviewRafLoop();
-      for (const vid of Object.values(previewVideoRefs.current)) {
+      for (const vid of previewSlotRefs.current) {
         if (vid) vid.pause();
       }
       // Set ref synchronously to prevent 1-frame stale read in rAF loop
@@ -465,64 +583,42 @@ export function TimelineEditor({
       // Set ref synchronously before starting rAF loop
       isPreviewPlayingRef.current = true;
       setIsPreviewPlaying(true);
-      const match = matchesRef.current[previewActiveIndexRef.current];
-      if (match?.source_video_id) {
-        const vid = previewVideoRefs.current[match.source_video_id];
-        if (vid) {
-          // Set segment end boundary before playing
-          if (match.merge_group_duration != null && match.segment_start_time != null) {
-            const mergeEnd = match.segment_start_time + match.merge_group_duration;
-            previewSegmentEndTimeRef.current = match.segment_end_time != null
-              ? Math.min(mergeEnd, match.segment_end_time)
-              : mergeEnd;
-          } else {
-            previewSegmentEndTimeRef.current = match.segment_end_time ?? undefined;
-          }
-          seekGraceTimestampRef.current = performance.now();
-          const targetTime = match.segment_start_time ?? vid.currentTime;
-          const alreadyAtTarget = Math.abs(vid.currentTime - targetTime) < 0.05;
-          if (alreadyAtTarget) {
-            vid.play().catch(() => {});
-            audio.play().catch(() => {});
-          } else {
-            // Wait for seek to complete before playing — prevents initial black frame stall
-            const onSeeked = () => {
-              vid.removeEventListener("seeked", onSeeked);
-              vid.play().catch(() => {});
-              audio.play().catch(() => {});
-            };
-            vid.addEventListener("seeked", onSeeked);
-            vid.currentTime = targetTime;
-          }
-        } else {
-          audio.play().catch(() => {});
-        }
-      } else {
-        audio.play().catch(() => {});
-      }
+      // Re-seat the active slot on the current segment (a single seek is fine on
+      // an explicit resume) and force the idle slot to re-stage next rAF tick.
+      preparedNextForIndexRef.current = null;
+      seatActiveSlot(previewActiveIndexRef.current, true);
+      audio.play().catch(() => {
+        isPreviewPlayingRef.current = false;
+        setIsPreviewPlaying(false);
+      });
       startPreviewRafLoop();
     }
-  }, [startPreviewRafLoop, stopPreviewRafLoop]);
+  }, [startPreviewRafLoop, stopPreviewRafLoop, seatActiveSlot]);
+
+  // Discrete user jump (prev/next, scrub-to-segment, segment click). A single
+  // direct seek on the active slot is visually acceptable here; ping-pong only
+  // needs to be seamless for AUTOMATIC boundary crossings.
+  const jumpToIndex = useCallback((idx: number) => {
+    const audio = previewAudioRef.current;
+    const match = matchesRef.current[idx];
+    if (!audio || !match) return;
+    audio.currentTime = match.srt_start;
+    setPreviewCurrentTime(match.srt_start);
+    setPreviewActiveIndex(idx);
+    previewActiveIndexRef.current = idx;
+    preparedNextForIndexRef.current = null;
+    seatActiveSlot(idx, isPreviewPlayingRef.current);
+  }, [seatActiveSlot]);
 
   const previewPrevSegment = useCallback(() => {
-    const audio = previewAudioRef.current;
-    if (!audio || previewActiveIndexRef.current <= 0) return;
-    const prevIdx = previewActiveIndexRef.current - 1;
-    audio.currentTime = matchesRef.current[prevIdx].srt_start;
-    setPreviewActiveIndex(prevIdx);
-    previewActiveIndexRef.current = prevIdx;
-    syncPreviewVideo(prevIdx);
-  }, [syncPreviewVideo]);
+    if (previewActiveIndexRef.current <= 0) return;
+    jumpToIndex(previewActiveIndexRef.current - 1);
+  }, [jumpToIndex]);
 
   const previewNextSegment = useCallback(() => {
-    const audio = previewAudioRef.current;
-    if (!audio || previewActiveIndexRef.current >= matchesRef.current.length - 1) return;
-    const nextIdx = previewActiveIndexRef.current + 1;
-    audio.currentTime = matchesRef.current[nextIdx].srt_start;
-    setPreviewActiveIndex(nextIdx);
-    previewActiveIndexRef.current = nextIdx;
-    syncPreviewVideo(nextIdx);
-  }, [syncPreviewVideo]);
+    if (previewActiveIndexRef.current >= matchesRef.current.length - 1) return;
+    jumpToIndex(previewActiveIndexRef.current + 1);
+  }, [jumpToIndex]);
 
   const handlePreviewSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const audio = previewAudioRef.current;
@@ -533,21 +629,16 @@ export function TimelineEditor({
     const newIdx = findActiveMatch(time);
     setPreviewActiveIndex(newIdx);
     previewActiveIndexRef.current = newIdx;
-    syncPreviewVideo(newIdx);
-  }, [findActiveMatch, syncPreviewVideo]);
+    preparedNextForIndexRef.current = null;
+    // Scrub lands at an arbitrary audio time; seat the active slot at the
+    // segment's start (video doesn't track sub-phrase position — same as before).
+    seatActiveSlot(newIdx, isPreviewPlayingRef.current);
+  }, [findActiveMatch, seatActiveSlot]);
 
   const handleSeekToSegment = useCallback((idx: number) => {
     if (!isPreviewActive) return;
-    const audio = previewAudioRef.current;
-    if (!audio) return;
-    const match = matchesRef.current[idx];
-    if (!match) return;
-    audio.currentTime = match.srt_start;
-    setPreviewCurrentTime(match.srt_start);
-    setPreviewActiveIndex(idx);
-    previewActiveIndexRef.current = idx;
-    syncPreviewVideo(idx);
-  }, [isPreviewActive, syncPreviewVideo]);
+    jumpToIndex(idx);
+  }, [isPreviewActive, jumpToIndex]);
 
   const activatePreview = useCallback(() => {
     // Increment activation ID — any pending async work from previous activations
@@ -585,58 +676,56 @@ export function TimelineEditor({
         setIsPreviewPlaying(true);
         seekGraceTimestampRef.current = performance.now();
 
-        // Pre-seek video to first segment BEFORE starting audio — prevents
-        // initial black frame stall where audio plays but video is still seeking.
+        // Reset the ping-pong slots for this activation. The <video> elements
+        // were freshly (re)mounted, so slot 0 starts blank and must be loaded.
+        activeSlotRef.current = 0;
+        setActiveSlot(0);
+        preparedNextForIndexRef.current = null;
+        slotStateRef.current[0] = { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false };
+        slotStateRef.current[1] = { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false };
+
         const firstMatch = matchesRef.current[0];
-        const vid = firstMatch?.source_video_id
-          ? previewVideoRefs.current[firstMatch.source_video_id]
-          : null;
-        const startVideoAndAudio = () => {
+
+        // Start the audio + rAF loop, then stage the idle slot for the first cut.
+        const startAudioAndLoop = () => {
           if (activationIdRef.current !== thisActivation) return; // stale — user clicked Stop
-          syncPreviewVideo(0);
           startPreviewRafLoop();
           audio.play().catch(() => {
             isPreviewPlayingRef.current = false;
             setIsPreviewPlaying(false);
           });
+          const nextIdx = findNextTransitionIndex(0);
+          if (nextIdx != null) prepareSlot(1, nextIdx);
         };
-        if (vid && firstMatch.segment_start_time != null) {
+
+        // Pre-seek the first segment into the ACTIVE slot BEFORE starting audio —
+        // prevents an initial black-frame stall. This is the one unavoidable seek.
+        if (firstMatch?.source_video_id && firstMatch.segment_start_time != null) {
           const targetTime = firstMatch.segment_start_time;
-          if (vid.readyState >= 2 && Math.abs(vid.currentTime - targetTime) < 0.05) {
-            startVideoAndAudio();
-          } else {
-            let started = false;
-            const onReady = () => {
-              if (started) return;
-              started = true;
-              vid.removeEventListener("seeked", onReady);
-              vid.removeEventListener("canplay", onReady);
-              startVideoAndAudio();
-            };
-            vid.addEventListener("seeked", onReady);
-            vid.addEventListener("canplay", onReady);
-            if (vid.readyState >= 2) {
-              vid.currentTime = targetTime;
-            } else {
-              // Video not loaded yet — wait for canplay first, then seek
-              const onFirstLoad = () => {
-                vid.removeEventListener("canplay", onFirstLoad);
-                vid.currentTime = targetTime;
-              };
-              vid.addEventListener("canplay", onFirstLoad);
-            }
-            // Safety timeout: don't block forever if video fails to load
-            activationTimeoutRef.current = setTimeout(() => {
-              activationTimeoutRef.current = null;
-              vid.removeEventListener("seeked", onReady);
-              vid.removeEventListener("canplay", onReady);
-              if (activationIdRef.current !== thisActivation) return; // stale
-              if (!audio.paused) return; // already started
-              startVideoAndAudio();
-            }, 3000);
-          }
+          setSegmentEndBoundary(firstMatch);
+          loadSlotSource(0, firstMatch.source_video_id);
+          slotStateRef.current[0].preparedForIndex = 0;
+          let started = false;
+          const onReady = () => {
+            if (started) return;
+            started = true;
+            if (activationIdRef.current !== thisActivation) return; // stale
+            const el = previewSlotRefs.current[0];
+            slotStateRef.current[0].segmentStartTime = targetTime;
+            slotStateRef.current[0].ready = true;
+            if (el && isPreviewPlayingRef.current) el.play().catch(() => {});
+            startAudioAndLoop();
+          };
+          seekSlotTo(0, targetTime, onReady);
+          // Safety timeout: don't block forever if the video fails to load.
+          activationTimeoutRef.current = setTimeout(() => {
+            activationTimeoutRef.current = null;
+            if (activationIdRef.current !== thisActivation) return; // stale
+            if (!audio.paused) return; // already started
+            onReady();
+          }, 3000);
         } else {
-          startVideoAndAudio();
+          startAudioAndLoop();
         }
       };
 
@@ -668,7 +757,7 @@ export function TimelineEditor({
       }
     };
     requestAnimationFrame(tryStart);
-  }, [syncPreviewVideo, startPreviewRafLoop]);
+  }, [startPreviewRafLoop, setSegmentEndBoundary, loadSlotSource, seekSlotTo, prepareSlot, findNextTransitionIndex]);
 
   const deactivatePreview = useCallback(() => {
     // Invalidate any pending async work from activatePreview (rAF retries, timeouts, event listeners)
@@ -688,7 +777,7 @@ export function TimelineEditor({
       audio.pause();
       audio.currentTime = 0;
     }
-    for (const vid of Object.values(previewVideoRefs.current)) {
+    for (const vid of previewSlotRefs.current) {
       if (vid) vid.pause();
     }
     isPreviewPlayingRef.current = false;
@@ -699,7 +788,30 @@ export function TimelineEditor({
     setPreviewActiveIndex(0);
     previewActiveIndexRef.current = 0;
     previewSegmentEndTimeRef.current = undefined;
+    // Reset ping-pong state (slot <video> elements unmount with the preview block).
+    activeSlotRef.current = 0;
+    setActiveSlot(0);
+    preparedNextForIndexRef.current = null;
+    slotStateRef.current[0] = { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false };
+    slotStateRef.current[1] = { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false };
   }, [stopPreviewRafLoop]);
+
+  // Expanding/collapsing moves the preview into a different DOM subtree, so the
+  // two <video> slots remount blank. Re-seat the active slot + re-stage the idle
+  // one after the new elements bind their refs.
+  useEffect(() => {
+    if (!isPreviewActive) return;
+    const raf = requestAnimationFrame(() => {
+      if (!isPreviewActiveRef.current) return;
+      slotStateRef.current[0] = { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false };
+      slotStateRef.current[1] = { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false };
+      activeSlotRef.current = activeSlot; // keep ref aligned with the visible slot
+      preparedNextForIndexRef.current = null;
+      seatActiveSlot(previewActiveIndexRef.current, isPreviewPlayingRef.current);
+    });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPreviewExpanded]);
 
   // Filtered segments: proximity ±2 rule + source filter + keyword search
   const filteredSegments = useMemo(() => {
@@ -1103,23 +1215,26 @@ export function TimelineEditor({
                 className="relative mx-auto bg-black flex items-center justify-center"
                 style={compactPreviewFrameStyle}
               >
-                {uniqueSourceVideoIds.map((sourceVideoId) => (
+                {/* Ping-pong double-buffer: two fixed slots; src set imperatively in
+                    prepareSlot/seatActiveSlot. Visibility follows the active slot. */}
+                {[0, 1].map((slot) => (
                   <video
-                    key={sourceVideoId}
-                    ref={(el) => { previewVideoRefs.current[sourceVideoId] = el; }}
-                    src={getPreviewStreamUrl(sourceVideoId)}
+                    key={`slot-${slot}`}
+                    ref={(el) => { previewSlotRefs.current[slot] = el; }}
                     muted
                     playsInline
-                    preload={getPreviewVideoPreload(sourceVideoId)}
+                    preload="auto"
                     className="absolute inset-0 w-full h-full object-cover"
                     onWaiting={() => setIsPreviewBuffering(true)}
                     onPlaying={() => setIsPreviewBuffering(false)}
                     onSeeked={() => setIsPreviewBuffering(false)}
                     style={{
-                      display:
-                        matches[previewActiveIndex]?.source_video_id === sourceVideoId
-                          ? "block"
-                          : "none",
+                      display: "block",
+                      opacity:
+                        activeSlot === slot && matches[previewActiveIndex]?.source_video_id
+                          ? 1
+                          : 0,
+                      zIndex: activeSlot === slot ? 1 : 0,
                     }}
                   />
                 ))}
@@ -1271,23 +1386,26 @@ export function TimelineEditor({
                     className="relative mx-auto bg-black flex items-center justify-center"
                     style={expandedPreviewFrameStyle}
                   >
-                    {uniqueSourceVideoIds.map((sourceVideoId) => (
+                    {/* Ping-pong double-buffer (expanded view) — same two slots,
+                        re-staged when this dialog mounts (see isPreviewExpanded effect). */}
+                    {[0, 1].map((slot) => (
                       <video
-                        key={`expanded-${sourceVideoId}`}
-                        ref={(el) => { previewVideoRefs.current[sourceVideoId] = el; }}
-                        src={getPreviewStreamUrl(sourceVideoId)}
+                        key={`expanded-slot-${slot}`}
+                        ref={(el) => { previewSlotRefs.current[slot] = el; }}
                         muted
                         playsInline
-                        preload={getPreviewVideoPreload(sourceVideoId)}
+                        preload="auto"
                         className="absolute inset-0 w-full h-full object-cover"
                         onWaiting={() => setIsPreviewBuffering(true)}
                         onPlaying={() => setIsPreviewBuffering(false)}
                         onSeeked={() => setIsPreviewBuffering(false)}
                         style={{
-                          display:
-                            matches[previewActiveIndex]?.source_video_id === sourceVideoId
-                              ? "block"
-                              : "none",
+                          display: "block",
+                          opacity:
+                            activeSlot === slot && matches[previewActiveIndex]?.source_video_id
+                              ? 1
+                              : 0,
+                          zIndex: activeSlot === slot ? 1 : 0,
                         }}
                       />
                     ))}
@@ -1454,8 +1572,8 @@ export function TimelineEditor({
                       className={`
                         relative flex-shrink-0 rounded-md border-2 cursor-pointer
                         transition-all select-none overflow-hidden
-                        border-indigo-500 bg-indigo-50 dark:bg-indigo-950/20
-                        ${isSlideSelected ? "ring-2 ring-indigo-500 ring-offset-1" : ""}
+                        border-primary bg-primary/10
+                        ${isSlideSelected ? "ring-2 ring-primary ring-offset-1" : ""}
                       `}
                       style={{
                         width: `max(50px, ${slideWidthPercent}%)`,
@@ -1474,12 +1592,12 @@ export function TimelineEditor({
                         />
                       )}
                       <div className="relative z-10 flex flex-col items-center justify-center h-full px-1 py-1 text-center">
-                        <ImageIcon className="h-3 w-3 text-indigo-600 dark:text-indigo-400 mb-0.5" />
-                        <span className="text-[10px] font-medium leading-tight text-indigo-700 dark:text-indigo-300">
+                        <ImageIcon className="h-3 w-3 text-primary mb-0.5" />
+                        <span className="text-[10px] font-medium leading-tight text-foreground">
                           {slide.duration.toFixed(1)}s
                         </span>
                         {slide.animation === "kenburns" && (
-                          <span className="text-[9px] text-indigo-500 dark:text-indigo-400 leading-none mt-0.5">KB</span>
+                          <span className="text-[9px] text-primary leading-none mt-0.5">KB</span>
                         )}
                       </div>
                     </div>
@@ -1614,10 +1732,10 @@ export function TimelineEditor({
             const slide = interstitialSlides.find((s) => s.id === selectedSlideId);
             if (!slide) return null;
             return (
-              <div className="rounded-md border border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/10 p-4 space-y-3">
+              <div className="rounded-md border border-primary/25 bg-primary/10 p-4 space-y-3">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-sm font-medium text-indigo-700 dark:text-indigo-300">
-                    <ImageIcon className="h-4 w-4" />
+                  <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                    <ImageIcon className="h-4 w-4 text-primary" />
                     Image Slide Config
                   </div>
                   <Button
@@ -1655,7 +1773,7 @@ export function TimelineEditor({
                         value={slide.imageUrl}
                         onChange={(e) => handleUpdateSlide(slide.id, { imageUrl: e.target.value })}
                         placeholder="https://..."
-                        className="w-full h-7 text-xs px-2 rounded border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        className="w-full h-7 text-xs px-2 rounded border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                       />
                     </div>
 
@@ -1689,7 +1807,7 @@ export function TimelineEditor({
                           step={0.5}
                           value={slide.duration}
                           onChange={(e) => handleUpdateSlide(slide.id, { duration: parseFloat(e.target.value) })}
-                          className="w-24 h-1.5 rounded-lg appearance-none cursor-pointer bg-secondary accent-indigo-500"
+                          className="w-24 h-1.5 rounded-lg appearance-none cursor-pointer bg-secondary accent-primary"
                         />
                       </div>
                     </div>
@@ -1725,7 +1843,7 @@ export function TimelineEditor({
                           <select
                             value={slide.kenBurnsDirection ?? "zoom-in"}
                             onChange={(e) => handleUpdateSlide(slide.id, { kenBurnsDirection: e.target.value as InterstitialSlide["kenBurnsDirection"] })}
-                            className="h-6 text-xs pl-2 pr-6 rounded border bg-background text-foreground appearance-none focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            className="h-6 text-xs pl-2 pr-6 rounded border bg-background text-foreground appearance-none focus:outline-none focus:ring-1 focus:ring-primary"
                           >
                             <option value="zoom-in">Zoom In</option>
                             <option value="zoom-out">Zoom Out</option>
@@ -1831,7 +1949,7 @@ export function TimelineEditor({
               <div className="flex items-center px-3 py-1 bg-muted/20">
                 <button
                   onClick={() => handleInsertSlide(-1)}
-                  className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700 transition-colors"
+                  className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
                 >
                   <Plus className="h-3 w-3" />
                   <span>Insert slide before</span>
@@ -1844,7 +1962,7 @@ export function TimelineEditor({
               .map((slide) => (
                 <div
                   key={`list-slide-${slide.id}`}
-                  className="group flex items-center gap-3 px-3 py-2.5 border-l-4 border-l-indigo-500 bg-indigo-50 dark:bg-indigo-950/20"
+                  className="group flex items-center gap-3 px-3 py-2.5 border-l-4 border-l-primary bg-primary/10"
                 >
                   <div className="flex-shrink-0 w-10 h-10 rounded overflow-hidden border bg-muted flex items-center justify-center">
                     {slide.imageUrl ? (
@@ -1853,7 +1971,7 @@ export function TimelineEditor({
                       <ImageIcon className="h-4 w-4 text-muted-foreground" />
                     )}
                   </div>
-                  <div className="flex-1 min-w-0 text-sm text-indigo-700 dark:text-indigo-300">
+                  <div className="flex-1 min-w-0 text-sm text-foreground">
                     <div className="font-medium">Image Slide</div>
                     <div className="text-xs text-muted-foreground">{slide.duration.toFixed(1)}s · {slide.animation === "kenburns" ? `Ken Burns (${slide.kenBurnsDirection ?? "zoom-in"})` : "Static"}</div>
                   </div>
@@ -1913,7 +2031,7 @@ export function TimelineEditor({
                     isDragOver
                       ? "border-t-2 border-t-primary"
                       : "border-t-transparent"
-                  } ${isInGroup ? "border-r-2 border-r-purple-400 dark:border-r-purple-600" : ""} ${
+                  } ${isInGroup ? "border-r-2 border-r-chart-2" : ""} ${
                     isGroupStart && isInGroup ? "rounded-tr-md" : ""
                   } ${isGroupEnd && isInGroup ? "rounded-br-md" : ""}`}
                 >
@@ -1949,7 +2067,7 @@ export function TimelineEditor({
                     <div className="flex items-center gap-1 text-xs">
                       {isGroupStart && isInGroup && match.merge_group_duration ? (
                         <span
-                          className="text-[10px] font-mono bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 px-1 rounded mr-0.5"
+                          className="text-[10px] font-mono bg-chart-2/15 text-chart-2 px-1 rounded mr-0.5"
                           title={`Segment video: ${match.merge_group_duration.toFixed(1)}s (grupate)`}
                         >
                           {match.merge_group_duration.toFixed(1)}s
@@ -2007,7 +2125,7 @@ export function TimelineEditor({
                             {Math.round(match.confidence * 100)}%
                           </span>
                           {match.product_group && (
-                            <Badge variant="outline" className="text-[9px] h-4 px-1 border-purple-400 text-purple-600 dark:text-purple-300">
+                            <Badge variant="outline" className="text-[9px] h-4 px-1 border-chart-2/60 text-chart-2">
                               {match.product_group}
                             </Badge>
                           )}
@@ -2026,12 +2144,12 @@ export function TimelineEditor({
                         <>
                           <Badge
                             variant="secondary"
-                            className="text-xs bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200 max-w-[90px]"
+                            className="text-xs border-primary/25 bg-primary/10 text-foreground max-w-[90px]"
                           >
                             <Film className="h-3 w-3 mr-1 flex-shrink-0" />
                             <span className="truncate">{match.segment_keywords[0] ?? "auto"}</span>
                           </Badge>
-                          <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">
+                          <span className="text-xs text-primary font-medium">
                             auto
                           </span>
                           <Button
@@ -2072,7 +2190,7 @@ export function TimelineEditor({
                 {slidesAfter.map((slide) => (
                   <div
                     key={`list-slide-${slide.id}`}
-                    className="group flex items-center gap-3 px-3 py-2.5 border-l-4 border-l-indigo-500 bg-indigo-50 dark:bg-indigo-950/20"
+                    className="group flex items-center gap-3 px-3 py-2.5 border-l-4 border-l-primary bg-primary/10"
                   >
                     <div className="flex-shrink-0 w-10 h-10 rounded overflow-hidden border bg-muted flex items-center justify-center">
                       {slide.imageUrl ? (
@@ -2081,7 +2199,7 @@ export function TimelineEditor({
                         <ImageIcon className="h-4 w-4 text-muted-foreground" />
                       )}
                     </div>
-                    <div className="flex-1 min-w-0 text-sm text-indigo-700 dark:text-indigo-300">
+                    <div className="flex-1 min-w-0 text-sm text-foreground">
                       <div className="font-medium">Image Slide</div>
                       <div className="text-xs text-muted-foreground">{slide.duration.toFixed(1)}s · {slide.animation === "kenburns" ? `Ken Burns (${slide.kenBurnsDirection ?? "zoom-in"})` : "Static"}</div>
                     </div>
@@ -2101,7 +2219,7 @@ export function TimelineEditor({
                   <div className="flex items-center px-3 py-1 bg-muted/20">
                     <button
                       onClick={() => handleInsertSlide(idx)}
-                      className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700 transition-colors"
+                      className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
                     >
                       <Plus className="h-3 w-3" />
                       <span>Insert slide after</span>

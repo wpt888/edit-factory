@@ -8,7 +8,7 @@ export function Hero() {
           Automated video production for indie creators.
         </h1>
         <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto mt-6">
-          Edit Factory turns any input — feed, script, idea — into social-media-ready videos. Runs entirely on your desktop. One-time license, no subscription.
+          Blipost turns any input — feed, script, idea — into social-media-ready videos. Runs entirely on your desktop. One-time license, no subscription.
         </p>
         <div className="flex gap-4 justify-center mt-10">
           <Button asChild size="lg">

@@ -17,7 +17,7 @@ test.describe('Phase 90: landing page + pricing', () => {
 
     // Section heading assertions (one per section per D-02 order).
     await expect(page.getByRole('heading', { name: 'Automated video production for indie creators.', level: 1 })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Why Edit Factory', level: 2 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Why Blipost', level: 2 })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Simple pricing', level: 2 })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'See it in action', level: 2 })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'How we compare', level: 2 })).toBeVisible();

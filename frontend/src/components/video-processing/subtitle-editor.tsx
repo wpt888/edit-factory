@@ -396,7 +396,7 @@ export function SubtitleEditor({
           ) : (
             <>
               {/* Gradient background simulating video */}
-              <div className="absolute inset-0 bg-gradient-to-br from-gray-700 via-gray-800 to-gray-900" />
+              <div className="absolute inset-0 bg-muted" />
               {renderLocalSubtitleOverlay(previewDimensions)}
             </>
           )}
@@ -448,7 +448,7 @@ export function SubtitleEditor({
               </>
             ) : (
               <>
-                <div className="absolute inset-0 bg-gradient-to-br from-gray-700 via-gray-800 to-gray-900" />
+                <div className="absolute inset-0 bg-muted" />
                 {renderLocalSubtitleOverlay({ height: 900 })}
               </>
             )}

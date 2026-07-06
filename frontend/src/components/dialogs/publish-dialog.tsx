@@ -271,13 +271,13 @@ export function PublishDialog({
         if (data.youtube_title) {
           setYoutubeTitle(data.youtube_title);
         }
-        toast.success(data.youtube_title ? "Caption + titlu YouTube generat cu AI!" : "Caption generat cu AI!");
+        toast.success(data.youtube_title ? "Caption + YouTube title generated with AI!" : "Caption generated with AI!");
       }
     } catch (err) {
       if (err && typeof err === "object" && "detail" in err) {
         toast.error((err as { detail: string }).detail);
       } else {
-        toast.error("Nu s-a putut genera caption-ul");
+        toast.error("Couldn't generate the caption");
       }
     } finally {
       setGeneratingCaption(false);
@@ -316,7 +316,7 @@ export function PublishDialog({
       if (pollCountRef.current > MAX_POLL_COUNT) {
         pollRef.current = null;
         setDialogState("error");
-        setErrorMessage("Timeout — publicarea dureaza prea mult.");
+        setErrorMessage("Timeout — publishing is taking too long.");
         return;
       }
 
@@ -353,8 +353,8 @@ export function PublishDialog({
       setProgressPercent(pct);
 
       const parts: string[] = [];
-      if (jobs.postiz) parts.push(`Postiz: ${completedJobsRef.current.postiz || "in curs..."}`);
-      if (jobs.buffer) parts.push(`Buffer: ${completedJobsRef.current.buffer || "in curs..."}`);
+      if (jobs.postiz) parts.push(`Postiz: ${completedJobsRef.current.postiz || "in progress..."}`);
+      if (jobs.buffer) parts.push(`Buffer: ${completedJobsRef.current.buffer || "in progress..."}`);
       setProgressStep(parts.join(" | "));
 
       if (completedCount >= totalJobs) {
@@ -365,8 +365,8 @@ export function PublishDialog({
             errorDetails.length > 0
               ? errorDetails.join("\n")
               : failedCount < totalJobs
-                ? "Unele platforme au esuat."
-                : "Publicarea a esuat."
+                ? "Some platforms failed."
+                : "Publishing failed."
           );
         } else {
           setDialogState("success");
@@ -384,7 +384,7 @@ export function PublishDialog({
   // Upload only (Postiz)
   const handleUploadOnly = async () => {
     setDialogState("uploading");
-    setProgressStep("Se incarca videoclipul in Postiz...");
+    setProgressStep("Uploading the video to Postiz...");
     setProgressPercent(30);
 
     try {
@@ -400,14 +400,14 @@ export function PublishDialog({
         onPublished?.();
       } else {
         setDialogState("error");
-        setErrorMessage(data.message || "Upload esuat");
+        setErrorMessage(data.message || "Upload failed");
       }
     } catch (err) {
       setDialogState("error");
       if (err && typeof err === "object" && "detail" in err && (err as { detail: string }).detail) {
         setErrorMessage((err as { detail: string }).detail);
       } else {
-        setErrorMessage(err instanceof Error ? err.message : "Eroare la upload");
+        setErrorMessage(err instanceof Error ? err.message : "Upload error");
       }
     }
   };
@@ -420,13 +420,13 @@ export function PublishDialog({
     }
 
     if (selectedIds.size === 0) {
-      toast.error("Selecteaza cel putin o platforma");
+      toast.error("Select at least one platform");
       return;
     }
 
     setDialogState("publishing");
     setProgressPercent(0);
-    setProgressStep("Se porneste publicarea...");
+    setProgressStep("Starting publishing...");
 
     const jobs: { postiz?: string; buffer?: string } = {};
 
@@ -477,7 +477,7 @@ export function PublishDialog({
 
       if (!jobs.postiz && !jobs.buffer) {
         setDialogState("error");
-        setErrorMessage("Nu s-a putut porni publicarea");
+        setErrorMessage("Couldn't start publishing");
         return;
       }
 
@@ -529,10 +529,10 @@ export function PublishDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Share2 className="h-5 w-5" />
-            Publica pe Social Media
+            Publish to Social Media
           </DialogTitle>
           <DialogDescription>
-            Selecteaza platformele si configureaza postarea.
+            Select platforms and configure your post.
           </DialogDescription>
         </DialogHeader>
 
@@ -544,7 +544,7 @@ export function PublishDialog({
               <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-muted/50 border border-border">
                 <Info className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                 <div className="text-sm">
-                  <span className="font-medium text-muted-foreground">Produs:</span>{" "}
+                  <span className="font-medium text-muted-foreground">Product:</span>{" "}
                   <span className="text-muted-foreground">
                     {projectName && <span className="font-medium">{projectName} — </span>}
                     {contextText.length > 200 ? contextText.slice(0, 200) + "..." : contextText}
@@ -557,7 +557,7 @@ export function PublishDialog({
             {publishMode !== "upload" && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label>Platforme</Label>
+                  <Label>Platforms</Label>
                   {platforms.length > 0 && (
                     <button
                       type="button"
@@ -570,7 +570,7 @@ export function PublishDialog({
                         }
                       }}
                     >
-                      {selectedIds.size === platforms.length ? "Deselecteaza tot" : "Selecteaza tot"}
+                      {selectedIds.size === platforms.length ? "Deselect all" : "Select all"}
                     </button>
                   )}
                 </div>
@@ -580,7 +580,7 @@ export function PublishDialog({
                   </div>
                 ) : platforms.length === 0 ? (
                   <p className="text-sm text-muted-foreground py-2">
-                    Nicio platforma conectata. Configureaza Postiz sau Buffer in Settings.
+                    No platform connected. Configure Postiz or Buffer in Settings.
                   </p>
                 ) : (
                   <div className="flex flex-wrap gap-2">
@@ -616,7 +616,7 @@ export function PublishDialog({
                             {PLATFORM_NAMES[platform.platformType] || platform.platformType}
                           </Badge>
                           {platform.source === "buffer" && (
-                            <Badge variant="outline" className="text-xs text-blue-400 border-blue-400/50">
+                            <Badge variant="outline" className="text-xs text-primary border-primary/50">
                               Buffer
                             </Badge>
                           )}
@@ -647,13 +647,13 @@ export function PublishDialog({
                       ) : (
                         <Sparkles className="h-3 w-3" />
                       )}
-                      {generatingCaption ? "Se genereaza..." : "Genereaza cu AI"}
+                      {generatingCaption ? "Generating..." : "Generate with AI"}
                     </Button>
                   )}
                 </div>
                 <Textarea
                   id="caption"
-                  placeholder="Scrie caption-ul pentru postare..."
+                  placeholder="Write the caption for your post..."
                   value={caption}
                   onChange={(e) => setCaption(e.target.value)}
                   rows={4}
@@ -691,7 +691,7 @@ export function PublishDialog({
                   <div className="flex items-start gap-2 text-xs text-yellow-600">
                     <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                     <span>
-                      Caption va fi trunchiat automat pe:{" "}
+                      Caption will be automatically truncated on:{" "}
                       {charWarnings
                         .map((w) => `${w.platform} (max ${w.limit})`)
                         .join(", ")}
@@ -705,12 +705,12 @@ export function PublishDialog({
             {publishMode !== "upload" && hasYoutubeSelected && (
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <Label htmlFor="youtube-title">Titlu YouTube</Label>
-                  <span className="text-xs text-muted-foreground">(max 100 caractere)</span>
+                  <Label htmlFor="youtube-title">YouTube title</Label>
+                  <span className="text-xs text-muted-foreground">(max 100 characters)</span>
                 </div>
                 <Input
                   id="youtube-title"
-                  placeholder="Titlu SEO pentru YouTube..."
+                  placeholder="SEO title for YouTube..."
                   value={youtubeTitle}
                   onChange={(e) => setYoutubeTitle(e.target.value.slice(0, 100))}
                   maxLength={100}
@@ -723,7 +723,7 @@ export function PublishDialog({
 
             {/* Publish mode */}
             <div className="space-y-3">
-              <Label>Mod publicare</Label>
+              <Label>Publish mode</Label>
               <div className={`grid gap-2 ${showDraftUpload ? "grid-cols-4" : "grid-cols-2"}`}>
                 <button
                   type="button"
@@ -735,7 +735,7 @@ export function PublishDialog({
                   }`}
                 >
                   <Share2 className="h-4 w-4" />
-                  <span className="font-medium">Publica acum</span>
+                  <span className="font-medium">Publish now</span>
                 </button>
                 <button
                   type="button"
@@ -747,7 +747,7 @@ export function PublishDialog({
                   }`}
                 >
                   <Calendar className="h-4 w-4" />
-                  <span className="font-medium">Programeaza</span>
+                  <span className="font-medium">Schedule</span>
                 </button>
                 {showDraftUpload && (
                   <>
@@ -780,12 +780,12 @@ export function PublishDialog({
               </div>
               {publishMode === "draft" && (
                 <p className="text-xs text-muted-foreground">
-                  Videoclipul va fi incarcat in Postiz ca draft. Poti programa postarea direct din Postiz.
+                  The video will be uploaded to Postiz as a draft. You can schedule the post directly from Postiz.
                 </p>
               )}
               {publishMode === "upload" && (
                 <p className="text-xs text-muted-foreground">
-                  Videoclipul va fi doar incarcat in biblioteca Postiz, fara a crea o postare. Util pentru a pregati continutul in avans.
+                  The video will only be uploaded to your Postiz library, without creating a post. Useful for preparing content in advance.
                 </p>
               )}
               {publishMode === "schedule" && (
@@ -797,7 +797,7 @@ export function PublishDialog({
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     min={minScheduleDate}
                   />
-                  <PostizMonthlyCalendar title="Calendar postari" />
+                  <PostizMonthlyCalendar title="Posts calendar" />
                 </>
               )}
             </div>
@@ -825,12 +825,12 @@ export function PublishDialog({
             <div className="text-center">
               <p className="text-lg font-semibold">
                 {publishMode === "upload"
-                  ? "Video incarcat in Postiz!"
+                  ? "Video uploaded to Postiz!"
                   : publishMode === "schedule"
-                    ? "Postare programata!"
+                    ? "Post scheduled!"
                     : publishMode === "draft"
-                      ? "Draft salvat in Postiz!"
-                      : "Publicat cu succes!"}
+                      ? "Draft saved to Postiz!"
+                      : "Published successfully!"}
               </p>
               <p className="text-sm text-muted-foreground mt-1">
                 {progressStep}
@@ -844,7 +844,7 @@ export function PublishDialog({
           <div className="flex flex-col items-center gap-4 py-8">
             <XCircle className="h-14 w-14 text-red-500" />
             <div className="text-center max-w-lg">
-              <p className="text-lg font-semibold">Publicare esuata</p>
+              <p className="text-lg font-semibold">Publishing failed</p>
               <div className="mt-2 space-y-1">
                 {errorMessage.split("\n").map((line, i) => (
                   <p key={i} className="text-sm text-muted-foreground break-words text-left">
@@ -861,7 +861,7 @@ export function PublishDialog({
           {dialogState === "form" && (
             <>
               <Button variant="outline" onClick={handleClose}>
-                Anuleaza
+                Cancel
               </Button>
               <Button
                 onClick={handlePublish}
@@ -878,30 +878,30 @@ export function PublishDialog({
                   <Share2 className="h-4 w-4 mr-2" />
                 )}
                 {publishMode === "upload"
-                  ? "Incarca in Postiz"
+                  ? "Upload to Postiz"
                   : publishMode === "schedule"
-                    ? "Programeaza"
+                    ? "Schedule"
                     : publishMode === "draft"
-                      ? "Salveaza draft"
-                      : "Publica"}
+                      ? "Save draft"
+                      : "Publish"}
               </Button>
             </>
           )}
           {(dialogState === "publishing" || dialogState === "uploading") && (
             <Button variant="outline" disabled>
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              {dialogState === "uploading" ? "Se incarca..." : "Se publica..."}
+              {dialogState === "uploading" ? "Uploading..." : "Publishing..."}
             </Button>
           )}
           {dialogState === "success" && (
-            <Button onClick={handleClose}>Inchide</Button>
+            <Button onClick={handleClose}>Close</Button>
           )}
           {dialogState === "error" && (
             <>
               <Button variant="outline" onClick={handleClose}>
-                Inchide
+                Close
               </Button>
-              <Button onClick={handleRetry}>Incearca din nou</Button>
+              <Button onClick={handleRetry}>Try again</Button>
             </>
           )}
         </DialogFooter>

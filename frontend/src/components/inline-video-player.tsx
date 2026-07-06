@@ -80,17 +80,17 @@ export function InlineVideoPlayer({
           />
           {/* Action bar: QC checkbox + Regenerate voice-over */}
           {(onToggleQc || (hasVoiceover && onRegenerateVoiceover)) && (
-            <div className="bg-zinc-900 border-t border-zinc-700 px-4 py-2.5 flex items-center justify-between gap-3">
+            <div className="bg-card border-t border-border px-4 py-2.5 flex items-center justify-between gap-3">
               {onToggleQc && (
                 <div className="flex items-center gap-2">
                   <Checkbox
                     checked={qcVerified || false}
                     onCheckedChange={() => onToggleQc()}
-                    className="h-5 w-5 border-2 border-blue-500 data-[state=checked]:border-blue-500 data-[state=checked]:bg-blue-500"
+                    className="h-5 w-5 border-2 border-primary data-[state=checked]:border-primary data-[state=checked]:bg-primary"
                   />
                   <label
                     className={`text-sm cursor-pointer select-none flex items-center gap-1.5 ${
-                      qcVerified ? "text-blue-400 font-medium" : "text-zinc-400"
+                      qcVerified ? "text-primary font-medium" : "text-muted-foreground"
                     }`}
                     onClick={() => onToggleQc()}
                   >
@@ -103,7 +103,7 @@ export function InlineVideoPlayer({
                 <Button
                   size="sm"
                   variant="outline"
-                  className="text-xs border-zinc-600 text-zinc-300 hover:text-white hover:bg-zinc-800"
+                  className="text-xs border-border text-muted-foreground hover:text-foreground hover:bg-muted"
                   onClick={() => onRegenerateVoiceover()}
                   disabled={regeneratingVoiceover}
                 >
@@ -112,15 +112,15 @@ export function InlineVideoPlayer({
                   ) : (
                     <RefreshCw className="h-3 w-3 mr-1.5" />
                   )}
-                  {regeneratingVoiceover ? "Regenerare..." : "Regenerează voice-over"}
+                  {regeneratingVoiceover ? "Regenerating..." : "Regenerate voice-over"}
                 </Button>
               )}
             </div>
           )}
           {scriptText && (
-            <div className="bg-zinc-900 border-t border-zinc-700 px-4 py-3 max-h-[30vh] overflow-y-auto">
-              <p className="text-[11px] text-zinc-400 font-medium mb-1.5 uppercase tracking-wider">Script</p>
-              <p className="text-sm text-zinc-200 leading-relaxed whitespace-pre-wrap">{scriptText}</p>
+            <div className="bg-card border-t border-border px-4 py-3 max-h-[30vh] overflow-y-auto">
+              <p className="text-[11px] text-muted-foreground font-medium mb-1.5 uppercase tracking-wider">Script</p>
+              <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">{scriptText}</p>
             </div>
           )}
         </div>

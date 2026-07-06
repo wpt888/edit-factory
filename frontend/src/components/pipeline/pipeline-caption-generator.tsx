@@ -674,7 +674,7 @@ export function PipelineCaptionGenerator({
                   <Badge variant="outline" className="text-xs font-normal">Optional</Badge>
                   {contextProducts.length > 0 && (
                     <Badge variant="secondary" className="text-xs font-normal">
-                      {contextProducts.length} {contextProducts.length === 1 ? "produs" : "produse"}
+                      {contextProducts.length} {contextProducts.length === 1 ? "product" : "products"}
                     </Badge>
                   )}
                 </span>
@@ -693,10 +693,10 @@ export function PipelineCaptionGenerator({
                     <ShoppingBag className="size-4 text-primary" />
                     <span className="text-sm font-medium">
                       {contextProducts.length === 0
-                        ? "Niciun produs selectat"
+                        ? "No products selected"
                         : contextProducts.length === 1
-                          ? "Produs selectat"
-                          : `${contextProducts.length} produse selectate`}
+                          ? "Product selected"
+                          : `${contextProducts.length} products selected`}
                     </span>
                   </div>
                   <Button
@@ -706,7 +706,7 @@ export function PipelineCaptionGenerator({
                     onClick={handleOpenCatalog}
                   >
                     <BookOpen className="h-3.5 w-3.5 mr-1" />
-                    {catalogOpen ? "Închide Catalog" : "Adaugă din Catalog"}
+                    {catalogOpen ? "Close Catalog" : "Add from Catalog"}
                   </Button>
                 </div>
 
@@ -742,7 +742,7 @@ export function PipelineCaptionGenerator({
                 <div className="relative flex-1">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input
-                    placeholder="Caută produse..."
+                    placeholder="Search products..."
                     value={catalogSearch}
                     onChange={(e) => handleCatalogSearch(e.target.value)}
                     className="pl-8 h-8 text-sm"
@@ -756,7 +756,7 @@ export function PipelineCaptionGenerator({
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
               ) : catalogProducts.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">Niciun produs găsit</p>
+                <p className="text-sm text-muted-foreground text-center py-4">No products found</p>
               ) : (
                 <div className="grid grid-cols-2 gap-2 max-h-[280px] overflow-y-auto">
                   {catalogProducts.map((p) => (
@@ -815,7 +815,7 @@ export function PipelineCaptionGenerator({
                   onClick={handleAddCatalogProducts}
                 >
                   <Plus className="h-3.5 w-3.5 mr-1" />
-                  Adaugă {selectedCatalogIds.size > 0 ? `(${selectedCatalogIds.size})` : ""}
+                  Add {selectedCatalogIds.size > 0 ? `(${selectedCatalogIds.size})` : ""}
                 </Button>
               </div>
                 </div>
@@ -1098,9 +1098,9 @@ export function PipelineCaptionGenerator({
               {/* YouTube Title — shown when generated or toggle is on */}
               {(generateYoutubeTitles || manualYoutubeTitles[key]?.trim()) && (
                 <div className="mt-3 space-y-1">
-                  <Label className="text-xs text-muted-foreground">Titlu YouTube (max 100)</Label>
+                  <Label className="text-xs text-muted-foreground">YouTube Title (max 100)</Label>
                   <Input
-                    placeholder="Titlu SEO pentru YouTube..."
+                    placeholder="SEO title for YouTube..."
                     value={manualYoutubeTitles[key] || ""}
                     onChange={(e) => {
                       setManualYoutubeTitles(prev => ({

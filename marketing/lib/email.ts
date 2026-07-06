@@ -2,7 +2,7 @@ import { Resend } from "resend";
 import type { LemonSqueezyTier } from "./lemon-squeezy";
 
 /**
- * Send the Edit Factory license-key confirmation email via Resend.
+ * Send the Blipost license-key confirmation email via Resend.
  *
  * Phase 91 — D-12 (Resend over alternatives), D-13 (sole new npm dep),
  * D-14 (subject + body LOCKED verbatim).
@@ -48,35 +48,35 @@ export async function sendLicenseEmail(args: {
   const tierDisplayName = TIER_DISPLAY_NAMES[args.tier];
 
   // Subject LOCKED verbatim per D-14.
-  const subject = "Your Edit Factory license key";
+  const subject = "Your Blipost license key";
 
   // Body LOCKED verbatim per D-14. Plain-text version:
-  const text = `Thanks for buying Edit Factory!
+  const text = `Thanks for buying Blipost!
 
 Your license key:    ${args.licenseKey}
 Your tier:           ${tierDisplayName}
 
-Download Edit Factory:
-  Windows:  https://github.com/${repo}/releases/latest/download/editfactory-setup.exe
-  macOS:    https://github.com/${repo}/releases/latest/download/EditFactory.dmg
+Download Blipost:
+  Windows:  https://github.com/${repo}/releases/latest/download/blipost-setup.exe
+  macOS:    https://github.com/${repo}/releases/latest/download/Blipost.dmg
 
 Activate by entering your license key in the desktop app on first launch.
 
 Refund policy: 30-day no-questions refund. Reply to this email.
 
 Thanks,
-The Edit Factory team`;
+The Blipost team`;
 
   // HTML version: same content, <br> separators, <pre> wrap around the license key per D-14.
-  const html = `<p>Thanks for buying Edit Factory!</p>
+  const html = `<p>Thanks for buying Blipost!</p>
 <p>Your license key:    <pre>${args.licenseKey}</pre><br />
 Your tier:           ${tierDisplayName}</p>
-<p>Download Edit Factory:<br />
-&nbsp;&nbsp;Windows:  <a href="https://github.com/${repo}/releases/latest/download/editfactory-setup.exe">editfactory-setup.exe</a><br />
-&nbsp;&nbsp;macOS:    <a href="https://github.com/${repo}/releases/latest/download/EditFactory.dmg">EditFactory.dmg</a></p>
+<p>Download Blipost:<br />
+&nbsp;&nbsp;Windows:  <a href="https://github.com/${repo}/releases/latest/download/blipost-setup.exe">blipost-setup.exe</a><br />
+&nbsp;&nbsp;macOS:    <a href="https://github.com/${repo}/releases/latest/download/Blipost.dmg">Blipost.dmg</a></p>
 <p>Activate by entering your license key in the desktop app on first launch.</p>
 <p>Refund policy: 30-day no-questions refund. Reply to this email.</p>
-<p>Thanks,<br />The Edit Factory team</p>`;
+<p>Thanks,<br />The Blipost team</p>`;
 
   const resend = new Resend(apiKey);
   return await resend.emails.send({

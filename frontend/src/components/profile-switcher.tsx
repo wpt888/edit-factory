@@ -34,7 +34,7 @@ export function ProfileSwitcher() {
   // Show skeleton during initial load
   if (isLoading) {
     return (
-      <div className="w-32 h-9 bg-muted animate-pulse rounded-md" />
+      <div className="w-full h-9 bg-muted animate-pulse rounded-lg" />
     );
   }
 
@@ -50,10 +50,10 @@ export function ProfileSwitcher() {
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" className="gap-2">
+          <Button variant="outline" className="w-full justify-start gap-2">
             <User className="h-4 w-4" />
-            {currentProfile?.name || "Select Profile"}
-            <ChevronDown className="h-4 w-4 opacity-50" />
+            <span className="truncate">{currentProfile?.name || "Select Profile"}</span>
+            <ChevronDown className="ml-auto h-4 w-4 opacity-50" />
           </Button>
         </DropdownMenuTrigger>
 

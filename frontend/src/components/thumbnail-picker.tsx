@@ -115,7 +115,7 @@ export function ThumbnailPicker({
                     <button
                       onClick={() => handleSelect(segId, thumbFilename)}
                       className={`w-[54px] h-[96px] rounded overflow-hidden border-2 flex-shrink-0 hover:opacity-80 transition-opacity ${
-                        isSelected ? "border-blue-500 ring-2 ring-blue-300" : "border-transparent"
+                        isSelected ? "border-primary ring-2 ring-primary/40" : "border-transparent"
                       }`}
                     >
                       <img
@@ -160,7 +160,7 @@ export function ThumbnailPicker({
                           key={frame.index}
                           onClick={() => handleSelect(segId, frame.frame_url)}
                           className={`aspect-[9/16] rounded overflow-hidden border-2 hover:opacity-80 transition-opacity ${
-                            frameSelected ? "border-blue-500 ring-2 ring-blue-300" : "border-muted"
+                            frameSelected ? "border-primary ring-2 ring-primary/40" : "border-muted"
                           }`}
                         >
                           <img

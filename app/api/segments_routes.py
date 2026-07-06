@@ -717,7 +717,7 @@ async def browse_local_file(
     if _os.getenv("DESKTOP_MODE", "").lower() in ("true", "1", "yes"):
         raise HTTPException(
             status_code=501,
-            detail="Native file dialog is provided by the desktop shell — update Edit Factory.",
+            detail="Native file dialog is provided by the desktop shell — update Blipost.",
         )
 
     proc = await asyncio.create_subprocess_exec(

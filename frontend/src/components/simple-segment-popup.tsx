@@ -214,10 +214,10 @@ export function SimpleSegmentPopup({
             <div className="grid gap-0.5 leading-none">
               <Label htmlFor="single-use" className="text-sm font-medium cursor-pointer flex items-center gap-1.5">
                 <Repeat1 className="h-3.5 w-3.5 text-orange-500" />
-                Folosește o singură dată
+                Use only once
               </Label>
               <p className="text-xs text-muted-foreground">
-                Segmentul va apărea maxim o dată în videoclip, fără a fi repetat.
+                The segment will appear at most once in the video, with no repeats.
               </p>
             </div>
           </div>

@@ -337,7 +337,7 @@ async def lifespan(app: FastAPI):
 
 # Create the application
 app = FastAPI(
-    title="Edit Factory",
+    title="Blipost",
     description="Video processing API for reels and short-form content",
     version=APP_VERSION,
     lifespan=lifespan
@@ -468,7 +468,7 @@ if static_path.exists():
 async def root():
     """Root endpoint - redirect to docs."""
     return {
-        "name": "Edit Factory",
+        "name": "Blipost",
         "version": APP_VERSION,
         "docs": "/docs",
         "api": "/api/v1"

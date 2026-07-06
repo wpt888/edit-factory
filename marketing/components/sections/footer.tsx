@@ -3,9 +3,9 @@ export function Footer() {
     <footer className="border-t mt-20 py-12 bg-background">
       <div className="max-w-6xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8">
         <div>
-          <div className="font-bold text-lg">Edit Factory</div>
+          <div className="font-bold text-lg">Blipost</div>
           <p className="text-muted-foreground text-sm mt-2">Automated video production for indie creators.</p>
-          <p className="text-muted-foreground text-xs mt-4">© 2026 Edit Factory. All rights reserved.</p>
+          <p className="text-muted-foreground text-xs mt-4">© 2026 Blipost. All rights reserved.</p>
         </div>
         <div>
           <h3 className="font-semibold text-sm">Product</h3>

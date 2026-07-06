@@ -60,7 +60,7 @@ export default function WikiPage() {
       setPages(data);
       return data;
     } catch (err) {
-      handleApiError(err, "Nu am putut încărca notițele");
+      handleApiError(err, "Couldn't load notes");
       return [];
     } finally {
       setLoadingList(false);
@@ -84,7 +84,7 @@ export default function WikiPage() {
       const data: WikiPageFull = await res.json();
       setCurrent(data);
     } catch (err) {
-      handleApiError(err, "Nu am putut încărca notița");
+      handleApiError(err, "Couldn't load note");
       setCurrent(null);
     } finally {
       setLoadingPage(false);
@@ -95,7 +95,7 @@ export default function WikiPage() {
     setCreating(true);
     try {
       const res = await apiPost("/wiki", {
-        title: "Notiță nouă",
+        title: "New note",
         category: "",
         content_md: "",
       });
@@ -109,7 +109,7 @@ export default function WikiPage() {
       setDraftMd(created.content_md || "");
       setEditing(true);
     } catch (err) {
-      handleApiError(err, "Nu am putut crea notița");
+      handleApiError(err, "Couldn't create note");
     } finally {
       setCreating(false);
     }
@@ -136,9 +136,9 @@ export default function WikiPage() {
       setCurrent(updated);
       setEditing(false);
       await loadList();
-      toast.success("Notiță salvată");
+      toast.success("Note saved");
     } catch (err) {
-      handleApiError(err, "Nu am putut salva notița");
+      handleApiError(err, "Couldn't save note");
     } finally {
       setSaving(false);
     }
@@ -148,13 +148,13 @@ export default function WikiPage() {
     if (!current) return;
     try {
       await apiDelete(`/wiki/${current.id}`);
-      toast.success("Notiță ștearsă");
+      toast.success("Note deleted");
       setCurrent(null);
       setSelectedId(null);
       setEditing(false);
       await loadList();
     } catch (err) {
-      handleApiError(err, "Nu am putut șterge notița");
+      handleApiError(err, "Couldn't delete note");
     }
   }, [current, loadList]);
 
@@ -162,7 +162,7 @@ export default function WikiPage() {
     <div className="container mx-auto p-6">
       <div className="mb-4 flex items-center gap-2">
         <NotebookPen className="size-6 text-primary" />
-        <h1 className="text-2xl font-bold">Notițe</h1>
+        <h1 className="text-2xl font-bold">Notes</h1>
         <Badge variant="secondary" className="ml-1">
           {currentProfile?.name || "—"}
         </Badge>
@@ -203,13 +203,13 @@ export default function WikiPage() {
                 <Input
                   value={draftTitle}
                   onChange={(e) => setDraftTitle(e.target.value)}
-                  placeholder="Titlu"
+                  placeholder="Title"
                   className="sm:flex-1 text-base font-semibold"
                 />
                 <Input
                   value={draftCategory}
                   onChange={(e) => setDraftCategory(e.target.value)}
-                  placeholder="Categorie (opțional)"
+                  placeholder="Category (optional)"
                   className="sm:w-56"
                 />
               </div>
@@ -223,13 +223,13 @@ export default function WikiPage() {
                   <Textarea
                     value={draftMd}
                     onChange={(e) => setDraftMd(e.target.value)}
-                    placeholder="Scrie în Markdown…"
+                    placeholder="Write in Markdown…"
                     className="min-h-[300px] flex-1 resize-none font-mono text-sm"
                   />
                 </div>
                 <div className="flex min-h-0 flex-col">
                   <span className="mb-1 text-xs font-medium text-muted-foreground">
-                    Previzualizare
+                    Preview
                   </span>
                   <div className="flex-1 overflow-y-auto rounded-md border bg-background p-4">
                     <WikiMarkdown content={draftMd} />
@@ -238,7 +238,7 @@ export default function WikiPage() {
               </div>
               <div className="flex items-center justify-end gap-2">
                 <Button variant="ghost" onClick={() => setEditing(false)} disabled={saving}>
-                  <X className="mr-1 size-4" /> Anulează
+                  <X className="mr-1 size-4" /> Cancel
                 </Button>
                 <Button onClick={handleSave} disabled={saving}>
                   {saving ? (
@@ -246,7 +246,7 @@ export default function WikiPage() {
                   ) : (
                     <Save className="mr-1 size-4" />
                   )}
-                  Salvează
+                  Save
                 </Button>
               </div>
             </div>
@@ -264,24 +264,24 @@ export default function WikiPage() {
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <Button variant="outline" size="sm" onClick={startEdit}>
-                    <Pencil className="mr-1 size-4" /> Editează
+                    <Pencil className="mr-1 size-4" /> Edit
                   </Button>
                   <AlertDialog>
                     <AlertDialogTrigger asChild>
-                      <Button variant="ghost" size="icon" title="Șterge notița">
+                      <Button variant="ghost" size="icon" title="Delete note">
                         <Trash2 className="size-4 text-destructive" />
                       </Button>
                     </AlertDialogTrigger>
                     <AlertDialogContent>
                       <AlertDialogHeader>
-                        <AlertDialogTitle>Ștergi „{current.title}"?</AlertDialogTitle>
+                        <AlertDialogTitle>Delete "{current.title}"?</AlertDialogTitle>
                         <AlertDialogDescription>
-                          Această acțiune nu poate fi anulată.
+                          This action cannot be undone.
                         </AlertDialogDescription>
                       </AlertDialogHeader>
                       <AlertDialogFooter>
-                        <AlertDialogCancel>Anulează</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleDelete}>Șterge</AlertDialogAction>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={handleDelete}>Delete</AlertDialogAction>
                       </AlertDialogFooter>
                     </AlertDialogContent>
                   </AlertDialog>
@@ -313,17 +313,17 @@ function EmptyState({
       <NotebookPen className="size-12 text-muted-foreground/40" />
       <div>
         <p className="font-medium">
-          {hasPages ? "Selectează o notiță" : "Nicio notiță încă"}
+          {hasPages ? "Select a note" : "No notes yet"}
         </p>
         <p className="text-sm text-muted-foreground">
           {hasPages
-            ? "Alege o notiță din stânga sau creează una nouă."
-            : "Salvează aici prompturi, idei și notițe de lucru."}
+            ? "Pick a note from the left or create a new one."
+            : "Save prompts, ideas, and working notes here."}
         </p>
       </div>
       <Button onClick={onNew} disabled={creating}>
         {creating ? <Loader2 className="mr-1 size-4 animate-spin" /> : null}
-        Notiță nouă
+        New note
       </Button>
     </div>
   );

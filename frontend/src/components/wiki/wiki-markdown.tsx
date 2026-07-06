@@ -17,7 +17,7 @@ export function WikiMarkdown({ content }: { content: string }) {
   if (!trimmed) {
     return (
       <p className="text-sm text-muted-foreground italic">
-        Această pagină este goală. Apasă „Editează" pentru a adăuga conținut.
+        This page is empty. Click "Edit" to add content.
       </p>
     );
   }

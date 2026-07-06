@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Edit Factory is a video processing platform for social media content creators (reels, TikTok, YouTube Shorts). It automates video production by combining Gemini AI script generation, ElevenLabs/Edge-TTS text-to-speech, keyword-based segment matching, FFmpeg video assembly, Supabase persistence, and Postiz social media publishing.
 
+## Related but Separate Project: blipost.com (social-scheduler)
+
+`C:\obSID SRL\n8n\social-scheduler` is a **different codebase for a different product**. They share a brand name and nothing else — don't assume shared code, database, auth, or conventions between them. Check which directory you're in before applying a pattern learned in one to the other.
+
+- **This repo (edit_factory)** — Electron desktop app + FastAPI backend + Next.js frontend, described above. Internal/personal tool for producing video content. Data lives in **Supabase** (`editai_*` tables), auth via **Supabase Auth**, publishing via a self-hosted **Postiz** instance. The UI was reskinned and renamed from "Edit Factory" to "Blipost" branding on 2026-07-06 — the name change is cosmetic, the stack described in this file is unaffected.
+- **`../social-scheduler` ("blipost", blipost.com)** — an unrelated, from-scratch SaaS clone of Postiz/Blotato: Next.js + Drizzle ORM + **plain self-hosted PostgreSQL** (not Supabase) + **Auth.js/NextAuth** (own credentials+bcrypt auth, not Supabase Auth) + Cloudflare R2 storage + Stripe billing, plus its own AI clipping pipeline (long video → Whisper transcription → AI highlight detection → FFmpeg reframe to 9:16 → burned-in karaoke captions → scheduled multi-platform publish). Built end-to-end via an autonomous task loop tracked in its own `docs/PROGRESS.md`; as of 2026-07-06 all 35 tasks across phases 0-9 are marked DONE ("BUILD COMPLETE"), with mocked/stubbed integrations (Stripe, R2, OpenAI, real platform connectors) pending real API credentials. Its own architecture/build spec lives in `docs/build-spec.md` there — refer to that repo's docs, not this file, when working on it.
+
 ## Development Commands
 
 ### Quick Start (Recommended)

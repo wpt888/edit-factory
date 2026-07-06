@@ -1516,7 +1516,7 @@ function PipelinePage() {
       return next;
     });
     if (checked) {
-      setPreviewError("Meta Multiplication activată. Rulează din nou Generate Previews pentru a crea și preview-urile B/Facebook.");
+      setPreviewError("Meta Multiplication enabled. Run Generate Previews again to also create the B/Facebook previews.");
     } else {
       setPreviewError(null);
     }
@@ -1713,7 +1713,7 @@ function PipelinePage() {
           variant_index: idx,
           status: "completed" as const,
           progress: 100,
-          current_step: "Render existent folosit",
+          current_step: "Existing render used",
         };
       }
       return {

@@ -11,7 +11,7 @@ export function FAQ() {
           <AccordionItem value="item-1">
             <AccordionTrigger>What&apos;s the difference between BYOAK and a subscription?</AccordionTrigger>
             <AccordionContent>
-              BYOAK = &quot;Bring Your Own API Key.&quot; You pay Edit Factory once for the software and use your own Gemini / ElevenLabs / fal.ai keys at provider pricing. There&apos;s no monthly markup. You can switch providers anytime. Subscription tools bundle the same APIs with their own margin and lock you into their pricing tiers — we don&apos;t.
+              BYOAK = &quot;Bring Your Own API Key.&quot; You pay Blipost once for the software and use your own Gemini / ElevenLabs / fal.ai keys at provider pricing. There&apos;s no monthly markup. You can switch providers anytime. Subscription tools bundle the same APIs with their own margin and lock you into their pricing tiers — we don&apos;t.
             </AccordionContent>
           </AccordionItem>
           <AccordionItem value="item-2">
@@ -23,13 +23,13 @@ export function FAQ() {
           <AccordionItem value="item-3">
             <AccordionTrigger>What&apos;s Cloud Sync and do I need it?</AccordionTrigger>
             <AccordionContent>
-              Cloud Sync ($39/yr add-on) keeps your projects, scripts, and renders synced across multiple Edit Factory installs and gives you an off-machine backup. Skip it if you work from one device and back up your own drive — the desktop app is fully functional without it.
+              Cloud Sync ($39/yr add-on) keeps your projects, scripts, and renders synced across multiple Blipost installs and gives you an off-machine backup. Skip it if you work from one device and back up your own drive — the desktop app is fully functional without it.
             </AccordionContent>
           </AccordionItem>
           <AccordionItem value="item-4">
             <AccordionTrigger>Why does Windows show a SmartScreen warning when I install?</AccordionTrigger>
             <AccordionContent>
-              We ship Edit Factory unsigned in v13 to keep the price down. Windows SmartScreen warns about any unsigned installer until enough users run it. Click &quot;More info&quot; → &quot;Run anyway&quot; to install. We sign installers in v14.
+              We ship Blipost unsigned in v13 to keep the price down. Windows SmartScreen warns about any unsigned installer until enough users run it. Click &quot;More info&quot; → &quot;Run anyway&quot; to install. We sign installers in v14.
             </AccordionContent>
           </AccordionItem>
           <AccordionItem value="item-5">
@@ -39,7 +39,7 @@ export function FAQ() {
             </AccordionContent>
           </AccordionItem>
           <AccordionItem value="item-6">
-            <AccordionTrigger>Can I use Edit Factory on more than one device?</AccordionTrigger>
+            <AccordionTrigger>Can I use Blipost on more than one device?</AccordionTrigger>
             <AccordionContent>
               Starter: 1 device. Pro: up to 5 devices (deactivate old ones from your /account/license page). Cloud Sync makes multi-device painless because projects stay in sync; without Cloud Sync you can still move files manually.
             </AccordionContent>

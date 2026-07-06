@@ -1,18 +1,17 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { NavBar } from "@/components/navbar";
+import { AppShell } from "@/components/navbar";
 
-// Paths where navbar should be hidden
-const hideNavbarPaths = ["/login", "/signup", "/setup", "/auth"];
+// Paths rendered without the app shell (sidebar): auth & onboarding flows
+const barePaths = ["/login", "/signup", "/setup", "/auth"];
 
-export function NavBarWrapper() {
+export function NavBarWrapper({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  // Hide navbar on login and signup pages
-  if (hideNavbarPaths.some((path) => pathname.startsWith(path))) {
-    return null;
+  if (barePaths.some((path) => pathname.startsWith(path))) {
+    return <>{children}</>;
   }
 
-  return <NavBar />;
+  return <AppShell>{children}</AppShell>;
 }

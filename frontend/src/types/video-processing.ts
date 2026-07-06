@@ -331,7 +331,7 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
   {
     id: "karaoke",
     name: "Karaoke",
-    description: "Cuvintele se evidențiază în sincron cu vocea (alb → galben). Stil Submagic/CapCut.",
+    description: "Words highlight in sync with the voice (white → yellow). Submagic/CapCut style.",
     settings: {
       fontSize: 48,
       fontFamily: "var(--font-anton), Anton, sans-serif",

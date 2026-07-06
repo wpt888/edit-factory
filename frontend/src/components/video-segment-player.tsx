@@ -1147,7 +1147,7 @@ export function VideoSegmentPlayer({
           const right = Math.min(100, bandEnd);
           const width = right - left;
           if (width <= 0 || bandEnd < 0 || bandStart > 100) return null;
-          const color = group.color || "#4ECDC4";
+          const color = group.color || "var(--chart-2)";
           return (
             <div
               key={group.id}
@@ -1261,17 +1261,17 @@ export function VideoSegmentPlayer({
         {/* Group marking range (purple) */}
         {getGroupMarkStyle() && (
           <div
-            className="absolute top-4 bottom-0 bg-purple-500/40 border-2 border-purple-500 border-dashed z-10"
+            className="absolute top-4 bottom-0 bg-chart-2/40 border-2 border-chart-2 border-dashed z-10"
             style={getGroupMarkStyle()!}
           >
-            <span className="absolute top-0.5 left-1 text-[9px] text-purple-200 font-medium">Group</span>
+            <span className="absolute top-0.5 left-1 text-[9px] text-foreground font-medium">Group</span>
           </div>
         )}
 
         {/* Group mark start point */}
         {getGroupMarkStartPosition() !== null && (
           <div
-            className="absolute top-4 bottom-0 w-1 bg-purple-500 z-30"
+            className="absolute top-4 bottom-0 w-1 bg-chart-2 z-30"
             style={{ left: `${getGroupMarkStartPosition()}%` }}
           />
         )}

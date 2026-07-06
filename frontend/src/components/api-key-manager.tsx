@@ -202,7 +202,7 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
                     </span>
                   )}
                   {key.is_env_default && (
-                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-primary/10 text-primary">
                       .env
                     </span>
                   )}

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Montserrat, Roboto, Open_Sans, Oswald, Bebas_Neue } from "next/font/google";
+import { Bricolage_Grotesque, Instrument_Sans, Geist_Mono, Montserrat, Roboto, Open_Sans, Oswald, Bebas_Neue } from "next/font/google";
 import "./globals.css";
 import { NavBarWrapper } from "@/components/navbar-wrapper";
 import { Toaster } from "sonner";
@@ -7,8 +7,13 @@ import { ProfileProvider } from "@/contexts/profile-context";
 import { AuthProvider } from "@/components/auth-provider";
 import { DesktopAuthGuard } from "@/components/desktop-auth-guard";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const heading = Bricolage_Grotesque({
+  variable: "--font-heading",
+  subsets: ["latin"],
+});
+
+const sans = Instrument_Sans({
+  variable: "--font-sans",
   subsets: ["latin"],
 });
 
@@ -48,8 +53,11 @@ const bebasNeue = Bebas_Neue({
   weight: "400",
 });
 
+// Desktop build tightens corners (see html.desktop in globals.css).
+const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
+
 export const metadata: Metadata = {
-  title: "Edit Factory - Smart Video Editing",
+  title: "Blipost - Smart Video Editing",
   description: "AI-powered video analysis and automation platform",
 };
 
@@ -59,16 +67,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} ${montserrat.variable} ${roboto.variable} ${openSans.variable} ${oswald.variable} ${bebasNeue.variable} antialiased`}
-      >
+    <html
+      lang="en"
+      className={`dark ${DESKTOP_MODE ? "desktop" : ""} ${heading.variable} ${sans.variable} ${geistMono.variable} ${montserrat.variable} ${roboto.variable} ${openSans.variable} ${oswald.variable} ${bebasNeue.variable} antialiased`}
+      suppressHydrationWarning
+    >
+      <body>
         <ProfileProvider>
           <AuthProvider>
-            <NavBarWrapper />
-            <DesktopAuthGuard>
-              {children}
-            </DesktopAuthGuard>
+            <NavBarWrapper>
+              <DesktopAuthGuard>
+                {children}
+              </DesktopAuthGuard>
+            </NavBarWrapper>
           </AuthProvider>
         </ProfileProvider>
         <Toaster

@@ -546,7 +546,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                               <button
                                 onClick={() => setThumbnailPickerKey(card.key)}
                                 className={`w-[54px] h-[96px] rounded overflow-hidden border-2 flex-shrink-0 hover:opacity-80 transition-opacity ${
-                                  thumb?.isAutoSelected ? "border-green-500/50" : "border-blue-500"
+                                  thumb?.isAutoSelected ? "border-green-500/50" : "border-primary"
                                 }`}
                                 title="Click to change thumbnail"
                               >

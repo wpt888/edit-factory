@@ -218,7 +218,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
     stopAudition();
     const v = (voices as Voice[]).find((x) => x.voice_id === voiceId);
     if (!v?.preview_url) {
-      toast.error("Această voce nu are un sample de previzualizare");
+      toast.error("This voice has no preview sample");
       return;
     }
     const audio = new Audio(v.preview_url);
@@ -363,7 +363,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                       size="icon"
                       onClick={handleAuditionVoice}
                       disabled={!voiceId || voiceId === "default"}
-                      title={auditioningVoiceId === voiceId ? "Oprește" : "Ascultă un sample al vocii"}
+                      title={auditioningVoiceId === voiceId ? "Stop" : "Preview a voice sample"}
                     >
                       {auditioningVoiceId === voiceId ? (
                         <Pause className="h-4 w-4" />
@@ -1180,8 +1180,8 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                     </div>
                     <p className="text-xs text-muted-foreground ml-6">
                       {metaMultiplication
-                        ? `Preview-ul va genera ${previewCards.length} variante (${scripts.length} scripturi × 2 versiuni Meta).`
-                        : "Activează dacă vrei să vezi separat preview-urile Instagram și Facebook înainte de render."}
+                        ? `The preview will generate ${previewCards.length} variants (${scripts.length} scripts × 2 Meta versions).`
+                        : "Enable this to preview Instagram and Facebook separately before rendering."}
                     </p>
                   </div>
                   <Button
@@ -1190,7 +1190,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                     className="w-full text-muted-foreground hover:text-foreground"
                     disabled={isGenerating || previewingIndex !== null || isRendering || isResettingUsage}
                     onClick={async () => {
-                      if (!confirm("Resetezi diversitatea segmentelor? Următoarele preview-uri vor putea reutiliza toate segmentele.")) return;
+                      if (!confirm("Reset segment diversity? Upcoming previews will be able to reuse all segments.")) return;
                       setIsResettingUsage(true);
                       try {
                         const filterIds = selectedSourceIds.size > 0 ? Array.from(selectedSourceIds) : undefined;
@@ -1201,9 +1201,9 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                         } else {
                           await apiPost("/segments/reset-usage", {});
                         }
-                        toast.success("Diversitatea segmentelor a fost resetată");
+                        toast.success("Segment diversity has been reset");
                       } catch (err) {
-                        handleApiError(err, "Eroare la resetarea diversității");
+                        handleApiError(err, "Failed to reset segment diversity");
                       } finally {
                         setIsResettingUsage(false);
                       }
@@ -1214,7 +1214,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                     ) : (
                       <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
                     )}
-                    {isResettingUsage ? "Se resetează..." : "Resetează diversitatea segmentelor"}
+                    {isResettingUsage ? "Resetting..." : "Reset segment diversity"}
                   </Button>
                   <Button
                     onClick={handlePreviewAll}

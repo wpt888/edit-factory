@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 
 /**
- * Generate an Edit Factory v13 license key in the format EF13-XXXX-XXXX-XXXX-XXXX.
+ * Generate a Blipost v13 license key in the format EF13-XXXX-XXXX-XXXX-XXXX.
  *
  * Phase 91 — D-09 / D-23.
  *

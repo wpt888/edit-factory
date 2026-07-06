@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Edit Factory — Production-Ready Video Tools",
-  description: "Marketing site for Edit Factory desktop video production app.",
+  title: "Blipost — Production-Ready Video Tools",
+  description: "Marketing site for Blipost desktop video production app.",
 };
 
 export default function RootLayout({

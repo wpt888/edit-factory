@@ -614,7 +614,7 @@ function LibrarieContent() {
     );
     try {
       await apiPatch(`/library/clips/${clipId}`, { qc_verified: newValue });
-      toast.success(newValue ? "Marcat ca verificat QC" : "Verificare QC anulată");
+      toast.success(newValue ? "Marked as QC verified" : "QC verification cleared");
     } catch (error) {
       handleApiError(error, "Error updating QC status");
       setClips((prev) =>
@@ -648,7 +648,7 @@ function LibrarieContent() {
     setRegeneratingVoiceoverId(clipId);
     try {
       await apiPost(`/library/clips/${clipId}/regenerate-voiceover`);
-      toast.info("Regenerare voice-over în curs...", { duration: 5000 });
+      toast.info("Regenerating voice-over...", { duration: 5000 });
       // Update clip status to processing
       setClips((prev) =>
         prev.map((c) => (c.id === clipId ? { ...c, final_status: "processing" } : c))
@@ -675,14 +675,14 @@ function LibrarieContent() {
               } : c)
             );
             if (clip.final_status === "completed" || clip.final_video_path) {
-              toast.success("Voice-over regenerat cu succes! Videoclipul a fost actualizat.");
+              toast.success("Voice-over regenerated successfully! The video has been updated.");
               // Update playing clip if it's still open
               setPlayingClip((prev) => {
                 if (!prev || prev.id !== clipId) return prev;
                 return { ...prev, final_status: clip.final_status, final_video_path: clip.final_video_path, _videoVersion: Date.now() };
               });
             } else {
-              toast.error("Regenerarea voice-over a eșuat.");
+              toast.error("Voice-over regeneration failed.");
             }
           }
         } catch {
@@ -2043,7 +2043,7 @@ function LibrarieContent() {
                     className="border-primary text-primary hover:bg-primary/10 disabled:opacity-50"
                     onClick={() => setBulkScheduleOpen(true)}
                     disabled={bulkDeleting || bulkUploading}
-                    title="Programează clipurile selectate în cascadă (1 post/zi)"
+                    title="Schedule selected clips in cascade (1 post/day)"
                   >
                     <CalendarClock className="h-4 w-4 mr-2" />
                     Schedule
@@ -2082,7 +2082,7 @@ function LibrarieContent() {
                     clip.is_downloaded_posted || clip.postiz_status === "sent"
                       ? "border-green-500 bg-green-50/50 dark:bg-green-950/20 hover:ring-2 hover:ring-green-400/50"
                       : clip.qc_verified
-                        ? "border-blue-500 bg-blue-50/50 dark:bg-blue-950/20 hover:ring-2 hover:ring-blue-400/50"
+                        ? "border-primary bg-primary/10 hover:ring-2 hover:ring-primary/40"
                         : `hover:ring-2 hover:ring-primary/50 ${selectedClipIds.has(clip.id) ? "ring-2 ring-primary" : ""}`
                   }`}
                   onClick={() => toggleClipSelection(clip.id)}
@@ -2142,7 +2142,7 @@ function LibrarieContent() {
 
                     {/* QC verified badge */}
                     {clip.qc_verified && !(clip.is_downloaded_posted || clip.postiz_status === "sent") && (
-                      <Badge className="absolute bottom-2 left-2 bg-blue-500 text-white text-[10px] px-1.5 py-0 z-10">
+                      <Badge className="absolute bottom-2 left-2 bg-primary text-primary-foreground text-[10px] px-1.5 py-0 z-10">
                         <ShieldCheck className="h-3 w-3 mr-0.5" />
                         QC
                       </Badge>
@@ -2229,7 +2229,7 @@ function LibrarieContent() {
                               e.stopPropagation();
                               regenerateVoiceover(clip.id);
                             }}
-                            title="Regenerează voice-over"
+                            title="Regenerate voice-over"
                           >
                             {regeneratingVoiceoverId === clip.id ? (
                               <Loader2 className="h-4 w-4 animate-spin" />
@@ -2379,12 +2379,12 @@ function LibrarieContent() {
                           id={`postiz-${clip.id}`}
                           checked={clip.postiz_status === "scheduled" || clip.postiz_status === "sent"}
                           disabled
-                          className="h-4 w-4 border-2 border-muted-foreground/50 data-[state=checked]:border-purple-500 data-[state=checked]:bg-purple-500 disabled:opacity-100"
+                          className="h-4 w-4 border-2 border-muted-foreground/50 data-[state=checked]:border-primary data-[state=checked]:bg-primary disabled:opacity-100"
                         />
                         <label
                           className={`text-xs select-none ${
                             clip.postiz_status === "scheduled" || clip.postiz_status === "sent"
-                              ? "text-purple-600 dark:text-purple-400 font-medium"
+                              ? "text-primary font-medium"
                               : "text-muted-foreground"
                           }`}
                         >
@@ -2397,12 +2397,12 @@ function LibrarieContent() {
                           id={`tiktok_posted-${clip.id}`}
                           checked={clip.tiktok_posted || false}
                           onCheckedChange={() => toggleTiktokPosted(clip.id)}
-                          className="h-4 w-4 border-2 border-muted-foreground/50 data-[state=checked]:border-blue-500 data-[state=checked]:bg-blue-500"
+                          className="h-4 w-4 border-2 border-muted-foreground/50 data-[state=checked]:border-primary data-[state=checked]:bg-primary"
                         />
                         <label
                           htmlFor={`tiktok_posted-${clip.id}`}
                           className={`text-xs cursor-pointer select-none ${
-                            clip.tiktok_posted ? "text-blue-600 dark:text-blue-400 font-medium" : "text-muted-foreground"
+                            clip.tiktok_posted ? "text-primary font-medium" : "text-muted-foreground"
                           }`}
                         >
                           TikTok
@@ -2420,12 +2420,12 @@ function LibrarieContent() {
                           id={`qc-verified-${clip.id}`}
                           checked={clip.qc_verified || false}
                           onCheckedChange={() => toggleQcVerified(clip.id)}
-                          className="h-5 w-5 border-2 border-blue-500 data-[state=checked]:border-blue-600 data-[state=checked]:bg-blue-600"
+                          className="h-5 w-5 border-2 border-primary data-[state=checked]:border-primary data-[state=checked]:bg-primary"
                         />
                         <label
                           htmlFor={`qc-verified-${clip.id}`}
                           className={`text-xs cursor-pointer select-none ${
-                            clip.qc_verified ? "text-blue-600 dark:text-blue-400 font-medium" : "text-muted-foreground"
+                            clip.qc_verified ? "text-primary font-medium" : "text-muted-foreground"
                           }`}
                         >
                           {clip.qc_verified ? "Verificat QC ✓" : "Verificare QC"}
@@ -2456,7 +2456,7 @@ function LibrarieContent() {
                         onClick={(e) => e.stopPropagation()}
                       >
                         <button
-                          className="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 flex items-center gap-1 transition-colors font-medium"
+                          className="text-xs text-primary hover:text-primary/80 flex items-center gap-1 transition-colors font-medium"
                           onClick={() => void openScriptDialog(clip)}
                           disabled={loadingScriptId === clip.id}
                         >
@@ -2573,7 +2573,7 @@ function LibrarieContent() {
           <DialogContent className="max-w-lg max-h-[80vh]">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
-                <FileText className="h-5 w-5 text-blue-500" />
+                <FileText className="h-5 w-5 text-primary" />
                 Script — {scriptDialogClip?.variant_name || `Variant ${(scriptDialogClip?.variant_index ?? 0) + 1}`}
               </DialogTitle>
               <p className="text-sm text-muted-foreground">{scriptDialogClip?.project_name}</p>
@@ -2639,7 +2639,7 @@ function LibrarieContent() {
             open={!!playingClip}
             onOpenChange={(open) => { if (!open) setPlayingClip(null); }}
             videoUrl={`${API_URL}/library/files/${encodeURIComponent(playingClip.final_video_path || playingClip.raw_video_path)}?v=${playingClip.id}${playingClip._videoVersion ? `&t=${playingClip._videoVersion}` : ''}`}
-            title={playingClip.variant_name || `Varianta ${playingClip.variant_index}`}
+            title={playingClip.variant_name || `Variant ${playingClip.variant_index}`}
             videoRef={videoRef}
             scriptText={playingClip.tts_text}
             qcVerified={playingClip.qc_verified}
@@ -2703,7 +2703,7 @@ function LibrarieContent() {
                     className="border-primary text-primary hover:bg-primary/10 disabled:opacity-50"
                     onClick={() => setBulkScheduleOpen(true)}
                     disabled={bulkDeleting || bulkUploading}
-                    title="Programează clipurile selectate în cascadă (1 post/zi)"
+                    title="Schedule selected clips in cascade (1 post/day)"
                   >
                     <CalendarClock className="h-4 w-4 mr-2" />
                     Schedule

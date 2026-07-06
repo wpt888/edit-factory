@@ -349,11 +349,11 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
 
   const handlePreview = async () => {
     if (projectIds.length === 0) {
-      toast.error("Nu s-au putut determina proiectele pentru clipurile selectate");
+      toast.error("Couldn't determine the projects for the selected clips");
       return;
     }
     if (selectedIntegrationIds.size === 0) {
-      toast.error("Selectează cel puțin o platformă");
+      toast.error("Select at least one platform");
       return;
     }
 
@@ -405,7 +405,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
       const detail = err && typeof err === "object" && "message" in err
         ? (err as { message: string }).message
         : String(err);
-      toast.error(`Preview-ul a eșuat: ${detail}`);
+      toast.error(`Preview failed: ${detail}`);
     } finally {
       setLoadingPreview(false);
     }
@@ -444,7 +444,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
       });
       const data = await res.json();
 
-      toast.success(data.message || "Plan de programare creat cu succes!");
+      toast.success(data.message || "Schedule plan created successfully!");
       setPreview(null);
       onScheduled?.(clips.map(c => c.id));
       onOpenChange(false);
@@ -453,7 +453,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
       const detail = err && typeof err === "object" && "message" in err
         ? (err as { message: string }).message
         : String(err);
-      toast.error(`Confirmarea a eșuat: ${detail}`);
+      toast.error(`Confirmation failed: ${detail}`);
     } finally {
       setConfirming(false);
     }
@@ -495,10 +495,10 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
         });
         const data: BulkPublishResponse = await res.json();
         const channelName = bufferChannels.find((channel) => channel.id === bufferChannelId)?.name;
-        results.push(data.message || `Buffer${channelName ? ` (${channelName})` : ""}: ${clipIds.length} clip(uri) programate`);
+        results.push(data.message || `Buffer${channelName ? ` (${channelName})` : ""}: ${clipIds.length} clip(s) scheduled`);
       }
 
-      toast.success(results.join(" | ") || `${clipIds.length} clipuri programate via Buffer!`);
+      toast.success(results.join(" | ") || `${clipIds.length} clips scheduled via Buffer!`);
       onScheduled?.(clipIds);
       onOpenChange(false);
     } catch (err: unknown) {
@@ -506,7 +506,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
       const detail = err && typeof err === "object" && "message" in err
         ? (err as { message: string }).message
         : String(err);
-      toast.error(`Programarea Buffer a eșuat: ${detail}`);
+      toast.error(`Buffer scheduling failed: ${detail}`);
     } finally {
       setSchedulingBuffer(false);
     }
@@ -527,7 +527,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <CalendarDays className="size-5 text-primary" />
-            Smart Schedule — {clips.length} {clips.length === 1 ? "clip" : "clipuri"}
+            Smart Schedule — {clips.length} {clips.length === 1 ? "clip" : "clips"}
           </DialogTitle>
         </DialogHeader>
 
@@ -535,7 +535,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
           {/* Date / Timezone */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="bulk-sched-date">Data de start</Label>
+              <Label htmlFor="bulk-sched-date">Start date</Label>
               <input
                 id="bulk-sched-date"
                 type="date"
@@ -546,7 +546,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
               />
             </div>
             <div className="space-y-2">
-              <Label>Fus orar</Label>
+              <Label>Timezone</Label>
               <Select value={timezone} onValueChange={setTimezone}>
                 <SelectTrigger>
                   <SelectValue />
@@ -564,22 +564,22 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
           {loadingIntegrations ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" />
-              Se încarcă integrările...
+              Loading integrations...
             </div>
           ) : integrationError ? (
             <div className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
               <div className="flex items-center gap-2 text-sm text-destructive">
                 <AlertCircle className="size-4" />
-                Nu s-au putut încărca integrările Postiz.
+                Couldn't load Postiz integrations.
               </div>
               <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => fetchIntegrations(true)}>
-                <RefreshCw className="size-3" /> Reîncearcă
+                <RefreshCw className="size-3" /> Retry
               </Button>
             </div>
           ) : integrations.length > 0 ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <Label>Platforme & Ore postare</Label>
+                <Label>Platforms & posting times</Label>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
@@ -598,7 +598,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
                       }
                     }}
                   >
-                    {selectedIntegrationIds.size === integrations.length ? "Deselectează tot" : "Selectează tot"}
+                    {selectedIntegrationIds.size === integrations.length ? "Deselect all" : "Select all"}
                   </button>
                   <Button variant="ghost" size="sm" className="h-6 text-xs gap-1 text-muted-foreground" onClick={() => fetchIntegrations(true)}>
                     <RefreshCw className="size-3" /> Refresh
@@ -647,15 +647,15 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
                 <div className="flex items-center gap-2 rounded-md border border-green-300 bg-green-50 dark:bg-green-950/30 dark:border-green-800 p-2.5 text-sm">
                   <ShieldCheck className="size-4 text-green-600 dark:text-green-400 shrink-0" />
                   <span className="text-green-800 dark:text-green-300">
-                    Versiuni video distincte confirmate pentru platformele Meta selectate
+                    Distinct video versions confirmed for the selected Meta platforms
                   </span>
                 </div>
               )}
               {selectedMetaCount >= 2 && !preview && (
-                <div className="flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-2.5 text-sm">
-                  <ShieldCheck className="size-4 text-blue-600 dark:text-blue-400 shrink-0" />
-                  <span className="text-blue-800 dark:text-blue-300">
-                    {selectedMetaCount} platforme Meta selectate — preview-ul va verifica maparea corectă
+                <div className="flex items-center gap-2 rounded-md border border-primary/25 bg-primary/10 p-2.5 text-sm">
+                  <ShieldCheck className="size-4 text-primary shrink-0" />
+                  <span className="text-foreground">
+                    {selectedMetaCount} Meta platforms selected — the preview will verify the correct mapping
                   </span>
                 </div>
               )}
@@ -663,7 +663,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
           ) : (
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
-                Nu sunt integrări Postiz configurate. Conectează conturile sociale în Postiz mai întâi.
+                No Postiz integrations configured. Connect your social accounts in Postiz first.
               </p>
               <Button variant="ghost" size="sm" className="h-6 text-xs gap-1 text-muted-foreground" onClick={() => fetchIntegrations(true)}>
                 <RefreshCw className="size-3" /> Refresh
@@ -688,8 +688,8 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
               </div>
               <p className="text-xs text-muted-foreground">
                 {jitterMinutes > 0
-                  ? `±${jitterMinutes} min offset random per postare pentru a evita detecția de bot`
-                  : "Fără jitter — toate postările la orele configurate exact"}
+                  ? `±${jitterMinutes} min random offset per post to avoid bot detection`
+                  : "No jitter — all posts go out at the exact configured times"}
               </p>
             </div>
           )}
@@ -702,7 +702,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
               onClick={() => setCaptionsExpanded(!captionsExpanded)}
             >
               {captionsExpanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
-              Caption-uri per clip (opțional)
+              Per-clip captions (optional)
             </button>
             {captionsExpanded && (
               <div className="space-y-3 border rounded-md p-3 max-h-[250px] overflow-y-auto">
@@ -712,7 +712,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
                       #{idx + 1} — {clip.variant_name || clip.project_name}
                     </Label>
                     <Textarea
-                      placeholder="Caption pentru acest clip..."
+                      placeholder="Caption for this clip..."
                       value={perClipCaptions[clip.id] || ""}
                       onChange={(e) =>
                         setPerClipCaptions(prev => ({ ...prev, [clip.id]: e.target.value }))
@@ -730,12 +730,12 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
           {hasYoutubeSelected && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <Label htmlFor="bulk-youtube-title">Titlu YouTube</Label>
-                <span className="text-xs text-muted-foreground">(shared, max 100 caractere)</span>
+                <Label htmlFor="bulk-youtube-title">YouTube title</Label>
+                <span className="text-xs text-muted-foreground">(shared, max 100 characters)</span>
               </div>
               <Input
                 id="bulk-youtube-title"
-                placeholder="Titlu SEO pentru YouTube... (gol = auto-derivat din caption)"
+                placeholder="SEO title for YouTube... (empty = auto-derived from caption)"
                 value={youtubeTitle}
                 onChange={(e) => setYoutubeTitle(e.target.value.slice(0, 100))}
                 maxLength={100}
@@ -750,7 +750,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
           {loadingBuffer ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" />
-              Se încarcă canalele Buffer...
+              Loading Buffer channels...
             </div>
           ) : bufferChannels.length > 0 ? (
             <div className="space-y-2">
@@ -773,7 +773,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
                     )}
                     <span>{ch.name}</span>
                     <Badge variant="outline" className="text-xs">{ch.service}</Badge>
-                    <Badge variant="outline" className="text-xs text-blue-400 border-blue-400/50">Buffer</Badge>
+                    <Badge variant="outline" className="text-xs text-primary border-primary/50">Buffer</Badge>
                   </label>
                 ))}
               </div>
@@ -835,10 +835,10 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
                       {preview.total_clips} clips
                     </Badge>
                     <Badge variant="secondary" className="text-sm px-3 py-1">
-                      {preview.total_days} {preview.total_days === 1 ? "zi" : "zile"}
+                      {preview.total_days} {preview.total_days === 1 ? "day" : "days"}
                     </Badge>
                     <Badge variant="secondary" className="text-sm px-3 py-1">
-                      {preview.collections_used} {preview.collections_used === 1 ? "colecție" : "colecții"}
+                      {preview.collections_used} {preview.collections_used === 1 ? "collection" : "collections"}
                     </Badge>
                   </div>
 
@@ -852,7 +852,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
                       onClick={() => setPreview(null)}
                       disabled={confirming}
                     >
-                      Modifică
+                      Edit
                     </Button>
                     <Button
                       onClick={handleConfirm}
@@ -875,7 +875,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
           {/* No platforms warning */}
           {noPlatformsSelected && !loadingIntegrations && !loadingBuffer && (
             <p className="text-xs text-muted-foreground text-center">
-              Selectează cel puțin o platformă pentru a putea programa.
+              Select at least one platform to schedule.
             </p>
           )}
         </div>

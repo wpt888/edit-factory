@@ -130,8 +130,8 @@ export function Step4Render({ ctx }: { ctx: any }) {
                         )}
                       </CardTitle>
                       <div className="flex items-center gap-2">
-                        {status.current_step === "Render existent folosit" ? (
-                          <Badge variant="default" className="bg-blue-600 hover:bg-blue-700">
+                        {status.current_step === "Existing render used" ? (
+                          <Badge variant="default" className="bg-primary text-primary-foreground hover:bg-primary/80">
                             <CheckCircle className="h-3 w-3 mr-1" />
                             Cached
                           </Badge>

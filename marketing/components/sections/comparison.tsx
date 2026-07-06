@@ -8,11 +8,11 @@ export function Comparison() {
         </p>
         <div className="mt-12 max-w-5xl mx-auto overflow-x-auto">
           <table className="w-full border-collapse">
-            <caption className="sr-only">Edit Factory vs SaaS competitors comparison</caption>
+            <caption className="sr-only">Blipost vs SaaS competitors comparison</caption>
             <thead className="bg-muted">
               <tr>
                 <th scope="col" className="text-left p-4">Feature</th>
-                <th scope="col" className="text-left p-4">Edit Factory</th>
+                <th scope="col" className="text-left p-4">Blipost</th>
                 <th scope="col" className="text-left p-4">Captions.ai (or similar)</th>
                 <th scope="col" className="text-left p-4">Submagic (or similar)</th>
               </tr>

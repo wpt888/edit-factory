@@ -1,8 +1,8 @@
-# Edit Factory
+# Blipost
 
 **Video Processing API pentru reels și short-form content**
 
-Edit Factory este o platformă completă pentru automatizarea producției video, destinată content creator-ilor de social media. Combină procesare video AI, text-to-speech, generare de subtitrări și workflow management într-un singur sistem.
+Blipost este o platformă completă pentru automatizarea producției video, destinată content creator-ilor de social media. Combină procesare video AI, text-to-speech, generare de subtitrări și workflow management într-un singur sistem.
 
 ## Caracteristici Principale
 
@@ -267,7 +267,7 @@ CREATE TABLE api_costs (
 
 Log-urile sunt salvate în `logs/` și afișate în consolă:
 ```
-2024-12-20 14:00:00 - app.main - INFO - Edit Factory started
+2024-12-20 14:00:00 - app.main - INFO - Blipost started
 2024-12-20 14:00:01 - services.video_processor - INFO - Processing video: input.mp4
 ```
 
@@ -289,4 +289,4 @@ Contribuțiile sunt binevenite! Deschide un issue sau pull request pe [GitHub](h
 
 ---
 
-**OBSID SRL** - Edit Factory v1.0.0
+**OBSID SRL** - Blipost v1.0.0

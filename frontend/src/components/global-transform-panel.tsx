@@ -187,7 +187,7 @@ export function GlobalTransformPanel({
       {loading ? (
         <div className="flex items-center justify-center py-4 gap-2">
           <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground" />
-          <p className="text-xs text-muted-foreground">Se încarcă segmentele...</p>
+          <p className="text-xs text-muted-foreground">Loading segments...</p>
         </div>
       ) : segmentCount === 0 ? (
         <p className="text-xs text-muted-foreground text-center py-4">
@@ -354,7 +354,7 @@ export function GlobalTransformPanel({
           {/* Custom transforms warning */}
           {segmentsWithCustomTransforms > 0 && (
             <p className="text-[11px] text-amber-500">
-              {segmentsWithCustomTransforms} segment{segmentsWithCustomTransforms > 1 ? "e" : ""} au deja transformări custom
+              {segmentsWithCustomTransforms} segment{segmentsWithCustomTransforms > 1 ? "s" : ""} already ha{segmentsWithCustomTransforms > 1 ? "ve" : "s"} custom transforms
             </p>
           )}
 
@@ -366,7 +366,7 @@ export function GlobalTransformPanel({
             disabled={isIdentity || applying || loading || segmentCount === 0}
           >
             <Layers className="h-3 w-3 mr-1" />
-            {applying ? "Se aplică..." : `Aplică la ${segmentCount} segmente${!scopeLabel ? " (toate videourile)" : ""}`}
+            {applying ? "Applying..." : `Apply to ${segmentCount} segments${!scopeLabel ? " (all videos)" : ""}`}
           </Button>
         </>
       )}
@@ -375,10 +375,10 @@ export function GlobalTransformPanel({
       <Dialog open={showModeDialog} onOpenChange={setShowModeDialog}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Cum aplici transformările?</DialogTitle>
+            <DialogTitle>How do you apply the transforms?</DialogTitle>
             <DialogDescription>
-              {segmentsWithCustomTransforms} segment{segmentsWithCustomTransforms > 1 ? "e au" : " are"} deja
-              transformări personalizate. Alege modul de aplicare:
+              {segmentsWithCustomTransforms} segment{segmentsWithCustomTransforms > 1 ? "s" : ""} already ha{segmentsWithCustomTransforms > 1 ? "ve" : "s"}
+              custom transforms. Choose how to apply:
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3 py-2">
@@ -389,10 +389,10 @@ export function GlobalTransformPanel({
             >
               <div className="flex items-center gap-2">
                 <Replace className="h-4 w-4" />
-                <span className="font-medium">Suprascrie</span>
+                <span className="font-medium">Overwrite</span>
               </div>
               <span className="text-xs text-muted-foreground font-normal">
-                Toate segmentele vor primi exact aceste valori (valorile existente se pierd)
+                All segments get exactly these values (existing values are lost)
               </span>
             </Button>
             <Button
@@ -402,16 +402,16 @@ export function GlobalTransformPanel({
             >
               <div className="flex items-center gap-2">
                 <Plus className="h-4 w-4" />
-                <span className="font-medium">Adaugă (offset)</span>
+                <span className="font-medium">Add (offset)</span>
               </div>
               <span className="text-xs text-muted-foreground font-normal">
-                Valorile se adaugă peste transformările existente ale fiecărui segment
+                Values are added on top of each segment's existing transforms
               </span>
             </Button>
           </div>
           <DialogFooter>
             <Button variant="ghost" size="sm" onClick={() => setShowModeDialog(false)}>
-              Anulează
+              Cancel
             </Button>
           </DialogFooter>
         </DialogContent>

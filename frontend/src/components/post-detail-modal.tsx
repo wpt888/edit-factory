@@ -37,8 +37,8 @@ function stateColor(state: string): string {
     case "PUBLISHED": return "bg-green-500/20 text-green-300 border-green-500/30";
     case "QUEUE": return "bg-amber-500/20 text-amber-300 border-amber-500/30";
     case "ERROR": return "bg-red-500/20 text-red-300 border-red-500/30";
-    case "DRAFT": return "bg-gray-500/20 text-gray-400 border-gray-500/30";
-    default: return "bg-gray-500/20 text-gray-400 border-gray-500/30";
+    case "DRAFT": return "bg-muted text-muted-foreground border-border";
+    default: return "bg-muted text-muted-foreground border-border";
   }
 }
 
@@ -126,7 +126,7 @@ export function PostDetailModal({ post, scheduleItem, siblings = [], onClose, on
               </div>
               {scheduleItem && (
                 <Badge variant="secondary" className="text-xs shrink-0">
-                  Posted via Edit Factory
+                  Posted via Blipost
                 </Badge>
               )}
             </div>
@@ -226,7 +226,7 @@ export function PostDetailModal({ post, scheduleItem, siblings = [], onClose, on
                 </div>
               </div>
 
-              {/* Clip info (only for Edit Factory posts) */}
+              {/* Clip info (only for Blipost posts) */}
               {scheduleItem && (
                 <div>
                   <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Clip Info</h4>

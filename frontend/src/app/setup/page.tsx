@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
-import { CheckCircle, AlertCircle, Loader2, Film, ChevronRight, ChevronLeft, ArrowRight, Volume2, ChevronDown } from "lucide-react"
+import { CheckCircle, AlertCircle, Loader2, ChevronRight, ChevronLeft, ArrowRight, Volume2, ChevronDown } from "lucide-react"
 
 function SetupPageContent() {
   const router = useRouter()
@@ -219,7 +219,7 @@ function SetupPageContent() {
         await apiPost("/desktop/first-run/complete")
       }
 
-      toast.success(isEditMode ? "Settings updated!" : "Setup complete! Welcome to Edit Factory.")
+      toast.success(isEditMode ? "Settings updated!" : "Setup complete! Welcome to Blipost.")
       router.replace("/librarie")
     } catch {
       toast.error("Failed to save settings. Please try again.")
@@ -231,10 +231,15 @@ function SetupPageContent() {
   // Non-desktop mode: show informational message
   if (process.env.NEXT_PUBLIC_DESKTOP_MODE !== "true") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <Card className="w-full max-w-md">
+      <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-ink p-4 text-paper">
+        <div className="pointer-events-none absolute inset-0 bg-grid-ink" />
+        <div className="pointer-events-none absolute inset-0 bg-noise" />
+        <div className="pointer-events-none absolute -bottom-32 -left-24 h-96 w-96 rounded-full bg-lime/15 blur-[110px]" />
+        <Card className="relative w-full max-w-md">
           <CardContent className="pt-6 text-center">
-            <Film className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
+            <div className="mb-4 flex justify-center">
+              <span className="font-heading text-2xl font-bold tracking-tight">bli<span className="text-lime">post</span></span>
+            </div>
             <p className="text-muted-foreground">
               The Setup Wizard is only available in desktop mode.
             </p>
@@ -246,20 +251,25 @@ function SetupPageContent() {
 
   if (checkingLicense) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
+      <div className="flex min-h-screen items-center justify-center bg-ink text-paper">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     )
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <div className="w-full max-w-lg space-y-6">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-ink p-4 text-paper">
+      <div className="pointer-events-none absolute inset-0 bg-grid-ink" />
+      <div className="pointer-events-none absolute inset-0 bg-noise" />
+      <div className="pointer-events-none absolute -bottom-32 -left-24 h-96 w-96 rounded-full bg-lime/15 blur-[110px]" />
+      <div className="relative w-full max-w-lg space-y-6">
         {/* Header */}
         <div className="text-center space-y-2">
-          <Film className="mx-auto h-10 w-10" />
-          <h1 className="text-2xl font-bold">
-            {isEditMode ? "Edit Factory Settings" : "Welcome to Edit Factory"}
+          <div className="flex justify-center">
+            <span className="font-heading text-2xl font-bold tracking-tight">bli<span className="text-lime">post</span></span>
+          </div>
+          <h1 className="font-heading text-2xl font-bold tracking-tight">
+            {isEditMode ? "Blipost Settings" : "Welcome to Blipost"}
           </h1>
           <p className="text-sm text-muted-foreground">
             {isEditMode ? "Update your configuration" : "Let's get you set up in just a few steps"}
@@ -281,7 +291,7 @@ function SetupPageContent() {
             <CardHeader>
               <CardTitle>License Activation</CardTitle>
               <CardDescription>
-                Enter your license key to activate Edit Factory
+                Enter your license key to activate Blipost
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -300,14 +310,14 @@ function SetupPageContent() {
               </div>
 
               {licenseError && (
-                <Alert variant="destructive">
+                <Alert variant="destructive" className="border-destructive/30 bg-destructive/10">
                   <AlertCircle className="h-4 w-4" />
                   <AlertDescription>{licenseError}</AlertDescription>
                 </Alert>
               )}
 
               {licenseValid && (
-                <Alert>
+                <Alert className="border-primary/30 bg-primary/10">
                   <CheckCircle className="h-4 w-4 text-green-500" />
                   <AlertDescription>License activated successfully!</AlertDescription>
                 </Alert>
@@ -340,7 +350,7 @@ function SetupPageContent() {
               <CardTitle>API Configuration</CardTitle>
               <CardDescription>
                 {supabaseSeeded
-                  ? "Conectat la cloud. Adaugă cheile AI (opțional) pentru voci premium și generare de scripturi."
+                  ? "Connected to the cloud. Add AI keys (optional) for premium voices and script generation."
                   : "Connect your services. Supabase is required; others are optional."}
               </CardDescription>
             </CardHeader>
@@ -371,8 +381,8 @@ function SetupPageContent() {
                 <div className="flex items-center gap-3 p-3 border border-green-500 bg-green-500/10 rounded-lg">
                   <CheckCircle className="h-5 w-5 text-green-500 flex-shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium">Conectat la cloud</p>
-                    <p className="text-xs text-muted-foreground">Baza de date e deja configurată — nu trebuie să introduci nimic.</p>
+                    <p className="text-sm font-medium">Connected to the cloud</p>
+                    <p className="text-xs text-muted-foreground">The database is already set up — nothing to enter.</p>
                   </div>
                 </div>
               ) : (
@@ -456,9 +466,9 @@ function SetupPageContent() {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Gemini are un tier gratuit generos.{" "}
+                  Gemini has a generous free tier.{" "}
                   <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-primary hover:underline">
-                    Ia o cheie gratuită →
+                    Get a free key →
                   </a>
                 </p>
               </div>
@@ -513,9 +523,9 @@ function SetupPageContent() {
                     </Button>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Voci premium · ~$0.22 / 1000 caractere.{" "}
+                    Premium voices · ~$0.22 / 1000 characters.{" "}
                     <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noreferrer" className="text-primary hover:underline">
-                      Ia o cheie ElevenLabs →
+                      Get an ElevenLabs key →
                     </a>
                   </p>
                 </div>
@@ -542,7 +552,7 @@ function SetupPageContent() {
             <CardHeader>
               <CardTitle>Preferences</CardTitle>
               <CardDescription>
-                Help improve Edit Factory by sharing crash reports
+                Help improve Blipost by sharing crash reports
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -550,7 +560,7 @@ function SetupPageContent() {
                 <div className="space-y-1 pr-4">
                   <p className="text-sm font-medium">Enable Crash Reporting</p>
                   <p className="text-xs text-muted-foreground">
-                    Automatically send anonymous crash reports to help improve Edit Factory.
+                    Automatically send anonymous crash reports to help improve Blipost.
                     Data collected: error messages, stack traces, and OS version.
                     Your video content and API keys are never included.
                   </p>
@@ -587,7 +597,7 @@ function SetupPageContent() {
 export default function SetupPage() {
   return (
     <Suspense fallback={
-      <div className="flex min-h-screen items-center justify-center bg-background">
+      <div className="flex min-h-screen items-center justify-center bg-ink text-paper">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     }>
