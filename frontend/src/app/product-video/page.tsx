@@ -240,7 +240,7 @@ function ProductVideoContent() {
         {/* Back navigation */}
         <div className="mb-6">
           <Link
-            href="/products"
+            href={source === "local" ? "/product-library" : "/products"}
             className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -259,9 +259,9 @@ function ProductVideoContent() {
           <div className="flex flex-col items-center justify-center py-20">
             <EmptyState
               icon={<Video className="h-6 w-6" />}
-              title="Select a product from the catalog"
-              description="Choose a product from the products page to generate a video."
-              action={{ label: "Go to Catalog", onClick: () => router.push("/products") }}
+              title="Select a product first"
+              description="Pick a product from your library to generate a video."
+              action={{ label: "Go to My Products", onClick: () => router.push("/product-library") }}
             />
           </div>
         )}

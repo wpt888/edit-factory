@@ -74,12 +74,17 @@ interface FilterOptions {
 
 type SourceTab = "catalog" | "feed";
 
+// D1: the Gomag catalog is one user's shop data — hidden by default. The local
+// Product Library (/product-library) is the default source. Set
+// NEXT_PUBLIC_CATALOG_GOMAG=true (+ CATALOG_GOMAG_ENABLED=true backend) to restore.
+const CATALOG_ENABLED = process.env.NEXT_PUBLIC_CATALOG_GOMAG === "true";
+
 export default function ProductsPage() {
   const { currentProfile } = useProfile();
   const router = useRouter();
 
   // Tab state
-  const [activeTab, setActiveTab] = useState<SourceTab>("catalog");
+  const [activeTab, setActiveTab] = useState<SourceTab>(CATALOG_ENABLED ? "catalog" : "feed");
 
   // Feed state (for "feed" tab)
   const [feeds, setFeeds] = useState<Feed[]>([]);
@@ -464,17 +469,19 @@ export default function ProductsPage() {
 
         {/* Tab switcher */}
         <div className="flex gap-1 mb-4 p-1 bg-muted rounded-lg w-fit">
-          <button
-            onClick={() => setActiveTab("catalog")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-              activeTab === "catalog"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <BookOpen className="h-4 w-4" />
-            Catalog
-          </button>
+          {CATALOG_ENABLED && (
+            <button
+              onClick={() => setActiveTab("catalog")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                activeTab === "catalog"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <BookOpen className="h-4 w-4" />
+              Catalog
+            </button>
+          )}
           <button
             onClick={() => setActiveTab("feed")}
             className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${

@@ -14,6 +14,7 @@ import {
   Film,
   Scissors,
   ShoppingBag,
+  Tag,
   Video,
   ListChecks,
   Settings,
@@ -55,7 +56,10 @@ const allNavGroups = [
   {
     label: "Products",
     items: [
-      { label: "Catalog", href: "/products", icon: ShoppingBag },
+      // D1: local product library is the default source; the Gomag catalog is
+      // gated off (see /products page + CATALOG_GOMAG_ENABLED backend flag).
+      { label: "My Products", href: "/product-library", icon: ShoppingBag },
+      { label: "Feed Import", href: "/products", icon: Tag },
       { label: "Generate", href: "/product-video", icon: Video },
       { label: "Batch Generate", href: "/batch-generate", icon: ListChecks },
     ],

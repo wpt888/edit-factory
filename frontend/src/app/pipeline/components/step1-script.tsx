@@ -231,7 +231,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                       onClick={handleOpenCatalog}
                     >
                       <BookOpen className="h-3.5 w-3.5 mr-1" />
-                      {catalogOpen ? "Close Catalog" : "Add from Catalog"}
+                      {catalogOpen ? "Close My Products" : "Add from My Products"}
                     </Button>
                   </div>
 
@@ -277,7 +277,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                         <div className="flex-1 relative">
                           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                           <Input
-                            placeholder="Search by name or SKU..."
+                            placeholder="Search your products..."
                             value={catalogSearch}
                             onChange={(e) => handleCatalogSearchChange(e.target.value)}
                             className="pl-9 h-9"

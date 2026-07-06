@@ -676,34 +676,42 @@ function PipelinePage() {
   // Count products from structured array
   const contextProductCount = contextProducts.length;
 
-  // Catalog: fetch products
+  // Context products: fetched from the local Product Library (D1 — the Gomag
+  // catalog is gated off). The library is small, so search filters client-side.
   const fetchCatalogProducts = useCallback(async (search: string, brand: string, category: string, page: number) => {
+    void brand; void category; void page; // kept for call-site compatibility; library has no taxonomy/pagination
     setCatalogLoading(true);
     try {
-      const params = new URLSearchParams({ page: page.toString(), page_size: "20" });
-      if (search) params.set("search", search);
-      if (brand && brand !== "all") params.set("brand", brand);
-      if (category && category !== "all") params.set("category", category);
-      const res = await apiGet(`/catalog/products?${params}`);
+      const res = await apiGet("/product-library");
       const data = await res.json();
-      setCatalogProducts(data.products || []);
-      setCatalogPagination(data.pagination || { page: 1, page_size: 20, total: 0, total_pages: 1 });
+      const q = search.trim().toLowerCase();
+      interface LibraryProduct { id: string; title: string; description?: string; image_urls?: string[] }
+      const all = ((data.products || []) as LibraryProduct[])
+        .filter((p) => !q || p.title.toLowerCase().includes(q))
+        .map((p) => ({
+          id: p.id,
+          title: p.title,
+          description: p.description || "",
+          brand: "",
+          sku: "",
+          image_link: p.image_urls?.[0] ? `${API_URL}${p.image_urls[0]}` : "",
+          category: "",
+          price: 0,
+          sale_price: 0,
+          is_on_sale: false,
+        }));
+      setCatalogProducts(all);
+      setCatalogPagination({ page: 1, page_size: all.length || 20, total: all.length, total_pages: 1 });
     } catch (err) {
-      handleApiError(err, "Failed to load catalog products");
+      handleApiError(err, "Failed to load products");
     } finally {
       setCatalogLoading(false);
     }
   }, []);
 
-  // Catalog: fetch filters (once)
+  // Local library has no brand/category taxonomy — keep filter dropdowns empty.
   const fetchCatalogFilters = useCallback(async () => {
-    try {
-      const res = await apiGet("/catalog/products/filters");
-      const data = await res.json();
-      setCatalogFilters({ brands: data.brands || [], categories: data.categories || [] });
-    } catch (err) {
-      handleApiError(err, "Failed to load catalog filters");
-    }
+    setCatalogFilters({ brands: [], categories: [] });
   }, []);
 
   // Source videos: fetch list with segment counts
