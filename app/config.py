@@ -138,6 +138,11 @@ class Settings(BaseSettings):
     auth_disabled: bool = False  # Set to True to disable authentication (local development only!)
     trusted_proxy_ips: str = "127.0.0.1,::1"  # Only trusted proxies may supply X-Forwarded-For
 
+    # Phase D1 — the hardcoded Gomag catalog (uf.products_catalog / v_catalog_products)
+    # is one user's shop data and must not be a default surface for other users.
+    # OFF by default; set CATALOG_GOMAG_ENABLED=true to re-enable the legacy endpoints.
+    catalog_gomag_enabled: bool = False
+
     # Desktop mode
     desktop_mode: bool = False  # Set to True when running as Electron desktop app
 

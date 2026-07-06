@@ -251,19 +251,24 @@ async def generate_product_video(
         raise HTTPException(status_code=503, detail="Database not available")
 
     # Verify product exists — source determines which table to query
-    if request.source == "catalog":
-        product_result = repo.table_query("v_catalog_products", "select",
-            filters=QueryFilters(select="id, title", eq={"id": product_id}, limit=1))
+    if request.source == "local":
+        from app.repositories.product_library import get_product_library
+        if not get_product_library().get(product_id, profile.profile_id):
+            raise HTTPException(status_code=404, detail="Product not found")
     else:
-        product_result = repo.table_query("products", "select",
-            filters=QueryFilters(
-                select="id, title, feed_id, product_feeds!inner(profile_id)",
-                eq={"id": product_id, "product_feeds.profile_id": profile.profile_id},
-                limit=1,
-            ))
+        if request.source == "catalog":
+            product_result = repo.table_query("v_catalog_products", "select",
+                filters=QueryFilters(select="id, title", eq={"id": product_id}, limit=1))
+        else:
+            product_result = repo.table_query("products", "select",
+                filters=QueryFilters(
+                    select="id, title, feed_id, product_feeds!inner(profile_id)",
+                    eq={"id": product_id, "product_feeds.profile_id": profile.profile_id},
+                    limit=1,
+                ))
 
-    if not product_result.data:
-        raise HTTPException(status_code=404, detail="Product not found")
+        if not product_result.data:
+            raise HTTPException(status_code=404, detail="Product not found")
 
     job_id = str(uuid.uuid4())
     job_storage = get_job_storage()
@@ -332,14 +337,21 @@ async def batch_generate_products(
 
     # Fetch product titles in one query for display — non-fatal if it fails
     try:
-        titles_table = "v_catalog_products" if request.source == "catalog" else "products"
-        titles_result = repo.table_query(titles_table, "select",
-            filters=QueryFilters(select="id, title", in_={"id": request.product_ids}))
-
-        if titles_result.data:
-            title_map = {row["id"]: row.get("title", "") for row in titles_result.data}
+        if request.source == "local":
+            from app.repositories.product_library import get_product_library
+            store = get_product_library()
             for pj in product_jobs:
-                pj["title"] = title_map.get(pj["product_id"], "")
+                local = store.get(pj["product_id"], profile.profile_id)
+                pj["title"] = (local or {}).get("title", "")
+        else:
+            titles_table = "v_catalog_products" if request.source == "catalog" else "products"
+            titles_result = repo.table_query(titles_table, "select",
+                filters=QueryFilters(select="id, title", in_={"id": request.product_ids}))
+
+            if titles_result.data:
+                title_map = {row["id"]: row.get("title", "") for row in titles_result.data}
+                for pj in product_jobs:
+                    pj["title"] = title_map.get(pj["product_id"], "")
     except Exception as exc:  # noqa: BLE001
         logger.warning("[batch %s] Failed to fetch product titles: %s", batch_id, exc)
 
@@ -638,14 +650,36 @@ async def _generate_product_video_task(
         repo = get_repository()
 
         # Fetch full product row — source determines table
-        product_table = "v_catalog_products" if request.source == "catalog" else "products"
-        product_result = repo.table_query(product_table, "select",
-            filters=QueryFilters(eq={"id": product_id}, maybe_single=True))
+        if request.source == "local":
+            from app.repositories.product_library import get_product_library
+            store = get_product_library()
+            local = store.get(product_id, profile_id)
+            if not local:
+                raise ValueError(f"Product {product_id} not found")
+            first_image = next(
+                (str(p) for rel in (local.get("image_paths") or [])
+                 if (p := store.abs_image_path(rel))),
+                None,
+            )
+            # Shape the local row like a feed/catalog product so the rest of
+            # the 6-stage pipeline runs unchanged (local_image_path drives Stage 1).
+            product = {
+                "id": local["id"],
+                "title": local["title"],
+                "description": local.get("description") or "",
+                "brand": "",
+                "local_image_path": first_image,
+                "image_link": None,
+            }
+        else:
+            product_table = "v_catalog_products" if request.source == "catalog" else "products"
+            product_result = repo.table_query(product_table, "select",
+                filters=QueryFilters(eq={"id": product_id}, maybe_single=True))
 
-        if not product_result.data:
-            raise ValueError(f"Product {product_id} not found")
+            if not product_result.data:
+                raise ValueError(f"Product {product_id} not found")
 
-        product = product_result.data[0]
+            product = product_result.data[0]
 
         # Read profile template settings (video_template_settings JSONB column)
         try:
@@ -705,7 +739,12 @@ async def _generate_product_video_task(
         # ---------------------------------------------------------------
         voiceover_text: str = ""
 
-        if request.voiceover_mode == "quick":
+        if request.voiceover_mode == "quick" and request.source == "local":
+            # Local products have no brand/price, so the default template would
+            # read "Pret: lei." — speak title + description instead.
+            voiceover_text = f"{product.get('title', '')}. {product.get('description', '')}".strip(". ") + "."
+
+        elif request.voiceover_mode == "quick":
             # Build from template — no AI call
             title = product.get("title", "")
             brand = product.get("brand", "") or ""

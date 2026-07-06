@@ -13,6 +13,7 @@ Endpoints:
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.auth import ProfileContext, get_profile_context
+from app.config import get_settings
 from app.repositories.factory import get_repository
 from app.repositories.models import QueryFilters
 
@@ -21,6 +22,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 
 TABLE = "v_catalog_products_grouped"
+
+
+def _catalog_enabled() -> bool:
+    """Phase D1: the Gomag catalog is one user's shop data — gated OFF by default.
+
+    The local Product Library (/product-library) is the default product source.
+    Set CATALOG_GOMAG_ENABLED=true to restore the legacy catalog.
+    """
+    return get_settings().catalog_gomag_enabled
 
 
 @router.get("/products")
@@ -34,6 +44,11 @@ async def list_catalog_products(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Paginated catalog products with optional filters."""
+    if not _catalog_enabled():
+        return {
+            "products": [],
+            "pagination": {"page": 1, "page_size": page_size, "total": 0, "total_pages": 1},
+        }
     repo = get_repository()
     if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -88,6 +103,8 @@ async def get_catalog_filters(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Return distinct brands and categories for filter dropdowns."""
+    if not _catalog_enabled():
+        return {"brands": [], "categories": []}
     repo = get_repository()
     if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -131,6 +148,8 @@ async def get_catalog_filters(
 @router.get("/products/with-approved-images")
 async def get_products_with_approved_images(profile: ProfileContext = Depends(get_profile_context)):
     """Return product IDs that have at least one approved generated image."""
+    if not _catalog_enabled():
+        return {"product_ids": []}
     repo = get_repository()
     if not repo:
         return {"product_ids": []}
@@ -161,6 +180,8 @@ async def get_product_images(
     Returns:
         {"product_id": "...", "images": ["https://...", ...]}
     """
+    if not _catalog_enabled():
+        raise HTTPException(status_code=404, detail="Catalog is disabled")
     repo = get_repository()
     if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -201,6 +222,8 @@ async def get_catalog_product(
     profile: ProfileContext = Depends(get_profile_context),
 ):
     """Fetch a single catalog product by ID."""
+    if not _catalog_enabled():
+        raise HTTPException(status_code=404, detail="Catalog is disabled")
     repo = get_repository()
     if not repo:
         raise HTTPException(status_code=503, detail="Database not available")
