@@ -164,6 +164,8 @@ frontend/.playwright-mcp/
 data.db
 data.db-shm
 data.db-wal
+# Local product library store (D1) — dev runs write it to the project root
+product_library/
 
 # One-off test/verification scripts
 verify_encoding_integration.py

@@ -71,6 +71,7 @@ from app.api.elevenlabs_accounts_routes import router as elevenlabs_accounts_rou
 from app.api.api_key_vault_routes import router as api_key_vault_router
 from app.api.product_routes import router as product_router
 from app.api.product_generate_routes import router as product_generate_router
+from app.api.product_library_routes import router as product_library_router
 from app.api.association_routes import router as association_router
 from app.api.tts_library_routes import router as tts_library_router
 from app.api.assembly_routes import router as assembly_router
@@ -420,6 +421,7 @@ app.include_router(elevenlabs_accounts_router, prefix="/api/v1", tags=["ElevenLa
 app.include_router(api_key_vault_router, prefix="/api/v1", tags=["API Key Vault"])
 app.include_router(product_router, prefix="/api/v1", tags=["Products"])
 app.include_router(product_generate_router, prefix="/api/v1", tags=["Product Video Generation"])
+app.include_router(product_library_router, prefix="/api/v1", tags=["Product Library"])
 app.include_router(association_router, prefix="/api/v1", tags=["Associations"])
 app.include_router(tts_library_router, prefix="/api/v1", tags=["TTS Library"])
 app.include_router(assembly_router, prefix="/api/v1", tags=["Script-to-Video Assembly"])
