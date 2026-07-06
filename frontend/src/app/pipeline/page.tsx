@@ -7,7 +7,6 @@ import { apiGet, apiGetWithRetry, apiPost, apiPut, apiPatch, apiDelete, API_URL,
 import {
   Loader2,
   Film,
-  ChevronRight,
 } from "lucide-react";
 import { usePolling } from "@/hooks";
 import { useProfile } from "@/contexts/profile-context";
@@ -21,8 +20,6 @@ import type { AssociationResponse } from "@/components/dialogs/product-picker-di
 import { SubtitleSettings, DEFAULT_SUBTITLE_SETTINGS, UserSubtitlePreset } from "@/types/video-processing";
 import { SegmentOption, InterstitialSlide } from "@/components/timeline-editor";
 import { ThumbnailSelection } from "@/components/thumbnail-picker";
-import { SimplePipeline } from "@/components/simple-mode-pipeline";
-import type { PipelineMode } from "@/types/pipeline-presets";
 import { DEFAULT_RENDER_SETTINGS } from "@/components/render-settings-panel";
 import { RenderCheckResult } from "@/components/dialogs/skip-render-dialog";
 import type { RenderSettings } from "@/components/render-settings-panel";
@@ -66,20 +63,6 @@ function PipelinePage() {
   // Ref to avoid stale closure in debounced setTimeout callbacks
   const currentProfileIdRef = useRef(currentProfile?.id);
   currentProfileIdRef.current = currentProfile?.id;
-
-  // Simple / Advanced mode toggle (persisted to localStorage)
-  const [pipelineMode, setPipelineMode] = useState<PipelineMode>("simple");
-  useEffect(() => {
-    const saved = localStorage.getItem("ef_pipeline_mode") as PipelineMode;
-    if (saved && saved !== pipelineMode) {
-      setPipelineMode(saved);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const handleModeChange = useCallback((mode: PipelineMode) => {
-    setPipelineMode(mode);
-    localStorage.setItem("ef_pipeline_mode", mode);
-  }, []);
 
   // Stable callback for VariantPreviewPlayer close
   const handlePreviewPlayerClose = useCallback((open: boolean) => {
@@ -3541,57 +3524,15 @@ function PipelinePage() {
           <div>
             <h1 className="text-3xl font-bold flex items-center gap-2">
               <Film className="h-8 w-8 text-primary" />
-              {pipelineMode === "simple" ? "Video Creator" : "Multi-Variant Pipeline"}
+              Multi-Variant Pipeline
             </h1>
             <p className="text-muted-foreground mt-2">
-              {pipelineMode === "simple"
-                ? "Upload, choose a style, and download your videos"
-                : "End-to-end workflow: generate scripts \u2192 preview matches \u2192 batch render"}
+              End-to-end workflow: generate scripts {'\u2192'} preview matches {'\u2192'} batch render
             </p>
-          </div>
-          {/* Mode toggle */}
-          <div className="flex items-center gap-1 bg-muted p-1 rounded-lg">
-            <Button
-              variant={pipelineMode === "simple" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => handleModeChange("simple")}
-              className="text-xs"
-            >
-              Simple
-            </Button>
-            <Button
-              variant={pipelineMode === "advanced" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => handleModeChange("advanced")}
-              className="text-xs"
-            >
-              Advanced
-            </Button>
           </div>
         </div>
 
-        {/* Simple Mode */}
-        {pipelineMode === "simple" && (
-          <div className="space-y-6">
-            <SimplePipeline onSwitchToAdvanced={() => handleModeChange("advanced")} />
-
-            {/* Advanced Settings teaser */}
-            <div className="border rounded-lg p-4">
-              <button
-                className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-full text-left"
-                onClick={() => handleModeChange("advanced")}
-              >
-                <ChevronRight className="h-4 w-4" />
-                <span>Advanced Settings</span>
-                <span className="text-xs ml-auto">Switch to Advanced mode for full control over all parameters</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Advanced Mode — existing 4-step pipeline */}
-        {pipelineMode === "advanced" && (
-        <>{/* Step indicator */}
+        {/* Step indicator */}
         <PipelineStepper ctx={pipelineCtx} />
 
         {/* Main content + History sidebar */}
@@ -3616,8 +3557,6 @@ function PipelinePage() {
           <PipelineHistorySidebar ctx={pipelineCtx} />
 
         </div>{/* end flex container */}
-        </>
-        )}
       </div>
 
       {/* Product Picker Dialog */}
