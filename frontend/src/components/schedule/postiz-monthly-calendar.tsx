@@ -14,11 +14,17 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, API_URL } from "@/lib/api";
 import { PostDetailModal } from "@/components/post-detail-modal";
 import { useProfile } from "@/contexts/profile-context";
 import { toast } from "sonner";
 import { friendlyPlatformName } from "@/lib/platforms";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 /* ---------- Types ---------- */
 
@@ -73,11 +79,25 @@ export interface CalendarData {
   days: Record<string, { postiz_count: number; scheduled_count: number; published_count: number }>;
 }
 
+/** A not-yet-confirmed clip from the Smart Schedule preview, drawn as a ghost chip. */
+export interface PreviewEntry {
+  date: string; // YYYY-MM-DD
+  clip_id: string;
+  clip_name: string;
+  collection_name: string;
+  thumbnail_path?: string;
+  final_video_path?: string;
+  platform_type?: string;
+  variant_index?: number;
+}
+
 interface PostizMonthlyCalendarProps {
-  /** Optional title override (default: "Postiz Calendar") */
+  /** Optional title override (default: "Publishing Calendar") */
   title?: string;
   /** Called after calendar data is fetched, so parent can access it */
   onDataLoaded?: (data: CalendarData) => void;
+  /** Unconfirmed preview clips to overlay as ghost chips (Smart Schedule). */
+  previewEntries?: PreviewEntry[];
 }
 
 /* ---------- Constants ---------- */
@@ -138,7 +158,14 @@ function getMonthCalendarDays(year: number, month: number): { date: string; isCu
 
 /* ---------- Component ---------- */
 
-export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded }: PostizMonthlyCalendarProps) {
+/** Legend entries mapping calendar chip colours to their meaning. */
+const LEGEND: { label: string; state: string }[] = [
+  { label: "Scheduled", state: "QUEUE" },
+  { label: "Published", state: "PUBLISHED" },
+  { label: "Failed", state: "ERROR" },
+];
+
+export function PostizMonthlyCalendar({ title = "Publishing Calendar", onDataLoaded, previewEntries }: PostizMonthlyCalendarProps) {
   // Store callback in ref to avoid re-fetch loops
   const onDataLoadedRef = useRef(onDataLoaded);
   onDataLoadedRef.current = onDataLoaded;
@@ -154,8 +181,27 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [previewVideo, setPreviewVideo] = useState<PreviewEntry | null>(null);
 
   const monthDays = useMemo(() => getMonthCalendarDays(viewYear, viewMonth), [viewYear, viewMonth]);
+
+  const previewByDate = useMemo(() => {
+    const map: Record<string, PreviewEntry[]> = {};
+    for (const e of previewEntries || []) {
+      const date = e.date.split("T")[0];
+      (map[date] ||= []).push(e);
+    }
+    return map;
+  }, [previewEntries]);
+
+  // Jump the calendar to the first preview day so ghosts are visible immediately.
+  const firstPreviewDate = previewEntries?.[0]?.date;
+  useEffect(() => {
+    if (!firstPreviewDate) return;
+    const d = new Date(firstPreviewDate + "T00:00:00");
+    setViewYear(d.getFullYear());
+    setViewMonth(d.getMonth());
+  }, [firstPreviewDate]);
 
   const dateRange = useMemo(() => {
     if (monthDays.length === 0) return { start: "", end: "" };
@@ -455,6 +501,16 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
             )}
           </div>
         )}
+
+        {/* Legend — explains what the coloured chips in each day cell mean */}
+        <div className="flex flex-wrap items-center gap-3 mt-2 pt-2 border-t">
+          {LEGEND.map(({ label, state }) => (
+            <span key={state} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className={`inline-block size-2.5 rounded-sm border ${stateColor(state)}`} />
+              {label}
+            </span>
+          ))}
+        </div>
       </CardHeader>
       <CardContent className="p-0">
         {loadingCalendar && !calendarData ? (
@@ -485,7 +541,8 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
                   const dayNum = new Date(dateStr + "T00:00:00").getDate();
                   const posts = postsByDate[dateStr] || [];
                   const items = scheduleItemsByDate[dateStr] || [];
-                  const totalItems = posts.length + items.length;
+                  const ghosts = previewByDate[dateStr] || [];
+                  const totalItems = posts.length + items.length + ghosts.length;
 
                   return (
                     <div
@@ -609,6 +666,36 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
                             </div>
                           );
                         })}
+
+                        {ghosts.map((g, gi) => {
+                          const hasVideo = !!g.final_video_path;
+                          return (
+                            <div
+                              key={`ghost-${g.clip_id}-${g.platform_type ?? gi}`}
+                              className={`rounded px-1 py-0.5 text-[10px] leading-tight border border-dashed border-primary/60 bg-primary/5 text-primary ${
+                                hasVideo ? "cursor-pointer hover:opacity-80 transition-opacity" : "cursor-default"
+                              }`}
+                              title={`Preview · ${g.clip_name}${g.platform_type ? ` · ${friendlyPlatformName(g.platform_type)}` : ""}`}
+                              onClick={() => hasVideo && setPreviewVideo(g)}
+                            >
+                              <div className="flex items-center gap-1">
+                                {g.thumbnail_path ? (
+                                  <img
+                                    src={`${API_URL}/library/files/${encodeURIComponent(g.thumbnail_path)}?v=${g.clip_id}`}
+                                    alt=""
+                                    className="size-3 rounded shrink-0"
+                                  />
+                                ) : null}
+                                <span className="truncate font-medium">
+                                  {g.platform_type && (
+                                    <span className="opacity-70 mr-0.5">{shortPlatformLabel(g.platform_type)}</span>
+                                  )}
+                                  {g.clip_name}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   );
@@ -626,6 +713,30 @@ export function PostizMonthlyCalendar({ title = "Postiz Calendar", onDataLoaded 
         onClose={() => setSelectedPost(null)}
         onDeleted={handlePostDeleted}
       />
+
+      {/* Preview clip playback (ghost chips, before confirming a schedule) */}
+      <Dialog open={!!previewVideo} onOpenChange={(open) => { if (!open) setPreviewVideo(null); }}>
+        <DialogContent className="max-w-md p-0 overflow-hidden">
+          <DialogHeader className="px-4 pt-4 pb-2">
+            <DialogTitle className="text-sm font-medium">{previewVideo?.clip_name}</DialogTitle>
+          </DialogHeader>
+          {previewVideo?.final_video_path ? (
+            <div className="aspect-[9/16] bg-black">
+              <video
+                key={previewVideo.clip_id}
+                src={`${API_URL}/library/files/${encodeURIComponent(previewVideo.final_video_path)}?v=${previewVideo.clip_id}`}
+                controls
+                autoPlay
+                className="w-full h-full object-contain"
+              />
+            </div>
+          ) : (
+            <div className="aspect-[9/16] bg-muted flex items-center justify-center text-muted-foreground text-sm">
+              Video not available
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

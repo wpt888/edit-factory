@@ -571,14 +571,46 @@ async def create_project(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _enrich_publishable_clips(repo, projects: List[dict]) -> None:
+    """Annotate each project dict with publishable_clip_count + a thumbnail.
+
+    One extra query over completed, non-deleted clips (same filter the scheduler
+    uses in _fetch_collection_clips) grouped by project_id. Mutates in place.
+    """
+    project_ids = [p["id"] for p in projects]
+    clips_resp = repo.table_query("editai_clips", "select",
+        filters=QueryFilters(
+            select="project_id, thumbnail_path",
+            in_={"project_id": project_ids},
+            eq={"final_status": "completed"},
+            or_="is_deleted.is.null,is_deleted.eq.false",
+        ))
+    counts: Dict[str, int] = {}
+    thumbs: Dict[str, str] = {}
+    for clip in (clips_resp.data or []):
+        pid = clip["project_id"]
+        counts[pid] = counts.get(pid, 0) + 1
+        if pid not in thumbs and clip.get("thumbnail_path"):
+            thumbs[pid] = clip["thumbnail_path"]
+    for p in projects:
+        p["publishable_clip_count"] = counts.get(p["id"], 0)
+        p["thumbnail_path"] = thumbs.get(p["id"])
+
+
 @router.get("/projects")
 async def list_projects(
     status: Optional[str] = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    with_clip_counts: bool = Query(default=False),
     profile: ProfileContext = Depends(get_profile_context)
 ):
-    """Listează toate proiectele."""
+    """Listează toate proiectele.
+
+    with_clip_counts=true adaugă `publishable_clip_count` + `thumbnail_path`
+    (câte clipuri randate are fiecare proiect) — folosit de Smart Schedule ca
+    să nu selectezi orbește colecții goale.
+    """
     repo = get_repository()
 
     try:
@@ -595,7 +627,10 @@ async def list_projects(
         )
         result = repo.list_projects(profile.profile_id, filters)
         total = result.count if result.count is not None else len(result.data)
-        return {"projects": result.data, "total": total, "limit": limit, "offset": offset}
+        projects = result.data
+        if with_clip_counts and projects:
+            _enrich_publishable_clips(repo, projects)
+        return {"projects": projects, "total": total, "limit": limit, "offset": offset}
     except Exception as e:
         logger.error(f"Error listing projects: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

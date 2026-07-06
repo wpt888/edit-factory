@@ -27,13 +27,12 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { apiGet, apiPost } from "@/lib/api";
+import { Input } from "@/components/ui/input";
+import { Search } from "lucide-react";
+import { apiGet, apiPost, API_URL } from "@/lib/api";
 import { toast } from "sonner";
 import { useProfile } from "@/contexts/profile-context";
-import {
-  ScheduleCalendarPreview,
-  type ScheduleEntry,
-} from "@/components/ScheduleCalendarPreview";
+import { type ScheduleEntry } from "@/components/ScheduleCalendarPreview";
 import { PostizMonthlyCalendar } from "@/components/schedule/postiz-monthly-calendar";
 
 /* ---------- Types ---------- */
@@ -43,6 +42,13 @@ interface Project {
   name: string;
   status?: string;
   clip_count?: number;
+  publishable_clip_count?: number;
+  thumbnail_path?: string;
+}
+
+/** Strip the auto-generated pipeline prefix so collection names are legible. */
+function displayCollectionName(name: string): string {
+  return name.replace(/^(Pipeline|Simple)\s*[:-]\s*/i, "").trim() || name;
 }
 
 interface Integration {
@@ -157,6 +163,8 @@ export default function SchedulePage() {
   // --- Config state ---
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(new Set());
+  const [collectionSearch, setCollectionSearch] = useState("");
+  const [showEmptyCollections, setShowEmptyCollections] = useState(false);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [selectedIntegrationIds, setSelectedIntegrationIds] = useState<Set<string>>(new Set());
   const [startDate, setStartDate] = useState(() => {
@@ -171,6 +179,7 @@ export default function SchedulePage() {
   const [integrationTimes, setIntegrationTimes] = useState<Record<string, string>>({});
   const [jitterMinutes, setJitterMinutes] = useState(15);
   const [loadingConfig, setLoadingConfig] = useState(true);
+  const [integrationsError, setIntegrationsError] = useState(false);
 
   // --- Preview state ---
   const [preview, setPreview] = useState<PreviewData | null>(null);
@@ -197,7 +206,7 @@ export default function SchedulePage() {
     setLoadingConfig(true);
     try {
       const [projRes, integRes] = await Promise.all([
-        apiGet("/library/projects"),
+        apiGet("/library/projects?with_clip_counts=true"),
         apiGet("/postiz/integrations").catch(() => null),
       ]);
 
@@ -210,7 +219,11 @@ export default function SchedulePage() {
         const integData = await integRes.json();
         if (isMountedRef.current) {
           setIntegrations(Array.isArray(integData) ? integData : integData.integrations || []);
+          setIntegrationsError(false);
         }
+      } else if (isMountedRef.current) {
+        // Fetch failed (Postiz unreachable) — surface it instead of hiding the section.
+        setIntegrationsError(true);
       }
     } catch (err) {
       console.error("Failed to load config data:", err);
@@ -295,12 +308,30 @@ export default function SchedulePage() {
     setPreview(null);
   };
 
+  const visibleProjects = useMemo(() => {
+    const q = collectionSearch.trim().toLowerCase();
+    return projects.filter((p) => {
+      const isEmpty = (p.publishable_clip_count ?? 0) === 0;
+      if (isEmpty && !showEmptyCollections) return false;
+      if (q && !displayCollectionName(p.name).toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [projects, collectionSearch, showEmptyCollections]);
+
+  const emptyCollectionCount = useMemo(
+    () => projects.filter((p) => (p.publishable_clip_count ?? 0) === 0).length,
+    [projects]
+  );
+
   const toggleAllProjects = () => {
-    if (selectedProjectIds.size === projects.length) {
-      setSelectedProjectIds(new Set());
-    } else {
-      setSelectedProjectIds(new Set(projects.map((p) => p.id)));
-    }
+    const visibleIds = visibleProjects.map((p) => p.id);
+    const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedProjectIds.has(id));
+    setSelectedProjectIds((prev) => {
+      const next = new Set(prev);
+      if (allSelected) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
     setPreview(null);
   };
 
@@ -469,31 +500,74 @@ export default function SchedulePage() {
             <div className="flex items-center justify-between">
               <Label>Collections</Label>
               <Button variant="ghost" size="sm" onClick={toggleAllProjects} className="text-xs h-7">
-                {selectedProjectIds.size === projects.length ? "Deselect All" : "Select All"}
+                Select All Shown
               </Button>
             </div>
             {projects.length === 0 ? (
               <p className="text-sm text-muted-foreground">No collections found.</p>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-48 overflow-y-auto border rounded-md p-2">
-                {projects.map((proj) => (
-                  <label
-                    key={proj.id}
-                    className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent cursor-pointer text-sm"
-                  >
-                    <Checkbox
-                      checked={selectedProjectIds.has(proj.id)}
-                      onCheckedChange={() => toggleProject(proj.id)}
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative flex-1 min-w-[180px]">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+                    <Input
+                      value={collectionSearch}
+                      onChange={(e) => setCollectionSearch(e.target.value)}
+                      placeholder="Search collections..."
+                      className="h-8 pl-8 text-sm"
                     />
-                    <span className="truncate">{proj.name}</span>
-                    {proj.clip_count != null && (
-                      <Badge variant="secondary" className="ml-auto text-xs shrink-0">
-                        {proj.clip_count} clips
-                      </Badge>
-                    )}
-                  </label>
-                ))}
-              </div>
+                  </div>
+                  {emptyCollectionCount > 0 && (
+                    <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer shrink-0">
+                      <Checkbox
+                        checked={showEmptyCollections}
+                        onCheckedChange={() => setShowEmptyCollections((v) => !v)}
+                      />
+                      Show {emptyCollectionCount} empty
+                    </label>
+                  )}
+                </div>
+                {visibleProjects.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-2">No collections match.</p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-56 overflow-y-auto border rounded-md p-2">
+                    {visibleProjects.map((proj) => {
+                      const count = proj.publishable_clip_count ?? 0;
+                      return (
+                        <label
+                          key={proj.id}
+                          className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent cursor-pointer text-sm"
+                        >
+                          <Checkbox
+                            checked={selectedProjectIds.has(proj.id)}
+                            onCheckedChange={() => toggleProject(proj.id)}
+                          />
+                          {proj.thumbnail_path ? (
+                            <img
+                              src={`${API_URL}/library/files/${encodeURIComponent(proj.thumbnail_path)}`}
+                              alt=""
+                              className="size-8 rounded object-cover shrink-0"
+                            />
+                          ) : (
+                            <div className="size-8 rounded bg-muted flex items-center justify-center shrink-0 text-[9px] text-muted-foreground">
+                              N/A
+                            </div>
+                          )}
+                          <span className="truncate flex-1" title={proj.name}>
+                            {displayCollectionName(proj.name)}
+                          </span>
+                          <Badge
+                            variant={count > 0 ? "secondary" : "outline"}
+                            className="ml-auto text-xs shrink-0"
+                          >
+                            {count} clips
+                          </Badge>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
           </div>
 
@@ -529,6 +603,23 @@ export default function SchedulePage() {
               </Select>
             </div>
           </div>
+
+          {/* No platforms connected — explain instead of silently hiding the section */}
+          {integrations.length === 0 && (
+            <div className="flex items-start gap-2 rounded-md border border-yellow-300 bg-yellow-50 dark:bg-yellow-900/20 dark:border-yellow-700 p-3 text-sm">
+              <AlertTriangle className="size-4 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-medium">
+                  {integrationsError ? "Couldn't reach Postiz" : "No platforms connected"}
+                </span>
+                <p className="text-muted-foreground mt-0.5">
+                  {integrationsError
+                    ? "Publishing integrations couldn't be loaded. Check your Postiz connection in Settings, then reload."
+                    : "Connect a social account in Settings to schedule posts. You can still preview a distribution below, but scheduling needs at least one platform."}
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Integrations with per-platform time slots */}
           {integrations.length > 0 && (
@@ -674,12 +765,22 @@ export default function SchedulePage() {
                   </div>
                 )}
 
-                {/* Calendar grid */}
-                <ScheduleCalendarPreview entries={preview.entries} />
+                {/* Preview clips are overlaid as ghost chips on the calendar below. */}
+                <p className="text-xs text-muted-foreground">
+                  {preview.total_clips} clip(s) laid out on the calendar below (dashed = not yet scheduled). Click a clip to preview its video.
+                </p>
 
                 {/* Confirm button */}
-                <div className="flex justify-end pt-2">
-                  <Button onClick={handleConfirm} disabled={confirming || preview.total_clips === 0}>
+                <div className="flex flex-col items-end gap-1.5 pt-2">
+                  {selectedIntegrationIds.size === 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Select at least one platform above to schedule.
+                    </p>
+                  )}
+                  <Button
+                    onClick={handleConfirm}
+                    disabled={confirming || preview.total_clips === 0 || selectedIntegrationIds.size === 0}
+                  >
                     {confirming && <Loader2 className="size-4 mr-2 animate-spin" />}
                     Confirm & Schedule
                   </Button>
@@ -690,8 +791,8 @@ export default function SchedulePage() {
         </Card>
       )}
 
-      {/* ===== Section 3: Postiz Calendar ===== */}
-      <PostizMonthlyCalendar />
+      {/* ===== Section 3: Unified Calendar (real posts + preview ghosts) ===== */}
+      <PostizMonthlyCalendar previewEntries={preview?.entries} />
 
       {/* ===== Section 4: Plans History ===== */}
       <Card>
