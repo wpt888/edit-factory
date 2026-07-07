@@ -109,6 +109,10 @@ class Settings(BaseSettings):
     postiz_api_url: str = ""
     postiz_api_key: str = ""
 
+    # Blipost Platform API (desktop → web bridge, phase U1)
+    # Base URL of the web app. Default = production; override for dev (e.g. http://localhost:3002).
+    blipost_platform_base_url: str = "https://blipost.com"
+
     # Gemini API
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"

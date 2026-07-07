@@ -448,12 +448,14 @@ from app.api.buffer_routes import router as buffer_router
 from app.api.schedule_routes import router as schedule_router
 from app.api.feed_routes import router as feed_router
 from app.api.image_generate_routes import router as image_generate_router
+from app.api.blipost_platform_routes import router as blipost_platform_router
 
 app.include_router(postiz_router, prefix="/api/v1", tags=["Postiz Publishing"])
 app.include_router(buffer_router, prefix="/api/v1", tags=["Buffer Publishing"])
 app.include_router(schedule_router, prefix="/api/v1", tags=["Smart Schedule"])
 app.include_router(feed_router, prefix="/api/v1", tags=["feeds"])
 app.include_router(image_generate_router, prefix="/api/v1", tags=["AI Image Generation"])
+app.include_router(blipost_platform_router, prefix="/api/v1", tags=["Blipost Platform"])
 
 # Desktop-only routes (license, version, settings) — gated behind DESKTOP_MODE
 if settings.desktop_mode:

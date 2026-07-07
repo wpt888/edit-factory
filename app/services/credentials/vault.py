@@ -22,7 +22,7 @@ from app.services.elevenlabs_account_manager import (
 logger = logging.getLogger(__name__)
 
 # Valid services for the vault
-VAULT_SERVICES = frozenset({"gemini", "fal", "anthropic", "postiz", "buffer", "telegram"})
+VAULT_SERVICES = frozenset({"gemini", "fal", "anthropic", "postiz", "buffer", "telegram", "blipost_platform"})
 
 # Singleton
 _instance: Optional["ApiKeyVaultManager"] = None
