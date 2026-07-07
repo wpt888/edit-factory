@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { ProfileSwitcher } from "@/components/profile-switcher";
 import { useProfile } from "@/contexts/profile-context";
 import { useAuth } from "@/components/auth-provider";
+import { apiGet } from "@/lib/api";
 import {
   Clapperboard,
   Film,
@@ -25,6 +26,7 @@ import {
   Calendar,
   NotebookPen,
   LogOut,
+  Wallet,
 } from "lucide-react";
 
 const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
@@ -139,6 +141,42 @@ function AppNav({ horizontal = false }: { horizontal?: boolean }) {
   );
 }
 
+// Credit balance pill — only renders when a Blipost platform token is connected.
+// Refreshes on mount (and when the profile changes), per the U1 spec.
+function CreditBalance() {
+  const { currentProfile } = useProfile();
+  const [balance, setBalance] = React.useState<number | null>(null);
+
+  React.useEffect(() => {
+    if (!currentProfile) return;
+    let cancelled = false;
+    apiGet("/platform/me")
+      .then((res) => res.json())
+      .then((data: { connected?: boolean; balance?: number | null }) => {
+        if (!cancelled && data.connected && typeof data.balance === "number") {
+          setBalance(data.balance);
+        } else if (!cancelled) {
+          setBalance(null);
+        }
+      })
+      .catch(() => { if (!cancelled) setBalance(null); });
+    return () => { cancelled = true; };
+  }, [currentProfile]);
+
+  if (balance === null) return null;
+  return (
+    <Link
+      href="/settings"
+      className="flex items-center gap-2 rounded-xl border border-lime/40 bg-lime/10 px-3 py-2 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-lime/15"
+      title="Blipost credit balance"
+    >
+      <Wallet className="size-4 text-lime" />
+      <span className="font-semibold">{balance.toLocaleString()}</span>
+      <span className="text-sidebar-foreground/60">credits</span>
+    </Link>
+  );
+}
+
 function Wordmark({ className }: { className?: string }) {
   return (
     <Image
@@ -173,6 +211,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <AppNav />
         </div>
         <div className="flex flex-col gap-3 px-4 pb-5 pt-3">
+          <CreditBalance />
           <ProfileSwitcher />
           <div className="flex items-center gap-2.5 rounded-xl border border-sidebar-border bg-sidebar-accent/50 p-3">
             <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-lime font-heading text-sm font-bold text-ink">

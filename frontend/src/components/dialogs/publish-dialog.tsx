@@ -33,13 +33,13 @@ import { toast } from "sonner";
 import { PostizMonthlyCalendar } from "@/components/schedule/postiz-monthly-calendar";
 import { PLATFORM_CHAR_LIMITS, PLATFORM_NAMES } from "@/lib/platforms";
 
-// Unified platform item — can be a Postiz integration or a Buffer channel
+// Unified platform item — a Postiz integration, a Buffer channel, or a Blipost account
 interface UnifiedPlatform {
   id: string;
   name: string;
   platformType: string; // facebook, instagram, tiktok, etc.
   picture?: string;
-  source: "postiz" | "buffer";
+  source: "postiz" | "buffer" | "platform";
   // Buffer-specific
   channelId?: string;
 }
@@ -100,8 +100,8 @@ export function PublishDialog({
   const MAX_POLL_COUNT = 200;
 
   // Track which polls are active (for multi-service polling)
-  const activeJobsRef = useRef<{ postiz?: string; buffer?: string }>({});
-  const completedJobsRef = useRef<{ postiz?: string; buffer?: string }>({});
+  const activeJobsRef = useRef<{ postiz?: string; buffer?: string; platform?: string }>({});
+  const completedJobsRef = useRef<{ postiz?: string; buffer?: string; platform?: string }>({});
 
   // Fetch all platforms (Postiz + Buffer) when dialog opens
   useEffect(() => {
@@ -164,6 +164,25 @@ export function PublishDialog({
         // Buffer not configured — skip
       }
 
+      // Fetch Blipost platform accounts (web account, if a token is connected)
+      try {
+        const res = await apiGet("/platform/accounts");
+        if (!cancelled) {
+          const data = await res.json();
+          for (const acc of data) {
+            allPlatforms.push({
+              id: `platform:${acc.id}`,
+              name: acc.displayName || acc.handle || acc.platform,
+              platformType: acc.platform,
+              picture: undefined,
+              source: "platform",
+            });
+          }
+        }
+      } catch {
+        // Blipost not connected — skip
+      }
+
       if (!cancelled) {
         setPlatforms(allPlatforms);
         // Select all by default
@@ -214,8 +233,16 @@ export function PublishDialog({
     [platforms, selectedIds]
   );
 
+  const selectedPlatformIds = useMemo(
+    () => Array.from(selectedIds)
+      .filter((id) => id.startsWith("platform:"))
+      .map((id) => id.replace("platform:", "")),
+    [selectedIds]
+  );
+
   const hasPostizSelected = selectedPostizIds.length > 0;
   const hasBufferSelected = selectedBufferChannels.length > 0;
+  const hasPlatformSelected = selectedPlatformIds.length > 0;
 
   // Check if YouTube is among selected platforms
   const hasYoutubeSelected = useMemo(
@@ -299,14 +326,14 @@ export function PublishDialog({
     }
   }, []);
 
-  // Unified polling for both services
-  const startUnifiedPolling = useCallback((jobs: { postiz?: string; buffer?: string }) => {
+  // Unified polling for all services
+  const startUnifiedPolling = useCallback((jobs: { postiz?: string; buffer?: string; platform?: string }) => {
     if (pollRef.current) clearTimeout(pollRef.current);
     pollCountRef.current = 0;
     activeJobsRef.current = { ...jobs };
     completedJobsRef.current = {};
 
-    const totalJobs = (jobs.postiz ? 1 : 0) + (jobs.buffer ? 1 : 0);
+    const totalJobs = (jobs.postiz ? 1 : 0) + (jobs.buffer ? 1 : 0) + (jobs.platform ? 1 : 0);
     let completedCount = 0;
     let failedCount = 0;
     const errorDetails: string[] = [];
@@ -348,6 +375,20 @@ export function PublishDialog({
         }
       }
 
+      // Poll Blipost platform job
+      if (jobs.platform && !completedJobsRef.current.platform) {
+        const result = await pollJob(jobs.platform, `/platform/publish/${jobs.platform}/progress`);
+        if (result.status === "completed") {
+          completedJobsRef.current.platform = "done";
+          completedCount++;
+        } else if (result.status === "failed") {
+          completedJobsRef.current.platform = "failed";
+          if (result.errorDetail) errorDetails.push(`Blipost: ${result.errorDetail}`);
+          failedCount++;
+          completedCount++;
+        }
+      }
+
       // Update progress
       const pct = Math.round((completedCount / totalJobs) * 100);
       setProgressPercent(pct);
@@ -355,6 +396,7 @@ export function PublishDialog({
       const parts: string[] = [];
       if (jobs.postiz) parts.push(`Postiz: ${completedJobsRef.current.postiz || "in progress..."}`);
       if (jobs.buffer) parts.push(`Buffer: ${completedJobsRef.current.buffer || "in progress..."}`);
+      if (jobs.platform) parts.push(`Blipost: ${completedJobsRef.current.platform || "in progress..."}`);
       setProgressStep(parts.join(" | "));
 
       if (completedCount >= totalJobs) {
@@ -428,7 +470,7 @@ export function PublishDialog({
     setProgressPercent(0);
     setProgressStep("Starting publishing...");
 
-    const jobs: { postiz?: string; buffer?: string } = {};
+    const jobs: { postiz?: string; buffer?: string; platform?: string } = {};
 
     try {
       // Launch Postiz publish if any Postiz platforms selected
@@ -475,7 +517,28 @@ export function PublishDialog({
         }
       }
 
-      if (!jobs.postiz && !jobs.buffer) {
+      // Launch Blipost platform publish if any web accounts selected
+      if (hasPlatformSelected) {
+        const body: Record<string, unknown> = {
+          clip_id: clipId,
+          caption,
+          account_ids: selectedPlatformIds,
+        };
+        if (publishMode === "schedule" && scheduleDate) {
+          body.schedule_date = new Date(scheduleDate).toISOString();
+        }
+        if (publishMode === "draft") {
+          body.save_as_draft = true;
+        }
+
+        const res = await apiPost("/platform/publish", body);
+        const data = await res.json();
+        if (data.job_id) {
+          jobs.platform = data.job_id;
+        }
+      }
+
+      if (!jobs.postiz && !jobs.buffer && !jobs.platform) {
         setDialogState("error");
         setErrorMessage("Couldn't start publishing");
         return;
@@ -618,6 +681,11 @@ export function PublishDialog({
                           {platform.source === "buffer" && (
                             <Badge variant="outline" className="text-xs text-primary border-primary/50">
                               Buffer
+                            </Badge>
+                          )}
+                          {platform.source === "platform" && (
+                            <Badge variant="outline" className="text-xs text-lime border-lime/50">
+                              Blipost
                             </Badge>
                           )}
                         </button>

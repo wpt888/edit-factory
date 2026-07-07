@@ -184,6 +184,11 @@ function LibrarieContent() {
     integrations: { name: string; type: string; picture?: string }[];
     error?: string;
   } | null>(null);
+  // U1: whether a Blipost platform token is connected. The publish dialog is a
+  // multi-source flow (Postiz + Buffer + Blipost), so the Publish button must be
+  // enabled when EITHER Postiz or Blipost is connected — not Postiz-only.
+  const [platformConnected, setPlatformConnected] = useState(false);
+  const canPublish = Boolean(postizStatus?.connected || platformConnected);
 
   // Publish dialog state
   const [publishDialogClip, setPublishDialogClip] = useState<ClipWithProject | null>(null);
@@ -477,6 +482,18 @@ function LibrarieContent() {
     }
   };
 
+  // U1: fetch Blipost platform connection state so the publish button can enable
+  // even when Postiz isn't configured.
+  const fetchPlatformStatus = async () => {
+    try {
+      const res = await apiGet("/platform/me");
+      const data = await res.json();
+      setPlatformConnected(Boolean(data.connected));
+    } catch {
+      setPlatformConnected(false);
+    }
+  };
+
   // Fetch available tags for the filter dropdown
   const fetchAvailableTags = async () => {
     try {
@@ -503,6 +520,7 @@ function LibrarieContent() {
     setHasMore(true);
     fetchAllClips(null, undefined, controller.signal);
     fetchPostizStatus();
+    fetchPlatformStatus();
     fetchAvailableTags();
     return () => { controller.abort(); };
   }, [profileLoading, profileId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2241,12 +2259,12 @@ function LibrarieContent() {
                         <Button
                           size="sm"
                           className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                          disabled={!postizStatus?.connected}
+                          disabled={!canPublish}
                           onClick={(e) => {
                             e.stopPropagation();
                             openPublishDialog(clip);
                           }}
-                          title={postizStatus?.connected ? "Publish to Social Media" : "Postiz not configured — configure in Settings"}
+                          title={canPublish ? "Publish to Social Media" : "Connect Postiz or Blipost in Settings to publish"}
                         >
                           <Share2 className="h-4 w-4" />
                         </Button>

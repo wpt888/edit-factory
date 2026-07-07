@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Loader2, Save, Settings as SettingsIcon, Eye, EyeOff, BarChart3, Trash2, Star, RefreshCw, Plus, Key, Shield } from "lucide-react"
+import { Loader2, Save, Settings as SettingsIcon, Eye, EyeOff, BarChart3, Trash2, Star, RefreshCw, Plus, Key, Shield, Wallet, Cloud } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
 import { apiGetWithRetry, apiPost, apiPatch, apiDelete, handleApiError } from "@/lib/api"
 import { toast } from "sonner"
@@ -188,6 +188,65 @@ export default function SettingsPage() {
   // Crash reporting state
   const [crashReporting, setCrashReporting] = useState(false)
   const [crashReportingLoading, setCrashReportingLoading] = useState(false)
+
+  // Blipost platform account (web bridge) state
+  interface BlipostMe {
+    connected: boolean
+    email?: string | null
+    plan?: string | null
+    balance?: number | null
+    error?: string | null
+  }
+  const [blipostToken, setBlipostToken] = useState("")
+  const [showBlipostToken, setShowBlipostToken] = useState(false)
+  const [blipostMe, setBlipostMe] = useState<BlipostMe | null>(null)
+  const [blipostConnecting, setBlipostConnecting] = useState(false)
+
+  const loadBlipostMe = useCallback(async () => {
+    if (!currentProfile) return
+    try {
+      const res = await apiGetWithRetry("/platform/me")
+      setBlipostMe(await res.json())
+    } catch {
+      setBlipostMe({ connected: false })
+    }
+  }, [currentProfile])
+
+  useEffect(() => {
+    if (profileLoading || !currentProfile) return
+    loadBlipostMe()
+  }, [currentProfile, profileLoading, loadBlipostMe])
+
+  const handleBlipostConnect = async () => {
+    const token = blipostToken.trim()
+    if (!token) {
+      toast.warning("Paste your Blipost platform token first")
+      return
+    }
+    setBlipostConnecting(true)
+    try {
+      const res = await apiPost("/platform/connect", { token })
+      const data = await res.json()
+      setBlipostMe(data)
+      setBlipostToken("")
+      setShowBlipostToken(false)
+      toast.success(`Connected to Blipost${data.email ? ` as ${data.email}` : ""}`)
+    } catch (error) {
+      handleApiError(error, "Could not connect to Blipost")
+    } finally {
+      setBlipostConnecting(false)
+    }
+  }
+
+  const handleBlipostDisconnect = async () => {
+    try {
+      await apiDelete("/platform/disconnect")
+      setBlipostMe({ connected: false })
+      toast.success("Disconnected from Blipost")
+    } catch (error) {
+      handleApiError(error, "Could not disconnect")
+    }
+  }
 
   // Load ElevenLabs accounts (subscription info auto-fetched by backend)
   const loadAccounts = useCallback(async () => {
@@ -1089,6 +1148,100 @@ export default function SettingsPage() {
           <ApiKeyManager key={`gemini-${currentProfile.id}`} service="gemini" label="Gemini AI" description="Google Gemini for script generation and image analysis" />
           <div className="border-t" />
           <ApiKeyManager key={`fal-${currentProfile.id}`} service="fal" label="fal.ai" description="Image generation service" />
+        </CardContent>
+      </Card>
+
+      {/* Blipost Account — connect the desktop app to the web account via a platform token.
+          When connected, publishing can route through the web Platform API and the
+          credit balance is shown here. Postiz below remains the fallback. */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Cloud className="h-5 w-5 text-lime" />
+            Blipost Account
+          </CardTitle>
+          <CardDescription>
+            Connect to your Blipost web account to publish through the platform and see your credit balance.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {blipostMe?.connected ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-lime/40 bg-lime/5 p-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-lime" />
+                    <span className="text-sm font-medium truncate">
+                      {blipostMe.email || "Connected"}
+                    </span>
+                    {blipostMe.plan && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-muted text-foreground capitalize">
+                        {blipostMe.plan}
+                      </span>
+                    )}
+                  </div>
+                  {blipostMe.error ? (
+                    <p className="text-xs text-red-500 mt-1">{blipostMe.error}</p>
+                  ) : (
+                    <div className="flex items-center gap-1.5 mt-1 text-sm">
+                      <Wallet className="h-4 w-4 text-muted-foreground" />
+                      <span className="font-semibold">{blipostMe.balance ?? 0}</span>
+                      <span className="text-muted-foreground">credits</span>
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={loadBlipostMe} title="Refresh balance">
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-red-500 hover:text-red-600"
+                    onClick={handleBlipostDisconnect}
+                    title="Disconnect"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Platform token</label>
+              <div className="flex gap-2">
+                <Input
+                  type={showBlipostToken ? "text" : "password"}
+                  value={blipostToken}
+                  onChange={(e) => setBlipostToken(e.target.value)}
+                  placeholder="blp_..."
+                  disabled={blipostConnecting}
+                  className="flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setShowBlipostToken(!showBlipostToken)}
+                >
+                  {showBlipostToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </Button>
+                <Button onClick={handleBlipostConnect} disabled={blipostConnecting || !blipostToken.trim()}>
+                  {blipostConnecting ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Connecting...
+                    </>
+                  ) : (
+                    "Test & Connect"
+                  )}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Create a token in Blipost web → Settings → API &amp; Desktop tokens, then paste it here. It is shown only once.
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
