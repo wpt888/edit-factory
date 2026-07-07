@@ -48,6 +48,7 @@ _TOKEN_LABEL = "Blipost Platform"
 _video_jobs: Dict[str, dict] = {}            # job_id -> {keywords, prompt, duration_sec, profile_id}
 _video_registrations: Dict[str, dict] = {}   # job_id -> VideoStatusResponse payload (dedup)
 _video_locks: Dict[str, asyncio.Lock] = {}   # job_id -> lock guarding download+register
+_video_owners: Dict[str, str] = {}           # job_id -> submitting profile_id (ownership; persists past registration)
 
 
 # ============== MODELS ==============
@@ -491,6 +492,7 @@ async def submit_video(body: VideoSubmitRequest, profile: ProfileContext = Depen
         "duration_sec": body.duration_sec,
         "profile_id": profile.profile_id,
     }
+    _video_owners[job_id] = profile.profile_id
     logger.info("[Profile %s] AI video job %s submitted (cost=%s)", profile.profile_id, job_id, result.get("creditCost"))
     return VideoSubmitResponse(
         job_id=job_id,
@@ -499,10 +501,25 @@ async def submit_video(body: VideoSubmitRequest, profile: ProfileContext = Depen
     )
 
 
+def _assert_video_owner(job_id: str, profile_id: str) -> None:
+    """A video job may only be polled by the profile that submitted (and paid
+    for) it — the active profile can change between submit and poll (X-Profile-Id
+    is read live from the client), which would otherwise file the clip under the
+    wrong profile or leak another profile's result. Mirror _resolve_clip_video:
+    404 on mismatch (don't reveal another profile's job).
+    ponytail: ownership is in-memory, so a job whose owner record didn't survive
+    a restart is allowed through — the credit was already charged and we can't do
+    better; the accidental-misfile window that motivates this check is same-process."""
+    owner = _video_owners.get(job_id)
+    if owner is not None and owner != profile_id:
+        raise HTTPException(status_code=404, detail="Video job not found.")
+
+
 @router.get("/videos/{job_id}", response_model=VideoStatusResponse)
 async def video_status(job_id: str, profile: ProfileContext = Depends(get_profile_context)):
     """Poll an AI video job. On 'done', download the clip once and register it as
     a normal segment; return the segment id so the pipeline can use it."""
+    _assert_video_owner(job_id, profile.profile_id)
     # Already imported? Return the cached segment result (idempotent poll).
     cached = _video_registrations.get(job_id)
     if cached:
