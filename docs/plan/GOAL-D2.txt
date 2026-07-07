@@ -1,0 +1,8 @@
+/goal În pipeline-ul de mass-editing, userul poate genera un segment video cu AI prin creditele platformei Blipost (bridge-ul U1 → POST /api/platform/v1/videos), iar clipul generat intră în timeline exact ca un segment obișnuit. TASK 0 obligatoriu întâi: repară cele 4 picker-e orfane de catalog găsite la review (detalii în spec §2).
+
+Repo: desktop (edit_factory). Branch nou: feat/d2-ai-video-segments, din main (include deja d1+u1, mergeate).
+Bani: DOAR credite platformă pentru video — extinde blipost_platform_client cu /videos din contractul social-scheduler/docs/platform-api.md (doar citire acolo; dacă lipsește ceva din contract, oprește-te și raportează — NU modifica repo-ul web). Clipul descărcat se înregistrează pe drumul existent de segmente (editai_segments + thumbnails) — investighează întâi cum intră azi un segment. Sold + cost vizibile înainte/după submit; 402 mesaj clar; fără token → feature disabled cu hint, nimic nu crapă. Imaginile BYOK existente rămân neatinse.
+Verificare OBLIGATORIE: Playwright + screenshot (Task 0 + fluxul Generate-with-AI) cu web-ul de dev pe main în celălalt repo (PORT=3002 npm run dev + npm run worker; keyless = mock video determinist) + self-check backend cu MockTransport (pattern-ul din tests/test_blipost_platform_client.py). Backend 8000 fără --reload, frontend 3001. Nu push/PR fără cerere explicită.
+
+Plan master & guardrails: @docs/IMPLEMENTATION-PLAN-2026-07.md
+Spec fază (citește integral întâi): @docs/plan/phase-D2-ai-video-segments.md

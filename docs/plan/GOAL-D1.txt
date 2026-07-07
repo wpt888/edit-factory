@@ -1,0 +1,8 @@
+/goal Înlocuiește catalogul hardcodat Gomag cu o bibliotecă de produse LOCALĂ, per-user (titlu + imagini + descriere), cu descriere auto din imagine+titlu prin Gemini Vision, folosibilă ca sursă de context la generarea în masă.
+
+Repo: desktop (edit_factory). Branch nou: feat/d1-product-library.
+Store local izolat (SQLite în userData) — NU atinge DATA_BACKEND=supabase pentru restul app-ului. Feed-import rămâne opțional (neatins). Ascunde catalogul Gomag din UI default, nu-l șterge. Refolosește: SQLiteRepository, clientul Gemini existent, api_key_vault, cost_tracker, componentele Shadcn.
+Respectă toate guardrails-urile din planul master. Verifică OBLIGATORIU cu test Playwright + screenshot. Nu depăși scope-ul IN/OUT din spec. Nu push/PR fără cerere explicită.
+
+Plan master & guardrails: @docs/IMPLEMENTATION-PLAN-2026-07.md
+Spec fază (citește integral întâi): @docs/plan/phase-D1-product-library.md

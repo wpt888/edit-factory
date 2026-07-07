@@ -1,0 +1,9 @@
+/goal Conectează aplicația desktop la contul Blipost web printr-un token de platformă lipit în Settings, astfel încât publicarea socială să meargă prin Platform API-ul web (Postiz rămâne fallback, neatins) și soldul de credite să fie vizibil în UI.
+
+Repo: desktop (edit_factory). Branch nou: feat/u1-desktop-bridge, creat din feat/d1-product-library (HEAD-ul curent). Contractul API: social-scheduler/docs/platform-api.md (există, scris de W2 — DOAR citire din acel repo; dacă lipsește, oprește-te și raportează; nu inventa endpoint-uri).
+Tokenul (format blp_*) se stochează în api_key_vault (service nou blipost_platform, Fernet — refolosește vault-ul, nu inventa alt storage). Client httpx subțire cu erori mapate curat (401 token invalid, 402 credite insuficiente, 429 backoff). Calea platform e o ramură în fluxul de publicare existent (Postiz), nu un flux duplicat. Fără token, totul merge ca înainte. Tokenul nu apare NICIODATĂ în loguri. NU atinge auth-ul Supabase al desktopului.
+Pentru teste: web-ul de dev e în C:\obSID SRL\n8n\social-scheduler pe branch-ul feat/w2-platform-api — pornește-l cu PORT=3002 npm run dev (3000/3001 sunt ocupate) și creează-ți token din UI-ul lui de settings.
+Verificare OBLIGATORIE: Playwright + screenshot (settings conectat cu sold vizibil + publicare cu conturile platformei) + self-check backend contra serverului de dev (me → accounts → media → post → get post). Backend desktop pe 8000 fără --reload, frontend 3001. Nu push/PR fără cerere explicită.
+
+Plan master & guardrails: @docs/IMPLEMENTATION-PLAN-2026-07.md
+Spec fază (citește integral întâi): @docs/plan/phase-U1-desktop-bridge.md
