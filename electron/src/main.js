@@ -618,6 +618,15 @@ function setupApplicationMenu() {
 const VIDEO_EXTENSIONS = ['mp4', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'webm', 'mpeg', 'mpg', '3gp', 'ogg'];
 
 function registerIpcHandlers() {
+  // Custom title bar window controls (main window is frameless — see createWindow)
+  ipcMain.on('window:minimize', () => mainWindow?.minimize());
+  ipcMain.on('window:toggle-maximize', () => {
+    if (!mainWindow) return;
+    mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
+  });
+  ipcMain.on('window:close', () => mainWindow?.close());
+  ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false);
+
   ipcMain.handle('dialog:select-videos', async (event) => {
     // Defense-in-depth: only serve our own UI origin
     try {
@@ -649,6 +658,7 @@ function createWindow() {
     backgroundColor: '#0a0a08', // blipost ink — matches app --background
     title: 'Blipost',
     icon: ICON_PATH,
+    frame: false, // custom title bar (frontend/src/components/desktop-titlebar.tsx) replaces native chrome
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -658,6 +668,10 @@ function createWindow() {
 
   // Hidden menu keeps accelerators; bar never shows (Alt does not reveal it)
   mainWindow.setMenuBarVisibility(false);
+
+  // Forward maximize state so the custom title bar can swap its icon
+  mainWindow.on('maximize', () => mainWindow.webContents.send('window:maximize-changed', true));
+  mainWindow.on('unmaximize', () => mainWindow.webContents.send('window:maximize-changed', false));
 
   // window.open handling:
   //  - Same-origin URLs (our backend/frontend on localhost) are almost always

@@ -7,6 +7,15 @@ declare global {
       isDesktop: boolean;
       /** Native multi-select video picker. [] = user cancelled. */
       selectVideoFiles: () => Promise<string[]>;
+      /** Custom title bar controls (main window runs frameless). */
+      window: {
+        minimize: () => void;
+        toggleMaximize: () => void;
+        close: () => void;
+        isMaximized: () => Promise<boolean>;
+        /** Subscribe to maximize/restore changes; call the returned fn to unsubscribe. */
+        onMaximizeChange: (cb: (isMaximized: boolean) => void) => () => void;
+      };
     };
   }
 }

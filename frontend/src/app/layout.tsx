@@ -6,6 +6,7 @@ import { Toaster } from "sonner";
 import { ProfileProvider } from "@/contexts/profile-context";
 import { AuthProvider } from "@/components/auth-provider";
 import { DesktopAuthGuard } from "@/components/desktop-auth-guard";
+import { DesktopTitleBar } from "@/components/desktop-titlebar";
 
 const heading = Bricolage_Grotesque({
   variable: "--font-heading",
@@ -73,15 +74,18 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body>
-        <ProfileProvider>
-          <AuthProvider>
-            <NavBarWrapper>
-              <DesktopAuthGuard>
-                {children}
-              </DesktopAuthGuard>
-            </NavBarWrapper>
-          </AuthProvider>
-        </ProfileProvider>
+        <DesktopTitleBar />
+        <div className="app-scroll">
+          <ProfileProvider>
+            <AuthProvider>
+              <NavBarWrapper>
+                <DesktopAuthGuard>
+                  {children}
+                </DesktopAuthGuard>
+              </NavBarWrapper>
+            </AuthProvider>
+          </ProfileProvider>
+        </div>
         <Toaster
           position="top-right"
           richColors
