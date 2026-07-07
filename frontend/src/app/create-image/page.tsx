@@ -319,14 +319,26 @@ export default function CreateImagePage() {
     }
   }, []);
 
+  // D1: products come from the local Product Library (the Gomag catalog is gated
+  // off). The library is small, so search filters client-side.
   const fetchProducts = useCallback(async (search?: string) => {
     try {
-      const q = search ?? productSearch;
-      const params = q ? `?search=${encodeURIComponent(q)}&page_size=20` : "?page_size=20";
-      const res = await apiGet(`/catalog/products${params}`);
+      const q = (search ?? productSearch).trim().toLowerCase();
+      const res = await apiGet("/product-library");
       if (res.ok) {
         const data = await res.json();
-        setProducts(data.products || []);
+        interface LibraryProduct { id: string; title: string; description?: string; image_urls?: string[] }
+        const all = ((data.products || []) as LibraryProduct[])
+          .filter((p) => !q || p.title.toLowerCase().includes(q))
+          .map((p) => ({
+            id: p.id,
+            title: p.title,
+            description: p.description || "",
+            brand: "",
+            price: "",
+            image_link: p.image_urls?.[0] ? `${API_URL}${p.image_urls[0]}` : "",
+          }));
+        setProducts(all);
       }
     } catch (err) {
       console.error("Failed to fetch products:", err);
@@ -352,15 +364,8 @@ export default function CreateImagePage() {
   }, []);
 
   const fetchProductsWithApprovedImages = useCallback(async () => {
-    try {
-      const res = await apiGet("/catalog/products/with-approved-images");
-      if (res.ok) {
-        const data = await res.json();
-        setProductsWithApprovedImages(new Set(data.product_ids || []));
-      }
-    } catch (err) {
-      console.error("Failed to fetch products with approved images:", err);
-    }
+    // "Approved images" is a Gomag-catalog concept; the local library has none. No-op.
+    setProductsWithApprovedImages(new Set());
   }, []);
 
   useEffect(() => {

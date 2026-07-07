@@ -118,6 +118,8 @@ const LS_TEMPLATE_KEY = "ef_video_caption_template_id";
 const LS_TONE_KEY = "ef_video_caption_tone";
 const LS_LANGUAGE_KEY = "ef_video_caption_language";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+
 /* ---------- Component ---------- */
 
 export function PipelineCaptionGenerator({
@@ -388,17 +390,34 @@ export function PipelineCaptionGenerator({
     return doc.body.textContent?.trim() || "";
   };
 
+  // D1: products come from the local Product Library (Gomag catalog gated off).
+  // The library is small — filter client-side, no server pagination.
   const fetchCatalogProducts = useCallback(async (search: string, page: number) => {
+    void page;
     setCatalogLoading(true);
     try {
-      const params = new URLSearchParams({ page: page.toString(), page_size: "20" });
-      if (search) params.set("search", search);
-      const res = await apiGet(`/catalog/products?${params}`);
+      const q = search.trim().toLowerCase();
+      const res = await apiGet("/product-library");
       const data = await res.json();
-      setCatalogProducts(data.products || []);
-      setCatalogPagination(data.pagination || { page: 1, page_size: 20, total: 0, total_pages: 1 });
+      interface LibraryProduct { id: string; title: string; description?: string; image_urls?: string[] }
+      const all = ((data.products || []) as LibraryProduct[])
+        .filter((p) => !q || p.title.toLowerCase().includes(q))
+        .map((p) => ({
+          id: p.id,
+          title: p.title,
+          description: p.description || "",
+          brand: "",
+          sku: "",
+          image_link: p.image_urls?.[0] ? `${API_URL}${p.image_urls[0]}` : "",
+          category: "",
+          price: 0,
+          sale_price: 0,
+          is_on_sale: false,
+        }));
+      setCatalogProducts(all);
+      setCatalogPagination({ page: 1, page_size: all.length || 20, total: all.length, total_pages: 1 });
     } catch {
-      toast.error("Failed to load catalog products");
+      toast.error("Failed to load products");
     } finally {
       setCatalogLoading(false);
     }

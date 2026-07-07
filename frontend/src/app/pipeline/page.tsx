@@ -48,6 +48,12 @@ import { Step4Render } from "./components/step4-render";
 import { PipelineStepper } from "./components/pipeline-stepper";
 import { PipelineHistorySidebar } from "./components/pipeline-history-sidebar";
 
+// D1: the segment↔product association picker is keyed on Gomag catalog product
+// IDs. With the Gomag catalog gated off (default) it has no products to show, so
+// gate its entry behind the same flag as /products. Migrating associations to the
+// local library is a separate feature (still OUT).
+const CATALOG_ENABLED = process.env.NEXT_PUBLIC_CATALOG_GOMAG === "true";
+
 export default function PipelinePageWrapper() {
   return (
     <PipelineErrorBoundary>
@@ -3567,8 +3573,8 @@ function PipelinePage() {
         </div>{/* end flex container */}
       </div>
 
-      {/* Product Picker Dialog */}
-      {pickerSegmentId && (
+      {/* Product Picker Dialog — gated: association is Gomag-catalog only */}
+      {CATALOG_ENABLED && pickerSegmentId && (
         <ProductPickerDialog
           open={!!pickerSegmentId}
           onOpenChange={(open) => { if (!open) setPickerSegmentId(null); }}
@@ -3577,8 +3583,8 @@ function PipelinePage() {
         />
       )}
 
-      {/* Image Picker Dialog */}
-      {imagePickerAssoc && (
+      {/* Image Picker Dialog — gated: association is Gomag-catalog only */}
+      {CATALOG_ENABLED && imagePickerAssoc && (
         <ImagePickerDialog
           open={!!imagePickerAssoc}
           onOpenChange={(open) => { if (!open) setImagePickerAssoc(null); }}
