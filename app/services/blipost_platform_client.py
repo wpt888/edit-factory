@@ -165,6 +165,41 @@ class BlipostPlatformClient:
         resp = await self._request("GET", f"/posts/{post_id}")
         return resp.json()
 
+    async def submit_video(
+        self,
+        prompt: str,
+        model: str,
+        duration_sec: int,
+        aspect_ratio: Optional[str] = None,
+    ) -> dict:
+        """POST /videos — submit a metered video job.
+
+        Returns { jobId, creditCost, remaining }. Credits are deducted at submit
+        and refunded automatically by the platform if the job fails/times out.
+        402 → BlipostCreditsError (carries the remaining balance).
+        """
+        payload: dict = {"prompt": prompt, "model": model, "durationSec": duration_sec}
+        if aspect_ratio:
+            payload["aspectRatio"] = aspect_ratio
+        resp = await self._request("POST", "/videos", json=payload)
+        return resp.json()
+
+    async def get_video(self, job_id: str) -> dict:
+        """GET /videos/{id} — job status. When status == 'done', carries
+        `outputMediaId` and a presigned `downloadUrl` (1h) for the mp4."""
+        resp = await self._request("GET", f"/videos/{job_id}")
+        return resp.json()
+
+    async def download_bytes(self, url: str) -> bytes:
+        """GET raw bytes from a presigned download URL (not under the API prefix,
+        carries no auth header — same rule as the presigned upload PUT)."""
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0), transport=self._transport) as client:
+            resp = await client.get(url)
+        if not resp.is_success:
+            logger.warning("Blipost video download failed: %d", resp.status_code)
+            raise BlipostPlatformError(f"Video download failed ({resp.status_code}).")
+        return resp.content
+
 
 def get_client_for_profile(profile_id: str) -> BlipostPlatformClient:
     """Build a client from the profile's stored token + configured base URL.

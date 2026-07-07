@@ -8,12 +8,13 @@ publish path that runs alongside the existing Postiz/Buffer flow.
 
 The token never appears in responses or logs — only masked hints and balances.
 """
+import asyncio
 import logging
 import mimetypes
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
@@ -39,6 +40,14 @@ router = APIRouter(prefix="/platform", tags=["Blipost Platform"])
 
 _VAULT_SERVICE = "blipost_platform"
 _TOKEN_LABEL = "Blipost Platform"
+
+# ---- AI video jobs (D2) — in-memory, per job_id ----------------------------
+# ponytail: lost on server restart (same ceiling as _generation_progress). A job
+# in flight when the backend restarts loses its keywords/duration fallback; the
+# poll still works and registers the clip with derived keywords.
+_video_jobs: Dict[str, dict] = {}            # job_id -> {keywords, prompt, duration_sec, profile_id}
+_video_registrations: Dict[str, dict] = {}   # job_id -> VideoStatusResponse payload (dedup)
+_video_locks: Dict[str, asyncio.Lock] = {}   # job_id -> lock guarding download+register
 
 
 # ============== MODELS ==============
@@ -75,6 +84,32 @@ class PublishResponse(BaseModel):
     status: str
     job_id: Optional[str] = None
     message: str
+
+
+# ---- AI video generation (D2) ----
+
+class VideoSubmitRequest(BaseModel):
+    prompt: str
+    model: str                       # "wan-2.5" | "kling-2.5-turbo" (validated server-side by web)
+    duration_sec: int                # 5 | 10 (per contract)
+    aspect_ratio: Optional[str] = None  # "16:9" | "9:16" | "1:1"
+    keywords: List[str] = []         # phrase words so the clip matches the script slot
+
+
+class VideoSubmitResponse(BaseModel):
+    job_id: str
+    credit_cost: Optional[float] = None
+    remaining: Optional[float] = None
+
+
+class VideoStatusResponse(BaseModel):
+    status: str                      # pending | generating | processing | done | failed
+    segment_id: Optional[str] = None
+    source_video_id: Optional[str] = None
+    keywords: List[str] = []
+    duration: Optional[float] = None
+    thumbnail_path: Optional[str] = None   # basename, served via /segments/files/{name}
+    error: Optional[str] = None
 
 
 # ============== CONNECTION MANAGEMENT ==============
@@ -404,3 +439,211 @@ async def _publish_task(
     except Exception as e:
         logger.error("Blipost publish job %s failed: %s", job_id, e)
         update_publish_progress(job_id, f"Error: {str(e)}", 100, "failed")
+
+
+# ============== AI VIDEO GENERATION (D2 — on platform credits) ==============
+
+def _credits_detail(e: BlipostCreditsError) -> str:
+    bal = f" (balance: {e.balance})" if e.balance is not None else ""
+    return f"Insufficient credits{bal}. Top up on blipost.com."
+
+
+def _keywords_from_prompt(prompt: str) -> List[str]:
+    """Fallback keywords when the caller sent none: the prompt's longer words."""
+    words = [w.strip(".,!?\"'").lower() for w in (prompt or "").split()]
+    kw = [w for w in words if len(w) > 3][:6]
+    return kw or ["ai"]
+
+
+@router.post("/videos", response_model=VideoSubmitResponse)
+async def submit_video(body: VideoSubmitRequest, profile: ProfileContext = Depends(get_profile_context)):
+    """Submit an AI video job to the platform (metered on credits)."""
+    prompt = (body.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt is required.")
+
+    try:
+        client = get_client_for_profile(profile.profile_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        result = await client.submit_video(prompt, body.model, body.duration_sec, body.aspect_ratio)
+    except BlipostCreditsError as e:
+        raise HTTPException(status_code=402, detail=_credits_detail(e))
+    except BlipostAuthError:
+        raise HTTPException(status_code=401, detail="Token invalid or revoked.")
+    except BlipostRateLimitError:
+        raise HTTPException(status_code=429, detail="Rate limited — try again in a moment.")
+    except BlipostPlatformError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        logger.error("[Profile %s] Blipost submit_video failed: %s", profile.profile_id, e)
+        raise HTTPException(status_code=502, detail="Could not reach the Blipost server.")
+
+    job_id = result.get("jobId")
+    if not job_id:
+        raise HTTPException(status_code=502, detail="Platform did not return a job id.")
+
+    _video_jobs[job_id] = {
+        "keywords": [k for k in (body.keywords or []) if k and k.strip()],
+        "prompt": prompt,
+        "duration_sec": body.duration_sec,
+        "profile_id": profile.profile_id,
+    }
+    logger.info("[Profile %s] AI video job %s submitted (cost=%s)", profile.profile_id, job_id, result.get("creditCost"))
+    return VideoSubmitResponse(
+        job_id=job_id,
+        credit_cost=result.get("creditCost"),
+        remaining=result.get("remaining"),
+    )
+
+
+@router.get("/videos/{job_id}", response_model=VideoStatusResponse)
+async def video_status(job_id: str, profile: ProfileContext = Depends(get_profile_context)):
+    """Poll an AI video job. On 'done', download the clip once and register it as
+    a normal segment; return the segment id so the pipeline can use it."""
+    # Already imported? Return the cached segment result (idempotent poll).
+    cached = _video_registrations.get(job_id)
+    if cached:
+        return VideoStatusResponse(**cached)
+
+    try:
+        client = get_client_for_profile(profile.profile_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        data = await client.get_video(job_id)
+    except BlipostAuthError:
+        raise HTTPException(status_code=401, detail="Token invalid or revoked.")
+    except BlipostPlatformError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        logger.warning("[Profile %s] Blipost get_video failed: %s", profile.profile_id, e)
+        raise HTTPException(status_code=502, detail="Could not reach the Blipost server.")
+
+    status = (data.get("status") or "").lower()
+    if status == "failed":
+        return VideoStatusResponse(status="failed", error="Generation failed — credits were refunded automatically on the platform.")
+    if status != "done":
+        # pending / generating / processing — keep the UI polling.
+        return VideoStatusResponse(status=status or "generating")
+
+    # done — download + register exactly once (guard against concurrent polls).
+    lock = _video_locks.setdefault(job_id, asyncio.Lock())
+    async with lock:
+        cached = _video_registrations.get(job_id)
+        if cached:
+            return VideoStatusResponse(**cached)
+
+        download_url = data.get("downloadUrl")
+        if not download_url:
+            raise HTTPException(status_code=502, detail="Job done but no download URL was returned.")
+
+        meta = _video_jobs.get(job_id, {})
+        keywords = meta.get("keywords") or _keywords_from_prompt(meta.get("prompt", ""))
+        try:
+            result = await _register_ai_clip_as_segment(
+                client=client,
+                download_url=download_url,
+                profile_id=profile.profile_id,
+                keywords=keywords,
+                prompt=meta.get("prompt", "AI clip"),
+                fallback_duration=float(meta.get("duration_sec") or 0) or None,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("AI clip registration failed for job %s: %s", job_id, e)
+            raise HTTPException(status_code=502, detail="Clip was generated but could not be imported as a segment.")
+
+        _video_registrations[job_id] = result
+        _video_jobs.pop(job_id, None)  # metadata no longer needed
+        return VideoStatusResponse(**result)
+
+
+async def _register_ai_clip_as_segment(
+    client: BlipostPlatformClient,
+    download_url: str,
+    profile_id: str,
+    keywords: List[str],
+    prompt: str,
+    fallback_duration: Optional[float],
+) -> dict:
+    """Download the generated mp4 and register it as a source video + one segment
+    spanning the whole clip — the same ingest path a cut-from-footage segment uses."""
+    # Reuse the segment-ingest helpers (ffprobe metadata + ffmpeg thumbnail).
+    from app.api.segments_routes import _get_video_info, _generate_thumbnail
+
+    repo = get_repository()
+    if not repo:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    settings = get_settings()
+    data = await client.download_bytes(download_url)
+
+    video_id = str(uuid.uuid4())
+    source_dir = settings.base_dir / "source_videos"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    video_path = source_dir / f"{video_id}_ai.mp4"
+    video_path.write_bytes(data)
+
+    # Metadata + thumbnails (ffmpeg/ffprobe are blocking — offload to threads).
+    info = await asyncio.to_thread(_get_video_info, video_path)
+    duration = float(info.get("duration") or 0) or (fallback_duration or 0.0)
+    if duration <= 0:
+        video_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=502, detail="Generated clip has no readable duration.")
+
+    src_thumb = source_dir / f"{video_id}_thumb.jpg"
+    await asyncio.to_thread(_generate_thumbnail, video_path, src_thumb, 1)
+
+    name = prompt if len(prompt) <= 60 else prompt[:59] + "…"
+    repo.create_source_video({
+        "id": video_id,
+        "profile_id": profile_id,
+        "name": f"AI: {name}",
+        "description": prompt,
+        "file_path": str(video_path),
+        "thumbnail_path": str(src_thumb) if src_thumb.exists() else None,
+        "duration": duration,
+        "width": info.get("width"),
+        "height": info.get("height"),
+        "fps": info.get("fps"),
+        "file_size_bytes": info.get("file_size_bytes"),
+        "segments_count": 1,
+        "status": "ready",
+    })
+
+    segment_id = str(uuid.uuid4())
+    segments_dir = settings.base_dir / "segments"
+    segments_dir.mkdir(parents=True, exist_ok=True)
+    seg_thumb = segments_dir / f"{segment_id}_thumb.jpg"
+    await asyncio.to_thread(_generate_thumbnail, video_path, seg_thumb, duration / 2)
+
+    repo.create_segment({
+        "id": segment_id,
+        "source_video_id": video_id,
+        "profile_id": profile_id,
+        "start_time": 0.0,
+        "end_time": duration,
+        "keywords": keywords,
+        "notes": f"AI-generated: {prompt}"[:500],
+        "thumbnail_path": str(seg_thumb) if seg_thumb.exists() else None,
+        "usage_count": 0,
+        "is_favorite": False,
+        "single_use": False,
+    })
+
+    logger.info("[Profile %s] AI clip registered as segment %s (%.1fs)", profile_id, segment_id, duration)
+    return {
+        "status": "done",
+        "segment_id": segment_id,
+        "source_video_id": video_id,
+        "keywords": keywords,
+        "duration": duration,
+        # basename only — the timeline serves it via /segments/files/{name} and
+        # split('/') would not split a Windows path.
+        "thumbnail_path": seg_thumb.name if seg_thumb.exists() else None,
+    }

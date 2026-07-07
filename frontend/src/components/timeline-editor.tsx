@@ -37,6 +37,8 @@ import {
 import { API_URL } from "@/lib/api";
 import { formatTimeShort as formatTime } from "@/lib/utils";
 import type { SubtitleSettings } from "@/types/video-processing";
+import { GenerateAiSegmentDialog } from "@/components/dialogs/generate-ai-segment-dialog";
+import { Sparkles } from "lucide-react";
 
 const compactPreviewFrameStyle: React.CSSProperties = {
   aspectRatio: "9 / 16",
@@ -129,6 +131,10 @@ export function TimelineEditor({
   const [assigningIndex, setAssigningIndex] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<"same" | "all">("all");
+  // D2: "Generate with AI" — capture the phrase text before the assign dialog
+  // closes so the generation dialog keeps its prompt.
+  const [aiGenOpen, setAiGenOpen] = useState(false);
+  const [aiGenPrompt, setAiGenPrompt] = useState("");
 
   // Timeline view state
   const [selectedBlockIndex, setSelectedBlockIndex] = useState<number | null>(null);
@@ -2257,6 +2263,20 @@ export function TimelineEditor({
                 </p>
               </div>
 
+              {/* D2: generate a fresh clip with AI when no footage fits */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full gap-1.5 border-primary/40 text-primary hover:bg-primary/10"
+                onClick={() => {
+                  setAiGenPrompt(matches[assigningIndex]?.srt_text ?? "");
+                  setAiGenOpen(true);
+                }}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Generate with AI
+              </Button>
+
               {/* Search */}
               <div className="relative">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -2345,6 +2365,14 @@ export function TimelineEditor({
           )}
         </DialogContent>
       </Dialog>
+
+      {/* D2: AI segment generation — on success, assign the new clip to the phrase */}
+      <GenerateAiSegmentDialog
+        open={aiGenOpen}
+        onOpenChange={setAiGenOpen}
+        initialPrompt={aiGenPrompt}
+        onGenerated={(seg) => handleSelectSegment(seg)}
+      />
     </>
   );
 }

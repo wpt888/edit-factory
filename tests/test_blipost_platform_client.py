@@ -133,8 +133,75 @@ def test_rate_limit_retries_then_raises():
     asyncio.run(run())
 
 
+def test_video_flow():
+    """submit → poll (generating → done) → download the presigned mp4 (D2)."""
+    calls = {"polls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path.endswith("/videos"):
+            return httpx.Response(201, json={"jobId": "job-1", "creditCost": 35, "remaining": 1210})
+        if "/videos/" in path:
+            calls["polls"] += 1
+            if calls["polls"] < 2:
+                return httpx.Response(200, json={"id": "job-1", "status": "generating"})
+            return httpx.Response(200, json={"id": "job-1", "status": "done",
+                                             "outputMediaId": "m1",
+                                             "downloadUrl": "https://r2.example/get/job-1.mp4"})
+        if "/get/" in path:  # presigned download target — must carry no auth
+            return httpx.Response(200, content=b"FAKEMP4")
+        return httpx.Response(404, json={"error": "not found"})
+
+    async def run():
+        c = _client(handler)
+        sub = await c.submit_video("a lime bottle spinning on ice", "wan-2.5", 5, "9:16")
+        assert sub["jobId"] == "job-1"
+        assert sub["creditCost"] == 35
+
+        first = await c.get_video("job-1")
+        assert first["status"] == "generating"
+        second = await c.get_video("job-1")
+        assert second["status"] == "done"
+        assert second["downloadUrl"].endswith(".mp4")
+
+        raw = await c.download_bytes(second["downloadUrl"])
+        assert raw == b"FAKEMP4"
+
+    asyncio.run(run())
+
+
+def test_video_insufficient_credits():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/videos"):
+            return httpx.Response(402, json={"error": "Insufficient credits", "balance": 3})
+        return httpx.Response(404, json={"error": "not found"})
+
+    async def run():
+        try:
+            await _client(handler).submit_video("x", "wan-2.5", 5)
+            assert False, "expected BlipostCreditsError"
+        except BlipostCreditsError as e:
+            assert e.balance == 3
+
+    asyncio.run(run())
+
+
+def test_video_failed_status():
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": "job-x", "status": "failed"})
+
+    async def run():
+        got = await _client(handler).get_video("job-x")
+        assert got["status"] == "failed"
+
+    asyncio.run(run())
+
+
 if __name__ == "__main__":
     test_full_flow()
     test_error_mapping()
     test_rate_limit_retries_then_raises()
+    test_video_flow()
+    test_video_insufficient_credits()
+    test_video_failed_status()
     print("blipost platform client self-check: PASS")
