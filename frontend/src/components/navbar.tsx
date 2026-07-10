@@ -27,8 +27,8 @@ import {
   NotebookPen,
   LogOut,
   Wallet,
-  ChevronsLeft,
-  ChevronsRight,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 
 const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
@@ -95,34 +95,50 @@ function isActive(pathname: string, href: string) {
 function NavLink({
   item,
   pathname,
+  collapsed = false,
 }: {
   item: { label: string; href: string; icon: React.ComponentType<{ className?: string }> };
   pathname: string;
+  collapsed?: boolean;
 }) {
   const active = isActive(pathname, item.href);
   return (
     <Link
       href={item.href}
+      title={collapsed ? item.label : undefined}
       className={cn(
-        "flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+        "flex shrink-0 items-center gap-2.5 rounded-lg text-sm font-medium transition-colors",
+        collapsed ? "justify-center py-2" : "px-3 py-2",
         active
           ? "bg-sidebar-accent text-sidebar-accent-foreground"
           : "text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
       )}
     >
       <item.icon className="size-4" />
-      {item.label}
+      {!collapsed && item.label}
     </Link>
   );
 }
 
-function AppNav({ horizontal = false }: { horizontal?: boolean }) {
+function AppNav({ horizontal = false, collapsed = false }: { horizontal?: boolean; collapsed?: boolean }) {
   const pathname = usePathname();
   if (horizontal) {
     return (
       <nav className="flex items-center gap-1 overflow-x-auto">
         {navGroups.flatMap((group) =>
           group.items.map((item) => <NavLink key={item.href} item={item} pathname={pathname} />)
+        )}
+      </nav>
+    );
+  }
+  // Icon-only rail: drop the group headers and keep just the icons.
+  if (collapsed) {
+    return (
+      <nav className="flex flex-col gap-1">
+        {navGroups.flatMap((group) =>
+          group.items.map((item) => (
+            <NavLink key={item.href} item={item} pathname={pathname} collapsed />
+          ))
         )}
       </nav>
     );
@@ -226,70 +242,89 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const initial = displayName.charAt(0).toUpperCase();
 
   return (
-    <div className="relative flex h-full overflow-hidden bg-background">
-      {/* floating re-open handle — only visible once the sidebar is collapsed */}
-      {collapsed && (
-        <button
-          type="button"
-          onClick={toggleSidebar}
-          title="Show sidebar"
-          aria-label="Show sidebar"
-          className="absolute left-2 top-3 z-50 hidden size-8 items-center justify-center rounded-lg border border-sidebar-border bg-sidebar text-sidebar-foreground/70 shadow-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground md:flex"
-        >
-          <ChevronsRight className="size-4" />
-        </button>
-      )}
-
-      {/* desktop sidebar */}
-      <aside
-        className={cn(
-          "hidden h-full shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-in-out md:flex",
-          collapsed ? "w-0 overflow-hidden border-r-0" : "w-64"
-        )}
-      >
-        <div className="flex items-start justify-between px-5 pt-6 pb-4">
-          <Link href="/pipeline" className="flex items-center">
-            <Wordmark className="h-8" />
-          </Link>
-          <button
-            type="button"
-            onClick={toggleSidebar}
-            title="Hide sidebar"
-            aria-label="Hide sidebar"
-            className="-mr-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
-          >
-            <ChevronsLeft className="size-4" />
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto px-3 pt-2">
-          <AppNav />
-        </div>
-        <div className="flex flex-col gap-3 px-4 pb-5 pt-3">
-          <CreditBalance />
-          <ProfileSwitcher />
-          <div className="flex items-center gap-2.5 rounded-xl border border-sidebar-border bg-sidebar-accent/50 p-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-lime font-heading text-sm font-bold text-ink">
+    <div className="flex h-full overflow-hidden bg-background">
+      {/* desktop sidebar — icon-only rail when collapsed, full panel otherwise */}
+      {collapsed ? (
+        <aside className="hidden h-full w-16 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
+          <div className="flex justify-center px-2 pt-6 pb-2">
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              title="Expand sidebar"
+              aria-label="Expand sidebar"
+              className="flex size-9 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+            >
+              <ChevronRight className="size-4" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-2 pt-2">
+            <AppNav collapsed />
+          </div>
+          <div className="flex flex-col items-center gap-2 px-2 pb-5 pt-3">
+            <span
+              title={`${displayName}${currentProfile?.name ? ` · ${currentProfile.name}` : ""}`}
+              className="flex size-9 shrink-0 items-center justify-center rounded-full bg-lime font-heading text-sm font-bold text-ink"
+            >
               {initial}
             </span>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{displayName}</p>
-              <p className="truncate text-xs font-medium text-sidebar-foreground/60">
-                {currentProfile?.name || "No profile"}
-              </p>
-            </div>
             {user && (
               <button
                 type="button"
                 onClick={signOut}
                 title="Sign out"
-                className="flex size-8 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                className="flex size-9 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
               >
                 <LogOut className="size-4" />
               </button>
             )}
           </div>
-        </div>
-      </aside>
+        </aside>
+      ) : (
+        <aside className="hidden h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
+          <div className="flex items-start justify-between px-5 pt-6 pb-4">
+            <Link href="/pipeline" className="flex items-center">
+              <Wordmark className="h-8" />
+            </Link>
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+              className="-mr-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+            >
+              <ChevronLeft className="size-4" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-3 pt-2">
+            <AppNav />
+          </div>
+          <div className="flex flex-col gap-3 px-4 pb-5 pt-3">
+            <CreditBalance />
+            <ProfileSwitcher />
+            <div className="flex items-center gap-2.5 rounded-xl border border-sidebar-border bg-sidebar-accent/50 p-3">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-lime font-heading text-sm font-bold text-ink">
+                {initial}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{displayName}</p>
+                <p className="truncate text-xs font-medium text-sidebar-foreground/60">
+                  {currentProfile?.name || "No profile"}
+                </p>
+              </div>
+              {user && (
+                <button
+                  type="button"
+                  onClick={signOut}
+                  title="Sign out"
+                  className="flex size-8 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                >
+                  <LogOut className="size-4" />
+                </button>
+              )}
+            </div>
+          </div>
+        </aside>
+      )}
 
       {/* content + mobile chrome */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
