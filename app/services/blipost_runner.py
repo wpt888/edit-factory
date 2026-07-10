@@ -38,20 +38,35 @@ _MAX_PROCESSED_HISTORY = 20
 # Render engine — ports of lib/clipping/captions.ts + lib/clipping/render.ts
 # =============================================================================
 
-_ASS_HEADER = """[Script Info]
-ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
-WrapStyle: 0
+# Reference vertical canvas the styles were tuned for (mirrors captions.ts
+# CAPTION_REF_W/H). Font sizes/margins scale by PlayResY so a source-aspect clip
+# gets proportional captions instead of an anamorphic squish.
+_CAPTION_REF_W = 1080
+_CAPTION_REF_H = 1920
 
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,Arial,72,&H0000FFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,60,60,220,1
-Style: Hook,Arial,84,&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,5,2,8,80,80,180,1
 
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
+def _ass_header(res_w: int, res_h: int) -> str:
+    """ASS header parameterised by render resolution. Mirrors captions.ts::assHeader."""
+    k = res_h / _CAPTION_REF_H
+
+    def px(n: int) -> int:
+        return max(1, round(n * k))
+
+    return (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {round(res_w)}\n"
+        f"PlayResY: {round(res_h)}\n"
+        "WrapStyle: 0\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Karaoke,Arial,{px(72)},&H0000FFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,{px(4)},2,2,{px(60)},{px(60)},{px(220)},1\n"
+        f"Style: Hook,Arial,{px(84)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,{px(5)},2,8,{px(80)},{px(80)},{px(180)},1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
 
 
 def _ass_time(total_sec: float) -> str:
@@ -90,7 +105,12 @@ def _karaoke_dialogue(segments: List[dict], clip_start: float, clip_end: float) 
 
 
 def build_clip_ass(
-    segments: List[dict], clip_start: float, clip_end: float, karaoke: bool, hook_text: Optional[str]
+    segments: List[dict],
+    clip_start: float,
+    clip_end: float,
+    karaoke: bool,
+    hook_text: Optional[str],
+    res: tuple[int, int] = (_CAPTION_REF_W, _CAPTION_REF_H),
 ) -> Optional[str]:
     """Recipe-variant caption file: optional karaoke word-highlights + optional
     static top hook line. Returns None when neither is requested (caller then
@@ -104,7 +124,7 @@ def build_clip_ass(
         lines.extend(_karaoke_dialogue(segments, clip_start, clip_end))
     if not lines:
         return None
-    return _ASS_HEADER + "\n".join(lines) + "\n"
+    return _ass_header(res[0], res[1]) + "\n".join(lines) + "\n"
 
 
 def build_clip_args(
@@ -114,15 +134,23 @@ def build_clip_args(
     duration_sec: float,
     subtitle_path: Optional[str],
     use_nvenc: bool,
+    aspect: str = "9:16",
 ) -> List[str]:
-    """ffmpeg args: cut [start, start+duration), center-crop to 9:16, scale to
-    1080x1920, optional caption burn. Mirrors render.ts::buildClipArgs, swapping
-    libx264→h264_nvenc when a GPU is present (the desktop's free advantage)."""
-    filters = [
-        "crop=min(iw\\,ih*9/16):ih:(iw-ow)/2:0",
-        "scale=1080:1920",
-        "setsar=1",
-    ]
+    """ffmpeg args: cut [start, start+duration), then either center-crop to 9:16 +
+    scale to 1080x1920 (default) or keep the source frame as-is (aspect="source",
+    only forcing even dims), optional caption burn. Mirrors render.ts::buildClipArgs,
+    swapping libx264→h264_nvenc when a GPU is present (the desktop's free advantage)."""
+    if aspect == "source":
+        filters = [
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "setsar=1",
+        ]
+    else:
+        filters = [
+            "crop=min(iw\\,ih*9/16):ih:(iw-ow)/2:0",
+            "scale=1080:1920",
+            "setsar=1",
+        ]
     if subtitle_path:
         # ffmpeg subtitles filter needs forward slashes and an escaped drive colon.
         escaped = subtitle_path.replace("\\", "/").replace(":", "\\:")
@@ -185,6 +213,34 @@ def validate_recipe(recipe: object) -> Optional[str]:
     return None
 
 
+def _probe_dimensions(path: str) -> Optional[tuple[int, int]]:
+    """Source video WxH via `ffmpeg -i` stderr (no ffprobe dependency). Mirrors
+    render.ts::probeDimensions. Returns even dims, or None when unparseable."""
+    import re
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-i", path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception:
+        return None
+    stderr = proc.stderr or ""
+    video_line = next((l for l in stderr.split("\n") if re.search(r"Stream #.*Video:", l)), None)
+    if not video_line:
+        return None
+    m = re.search(r"\b(\d{2,5})x(\d{2,5})\b", video_line)
+    if not m:
+        return None
+    w, h = int(m.group(1)), int(m.group(2))
+    if not w or not h:
+        return None
+    return (w - (w % 2), h - (h % 2))
+
+
 def _render_one(recipe: dict, output: dict, source_path: str, work_dir: Path, use_nvenc: bool) -> dict:
     """Renders one (segment × variant) clip to disk. Mirrors local.ts::renderOne.
     Blocking (ffmpeg) — call via asyncio.to_thread. Returns
@@ -193,6 +249,12 @@ def _render_one(recipe: dict, output: dict, source_path: str, work_dir: Path, us
     segment = output["segment"]
     variant = output["variant"]
     output_path = work_dir / f"clip-{index}.mp4"
+    aspect = variant.get("aspect") or "9:16"
+
+    # Source-aspect clips size captions to the real frame; 9:16 keeps the reference.
+    res = (_CAPTION_REF_W, _CAPTION_REF_H)
+    if aspect == "source":
+        res = _probe_dimensions(source_path) or (_CAPTION_REF_W, _CAPTION_REF_H)
 
     # hookText on the variant wins; otherwise fall back to the segment's LLM hook.
     hook_text = variant.get("hookText") or segment.get("hookLine")
@@ -202,6 +264,7 @@ def _render_one(recipe: dict, output: dict, source_path: str, work_dir: Path, us
         float(segment["end"]),
         karaoke=variant.get("captionStyle") != "none",
         hook_text=hook_text,
+        res=res,
     )
 
     subtitle_path: Optional[str] = None
@@ -211,7 +274,7 @@ def _render_one(recipe: dict, output: dict, source_path: str, work_dir: Path, us
         subtitle_path = str(sub)
 
     duration_sec = float(segment["end"]) - float(segment["start"])
-    args = build_clip_args(source_path, str(output_path), float(segment["start"]), duration_sec, subtitle_path, use_nvenc)
+    args = build_clip_args(source_path, str(output_path), float(segment["start"]), duration_sec, subtitle_path, use_nvenc, aspect)
     # Generous per-clip timeout: a 90s short encodes in seconds on GPU, longer on
     # a slow CPU box; 15 min is a safety ceiling, not an expectation.
     result = safe_ffmpeg_run(args, timeout=900, operation=f"blipost-render clip-{index}")
