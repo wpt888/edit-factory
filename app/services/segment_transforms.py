@@ -65,7 +65,15 @@ class SegmentTransform:
         if self.is_identity():
             return []
 
-        filters = []
+        # Normalize to the target frame FIRST. The transform chain replaces the
+        # default scale+crop normalization in assembly, so without this the zoom
+        # step force-scales the RAW source (any size/orientation) and distorts
+        # aspect ratio. It also guarantees zoom/pan operate on exactly WxH.
+        norm = [
+            f"scale={width}:{height}:force_original_aspect_ratio=increase",
+            f"crop={width}:{height}",
+        ]
+        filters = list(norm)
 
         # 1. Flips (cheapest, do first)
         if self.flip_h:
@@ -86,14 +94,22 @@ class SegmentTransform:
                 # Arbitrary angle rotation (in radians)
                 radians = rot * math.pi / 180
                 filters.append(f"rotate={radians:.4f}:fillcolor=black")
+            # transpose swaps WxH — restore target dims so zoom/pan stay valid
+            filters.extend(norm)
 
         # 3. Scale (zoom)
         if abs(self.scale - 1.0) >= 0.01:
-            scaled_w = int(width * self.scale)
-            scaled_h = int(height * self.scale)
-            # Scale up/down then crop back to target size
+            scaled_w = max(2, int(width * self.scale) // 2 * 2)
+            scaled_h = max(2, int(height * self.scale) // 2 * 2)
             filters.append(f"scale={scaled_w}:{scaled_h}")
-            filters.append(f"crop={width}:{height}")
+            if self.scale > 1.0:
+                # Zoom-in: crop the enlarged frame back to target
+                filters.append(f"crop={width}:{height}")
+            else:
+                # Zoom-out: frame is now SMALLER than target — cropping would be
+                # a fatal FFmpeg error ("Invalid too big or non positive size").
+                # Pad back to target with black borders instead.
+                filters.append(f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black")
 
         # 4. Pan (offset via pad + crop)
         if self.pan_x != 0 or self.pan_y != 0:

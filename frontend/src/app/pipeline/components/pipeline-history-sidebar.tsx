@@ -222,7 +222,7 @@ export function PipelineHistorySidebar({ ctx }: { ctx: any }) {
                                     setPipelineId(selectedHistoryId);
                                     setScripts(historyScripts.map(formatScript));
                                     // Carry over TTS results: prefer tts_info (Step 2) over preview_info (Step 3)
-                                    const restored2 = buildRestoredTts(historyTtsInfo, historyPreviewInfo);
+                                    const restored2 = buildRestoredTts(historyTtsInfo, historyPreviewInfo, historyScripts.length);
                                     setTtsResults(restored2.tts);
                                     if (restored2.approved.size > 0) setApprovedScripts(restored2.approved);
                                     // Restore pipeline metadata for "Back to Input"
