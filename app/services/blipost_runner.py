@@ -316,8 +316,14 @@ def _render_one(recipe: dict, output: dict, source_path: str, work_dir: Path, us
 
     # hookText on the variant wins; otherwise fall back to the segment's LLM hook.
     hook_text = variant.get("hookText") or segment.get("hookLine")
+    # A language variant burns the translated segment set (same timestamps).
+    # Mirrors local.ts::renderOne's translations lookup.
+    lang = variant.get("lang")
+    caption_segments = (recipe.get("translations") or {}).get(lang) if lang else None
+    if not caption_segments:
+        caption_segments = recipe["transcript"]["segments"]
     ass = build_clip_ass(
-        recipe["transcript"]["segments"],
+        caption_segments,
         float(segment["start"]),
         float(segment["end"]),
         karaoke=variant.get("captionStyle") != "none",
