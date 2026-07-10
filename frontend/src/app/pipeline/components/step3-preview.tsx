@@ -170,6 +170,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     setUltraRapidIntro,
     assemblyPreset,
     setAssemblyPreset,
+    renderAdjust,
+    setRenderAdjust,
     scheduleReassemblePreviews,
     savePresetName,
     setSavePresetName,
@@ -256,6 +258,9 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                       <SelectItem value="shuffle" title="Randomize segment assignment per variant, for maximum A/B difference">
                         Shuffle per variant
                       </SelectItem>
+                      <SelectItem value="ai_smart" title="Gemini reads each phrase and picks the best-fitting segment from your library — falls back to keyword matching if AI is unavailable">
+                        AI smart match
+                      </SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
@@ -263,6 +268,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                     {assemblyPreset === "balanced" && "Match by keyword when possible, fall back to rotation for the rest — the default."}
                     {assemblyPreset === "max_variety" && "Favor spreading usage across the whole segment pool, even for keyword matches."}
                     {assemblyPreset === "shuffle" && "Randomize segment assignment per variant, for maximum A/B difference."}
+                    {assemblyPreset === "ai_smart" && "Gemini reads each phrase and picks the best-fitting segment from your library — falls back to keyword matching if AI is unavailable."}
                   </p>
                 </div>
 
@@ -304,6 +310,109 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                       scheduleReassemblePreviews();
                     }}
                   />
+                </div>
+
+                {/* Picture & Audio adjustments — applied by the render engine
+                    (server preview + final render), no re-matching needed. */}
+                <div className="space-y-4 pt-3 border-t">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <Label htmlFor="color-correction">Color correction</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Brightness, contrast and saturation burned into the video.
+                      </p>
+                    </div>
+                    <Switch
+                      id="color-correction"
+                      checked={renderAdjust.enableColor}
+                      onCheckedChange={(checked) =>
+                        setRenderAdjust((prev: typeof renderAdjust) => ({ ...prev, enableColor: checked }))
+                      }
+                    />
+                  </div>
+                  {renderAdjust.enableColor && (
+                    <div className="space-y-3 pl-1">
+                      {([
+                        { key: "brightness", label: "Brightness", min: -0.3, max: 0.3, step: 0.01, fmt: (v: number) => v.toFixed(2) },
+                        { key: "contrast", label: "Contrast", min: 0.5, max: 1.5, step: 0.01, fmt: (v: number) => v.toFixed(2) },
+                        { key: "saturation", label: "Saturation", min: 0.0, max: 2.0, step: 0.05, fmt: (v: number) => v.toFixed(2) },
+                      ] as const).map(({ key, label, min, max, step, fmt }) => (
+                        <div key={key} className="flex items-center justify-between gap-4">
+                          <Label className="text-xs w-20">{label}</Label>
+                          <div className="flex items-center gap-2 w-48">
+                            <Slider
+                              min={min}
+                              max={max}
+                              step={step}
+                              value={[renderAdjust[key]]}
+                              onValueChange={([v]) =>
+                                setRenderAdjust((prev: typeof renderAdjust) => ({ ...prev, [key]: v }))
+                              }
+                            />
+                            <span className="text-xs font-mono tabular-nums w-10 text-right">
+                              {fmt(renderAdjust[key])}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <Label htmlFor="voice-volume">Voice volume</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Voiceover loudness in the final video (1.00 = unchanged).
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 w-48">
+                      <Slider
+                        id="voice-volume"
+                        min={0.5}
+                        max={2.0}
+                        step={0.05}
+                        value={[renderAdjust.voiceVolume]}
+                        onValueChange={([v]) =>
+                          setRenderAdjust((prev: typeof renderAdjust) => ({ ...prev, voiceVolume: v }))
+                        }
+                      />
+                      <span className="text-xs font-mono tabular-nums w-10 text-right">
+                        {renderAdjust.voiceVolume.toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <Label>Audio fade in / out</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Seconds of fade at the start / end of the voiceover.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {([
+                        { key: "audioFadeIn", label: "In" },
+                        { key: "audioFadeOut", label: "Out" },
+                      ] as const).map(({ key, label }) => (
+                        <div key={key} className="flex items-center gap-1">
+                          <span className="text-xs text-muted-foreground">{label}</span>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={5}
+                            step={0.5}
+                            className="h-7 w-16 text-xs"
+                            value={renderAdjust[key]}
+                            onChange={(e) => {
+                              const v = Math.max(0, Math.min(5, parseFloat(e.target.value) || 0));
+                              setRenderAdjust((prev: typeof renderAdjust) => ({ ...prev, [key]: v }));
+                            }}
+                          />
+                          <span className="text-xs text-muted-foreground">s</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -735,6 +844,13 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   ultraRapidIntro={ultraRapidIntro}
                   interstitialSlides={interstitialSlides[previewVariant]}
                   pipOverlays={Object.keys(_previewPipOverlays).length > 0 ? _previewPipOverlays : undefined}
+                  enableColor={renderAdjust.enableColor}
+                  brightness={renderAdjust.brightness}
+                  contrast={renderAdjust.contrast}
+                  saturation={renderAdjust.saturation}
+                  voiceVolume={renderAdjust.voiceVolume}
+                  audioFadeIn={renderAdjust.audioFadeIn}
+                  audioFadeOut={renderAdjust.audioFadeOut}
                 />
               );
             })()}

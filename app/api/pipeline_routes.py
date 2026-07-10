@@ -1645,6 +1645,10 @@ class PipelineRenderRequest(BaseModel):
     brightness: float = 0.0
     contrast: float = 1.0
     saturation: float = 1.0
+    # Audio adjust
+    voice_volume: float = Field(default=1.0, ge=0.0, le=3.0)
+    audio_fade_in: float = Field(default=0.0, ge=0.0, le=10.0)
+    audio_fade_out: float = Field(default=0.0, ge=0.0, le=10.0)
     # TTS model
     elevenlabs_model: str = "eleven_flash_v2_5"
     # TTS voice
@@ -4139,6 +4143,9 @@ async def render_variants(
                         brightness=render_request.brightness,
                         contrast=render_request.contrast,
                         saturation=render_request.saturation,
+                        voice_volume=render_request.voice_volume,
+                        audio_fade_in=render_request.audio_fade_in,
+                        audio_fade_out=render_request.audio_fade_out,
                         shadow_depth=render_request.shadow_depth,
                         enable_glow=render_request.enable_glow,
                         glow_blur=render_request.glow_blur,
@@ -4655,6 +4662,9 @@ async def remake_variant(
                         brightness=render_request.brightness,
                         contrast=render_request.contrast,
                         saturation=render_request.saturation,
+                        voice_volume=render_request.voice_volume,
+                        audio_fade_in=render_request.audio_fade_in,
+                        audio_fade_out=render_request.audio_fade_out,
                         shadow_depth=render_request.shadow_depth,
                         enable_glow=render_request.enable_glow,
                         glow_blur=render_request.glow_blur,
@@ -5659,6 +5669,10 @@ class PreviewRenderRequest(BaseModel):
     brightness: float = 0.0
     contrast: float = 1.0
     saturation: float = 1.0
+    # Audio adjust
+    voice_volume: float = Field(default=1.0, ge=0.0, le=3.0)
+    audio_fade_in: float = Field(default=0.0, ge=0.0, le=10.0)
+    audio_fade_out: float = Field(default=0.0, ge=0.0, le=10.0)
     visual_version: Optional[str] = None
 
     # BUG-PR-14: Validate source_video_ids are valid UUIDs
@@ -5816,6 +5830,9 @@ async def render_preview(
             "brightness": render_request.brightness,
             "contrast": render_request.contrast,
             "saturation": render_request.saturation,
+            "voice_volume": render_request.voice_volume,
+            "audio_fade_in": render_request.audio_fade_in,
+            "audio_fade_out": render_request.audio_fade_out,
         },
         "audio_mtime": audio_mtime,
     }
@@ -5937,6 +5954,9 @@ async def render_preview(
                         brightness=render_request.brightness,
                         contrast=render_request.contrast,
                         saturation=render_request.saturation,
+                        voice_volume=render_request.voice_volume,
+                        audio_fade_in=render_request.audio_fade_in,
+                        audio_fade_out=render_request.audio_fade_out,
                         subtitle_style_override=subtitle_style_override,
                         visual_version_label=normalized_visual_version,
                     ),

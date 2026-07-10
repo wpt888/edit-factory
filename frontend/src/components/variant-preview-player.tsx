@@ -43,6 +43,9 @@ interface VariantPreviewPlayerProps {
   brightness?: number;
   contrast?: number;
   saturation?: number;
+  voiceVolume?: number;
+  audioFadeIn?: number;
+  audioFadeOut?: number;
 }
 
 export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
@@ -69,6 +72,9 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
   brightness = 0.0,
   contrast = 1.0,
   saturation = 1.0,
+  voiceVolume = 1.0,
+  audioFadeIn = 0.0,
+  audioFadeOut = 0.0,
 }: VariantPreviewPlayerProps) {
   const [status, setStatus] = useState<string>("idle");
   const [progress, setProgress] = useState(0);
@@ -175,6 +181,9 @@ export const VariantPreviewPlayer = memo(function VariantPreviewPlayer({
             brightness,
             contrast,
             saturation,
+            voice_volume: voiceVolume,
+            audio_fade_in: audioFadeIn,
+            audio_fade_out: audioFadeOut,
             visual_version: visualVersion,
           }
         );

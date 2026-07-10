@@ -4435,6 +4435,11 @@ async def _render_with_preset(
     brightness: float = 0.0,
     contrast: float = 1.0,
     saturation: float = 1.0,
+    # Audio adjust: voice volume multiplier (1.0 = unchanged) + fade in/out seconds.
+    # Applied AFTER loudnorm so normalization doesn't cancel the user's intent.
+    voice_volume: float = 1.0,
+    audio_fade_in: float = 0.0,
+    audio_fade_out: float = 0.0,
     # Preview mode: skip loudnorm, use ultrafast codec
     _preview_mode: bool = False,
     force_cpu: bool = False,
@@ -4535,6 +4540,23 @@ async def _render_with_preset(
         # DEBUG: Log the complete -vf filter string to diagnose subtitle transparency
         logger.debug(f"[RENDER-DEBUG] Complete -vf filter: {vf_str}")
 
+    # Determine audio duration (needed for fade-out timing, progress and -t clamp)
+    _audio_dur = 0
+    if audio_path and audio_path.exists():
+        try:
+            _probe = safe_ffmpeg_run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
+                timeout=30, operation="ffprobe audio duration (render)"
+            )
+            _audio_dur = float(_probe.stdout.strip()) if _probe.returncode == 0 else 0
+        except Exception:
+            _audio_dur = 0
+        # BUG-6.4: If audio file exists but duration probe returned 0, try fallback
+        if _audio_dur == 0 and audio_path.stat().st_size > 0:
+            logger.warning(f"Audio file exists ({audio_path.stat().st_size} bytes) but ffprobe returned duration=0, using -shortest fallback")
+            # _audio_dur stays 0, -shortest will be used — which is correct for real audio
+
     # Audio normalization (two-pass loudnorm) — skip in preview mode for speed
     audio_filters = []
     encoding_preset = None  # Will be set in audio normalization or encoding params block
@@ -4583,6 +4605,20 @@ async def _render_with_preset(
                 logger.info(f"Audio normalization: {measurement.input_i:.1f} LUFS -> {encoding_preset.target_lufs} LUFS")
             else:
                 logger.warning("Audio normalization measurement failed, rendering without normalization")
+
+    # User audio adjustments — appended AFTER loudnorm so normalization doesn't
+    # cancel the requested volume; fade times account for the -itsoffset intro
+    # delay (filters see the shifted timestamps).
+    if has_audio:
+        _fade_base = intro_offset_sec if intro_offset_sec > 0 else 0.0
+        if abs(voice_volume - 1.0) > 0.001:
+            audio_filters.append(f"volume={voice_volume:.2f}")
+            logger.info(f"Applying voice volume: {voice_volume:.2f}")
+        if audio_fade_in > 0:
+            audio_filters.append(f"afade=t=in:st={_fade_base:.2f}:d={audio_fade_in:.2f}")
+        if audio_fade_out > 0 and _audio_dur > audio_fade_out:
+            _fade_out_st = _fade_base + _audio_dur - audio_fade_out
+            audio_filters.append(f"afade=t=out:st={_fade_out_st:.2f}:d={audio_fade_out:.2f}")
 
     # Apply audio filters if any
     if audio_filters:
@@ -4661,23 +4697,6 @@ async def _render_with_preset(
             if db_bitrate_val > preset_bitrate_val:
                 logger.info(f"Database audio bitrate {db_audio_bitrate} higher than preset {encoding_preset.audio_bitrate}, using database value")
                 encoding_preset = encoding_preset.model_copy(update={"audio_bitrate": db_audio_bitrate})
-
-    # Determine audio duration (needed for both single-pass and 2-pass)
-    _audio_dur = 0
-    if audio_path and audio_path.exists():
-        try:
-            _probe = safe_ffmpeg_run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                 "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
-                timeout=30, operation="ffprobe audio duration (render)"
-            )
-            _audio_dur = float(_probe.stdout.strip()) if _probe.returncode == 0 else 0
-        except Exception:
-            _audio_dur = 0
-        # BUG-6.4: If audio file exists but duration probe returned 0, try fallback
-        if _audio_dur == 0 and audio_path.stat().st_size > 0:
-            logger.warning(f"Audio file exists ({audio_path.stat().st_size} bytes) but ffprobe returned duration=0, using -shortest fallback")
-            # _audio_dur stays 0, -shortest will be used — which is correct for real audio
 
     # ── 2-Pass VBR Rendering ──
     if not _preview_mode and encoding_preset and encoding_preset.needs_two_pass():

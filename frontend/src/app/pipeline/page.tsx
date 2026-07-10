@@ -201,8 +201,19 @@ function PipelinePage() {
   // Assembly preset — how library segments get auto-assigned to phrases.
   // Distinct from `presetName` (export aspect ratio preset, e.g. TikTok).
   const [assemblyPreset, setAssemblyPreset] = useState<
-    "keyword_strict" | "balanced" | "max_variety" | "shuffle"
+    "keyword_strict" | "balanced" | "max_variety" | "shuffle" | "ai_smart"
   >("balanced");
+  // Render-time picture & audio adjustments (Step 3 "Render Settings" card).
+  // Applied by the render engine (eq / volume / afade), not by segment matching.
+  const [renderAdjust, setRenderAdjust] = useState({
+    enableColor: false,
+    brightness: 0.0,
+    contrast: 1.0,
+    saturation: 1.0,
+    voiceVolume: 1.0,
+    audioFadeIn: 0.0,
+    audioFadeOut: 0.0,
+  });
   const [voiceSettingsLoaded, setVoiceSettingsLoaded] = useState(false);
   // BUG-FE-25: Initialize as empty to avoid stale defaults; the sync useEffect below populates it
   const voiceSettingsValuesRef = useRef<Record<string, unknown>>({});
@@ -642,6 +653,12 @@ function PipelinePage() {
         const previewInfo: Record<string, { has_audio: boolean; audio_duration: number }> = data.preview_info || {};
         const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
         const restoredApproved = new Set<number>();
+        // Bound restored keys to the current script count. The backend can hold
+        // stale tts_info for variants deleted from the scripts array (delete-script
+        // saves the shorter scripts but leaves the old tts_info row), so an orphan
+        // key >= scriptCount would push ttsCount past scripts.length → "N of M, -1
+        // remaining" and a jammed Continue gate. See buildRestoredTts for the twin.
+        const scriptCount = (data.scripts || []).length;
         // Meta-multiplication keys like "0_A" must collapse to base variant 0.
         const toBaseVariant = (key: string): number | null => {
           const m = key.match(/^(\d+)/);
@@ -652,7 +669,7 @@ function PipelinePage() {
         Object.entries(ttsInfo).forEach(([key, info]) => {
           if (!info.has_audio) return;
           const idx = toBaseVariant(key);
-          if (idx === null) return;
+          if (idx === null || idx >= scriptCount) return;
           restoredTts[idx] = { audio_duration: info.audio_duration, generating: false, stale: false };
           if (info.approved) restoredApproved.add(idx);
         });
@@ -661,7 +678,7 @@ function PipelinePage() {
         Object.entries(previewInfo).forEach(([key, info]) => {
           if (!info.has_audio) return;
           const idx = toBaseVariant(key);
-          if (idx === null) return;
+          if (idx === null || idx >= scriptCount) return;
           if (!restoredTts[idx]) {
             restoredTts[idx] = { audio_duration: info.audio_duration, generating: false, stale: false };
           }
@@ -1717,6 +1734,14 @@ function PipelinePage() {
       ultra_rapid_intro: ultraRapidIntro,
       preset: assemblyPreset,
       meta_multiplication: metaMultiplication,
+      // Picture & audio adjustments (Step 3 Render Settings)
+      enable_color: renderAdjust.enableColor,
+      brightness: renderAdjust.brightness,
+      contrast: renderAdjust.contrast,
+      saturation: renderAdjust.saturation,
+      voice_volume: renderAdjust.voiceVolume,
+      audio_fade_in: renderAdjust.audioFadeIn,
+      audio_fade_out: renderAdjust.audioFadeOut,
       // Flat fields = DEFAULT subtitle style. Backend uses these for any
       // variant key that has no entry in subtitle_settings_by_key.
       font_size: subtitleSettings.fontSize,
@@ -2553,22 +2578,28 @@ function PipelinePage() {
     }
   };
 
-  // FE-13: Shared helper to restore TTS results from history info maps
+  // FE-13: Shared helper to restore TTS results from history info maps.
+  // scriptCount bounds the keys we accept: the backend can retain tts_info for
+  // variant indices deleted from the scripts array (delete-script prunes local
+  // state + saves scripts, but leaves the old tts_info row). Restoring those
+  // orphan keys makes ttsCount exceed scripts.length → "4 of 3 scripts, -1
+  // remaining" and a jammed Continue gate. Drop any key >= scriptCount.
   const buildRestoredTts = (
     ttsInfo: Record<string, { has_audio: boolean; audio_duration: number; approved?: boolean }>,
     previewInfo: Record<string, { has_audio: boolean; audio_duration: number; has_srt?: boolean }>,
+    scriptCount: number,
   ): { tts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }>; approved: Set<number> } => {
     const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
     const restoredApproved = new Set<number>();
     Object.entries(ttsInfo).forEach(([key, info]) => {
-      if (info.has_audio) {
+      if (info.has_audio && Number(key) < scriptCount) {
         restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
         if (info.approved) restoredApproved.add(Number(key));
       }
     });
     // Per-variant fallback: fill gaps from preview_info
     Object.entries(previewInfo).forEach(([key, info]) => {
-      if (info.has_audio && !restoredTts[Number(key)]) {
+      if (info.has_audio && Number(key) < scriptCount && !restoredTts[Number(key)]) {
         restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
       }
     });
@@ -2586,7 +2617,7 @@ function PipelinePage() {
       setPipelineId(pid);
       setScripts(historyScripts.map(formatScript));
       // Carry over TTS results: prefer tts_info (Step 2) over preview_info (Step 3)
-      const restored = buildRestoredTts(historyTtsInfo, historyPreviewInfo);
+      const restored = buildRestoredTts(historyTtsInfo, historyPreviewInfo, historyScripts.length);
       setTtsResults(restored.tts);
       if (restored.approved.size > 0) setApprovedScripts(restored.approved);
       // Restore context products from history
@@ -3478,6 +3509,8 @@ function PipelinePage() {
     setUltraRapidIntro,
     assemblyPreset,
     setAssemblyPreset,
+    renderAdjust,
+    setRenderAdjust,
     scheduleReassemblePreviews,
     approvedScripts,
     setApprovedScripts,

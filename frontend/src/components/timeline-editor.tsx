@@ -184,6 +184,7 @@ export function TimelineEditor({
   const isPreviewActiveRef = useRef(false);
   const previewActiveIndexRef = useRef(0);
   const previewSegmentEndTimeRef = useRef<number | undefined>(undefined);
+  const previewSegmentStartTimeRef = useRef<number | undefined>(undefined);
   const pendingCanPlayRef = useRef<(() => void) | null>(null);
   const matchesRef = useRef(matches);
   const previewRafIdRef = useRef<number | null>(null);
@@ -279,6 +280,7 @@ export function TimelineEditor({
     } else {
       previewSegmentEndTimeRef.current = match?.segment_end_time ?? undefined;
     }
+    previewSegmentStartTimeRef.current = match?.segment_start_time ?? undefined;
   }, []);
 
   // Point a slot's <video> at a source, reloading only when it actually changes
@@ -555,7 +557,16 @@ export function TimelineEditor({
           previewSegmentEndTimeRef.current != null &&
           vid.currentTime >= previewSegmentEndTimeRef.current
         ) {
-          vid.pause();
+          // Mirror the render engine: a segment shorter than its phrase slot is
+          // LOOPED there (use_loop), so wrap to the in-point instead of freezing
+          // on the last frame — the freeze read as stutter at every seam.
+          const loopStart = previewSegmentStartTimeRef.current;
+          if (loopStart != null) {
+            seekGraceTimestampRef.current = performance.now();
+            vid.currentTime = loopStart;
+          } else {
+            vid.pause();
+          }
         }
       }
       segmentEnforceRafRef.current = requestAnimationFrame(enforceLoop);
@@ -797,6 +808,7 @@ export function TimelineEditor({
     setPreviewActiveIndex(0);
     previewActiveIndexRef.current = 0;
     previewSegmentEndTimeRef.current = undefined;
+    previewSegmentStartTimeRef.current = undefined;
     // Reset ping-pong state (slot <video> elements unmount with the preview block).
     activeSlotRef.current = 0;
     setActiveSlot(0);
@@ -1029,6 +1041,47 @@ export function TimelineEditor({
     const newDuration = Math.max(0.5, Math.min(10, currentDuration + delta));
     const updated = [...matches];
     updated[index] = { ...updated[index], duration_override: newDuration };
+    onMatchesChange(updated);
+  };
+
+  // --- Trim (in/out point) adjustment ---
+  // Nudges segment_start_time / segment_end_time within the source video.
+  // Propagates to the whole merge group (render collapse uses the first entry's
+  // segment for the group), same as handleSelectSegment.
+
+  const adjustTrim = (index: number, edge: "in" | "out", delta: number) => {
+    const match = matches[index];
+    if (!match?.segment_id) return;
+    const start = match.segment_start_time ?? 0;
+    const end = match.segment_end_time ?? start + 0.5;
+
+    // Clamp within the segment's library bounds when known.
+    const lib = availableSegments.find((s) => s.id === match.segment_id);
+    const minStart = lib?.start_time ?? 0;
+    const maxEnd = lib?.end_time ?? end + 10;
+
+    let newStart = start;
+    let newEnd = end;
+    if (edge === "in") {
+      // Keep at least a 0.5s window and stay within library bounds.
+      newStart = Math.min(Math.max(minStart, start + delta), end - 0.5);
+    } else {
+      newEnd = Math.max(Math.min(maxEnd, end + delta), start + 0.5);
+    }
+    if (newStart === start && newEnd === end) return;
+
+    const targetGroup = match.merge_group;
+    const updated = matches.map((m, idx) => {
+      if (idx === index || (targetGroup != null && m.merge_group === targetGroup)) {
+        return {
+          ...m,
+          segment_start_time: newStart,
+          segment_end_time: newEnd,
+          pinned: true,
+        };
+      }
+      return m;
+    });
     onMatchesChange(updated);
   };
 
@@ -1963,6 +2016,61 @@ export function TimelineEditor({
                       <Plus className="h-3 w-3" />
                     </Button>
                   </div>
+
+                  {/* Trim controls (in/out points within the source segment).
+                      Stacked rows — the selected-block panel is too narrow for
+                      a single-line In/Out readout. */}
+                  {selectedMatch.segment_id && (
+                    <div className="space-y-0.5 text-xs">
+                      <div className="flex items-center gap-1">
+                        <span className="text-muted-foreground w-7">In</span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5"
+                          onClick={() => adjustTrim(selectedBlockIndex, "in", -0.5)}
+                        >
+                          <Minus className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5"
+                          onClick={() => adjustTrim(selectedBlockIndex, "in", 0.5)}
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                        <span className="font-mono tabular-nums">
+                          {(selectedMatch.segment_start_time ?? 0).toFixed(1)}s
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-muted-foreground w-7">Out</span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5"
+                          onClick={() => adjustTrim(selectedBlockIndex, "out", -0.5)}
+                        >
+                          <Minus className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5"
+                          onClick={() => adjustTrim(selectedBlockIndex, "out", 0.5)}
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                        <span className="font-mono tabular-nums">
+                          {(selectedMatch.segment_end_time ?? 0).toFixed(1)}s
+                        </span>
+                      </div>
+                      <div className="text-muted-foreground">
+                        Trim ({Math.max(0, (selectedMatch.segment_end_time ?? 0) - (selectedMatch.segment_start_time ?? 0)).toFixed(1)}s)
+                      </div>
+                    </div>
+                  )}
 
                   {/* Swap button */}
                   <Button
