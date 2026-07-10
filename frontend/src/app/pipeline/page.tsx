@@ -57,7 +57,7 @@ const CATALOG_ENABLED = process.env.NEXT_PUBLIC_CATALOG_GOMAG === "true";
 export default function PipelinePageWrapper() {
   return (
     <PipelineErrorBoundary>
-      <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><Loader2 className="h-8 w-8 animate-spin" /></div>}>
+      <Suspense fallback={<div className="flex items-center justify-center min-h-full"><Loader2 className="h-8 w-8 animate-spin" /></div>}>
         <PipelinePage />
       </Suspense>
     </PipelineErrorBoundary>
@@ -3531,7 +3531,7 @@ function PipelinePage() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-full bg-background">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="mb-8 flex items-start justify-between">

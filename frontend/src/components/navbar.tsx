@@ -196,9 +196,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const initial = displayName.charAt(0).toUpperCase();
 
   return (
-    <div className="flex min-h-screen bg-ink">
+    <div className="flex h-full overflow-hidden bg-ink">
       {/* desktop sidebar */}
-      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
+      <aside className="hidden h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
         <div className="px-5 pt-6 pb-4">
           <Link href="/pipeline" className="flex items-center">
             <Wordmark className="h-8" />
@@ -238,7 +238,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* content + mobile chrome */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="sticky top-0 z-40 flex flex-col gap-2 border-b border-sidebar-border bg-sidebar px-4 pt-3 pb-2 text-sidebar-foreground md:hidden">
           <div className="flex items-center justify-between">
             <Link href="/pipeline" className="flex items-center">
@@ -255,7 +255,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <AppNav horizontal />
         </header>
-        <main className="flex-1">{children}</main>
+        <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>
   );

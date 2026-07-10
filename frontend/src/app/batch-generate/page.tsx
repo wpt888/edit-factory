@@ -209,7 +209,7 @@ function BatchGenerateContent() {
   // Empty state — no batch_id in URL
   if (!batchId) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="min-h-full bg-background flex items-center justify-center">
         <EmptyState
           icon={<Layers className="h-6 w-6" />}
           title="No batch generation"
@@ -239,7 +239,7 @@ function BatchGenerateContent() {
   const someFailedAndDone = isDone && failedCount > 0;
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-full bg-background">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="mb-8">
@@ -355,7 +355,7 @@ export default function BatchGeneratePage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="min-h-full bg-background flex items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       }

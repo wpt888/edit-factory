@@ -235,7 +235,7 @@ function ProductVideoContent() {
   const isFormDisabled = isPolling || isGenerating;
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-full bg-background">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Back navigation */}
         <div className="mb-6">
@@ -673,7 +673,7 @@ export default function ProductVideoPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="min-h-full bg-background flex items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       }

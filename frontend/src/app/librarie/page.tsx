@@ -1261,7 +1261,7 @@ function LibrarieContent() {
   // Handle no profile selected
   if (!profileLoading && !currentProfile) {
     return (
-      <div className="min-h-screen bg-background">
+      <div className="min-h-full bg-background">
         <main className="w-full max-w-[1400px] mx-auto px-6 py-8">
           <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
             <User className="h-16 w-16 text-muted-foreground mb-4" />
@@ -1279,7 +1279,7 @@ function LibrarieContent() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-full bg-background">
       <main className={`w-full max-w-[1400px] mx-auto px-6 py-8 ${(viewMode === "library" && selectedClipIds.size > 0) || (activeTab === "images" && selectedImageIds.size > 0) ? "pb-24" : ""}`}>
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
@@ -2824,7 +2824,7 @@ function LibrarieContent() {
 export default function LibrariePage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="min-h-full bg-background flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
     }>
