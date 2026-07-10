@@ -44,13 +44,63 @@ _MAX_PROCESSED_HISTORY = 20
 _CAPTION_REF_W = 1080
 _CAPTION_REF_H = 1920
 
+# Caption style presets — mirrors lib/clipping/caption-presets.ts (same ids,
+# same values). "classic" reproduces the original hardcoded style byte-for-byte.
+_LIME = "#B4F03A"
+_CAPTION_PRESETS: dict = {
+    "classic": {"font": "Arial", "size": 72, "textColor": "#FFFFFF", "highlightColor": "#FFFF00",
+                "outlineColor": "#000000", "outline": 4, "box": False, "position": "bottom", "uppercase": False},
+    "bold-center": {"font": "Arial", "size": 84, "textColor": "#FFFFFF", "highlightColor": _LIME,
+                    "outlineColor": "#000000", "outline": 5, "box": False, "position": "center", "uppercase": True},
+    "minimal-lower": {"font": "Arial", "size": 58, "textColor": "#FFFFFF", "highlightColor": "#FFFFFF",
+                      "outlineColor": "#000000", "outline": 2, "box": False, "position": "bottom", "uppercase": False},
+    "highlight-box": {"font": "Arial", "size": 66, "textColor": "#FFFFFF", "highlightColor": _LIME,
+                      "outlineColor": "#000000", "outline": 3, "box": True, "position": "bottom", "uppercase": True},
+    "lime-pop": {"font": "Arial", "size": 76, "textColor": "#FFFFFF", "highlightColor": _LIME,
+                 "outlineColor": "#000000", "outline": 4, "box": False, "position": "bottom", "uppercase": True},
+}
+_DEFAULT_CAPTION_PRESET = "classic"
 
-def _ass_header(res_w: int, res_h: int) -> str:
-    """ASS header parameterised by render resolution. Mirrors captions.ts::assHeader."""
+
+def _resolve_caption_preset(preset_id: Optional[str], overrides: Optional[dict]) -> dict:
+    """Preset id → style dict, unknown/absent → classic; overrides layered on.
+    Mirrors caption-presets.ts::resolveCaptionPreset + the spread in buildClipAss."""
+    preset = dict(_CAPTION_PRESETS.get(preset_id or "", _CAPTION_PRESETS[_DEFAULT_CAPTION_PRESET]))
+    for key in ("highlightColor", "position", "uppercase"):
+        if overrides and overrides.get(key) is not None:
+            preset[key] = overrides[key]
+    return preset
+
+
+def _hex_to_ass(hex_color: str) -> str:
+    """#RRGGBB → ASS &H00BBGGRR (opaque). Mirrors captions.ts::hexToAss."""
+    h = hex_color.lstrip("#")
+    return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}".upper()
+
+
+def _alignment_for(position: str) -> int:
+    """Caption position → ASS numpad alignment. Mirrors captions.ts::alignmentFor."""
+    return 8 if position == "top" else 5 if position == "center" else 2
+
+
+def _ass_header(res_w: int, res_h: int, preset: dict) -> str:
+    """ASS header parameterised by render resolution + style preset. Mirrors
+    captions.ts::assHeader (Hook style stays fixed)."""
     k = res_h / _CAPTION_REF_H
 
     def px(n: int) -> int:
         return max(1, round(n * k))
+
+    align = _alignment_for(preset["position"])
+    margin_v = 0 if preset["position"] == "center" else px(220)
+    border_style = 3 if preset["box"] else 1
+    shadow = 0 if preset["box"] else 2
+    karaoke = (
+        f"Style: Karaoke,{preset['font']},{px(preset['size'])},"
+        f"{_hex_to_ass(preset['highlightColor'])},{_hex_to_ass(preset['textColor'])},"
+        f"{_hex_to_ass(preset['outlineColor'])},&H80000000,-1,0,0,0,100,100,0,0,"
+        f"{border_style},{px(preset['outline'])},{shadow},{align},{px(60)},{px(60)},{margin_v},1"
+    )
 
     return (
         "[Script Info]\n"
@@ -61,7 +111,7 @@ def _ass_header(res_w: int, res_h: int) -> str:
         "\n"
         "[V4+ Styles]\n"
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Karaoke,Arial,{px(72)},&H0000FFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,{px(4)},2,2,{px(60)},{px(60)},{px(220)},1\n"
+        f"{karaoke}\n"
         f"Style: Hook,Arial,{px(84)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,{px(5)},2,8,{px(80)},{px(80)},{px(180)},1\n"
         "\n"
         "[Events]\n"
@@ -84,7 +134,9 @@ def _ass_escape(text: str) -> str:
     return text.replace("\n", " ").replace("{", "(").replace("}", ")").strip()
 
 
-def _karaoke_dialogue(segments: List[dict], clip_start: float, clip_end: float) -> List[str]:
+def _karaoke_dialogue(
+    segments: List[dict], clip_start: float, clip_end: float, uppercase: bool = False
+) -> List[str]:
     """Word-timed \\k karaoke lines for the transcript slice, clip-relative.
     Mirrors captions.ts::karaokeDialogue."""
     lines: List[str] = []
@@ -93,7 +145,10 @@ def _karaoke_dialogue(segments: List[dict], clip_start: float, clip_end: float) 
         end = min(float(seg["end"]), clip_end)
         if end - start < 0.2:
             continue
-        words = [w for w in str(seg.get("text", "")).strip().split() if w]
+        text = str(seg.get("text", ""))
+        if uppercase:
+            text = text.upper()
+        words = [w for w in text.strip().split() if w]
         if not words:
             continue
         rel_start = start - clip_start
@@ -111,20 +166,23 @@ def build_clip_ass(
     karaoke: bool,
     hook_text: Optional[str],
     res: tuple[int, int] = (_CAPTION_REF_W, _CAPTION_REF_H),
+    preset_id: Optional[str] = None,
+    overrides: Optional[dict] = None,
 ) -> Optional[str]:
     """Recipe-variant caption file: optional karaoke word-highlights + optional
     static top hook line. Returns None when neither is requested (caller then
     skips the subtitles filter). Mirrors captions.ts::buildClipAss."""
+    preset = _resolve_caption_preset(preset_id, overrides)
     lines: List[str] = []
     hook = (hook_text or "").strip()
     if hook:
         rel_end = max(0.0, clip_end - clip_start)
         lines.append(f"Dialogue: 1,{_ass_time(0)},{_ass_time(rel_end)},Hook,,0,0,0,,{_ass_escape(hook)}")
     if karaoke:
-        lines.extend(_karaoke_dialogue(segments, clip_start, clip_end))
+        lines.extend(_karaoke_dialogue(segments, clip_start, clip_end, bool(preset["uppercase"])))
     if not lines:
         return None
-    return _ass_header(res[0], res[1]) + "\n".join(lines) + "\n"
+    return _ass_header(res[0], res[1], preset) + "\n".join(lines) + "\n"
 
 
 def build_clip_args(
@@ -265,6 +323,8 @@ def _render_one(recipe: dict, output: dict, source_path: str, work_dir: Path, us
         karaoke=variant.get("captionStyle") != "none",
         hook_text=hook_text,
         res=res,
+        preset_id=variant.get("captionPreset"),
+        overrides=variant.get("captionOverrides"),
     )
 
     subtitle_path: Optional[str] = None
