@@ -27,6 +27,8 @@ import {
   NotebookPen,
   LogOut,
   Wallet,
+  ChevronsLeft,
+  ChevronsRight,
 } from "lucide-react";
 
 const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
@@ -108,7 +110,7 @@ function NavLink({
           : "text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
       )}
     >
-      <item.icon className={cn("size-4", active && "text-lime")} />
+      <item.icon className="size-4" />
       {item.label}
     </Link>
   );
@@ -167,10 +169,10 @@ function CreditBalance() {
   return (
     <Link
       href="/settings"
-      className="flex items-center gap-2 rounded-xl border border-lime/40 bg-lime/10 px-3 py-2 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-lime/15"
+      className="flex items-center gap-2 rounded-xl border border-sidebar-border bg-sidebar-accent/50 px-3 py-2 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent"
       title="Blipost credit balance"
     >
-      <Wallet className="size-4 text-lime" />
+      <Wallet className="size-4 text-sidebar-foreground/70" />
       <span className="font-semibold">{balance.toLocaleString()}</span>
       <span className="text-sidebar-foreground/60">credits</span>
     </Link>
@@ -178,34 +180,86 @@ function CreditBalance() {
 }
 
 function Wordmark({ className }: { className?: string }) {
+  // The PNG is white-on-dark artwork — invisible on the light sidebar, so
+  // light mode falls back to the text wordmark used on the auth pages.
   return (
-    <Image
-      src={blipostLogo}
-      alt="Blipost"
-      priority
-      className={cn("w-auto", className)}
-    />
+    <>
+      <Image
+        src={blipostLogo}
+        alt="Blipost"
+        priority
+        className={cn("hidden w-auto dark:block", className)}
+      />
+      <span className="font-heading text-2xl font-bold tracking-tight dark:hidden">
+        bli<span className="text-lime">post</span>
+      </span>
+    </>
   );
 }
+
+const SIDEBAR_STORAGE_KEY = "blipost.sidebar.collapsed";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { currentProfile } = useProfile();
   const { user, signOut } = useAuth();
+  const [collapsed, setCollapsed] = React.useState(false);
+
+  // Restore the persisted preference after mount — reading localStorage during
+  // render would break hydration (the server has no localStorage).
+  React.useEffect(() => {
+    if (localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true") setCollapsed(true);
+  }, []);
+
+  const toggleSidebar = React.useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SIDEBAR_STORAGE_KEY, String(next));
+      } catch {
+        /* private mode / storage disabled — collapse still works for the session */
+      }
+      return next;
+    });
+  }, []);
 
   const displayName = user?.email || currentProfile?.name || "You";
   const initial = displayName.charAt(0).toUpperCase();
 
   return (
-    <div className="flex h-full overflow-hidden bg-ink">
+    <div className="relative flex h-full overflow-hidden bg-background">
+      {/* floating re-open handle — only visible once the sidebar is collapsed */}
+      {collapsed && (
+        <button
+          type="button"
+          onClick={toggleSidebar}
+          title="Show sidebar"
+          aria-label="Show sidebar"
+          className="absolute left-2 top-3 z-50 hidden size-8 items-center justify-center rounded-lg border border-sidebar-border bg-sidebar text-sidebar-foreground/70 shadow-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground md:flex"
+        >
+          <ChevronsRight className="size-4" />
+        </button>
+      )}
+
       {/* desktop sidebar */}
-      <aside className="hidden h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
-        <div className="px-5 pt-6 pb-4">
+      <aside
+        className={cn(
+          "hidden h-full shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-in-out md:flex",
+          collapsed ? "w-0 overflow-hidden border-r-0" : "w-64"
+        )}
+      >
+        <div className="flex items-start justify-between px-5 pt-6 pb-4">
           <Link href="/pipeline" className="flex items-center">
             <Wordmark className="h-8" />
           </Link>
-          <p className="mt-2.5 text-xs leading-snug text-sidebar-foreground/45">
-            AI scripts, TTS and video assembly
-          </p>
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            title="Hide sidebar"
+            aria-label="Hide sidebar"
+            className="-mr-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+          >
+            <ChevronsLeft className="size-4" />
+          </button>
         </div>
         <div className="flex-1 overflow-y-auto px-3 pt-2">
           <AppNav />
@@ -219,7 +273,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </span>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium">{displayName}</p>
-              <p className="truncate text-xs font-medium text-lime">
+              <p className="truncate text-xs font-medium text-sidebar-foreground/60">
                 {currentProfile?.name || "No profile"}
               </p>
             </div>
