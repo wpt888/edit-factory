@@ -253,7 +253,7 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
                     ) : (
                       <Star className="mr-1 h-3 w-3" />
                     )}
-                    Foloseste
+                    Use
                   </Button>
                 )}
                 {!key.is_env_default && (

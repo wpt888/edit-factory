@@ -1120,7 +1120,7 @@ export default function SettingsPage() {
                         ) : (
                           <Star className="mr-1 h-3 w-3" />
                         )}
-                        Foloseste
+                        Use
                       </Button>
                     )}
                     <Button
