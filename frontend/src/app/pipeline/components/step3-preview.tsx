@@ -332,7 +332,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                   )}
                   {subtitleSaveState === "saved" && (
                     <>
-                      <CheckCircle className="h-3 w-3 text-green-600" />
+                      <CheckCircle className="h-3 w-3 text-success" />
                       <span>Saved automatically. This style will remain available for the next pipeline too.</span>
                     </>
                   )}
@@ -602,7 +602,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                     <CardContent className="space-y-3">
                       {/* Match summary counts */}
                       <div className="flex items-center gap-4 text-sm">
-                        <div className="flex items-center gap-1 text-green-600">
+                        <div className="flex items-center gap-1 text-success">
                           <CheckCircle className="h-4 w-4" />
                           <span className="font-semibold">{preview.matched_count}</span>
                           <span className="text-muted-foreground">matched</span>
@@ -629,7 +629,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                               <button
                                 onClick={() => setThumbnailPickerKey(card.key)}
                                 className={`w-[54px] h-[96px] rounded overflow-hidden border-2 flex-shrink-0 hover:opacity-80 transition-opacity ${
-                                  thumb?.isAutoSelected ? "border-green-500/50" : "border-primary"
+                                  thumb?.isAutoSelected ? "border-border" : "border-primary"
                                 }`}
                                 title="Click to change thumbnail"
                               >
@@ -870,6 +870,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
 
             {/* Render button */}
             <Button
+              variant="cta"
               onClick={handleRenderClick}
               disabled={isRendering || isCheckingRender || selectedVariants.size === 0}
               className="w-full"

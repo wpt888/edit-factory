@@ -259,7 +259,7 @@ export default function UsagePage() {
           <Card className="bg-card border-border col-span-2">
             <CardHeader className="pb-2">
               <CardTitle className="text-foreground flex items-center gap-2">
-                <DollarSign className="h-5 w-5 text-green-500" />
+                <DollarSign className="h-5 w-5 text-success" />
                 Budget Overview
               </CardTitle>
             </CardHeader>
@@ -283,7 +283,7 @@ export default function UsagePage() {
                     </span>
                     <span className="text-muted-foreground">
                       Remaining:{" "}
-                      <span className={`font-bold ${budgetRemaining < 0 ? "text-destructive" : "text-green-500"}`}>
+                      <span className={`font-bold ${budgetRemaining < 0 ? "text-destructive" : "text-success"}`}>
                         {formatCost(budgetRemaining)}
                       </span>
                     </span>
@@ -412,7 +412,7 @@ export default function UsagePage() {
 
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Remaining:</span>
-                      <span className="text-green-500 font-medium">
+                      <span className="text-success font-medium">
                         {acc.characters_remaining?.toLocaleString() || 0} chars
                       </span>
                     </div>
@@ -482,7 +482,7 @@ export default function UsagePage() {
                         Testing...
                       </Badge>
                     ) : geminiStatus?.connected ? (
-                      <Badge variant="outline" className="border-green-500 text-green-500">
+                      <Badge variant="outline" className="border-success/20 text-success">
                         <CheckCircle2 className="h-3 w-3 mr-1" />
                         Connected
                       </Badge>
@@ -622,7 +622,7 @@ export default function UsagePage() {
                           {entry.service === "elevenlabs" ? "chars" : "frames"}
                         </span>
                       </TableCell>
-                      <TableCell className="text-green-500 text-right font-medium">
+                      <TableCell className="text-success text-right font-medium">
                         {formatCost(entry.estimated_cost || entry.cost || 0)}
                       </TableCell>
                     </TableRow>

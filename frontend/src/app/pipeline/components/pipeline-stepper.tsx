@@ -31,6 +31,8 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
     pipelineId,
     scripts,
     previews,
+    ttsResults,
+    handlePreviewAll,
     variantStatuses,
     setStep,
     setPreviewError,
@@ -39,6 +41,12 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
     handleCancelRender,
     resetPipeline,
   }: PipelineStepperCtx = ctx;
+  // Step 2 -> 3 is unlocked by ready voice-overs, not previews: matching can
+  // run on demand (handlePreviewAll reuses the audio and auto-advances).
+  const allTtsReady =
+    scripts.length > 0 &&
+    Object.values(ttsResults as Record<number, { generating: boolean; stale: boolean }>)
+      .filter((r) => !r.generating && !r.stale).length === scripts.length;
   return (
         <div className="mb-8">
           <div className="flex items-center justify-between">
@@ -53,7 +61,7 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
                 This fixes the 1 -> 2 dead-end after returning from Step 2 back to Step 1.
               */
               const canJumpToStep2 = s.num === 2 && step === 1 && !!pipelineId && scripts.length > 0;
-              const canJumpToStep3 = s.num === 3 && step === 2 && Object.keys(previews).length > 0;
+              const canJumpToStep3 = s.num === 3 && step === 2 && (Object.keys(previews).length > 0 || allTtsReady);
               const canJumpToStep4 = s.num === 4 && step === 3 && variantStatuses.length > 0;
               const isClickableForward = canJumpToStep2 || canJumpToStep3 || canJumpToStep4;
 
@@ -65,7 +73,7 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
                         step === s.num
                           ? "bg-primary text-primary-foreground"
                           : step > s.num
-                          ? "bg-green-600 text-white cursor-pointer hover:bg-green-700 transition-colors"
+                          ? "bg-primary text-primary-foreground cursor-pointer hover:bg-primary/90 transition-colors"
                           : isClickableForward
                           ? "bg-primary text-primary-foreground cursor-pointer hover:bg-primary/80 transition-colors"
                           : "bg-secondary text-muted-foreground"
@@ -82,10 +90,15 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
                           setStep(2);
                           setPreviewError(null);
                         }
-                        // 3. Forward to Step 3: only from Step 2 when previews have been generated
+                        // 3. Forward to Step 3: from Step 2 when previews exist, or when
+                        // voice-overs are ready (matching runs on demand and auto-advances)
                         if (canJumpToStep3) {
-                          setStep(3);
                           setPreviewError(null);
+                          if (Object.keys(previews).length > 0) {
+                            setStep(3);
+                          } else {
+                            void handlePreviewAll?.();
+                          }
                         }
                         // 4. Forward to Step 4: only from Step 3 when rendering has been initiated
                         if (canJumpToStep4) {
@@ -107,7 +120,7 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
                   {index < 3 && (
                     <div
                       className={`flex-1 h-1 mx-2 ${
-                        step > s.num ? "bg-green-600" : "bg-secondary"
+                        step > s.num ? "bg-primary" : "bg-secondary"
                       }`}
                     />
                   )}

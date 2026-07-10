@@ -1653,7 +1653,7 @@ export function TimelineEditor({
                   const borderColor = isMatched
                     ? isLowConfidence
                       ? "border-amber-400"
-                      : "border-green-500"
+                      : "border-success"
                     : isAutoFilled
                     ? "border-muted-foreground"
                     : "border-amber-500";
@@ -1663,7 +1663,7 @@ export function TimelineEditor({
                     : isMatched
                     ? isLowConfidence
                       ? "bg-amber-50/60 dark:bg-amber-950/10"
-                      : "bg-green-50 dark:bg-green-950/20"
+                      : "bg-success/10"
                     : isAutoFilled
                     ? "bg-muted/50"
                     : "bg-amber-50 dark:bg-amber-950/20";
@@ -1694,7 +1694,7 @@ export function TimelineEditor({
                         transition-all select-none overflow-hidden
                         ${borderColor} ${bgColor}
                         ${isSelected && !isPreviewActive ? "ring-2 ring-primary ring-offset-1" : ""}
-                        ${isPreviewHighlighted ? "ring-2 ring-green-400 ring-offset-1 brightness-110" : ""}
+                        ${isPreviewHighlighted ? "ring-2 ring-primary ring-offset-1 brightness-110" : ""}
                       `}
                       style={{
                         width: `max(${isMulti ? 90 : 60}px, ${widthPercent}%)`,
@@ -1933,7 +1933,7 @@ export function TimelineEditor({
                   {selectedMatch.matched_keyword && (
                     <Badge
                       variant="secondary"
-                      className="text-xs bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200"
+                      className="text-xs bg-success/10 text-success border-success/20"
                     >
                       <CheckCircle className="h-3 w-3 mr-1" />
                       {selectedMatch.matched_keyword}
@@ -2067,7 +2067,7 @@ export function TimelineEditor({
                     isMatched
                       ? isLowConfidence
                         ? "border-l-amber-400 bg-amber-50/60 dark:bg-amber-950/10"
-                        : "border-l-green-500 bg-green-50 dark:bg-green-950/20"
+                        : "border-l-success bg-success/10"
                       : isAutoFilled
                       ? "border-l-muted-foreground bg-muted/50"
                       : "border-l-amber-500 bg-amber-50 dark:bg-amber-950/20"
@@ -2170,7 +2170,7 @@ export function TimelineEditor({
                           )}
                           <Badge
                             variant="secondary"
-                            className="text-xs bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200 max-w-[90px]"
+                            className="text-xs bg-success/10 text-success border-success/20 max-w-[90px]"
                             title={match.explanation}
                           >
                             <CheckCircle className="h-3 w-3 mr-1 flex-shrink-0" />
@@ -2180,7 +2180,7 @@ export function TimelineEditor({
                             className={`text-xs font-medium ${
                               isLowConfidence
                                 ? "text-amber-600 dark:text-amber-400"
-                                : "text-green-700 dark:text-green-400"
+                                : "text-success"
                             }`}
                             title={match.explanation ?? (isLowConfidence ? "Low-confidence match" : undefined)}
                           >

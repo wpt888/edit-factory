@@ -184,7 +184,7 @@ export function VoiceCloningUpload({ onVoiceCloned }: VoiceCloningUploadProps) {
             <p className="text-sm text-muted-foreground">
               Duration: {duration.toFixed(1)} seconds
               {duration >= 6 && duration <= 20 && (
-                <CheckCircle2 className="inline ml-2 h-4 w-4 text-green-500" />
+                <CheckCircle2 className="inline ml-2 h-4 w-4 text-success" />
               )}
             </p>
           )}
@@ -199,7 +199,7 @@ export function VoiceCloningUpload({ onVoiceCloned }: VoiceCloningUploadProps) {
 
         {success && (
           <Alert>
-            <CheckCircle2 className="h-4 w-4 text-green-500" />
+            <CheckCircle2 className="h-4 w-4 text-success" />
             <AlertDescription>{success}</AlertDescription>
           </Alert>
         )}

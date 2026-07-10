@@ -130,7 +130,7 @@ export const ScriptCard = memo(function ScriptCard({
   const charCount = draft.replace(/\[([^\[\]]+)\]/g, "").length;
 
   return (
-    <Card className={`transition-colors ${isApproved ? "border-green-500 bg-green-50/50 dark:bg-green-950/20" : ""}`}>
+    <Card className={`transition-colors ${isApproved ? "border-success/40 bg-success/5" : ""}`}>
       <CardHeader>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -139,13 +139,13 @@ export const ScriptCard = memo(function ScriptCard({
                 id={`approve-header-${index}`}
                 checked={isApproved}
                 onCheckedChange={(checked) => onApprove(index, checked === true)}
-                className="h-5 w-5 border-green-500 data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
+                className="h-5 w-5 border-success data-[state=checked]:border-success data-[state=checked]:bg-success"
               />
             )}
             <CardTitle className="text-lg">
               Script {index + 1}
               {isApproved && (
-                <CheckCircle className="inline-block h-4 w-4 ml-2 text-green-600" />
+                <CheckCircle className="inline-block h-4 w-4 ml-2 text-success" />
               )}
             </CardTitle>
           </div>
@@ -238,7 +238,7 @@ export const ScriptCard = memo(function ScriptCard({
                         isOpen
                           ? "ring-2 ring-amber-400 bg-amber-50 dark:bg-amber-950/30 border-amber-300"
                           : isPaired
-                          ? "ring-2 ring-green-400 bg-green-50 dark:bg-green-950/30 border-green-300"
+                          ? "ring-2 ring-success/50 bg-success/10 border-success/30"
                           : "border-border"
                       }`}
                     >
@@ -250,7 +250,7 @@ export const ScriptCard = memo(function ScriptCard({
                       )}
                       {g.label}
                       <span className="text-muted-foreground">({g.segments_count})</span>
-                      {isPaired && <CheckCircle className="h-3 w-3 text-green-600 flex-shrink-0" />}
+                      {isPaired && <CheckCircle className="h-3 w-3 text-success flex-shrink-0" />}
                       {isOpen && <span className="text-amber-600 font-bold flex-shrink-0">…</span>}
                     </button>
                   );
@@ -259,7 +259,7 @@ export const ScriptCard = memo(function ScriptCard({
               {tagStates.length > 0 && (
                 <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
                   <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" /> Open</span>
-                  <span className="inline-flex items-center gap-1"><CheckCircle className="h-2.5 w-2.5 text-green-600" /> Paired</span>
+                  <span className="inline-flex items-center gap-1"><CheckCircle className="h-2.5 w-2.5 text-success" /> Paired</span>
                 </div>
               )}
             </div>
@@ -364,16 +364,16 @@ export const ScriptCard = memo(function ScriptCard({
             </Button>
           )}
           {ttsResult && !ttsResult.generating && !ttsResult.stale && (
-            <div className="ml-auto flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-2.5 py-1 dark:border-green-900 dark:bg-green-950/30">
+            <div className="ml-auto flex items-center gap-2 rounded-md border border-success/20 bg-success/10 px-2.5 py-1">
               <Checkbox
                 id={`approve-script-${index}`}
                 checked={isApproved}
                 onCheckedChange={(checked) => onApprove(index, checked === true)}
-                className="h-4.5 w-4.5 border-green-500 data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
+                className="h-4.5 w-4.5 border-success data-[state=checked]:border-success data-[state=checked]:bg-success"
               />
               <Label
                 htmlFor={`approve-script-${index}`}
-                className="cursor-pointer text-xs font-medium text-green-700 dark:text-green-300"
+                className="cursor-pointer text-xs font-medium text-success"
               >
                 Approve voice-over
               </Label>

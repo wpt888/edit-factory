@@ -364,7 +364,7 @@ export function ProductPickerDialog({
                     <div className="flex items-center gap-1 pt-0.5">
                       {product.is_on_sale ? (
                         <>
-                          <span className="text-xs font-bold text-green-400">
+                          <span className="text-xs font-bold text-success">
                             {product.raw_sale_price_str}
                           </span>
                           <span className="text-xs text-muted-foreground line-through">

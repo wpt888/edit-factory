@@ -41,14 +41,14 @@ export function DesktopTitleBar() {
         <button
           aria-label="Minimize"
           onClick={() => win()?.minimize()}
-          className="flex h-full w-11 items-center justify-center text-sidebar-foreground/70 transition-colors hover:bg-white/[0.06] hover:text-sidebar-foreground"
+          className="flex h-full w-11 items-center justify-center text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
         >
           <Minus size={14} strokeWidth={2} />
         </button>
         <button
           aria-label={isMaximized ? "Restore" : "Maximize"}
           onClick={() => win()?.toggleMaximize()}
-          className="flex h-full w-11 items-center justify-center text-sidebar-foreground/70 transition-colors hover:bg-white/[0.06] hover:text-sidebar-foreground"
+          className="flex h-full w-11 items-center justify-center text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
         >
           {isMaximized ? <Copy size={12} strokeWidth={2} /> : <Square size={12} strokeWidth={2} />}
         </button>

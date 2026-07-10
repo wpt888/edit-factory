@@ -114,8 +114,8 @@ const PLATFORM_NAMES: Record<string, string> = {
   tiktok: "TikTok",
 };
 
-const SELECTED_BORDER = "border-green-500";
-const SELECTED_BG = "bg-green-500/15";
+const SELECTED_BORDER = "border-primary";
+const SELECTED_BG = "bg-primary/10";
 
 // ============== Model / Resolution config ==============
 
@@ -988,7 +988,7 @@ export default function CreateImagePage() {
                       <SelectItem key={p.id} value={p.id}>
                         <span className="flex items-center gap-1.5">
                           {productsWithApprovedImages.has(p.id) && (
-                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                            <CheckCircle2 className="h-3.5 w-3.5 text-success shrink-0" />
                           )}
                           {p.title} {p.brand ? `(${p.brand})` : ""}
                         </span>
@@ -1110,6 +1110,7 @@ export default function CreateImagePage() {
 
               {/* Generate button */}
               <Button
+                variant="cta"
                 className="w-full"
                 onClick={handleGenerate}
                 disabled={generating || (!promptText.trim() && !userText.trim())}
@@ -1747,7 +1748,7 @@ export default function CreateImagePage() {
                   {/* Success */}
                   {publishState === "success" && (
                     <div className="flex flex-col items-center gap-3 py-4">
-                      <CheckCircle2 className="h-10 w-10 text-green-500" />
+                      <CheckCircle2 className="h-10 w-10 text-success" />
                       <p className="text-sm font-semibold">
                         {scheduleEnabled ? "Post scheduled!" : "Published successfully!"}
                       </p>
@@ -1812,7 +1813,7 @@ export default function CreateImagePage() {
                 <div
                   className={`flex items-center gap-2 text-sm p-3 rounded-lg ${
                     sendResult.includes("success")
-                      ? "bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300"
+                      ? "bg-success/10 text-success"
                       : "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300"
                   }`}
                 >

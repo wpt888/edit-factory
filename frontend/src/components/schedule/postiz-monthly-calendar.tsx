@@ -113,7 +113,7 @@ const MONTH_NAMES = [
 
 function stateColor(state: string): string {
   switch (state) {
-    case "PUBLISHED": return "bg-green-500/20 text-green-300 border-green-500/30";
+    case "PUBLISHED": return "bg-success/10 text-success border-success/20";
     case "QUEUE": return "bg-amber-500/20 text-amber-300 border-amber-500/30";
     case "ERROR": return "bg-red-500/20 text-red-300 border-red-500/30";
     case "DRAFT": return "bg-muted text-muted-foreground border-border";

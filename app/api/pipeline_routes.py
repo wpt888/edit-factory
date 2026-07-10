@@ -266,6 +266,98 @@ def _restore_missing_tts_audio_paths(
     return restored_count
 
 
+def _persist_tts_audio(
+    profile_id: str,
+    cleaned_text: str,
+    audio_path: str,
+    srt_content: Optional[str],
+    timestamps: Optional[dict],
+    model: str,
+    duration: float,
+    voice_id: Optional[str] = None,
+) -> Tuple[str, Optional[str]]:
+    """
+    Persist a (possibly temp/) TTS file to the TTS library, or media/tts/ as fallback.
+
+    Returns (persistent_audio_path, library_asset_id). Returns the original path
+    (with an ERROR log) only if every persistence path fails — a temp/ path left
+    in pipeline state breaks later previews/renders once temp/ is cleaned up.
+    """
+    import shutil
+
+    try:
+        from app.services.tts_library_service import get_tts_library_service
+        tts_lib = get_tts_library_service()
+        saved_asset_id = tts_lib.save_from_pipeline(
+            profile_id=profile_id,
+            text=cleaned_text,
+            audio_path=audio_path,
+            srt_content=srt_content,
+            timestamps=timestamps,
+            model=model,
+            duration=duration,
+            voice_id=voice_id,
+        )
+        if saved_asset_id:
+            lib_path = f"media/tts/{profile_id}/{saved_asset_id}.mp3"
+            if Path(lib_path).exists():
+                logger.info(
+                    f"[Profile {profile_id}] TTS auto-saved to library: "
+                    f"asset {saved_asset_id}, path updated to {lib_path}"
+                )
+                return lib_path, saved_asset_id
+        else:
+            # Dedup hit — asset already exists. Look it up and use its path.
+            _repo = get_repository()
+            if _repo:
+                _existing = _repo.list_tts_assets(
+                    profile_id,
+                    QueryFilters(
+                        eq={"status": "ready", "tts_text": cleaned_text},
+                        select="id, mp3_path",
+                        limit=1,
+                    ),
+                )
+                if _existing.data and _existing.data[0].get("mp3_path"):
+                    _lib_path = _existing.data[0]["mp3_path"]
+                    _lib_asset_id = _existing.data[0]["id"]
+                    if Path(_lib_path).exists():
+                        logger.info(
+                            f"[Profile {profile_id}] TTS dedup: reusing library path {_lib_path}"
+                        )
+                        return _lib_path, _lib_asset_id
+                    if Path(audio_path).exists():
+                        # Library file missing on disk — re-copy from temp source
+                        Path(_lib_path).parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(audio_path, _lib_path)
+                        logger.info(
+                            f"[Profile {profile_id}] TTS dedup: re-copied to library path {_lib_path}"
+                        )
+                        return _lib_path, _lib_asset_id
+    except Exception as lib_err:
+        logger.warning(f"TTS library auto-save failed (non-blocking): {lib_err}")
+
+    # Final fallback: copy directly to media/tts/ so audio survives temp/ cleanup
+    # on server restart.
+    if Path(audio_path).exists():
+        try:
+            _fallback_dir = Path(f"media/tts/{profile_id}")
+            _fallback_dir.mkdir(parents=True, exist_ok=True)
+            _fallback_path = _fallback_dir / Path(audio_path).name
+            shutil.copy2(audio_path, str(_fallback_path))
+            logger.info(
+                f"[Profile {profile_id}] TTS fallback: copied to {_fallback_path} "
+                f"(library save did not persist)"
+            )
+            return str(_fallback_path), None
+        except Exception as _fb_err:
+            logger.error(
+                f"[Profile {profile_id}] TTS persistence failed — temp path stays in "
+                f"pipeline state and will break previews after temp/ cleanup: {_fb_err}"
+            )
+    return audio_path, None
+
+
 router = APIRouter(prefix="/pipeline", tags=["Multi-Variant Pipeline"])
 
 # In-memory pipeline state storage
@@ -2991,90 +3083,23 @@ async def generate_variant_tts(
                 previews.pop(str(variant_index), None)
                 logger.info(f"Invalidated Step 3 preview cache for variant {variant_index} (TTS regenerated)")
 
-        # Auto-save to TTS Library so audio persists beyond temp/ cleanup.
-        # Same pattern used by assemble_and_render (assembly_service.py:1757).
-        _persisted = False
-        try:
-            from app.services.tts_library_service import get_tts_library_service
-            tts_lib = get_tts_library_service()
-            saved_asset_id = tts_lib.save_from_pipeline(
-                profile_id=profile.profile_id,
-                text=cleaned_text,
-                audio_path=str(audio_path),
-                srt_content=srt_content,
-                timestamps=_timestamps,
-                model=request.elevenlabs_model,
-                duration=audio_duration,
-                voice_id=request.voice_id,
-            )
-            if saved_asset_id:
-                # Update audio_path to persistent library location
-                lib_path = f"media/tts/{profile.profile_id}/{saved_asset_id}.mp3"
-                if Path(lib_path).exists():
-                    with state_lock:
-                        pipeline["tts_previews"][variant_index]["audio_path"] = lib_path
-                        pipeline["tts_previews"][variant_index]["library_asset_id"] = saved_asset_id
-                    _persisted = True
-                    logger.info(
-                        f"[Profile {profile.profile_id}] TTS auto-saved to library: "
-                        f"asset {saved_asset_id}, path updated to {lib_path}"
-                    )
-            else:
-                # Dedup hit — asset already exists. Look it up and use its path.
-                _repo = get_repository()
-                if _repo:
-                    _existing = _repo.list_tts_assets(
-                        profile.profile_id,
-                        QueryFilters(
-                            eq={"status": "ready", "tts_text": cleaned_text},
-                            select="id, mp3_path",
-                            limit=1,
-                        ),
-                    )
-                    if _existing.data and _existing.data[0].get("mp3_path"):
-                        _lib_path = _existing.data[0]["mp3_path"]
-                        _lib_asset_id = _existing.data[0]["id"]
-                        if Path(_lib_path).exists():
-                            with state_lock:
-                                pipeline["tts_previews"][variant_index]["audio_path"] = _lib_path
-                                pipeline["tts_previews"][variant_index]["library_asset_id"] = _lib_asset_id
-                            _persisted = True
-                            logger.info(
-                                f"[Profile {profile.profile_id}] TTS dedup: reusing library path {_lib_path}"
-                            )
-                        elif Path(str(audio_path)).exists():
-                            # Library file missing on disk — re-copy from temp source
-                            Path(_lib_path).parent.mkdir(parents=True, exist_ok=True)
-                            import shutil
-                            shutil.copy2(str(audio_path), _lib_path)
-                            with state_lock:
-                                pipeline["tts_previews"][variant_index]["audio_path"] = _lib_path
-                                pipeline["tts_previews"][variant_index]["library_asset_id"] = _lib_asset_id
-                            _persisted = True
-                            logger.info(
-                                f"[Profile {profile.profile_id}] TTS dedup: re-copied to library path {_lib_path}"
-                            )
-        except Exception as lib_err:
-            logger.warning(f"TTS library auto-save failed (non-blocking): {lib_err}")
-
-        # Final fallback: if library save didn't persist the file, copy directly
-        # to media/tts/ so audio survives temp/ cleanup on server restart.
-        if not _persisted and Path(str(audio_path)).exists():
-            try:
-                import shutil
-                _fallback_dir = Path(f"media/tts/{profile.profile_id}")
-                _fallback_dir.mkdir(parents=True, exist_ok=True)
-                _fallback_name = Path(str(audio_path)).name
-                _fallback_path = _fallback_dir / _fallback_name
-                shutil.copy2(str(audio_path), str(_fallback_path))
-                with state_lock:
-                    pipeline["tts_previews"][variant_index]["audio_path"] = str(_fallback_path)
-                logger.info(
-                    f"[Profile {profile.profile_id}] TTS fallback: copied to {_fallback_path} "
-                    f"(library save did not persist)"
-                )
-            except Exception as _fb_err:
-                logger.warning(f"TTS fallback copy failed: {_fb_err}")
+        # Auto-save to TTS Library (media/tts/ fallback) so audio persists beyond
+        # temp/ cleanup. Same pattern used by assemble_and_render.
+        _persist_path, _lib_asset_id = _persist_tts_audio(
+            profile_id=profile.profile_id,
+            cleaned_text=cleaned_text,
+            audio_path=str(audio_path),
+            srt_content=srt_content,
+            timestamps=_timestamps,
+            model=request.elevenlabs_model,
+            duration=audio_duration,
+            voice_id=request.voice_id,
+        )
+        if _persist_path != str(audio_path) or _lib_asset_id:
+            with state_lock:
+                pipeline["tts_previews"][variant_index]["audio_path"] = _persist_path
+                if _lib_asset_id:
+                    pipeline["tts_previews"][variant_index]["library_asset_id"] = _lib_asset_id
 
         # Persist to DB (outside lock)
         logger.info(
@@ -3248,6 +3273,13 @@ async def preview_variant(
         # fall back to file cache which returned stale audio.
         if script_match:
             audio_path_str = existing_tts.get("audio_path")
+            if not (audio_path_str and Path(audio_path_str).exists()):
+                # Self-heal: the temp file may be gone but a persistent library
+                # copy usually exists — reattach it instead of regenerating TTS.
+                if _restore_missing_tts_audio_paths(pipeline_id, pipeline):
+                    _tts_previews = pipeline.get("tts_previews", {})
+                    existing_tts = _tts_previews.get(variant_index) or _tts_previews.get(str(variant_index)) or existing_tts
+                    audio_path_str = existing_tts.get("audio_path")
             if audio_path_str and Path(audio_path_str).exists() and Path(audio_path_str).stat().st_size > 100:
                 reuse_audio_path = audio_path_str
                 reuse_audio_duration = existing_tts.get("audio_duration")
@@ -3340,6 +3372,24 @@ async def preview_variant(
             if m.get("segment_id")
         })
 
+        # Persist freshly generated TTS out of temp/ BEFORE storing its path —
+        # temp/ is cleaned up on restart, and a temp path in tts_previews later
+        # breaks /render-preview with "TTS audio file missing from disk".
+        _persisted_audio_path: Optional[str] = None
+        _persisted_asset_id: Optional[str] = None
+        _fresh_audio_path = preview_data.get("audio_path", "")
+        if not reuse_audio_path and _fresh_audio_path:
+            _persisted_audio_path, _persisted_asset_id = _persist_tts_audio(
+                profile_id=profile.profile_id,
+                cleaned_text=cleaned_text,
+                audio_path=str(_fresh_audio_path),
+                srt_content=preview_data.get("srt_content"),
+                timestamps=None,
+                model=elevenlabs_model,
+                duration=preview_data.get("audio_duration", 0.0),
+                voice_id=voice_id,
+            )
+
         # BUG-PR-20: Reuse state_lock from above (already obtained), single acquisition for all writes
         with state_lock:
             pipeline.setdefault("segment_usage", {})[preview_key] = used_segment_ids
@@ -3364,10 +3414,12 @@ async def preview_variant(
             # Also persist audio info from preview_data if tts_previews was empty
             # (covers the case where Step 2 standalone TTS was skipped entirely)
             if not pipeline["tts_previews"][variant_index].get("audio_path"):
-                pipeline["tts_previews"][variant_index]["audio_path"] = preview_data.get("audio_path", "")
+                pipeline["tts_previews"][variant_index]["audio_path"] = _persisted_audio_path or _fresh_audio_path
                 pipeline["tts_previews"][variant_index]["audio_duration"] = preview_data.get("audio_duration", 0.0)
                 pipeline["tts_previews"][variant_index]["script_hash"] = _stable_hash(cleaned_text)
                 pipeline["tts_previews"][variant_index]["timestamp"] = datetime.now(timezone.utc).isoformat()
+                if _persisted_asset_id:
+                    pipeline["tts_previews"][variant_index]["library_asset_id"] = _persisted_asset_id
 
         # Persist to DB (outside lock — DB I/O should not hold the state lock)
         _db_save_pipeline(pipeline_id, pipeline)
@@ -4748,6 +4800,39 @@ async def remake_variant(
     }
 
 
+def _mark_stale_render_jobs(pipeline_id: str, pipeline: dict) -> None:
+    """Flip 'processing' render jobs older than the stale threshold to 'failed'.
+
+    A backend restart mid-render otherwise leaves them spinning forever in the
+    UI and blocks resubmission (mirrors the stale check in the /render path).
+    """
+    changed = False
+    for job in (pipeline.get("render_jobs") or {}).values():
+        if not isinstance(job, dict) or job.get("status") != "processing":
+            continue
+        stale = True
+        started_at = job.get("started_at")
+        if started_at:
+            try:
+                started_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                stale = (datetime.now(timezone.utc) - started_dt).total_seconds() > STALE_PROCESSING_THRESHOLD_SEC
+            except (ValueError, TypeError):
+                pass  # unparseable timestamp → treat as stale
+        if stale:
+            job["status"] = "failed"
+            job["progress"] = 0
+            job["current_step"] = "Render failed (stale)"
+            job["error"] = "Render did not survive a backend restart. Submit the render again."
+            job["failed_at"] = datetime.now(timezone.utc).isoformat()
+            changed = True
+            logger.warning(f"Pipeline {pipeline_id}: marked stale 'processing' render job as failed")
+    if changed:
+        try:
+            _db_update_render_jobs(pipeline_id, pipeline["render_jobs"])
+        except Exception as db_err:
+            logger.warning(f"Pipeline {pipeline_id}: failed to persist stale-job flip: {db_err}")
+
+
 @router.get("/status/{pipeline_id}", response_model=PipelineStatusResponse)
 async def get_pipeline_status(pipeline_id: str):
     """
@@ -4765,6 +4850,7 @@ async def get_pipeline_status(pipeline_id: str):
     if not pipeline:
         raise HTTPException(status_code=404, detail="Pipeline not found")
     _restore_missing_tts_audio_paths(pipeline_id, pipeline)
+    _mark_stale_render_jobs(pipeline_id, pipeline)
 
     # Enforce 30-day TTL
     created_at = pipeline.get("created_at", "")
@@ -5671,11 +5757,23 @@ async def render_preview(
     _tts = pipeline.get("tts_previews", {})
     tts_data = _tts.get(variant_index) or _tts.get(str(variant_index))
     if not tts_data:
-        raise HTTPException(status_code=400, detail="TTS audio not generated yet. Run Preview All first.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"No voice-over exists for variant {variant_index + 1}. Generate the voice-over first (Step 2).",
+        )
 
     audio_path_str = tts_data.get("audio_path")
     if not audio_path_str or not Path(audio_path_str).exists():
-        raise HTTPException(status_code=400, detail="TTS audio file missing from disk. Re-run Preview All.")
+        # Self-heal: temp file may be gone but a persistent library copy usually exists
+        if _restore_missing_tts_audio_paths(pipeline_id, pipeline):
+            _tts = pipeline.get("tts_previews", {})
+            tts_data = _tts.get(variant_index) or _tts.get(str(variant_index)) or tts_data
+            audio_path_str = tts_data.get("audio_path")
+    if not audio_path_str or not Path(audio_path_str).exists():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Voice-over audio file for variant {variant_index + 1} is missing from disk. Regenerate the voice-over (Step 2).",
+        )
 
     try:
         audio_mtime = str(Path(audio_path_str).stat().st_mtime)
@@ -5760,11 +5858,17 @@ async def render_preview(
         existing_state = pipeline.get("preview_renders", {}).get(preview_key)
         if existing_state and existing_state.get("status") == "processing":
             return {"status": "processing", "matches_fingerprint": existing_state.get("matches_fingerprint")}
-        # Lock held but no processing state — force acquire
-        raise HTTPException(
-            status_code=409,
-            detail="Preview render lock is held but no processing preview state exists. Try again shortly.",
+        # Lock held but no processing state — a previous request died between
+        # acquire and its background task's finally. Reclaim the orphan lock
+        # instead of returning a permanent 409.
+        logger.warning(
+            f"Pipeline {pipeline_id}: reclaiming orphaned preview lock for {preview_key}"
         )
+        try:
+            preview_lock.release()
+        except RuntimeError:
+            pass  # released concurrently — fine, we acquire below
+        await preview_lock.acquire()
     else:
         await preview_lock.acquire()
 

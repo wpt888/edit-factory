@@ -86,7 +86,7 @@ function ItemStatusBadge({ status }: { status: string }) {
       );
     case "ready_for_review":
       return (
-        <Badge className="bg-green-600 text-white hover:bg-green-600">
+        <Badge className="bg-success/10 text-success border border-success/20 hover:bg-success/10">
           ready for review
         </Badge>
       );
@@ -110,7 +110,7 @@ function BatchStatusBadge({ status }: { status: string }) {
       );
     case "completed":
       return (
-        <Badge className="bg-green-600 text-white hover:bg-green-600">
+        <Badge className="bg-success/10 text-success border border-success/20 hover:bg-success/10">
           completed
         </Badge>
       );
@@ -528,7 +528,7 @@ export default function BatchPage() {
                               </p>
                             )}
                             {renderState?.status === "completed" && (
-                              <p className="text-xs text-green-600 mt-0.5 flex items-center gap-1 truncate">
+                              <p className="text-xs text-success mt-0.5 flex items-center gap-1 truncate">
                                 <CheckCircle2 className="size-3 shrink-0" />
                                 Done
                                 {renderState.outputName

@@ -124,7 +124,7 @@ export function SkipRenderDialog({
               </div>
               <div className="flex items-center gap-2">
                 {result.can_skip && result.reason === "fingerprint_match" ? (
-                  <Badge variant="default" className="bg-green-600 hover:bg-green-700">
+                  <Badge variant="outline" className="bg-success/10 text-success border-success/20">
                     <CheckCircle className="h-3 w-3 mr-1" />
                     Identical
                   </Badge>

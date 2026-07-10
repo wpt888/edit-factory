@@ -48,7 +48,7 @@ export function ElevenCreditsBadge({ credits, loading, error, onRefresh }: Eleve
   const pct = credits.usage_percent;
   const remainingPct = credits.character_limit > 0 ? 100 - pct : 0;
   // green >25% remaining, amber 10-25%, red <10%
-  const color = remainingPct > 25 ? "text-emerald-500" : remainingPct > 10 ? "text-amber-500" : "text-red-500";
+  const color = remainingPct > 25 ? "text-success" : remainingPct > 10 ? "text-amber-500" : "text-red-500";
 
   return (
     <div className="flex items-center gap-3">

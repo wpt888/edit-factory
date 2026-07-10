@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { Bricolage_Grotesque, Instrument_Sans, Geist_Mono, Montserrat, Roboto, Open_Sans, Oswald, Bebas_Neue } from "next/font/google";
 import "./globals.css";
 import { NavBarWrapper } from "@/components/navbar-wrapper";
-import { Toaster } from "sonner";
+import { ThemeProvider } from "@/components/theme-provider";
+import { ThemedToaster } from "@/components/themed-toaster";
 import { ProfileProvider } from "@/contexts/profile-context";
 import { AuthProvider } from "@/components/auth-provider";
 import { DesktopAuthGuard } from "@/components/desktop-auth-guard";
@@ -74,24 +75,29 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body>
-        <DesktopTitleBar />
-        <div className="app-scroll">
-          <ProfileProvider>
-            <AuthProvider>
-              <NavBarWrapper>
-                <DesktopAuthGuard>
-                  {children}
-                </DesktopAuthGuard>
-              </NavBarWrapper>
-            </AuthProvider>
-          </ProfileProvider>
-        </div>
-        <Toaster
-          position="top-right"
-          richColors
-          closeButton
-          theme="dark"
+        {/* Anti-flash: the server always renders class="dark" (the default);
+            this runs before first paint and strips it when the stored
+            preference is light. Key must match theme-provider.tsx. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{if(localStorage.getItem("blipost-theme")==="light")document.documentElement.classList.remove("dark")}catch(e){}`,
+          }}
         />
+        <ThemeProvider>
+          <DesktopTitleBar />
+          <div className="app-scroll">
+            <ProfileProvider>
+              <AuthProvider>
+                <NavBarWrapper>
+                  <DesktopAuthGuard>
+                    {children}
+                  </DesktopAuthGuard>
+                </NavBarWrapper>
+              </AuthProvider>
+            </ProfileProvider>
+          </div>
+          <ThemedToaster />
+        </ThemeProvider>
       </body>
     </html>
   );

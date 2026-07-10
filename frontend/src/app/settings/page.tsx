@@ -11,7 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Loader2, Save, Settings as SettingsIcon, Eye, EyeOff, BarChart3, Trash2, Star, RefreshCw, Plus, Key, Shield, Wallet, Cloud } from "lucide-react"
+import { Loader2, Save, Settings as SettingsIcon, Eye, EyeOff, BarChart3, Trash2, Star, RefreshCw, Plus, Key, Shield, Wallet, Cloud, Sun, Moon } from "lucide-react"
+import { useTheme } from "@/components/theme-provider"
 import { Switch } from "@/components/ui/switch"
 import { apiGetWithRetry, apiPost, apiPatch, apiDelete, handleApiError } from "@/lib/api"
 import { toast } from "sonner"
@@ -82,6 +83,7 @@ interface ElevenLabsAccount {
 export default function SettingsPage() {
   const { currentProfile, isLoading: profileLoading } = useProfile()
 
+  const { theme, setTheme } = useTheme()
   const [provider, setProvider] = useState("elevenlabs")
   const [voiceId, setVoiceId] = useState("")
   const voiceIdRef = useRef(voiceId); // Bug #60: stable ref for async callbacks
@@ -883,6 +885,34 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
+            <Sun className="h-5 w-5" />
+            Appearance
+          </CardTitle>
+          <CardDescription>Theme for the app interface</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-2">
+            <Button
+              variant={theme === "dark" ? "default" : "outline"}
+              onClick={() => setTheme("dark")}
+            >
+              <Moon className="h-4 w-4" />
+              Dark
+            </Button>
+            <Button
+              variant={theme === "light" ? "default" : "outline"}
+              onClick={() => setTheme("light")}
+            >
+              <Sun className="h-4 w-4" />
+              Light
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
             <BarChart3 className="h-5 w-5" />
             Profile Activity
           </CardTitle>
@@ -941,7 +971,7 @@ export default function SettingsPage() {
                       ? 'bg-red-500'
                       : (dashboard.costs.monthly / dashboard.costs.monthly_quota) > 0.7
                         ? 'bg-yellow-500'
-                        : 'bg-green-500'
+                        : 'bg-success'
                   }`}
                   style={{
                     width: `${Math.min(100, (dashboard.costs.monthly / dashboard.costs.monthly_quota) * 100)}%`
@@ -1011,7 +1041,7 @@ export default function SettingsPage() {
                   key={account.id}
                   className={`flex items-center gap-3 p-3 rounded-lg border-2 transition-colors ${
                     account.is_primary
-                      ? "border-green-500 bg-green-500/5"
+                      ? "border-primary bg-primary/5"
                       : !account.is_active
                         ? "opacity-50 bg-muted/50 border-transparent"
                         : "border-muted bg-muted/30"
@@ -1021,7 +1051,7 @@ export default function SettingsPage() {
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-sm truncate">{account.label}</span>
                       {account.is_primary && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-green-600 text-white">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-success/10 text-success border border-success/20">
                           ACTIV
                         </span>
                       )}
@@ -1054,7 +1084,7 @@ export default function SettingsPage() {
                                   ? 'bg-red-500'
                                   : (account.characters_used! / account.character_limit) > 0.7
                                     ? 'bg-yellow-500'
-                                    : 'bg-green-500'
+                                    : 'bg-success'
                               }`}
                               style={{
                                 width: `${Math.min(100, (account.characters_used! / account.character_limit) * 100)}%`
@@ -1231,7 +1261,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Cloud className="h-5 w-5 text-lime" />
+            <Cloud className="h-5 w-5 text-muted-foreground" />
             Blipost Account
           </CardTitle>
           <CardDescription>
@@ -1241,10 +1271,10 @@ export default function SettingsPage() {
         <CardContent className="space-y-4">
           {blipostMe?.connected ? (
             <div className="space-y-3">
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-lime/40 bg-lime/5 p-4">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-4">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <div className="h-2 w-2 rounded-full bg-lime" />
+                    <div className="h-2 w-2 rounded-full bg-success" />
                     <span className="text-sm font-medium truncate">
                       {blipostMe.email || "Connected"}
                     </span>
@@ -1326,10 +1356,10 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Cloud className="h-5 w-5 text-lime" />
+            <Cloud className="h-5 w-5 text-muted-foreground" />
             Render for Blipost
             {renderStatus?.nvenc && (
-              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-lime/10 text-lime">
+              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-success/10 text-success">
                 GPU
               </span>
             )}
@@ -1341,10 +1371,10 @@ export default function SettingsPage() {
         <CardContent className="space-y-4">
           {renderStatus?.connected ? (
             <div className="space-y-3">
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-lime/40 bg-lime/5 p-4">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-4">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <div className={`h-2 w-2 rounded-full ${renderStatus.running ? "bg-lime animate-pulse" : "bg-muted-foreground"}`} />
+                    <div className={`h-2 w-2 rounded-full ${renderStatus.running ? "bg-success animate-pulse" : "bg-muted-foreground"}`} />
                     <span className="text-sm font-medium">Accept render jobs</span>
                   </div>
                   <p className="text-xs text-muted-foreground mt-1 capitalize">
@@ -1382,7 +1412,7 @@ export default function SettingsPage() {
                     {renderStatus.processed.slice(0, 8).map((job, i) => (
                       <li key={`${job.jobId}-${i}`} className="flex items-center justify-between text-xs">
                         <span className="font-mono text-muted-foreground">{job.jobId.slice(0, 8)}…</span>
-                        <span className={job.outcome === "rendered" ? "text-lime" : "text-red-500"}>
+                        <span className={job.outcome === "rendered" ? "text-success" : "text-red-500"}>
                           {job.outcome === "rendered" ? `${job.clips} clip${job.clips === 1 ? "" : "s"}` : "failed"}
                         </span>
                       </li>
@@ -1505,7 +1535,7 @@ export default function SettingsPage() {
               )}
             </Button>
             {connectionStatus === "success" && (
-              <span className="text-sm text-green-600">Connected</span>
+              <span className="text-sm text-success">Connected</span>
             )}
             {connectionStatus === "error" && (
               <span className="text-sm text-red-600">Connection failed</span>
@@ -1525,10 +1555,10 @@ export default function SettingsPage() {
             let dotClass = "bg-yellow-500"
             let label = "Credentials entered — click Save to persist for this profile."
             if (formMatchesSaved && verified) {
-              dotClass = "bg-green-500"
+              dotClass = "bg-success"
               label = "Credentials saved and verified for this profile."
             } else if (formMatchesSaved) {
-              dotClass = "bg-green-500"
+              dotClass = "bg-success"
               label = "Credentials saved for this profile."
             } else if (verified) {
               dotClass = "bg-yellow-500"
@@ -1723,7 +1753,7 @@ export default function SettingsPage() {
               )}
             </Button>
             {bufferConnectionStatus === "success" && (
-              <span className="text-sm text-green-600">Connected</span>
+              <span className="text-sm text-success">Connected</span>
             )}
             {bufferConnectionStatus === "error" && (
               <span className="text-sm text-red-600">Connection failed</span>
@@ -1739,10 +1769,10 @@ export default function SettingsPage() {
             let dotClass = "bg-yellow-500"
             let label = "Credentials entered — click Save to persist for this profile."
             if (formMatchesSaved && verified) {
-              dotClass = "bg-green-500"
+              dotClass = "bg-success"
               label = "Credentials saved and verified for this profile."
             } else if (formMatchesSaved) {
-              dotClass = "bg-green-500"
+              dotClass = "bg-success"
               label = "Credentials saved for this profile."
             } else if (verified) {
               dotClass = "bg-yellow-500"

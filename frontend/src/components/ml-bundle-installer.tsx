@@ -209,7 +209,7 @@ export function MLBundleInstaller() {
           </div>
         )}
         {state.kind === "installed" && (
-          <div className="flex items-center gap-2 text-green-600" data-testid="ml-installer-installed">
+          <div className="flex items-center gap-2 text-success" data-testid="ml-installer-installed">
             <CheckCircle2 className="h-5 w-5" />
             <span className="font-medium">Installed (v{state.version})</span>
           </div>

@@ -54,6 +54,12 @@ import { PipelineHistorySidebar } from "./components/pipeline-history-sidebar";
 // local library is a separate feature (still OUT).
 const CATALOG_ENABLED = process.env.NEXT_PUBLIC_CATALOG_GOMAG === "true";
 
+// Persist enough to survive route unmount (clicking away in the left nav).
+// The pointer lets us reuse the existing backend restore path (?id=); the draft
+// covers Step-1 text typed before a pipeline id exists yet.
+const PIPELINE_SESSION_KEY = "ef_pipeline_session"; // { pipelineId, step }
+const PIPELINE_DRAFT_KEY = "ef_pipeline_draft"; // { pipelineName, idea, context, variantCount, provider, targetScriptDuration }
+
 export default function PipelinePageWrapper() {
   return (
     <PipelineErrorBoundary>
@@ -542,6 +548,61 @@ function PipelinePage() {
     return () => { isMountedRef.current = false; };
   }, []);
 
+  // Session/draft persistence — survives the component unmount that Next.js does
+  // when the user navigates away via the left nav and back. Gated so saves only
+  // start after the one-time rehydration below has applied (avoids clobbering).
+  const [hydrated, setHydrated] = useState(false);
+
+  // Rehydrate once on mount (post-hydration: localStorage is unavailable during SSR)
+  useEffect(() => {
+    try {
+      const draftRaw = localStorage.getItem(PIPELINE_DRAFT_KEY);
+      if (draftRaw) {
+        const d = JSON.parse(draftRaw);
+        if (d && typeof d === "object") {
+          // Fill-if-empty: never override the backend restore, which is source of truth
+          if (!idea && d.idea) setIdea(d.idea);
+          if (!context && d.context) setContext(d.context);
+          if (!pipelineName && d.pipelineName) setPipelineName(d.pipelineName);
+          if (typeof d.variantCount === "number") setVariantCount(d.variantCount);
+          if (typeof d.provider === "string" && d.provider) setProvider(d.provider);
+          if (typeof d.targetScriptDuration === "number") setTargetScriptDuration(d.targetScriptDuration);
+        }
+      }
+    } catch { /* corrupt draft — ignore */ }
+
+    // If we returned to /pipeline without ?id=, put the last pointer back in the
+    // URL so the existing restore effect (keyed on urlPipelineId) picks it up.
+    try {
+      if (!urlPipelineId) {
+        const sessRaw = localStorage.getItem(PIPELINE_SESSION_KEY);
+        if (sessRaw) {
+          const s = JSON.parse(sessRaw);
+          if (s && s.pipelineId) {
+            const savedStep = s.step >= 1 && s.step <= 4 ? s.step : 1;
+            setStepRaw(savedStep); // set before updateUrlParams so restore sees the right step
+            updateUrlParams(savedStep, s.pipelineId);
+          }
+        }
+      }
+    } catch { /* corrupt pointer — ignore */ }
+
+    setHydrated(true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- one-time mount rehydrate
+
+  // Persist pointer + Step-1 draft on change. ponytail: no debounce, add if profiling shows jank
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      if (pipelineId) {
+        localStorage.setItem(PIPELINE_SESSION_KEY, JSON.stringify({ pipelineId, step }));
+      }
+      localStorage.setItem(PIPELINE_DRAFT_KEY, JSON.stringify({
+        pipelineName, idea, context, variantCount, provider, targetScriptDuration,
+      }));
+    } catch { /* storage full/blocked — non-fatal */ }
+  }, [hydrated, pipelineId, step, pipelineName, idea, context, variantCount, provider, targetScriptDuration]);
+
   // Restore pipeline from URL ?id=<pipeline_id> on mount
   const urlRestoreAttempted = useRef(false);
   useEffect(() => {
@@ -658,11 +719,12 @@ function PipelinePage() {
         // Navigate to step 2 if on step 1 (scripts are loaded)
         if (step === 1) setStep(2);
       } catch {
-        // Pipeline not found or expired — clear ID from URL
+        // Pipeline not found or expired — clear ID from URL and drop the dead pointer
         updateUrlParams(step, null);
+        try { localStorage.removeItem(PIPELINE_SESSION_KEY); } catch { /* ignore */ }
       }
     })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps — one-time mount restore
+  }, [urlPipelineId]); // eslint-disable-line react-hooks/exhaustive-deps -- re-fires once when rehydrate injects ?id=
 
   const stripEmbeddedProductBlocks = (value: string): string => {
     if (!value) return "";
@@ -1881,6 +1943,12 @@ function PipelinePage() {
       ttsAudioRef.current.pause();
       ttsAudioRef.current = null;
     }
+    // Starting fresh — drop the persisted session/draft so navigating away and
+    // back doesn't resurrect the old pipeline.
+    try {
+      localStorage.removeItem(PIPELINE_SESSION_KEY);
+      localStorage.removeItem(PIPELINE_DRAFT_KEY);
+    } catch { /* ignore */ }
   };
 
   // History sidebar: fetch pipeline list (Bug #54: wrapped in useCallback)
@@ -1962,6 +2030,7 @@ function PipelinePage() {
             setTtsResults({});
             setPreviewError(null);
             setStep(1);
+            try { localStorage.removeItem(PIPELINE_SESSION_KEY); } catch { /* ignore */ }
           }
         } catch (err) {
           handleApiError(err, "Failed to delete pipeline");

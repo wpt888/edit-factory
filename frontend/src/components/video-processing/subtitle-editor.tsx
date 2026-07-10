@@ -463,7 +463,7 @@ export function SubtitleEditor({
         </p>
         {pipelineId && (
           ffmpegPreviewUrl ? (
-            <Badge variant="outline" className="text-[10px] text-green-500 border-green-500/30">
+            <Badge variant="outline" className="text-[10px] text-success border-success/30">
               <CheckCircle2 className="h-3 w-3 mr-1" />
               Accurate preview
             </Badge>

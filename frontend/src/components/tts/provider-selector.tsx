@@ -88,11 +88,6 @@ export function ProviderSelector({ value, onChange, disabled }: ProviderSelector
                     </Label>
                     <Badge
                       variant={provider.costPer1kChars === 0 ? "default" : "secondary"}
-                      className={
-                        provider.costPer1kChars === 0
-                          ? "bg-green-500 hover:bg-green-600"
-                          : ""
-                      }
                     >
                       {provider.costPer1kChars === 0
                         ? "Free"

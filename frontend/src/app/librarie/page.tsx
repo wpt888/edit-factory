@@ -728,7 +728,7 @@ function LibrarieContent() {
     switch (status) {
       case "sent":
         return {
-          color: "bg-green-500 text-white",
+          color: "bg-success text-white",
           label: "Sent",
           icon: <CheckCircle2 className="h-3 w-3 mr-1" />,
         };
@@ -1342,7 +1342,7 @@ function LibrarieContent() {
               <div>
                 {postizStatus.connected ? (
                   <div className="flex items-center gap-2 text-sm">
-                    <Badge variant="outline" className="border-green-500 text-green-600 gap-1">
+                    <Badge variant="outline" className="border-success/20 text-success gap-1">
                       <Link className="h-3 w-3" />
                       {postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")} - {postizStatus.integrations_count} {postizStatus.integrations_count === 1 ? "account" : "accounts"}
                     </Badge>
@@ -1488,7 +1488,7 @@ function LibrarieContent() {
                       <Badge
                         className={`absolute top-2 right-2 text-xs ${
                           img.status === "completed"
-                            ? "bg-green-500 text-white"
+                            ? "bg-success text-white"
                             : img.status === "failed"
                             ? "bg-red-500 text-white"
                             : img.status === "processing"
@@ -1508,7 +1508,7 @@ function LibrarieContent() {
 
                       {/* Approved badge */}
                       {img.is_approved && (
-                        <Badge className="absolute bottom-2 left-2 text-xs bg-emerald-600 text-white">
+                        <Badge className="absolute bottom-2 left-2 text-xs bg-success text-white">
                           <CheckCircle2 className="h-3 w-3 mr-1" />
                           Aprobat
                         </Badge>
@@ -1816,7 +1816,7 @@ function LibrarieContent() {
           <div className="mb-4">
             {postizStatus.connected ? (
               <div className="flex items-center gap-2 text-sm">
-                <Badge variant="outline" className="border-green-500 text-green-600 gap-1">
+                <Badge variant="outline" className="border-success/20 text-success gap-1">
                   <Link className="h-3 w-3" />
                   {postizStatus.api_url?.replace(/^https?:\/\//, "").replace(/\/+$/, "")} — {postizStatus.integrations_count} {postizStatus.integrations_count === 1 ? "account" : "accounts"}
                 </Badge>
@@ -2098,7 +2098,7 @@ function LibrarieContent() {
                   key={clip.id}
                   className={`overflow-hidden transition-all cursor-pointer ${
                     clip.is_downloaded_posted || clip.postiz_status === "sent"
-                      ? "border-green-500 bg-green-50/50 dark:bg-green-950/20 hover:ring-2 hover:ring-green-400/50"
+                      ? "border-success bg-success/5 hover:ring-2 hover:ring-success/40"
                       : clip.qc_verified
                         ? "border-primary bg-primary/10 hover:ring-2 hover:ring-primary/40"
                         : `hover:ring-2 hover:ring-primary/50 ${selectedClipIds.has(clip.id) ? "ring-2 ring-primary" : ""}`
@@ -2341,7 +2341,7 @@ function LibrarieContent() {
                           className="h-6 w-6 shrink-0"
                           onClick={() => renameClip(clip.id, renameValue)}
                         >
-                          <Check className="h-3 w-3 text-green-500" />
+                          <Check className="h-3 w-3 text-success" />
                         </Button>
                         <Button
                           size="icon"
@@ -2455,12 +2455,12 @@ function LibrarieContent() {
                           id={`downloaded-posted-${clip.id}`}
                           checked={clip.is_downloaded_posted || false}
                           onCheckedChange={() => toggleDownloadedPosted(clip.id)}
-                          className="h-5 w-5 border-2 border-green-500 data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
+                          className="h-5 w-5 border-2 border-success data-[state=checked]:border-success data-[state=checked]:bg-success"
                         />
                         <label
                           htmlFor={`downloaded-posted-${clip.id}`}
                           className={`text-xs cursor-pointer select-none ${
-                            clip.is_downloaded_posted ? "text-green-600 dark:text-green-400 font-medium" : "text-muted-foreground"
+                            clip.is_downloaded_posted ? "text-success font-medium" : "text-muted-foreground"
                           }`}
                         >
                           {clip.is_downloaded_posted ? "Downloaded & Posted" : "Mark as downloaded & posted"}
@@ -2494,7 +2494,7 @@ function LibrarieContent() {
                         onClick={(e) => e.stopPropagation()}
                       >
                         <button
-                          className="text-xs text-emerald-500 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300 flex items-center gap-1 transition-colors font-medium"
+                          className="text-xs text-primary hover:text-primary/80 flex items-center gap-1 transition-colors font-medium"
                           onClick={() => void openCaptionDialog(clip)}
                           disabled={loadingScriptId === clip.id}
                         >
@@ -2622,7 +2622,7 @@ function LibrarieContent() {
           <DialogContent className="max-w-lg max-h-[80vh]">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
-                <FileText className="h-5 w-5 text-emerald-500" />
+                <FileText className="h-5 w-5 text-muted-foreground" />
                 Caption — {captionDialogClip?.variant_name || `Variant ${(captionDialogClip?.variant_index ?? 0) + 1}`}
               </DialogTitle>
               <p className="text-sm text-muted-foreground">{captionDialogClip?.project_name}</p>

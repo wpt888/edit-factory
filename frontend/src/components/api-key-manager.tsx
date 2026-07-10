@@ -151,8 +151,8 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div className="space-y-1">
-          <div className="inline-flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1">
-            <Key className="h-4 w-4 text-emerald-300" />
+          <div className="inline-flex items-center gap-2 rounded-md border border-border bg-muted px-2.5 py-1">
+            <Key className="h-4 w-4 text-muted-foreground" />
             <h3 className="text-sm font-semibold tracking-wide text-foreground">
               {label}
             </h3>
@@ -187,7 +187,7 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
               key={key.id}
               className={`flex items-center gap-3 p-3 rounded-lg border-2 transition-colors ${
                 key.is_primary
-                  ? "border-green-500 bg-green-500/5"
+                  ? "border-primary bg-primary/5"
                   : !key.is_active
                     ? "opacity-50 bg-muted/50 border-transparent"
                     : "border-muted bg-muted/30"
@@ -197,7 +197,7 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-sm truncate">{key.label}</span>
                   {key.is_primary && (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-green-600 text-white">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-primary text-primary-foreground">
                       ACTIV
                     </span>
                   )}
@@ -316,9 +316,9 @@ export function ApiKeyManager({ service, label, description }: ApiKeyManagerProp
             {adding ? "Validating…" : `Test & Add ${label} Key`}
           </Button>
           {testStatus === "success" && (
-            <div className="flex items-center gap-2 p-2 bg-green-500/10 rounded-md border border-green-500/30">
-              <div className="w-2 h-2 rounded-full bg-green-500" />
-              <span className="text-xs text-green-600 dark:text-green-400">Key validated and added</span>
+            <div className="flex items-center gap-2 p-2 bg-success/10 rounded-md border border-success/20">
+              <div className="w-2 h-2 rounded-full bg-success" />
+              <span className="text-xs text-success">Key validated and added</span>
             </div>
           )}
           {testStatus === "error" && (
