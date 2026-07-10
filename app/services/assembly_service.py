@@ -43,6 +43,18 @@ logger = logging.getLogger(__name__)
 from app.repositories.factory import get_repository
 
 
+# F4: transparent scoring weights per preset. Values are literals — the whole
+# selection policy lives here. "balanced" is the default and reproduces roughly
+# the old round-robin-with-cooldown behaviour.
+MATCH_PRESETS: Dict[str, Dict[str, float]] = {
+    "keyword_strict": {"w_kw": 3.0, "w_rec": 0.5, "w_div": 0.3, "w_ovl": 1.0, "w_avoid": 0.8},
+    "balanced":       {"w_kw": 1.0, "w_rec": 1.5, "w_div": 0.5, "w_ovl": 1.0, "w_avoid": 0.8},
+    "max_variety":    {"w_kw": 0.7, "w_rec": 1.0, "w_div": 2.0, "w_ovl": 1.5, "w_avoid": 1.2},
+    "shuffle":        {"w_kw": 1.0, "w_rec": 1.5, "w_div": 0.5, "w_ovl": 1.0, "w_avoid": 0.8},
+}
+_SHUFFLE_EPSILON = 0.25  # scores within this of the max are tie-broken by seeded RNG
+
+
 @dataclass
 class MatchResult:
     """Result of matching an SRT entry to a segment."""
@@ -61,6 +73,8 @@ class MatchResult:
     segment_end_time: Optional[float] = None
     thumbnail_path: Optional[str] = None
     transforms: Optional[dict] = None
+    explanation: Optional[str] = None  # F5: human-readable reason for this pick
+    pinned: bool = False               # F6: user-locked assignment
 
 
 @dataclass
@@ -72,11 +86,34 @@ class TimelineEntry:
     timeline_start: float  # Position in final video
     timeline_duration: float
     transforms: Optional[dict] = None  # Per-segment visual transforms
+    pinned: bool = False  # F6: originates from a pinned match — never absorbed/swapped
 
 
 def strip_product_group_tags(text: str) -> str:
     """Remove [ProductGroup] tags from script text, leaving only speakable content."""
     return re.sub(r'\[([^\[\]]+)\]', '', text).strip()
+
+
+_SRT_TS_RE = re.compile(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})")
+
+
+def shift_srt(content: str, offset_sec: float) -> str:
+    """Shift every SRT timestamp by offset_sec (F1: intro delay).
+
+    Keeps the HH:MM:SS,mmm format. offset_sec of 0 returns content unchanged.
+    """
+    if not content or offset_sec <= 0:
+        return content
+
+    def _shift(m: "re.Match") -> str:
+        total_ms = (int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))) * 1000 + int(m.group(4))
+        total_ms += int(round(offset_sec * 1000))
+        h, rem = divmod(total_ms, 3600_000)
+        mnt, rem = divmod(rem, 60_000)
+        s, ms = divmod(rem, 1000)
+        return f"{h:02d}:{mnt:02d}:{s:02d},{ms:03d}"
+
+    return _SRT_TS_RE.sub(_shift, content)
 
 
 def _slugify_output_component(value: Optional[str], *, fallback: str, max_words: int = 8, max_length: int = 48) -> str:
@@ -509,422 +546,316 @@ class AssemblyService:
         min_confidence: float = 0.3,
         variant_index: int = 0,
         srt_product_groups: Optional[List[Optional[str]]] = None,
-        avoid_segment_ids: Optional[set] = None
+        avoid_segment_ids: Optional[set] = None,
+        preset: str = "balanced",
+        pinned_assignments: Optional[Dict[int, str]] = None,
     ) -> List[MatchResult]:
         """
-        Match SRT subtitle phrases against segment keywords using round-robin.
+        Assign one library segment to each SRT phrase via a transparent scoring
+        function (F4).  For each phrase i, every segment passing the hard
+        constraints is scored:
 
-        Round-robin is the primary allocation mechanism. The pointer advances
-        through a fixed cyclical order (A→B→C→D→E→A→…). Keyword matches
-        "consume" a segment from the current cycle without advancing the pointer,
-        so the matched segment is skipped when the pointer reaches it, and it
-        does NOT get priority at the start of the next cycle — it comes back at
-        its natural position in the rotation.
+            score = w_kw*keyword_affinity + w_rec*recency + w_div*diversity
+                    - w_ovl*overlap_penalty - w_avoid*avoided
 
-        Example with segments A,B,C,D,E and keyword match on C at pos 0:
-          pos 0: keyword→C  (consumed, pointer stays at A)
-          pos 1: rr→A       (pointer→B)
-          pos 2: rr→B       (pointer→C, but C used → skip → D)
-          pos 3: rr→D       (pointer→E)
-          pos 4: rr→E       (cycle complete, pointer→A)
-          pos 5: rr→A       (new cycle, pointer→B)
-          pos 6: rr→B       (pointer→C)
-          pos 7: rr→C       (7 positions since last use — maximum spacing!)
-          pos 8: rr→D
-          pos 9: rr→E
+        and the argmax wins (deterministic tie-break by segment id).  Weights are
+        chosen by ``preset`` (see MATCH_PRESETS).  The "shuffle" preset breaks
+        near-ties with a per-variant seeded RNG so each variant looks different;
+        all other presets are fully deterministic.
+
+        Hard constraints per phrase:
+          - product-group match when the phrase forces a group (falls back to any
+            group when the forced group is empty, but logs it);
+          - not a single_use segment already spent this render;
+          - not identical to the immediately previous pick (when n > 1).
 
         Args:
-            srt_entries: List of {start_time, end_time, text} from SRT
-            segments_data: List of segment dicts with {id, keywords, ...}
-            min_confidence: Minimum confidence score to accept a keyword match
-            variant_index: Offsets round-robin start position per variant
-            srt_product_groups: Optional product group labels per SRT entry
-
-        Returns:
-            List of MatchResult objects (one per SRT entry)
+            min_confidence: a keyword only counts as "matched" (populating
+                matched_keyword/confidence and the w_kw term) when its affinity
+                is >= this threshold; weaker keyword hits contribute 0.
+            variant_index: seeds the "shuffle" preset's tie-break RNG.
+            avoid_segment_ids: cross-variant deprioritization (w_avoid term).
+            pinned_assignments: srt_index -> segment_id.  A pinned phrase skips
+                scoring entirely, is marked pinned, and still updates the recency
+                ledger so neighbours see it.
         """
+        weights = MATCH_PRESETS.get(preset)
+        if weights is None:
+            logger.warning("Unknown match preset %r — falling back to 'balanced'", preset)
+            preset = "balanced"
+            weights = MATCH_PRESETS["balanced"]
+        w_kw = weights["w_kw"]
+        w_rec = weights["w_rec"]
+        w_div = weights["w_div"]
+        w_ovl = weights["w_ovl"]
+        w_avoid = weights["w_avoid"]
+
         matches: List[MatchResult] = []
-        current_product_group: Optional[str] = None
+        _avoid_ids: set = avoid_segment_ids or set()
+        pinned_assignments = pinned_assignments or {}
+        n = len(segments_data)
+        segment_lookup: Dict[str, dict] = {s["id"]: s for s in segments_data}
+        groups_present = {s.get("product_group") for s in segments_data}
+
+        # Recency ledger: srt index each segment was last used at (-inf = never).
+        last_used: Dict[str, int] = {}
+        _used_single_use_ids: set = set()
+
+        # RNG only used by the "shuffle" preset for near-tie scatter.
+        shuffle_rng = random.Random(variant_index) if preset == "shuffle" else None
+
         prev_segment_id: Optional[str] = None
         prev_source_video_id: Optional[str] = None
         prev_segment_start: Optional[float] = None
         prev_segment_end: Optional[float] = None
-        variant_rng = random.Random(variant_index)
+        current_product_group: Optional[str] = None
 
-        # --- Build ordered segment lists per product group ---
-        # Interleave segments by source_video_id so that the round-robin
-        # cycles through different source videos before repeating any.
-        # E.g. sources A(3 segs), B(2 segs) → A1,B1,A2,B2,A3 instead of A1,A2,A3,B1,B2
-        group_seg_ids: Dict[Optional[str], List[str]] = {}
-        segment_lookup: Dict[str, dict] = {}
-        for seg in segments_data:
-            segment_lookup[seg["id"]] = seg
+        def _keyword_affinity(seg: dict, srt_text_lower: str, words: set,
+                              forced_group: Optional[str]) -> Tuple[float, Optional[str]]:
+            """Best keyword affinity for seg against this phrase (0 if none).
 
-        for seg in segments_data:
-            g = seg.get("product_group")
-            group_seg_ids.setdefault(g, [])
-
-        for g in group_seg_ids:
-            # Group segments by source_video_id within this product group
-            segs_in_group = [s for s in segments_data if s.get("product_group") == g]
-            source_buckets: Dict[Optional[str], List[str]] = {}
-            for s in segs_in_group:
-                src_id = s.get("source_video_id")
-                source_buckets.setdefault(src_id, []).append(s["id"])
-            # Sort each bucket for determinism
-            for src_id in source_buckets:
-                source_buckets[src_id].sort()
-            # Sort source keys for determinism
-            sorted_sources = sorted(source_buckets.keys(), key=lambda x: (x is None, x or ""))
-            # Interleave: take one segment from each source in round-robin
-            interleaved: List[str] = []
-            max_len = max((len(v) for v in source_buckets.values()), default=0)
-            for i in range(max_len):
-                for src_id in sorted_sources:
-                    bucket = source_buckets[src_id]
-                    if i < len(bucket):
-                        interleaved.append(bucket[i])
-            group_seg_ids[g] = interleaved
-
-        def _resolve_group(group: Optional[str]) -> Optional[str]:
-            """Return group key that has segments, with fallback."""
-            if group in group_seg_ids and group_seg_ids[group]:
-                return group
-            if None in group_seg_ids:
-                return None
-            return list(group_seg_ids.keys())[0] if group_seg_ids else None
-
-        # --- Round-robin state per group ---
-        # Pointer: fixed cyclical position (only advances on round-robin picks)
-        rr_pointer: Dict[Optional[str], int] = {}
-        # Cooldown: tracks which SRT index each segment was last used at
-        last_used_at: Dict[Optional[str], Dict[str, int]] = {}
-        # Avoid set for cross-variant deprioritization
-        _avoid_ids: set = avoid_segment_ids or set()
-        # Track single_use segments already placed in this render
-        _used_single_use_ids: set = set()
-
-        for g, ids in group_seg_ids.items():
-            # Prime-scatter to avoid modulo collisions between meta visual versions.
-            # segment_offset=100 with 10 segments: plain 100%10=0 == 0%10 (same start).
-            # With scatter: (100*7 + 1*3)%10=3, (0*7 + 0*3)%10=0 → different starts.
-            n = len(ids) if ids else 1
-            rr_pointer[g] = (variant_index * 7 + variant_index // 100 * 3) % n if ids else 0
-            last_used_at[g] = {}
-
-        def _rr_next(group: Optional[str], current_srt_idx: int,
-                     exclude_id: Optional[str] = None,
-                     exclude_source_video_id: Optional[str] = None,
-                     exclude_start: Optional[float] = None,
-                     exclude_end: Optional[float] = None) -> Optional[dict]:
+            Returns (affinity, matched_keyword). Mirrors the old 0.7/1.0 + group
+            bonus heuristic.
             """
-            Get next segment by advancing the round-robin pointer.
-            Uses cooldown system: a segment is skipped if it was used fewer than
-            min_reuse_distance SRT entries ago.
-            Prefers segments not in _avoid_ids (cross-variant deprioritization).
-            Prefers segments that do not produce overlapping-time-range adjacency.
-            """
-            grp = _resolve_group(group)
-            ids = group_seg_ids.get(grp)
-            if not ids:
-                return None
-
-            n = len(ids)
-            min_reuse_distance = max(2, n)
-            group_last_used = last_used_at.get(grp, {})
-
-            ptr = rr_pointer.get(grp, 0) % n
-
-            # Collect candidates: (seg, idx, is_avoided, is_overlapping)
-            best_non_overlap_non_avoid = None
-            best_non_overlap_non_avoid_idx = None
-            best_non_overlap_avoid = None
-            best_non_overlap_avoid_idx = None
-            best_any = None
-            best_any_idx = None
-
-            for attempt in range(n):
-                idx = (ptr + attempt) % n
-                sid = ids[idx]
-
-                # Cooldown check
-                last_pos = group_last_used.get(sid, -999)
-                if (current_srt_idx - last_pos) < min_reuse_distance:
+            seg_group = seg.get("product_group")
+            best = 0.0
+            best_kw = None
+            for keyword in (seg.get("keywords") or []):
+                kw_lower = keyword.lower()
+                if kw_lower not in srt_text_lower:
                     continue
-                # Skip consecutive identical segment (always, even with n==1)
-                if sid == exclude_id:
-                    continue
-                # Skip single_use segments already placed
-                if sid in _used_single_use_ids:
-                    continue
+                conf = 1.0 if kw_lower in words else 0.7
+                if seg_group and kw_lower == seg_group.lower():
+                    conf += 0.5
+                if current_product_group and seg_group == current_product_group:
+                    conf += 0.2
+                conf = min(conf, 1.0)
+                if conf > best:
+                    best = conf
+                    best_kw = keyword
+            return best, best_kw
 
-                seg = segment_lookup[sid]
-                seg_source = seg.get("source_video_id")
-                is_avoided = sid in _avoid_ids
-
-                # Check overlapping-time adjacency
-                same_source_overlap = (
-                    exclude_source_video_id
-                    and seg_source == exclude_source_video_id
-                    and exclude_start is not None
-                    and exclude_end is not None
-                    and seg.get("start_time", 0.0) < exclude_end
-                    and exclude_start < seg.get("end_time", 0.0)
-                )
-                if same_source_overlap:
-                    continue
-
-                # Track best fallback (after overlap check so it's never an overlapping segment)
-                if best_any is None:
-                    best_any = seg
-                    best_any_idx = idx
-
-                # Non-overlapping candidate found
-                if not is_avoided:
-                    best_non_overlap_non_avoid = seg
-                    best_non_overlap_non_avoid_idx = idx
-                    break  # Best possible match
-                elif best_non_overlap_avoid is None:
-                    best_non_overlap_avoid = seg
-                    best_non_overlap_avoid_idx = idx
-                    # Keep looking for non-avoided
-
-            # Priority: non-overlap+non-avoid > non-overlap+avoid > any
-            chosen = best_non_overlap_non_avoid or best_non_overlap_avoid or best_any
-            chosen_idx = (
-                best_non_overlap_non_avoid_idx if best_non_overlap_non_avoid
-                else best_non_overlap_avoid_idx if best_non_overlap_avoid
-                else best_any_idx
-            )
-
-            if chosen and chosen_idx is not None:
-                rr_pointer[grp] = (chosen_idx + 1) % n
-                group_last_used[chosen["id"]] = current_srt_idx
-                return chosen
-
-            # All on cooldown — pick the segment with oldest last_used_at,
-            # but still respect exclude_id to prevent consecutive duplicates,
-            # and prefer segments not in _avoid_ids.
-            candidates = sorted(ids, key=lambda s: group_last_used.get(s, -999))
-            # Try: non-excluded + non-avoided + non-single-use-spent, then relax constraints
-            fallback = None
-            for sid in candidates:
-                if sid == exclude_id:
-                    continue
-                if sid in _used_single_use_ids:
-                    continue
-                if sid not in _avoid_ids:
-                    fallback = sid
-                    break
-            if fallback is None:
-                for sid in candidates:
-                    if sid == exclude_id:
-                        continue
-                    if sid in _used_single_use_ids:
-                        continue
-                    fallback = sid
-                    break
-            if fallback is None:
-                fallback = candidates[0]  # absolute last resort (may reuse single_use)
-            fallback_idx = ids.index(fallback)
-            rr_pointer[grp] = (fallback_idx + 1) % n
-            group_last_used[fallback] = current_srt_idx
-            return segment_lookup[fallback]
-
-        def _mark_keyword_consumed(seg_id: str, group: Optional[str], current_srt_idx: int):
-            """
-            Mark segment as consumed via keyword match (records cooldown timestamp).
-            Does NOT advance the round-robin pointer.
-            """
-            grp = _resolve_group(group)
-            group_last_used = last_used_at.setdefault(grp, {})
-            group_last_used[seg_id] = current_srt_idx
-
-        def _is_available_in_cooldown(seg_id: str, group: Optional[str], current_srt_idx: int) -> bool:
-            """Check if segment has passed its cooldown period."""
-            grp = _resolve_group(group)
-            ids = group_seg_ids.get(grp, [])
-            min_reuse_distance = max(2, len(ids))
-            group_last_used = last_used_at.get(grp, {})
-            last_pos = group_last_used.get(seg_id, -999)
-            return (current_srt_idx - last_pos) >= min_reuse_distance
-
-        # --- Single-pass: keyword match + round-robin in one loop ---
         keyword_matched = 0
         auto_filled = 0
+        pinned_count = 0
 
         for idx, entry in enumerate(srt_entries):
             srt_text = entry["text"]
-            srt_text_lower = srt_text.lower()
+            srt_start = entry["start_time"]
+            srt_end = entry["end_time"]
 
-            # Determine target group
-            forced_group = srt_product_groups[idx] if srt_product_groups and idx < len(srt_product_groups) else None
-            target_group = forced_group or current_product_group
-
-            # --- Try keyword matching (only among cycle-available segments) ---
-            if forced_group:
-                search_segments = [s for s in segments_data if s.get("product_group") == forced_group]
-                if not search_segments:
-                    search_segments = segments_data
-            else:
-                search_segments = segments_data
-
-            candidates = []
-            for segment in search_segments:
-                seg_group = segment.get("product_group")
-                check_group = forced_group or seg_group or target_group
-
-                # Only consider segments that have passed cooldown
-                if not _is_available_in_cooldown(segment["id"], check_group, idx):
-                    continue
-
-                keywords = segment.get("keywords") or []
-                for keyword in keywords:
-                    keyword_lower = keyword.lower()
-                    if keyword_lower in srt_text_lower:
-                        words = srt_text_lower.split()
-                        exact_match = keyword_lower in words
-                        confidence = 1.0 if exact_match else 0.7
-
-                        if seg_group and keyword_lower == seg_group.lower():
-                            confidence += 0.5
-                        if current_product_group and seg_group == current_product_group:
-                            confidence += 0.2
-
-                        confidence = min(confidence, 1.0)
-                        candidates.append((segment, keyword, confidence))
-
-            chosen_segment = None
-            chosen_keyword = None
-            chosen_confidence = 0.0
-            is_auto = False
-
-            if candidates:
-                candidates.sort(key=lambda c: c[2], reverse=True)
-                top_confidence = candidates[0][2]
-                top_candidates = [c for c in candidates if c[2] >= top_confidence - 0.1]
-
-                # Prefer candidates that do not produce overlapping-time adjacency.
-                # Two segments are considered "same visual content" when they share
-                # the same source_video_id AND their time ranges overlap.
-                def _overlaps_previous(seg: dict) -> bool:
-                    if not prev_source_video_id or seg.get("source_video_id") != prev_source_video_id:
-                        return False
-                    if prev_segment_start is None or prev_segment_end is None:
-                        return False
-                    seg_start = seg.get("start_time", 0.0)
-                    seg_end = seg.get("end_time", 0.0)
-                    return seg_start < prev_segment_end and prev_segment_start < seg_end
-
-                non_overlapping = [c for c in top_candidates if not _overlaps_previous(c[0])]
-                if not non_overlapping:
-                    # All candidates overlap with previous — at least avoid same segment
-                    non_prev = [c for c in top_candidates if c[0]["id"] != prev_segment_id]
-                    pool = non_prev if non_prev else top_candidates
-                else:
-                    # Also filter out consecutive duplicate from non-overlapping pool
-                    non_dup = [c for c in non_overlapping if c[0]["id"] != prev_segment_id]
-                    pool = non_dup if non_dup else non_overlapping
-
-                # Filter out already-used single_use segments
-                filtered_pool = [c for c in pool if not (c[0].get("single_use") and c[0]["id"] in _used_single_use_ids)]
-                if filtered_pool:
-                    pool = filtered_pool
-
-                # Prefer segments with oldest cooldown (most spacing) and not in avoid set
-                if len(pool) > 1:
-                    def _sort_key(c):
-                        sid = c[0]["id"]
-                        grp = c[0].get("product_group") or target_group
-                        resolved_grp = _resolve_group(grp)
-                        age = last_used_at.get(resolved_grp, {}).get(sid, -999)
-                        avoid_penalty = 1000 if sid in _avoid_ids else 0
-                        return avoid_penalty + age  # Lower = preferred
-                    pool.sort(key=_sort_key)
-                    chosen_seg_tuple = pool[0]
-                else:
-                    chosen_seg_tuple = pool[0]
-                seg, kw, conf = chosen_seg_tuple
-
-                if conf >= min_confidence:
-                    chosen_segment = seg
-                    chosen_keyword = kw
-                    chosen_confidence = conf
-                    keyword_matched += 1
-
-            # --- No keyword match → round-robin auto-fill ---
-            if not chosen_segment:
-                seg = _rr_next(target_group, current_srt_idx=idx,
-                               exclude_id=prev_segment_id,
-                               exclude_source_video_id=prev_source_video_id,
-                               exclude_start=prev_segment_start,
-                               exclude_end=prev_segment_end)
-                if seg:
-                    chosen_segment = seg
-                    is_auto = True
-                    auto_filled += 1
-                else:
-                    chosen_segment = segments_data[0] if segments_data else None
-                    is_auto = True
-                    auto_filled += 1
-
-            # --- Build match result ---
-            if chosen_segment:
-                seg_group = chosen_segment.get("product_group")
-
-                # Track single_use segments
-                if chosen_segment.get("single_use"):
-                    _used_single_use_ids.add(chosen_segment["id"])
-
-                # Keyword match: record cooldown without advancing pointer
-                if not is_auto:
-                    _mark_keyword_consumed(chosen_segment["id"], seg_group, idx)
-
-                match = MatchResult(
-                    srt_index=idx,
-                    srt_text=srt_text,
-                    srt_start=entry["start_time"],
-                    srt_end=entry["end_time"],
-                    segment_id=chosen_segment["id"],
-                    segment_keywords=chosen_segment.get("keywords") or [],
-                    matched_keyword=chosen_keyword,
-                    confidence=chosen_confidence,
-                    is_auto_filled=is_auto,
-                    product_group=seg_group,
-                    source_video_id=chosen_segment.get("source_video_id"),
-                    segment_start_time=chosen_segment.get("start_time"),
-                    segment_end_time=chosen_segment.get("end_time"),
-                    thumbnail_path=chosen_segment.get("thumbnail_path"),
-                    transforms=chosen_segment.get("transforms"),
-                )
-                prev_segment_id = chosen_segment["id"]
-                prev_source_video_id = chosen_segment.get("source_video_id")
-                prev_segment_start = chosen_segment.get("start_time")
-                prev_segment_end = chosen_segment.get("end_time")
+            # --- F6: pinned assignment short-circuits scoring ---
+            pin_id = pinned_assignments.get(idx)
+            if pin_id and pin_id in segment_lookup:
+                seg = segment_lookup[pin_id]
+                seg_group = seg.get("product_group")
+                last_used[pin_id] = idx
+                if seg.get("single_use"):
+                    _used_single_use_ids.add(pin_id)
                 if seg_group:
                     current_product_group = seg_group
-            else:
-                logger.warning(
-                    "No segment matched for SRT entry %d: %s",
-                    idx, srt_text[:80],
-                )
-                match = MatchResult(
-                    srt_index=idx,
-                    srt_text=srt_text,
-                    srt_start=entry["start_time"],
-                    srt_end=entry["end_time"],
-                    segment_id=None,
-                    segment_keywords=[],
-                    matched_keyword=None,
-                    confidence=0.0,
-                )
+                prev_segment_id = pin_id
+                prev_source_video_id = seg.get("source_video_id")
+                prev_segment_start = seg.get("start_time")
+                prev_segment_end = seg.get("end_time")
+                matches.append(MatchResult(
+                    srt_index=idx, srt_text=srt_text, srt_start=srt_start, srt_end=srt_end,
+                    segment_id=pin_id,
+                    segment_keywords=seg.get("keywords") or [],
+                    matched_keyword=None, confidence=0.0, is_auto_filled=False,
+                    product_group=seg_group,
+                    source_video_id=seg.get("source_video_id"),
+                    segment_start_time=seg.get("start_time"),
+                    segment_end_time=seg.get("end_time"),
+                    thumbnail_path=seg.get("thumbnail_path"),
+                    transforms=seg.get("transforms"),
+                    explanation="pinned by user", pinned=True,
+                ))
+                pinned_count += 1
+                continue
 
-            matches.append(match)
+            srt_text_lower = srt_text.lower()
+            words = set(srt_text_lower.split())
+
+            forced_group = (
+                srt_product_groups[idx]
+                if srt_product_groups and idx < len(srt_product_groups)
+                else None
+            )
+            # Resolve the hard product-group constraint. When a group is forced
+            # but has no segments, fall back to the whole pool (logged).
+            group_constraint: Optional[str]
+            if forced_group is not None and forced_group in groups_present:
+                group_constraint = forced_group
+            elif forced_group is not None:
+                logger.info(
+                    "SRT %d forces product_group %r which has no segments — "
+                    "falling back to any group", idx, forced_group,
+                )
+                group_constraint = None
+            else:
+                group_constraint = None
+
+            # --- Score every eligible candidate ---
+            best_seg = None
+            best_kw = None
+            best_conf = 0.0
+            best_score = None
+            tie_pool: list = []  # (segment, kw, conf) within epsilon of best (shuffle only)
+
+            for seg in segments_data:
+                sid = seg["id"]
+                # Hard constraints
+                if group_constraint is not None and seg.get("product_group") != group_constraint:
+                    continue
+                if seg.get("single_use") and sid in _used_single_use_ids:
+                    continue
+                if n > 1 and sid == prev_segment_id:
+                    continue
+
+                affinity, kw = _keyword_affinity(seg, srt_text_lower, words, group_constraint)
+                # A keyword only "counts" (matched_keyword + w_kw term) at/above
+                # min_confidence; weaker hits contribute nothing.
+                kw_term = affinity if affinity >= min_confidence else 0.0
+                effective_kw = kw if affinity >= min_confidence else None
+
+                last = last_used.get(sid)
+                recency = 1.0 if last is None else min(1.0, (idx - last) / max(2, n))
+
+                same_src_as_prev = (
+                    prev_source_video_id is not None
+                    and seg.get("source_video_id") == prev_source_video_id
+                )
+                diversity = 0.0 if same_src_as_prev else 1.0
+
+                overlap = 0.0
+                if (same_src_as_prev and prev_segment_start is not None
+                        and prev_segment_end is not None
+                        and seg.get("start_time", 0.0) < prev_segment_end
+                        and prev_segment_start < seg.get("end_time", 0.0)):
+                    overlap = 1.0
+
+                avoided = 1.0 if sid in _avoid_ids else 0.0
+
+                score = (w_kw * kw_term + w_rec * recency + w_div * diversity
+                         - w_ovl * overlap - w_avoid * avoided)
+
+                # argmax with deterministic tie-break by segment id
+                if (best_score is None or score > best_score
+                        or (score == best_score and best_seg is not None and sid < best_seg["id"])):
+                    best_score = score
+                    best_seg = seg
+                    best_kw = effective_kw
+                    best_conf = affinity if affinity >= min_confidence else 0.0
+
+            if best_seg is None:
+                # No candidate cleared the hard constraints (e.g. only 1 segment
+                # and it equals prev). Relax the no-repeat rule as last resort.
+                for seg in segments_data:
+                    if seg.get("single_use") and seg["id"] in _used_single_use_ids:
+                        continue
+                    if group_constraint is not None and seg.get("product_group") != group_constraint:
+                        continue
+                    best_seg = seg
+                    break
+                if best_seg is None and segments_data:
+                    best_seg = segments_data[0]
+
+            if best_seg is None:
+                logger.warning("No segment matched for SRT entry %d: %s", idx, srt_text[:80])
+                matches.append(MatchResult(
+                    srt_index=idx, srt_text=srt_text, srt_start=srt_start, srt_end=srt_end,
+                    segment_id=None, segment_keywords=[], matched_keyword=None, confidence=0.0,
+                ))
+                continue
+
+            # --- Shuffle preset: scatter near-ties by seeded RNG ---
+            if shuffle_rng is not None and best_score is not None:
+                near = []
+                for seg in segments_data:
+                    sid = seg["id"]
+                    if group_constraint is not None and seg.get("product_group") != group_constraint:
+                        continue
+                    if seg.get("single_use") and sid in _used_single_use_ids:
+                        continue
+                    if n > 1 and sid == prev_segment_id:
+                        continue
+                    affinity, kw = _keyword_affinity(seg, srt_text_lower, words, group_constraint)
+                    kw_term = affinity if affinity >= min_confidence else 0.0
+                    last = last_used.get(sid)
+                    recency = 1.0 if last is None else min(1.0, (idx - last) / max(2, n))
+                    same_src = (prev_source_video_id is not None
+                                and seg.get("source_video_id") == prev_source_video_id)
+                    diversity = 0.0 if same_src else 1.0
+                    overlap = 1.0 if (same_src and prev_segment_start is not None
+                                      and prev_segment_end is not None
+                                      and seg.get("start_time", 0.0) < prev_segment_end
+                                      and prev_segment_start < seg.get("end_time", 0.0)) else 0.0
+                    avoided = 1.0 if sid in _avoid_ids else 0.0
+                    score = (w_kw * kw_term + w_rec * recency + w_div * diversity
+                             - w_ovl * overlap - w_avoid * avoided)
+                    if score >= best_score - _SHUFFLE_EPSILON:
+                        near.append((seg, kw if affinity >= min_confidence else None,
+                                     affinity if affinity >= min_confidence else 0.0))
+                if len(near) > 1:
+                    near.sort(key=lambda t: t[0]["id"])  # stable order before seeded pick
+                    best_seg, best_kw, best_conf = shuffle_rng.choice(near)
+
+            sid = best_seg["id"]
+            seg_group = best_seg.get("product_group")
+            is_auto = best_kw is None
+            if best_kw is not None:
+                keyword_matched += 1
+            else:
+                auto_filled += 1
+
+            # Build explanation from the winning terms (F5).
+            expl_parts = []
+            if best_kw is not None:
+                expl_parts.append(f"keyword '{best_kw}' matched ({best_conf:.2f})")
+            last = last_used.get(sid)
+            if last is None:
+                expl_parts.append("never used before")
+            else:
+                expl_parts.append(f"unused for {idx - last} phrases")
+            if prev_source_video_id is not None:
+                if best_seg.get("source_video_id") != prev_source_video_id:
+                    expl_parts.append("different source than previous")
+                else:
+                    expl_parts.append("same source as previous")
+            if sid in _avoid_ids:
+                expl_parts.append("(deprioritized cross-variant)")
+            explanation = "; ".join(expl_parts)
+
+            # Record ledger + single_use before advancing prev-state.
+            last_used[sid] = idx
+            if best_seg.get("single_use"):
+                _used_single_use_ids.add(sid)
+            if seg_group:
+                current_product_group = seg_group
+
+            matches.append(MatchResult(
+                srt_index=idx, srt_text=srt_text, srt_start=srt_start, srt_end=srt_end,
+                segment_id=sid,
+                segment_keywords=best_seg.get("keywords") or [],
+                matched_keyword=best_kw, confidence=best_conf, is_auto_filled=is_auto,
+                product_group=seg_group,
+                source_video_id=best_seg.get("source_video_id"),
+                segment_start_time=best_seg.get("start_time"),
+                segment_end_time=best_seg.get("end_time"),
+                thumbnail_path=best_seg.get("thumbnail_path"),
+                transforms=best_seg.get("transforms"),
+                explanation=explanation, pinned=False,
+            ))
+            prev_segment_id = sid
+            prev_source_video_id = best_seg.get("source_video_id")
+            prev_segment_start = best_seg.get("start_time")
+            prev_segment_end = best_seg.get("end_time")
 
         logger.info(
-            f"Segment allocation: {keyword_matched} keyword-matched, "
-            f"{auto_filled} round-robin auto-filled, "
-            f"{len(matches)} total (variant={variant_index})"
+            "Segment allocation [%s]: %d keyword-matched, %d scored auto-fill, "
+            "%d pinned, %d total (variant=%d)",
+            preset, keyword_matched, auto_filled, pinned_count, len(matches), variant_index,
         )
 
         return matches
@@ -938,7 +869,7 @@ class AssemblyService:
         variant_index: int = 0,
         min_segment_duration: float = 3.0,
         ultra_rapid_intro: bool = True
-    ) -> List[TimelineEntry]:
+    ) -> Tuple[List[TimelineEntry], float]:
         """
         Build video timeline from match results.
 
@@ -954,13 +885,47 @@ class AssemblyService:
                                  duration for that entry.
 
         Returns:
-            List of TimelineEntry objects
+            (timeline, intro_offset_sec) — intro_offset_sec is the total duration
+            of the ultra-rapid intro prepended before the body (0.0 when disabled).
+            The body starts at t=intro_offset_sec, so callers must shift the SRT
+            and delay the audio by this amount to keep A/V/subtitles in sync (F1).
         """
         timeline = []
 
+        # F3: probe each source video's real duration once, cached per path, so
+        # merge/gap-fill never extend an entry past EOF (which would produce a
+        # short clip and shift everything after it).
+        _duration_cache: Dict[str, float] = {}
+
+        def _real_duration(path: Optional[str]) -> Optional[float]:
+            if not path:
+                return None
+            if path in _duration_cache:
+                return _duration_cache[path]
+            dur = None
+            try:
+                probe = safe_ffmpeg_run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", path],
+                    timeout=30, operation="ffprobe source duration (timeline)",
+                )
+                if probe.returncode == 0 and probe.stdout.strip():
+                    dur = float(probe.stdout.strip())
+            except Exception:
+                dur = None
+            _duration_cache[path] = dur
+            return dur
+
+        def _clamp_end(path: Optional[str], start: float, desired_end: float) -> float:
+            """Clamp desired_end to the source's real length (F3)."""
+            real = _real_duration(path)
+            if real is not None and desired_end > real:
+                return max(start, real)
+            return desired_end
+
         if not match_results:
             logger.warning("No SRT entries to build timeline from")
-            return timeline
+            return timeline, 0.0
 
         # Build segment lookup
         segment_lookup = {seg["id"]: seg for seg in segments_data}
@@ -1107,22 +1072,19 @@ class AssemblyService:
             segment_end = segment.get("end_time", segment_start + needed_duration)
             segment_duration = segment_end - segment_start
 
-            # Trim or use segment at its real duration
+            # F2: the timeline entry ALWAYS occupies exactly needed_duration so
+            # video time never falls behind audio/SRT. If the source span is
+            # shorter, keep end_time at the real segment end (clamped to EOF) and
+            # let the extraction layer loop/hold to fill the slot.
             if segment_duration >= needed_duration:
-                # Segment is long enough, trim it
                 use_end = segment_start + needed_duration
-                use_duration = needed_duration
             else:
-                # Segment is too short — use it as-is at its real duration
-                # instead of looping it (which produces visible repetition).
-                # The next SRT entry will bring the next segment naturally,
-                # and the end-of-timeline gap code handles any shortfall.
-                use_end = segment_end
-                use_duration = segment_duration
+                use_end = _clamp_end(source_video_path, segment_start, segment_end)
                 logger.info(
                     f"  timeline[{idx}]: segment short ({segment_duration:.2f}s < "
-                    f"{needed_duration:.2f}s), using real duration — no loop"
+                    f"{needed_duration:.2f}s) — slot held at {needed_duration:.2f}s (loop-fill)"
                 )
+            use_duration = needed_duration
 
             timeline_entry = TimelineEntry(
                 source_video_path=source_video_path,
@@ -1131,6 +1093,7 @@ class AssemblyService:
                 timeline_start=current_timeline_pos,
                 timeline_duration=use_duration,
                 transforms=segment.get("transforms"),
+                pinned=getattr(match, "pinned", False),
             )
             timeline.append(timeline_entry)
             current_timeline_pos += use_duration
@@ -1166,7 +1129,8 @@ class AssemblyService:
                     if alt_segments:
                         alt = max(alt_segments, key=lambda s: s.get("end_time", 0) - s.get("start_time", 0))
                         alt_start = alt.get("start_time", 0.0)
-                        alt_end = alt.get("end_time", alt_start + gap)
+                        # F3: clamp to source EOF; loop-fill covers any shortfall.
+                        alt_end = _clamp_end(alt.get("source_video_path"), alt_start, alt.get("end_time", alt_start + gap))
                         timeline.append(TimelineEntry(
                             source_video_path=alt.get("source_video_path"),
                             start_time=alt_start,
@@ -1177,24 +1141,28 @@ class AssemblyService:
                         ))
                         logger.info(f"Gap fill: added diverse segment instead of extending last entry")
                     else:
-                        # No alternative — extend last entry
+                        # No alternative — extend last entry (clamped to EOF, F3)
                         timeline[-1] = TimelineEntry(
                             source_video_path=last_entry.source_video_path,
                             start_time=last_entry.start_time,
-                            end_time=last_entry.start_time + last_entry.timeline_duration + gap,
+                            end_time=_clamp_end(last_entry.source_video_path, last_entry.start_time,
+                                                last_entry.start_time + last_entry.timeline_duration + gap),
                             timeline_start=last_entry.timeline_start,
                             timeline_duration=last_entry.timeline_duration + gap,
                             transforms=last_entry.transforms,
+                            pinned=last_entry.pinned,
                         )
                 else:
-                    # Small gap or no segments — extend the last entry
+                    # Small gap or no segments — extend the last entry (clamped, F3)
                     timeline[-1] = TimelineEntry(
                         source_video_path=last_entry.source_video_path,
                         start_time=last_entry.start_time,
-                        end_time=last_entry.start_time + last_entry.timeline_duration + gap,
+                        end_time=_clamp_end(last_entry.source_video_path, last_entry.start_time,
+                                            last_entry.start_time + last_entry.timeline_duration + gap),
                         timeline_start=last_entry.timeline_start,
                         timeline_duration=last_entry.timeline_duration + gap,
                         transforms=last_entry.transforms,
+                        pinned=last_entry.pinned,
                     )
             elif segments_data:
                 # Fallback: no timeline entries yet, use first available segment
@@ -1205,7 +1173,7 @@ class AssemblyService:
                 gap_entry = TimelineEntry(
                     source_video_path=source_video_path,
                     start_time=segment_start,
-                    end_time=min(segment_end, segment_start + gap),
+                    end_time=_clamp_end(source_video_path, segment_start, min(segment_end, segment_start + gap)),
                     timeline_start=current_timeline_pos,
                     timeline_duration=gap,
                 )
@@ -1249,13 +1217,19 @@ class AssemblyService:
                 accumulated_duration = current.timeline_duration
                 last_merged_idx = i
 
-                # Absorb following entries while under minimum
-                while accumulated_duration < min_segment_duration and last_merged_idx + 1 < len(timeline):
-                    last_merged_idx += 1
-                    # Skip zero-duration entries in accumulation
-                    if timeline[last_merged_idx].timeline_duration <= 0.001:
-                        continue
-                    accumulated_duration += timeline[last_merged_idx].timeline_duration
+                # F6: a pinned entry never merges — it stays its own group at its
+                # own duration, and it never absorbs following entries.
+                if not current.pinned:
+                    # Absorb following entries while under minimum, but stop before
+                    # a pinned entry (it must start its own group).
+                    while accumulated_duration < min_segment_duration and last_merged_idx + 1 < len(timeline):
+                        if timeline[last_merged_idx + 1].pinned:
+                            break
+                        last_merged_idx += 1
+                        # Skip zero-duration entries in accumulation
+                        if timeline[last_merged_idx].timeline_duration <= 0.001:
+                            continue
+                        accumulated_duration += timeline[last_merged_idx].timeline_duration
 
                 # Pick representative: avoid any source_video_path used in the
                 # last DIVERSITY_WINDOW groups.  Compare by path only (not exact
@@ -1271,11 +1245,16 @@ class AssemblyService:
                     i = last_merged_idx + 1
                     continue
 
+                # F6: if the group contains a pinned entry, it MUST be the
+                # representative — the user's chosen clip cannot be swapped out.
+                _pinned_in_group = [e for e in sub_entries if e.pinned]
                 diverse_candidates = [
                     e for e in sub_entries
                     if e.source_video_path not in recent_paths
                 ]
-                if diverse_candidates:
+                if _pinned_in_group:
+                    representative = _pinned_in_group[0]
+                elif diverse_candidates:
                     # Among diverse candidates, pick longest
                     representative = max(diverse_candidates, key=lambda e: e.timeline_duration)
                 elif len(recent_paths) > 1:
@@ -1296,11 +1275,12 @@ class AssemblyService:
                 recent_reps.append(representative.source_video_path)
 
                 # Extend end_time to cover accumulated_duration so FFmpeg doesn't
-                # loop a short clip.  If the source video is shorter than this,
-                # the loop fallback in assemble_video still handles it.
-                extended_end = max(
-                    representative.end_time,
-                    representative.start_time + accumulated_duration,
+                # loop a short clip — but F3: clamp to the source's real length so
+                # extraction never reads past EOF (the loop-fill covers shortfall).
+                extended_end = _clamp_end(
+                    representative.source_video_path,
+                    representative.start_time,
+                    max(representative.end_time, representative.start_time + accumulated_duration),
                 )
                 merged.append(TimelineEntry(
                     source_video_path=representative.source_video_path,
@@ -1309,23 +1289,29 @@ class AssemblyService:
                     timeline_start=current.timeline_start,
                     timeline_duration=accumulated_duration,
                     transforms=representative.transforms,
+                    pinned=representative.pinned,
                 ))
 
                 i = last_merged_idx + 1
 
             # If the last entry is shorter than minimum, absorb it into
-            # the previous entry — but only if prev is a body entry (not intro)
-            if len(merged) >= 2 and merged[-1].timeline_duration < min_segment_duration and len(merged) - 1 >= intro_entry_count:
+            # the previous entry — but only if prev is a body entry (not intro).
+            # F6: never absorb when either entry is pinned (would drop the user's clip).
+            if (len(merged) >= 2 and merged[-1].timeline_duration < min_segment_duration
+                    and len(merged) - 1 >= intro_entry_count
+                    and not merged[-1].pinned and not merged[-2].pinned):
                 last = merged.pop()
                 prev = merged[-1]
                 combined_duration = prev.timeline_duration + last.timeline_duration
                 merged[-1] = TimelineEntry(
                     source_video_path=prev.source_video_path,
                     start_time=prev.start_time,
-                    end_time=max(prev.end_time, prev.start_time + combined_duration),
+                    end_time=_clamp_end(prev.source_video_path, prev.start_time,
+                                        max(prev.end_time, prev.start_time + combined_duration)),
                     timeline_start=prev.timeline_start,
                     timeline_duration=combined_duration,
                     transforms=prev.transforms,
+                    pinned=prev.pinned,
                 )
                 logger.info(
                     f"Absorbed short last entry ({last.timeline_duration:.2f}s) into previous "
@@ -1367,6 +1353,9 @@ class AssemblyService:
 
             dedup_swaps = 0
             for idx in range(intro_entry_count + 1, len(merged)):
+                # F6: never swap a pinned entry — it's the user's explicit choice.
+                if merged[idx].pinned:
+                    continue
                 # Collect clip keys used in the recent window
                 window_start = max(intro_entry_count, idx - DEDUP_WINDOW)
                 recent_clip_keys = {_clip_key(merged[j]) for j in range(window_start, idx)}
@@ -1410,9 +1399,11 @@ class AssemblyService:
                             break
 
                 if best_replacement:
-                    extended_end = max(
-                        best_replacement.end_time,
-                        best_replacement.start_time + merged[idx].timeline_duration,
+                    extended_end = _clamp_end(
+                        best_replacement.source_video_path,
+                        best_replacement.start_time,
+                        max(best_replacement.end_time,
+                            best_replacement.start_time + merged[idx].timeline_duration),
                     )
                     merged[idx] = TimelineEntry(
                         source_video_path=best_replacement.source_video_path,
@@ -1421,6 +1412,7 @@ class AssemblyService:
                         timeline_start=merged[idx].timeline_start,
                         timeline_duration=merged[idx].timeline_duration,
                         transforms=best_replacement.transforms,
+                        pinned=merged[idx].pinned,
                     )
                     dedup_swaps += 1
             if dedup_swaps:
@@ -1437,15 +1429,25 @@ class AssemblyService:
                         timeline_start=cumulative,
                         timeline_duration=merged[idx_m].timeline_duration,
                         transforms=merged[idx_m].transforms,
+                        pinned=merged[idx_m].pinned,
                     )
                 cumulative += merged[idx_m].timeline_duration
 
             timeline = merged
 
-        total_duration = sum(e.timeline_duration for e in timeline)
-        logger.info(f"Built timeline with {len(timeline)} entries, total duration: {total_duration:.2f}s")
+        # F1: intro_offset_sec = total duration of the prepended intro (the body
+        # begins at this timeline position). Callers shift SRT + delay audio by it.
+        intro_offset_sec = sum(
+            e.timeline_duration for e in timeline[:intro_entry_count]
+        ) if intro_entry_count else 0.0
 
-        return timeline
+        total_duration = sum(e.timeline_duration for e in timeline)
+        logger.info(
+            f"Built timeline with {len(timeline)} entries, total duration: {total_duration:.2f}s, "
+            f"intro_offset={intro_offset_sec:.2f}s"
+        )
+
+        return timeline, intro_offset_sec
 
     async def assemble_video(
         self,
@@ -1822,6 +1824,8 @@ class AssemblyService:
         output_created_at: Optional[datetime] = None,
         force_cpu: bool = False,
         strict_segments: bool = True,
+        preset: str = "balanced",
+        pinned_assignments: Optional[Dict[int, str]] = None,
     ) -> Path:
         """
         Full pipeline: TTS -> SRT -> match -> timeline -> assemble -> render.
@@ -2113,6 +2117,8 @@ class AssemblyService:
                         segment_end_time=m.get("segment_end_time"),
                         thumbnail_path=m.get("thumbnail_path"),
                         transforms=m.get("transforms"),
+                        explanation=m.get("explanation"),
+                        pinned=m.get("pinned", False),  # F6: honor user lock
                     )
                     for m in match_overrides
                 ]
@@ -2150,8 +2156,10 @@ class AssemblyService:
                     for g in group_order:
                         indices = grouped[g]
                         entries = [_original_matches[i] for i in indices]
-                        # Representative: longest entry (matches build_timeline strategy)
-                        rep = max(entries, key=lambda e: e.srt_end - e.srt_start)
+                        # F6: a pinned entry MUST be the representative so the
+                        # user's chosen clip survives collapse; else longest entry.
+                        _pinned = [e for e in entries if getattr(e, "pinned", False)]
+                        rep = _pinned[0] if _pinned else max(entries, key=lambda e: e.srt_end - e.srt_start)
                         collapsed.append(MatchResult(
                             srt_index=rep.srt_index,
                             srt_text=" ".join(e.srt_text for e in entries if e.srt_text),
@@ -2168,9 +2176,25 @@ class AssemblyService:
                             segment_end_time=rep.segment_end_time,
                             thumbnail_path=rep.thumbnail_path,
                             transforms=rep.transforms,
+                            explanation=rep.explanation,
+                            pinned=bool(_pinned),
                         ))
-                        # Use duration override from first entry in group
-                        group_dur_ov = match_overrides[indices[0]].get("duration_override")
+                        # F7: collapsed override = SUM of the group's overrides
+                        # (entries without an explicit override count at their
+                        # natural SRT duration), so total requested time is preserved.
+                        _any_override = any(
+                            match_overrides[i].get("duration_override") is not None for i in indices
+                        )
+                        if _any_override:
+                            group_dur_ov = 0.0
+                            for i in indices:
+                                ov = match_overrides[i].get("duration_override")
+                                if ov is not None:
+                                    group_dur_ov += ov
+                                else:
+                                    group_dur_ov += (_original_matches[i].srt_end - _original_matches[i].srt_start)
+                        else:
+                            group_dur_ov = None
                         collapsed_dur_overrides.append(group_dur_ov)
 
                     match_results = collapsed
@@ -2200,7 +2224,9 @@ class AssemblyService:
                     min_confidence=0.3,
                     variant_index=variant_index,
                     srt_product_groups=srt_product_groups,
-                    avoid_segment_ids=avoid_segment_ids
+                    avoid_segment_ids=avoid_segment_ids,
+                    preset=preset,
+                    pinned_assignments=pinned_assignments,
                 )
                 duration_overrides = None
 
@@ -2213,7 +2239,7 @@ class AssemblyService:
             # so the merge pass in build_timeline won't change them further.
             # Ultra-rapid intro is passed through so it appears in the render
             # just as it did in the preview.
-            timeline = self.build_timeline(
+            timeline, intro_offset_sec = self.build_timeline(
                 match_results=match_results,
                 segments_data=segments_data,
                 audio_duration=audio_duration,
@@ -2234,6 +2260,15 @@ class AssemblyService:
                     f"timeline_dur={t_entry.timeline_duration:.2f}s "
                     f"{'LOOP' if will_loop else 'ok'}"
                 )
+
+            # F1: the ultra-rapid intro pushes the body forward by intro_offset_sec,
+            # but the SRT/audio start at t=0. Shift the burned-in SRT and (below)
+            # delay the audio track by the same offset so captions/voiceover stay
+            # aligned with the body. The library-saved SRT content stays unshifted.
+            if intro_offset_sec > 0:
+                with open(srt_path, 'w', encoding='utf-8') as f:
+                    f.write(shift_srt(sanitize_srt_full(srt_content), intro_offset_sec))
+                logger.info(f"Shifted burned-in SRT by intro offset {intro_offset_sec:.2f}s")
 
             # Step 7: Assemble video
             logger.info("Step 7/7: Assembling and rendering final video")
@@ -2299,6 +2334,7 @@ class AssemblyService:
                 saturation=saturation,
                 _preview_mode=_preview_mode,
                 force_cpu=force_cpu,
+                intro_offset_sec=intro_offset_sec,  # F1: delay audio by intro length
                 # Real encode progress fills the 85%->99% band (replaces the
                 # fake freeze at 85%). _report no-ops when no on_progress consumer.
                 on_encode_progress=(
@@ -2327,6 +2363,8 @@ class AssemblyService:
                     "segment_end_time": mr.segment_end_time,
                     "thumbnail_path": mr.thumbnail_path,
                     "transforms": mr.transforms,
+                    "explanation": mr.explanation,
+                    "pinned": mr.pinned,
                 }
                 for mr in match_results
             ]
@@ -2473,7 +2511,8 @@ class AssemblyService:
         avoid_segment_ids: Optional[set] = None,
         ultra_rapid_intro: bool = True,
         reuse_srt_content: Optional[str] = None,
-        subtitle_settings: Optional[dict] = None
+        subtitle_settings: Optional[dict] = None,
+        preset: str = "balanced"
     ) -> dict:
         """
         Preview-only: TTS -> SRT -> match -> timeline (no rendering).
@@ -2603,10 +2642,11 @@ class AssemblyService:
             min_confidence=0.3,
             variant_index=variant_index,
             srt_product_groups=srt_product_groups,
-            avoid_segment_ids=avoid_segment_ids
+            avoid_segment_ids=avoid_segment_ids,
+            preset=preset,
         )
 
-        timeline = self.build_timeline(
+        timeline, _intro_offset_sec = self.build_timeline(
             match_results=match_results,
             segments_data=segments_data,
             audio_duration=audio_duration,
@@ -2653,6 +2693,8 @@ class AssemblyService:
                 "segment_end_time": m.segment_end_time,
                 "thumbnail_path": m.thumbnail_path,
                 "transforms": m.transforms,
+                "explanation": m.explanation,
+                "pinned": m.pinned,
             }
             for m in match_results
         ]

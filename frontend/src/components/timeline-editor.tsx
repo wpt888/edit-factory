@@ -33,6 +33,7 @@ import {
   ChevronDown,
   Loader2,
   Maximize2,
+  Pin,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import { formatTimeShort as formatTime } from "@/lib/utils";
@@ -72,6 +73,8 @@ export interface MatchPreview {
   merge_group?: number;
   merge_group_duration?: number;
   transforms?: Record<string, unknown> | null;
+  explanation?: string;  // Human-readable reason this segment was assigned
+  pinned?: boolean;  // User manually locked this assignment — assembly won't reassign it
 }
 
 export interface SegmentOption {
@@ -921,6 +924,7 @@ export function TimelineEditor({
       product_group: segment.product_group,
       transforms: segment.transforms,
       is_auto_filled: false,
+      pinned: true,
     };
 
     const updatedMatches = matches.map((match, idx) => {
@@ -986,6 +990,7 @@ export function TimelineEditor({
       segment_end_time: updated[dragIndex].segment_end_time,
       thumbnail_path: updated[dragIndex].thumbnail_path,
       transforms: updated[dragIndex].transforms,
+      pinned: true,
     };
     const dropSegment = {
       segment_id: updated[dropIndex].segment_id,
@@ -999,6 +1004,7 @@ export function TimelineEditor({
       segment_end_time: updated[dropIndex].segment_end_time,
       thumbnail_path: updated[dropIndex].thumbnail_path,
       transforms: updated[dropIndex].transforms,
+      pinned: true,
     };
 
     updated[dragIndex] = { ...updated[dragIndex], ...dropSegment };
@@ -1023,6 +1029,16 @@ export function TimelineEditor({
     const newDuration = Math.max(0.5, Math.min(10, currentDuration + delta));
     const updated = [...matches];
     updated[index] = { ...updated[index], duration_override: newDuration };
+    onMatchesChange(updated);
+  };
+
+  // --- Pin handlers ---
+  // Manual swaps/drags pin an assignment so re-running assembly won't touch it.
+  // Users can click the pin indicator to release it back to auto-assignment.
+
+  const handleTogglePin = (index: number) => {
+    const updated = [...matches];
+    updated[index] = { ...updated[index], pinned: !updated[index].pinned };
     onMatchesChange(updated);
   };
 
@@ -1629,11 +1645,15 @@ export function TimelineEditor({
                   // Use first match for color/status
                   const isMatched = firstMatch.segment_id !== null && firstMatch.confidence > 0;
                   const isAutoFilled = firstMatch.is_auto_filled === true && firstMatch.segment_id !== null;
+                  const isPinned = firstMatch.pinned === true;
+                  const isLowConfidence = isMatched && !isPinned && firstMatch.confidence < 0.5;
                   const isSelected = group.matchIndices.includes(selectedBlockIndex ?? -1);
                   const isPreviewHighlighted = isPreviewActive && group.matchIndices.includes(previewActiveIndex);
 
                   const borderColor = isMatched
-                    ? "border-green-500"
+                    ? isLowConfidence
+                      ? "border-amber-400"
+                      : "border-green-500"
                     : isAutoFilled
                     ? "border-muted-foreground"
                     : "border-amber-500";
@@ -1641,13 +1661,16 @@ export function TimelineEditor({
                   const bgColor = isSelected
                     ? "bg-accent"
                     : isMatched
-                    ? "bg-green-50 dark:bg-green-950/20"
+                    ? isLowConfidence
+                      ? "bg-amber-50/60 dark:bg-amber-950/10"
+                      : "bg-green-50 dark:bg-green-950/20"
                     : isAutoFilled
                     ? "bg-muted/50"
                     : "bg-amber-50 dark:bg-amber-950/20";
 
-                  // Combine texts for tooltip
-                  const groupTexts = group.matchIndices.map(i => matches[i].srt_text).join(" ");
+                  // Combine texts for tooltip, plus the assembly explanation if present
+                  const groupTexts = group.matchIndices.map(i => matches[i].srt_text).join(" ")
+                    + (firstMatch.explanation ? `\n\n${firstMatch.explanation}` : "");
 
                   elements.push(
                     <div
@@ -1687,6 +1710,17 @@ export function TimelineEditor({
                           className="absolute inset-0 w-full h-full object-cover opacity-40"
                           loading="lazy"
                         />
+                      )}
+                      {/* Pin indicator — manually assigned, click to unpin */}
+                      {isPinned && (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); handleTogglePin(firstIdx); }}
+                          className="absolute top-0.5 right-0.5 z-20 text-primary hover:text-muted-foreground transition-colors"
+                          title="Pinned — manually assigned, click to unpin"
+                        >
+                          <Pin className="h-3 w-3 fill-current" />
+                        </button>
                       )}
                       {/* Content overlay */}
                       <div className="relative z-10 flex flex-col items-center justify-center h-full px-1 py-1 text-center">
@@ -1995,6 +2029,8 @@ export function TimelineEditor({
             {matches.map((match, idx) => {
               const isMatched = match.segment_id !== null && match.confidence > 0;
               const isAutoFilled = match.is_auto_filled === true && match.segment_id !== null;
+              const isPinned = match.pinned === true;
+              const isLowConfidence = isMatched && !isPinned && match.confidence < 0.5;
               const isDragging = dragIndex === idx;
               const isDragOver = dragOverIndex === idx && dragIndex !== idx;
               const displayText =
@@ -2029,7 +2065,9 @@ export function TimelineEditor({
                   onDragEnd={handleDragEnd}
                   className={`group flex items-center gap-3 px-3 py-2.5 min-h-[48px] border-l-4 transition-colors select-none ${
                     isMatched
-                      ? "border-l-green-500 bg-green-50 dark:bg-green-950/20"
+                      ? isLowConfidence
+                        ? "border-l-amber-400 bg-amber-50/60 dark:bg-amber-950/10"
+                        : "border-l-green-500 bg-green-50 dark:bg-green-950/20"
                       : isAutoFilled
                       ? "border-l-muted-foreground bg-muted/50"
                       : "border-l-amber-500 bg-amber-50 dark:bg-amber-950/20"
@@ -2120,14 +2158,32 @@ export function TimelineEditor({
                     <div className="flex items-center gap-2">
                       {isMatched ? (
                         <>
+                          {isPinned && (
+                            <button
+                              type="button"
+                              onClick={() => handleTogglePin(idx)}
+                              className="text-primary hover:text-muted-foreground transition-colors flex-shrink-0"
+                              title="Pinned — manually assigned, click to unpin"
+                            >
+                              <Pin className="h-3 w-3 fill-current" />
+                            </button>
+                          )}
                           <Badge
                             variant="secondary"
                             className="text-xs bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200 max-w-[90px]"
+                            title={match.explanation}
                           >
                             <CheckCircle className="h-3 w-3 mr-1 flex-shrink-0" />
                             <span className="truncate">{match.matched_keyword}</span>
                           </Badge>
-                          <span className="text-xs text-green-700 dark:text-green-400 font-medium">
+                          <span
+                            className={`text-xs font-medium ${
+                              isLowConfidence
+                                ? "text-amber-600 dark:text-amber-400"
+                                : "text-green-700 dark:text-green-400"
+                            }`}
+                            title={match.explanation ?? (isLowConfidence ? "Low-confidence match" : undefined)}
+                          >
                             {Math.round(match.confidence * 100)}%
                           </span>
                           {match.product_group && (
@@ -2148,14 +2204,28 @@ export function TimelineEditor({
                         </>
                       ) : isAutoFilled ? (
                         <>
+                          {isPinned && (
+                            <button
+                              type="button"
+                              onClick={() => handleTogglePin(idx)}
+                              className="text-primary hover:text-muted-foreground transition-colors flex-shrink-0"
+                              title="Pinned — manually assigned, click to unpin"
+                            >
+                              <Pin className="h-3 w-3 fill-current" />
+                            </button>
+                          )}
                           <Badge
                             variant="secondary"
                             className="text-xs border-primary/25 bg-primary/10 text-foreground max-w-[90px]"
+                            title={match.explanation}
                           >
                             <Film className="h-3 w-3 mr-1 flex-shrink-0" />
                             <span className="truncate">{match.segment_keywords[0] ?? "auto"}</span>
                           </Badge>
-                          <span className="text-xs text-primary font-medium">
+                          <span
+                            className="text-xs text-primary font-medium cursor-help"
+                            title={match.explanation ?? "Auto-filled from the segment pool (no keyword match)"}
+                          >
                             auto
                           </span>
                           <Button

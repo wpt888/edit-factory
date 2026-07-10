@@ -192,6 +192,11 @@ function PipelinePage() {
   const [wordsPerSubtitle, setWordsPerSubtitle] = useState(2);
   const [minSegmentDuration, setMinSegmentDuration] = useState(3.0);
   const [ultraRapidIntro, setUltraRapidIntro] = useState(true);
+  // Assembly preset — how library segments get auto-assigned to phrases.
+  // Distinct from `presetName` (export aspect ratio preset, e.g. TikTok).
+  const [assemblyPreset, setAssemblyPreset] = useState<
+    "keyword_strict" | "balanced" | "max_variety" | "shuffle"
+  >("balanced");
   const [voiceSettingsLoaded, setVoiceSettingsLoaded] = useState(false);
   // BUG-FE-25: Initialize as empty to avoid stale defaults; the sync useEffect below populates it
   const voiceSettingsValuesRef = useRef<Record<string, unknown>>({});
@@ -323,6 +328,9 @@ function PipelinePage() {
   const [groupTagSearch, setGroupTagSearch] = useState("");
   const sourceSelectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipelineIdRef = useRef<string | null>(null);
+  // Always-current ref to handlePreviewAll, so the debounced assembly-settings
+  // re-fetch (scheduleReassemblePreviews) never closes over stale state.
+  const handlePreviewAllRef = useRef<(() => Promise<void>) | null>(null);
   // initialSourceSelectionDone ref removed — no longer auto-selecting source videos
 
   // Product groups for tag insertion (fetched when source videos are selected)
@@ -1418,6 +1426,7 @@ function PipelinePage() {
             min_segment_duration: minSegmentDuration,
             ultra_rapid_intro: ultraRapidIntro,
             visual_version: previewCard.visualVersion,
+            preset: assemblyPreset,
           }, { timeout: 300_000, signal: abortController.signal }); // 5 min — TTS generation + SRT can be slow
 
           if (abortController.signal.aborted || !isMountedRef.current) { setPreviewingIndex(null); return; }
@@ -1484,6 +1493,19 @@ function PipelinePage() {
       if (isMountedRef.current) setPreviewingIndex(null);
     }
   };
+  handlePreviewAllRef.current = handlePreviewAll;
+
+  // Debounced re-fetch of all previews — used when assembly controls (preset,
+  // min segment duration, rapid intro) change, so a slider drag doesn't fire
+  // a preview request per tick.
+  const reassemblePreviewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleReassemblePreviews = useCallback(() => {
+    if (reassemblePreviewTimer.current) clearTimeout(reassemblePreviewTimer.current);
+    reassemblePreviewTimer.current = setTimeout(() => {
+      reassemblePreviewTimer.current = null;
+      handlePreviewAllRef.current?.();
+    }, 500);
+  }, []);
 
   const handleMetaMultiplicationChange = useCallback(async (checked: boolean) => {
     setMetaMultiplication(checked);
@@ -1631,6 +1653,7 @@ function PipelinePage() {
       words_per_subtitle: wordsPerSubtitle,
       min_segment_duration: minSegmentDuration,
       ultra_rapid_intro: ultraRapidIntro,
+      preset: assemblyPreset,
       meta_multiplication: metaMultiplication,
       // Flat fields = DEFAULT subtitle style. Backend uses these for any
       // variant key that has no entry in subtitle_settings_by_key.
@@ -2755,6 +2778,10 @@ function PipelinePage() {
       if (msd !== null) setMinSegmentDuration(parseFloat(msd));
       const uri = localStorage.getItem("ef_ultra_rapid_intro");
       if (uri !== null) setUltraRapidIntro(uri === "true");
+      const preset = localStorage.getItem("ef_assembly_preset");
+      if (preset === "keyword_strict" || preset === "balanced" || preset === "max_variety" || preset === "shuffle") {
+        setAssemblyPreset(preset);
+      }
       // If no voice values were stored, hydration won't trigger a re-render,
       // so pre-mark as hydrated to avoid skipping the first real user change
       if (!hasVoiceValues) voiceSettingsHydrated.current = true;
@@ -2781,7 +2808,8 @@ function PipelinePage() {
     localStorage.setItem("ef_min_segment_duration", String(minSegmentDuration));
     localStorage.setItem("ef_ultra_rapid_intro", String(ultraRapidIntro));
     localStorage.setItem("ef_elevenlabs_model", elevenlabsModel);
-  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel]);
+    localStorage.setItem("ef_assembly_preset", assemblyPreset);
+  }, [voiceSettingsLoaded, voiceStability, voiceSimilarity, voiceStyle, voiceSpeed, voiceSpeakerBoost, wordsPerSubtitle, minSegmentDuration, ultraRapidIntro, elevenlabsModel, assemblyPreset]);
 
   // Debounced auto-save voice settings to profile.
   // FE-07: This uses a read-then-patch pattern (GET profile -> merge tts_settings -> PATCH)
@@ -3102,6 +3130,7 @@ function PipelinePage() {
         ultra_rapid_intro: ultraRapidIntro,
         visual_version: visualVersion,
         force_regenerate_tts: true,
+        preset: assemblyPreset,
       }, { timeout: 300_000 });
 
       const data = await res.json();
@@ -3378,6 +3407,9 @@ function PipelinePage() {
     setMinSegmentDuration,
     ultraRapidIntro,
     setUltraRapidIntro,
+    assemblyPreset,
+    setAssemblyPreset,
+    scheduleReassemblePreviews,
     approvedScripts,
     setApprovedScripts,
     pipelineId,

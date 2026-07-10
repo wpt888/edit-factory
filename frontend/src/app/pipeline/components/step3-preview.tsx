@@ -20,6 +20,8 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -162,8 +164,13 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     buildPipOverlaysForMatches,
     handlePreviewPlayerClose,
     minSegmentDuration,
+    setMinSegmentDuration,
     wordsPerSubtitle,
     ultraRapidIntro,
+    setUltraRapidIntro,
+    assemblyPreset,
+    setAssemblyPreset,
+    scheduleReassemblePreviews,
     savePresetName,
     setSavePresetName,
     savePresetError,
@@ -204,7 +211,7 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               <CardHeader>
                 <CardTitle className="text-lg">Render Settings</CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-5">
                 <div className="space-y-2">
                   <Label htmlFor="preset">Export Preset</Label>
                   <Select value={presetName} onValueChange={setPresetName}>
@@ -221,6 +228,82 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                       </SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+
+                {/* Assembly controls — how library segments get auto-assigned to phrases */}
+                <div className="space-y-2 pt-1 border-t">
+                  <Label htmlFor="assembly-preset" className="pt-3 inline-block">Assembly Preset</Label>
+                  <Select
+                    value={assemblyPreset}
+                    onValueChange={(v) => {
+                      setAssemblyPreset(v as typeof assemblyPreset);
+                      scheduleReassemblePreviews();
+                    }}
+                  >
+                    <SelectTrigger id="assembly-preset">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="keyword_strict" title="Only use segments whose keywords match the phrase — leaves phrases unmatched rather than guessing">
+                        Keyword strict
+                      </SelectItem>
+                      <SelectItem value="balanced" title="Match by keyword when possible, fall back to rotation for the rest — the default">
+                        Balanced
+                      </SelectItem>
+                      <SelectItem value="max_variety" title="Favor spreading usage across the whole segment pool, even for keyword matches">
+                        Max variety
+                      </SelectItem>
+                      <SelectItem value="shuffle" title="Randomize segment assignment per variant, for maximum A/B difference">
+                        Shuffle per variant
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {assemblyPreset === "keyword_strict" && "Only use segments whose keywords match the phrase — leaves phrases unmatched rather than guessing."}
+                    {assemblyPreset === "balanced" && "Match by keyword when possible, fall back to rotation for the rest — the default."}
+                    {assemblyPreset === "max_variety" && "Favor spreading usage across the whole segment pool, even for keyword matches."}
+                    {assemblyPreset === "shuffle" && "Randomize segment assignment per variant, for maximum A/B difference."}
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <Label htmlFor="min-shot-length">Min shot length</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Shortest a single library segment is allowed to be before merging.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 w-40">
+                    <Slider
+                      id="min-shot-length"
+                      min={1}
+                      max={6}
+                      step={0.5}
+                      value={[minSegmentDuration]}
+                      onValueChange={([v]) => setMinSegmentDuration(v)}
+                      onValueCommit={() => scheduleReassemblePreviews()}
+                    />
+                    <span className="text-xs font-mono tabular-nums w-8 text-right">
+                      {minSegmentDuration.toFixed(1)}s
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <Label htmlFor="rapid-intro">Rapid intro (2s)</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Force the first shot to a snappy 2-second cut regardless of min shot length.
+                    </p>
+                  </div>
+                  <Switch
+                    id="rapid-intro"
+                    checked={ultraRapidIntro}
+                    onCheckedChange={(checked) => {
+                      setUltraRapidIntro(checked);
+                      scheduleReassemblePreviews();
+                    }}
+                  />
                 </div>
               </CardContent>
             </Card>

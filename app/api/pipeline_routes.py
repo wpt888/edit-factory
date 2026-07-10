@@ -1495,6 +1495,8 @@ class MatchPreview(BaseModel):
     merge_group: Optional[int] = None
     merge_group_duration: Optional[float] = None
     transforms: Optional[dict] = None
+    explanation: Optional[str] = None  # F5: why this segment was picked
+    pinned: bool = False               # F6: user-locked assignment
 
 
 class PipelinePreviewResponse(BaseModel):
@@ -1561,6 +1563,8 @@ class PipelineRenderRequest(BaseModel):
     words_per_subtitle: int = Field(default=2, ge=1, le=20)
     # Minimum video segment duration (seconds) — groups short SRT phrases
     min_segment_duration: float = 3.0
+    # F8: segment-selection scoring preset (keyword_strict|balanced|max_variety|shuffle)
+    preset: Optional[str] = "balanced"
     # Ultra-rapid intro: 3-4 micro-segments at the start for hook effect
     ultra_rapid_intro: bool = True
     # Interstitial product image slides: variant_index -> list of slide configs
@@ -3147,6 +3151,7 @@ async def preview_variant(
     words_per_subtitle: int = Body(2, embed=True),
     min_segment_duration: float = Body(3.0, embed=True),
     ultra_rapid_intro: bool = Body(True, embed=True),
+    preset: str = Body("balanced", embed=True),  # F8: scoring preset
     visual_version: Optional[str] = Body(None, embed=True),
     force_regenerate_tts: bool = Body(False, embed=True)
 ):
@@ -3325,7 +3330,8 @@ async def preview_variant(
             min_segment_duration=min_segment_duration,
             avoid_segment_ids=avoid_ids if avoid_ids else None,
             ultra_rapid_intro=ultra_rapid_intro,
-            reuse_srt_content=reuse_srt_content
+            reuse_srt_content=reuse_srt_content,
+            preset=preset,
         )
 
         # Track which segments this variant used (for cross-variant deprioritization)
@@ -3385,6 +3391,8 @@ async def preview_variant(
                 merge_group=m.get("merge_group"),
                 merge_group_duration=m.get("merge_group_duration"),
                 transforms=m.get("transforms"),
+                explanation=m.get("explanation"),
+                pinned=m.get("pinned", False),
             )
             for m in preview_data.get("matches", [])
         ]
@@ -4091,6 +4099,7 @@ async def render_variants(
                         on_progress=on_progress,
                         max_words_per_phrase=render_request.words_per_subtitle,
                         min_segment_duration=render_request.min_segment_duration,
+                        preset=render_request.preset or "balanced",
                         ultra_rapid_intro=render_request.ultra_rapid_intro,
                         interstitial_slides=variant_interstitial_slides,
                         pip_overlays=variant_pip_overlays,
@@ -4363,9 +4372,12 @@ async def remake_variant(
 ):
     """Re-render a completed variant with the SAME voiceover but DIFFERENT video segments.
 
-    The frontend sends the current render settings (subtitle, encoding, etc.)
-    but match_overrides are ignored — the backend auto-matches with a strong
-    avoid set containing the variant's previous segments.
+    The frontend sends the current render settings (subtitle, encoding, etc.).
+    Full match_overrides are ignored (they may be stale after a script edit), so
+    the backend auto-matches with a strong avoid set containing the variant's
+    previous segments. F6: entries the user pinned in the saved preview ARE
+    honored — they're passed into the re-match as pinned_assignments keyed by
+    srt_index, so a locked clip survives a remake as long as that index exists.
     """
     # 1. Validate pipeline
     pipeline = _get_pipeline_or_load(pipeline_id)
@@ -4452,10 +4464,31 @@ async def remake_variant(
     except Exception as e:
         logger.warning(f"Failed to load segment usage for remake: {e}")
 
+    # F6: honor user-pinned matches from the saved preview. Full overrides are
+    # dropped (stale after script edits), but pinned entries keyed by srt_index
+    # are passed into the re-match so the locked clip survives.
+    remake_pinned_assignments: Dict[int, str] = {}
+    try:
+        _preview_key = _build_preview_key(vid, normalized_visual_version)
+        _saved_preview = (
+            pipeline.get("previews", {}).get(_preview_key)
+            or pipeline.get("previews", {}).get(vid)
+        )
+        _saved_matches = (
+            (_saved_preview or {}).get("preview_data", {}).get("matches", [])
+            if isinstance(_saved_preview, dict) else []
+        )
+        for _m in _saved_matches:
+            if _m.get("pinned") and _m.get("segment_id") and _m.get("srt_index") is not None:
+                remake_pinned_assignments[int(_m["srt_index"])] = _m["segment_id"]
+    except Exception as e:
+        logger.warning(f"Failed to load pinned matches for remake: {e}")
+
     logger.info(
         f"[Profile {profile.profile_id}] ═══ REMAKE START ═══ "
         f"pipeline={pipeline_id} variant={vid} "
         f"avoid_segments={len(remake_avoid_ids)} "
+        f"pinned={len(remake_pinned_assignments)} "
         f"(current_variant={len(current_segs)})"
     )
 
@@ -4582,6 +4615,8 @@ async def remake_variant(
                         on_progress=on_progress,
                         max_words_per_phrase=render_request.words_per_subtitle,
                         min_segment_duration=render_request.min_segment_duration,
+                        preset=render_request.preset or "balanced",
+                        pinned_assignments=remake_pinned_assignments or None,
                         ultra_rapid_intro=render_request.ultra_rapid_intro,
                         interstitial_slides=variant_interstitial_slides,
                         pip_overlays=variant_pip_overlays,

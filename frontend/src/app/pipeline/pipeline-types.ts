@@ -20,6 +20,8 @@ export interface MatchPreview {
   merge_group?: number;
   merge_group_duration?: number;
   transforms?: Record<string, unknown> | null;
+  explanation?: string;  // Human-readable reason this segment was assigned
+  pinned?: boolean;  // User manually locked this assignment — assembly won't reassign it
 }
 
 export interface PreviewData {
