@@ -248,6 +248,80 @@ export default function SettingsPage() {
     }
   }
 
+  // Blipost render fleet (this desktop renders the web account's clip jobs for free)
+  interface RenderStatus {
+    connected: boolean
+    running: boolean
+    state: string
+    currentJob?: string | null
+    processed: { jobId: string; clips: number; outcome: string }[]
+    nvenc: boolean
+  }
+  const [renderStatus, setRenderStatus] = useState<RenderStatus | null>(null)
+  const [pairCode, setPairCode] = useState("")
+  const [pairing, setPairing] = useState(false)
+  const [renderToggling, setRenderToggling] = useState(false)
+
+  const loadRenderStatus = useCallback(async () => {
+    if (!currentProfile) return
+    try {
+      const res = await apiGetWithRetry("/render/status")
+      setRenderStatus(await res.json())
+    } catch {
+      setRenderStatus(null)
+    }
+  }, [currentProfile])
+
+  useEffect(() => {
+    if (profileLoading || !currentProfile) return
+    loadRenderStatus()
+    // While the runner is on, poll so the status/processed list stays live.
+    const id = setInterval(loadRenderStatus, 5000)
+    return () => clearInterval(id)
+  }, [currentProfile, profileLoading, loadRenderStatus])
+
+  const handleRenderPair = async () => {
+    const code = pairCode.trim()
+    if (!code) {
+      toast.warning("Enter the pairing code from Blipost → Settings")
+      return
+    }
+    setPairing(true)
+    try {
+      const res = await apiPost("/render/pair", { code, deviceName: "" })
+      const data = await res.json()
+      setPairCode("")
+      toast.success(`Paired as "${data.deviceName}"`)
+      await loadRenderStatus()
+    } catch (error) {
+      handleApiError(error, "Could not pair this device")
+    } finally {
+      setPairing(false)
+    }
+  }
+
+  const handleRenderUnpair = async () => {
+    try {
+      await apiDelete("/render/pair")
+      toast.success("This device left the render fleet")
+      await loadRenderStatus()
+    } catch (error) {
+      handleApiError(error, "Could not unpair")
+    }
+  }
+
+  const handleRenderToggle = async (on: boolean) => {
+    setRenderToggling(true)
+    try {
+      const res = await apiPost(on ? "/render/start" : "/render/stop", {})
+      setRenderStatus(await res.json())
+    } catch (error) {
+      handleApiError(error, on ? "Could not start the runner" : "Could not stop the runner")
+    } finally {
+      setRenderToggling(false)
+    }
+  }
+
   // Load ElevenLabs accounts (subscription info auto-fetched by backend)
   const loadAccounts = useCallback(async () => {
     if (!currentProfile) return
@@ -1239,6 +1313,109 @@ export default function SettingsPage() {
               </div>
               <p className="text-xs text-muted-foreground">
                 Create a token in Blipost web → Settings → API &amp; Desktop tokens, then paste it here. It is shown only once.
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Blipost Render Fleet — pair this desktop with the web account so it can
+          render the account's clip jobs locally (free, uses this machine's GPU
+          when present). Separate from the account token above: this is a runner
+          token from a one-time pairing code generated on blipost.com → Settings. */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Cloud className="h-5 w-5 text-lime" />
+            Render for Blipost
+            {renderStatus?.nvenc && (
+              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-lime/10 text-lime">
+                GPU
+              </span>
+            )}
+          </CardTitle>
+          <CardDescription>
+            Let this computer render your Blipost clip jobs for free instead of spending render credits in the cloud.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {renderStatus?.connected ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-lime/40 bg-lime/5 p-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <div className={`h-2 w-2 rounded-full ${renderStatus.running ? "bg-lime animate-pulse" : "bg-muted-foreground"}`} />
+                    <span className="text-sm font-medium">Accept render jobs</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1 capitalize">
+                    {renderStatus.running
+                      ? renderStatus.state === "rendering"
+                        ? `Rendering job ${(renderStatus.currentJob || "").slice(0, 8)}…`
+                        : renderStatus.state === "error"
+                          ? "Idle (last cycle errored — retrying)"
+                          : "Idle — waiting for jobs"
+                      : "Off"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={renderStatus.running}
+                    disabled={renderToggling}
+                    onCheckedChange={handleRenderToggle}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-red-500 hover:text-red-600"
+                    onClick={handleRenderUnpair}
+                    title="Unpair this device"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+
+              {renderStatus.processed.length > 0 && (
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Recent jobs</p>
+                  <ul className="space-y-1">
+                    {renderStatus.processed.slice(0, 8).map((job, i) => (
+                      <li key={`${job.jobId}-${i}`} className="flex items-center justify-between text-xs">
+                        <span className="font-mono text-muted-foreground">{job.jobId.slice(0, 8)}…</span>
+                        <span className={job.outcome === "rendered" ? "text-lime" : "text-red-500"}>
+                          {job.outcome === "rendered" ? `${job.clips} clip${job.clips === 1 ? "" : "s"}` : "failed"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Pairing code</label>
+              <div className="flex gap-2">
+                <Input
+                  value={pairCode}
+                  onChange={(e) => setPairCode(e.target.value.toUpperCase())}
+                  placeholder="8-character code"
+                  maxLength={12}
+                  disabled={pairing}
+                  className="flex-1 font-mono tracking-widest"
+                />
+                <Button onClick={handleRenderPair} disabled={pairing || !pairCode.trim()}>
+                  {pairing ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Pairing...
+                    </>
+                  ) : (
+                    "Pair device"
+                  )}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                On blipost.com → Settings → “Connect a desktop”, generate a code and enter it here. The runner token is stored securely on this machine.
               </p>
             </div>
           )}
