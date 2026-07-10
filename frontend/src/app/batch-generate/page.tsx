@@ -42,7 +42,7 @@ function getStatusBadge(status: ProductJobStatus["status"]) {
       );
     case "completed":
       return (
-        <Badge className="bg-green-600 hover:bg-green-600 text-white">
+        <Badge className="bg-success/10 text-success border border-success/20 hover:bg-success/10">
           <CheckCircle2 className="h-3 w-3 mr-1" />
           Completed
         </Badge>
@@ -77,7 +77,7 @@ function ProductJobCard({ job }: { job: ProductJobStatus }) {
   const progressValue = getProgressValue(job);
 
   return (
-    <Card className={job.status === "completed" ? "border-green-500/50" : job.status === "failed" ? "border-destructive/50" : ""}>
+    <Card className={job.status === "completed" ? "border-success/50" : job.status === "failed" ? "border-destructive/50" : ""}>
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="text-sm font-medium leading-tight line-clamp-2">

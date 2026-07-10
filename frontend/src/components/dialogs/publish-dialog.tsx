@@ -56,9 +56,9 @@ interface PublishDialogProps {
   onPublished?: () => void;
 }
 
-// Unified green for all selected platforms
-const SELECTED_BORDER = "border-green-500";
-const SELECTED_BG = "bg-green-500/15";
+// Unified neutral highlight for all selected platforms
+const SELECTED_BORDER = "border-primary";
+const SELECTED_BG = "bg-primary/15";
 
 type DialogState = "form" | "publishing" | "uploading" | "success" | "error";
 type PublishMode = "now" | "schedule" | "draft" | "upload";
@@ -684,7 +684,7 @@ export function PublishDialog({
                             </Badge>
                           )}
                           {platform.source === "platform" && (
-                            <Badge variant="outline" className="text-xs text-lime border-lime/50">
+                            <Badge variant="outline" className="text-xs text-muted-foreground border-border">
                               Blipost
                             </Badge>
                           )}
@@ -889,7 +889,7 @@ export function PublishDialog({
         {/* Success state */}
         {dialogState === "success" && (
           <div className="flex flex-col items-center gap-4 py-8">
-            <CheckCircle2 className="h-14 w-14 text-green-500" />
+            <CheckCircle2 className="h-14 w-14 text-success" />
             <div className="text-center">
               <p className="text-lg font-semibold">
                 {publishMode === "upload"

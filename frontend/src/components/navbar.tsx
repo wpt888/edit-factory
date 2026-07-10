@@ -27,6 +27,8 @@ import {
   NotebookPen,
   LogOut,
   Wallet,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 
 const DESKTOP_MODE = process.env.NEXT_PUBLIC_DESKTOP_MODE === "true";
@@ -93,34 +95,50 @@ function isActive(pathname: string, href: string) {
 function NavLink({
   item,
   pathname,
+  collapsed = false,
 }: {
   item: { label: string; href: string; icon: React.ComponentType<{ className?: string }> };
   pathname: string;
+  collapsed?: boolean;
 }) {
   const active = isActive(pathname, item.href);
   return (
     <Link
       href={item.href}
+      title={collapsed ? item.label : undefined}
       className={cn(
-        "flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+        "flex shrink-0 items-center gap-2.5 rounded-lg text-sm font-medium transition-colors",
+        collapsed ? "justify-center py-2" : "px-3 py-2",
         active
           ? "bg-sidebar-accent text-sidebar-accent-foreground"
           : "text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
       )}
     >
-      <item.icon className={cn("size-4", active && "text-lime")} />
-      {item.label}
+      <item.icon className="size-4" />
+      {!collapsed && item.label}
     </Link>
   );
 }
 
-function AppNav({ horizontal = false }: { horizontal?: boolean }) {
+function AppNav({ horizontal = false, collapsed = false }: { horizontal?: boolean; collapsed?: boolean }) {
   const pathname = usePathname();
   if (horizontal) {
     return (
       <nav className="flex items-center gap-1 overflow-x-auto">
         {navGroups.flatMap((group) =>
           group.items.map((item) => <NavLink key={item.href} item={item} pathname={pathname} />)
+        )}
+      </nav>
+    );
+  }
+  // Icon-only rail: drop the group headers and keep just the icons.
+  if (collapsed) {
+    return (
+      <nav className="flex flex-col gap-1">
+        {navGroups.flatMap((group) =>
+          group.items.map((item) => (
+            <NavLink key={item.href} item={item} pathname={pathname} collapsed />
+          ))
         )}
       </nav>
     );
@@ -167,10 +185,10 @@ function CreditBalance() {
   return (
     <Link
       href="/settings"
-      className="flex items-center gap-2 rounded-xl border border-lime/40 bg-lime/10 px-3 py-2 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-lime/15"
+      className="flex items-center gap-2 rounded-xl border border-sidebar-border bg-sidebar-accent/50 px-3 py-2 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent"
       title="Blipost credit balance"
     >
-      <Wallet className="size-4 text-lime" />
+      <Wallet className="size-4 text-sidebar-foreground/70" />
       <span className="font-semibold">{balance.toLocaleString()}</span>
       <span className="text-sidebar-foreground/60">credits</span>
     </Link>
@@ -178,64 +196,135 @@ function CreditBalance() {
 }
 
 function Wordmark({ className }: { className?: string }) {
+  // The PNG is white-on-dark artwork — invisible on the light sidebar, so
+  // light mode falls back to the text wordmark used on the auth pages.
   return (
-    <Image
-      src={blipostLogo}
-      alt="Blipost"
-      priority
-      className={cn("w-auto", className)}
-    />
+    <>
+      <Image
+        src={blipostLogo}
+        alt="Blipost"
+        priority
+        className={cn("hidden w-auto dark:block", className)}
+      />
+      <span className="font-heading text-2xl font-bold tracking-tight dark:hidden">
+        bli<span className="text-lime">post</span>
+      </span>
+    </>
   );
 }
+
+const SIDEBAR_STORAGE_KEY = "blipost.sidebar.collapsed";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { currentProfile } = useProfile();
   const { user, signOut } = useAuth();
+  const [collapsed, setCollapsed] = React.useState(false);
+
+  // Restore the persisted preference after mount — reading localStorage during
+  // render would break hydration (the server has no localStorage).
+  React.useEffect(() => {
+    if (localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true") setCollapsed(true);
+  }, []);
+
+  const toggleSidebar = React.useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SIDEBAR_STORAGE_KEY, String(next));
+      } catch {
+        /* private mode / storage disabled — collapse still works for the session */
+      }
+      return next;
+    });
+  }, []);
 
   const displayName = user?.email || currentProfile?.name || "You";
   const initial = displayName.charAt(0).toUpperCase();
 
   return (
-    <div className="flex h-full overflow-hidden bg-ink">
-      {/* desktop sidebar */}
-      <aside className="hidden h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
-        <div className="px-5 pt-6 pb-4">
-          <Link href="/pipeline" className="flex items-center">
-            <Wordmark className="h-8" />
-          </Link>
-          <p className="mt-2.5 text-xs leading-snug text-sidebar-foreground/45">
-            AI scripts, TTS and video assembly
-          </p>
-        </div>
-        <div className="flex-1 overflow-y-auto px-3 pt-2">
-          <AppNav />
-        </div>
-        <div className="flex flex-col gap-3 px-4 pb-5 pt-3">
-          <CreditBalance />
-          <ProfileSwitcher />
-          <div className="flex items-center gap-2.5 rounded-xl border border-sidebar-border bg-sidebar-accent/50 p-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-lime font-heading text-sm font-bold text-ink">
+    <div className="flex h-full overflow-hidden bg-background">
+      {/* desktop sidebar — icon-only rail when collapsed, full panel otherwise */}
+      {collapsed ? (
+        <aside className="hidden h-full w-16 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
+          <div className="flex justify-center px-2 pt-6 pb-2">
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              title="Expand sidebar"
+              aria-label="Expand sidebar"
+              className="flex size-9 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+            >
+              <ChevronRight className="size-4" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-2 pt-2">
+            <AppNav collapsed />
+          </div>
+          <div className="flex flex-col items-center gap-2 px-2 pb-5 pt-3">
+            <span
+              title={`${displayName}${currentProfile?.name ? ` · ${currentProfile.name}` : ""}`}
+              className="flex size-9 shrink-0 items-center justify-center rounded-full bg-lime font-heading text-sm font-bold text-ink"
+            >
               {initial}
             </span>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{displayName}</p>
-              <p className="truncate text-xs font-medium text-lime">
-                {currentProfile?.name || "No profile"}
-              </p>
-            </div>
             {user && (
               <button
                 type="button"
                 onClick={signOut}
                 title="Sign out"
-                className="flex size-8 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                className="flex size-9 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
               >
                 <LogOut className="size-4" />
               </button>
             )}
           </div>
-        </div>
-      </aside>
+        </aside>
+      ) : (
+        <aside className="hidden h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
+          <div className="flex items-start justify-between px-5 pt-6 pb-4">
+            <Link href="/pipeline" className="flex items-center">
+              <Wordmark className="h-8" />
+            </Link>
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+              className="-mr-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+            >
+              <ChevronLeft className="size-4" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-3 pt-2">
+            <AppNav />
+          </div>
+          <div className="flex flex-col gap-3 px-4 pb-5 pt-3">
+            <CreditBalance />
+            <ProfileSwitcher />
+            <div className="flex items-center gap-2.5 rounded-xl border border-sidebar-border bg-sidebar-accent/50 p-3">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-lime font-heading text-sm font-bold text-ink">
+                {initial}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{displayName}</p>
+                <p className="truncate text-xs font-medium text-sidebar-foreground/60">
+                  {currentProfile?.name || "No profile"}
+                </p>
+              </div>
+              {user && (
+                <button
+                  type="button"
+                  onClick={signOut}
+                  title="Sign out"
+                  className="flex size-8 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                >
+                  <LogOut className="size-4" />
+                </button>
+              )}
+            </div>
+          </div>
+        </aside>
+      )}
 
       {/* content + mobile chrome */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">

@@ -320,7 +320,7 @@ export function ImageBulkPublishDialog({
 
         {dialogState === "success" && (
           <div className="space-y-3 py-4">
-            <div className="flex items-center gap-2 text-green-600">
+            <div className="flex items-center gap-2 text-success">
               <CheckCircle2 className="h-5 w-5" />
               <span className="font-medium">Image batch sent successfully.</span>
             </div>

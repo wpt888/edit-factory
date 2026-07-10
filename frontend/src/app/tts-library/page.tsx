@@ -377,7 +377,7 @@ export default function TTSLibraryPage() {
           </Badge>
         );
       case "ready":
-        return <Badge className="bg-green-600 hover:bg-green-700">Ready</Badge>;
+        return <Badge className="bg-success/10 text-success border border-success/20 hover:bg-success/10">Ready</Badge>;
       case "failed":
         return <Badge variant="destructive">Failed</Badge>;
       default:

@@ -86,14 +86,14 @@ export default function SignupPage() {
 
   if (success) {
     return (
-      <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-ink p-4 text-paper">
+      <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4 text-foreground">
         <div className="pointer-events-none absolute inset-0 bg-grid-ink" />
         <div className="pointer-events-none absolute inset-0 bg-noise" />
-        <div className="pointer-events-none absolute -bottom-32 -left-24 h-96 w-96 rounded-full bg-lime/15 blur-[110px]" />
+        <div className="pointer-events-none absolute -bottom-32 -left-24 h-96 w-96 rounded-full bg-primary/10 blur-[110px]" />
         <Card className="relative w-full max-w-md">
           <CardHeader className="space-y-1 text-center">
             <div className="flex justify-center mb-4">
-              <CheckCircle2 className="h-16 w-16 text-green-500" />
+              <CheckCircle2 className="h-16 w-16 text-success" />
             </div>
             <CardTitle className="font-heading text-2xl font-bold tracking-tight">Check your email</CardTitle>
             <CardDescription>
@@ -116,10 +116,10 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-ink p-4 text-paper">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4 text-foreground">
       <div className="pointer-events-none absolute inset-0 bg-grid-ink" />
       <div className="pointer-events-none absolute inset-0 bg-noise" />
-      <div className="pointer-events-none absolute -bottom-32 -left-24 h-96 w-96 rounded-full bg-lime/15 blur-[110px]" />
+      <div className="pointer-events-none absolute -bottom-32 -left-24 h-96 w-96 rounded-full bg-primary/10 blur-[110px]" />
       <Card className="relative w-full max-w-md">
         <CardHeader className="space-y-1 text-center">
           <div className="flex justify-center mb-4">

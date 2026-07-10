@@ -535,7 +535,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                 const estimatedDuration = Math.round(wordCount / WORDS_PER_SECOND);
 
                 return (
-                  <Card key={index} className={`transition-colors ${approvedScripts.has(index) ? "border-green-500 bg-green-50/50 dark:bg-green-950/20" : ""}`}>
+                  <Card key={index} className={`transition-colors ${approvedScripts.has(index) ? "border-success/40 bg-success/5" : ""}`}>
                     <CardHeader>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
@@ -555,13 +555,13 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                                   apiPatch(`/pipeline/${pipelineId}/tts-approve/${index}`, { approved }).catch(() => {});
                                 }
                               }}
-                              className="h-5 w-5 border-green-500 data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
+                              className="h-5 w-5 border-success data-[state=checked]:border-success data-[state=checked]:bg-success"
                             />
                           )}
                           <CardTitle className="text-lg">
                             Script {index + 1}
                             {approvedScripts.has(index) && (
-                              <CheckCircle className="inline-block h-4 w-4 ml-2 text-green-600" />
+                              <CheckCircle className="inline-block h-4 w-4 ml-2 text-success" />
                             )}
                           </CardTitle>
                         </div>
@@ -716,7 +716,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                                       isOpen
                                         ? "ring-2 ring-amber-400 bg-amber-50 dark:bg-amber-950/30 border-amber-300"
                                         : isPaired
-                                        ? "ring-2 ring-green-400 bg-green-50 dark:bg-green-950/30 border-green-300"
+                                        ? "ring-2 ring-success/50 bg-success/10 border-success/30"
                                         : "border-border"
                                     }`}
                                   >
@@ -728,7 +728,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                                     )}
                                     {g.label}
                                     <span className="text-muted-foreground">({g.segments_count})</span>
-                                    {isPaired && <CheckCircle className="h-3 w-3 text-green-600 flex-shrink-0" />}
+                                    {isPaired && <CheckCircle className="h-3 w-3 text-success flex-shrink-0" />}
                                     {isOpen && <span className="text-amber-600 font-bold flex-shrink-0">…</span>}
                                   </button>
                                 );
@@ -737,7 +737,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                             {tagStates.length > 0 && (
                               <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
                                 <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" /> Open</span>
-                                <span className="inline-flex items-center gap-1"><CheckCircle className="h-2.5 w-2.5 text-green-600" /> Paired</span>
+                                <span className="inline-flex items-center gap-1"><CheckCircle className="h-2.5 w-2.5 text-success" /> Paired</span>
                               </div>
                             )}
                           </div>
@@ -842,7 +842,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                           </Button>
                         )}
                         {ttsResults[index] && !ttsResults[index].generating && !ttsResults[index].stale && (
-                          <div className="ml-auto flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-2.5 py-1 dark:border-green-900 dark:bg-green-950/30">
+                          <div className="ml-auto flex items-center gap-2 rounded-md border border-success/20 bg-success/10 px-2.5 py-1">
                             <Checkbox
                               id={`approve-script-${index}`}
                               checked={approvedScripts.has(index)}
@@ -858,11 +858,11 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                                   apiPatch(`/pipeline/${pipelineId}/tts-approve/${index}`, { approved }).catch(() => {});
                                 }
                               }}
-                              className="h-4.5 w-4.5 border-green-500 data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
+                              className="h-4.5 w-4.5 border-success data-[state=checked]:border-success data-[state=checked]:bg-success"
                             />
                             <Label
                               htmlFor={`approve-script-${index}`}
-                              className="cursor-pointer text-xs font-medium text-green-700 dark:text-green-300"
+                              className="cursor-pointer text-xs font-medium text-success"
                             >
                               Approve voice-over
                             </Label>
@@ -1142,10 +1142,10 @@ export function Step2TTS({ ctx }: { ctx: any }) {
               const ttsCount = Object.values(ttsResults).filter(r => !r.generating && !r.stale).length;
               if (ttsCount === 0) return null;
               return (
-                <Alert className="border-green-300 bg-green-50 dark:bg-green-950/30 dark:border-green-800">
-                  <CheckCircle className="h-4 w-4 text-green-600" />
+                <Alert className="border-success/20 bg-success/10">
+                  <CheckCircle className="h-4 w-4 text-success" />
                   <AlertDescription className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="text-green-800 dark:text-green-300">
+                    <span className="text-success">
                       {ttsCount === scripts.length
                         ? "All scripts have voice-over generated"
                         : `${ttsCount} of ${scripts.length} scripts have voice-over. The remaining ${scripts.length - ttsCount} will be generated automatically.`}
@@ -1243,7 +1243,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
             {/* Approval status */}
             {scripts.length > 0 && (
               <div className="flex items-center justify-between text-sm">
-                <span className={`font-medium ${approvedScripts.size === scripts.length ? "text-green-600" : "text-muted-foreground"}`}>
+                <span className={`font-medium ${approvedScripts.size === scripts.length ? "text-success" : "text-muted-foreground"}`}>
                   {approvedScripts.size === 0
                     ? "No scripts approved yet — listen and check the ones you like"
                     : approvedScripts.size === scripts.length
@@ -1262,17 +1262,36 @@ export function Step2TTS({ ctx }: { ctx: any }) {
                 )}
               </div>
             )}
-            {Object.keys(previews).length > 0 && (
-              <Button
-                variant="default"
-                onClick={() => { setStep(3); setPreviewError(null); }}
-                className="w-full bg-green-600 hover:bg-green-700 text-white"
-                size="lg"
-              >
-                <CheckCircle className="h-4 w-4 mr-2" />
-                Voice-overs ready — Continue to Preview
-              </Button>
-            )}
+            {(() => {
+              const readyCount = Object.values(ttsResults).filter(r => !r.generating && !r.stale).length;
+              const ttsReady = readyCount === scripts.length && scripts.length > 0;
+              const hasPreviews = Object.keys(previews).length > 0;
+              if (!hasPreviews && !ttsReady) return null;
+              return (
+                <Button
+                  variant="default"
+                  onClick={() => {
+                    setPreviewError(null);
+                    if (hasPreviews) {
+                      setStep(3);
+                    } else {
+                      // TTS is ready but segment matching hasn't run yet —
+                      // handlePreviewAll reuses the audio, runs matching only,
+                      // and auto-advances to Step 3 (skipReview path).
+                      void handlePreviewAll();
+                    }
+                  }}
+                  disabled={previewingIndex !== null || isGenerating || isRendering}
+                  className="w-full"
+                  size="lg"
+                >
+                  <CheckCircle className="h-4 w-4 mr-2" />
+                  {hasPreviews
+                    ? "Voice-overs ready — Continue to Preview"
+                    : "Voice-overs ready — Match segments & Preview"}
+                </Button>
+              );
+            })()}
             {sourceVideos.length > 0 && selectedSourceIds.size === 0 && (
               <p className="text-xs text-destructive text-center">Select at least one source video above</p>
             )}

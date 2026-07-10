@@ -51,6 +51,9 @@ MATCH_PRESETS: Dict[str, Dict[str, float]] = {
     "balanced":       {"w_kw": 1.0, "w_rec": 1.5, "w_div": 0.5, "w_ovl": 1.0, "w_avoid": 0.8},
     "max_variety":    {"w_kw": 0.7, "w_rec": 1.0, "w_div": 2.0, "w_ovl": 1.5, "w_avoid": 1.2},
     "shuffle":        {"w_kw": 1.0, "w_rec": 1.5, "w_div": 0.5, "w_ovl": 1.0, "w_avoid": 0.8},
+    # ai_smart: Gemini pre-assigns segments (see _ai_match_segments); phrases the
+    # AI couldn't place fall through to scoring with balanced weights.
+    "ai_smart":       {"w_kw": 1.0, "w_rec": 1.5, "w_div": 0.5, "w_ovl": 1.0, "w_avoid": 0.8},
 }
 _SHUFFLE_EPSILON = 0.25  # scores within this of the max are tie-broken by seeded RNG
 
@@ -539,6 +542,74 @@ class AssemblyService:
 
         return srt_content
 
+    def _ai_match_segments(
+        self,
+        srt_entries: List[dict],
+        segments_data: List[dict],
+        profile_id: Optional[str] = None,
+    ) -> Optional[Dict[int, str]]:
+        """One text-only Gemini call: pick the best segment for each SRT phrase.
+
+        Returns {srt_index: segment_id} or None on ANY failure — the caller
+        falls back to keyword scoring, so this can never break a preview.
+        Blocking (sync); async callers run it via asyncio.to_thread.
+        """
+        import json
+        try:
+            from app.services.gemini_analyzer import GeminiVideoAnalyzer
+            analyzer = GeminiVideoAnalyzer(profile_id=profile_id)
+
+            catalog = [
+                {
+                    "id": s["id"],
+                    "keywords": s.get("keywords") or [],
+                    "duration": round(
+                        float(s.get("end_time") or 0) - float(s.get("start_time") or 0), 1
+                    ),
+                }
+                for s in segments_data
+            ]
+            phrases = [{"index": i, "text": e["text"]} for i, e in enumerate(srt_entries)]
+            prompt = (
+                "You match narration phrases to stock video segments for a short-form "
+                "social video. For EACH phrase pick the segment whose keywords best fit "
+                "its meaning. Prefer visual variety: avoid giving consecutive phrases "
+                "the same segment unless nothing else fits.\n"
+                f"Phrases: {json.dumps(phrases, ensure_ascii=False)}\n"
+                f"Segments: {json.dumps(catalog, ensure_ascii=False)}\n"
+                'Reply ONLY with JSON: {"matches": [{"index": 0, "segment_id": "..."}]} '
+                "covering every phrase index exactly once."
+            )
+
+            response = analyzer.client.models.generate_content(
+                model=analyzer.model_name, contents=[prompt]
+            )
+            text = response.text or ""
+            json_match = re.search(r"\{.*\}", text, re.DOTALL)
+            if not json_match:
+                logger.warning("AI smart match: no JSON found in Gemini response")
+                return None
+
+            data = json.loads(json_match.group(0))
+            valid_ids = {s["id"] for s in segments_data}
+            result: Dict[int, str] = {}
+            for item in data.get("matches", []):
+                idx = item.get("index")
+                seg_id = item.get("segment_id")
+                if isinstance(idx, int) and 0 <= idx < len(srt_entries) and seg_id in valid_ids:
+                    result[idx] = seg_id
+
+            if not result:
+                logger.warning("AI smart match: Gemini returned no usable assignments")
+                return None
+            logger.info(
+                f"AI smart match: Gemini assigned {len(result)}/{len(srt_entries)} phrases"
+            )
+            return result
+        except Exception as e:
+            logger.warning(f"AI smart match failed, falling back to keyword scoring: {e}")
+            return None
+
     def match_srt_to_segments(
         self,
         srt_entries: List[dict],
@@ -549,6 +620,7 @@ class AssemblyService:
         avoid_segment_ids: Optional[set] = None,
         preset: str = "balanced",
         pinned_assignments: Optional[Dict[int, str]] = None,
+        ai_assignments: Optional[Dict[int, str]] = None,
     ) -> List[MatchResult]:
         """
         Assign one library segment to each SRT phrase via a transparent scoring
@@ -672,6 +744,43 @@ class AssemblyService:
                     explanation="pinned by user", pinned=True,
                 ))
                 pinned_count += 1
+                continue
+
+            # --- ai_smart: Gemini-assigned pick. Soft — skipped when the pick
+            # violates a hard constraint (spent single-use / same as previous),
+            # in which case the phrase falls through to normal scoring. ---
+            ai_id = ai_assignments.get(idx) if ai_assignments else None
+            if (
+                ai_id
+                and ai_id in segment_lookup
+                and ai_id not in _used_single_use_ids
+                and not (n > 1 and ai_id == prev_segment_id)
+            ):
+                seg = segment_lookup[ai_id]
+                seg_group = seg.get("product_group")
+                last_used[ai_id] = idx
+                if seg.get("single_use"):
+                    _used_single_use_ids.add(ai_id)
+                if seg_group:
+                    current_product_group = seg_group
+                prev_segment_id = ai_id
+                prev_source_video_id = seg.get("source_video_id")
+                prev_segment_start = seg.get("start_time")
+                prev_segment_end = seg.get("end_time")
+                matches.append(MatchResult(
+                    srt_index=idx, srt_text=srt_text, srt_start=srt_start, srt_end=srt_end,
+                    segment_id=ai_id,
+                    segment_keywords=seg.get("keywords") or [],
+                    matched_keyword=None, confidence=0.9, is_auto_filled=False,
+                    product_group=seg_group,
+                    source_video_id=seg.get("source_video_id"),
+                    segment_start_time=seg.get("start_time"),
+                    segment_end_time=seg.get("end_time"),
+                    thumbnail_path=seg.get("thumbnail_path"),
+                    transforms=seg.get("transforms"),
+                    explanation="AI smart match",
+                ))
+                keyword_matched += 1
                 continue
 
             srt_text_lower = srt_text.lower()
@@ -1727,6 +1836,11 @@ class AssemblyService:
                         duration=slide.get("duration", 2.0),
                         animation=slide.get("animation", "static"),
                         ken_burns_direction=slide.get("kenBurnsDirection", "zoom-in"),
+                        # Must match the extracted segments exactly — a 1080x1920
+                        # slide in a 540x960 preview concat corrupts the stream.
+                        width=target_w,
+                        height=target_h,
+                        fps=TARGET_FPS,
                     )
                     if result and result.exists():
                         slide_clips.setdefault(idx, []).append(result)
@@ -1800,6 +1914,9 @@ class AssemblyService:
         brightness: float = 0.0,
         contrast: float = 1.0,
         saturation: float = 1.0,
+        voice_volume: float = 1.0,
+        audio_fade_in: float = 0.0,
+        audio_fade_out: float = 0.0,
         shadow_depth: int = 0,
         enable_glow: bool = False,
         glow_blur: int = 0,
@@ -2218,6 +2335,11 @@ class AssemblyService:
                     )
             else:
                 logger.info("Step 5/7: Matching SRT phrases to segments")
+                _ai_assignments = None
+                if preset == "ai_smart":
+                    _ai_assignments = await asyncio.to_thread(
+                        self._ai_match_segments, srt_entries, segments_data, profile_id
+                    )
                 match_results = self.match_srt_to_segments(
                     srt_entries=srt_entries,
                     segments_data=segments_data,
@@ -2227,6 +2349,7 @@ class AssemblyService:
                     avoid_segment_ids=avoid_segment_ids,
                     preset=preset,
                     pinned_assignments=pinned_assignments,
+                    ai_assignments=_ai_assignments,
                 )
                 duration_overrides = None
 
@@ -2332,6 +2455,9 @@ class AssemblyService:
                 brightness=brightness,
                 contrast=contrast,
                 saturation=saturation,
+                voice_volume=voice_volume,
+                audio_fade_in=audio_fade_in,
+                audio_fade_out=audio_fade_out,
                 _preview_mode=_preview_mode,
                 force_cpu=force_cpu,
                 intro_offset_sec=intro_offset_sec,  # F1: delay audio by intro length
@@ -2416,6 +2542,9 @@ class AssemblyService:
         brightness: float = 0.0,
         contrast: float = 1.0,
         saturation: float = 1.0,
+        voice_volume: float = 1.0,
+        audio_fade_in: float = 0.0,
+        audio_fade_out: float = 0.0,
         subtitle_style_override: Optional[Dict[str, object]] = None,
         visual_version_label: Optional[str] = None,
     ) -> Path:
@@ -2474,6 +2603,9 @@ class AssemblyService:
             brightness=brightness,
             contrast=contrast,
             saturation=saturation,
+            voice_volume=voice_volume,
+            audio_fade_in=audio_fade_in,
+            audio_fade_out=audio_fade_out,
             # Pass through subtitle style params to match final render output
             shadow_depth=_ss.get("shadowDepth", 0),
             enable_glow=_ss.get("enableGlow", False),
@@ -2636,6 +2768,11 @@ class AssemblyService:
 
         # Step 4: Match and build timeline
         logger.info("Preview Step 4/4: Matching and building timeline")
+        _ai_assignments = None
+        if preset == "ai_smart":
+            _ai_assignments = await asyncio.to_thread(
+                self._ai_match_segments, srt_entries, segments_data, profile_id
+            )
         match_results = self.match_srt_to_segments(
             srt_entries=srt_entries,
             segments_data=segments_data,
@@ -2644,6 +2781,7 @@ class AssemblyService:
             srt_product_groups=srt_product_groups,
             avoid_segment_ids=avoid_segment_ids,
             preset=preset,
+            ai_assignments=_ai_assignments,
         )
 
         timeline, _intro_offset_sec = self.build_timeline(

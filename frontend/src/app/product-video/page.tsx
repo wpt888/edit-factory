@@ -582,6 +582,7 @@ function ProductVideoContent() {
         <div className="mb-6 flex gap-2">
           <Button
             size="lg"
+            variant="cta"
             onClick={handleGenerate}
             disabled={isFormDisabled || !productId || isComplete}
             className="w-full sm:w-auto"
@@ -632,7 +633,7 @@ function ProductVideoContent() {
               {/* Success state */}
               {isComplete && (
                 <div className="flex flex-col items-center gap-4 py-4">
-                  <div className="flex items-center gap-2 text-green-500">
+                  <div className="flex items-center gap-2 text-success">
                     <CheckCircle2 className="h-6 w-6" />
                     <span className="font-semibold text-lg">Video Generated!</span>
                   </div>

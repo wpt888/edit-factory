@@ -139,7 +139,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                       </Badge>
                     )}
                     {aiRulesSaved && (
-                      <span className="text-xs text-green-500 flex items-center gap-1">
+                      <span className="text-xs text-success flex items-center gap-1">
                         <CheckCircle className="h-3 w-3" /> Saved
                       </span>
                     )}
@@ -500,6 +500,7 @@ export function Step1Script({ ctx }: { ctx: any }) {
                 ) : (
                   <div className="space-y-2">
                     <Button
+                      variant="cta"
                       onClick={handleGenerate}
                       disabled={!idea.trim()}
                       className="w-full"

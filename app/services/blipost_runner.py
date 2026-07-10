@@ -38,20 +38,85 @@ _MAX_PROCESSED_HISTORY = 20
 # Render engine — ports of lib/clipping/captions.ts + lib/clipping/render.ts
 # =============================================================================
 
-_ASS_HEADER = """[Script Info]
-ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
-WrapStyle: 0
+# Reference vertical canvas the styles were tuned for (mirrors captions.ts
+# CAPTION_REF_W/H). Font sizes/margins scale by PlayResY so a source-aspect clip
+# gets proportional captions instead of an anamorphic squish.
+_CAPTION_REF_W = 1080
+_CAPTION_REF_H = 1920
 
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,Arial,72,&H0000FFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,60,60,220,1
-Style: Hook,Arial,84,&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,5,2,8,80,80,180,1
+# Caption style presets — mirrors lib/clipping/caption-presets.ts (same ids,
+# same values). "classic" reproduces the original hardcoded style byte-for-byte.
+_LIME = "#B4F03A"
+_CAPTION_PRESETS: dict = {
+    "classic": {"font": "Arial", "size": 72, "textColor": "#FFFFFF", "highlightColor": "#FFFF00",
+                "outlineColor": "#000000", "outline": 4, "box": False, "position": "bottom", "uppercase": False},
+    "bold-center": {"font": "Arial", "size": 84, "textColor": "#FFFFFF", "highlightColor": _LIME,
+                    "outlineColor": "#000000", "outline": 5, "box": False, "position": "center", "uppercase": True},
+    "minimal-lower": {"font": "Arial", "size": 58, "textColor": "#FFFFFF", "highlightColor": "#FFFFFF",
+                      "outlineColor": "#000000", "outline": 2, "box": False, "position": "bottom", "uppercase": False},
+    "highlight-box": {"font": "Arial", "size": 66, "textColor": "#FFFFFF", "highlightColor": _LIME,
+                      "outlineColor": "#000000", "outline": 3, "box": True, "position": "bottom", "uppercase": True},
+    "lime-pop": {"font": "Arial", "size": 76, "textColor": "#FFFFFF", "highlightColor": _LIME,
+                 "outlineColor": "#000000", "outline": 4, "box": False, "position": "bottom", "uppercase": True},
+}
+_DEFAULT_CAPTION_PRESET = "classic"
 
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
+
+def _resolve_caption_preset(preset_id: Optional[str], overrides: Optional[dict]) -> dict:
+    """Preset id → style dict, unknown/absent → classic; overrides layered on.
+    Mirrors caption-presets.ts::resolveCaptionPreset + the spread in buildClipAss."""
+    preset = dict(_CAPTION_PRESETS.get(preset_id or "", _CAPTION_PRESETS[_DEFAULT_CAPTION_PRESET]))
+    for key in ("highlightColor", "position", "uppercase"):
+        if overrides and overrides.get(key) is not None:
+            preset[key] = overrides[key]
+    return preset
+
+
+def _hex_to_ass(hex_color: str) -> str:
+    """#RRGGBB → ASS &H00BBGGRR (opaque). Mirrors captions.ts::hexToAss."""
+    h = hex_color.lstrip("#")
+    return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}".upper()
+
+
+def _alignment_for(position: str) -> int:
+    """Caption position → ASS numpad alignment. Mirrors captions.ts::alignmentFor."""
+    return 8 if position == "top" else 5 if position == "center" else 2
+
+
+def _ass_header(res_w: int, res_h: int, preset: dict) -> str:
+    """ASS header parameterised by render resolution + style preset. Mirrors
+    captions.ts::assHeader (Hook style stays fixed)."""
+    k = res_h / _CAPTION_REF_H
+
+    def px(n: int) -> int:
+        return max(1, round(n * k))
+
+    align = _alignment_for(preset["position"])
+    margin_v = 0 if preset["position"] == "center" else px(220)
+    border_style = 3 if preset["box"] else 1
+    shadow = 0 if preset["box"] else 2
+    karaoke = (
+        f"Style: Karaoke,{preset['font']},{px(preset['size'])},"
+        f"{_hex_to_ass(preset['highlightColor'])},{_hex_to_ass(preset['textColor'])},"
+        f"{_hex_to_ass(preset['outlineColor'])},&H80000000,-1,0,0,0,100,100,0,0,"
+        f"{border_style},{px(preset['outline'])},{shadow},{align},{px(60)},{px(60)},{margin_v},1"
+    )
+
+    return (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {round(res_w)}\n"
+        f"PlayResY: {round(res_h)}\n"
+        "WrapStyle: 0\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"{karaoke}\n"
+        f"Style: Hook,Arial,{px(84)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,{px(5)},2,8,{px(80)},{px(80)},{px(180)},1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
 
 
 def _ass_time(total_sec: float) -> str:
@@ -69,7 +134,9 @@ def _ass_escape(text: str) -> str:
     return text.replace("\n", " ").replace("{", "(").replace("}", ")").strip()
 
 
-def _karaoke_dialogue(segments: List[dict], clip_start: float, clip_end: float) -> List[str]:
+def _karaoke_dialogue(
+    segments: List[dict], clip_start: float, clip_end: float, uppercase: bool = False
+) -> List[str]:
     """Word-timed \\k karaoke lines for the transcript slice, clip-relative.
     Mirrors captions.ts::karaokeDialogue."""
     lines: List[str] = []
@@ -78,7 +145,10 @@ def _karaoke_dialogue(segments: List[dict], clip_start: float, clip_end: float) 
         end = min(float(seg["end"]), clip_end)
         if end - start < 0.2:
             continue
-        words = [w for w in str(seg.get("text", "")).strip().split() if w]
+        text = str(seg.get("text", ""))
+        if uppercase:
+            text = text.upper()
+        words = [w for w in text.strip().split() if w]
         if not words:
             continue
         rel_start = start - clip_start
@@ -90,21 +160,29 @@ def _karaoke_dialogue(segments: List[dict], clip_start: float, clip_end: float) 
 
 
 def build_clip_ass(
-    segments: List[dict], clip_start: float, clip_end: float, karaoke: bool, hook_text: Optional[str]
+    segments: List[dict],
+    clip_start: float,
+    clip_end: float,
+    karaoke: bool,
+    hook_text: Optional[str],
+    res: tuple[int, int] = (_CAPTION_REF_W, _CAPTION_REF_H),
+    preset_id: Optional[str] = None,
+    overrides: Optional[dict] = None,
 ) -> Optional[str]:
     """Recipe-variant caption file: optional karaoke word-highlights + optional
     static top hook line. Returns None when neither is requested (caller then
     skips the subtitles filter). Mirrors captions.ts::buildClipAss."""
+    preset = _resolve_caption_preset(preset_id, overrides)
     lines: List[str] = []
     hook = (hook_text or "").strip()
     if hook:
         rel_end = max(0.0, clip_end - clip_start)
         lines.append(f"Dialogue: 1,{_ass_time(0)},{_ass_time(rel_end)},Hook,,0,0,0,,{_ass_escape(hook)}")
     if karaoke:
-        lines.extend(_karaoke_dialogue(segments, clip_start, clip_end))
+        lines.extend(_karaoke_dialogue(segments, clip_start, clip_end, bool(preset["uppercase"])))
     if not lines:
         return None
-    return _ASS_HEADER + "\n".join(lines) + "\n"
+    return _ass_header(res[0], res[1], preset) + "\n".join(lines) + "\n"
 
 
 def build_clip_args(
@@ -114,15 +192,23 @@ def build_clip_args(
     duration_sec: float,
     subtitle_path: Optional[str],
     use_nvenc: bool,
+    aspect: str = "9:16",
 ) -> List[str]:
-    """ffmpeg args: cut [start, start+duration), center-crop to 9:16, scale to
-    1080x1920, optional caption burn. Mirrors render.ts::buildClipArgs, swapping
-    libx264→h264_nvenc when a GPU is present (the desktop's free advantage)."""
-    filters = [
-        "crop=min(iw\\,ih*9/16):ih:(iw-ow)/2:0",
-        "scale=1080:1920",
-        "setsar=1",
-    ]
+    """ffmpeg args: cut [start, start+duration), then either center-crop to 9:16 +
+    scale to 1080x1920 (default) or keep the source frame as-is (aspect="source",
+    only forcing even dims), optional caption burn. Mirrors render.ts::buildClipArgs,
+    swapping libx264→h264_nvenc when a GPU is present (the desktop's free advantage)."""
+    if aspect == "source":
+        filters = [
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "setsar=1",
+        ]
+    else:
+        filters = [
+            "crop=min(iw\\,ih*9/16):ih:(iw-ow)/2:0",
+            "scale=1080:1920",
+            "setsar=1",
+        ]
     if subtitle_path:
         # ffmpeg subtitles filter needs forward slashes and an escaped drive colon.
         escaped = subtitle_path.replace("\\", "/").replace(":", "\\:")
@@ -185,6 +271,34 @@ def validate_recipe(recipe: object) -> Optional[str]:
     return None
 
 
+def _probe_dimensions(path: str) -> Optional[tuple[int, int]]:
+    """Source video WxH via `ffmpeg -i` stderr (no ffprobe dependency). Mirrors
+    render.ts::probeDimensions. Returns even dims, or None when unparseable."""
+    import re
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-i", path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception:
+        return None
+    stderr = proc.stderr or ""
+    video_line = next((l for l in stderr.split("\n") if re.search(r"Stream #.*Video:", l)), None)
+    if not video_line:
+        return None
+    m = re.search(r"\b(\d{2,5})x(\d{2,5})\b", video_line)
+    if not m:
+        return None
+    w, h = int(m.group(1)), int(m.group(2))
+    if not w or not h:
+        return None
+    return (w - (w % 2), h - (h % 2))
+
+
 def _render_one(recipe: dict, output: dict, source_path: str, work_dir: Path, use_nvenc: bool) -> dict:
     """Renders one (segment × variant) clip to disk. Mirrors local.ts::renderOne.
     Blocking (ffmpeg) — call via asyncio.to_thread. Returns
@@ -193,15 +307,30 @@ def _render_one(recipe: dict, output: dict, source_path: str, work_dir: Path, us
     segment = output["segment"]
     variant = output["variant"]
     output_path = work_dir / f"clip-{index}.mp4"
+    aspect = variant.get("aspect") or "9:16"
+
+    # Source-aspect clips size captions to the real frame; 9:16 keeps the reference.
+    res = (_CAPTION_REF_W, _CAPTION_REF_H)
+    if aspect == "source":
+        res = _probe_dimensions(source_path) or (_CAPTION_REF_W, _CAPTION_REF_H)
 
     # hookText on the variant wins; otherwise fall back to the segment's LLM hook.
     hook_text = variant.get("hookText") or segment.get("hookLine")
+    # A language variant burns the translated segment set (same timestamps).
+    # Mirrors local.ts::renderOne's translations lookup.
+    lang = variant.get("lang")
+    caption_segments = (recipe.get("translations") or {}).get(lang) if lang else None
+    if not caption_segments:
+        caption_segments = recipe["transcript"]["segments"]
     ass = build_clip_ass(
-        recipe["transcript"]["segments"],
+        caption_segments,
         float(segment["start"]),
         float(segment["end"]),
         karaoke=variant.get("captionStyle") != "none",
         hook_text=hook_text,
+        res=res,
+        preset_id=variant.get("captionPreset"),
+        overrides=variant.get("captionOverrides"),
     )
 
     subtitle_path: Optional[str] = None
@@ -211,7 +340,7 @@ def _render_one(recipe: dict, output: dict, source_path: str, work_dir: Path, us
         subtitle_path = str(sub)
 
     duration_sec = float(segment["end"]) - float(segment["start"])
-    args = build_clip_args(source_path, str(output_path), float(segment["start"]), duration_sec, subtitle_path, use_nvenc)
+    args = build_clip_args(source_path, str(output_path), float(segment["start"]), duration_sec, subtitle_path, use_nvenc, aspect)
     # Generous per-clip timeout: a 90s short encodes in seconds on GPU, longer on
     # a slow CPU box; 15 min is a safety ceiling, not an expectation.
     result = safe_ffmpeg_run(args, timeout=900, operation=f"blipost-render clip-{index}")

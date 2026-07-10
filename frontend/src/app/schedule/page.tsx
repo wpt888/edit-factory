@@ -662,9 +662,9 @@ export default function SchedulePage() {
 
               {/* Meta safety indicator — only confirmed after successful preview */}
               {selectedMetaCount >= 2 && preview?.variant_routing && (
-                <div className="flex items-center gap-2 rounded-md border border-green-300 bg-green-50 dark:bg-green-950/30 dark:border-green-800 p-2.5 text-sm">
-                  <ShieldCheck className="size-4 text-green-600 dark:text-green-400 shrink-0" />
-                  <span className="text-green-800 dark:text-green-300">
+                <div className="flex items-center gap-2 rounded-md border border-success/20 bg-success/10 p-2.5 text-sm">
+                  <ShieldCheck className="size-4 text-success shrink-0" />
+                  <span className="text-success">
                     Distinct video versions confirmed for the selected Meta platforms
                   </span>
                 </div>

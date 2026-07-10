@@ -54,6 +54,12 @@ import { PipelineHistorySidebar } from "./components/pipeline-history-sidebar";
 // local library is a separate feature (still OUT).
 const CATALOG_ENABLED = process.env.NEXT_PUBLIC_CATALOG_GOMAG === "true";
 
+// Persist enough to survive route unmount (clicking away in the left nav).
+// The pointer lets us reuse the existing backend restore path (?id=); the draft
+// covers Step-1 text typed before a pipeline id exists yet.
+const PIPELINE_SESSION_KEY = "ef_pipeline_session"; // { pipelineId, step }
+const PIPELINE_DRAFT_KEY = "ef_pipeline_draft"; // { pipelineName, idea, context, variantCount, provider, targetScriptDuration }
+
 export default function PipelinePageWrapper() {
   return (
     <PipelineErrorBoundary>
@@ -195,8 +201,19 @@ function PipelinePage() {
   // Assembly preset — how library segments get auto-assigned to phrases.
   // Distinct from `presetName` (export aspect ratio preset, e.g. TikTok).
   const [assemblyPreset, setAssemblyPreset] = useState<
-    "keyword_strict" | "balanced" | "max_variety" | "shuffle"
+    "keyword_strict" | "balanced" | "max_variety" | "shuffle" | "ai_smart"
   >("balanced");
+  // Render-time picture & audio adjustments (Step 3 "Render Settings" card).
+  // Applied by the render engine (eq / volume / afade), not by segment matching.
+  const [renderAdjust, setRenderAdjust] = useState({
+    enableColor: false,
+    brightness: 0.0,
+    contrast: 1.0,
+    saturation: 1.0,
+    voiceVolume: 1.0,
+    audioFadeIn: 0.0,
+    audioFadeOut: 0.0,
+  });
   const [voiceSettingsLoaded, setVoiceSettingsLoaded] = useState(false);
   // BUG-FE-25: Initialize as empty to avoid stale defaults; the sync useEffect below populates it
   const voiceSettingsValuesRef = useRef<Record<string, unknown>>({});
@@ -542,6 +559,61 @@ function PipelinePage() {
     return () => { isMountedRef.current = false; };
   }, []);
 
+  // Session/draft persistence — survives the component unmount that Next.js does
+  // when the user navigates away via the left nav and back. Gated so saves only
+  // start after the one-time rehydration below has applied (avoids clobbering).
+  const [hydrated, setHydrated] = useState(false);
+
+  // Rehydrate once on mount (post-hydration: localStorage is unavailable during SSR)
+  useEffect(() => {
+    try {
+      const draftRaw = localStorage.getItem(PIPELINE_DRAFT_KEY);
+      if (draftRaw) {
+        const d = JSON.parse(draftRaw);
+        if (d && typeof d === "object") {
+          // Fill-if-empty: never override the backend restore, which is source of truth
+          if (!idea && d.idea) setIdea(d.idea);
+          if (!context && d.context) setContext(d.context);
+          if (!pipelineName && d.pipelineName) setPipelineName(d.pipelineName);
+          if (typeof d.variantCount === "number") setVariantCount(d.variantCount);
+          if (typeof d.provider === "string" && d.provider) setProvider(d.provider);
+          if (typeof d.targetScriptDuration === "number") setTargetScriptDuration(d.targetScriptDuration);
+        }
+      }
+    } catch { /* corrupt draft — ignore */ }
+
+    // If we returned to /pipeline without ?id=, put the last pointer back in the
+    // URL so the existing restore effect (keyed on urlPipelineId) picks it up.
+    try {
+      if (!urlPipelineId) {
+        const sessRaw = localStorage.getItem(PIPELINE_SESSION_KEY);
+        if (sessRaw) {
+          const s = JSON.parse(sessRaw);
+          if (s && s.pipelineId) {
+            const savedStep = s.step >= 1 && s.step <= 4 ? s.step : 1;
+            setStepRaw(savedStep); // set before updateUrlParams so restore sees the right step
+            updateUrlParams(savedStep, s.pipelineId);
+          }
+        }
+      }
+    } catch { /* corrupt pointer — ignore */ }
+
+    setHydrated(true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- one-time mount rehydrate
+
+  // Persist pointer + Step-1 draft on change. ponytail: no debounce, add if profiling shows jank
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      if (pipelineId) {
+        localStorage.setItem(PIPELINE_SESSION_KEY, JSON.stringify({ pipelineId, step }));
+      }
+      localStorage.setItem(PIPELINE_DRAFT_KEY, JSON.stringify({
+        pipelineName, idea, context, variantCount, provider, targetScriptDuration,
+      }));
+    } catch { /* storage full/blocked — non-fatal */ }
+  }, [hydrated, pipelineId, step, pipelineName, idea, context, variantCount, provider, targetScriptDuration]);
+
   // Restore pipeline from URL ?id=<pipeline_id> on mount
   const urlRestoreAttempted = useRef(false);
   useEffect(() => {
@@ -581,6 +653,12 @@ function PipelinePage() {
         const previewInfo: Record<string, { has_audio: boolean; audio_duration: number }> = data.preview_info || {};
         const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
         const restoredApproved = new Set<number>();
+        // Bound restored keys to the current script count. The backend can hold
+        // stale tts_info for variants deleted from the scripts array (delete-script
+        // saves the shorter scripts but leaves the old tts_info row), so an orphan
+        // key >= scriptCount would push ttsCount past scripts.length → "N of M, -1
+        // remaining" and a jammed Continue gate. See buildRestoredTts for the twin.
+        const scriptCount = (data.scripts || []).length;
         // Meta-multiplication keys like "0_A" must collapse to base variant 0.
         const toBaseVariant = (key: string): number | null => {
           const m = key.match(/^(\d+)/);
@@ -591,7 +669,7 @@ function PipelinePage() {
         Object.entries(ttsInfo).forEach(([key, info]) => {
           if (!info.has_audio) return;
           const idx = toBaseVariant(key);
-          if (idx === null) return;
+          if (idx === null || idx >= scriptCount) return;
           restoredTts[idx] = { audio_duration: info.audio_duration, generating: false, stale: false };
           if (info.approved) restoredApproved.add(idx);
         });
@@ -600,7 +678,7 @@ function PipelinePage() {
         Object.entries(previewInfo).forEach(([key, info]) => {
           if (!info.has_audio) return;
           const idx = toBaseVariant(key);
-          if (idx === null) return;
+          if (idx === null || idx >= scriptCount) return;
           if (!restoredTts[idx]) {
             restoredTts[idx] = { audio_duration: info.audio_duration, generating: false, stale: false };
           }
@@ -658,11 +736,12 @@ function PipelinePage() {
         // Navigate to step 2 if on step 1 (scripts are loaded)
         if (step === 1) setStep(2);
       } catch {
-        // Pipeline not found or expired — clear ID from URL
+        // Pipeline not found or expired — clear ID from URL and drop the dead pointer
         updateUrlParams(step, null);
+        try { localStorage.removeItem(PIPELINE_SESSION_KEY); } catch { /* ignore */ }
       }
     })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps — one-time mount restore
+  }, [urlPipelineId]); // eslint-disable-line react-hooks/exhaustive-deps -- re-fires once when rehydrate injects ?id=
 
   const stripEmbeddedProductBlocks = (value: string): string => {
     if (!value) return "";
@@ -1655,6 +1734,14 @@ function PipelinePage() {
       ultra_rapid_intro: ultraRapidIntro,
       preset: assemblyPreset,
       meta_multiplication: metaMultiplication,
+      // Picture & audio adjustments (Step 3 Render Settings)
+      enable_color: renderAdjust.enableColor,
+      brightness: renderAdjust.brightness,
+      contrast: renderAdjust.contrast,
+      saturation: renderAdjust.saturation,
+      voice_volume: renderAdjust.voiceVolume,
+      audio_fade_in: renderAdjust.audioFadeIn,
+      audio_fade_out: renderAdjust.audioFadeOut,
       // Flat fields = DEFAULT subtitle style. Backend uses these for any
       // variant key that has no entry in subtitle_settings_by_key.
       font_size: subtitleSettings.fontSize,
@@ -1881,6 +1968,12 @@ function PipelinePage() {
       ttsAudioRef.current.pause();
       ttsAudioRef.current = null;
     }
+    // Starting fresh — drop the persisted session/draft so navigating away and
+    // back doesn't resurrect the old pipeline.
+    try {
+      localStorage.removeItem(PIPELINE_SESSION_KEY);
+      localStorage.removeItem(PIPELINE_DRAFT_KEY);
+    } catch { /* ignore */ }
   };
 
   // History sidebar: fetch pipeline list (Bug #54: wrapped in useCallback)
@@ -1962,6 +2055,7 @@ function PipelinePage() {
             setTtsResults({});
             setPreviewError(null);
             setStep(1);
+            try { localStorage.removeItem(PIPELINE_SESSION_KEY); } catch { /* ignore */ }
           }
         } catch (err) {
           handleApiError(err, "Failed to delete pipeline");
@@ -2484,22 +2578,28 @@ function PipelinePage() {
     }
   };
 
-  // FE-13: Shared helper to restore TTS results from history info maps
+  // FE-13: Shared helper to restore TTS results from history info maps.
+  // scriptCount bounds the keys we accept: the backend can retain tts_info for
+  // variant indices deleted from the scripts array (delete-script prunes local
+  // state + saves scripts, but leaves the old tts_info row). Restoring those
+  // orphan keys makes ttsCount exceed scripts.length → "4 of 3 scripts, -1
+  // remaining" and a jammed Continue gate. Drop any key >= scriptCount.
   const buildRestoredTts = (
     ttsInfo: Record<string, { has_audio: boolean; audio_duration: number; approved?: boolean }>,
     previewInfo: Record<string, { has_audio: boolean; audio_duration: number; has_srt?: boolean }>,
+    scriptCount: number,
   ): { tts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }>; approved: Set<number> } => {
     const restoredTts: Record<number, { audio_duration: number; generating: boolean; stale: boolean }> = {};
     const restoredApproved = new Set<number>();
     Object.entries(ttsInfo).forEach(([key, info]) => {
-      if (info.has_audio) {
+      if (info.has_audio && Number(key) < scriptCount) {
         restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
         if (info.approved) restoredApproved.add(Number(key));
       }
     });
     // Per-variant fallback: fill gaps from preview_info
     Object.entries(previewInfo).forEach(([key, info]) => {
-      if (info.has_audio && !restoredTts[Number(key)]) {
+      if (info.has_audio && Number(key) < scriptCount && !restoredTts[Number(key)]) {
         restoredTts[Number(key)] = { audio_duration: info.audio_duration, generating: false, stale: false };
       }
     });
@@ -2517,7 +2617,7 @@ function PipelinePage() {
       setPipelineId(pid);
       setScripts(historyScripts.map(formatScript));
       // Carry over TTS results: prefer tts_info (Step 2) over preview_info (Step 3)
-      const restored = buildRestoredTts(historyTtsInfo, historyPreviewInfo);
+      const restored = buildRestoredTts(historyTtsInfo, historyPreviewInfo, historyScripts.length);
       setTtsResults(restored.tts);
       if (restored.approved.size > 0) setApprovedScripts(restored.approved);
       // Restore context products from history
@@ -3409,6 +3509,8 @@ function PipelinePage() {
     setUltraRapidIntro,
     assemblyPreset,
     setAssemblyPreset,
+    renderAdjust,
+    setRenderAdjust,
     scheduleReassemblePreviews,
     approvedScripts,
     setApprovedScripts,

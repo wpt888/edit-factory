@@ -288,6 +288,13 @@ def _run_interstitial_ffmpeg(
         "-vf", vf,
         "-t", str(duration),
         *get_prep_codec_params(include_audio=False),
+        # Match segment extraction params exactly — these clips join the same
+        # `-c copy` concat as the segments, and any CFR/timescale mismatch
+        # produces broken timestamps (stuttery playback) in the assembled video.
+        "-r", str(fps),
+        "-fps_mode", "cfr",
+        "-video_track_timescale", "15360",
+        "-force_key_frames", "expr:eq(n,0)",
         "-pix_fmt", "yuv420p",
         "-an",  # no audio
         output_path,
@@ -442,6 +449,11 @@ def _run_pip_ffmpeg(
         "-map", "[out]",
         "-map", "0:a?",       # copy audio from main video if present
         *get_prep_codec_params(include_audio=False),
+        # Same concat-compat params as segment extraction (see interstitial cmd)
+        "-r", str(FPS),
+        "-fps_mode", "cfr",
+        "-video_track_timescale", "15360",
+        "-force_key_frames", "expr:eq(n,0)",
         "-pix_fmt", "yuv420p",
         "-c:a", "copy",
         "-shortest",          # end when shortest input finishes (main video)

@@ -57,7 +57,7 @@ export function ProgressTracker({
           icon: <CheckCircle2 className="h-4 w-4" />,
           variant: "default" as const,
           label: "Completed",
-          color: "text-green-600",
+          color: "text-success",
         };
       case "failed":
         return {

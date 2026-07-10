@@ -5,7 +5,7 @@
  * Features:
  * - Fetches all images for a catalog product via GET /catalog/products/{id}/images
  * - Displays images in a responsive grid with toggle selection (Set<string> for O(1) lookups)
- * - Selected images get a green border and checkmark overlay
+ * - Selected images get a highlighted border and checkmark overlay
  * - Save button calls PATCH /associations/{id} with selected_image_urls
  * - Loading spinner and "No images available" empty state
  */
@@ -168,7 +168,7 @@ export function ImagePickerDialog({
                     key={url}
                     className={`relative cursor-pointer rounded-lg overflow-hidden border-2 transition-all ${
                       isSelected
-                        ? "border-green-500 ring-1 ring-green-500"
+                        ? "border-primary ring-1 ring-primary"
                         : "border-transparent hover:border-muted-foreground/40"
                     }`}
                     onClick={() => toggleImage(url)}
@@ -185,8 +185,8 @@ export function ImagePickerDialog({
                     />
                     {/* Checkmark overlay when selected */}
                     {isSelected && (
-                      <div className="absolute top-1 right-1 h-5 w-5 rounded-full bg-green-500 flex items-center justify-center shadow-sm">
-                        <Check className="h-3 w-3 text-white" strokeWidth={3} />
+                      <div className="absolute top-1 right-1 h-5 w-5 rounded-full bg-primary flex items-center justify-center shadow-sm">
+                        <Check className="h-3 w-3 text-primary-foreground" strokeWidth={3} />
                       </div>
                     )}
                   </div>

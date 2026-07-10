@@ -184,6 +184,7 @@ export function TimelineEditor({
   const isPreviewActiveRef = useRef(false);
   const previewActiveIndexRef = useRef(0);
   const previewSegmentEndTimeRef = useRef<number | undefined>(undefined);
+  const previewSegmentStartTimeRef = useRef<number | undefined>(undefined);
   const pendingCanPlayRef = useRef<(() => void) | null>(null);
   const matchesRef = useRef(matches);
   const previewRafIdRef = useRef<number | null>(null);
@@ -279,6 +280,7 @@ export function TimelineEditor({
     } else {
       previewSegmentEndTimeRef.current = match?.segment_end_time ?? undefined;
     }
+    previewSegmentStartTimeRef.current = match?.segment_start_time ?? undefined;
   }, []);
 
   // Point a slot's <video> at a source, reloading only when it actually changes
@@ -555,7 +557,16 @@ export function TimelineEditor({
           previewSegmentEndTimeRef.current != null &&
           vid.currentTime >= previewSegmentEndTimeRef.current
         ) {
-          vid.pause();
+          // Mirror the render engine: a segment shorter than its phrase slot is
+          // LOOPED there (use_loop), so wrap to the in-point instead of freezing
+          // on the last frame — the freeze read as stutter at every seam.
+          const loopStart = previewSegmentStartTimeRef.current;
+          if (loopStart != null) {
+            seekGraceTimestampRef.current = performance.now();
+            vid.currentTime = loopStart;
+          } else {
+            vid.pause();
+          }
         }
       }
       segmentEnforceRafRef.current = requestAnimationFrame(enforceLoop);
@@ -797,6 +808,7 @@ export function TimelineEditor({
     setPreviewActiveIndex(0);
     previewActiveIndexRef.current = 0;
     previewSegmentEndTimeRef.current = undefined;
+    previewSegmentStartTimeRef.current = undefined;
     // Reset ping-pong state (slot <video> elements unmount with the preview block).
     activeSlotRef.current = 0;
     setActiveSlot(0);
@@ -1029,6 +1041,47 @@ export function TimelineEditor({
     const newDuration = Math.max(0.5, Math.min(10, currentDuration + delta));
     const updated = [...matches];
     updated[index] = { ...updated[index], duration_override: newDuration };
+    onMatchesChange(updated);
+  };
+
+  // --- Trim (in/out point) adjustment ---
+  // Nudges segment_start_time / segment_end_time within the source video.
+  // Propagates to the whole merge group (render collapse uses the first entry's
+  // segment for the group), same as handleSelectSegment.
+
+  const adjustTrim = (index: number, edge: "in" | "out", delta: number) => {
+    const match = matches[index];
+    if (!match?.segment_id) return;
+    const start = match.segment_start_time ?? 0;
+    const end = match.segment_end_time ?? start + 0.5;
+
+    // Clamp within the segment's library bounds when known.
+    const lib = availableSegments.find((s) => s.id === match.segment_id);
+    const minStart = lib?.start_time ?? 0;
+    const maxEnd = lib?.end_time ?? end + 10;
+
+    let newStart = start;
+    let newEnd = end;
+    if (edge === "in") {
+      // Keep at least a 0.5s window and stay within library bounds.
+      newStart = Math.min(Math.max(minStart, start + delta), end - 0.5);
+    } else {
+      newEnd = Math.max(Math.min(maxEnd, end + delta), start + 0.5);
+    }
+    if (newStart === start && newEnd === end) return;
+
+    const targetGroup = match.merge_group;
+    const updated = matches.map((m, idx) => {
+      if (idx === index || (targetGroup != null && m.merge_group === targetGroup)) {
+        return {
+          ...m,
+          segment_start_time: newStart,
+          segment_end_time: newEnd,
+          pinned: true,
+        };
+      }
+      return m;
+    });
     onMatchesChange(updated);
   };
 
@@ -1653,7 +1706,7 @@ export function TimelineEditor({
                   const borderColor = isMatched
                     ? isLowConfidence
                       ? "border-amber-400"
-                      : "border-green-500"
+                      : "border-success"
                     : isAutoFilled
                     ? "border-muted-foreground"
                     : "border-amber-500";
@@ -1663,7 +1716,7 @@ export function TimelineEditor({
                     : isMatched
                     ? isLowConfidence
                       ? "bg-amber-50/60 dark:bg-amber-950/10"
-                      : "bg-green-50 dark:bg-green-950/20"
+                      : "bg-success/10"
                     : isAutoFilled
                     ? "bg-muted/50"
                     : "bg-amber-50 dark:bg-amber-950/20";
@@ -1694,7 +1747,7 @@ export function TimelineEditor({
                         transition-all select-none overflow-hidden
                         ${borderColor} ${bgColor}
                         ${isSelected && !isPreviewActive ? "ring-2 ring-primary ring-offset-1" : ""}
-                        ${isPreviewHighlighted ? "ring-2 ring-green-400 ring-offset-1 brightness-110" : ""}
+                        ${isPreviewHighlighted ? "ring-2 ring-primary ring-offset-1 brightness-110" : ""}
                       `}
                       style={{
                         width: `max(${isMulti ? 90 : 60}px, ${widthPercent}%)`,
@@ -1933,7 +1986,7 @@ export function TimelineEditor({
                   {selectedMatch.matched_keyword && (
                     <Badge
                       variant="secondary"
-                      className="text-xs bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200"
+                      className="text-xs bg-success/10 text-success border-success/20"
                     >
                       <CheckCircle className="h-3 w-3 mr-1" />
                       {selectedMatch.matched_keyword}
@@ -1963,6 +2016,61 @@ export function TimelineEditor({
                       <Plus className="h-3 w-3" />
                     </Button>
                   </div>
+
+                  {/* Trim controls (in/out points within the source segment).
+                      Stacked rows — the selected-block panel is too narrow for
+                      a single-line In/Out readout. */}
+                  {selectedMatch.segment_id && (
+                    <div className="space-y-0.5 text-xs">
+                      <div className="flex items-center gap-1">
+                        <span className="text-muted-foreground w-7">In</span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5"
+                          onClick={() => adjustTrim(selectedBlockIndex, "in", -0.5)}
+                        >
+                          <Minus className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5"
+                          onClick={() => adjustTrim(selectedBlockIndex, "in", 0.5)}
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                        <span className="font-mono tabular-nums">
+                          {(selectedMatch.segment_start_time ?? 0).toFixed(1)}s
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-muted-foreground w-7">Out</span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5"
+                          onClick={() => adjustTrim(selectedBlockIndex, "out", -0.5)}
+                        >
+                          <Minus className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5"
+                          onClick={() => adjustTrim(selectedBlockIndex, "out", 0.5)}
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                        <span className="font-mono tabular-nums">
+                          {(selectedMatch.segment_end_time ?? 0).toFixed(1)}s
+                        </span>
+                      </div>
+                      <div className="text-muted-foreground">
+                        Trim ({Math.max(0, (selectedMatch.segment_end_time ?? 0) - (selectedMatch.segment_start_time ?? 0)).toFixed(1)}s)
+                      </div>
+                    </div>
+                  )}
 
                   {/* Swap button */}
                   <Button
@@ -2067,7 +2175,7 @@ export function TimelineEditor({
                     isMatched
                       ? isLowConfidence
                         ? "border-l-amber-400 bg-amber-50/60 dark:bg-amber-950/10"
-                        : "border-l-green-500 bg-green-50 dark:bg-green-950/20"
+                        : "border-l-success bg-success/10"
                       : isAutoFilled
                       ? "border-l-muted-foreground bg-muted/50"
                       : "border-l-amber-500 bg-amber-50 dark:bg-amber-950/20"
@@ -2170,7 +2278,7 @@ export function TimelineEditor({
                           )}
                           <Badge
                             variant="secondary"
-                            className="text-xs bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200 max-w-[90px]"
+                            className="text-xs bg-success/10 text-success border-success/20 max-w-[90px]"
                             title={match.explanation}
                           >
                             <CheckCircle className="h-3 w-3 mr-1 flex-shrink-0" />
@@ -2180,7 +2288,7 @@ export function TimelineEditor({
                             className={`text-xs font-medium ${
                               isLowConfidence
                                 ? "text-amber-600 dark:text-amber-400"
-                                : "text-green-700 dark:text-green-400"
+                                : "text-success"
                             }`}
                             title={match.explanation ?? (isLowConfidence ? "Low-confidence match" : undefined)}
                           >

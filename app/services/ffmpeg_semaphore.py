@@ -179,6 +179,15 @@ async def acquire_prep_slot(timeout: float = SEMAPHORE_ACQUIRE_TIMEOUT):
 # Safe FFmpeg subprocess runner (Popen + kill on timeout, no zombies)
 # =============================================================================
 
+# Background encodes must never starve the UI: on the desktop (Electron) the
+# user plays a preview WHILE other variants render, and normal-priority FFmpeg
+# saturating the cores makes playback stutter. Below-normal keeps encodes at
+# full speed on idle cores but always yields to the foreground app.
+_POPEN_PRIORITY: dict = (
+    {"creationflags": subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name == "nt" else {}
+)
+
+
 def safe_ffmpeg_run(
     cmd: list,
     timeout: int = 300,
@@ -212,6 +221,7 @@ def safe_ffmpeg_run(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        **_POPEN_PRIORITY,
     )
     register_process(proc)
     try:
@@ -285,6 +295,7 @@ def safe_ffmpeg_run_with_progress(
         stdout=subprocess.PIPE,
         stderr=stderr_file,
         text=True,
+        **_POPEN_PRIORITY,
     )
     register_process(proc)
 

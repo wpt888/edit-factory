@@ -31,14 +31,14 @@ interface ScheduleCalendarPreviewProps {
 
 /** Fixed palette of distinct Tailwind-friendly colours keyed by collection index */
 const COLLECTION_COLORS = [
-  { bg: "bg-emerald-100 dark:bg-emerald-900/40", text: "text-emerald-700 dark:text-emerald-300", border: "border-emerald-300 dark:border-emerald-700" },
+  { bg: "bg-teal-100 dark:bg-teal-900/40", text: "text-teal-700 dark:text-teal-300", border: "border-teal-300 dark:border-teal-700" },
   { bg: "bg-muted", text: "text-muted-foreground", border: "border-border" },
   { bg: "bg-amber-100 dark:bg-amber-900/40", text: "text-amber-700 dark:text-amber-300", border: "border-amber-300 dark:border-amber-700" },
   { bg: "bg-teal-100 dark:bg-teal-900/40", text: "text-teal-700 dark:text-teal-300", border: "border-teal-300 dark:border-teal-700" },
   { bg: "bg-orange-100 dark:bg-orange-900/40", text: "text-orange-700 dark:text-orange-300", border: "border-orange-300 dark:border-orange-700" },
   { bg: "bg-muted", text: "text-muted-foreground", border: "border-border" },
   { bg: "bg-muted", text: "text-muted-foreground", border: "border-border" },
-  { bg: "bg-lime-100 dark:bg-lime-900/40", text: "text-lime-700 dark:text-lime-300", border: "border-lime-300 dark:border-lime-700" },
+  { bg: "bg-amber-100 dark:bg-amber-900/40", text: "text-amber-700 dark:text-amber-300", border: "border-amber-300 dark:border-amber-700" },
   { bg: "bg-muted", text: "text-muted-foreground", border: "border-border" },
   { bg: "bg-primary/10", text: "text-primary", border: "border-primary/40" },
 ];

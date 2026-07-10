@@ -439,7 +439,7 @@ export default function ProductsPage() {
     switch (status) {
       case "idle":
       case "completed":
-        return "bg-green-600 hover:bg-green-600 text-white";
+        return "bg-success/10 hover:bg-success/10 text-success border border-success/20";
       case "syncing":
         return "bg-yellow-500 hover:bg-yellow-500 text-white";
       case "error":
@@ -714,7 +714,7 @@ export default function ProductsPage() {
                   <div className="flex items-center gap-1 flex-wrap pt-1">
                     {product.is_on_sale ? (
                       <>
-                        <span className="text-sm font-bold text-green-400">
+                        <span className="text-sm font-bold text-success">
                           {product.raw_sale_price_str}
                         </span>
                         <span className="text-xs text-muted-foreground line-through">

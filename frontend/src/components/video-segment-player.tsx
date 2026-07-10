@@ -1205,7 +1205,7 @@ export function VideoSegmentPlayer({
               } ${
                 currentSegment?.id === segment.id
                   ? "bg-primary/70 border-primary ring-1 ring-primary/50"
-                  : "bg-green-500/50 hover:bg-green-500/70 border-green-600"
+                  : "bg-success/50 hover:bg-success/70 border-success"
               }`}
               style={style}
               onMouseDown={(e) => e.stopPropagation()}
