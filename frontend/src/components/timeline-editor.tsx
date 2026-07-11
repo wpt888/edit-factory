@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -36,7 +36,7 @@ import {
   Pin,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
-import { scaleSubtitlePx } from "@/lib/subtitle-preview-scale";
+import { scaleSubtitlePx, useSubtitlePreviewHeight } from "@/lib/subtitle-preview-scale";
 import { formatTimeShort as formatTime } from "@/lib/utils";
 import type { SubtitleSettings } from "@/types/video-processing";
 import { GenerateAiSegmentDialog } from "@/components/dialogs/generate-ai-segment-dialog";
@@ -164,7 +164,8 @@ export function TimelineEditor({
   const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
   const [previewDuration, setPreviewDuration] = useState(0);
   const [previewActiveIndex, setPreviewActiveIndex] = useState(0);
-  const [previewContainerHeight, setPreviewContainerHeight] = useState(0);
+  const previewMeasurement = useSubtitlePreviewHeight<HTMLDivElement>(isPreviewActive, isPreviewExpanded);
+  const previewContainerHeight = previewMeasurement.height;
   // Which of the two ping-pong <video> slots is currently visible/playing (0 or 1).
   const [activeSlot, setActiveSlot] = useState(0);
 
@@ -190,30 +191,6 @@ export function TimelineEditor({
   // Invalidates late seek callbacks when a slot is repurposed before an async
   // load/seek finishes (most likely after a fallback transition).
   const slotPreparationIdRef = useRef([0, 0]);
-  const previewContainerRef = useRef<HTMLDivElement | null>(null);
-
-  useLayoutEffect(() => {
-    if (!isPreviewActive) return;
-
-    const container = previewContainerRef.current;
-    if (!container) return;
-
-    const updateHeight = (height: number) => {
-      if (!Number.isFinite(height) || height <= 0) return;
-      setPreviewContainerHeight((currentHeight) =>
-        Math.abs(currentHeight - height) < 0.1 ? currentHeight : height
-      );
-    };
-
-    updateHeight(container.getBoundingClientRect().height);
-
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry) updateHeight(entry.contentRect.height);
-    });
-    observer.observe(container);
-
-    return () => observer.disconnect();
-  }, [isPreviewActive, isPreviewExpanded]);
   const isPreviewPlayingRef = useRef(false);
   const isPreviewActiveRef = useRef(false);
   const previewActiveIndexRef = useRef(0);
@@ -1423,7 +1400,7 @@ export function TimelineEditor({
             <div className="rounded-lg border bg-card mb-3 overflow-hidden">
               {/* Video display with subtitle overlay */}
               <div
-                ref={previewContainerRef}
+                ref={previewMeasurement.ref}
                 className="relative mx-auto bg-black flex items-center justify-center"
                 style={compactPreviewFrameStyle}
               >
@@ -1549,7 +1526,7 @@ export function TimelineEditor({
               <div className="px-6 pb-6">
                 <div className="rounded-lg border bg-card overflow-hidden">
                   <div
-                    ref={previewContainerRef}
+                    ref={previewMeasurement.ref}
                     className="relative mx-auto bg-black flex items-center justify-center"
                     style={expandedPreviewFrameStyle}
                   >

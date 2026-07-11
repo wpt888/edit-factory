@@ -44,6 +44,7 @@ import { apiPost } from "@/lib/api";
 import {
   scaleSubtitlePx,
   SUBTITLE_REFERENCE_HEIGHT,
+  useSubtitlePreviewHeight,
 } from "@/lib/subtitle-preview-scale";
 
 // Bug #126: stable default to avoid invalidating useMemo on every render
@@ -118,6 +119,7 @@ export function SubtitleEditor({
   visualVersion,
   renderMode = "full",
 }: SubtitleEditorProps) {
+  const previewMeasurement = useSubtitlePreviewHeight<HTMLDivElement>(showPreview);
   // Track which preset is currently selected (null = manual/custom)
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
 
@@ -333,6 +335,11 @@ export function SubtitleEditor({
     };
   }, [videoInfo, previewHeight]);
 
+  const measuredPreviewDimensions = {
+    ...previewDimensions,
+    height: previewMeasurement.height || previewDimensions.height,
+  };
+
   const renderLocalSubtitleOverlay = (
     dimensions: { height: number },
     className = ""
@@ -408,13 +415,13 @@ export function SubtitleEditor({
                 alt="Subtitle preview"
                 className="absolute inset-0 w-full h-full object-contain rounded-lg"
               />
-              {renderLocalSubtitleOverlay(previewDimensions)}
+              {renderLocalSubtitleOverlay(measuredPreviewDimensions)}
             </>
           ) : (
             <>
               {/* Gradient background simulating video */}
               <div className="absolute inset-0 bg-muted" />
-              {renderLocalSubtitleOverlay(previewDimensions)}
+              {renderLocalSubtitleOverlay(measuredPreviewDimensions)}
             </>
           )}
           {ffmpegLoading && (
