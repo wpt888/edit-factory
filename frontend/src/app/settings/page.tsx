@@ -1313,9 +1313,10 @@ export default function SettingsPage() {
             </div>
           ) : (
             <div className="space-y-2">
-              <label className="text-sm font-medium">Platform token</label>
+              <label htmlFor="blipost-platform-token" className="text-sm font-medium">Platform token</label>
               <div className="flex gap-2">
                 <Input
+                  id="blipost-platform-token"
                   type={showBlipostToken ? "text" : "password"}
                   value={blipostToken}
                   onChange={(e) => setBlipostToken(e.target.value)}
@@ -1328,6 +1329,8 @@ export default function SettingsPage() {
                   variant="ghost"
                   size="icon"
                   onClick={() => setShowBlipostToken(!showBlipostToken)}
+                  aria-label={showBlipostToken ? "Hide platform token" : "Show platform token"}
+                  title={showBlipostToken ? "Hide platform token" : "Show platform token"}
                 >
                   {showBlipostToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </Button>
@@ -1398,6 +1401,7 @@ export default function SettingsPage() {
                     checked={renderStatus.running}
                     disabled={renderToggling}
                     onCheckedChange={handleRenderToggle}
+                    aria-label={renderStatus.running ? "Stop accepting render jobs" : "Start accepting render jobs"}
                   />
                   <Button
                     variant="ghost"
@@ -1429,9 +1433,10 @@ export default function SettingsPage() {
             </div>
           ) : (
             <div className="space-y-2">
-              <label className="text-sm font-medium">Pairing code</label>
+              <label htmlFor="blipost-pairing-code" className="text-sm font-medium">Pairing code</label>
               <div className="flex gap-2">
                 <Input
+                  id="blipost-pairing-code"
                   value={pairCode}
                   onChange={(e) => setPairCode(e.target.value.toUpperCase())}
                   placeholder="8-character code"
