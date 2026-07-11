@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -36,6 +36,7 @@ import {
   Pin,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
+import { scaleSubtitlePx } from "@/lib/subtitle-preview-scale";
 import { formatTimeShort as formatTime } from "@/lib/utils";
 import type { SubtitleSettings } from "@/types/video-processing";
 import { GenerateAiSegmentDialog } from "@/components/dialogs/generate-ai-segment-dialog";
@@ -158,6 +159,7 @@ export function TimelineEditor({
   const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
   const [previewDuration, setPreviewDuration] = useState(0);
   const [previewActiveIndex, setPreviewActiveIndex] = useState(0);
+  const [previewContainerHeight, setPreviewContainerHeight] = useState(0);
   // Which of the two ping-pong <video> slots is currently visible/playing (0 or 1).
   const [activeSlot, setActiveSlot] = useState(0);
 
@@ -180,6 +182,29 @@ export function TimelineEditor({
   // Marker so the rAF loop stages the idle slot once per current index, not every frame.
   const preparedNextForIndexRef = useRef<number | null>(null);
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!isPreviewActive) return;
+
+    const container = previewContainerRef.current;
+    if (!container) return;
+
+    const updateHeight = (height: number) => {
+      if (!Number.isFinite(height) || height <= 0) return;
+      setPreviewContainerHeight((currentHeight) =>
+        Math.abs(currentHeight - height) < 0.1 ? currentHeight : height
+      );
+    };
+
+    updateHeight(container.getBoundingClientRect().height);
+
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) updateHeight(entry.contentRect.height);
+    });
+    observer.observe(container);
+
+    return () => observer.disconnect();
+  }, [isPreviewActive, isPreviewExpanded]);
   const isPreviewPlayingRef = useRef(false);
   const isPreviewActiveRef = useRef(false);
   const previewActiveIndexRef = useRef(0);
@@ -1217,6 +1242,63 @@ export function TimelineEditor({
   // Selected match for inline preview
   const selectedMatch = selectedBlockIndex !== null ? matches[selectedBlockIndex] : null;
 
+  const renderPreviewSubtitleOverlay = (minimumFontSize: number) => {
+    const subtitleText = matches[previewActiveIndex]?.srt_text;
+    if (!subtitleText || previewContainerHeight <= 0) return null;
+
+    const fontSize = Math.max(
+      minimumFontSize,
+      scaleSubtitlePx(subtitleSettings?.fontSize ?? 48, previewContainerHeight)
+    );
+    const outlineWidth = Math.max(
+      0,
+      scaleSubtitlePx(subtitleSettings?.outlineWidth ?? 3, previewContainerHeight)
+    );
+    const shadowDepth = Math.max(
+      0,
+      scaleSubtitlePx(subtitleSettings?.shadowDepth ?? 0, previewContainerHeight)
+    );
+    const glowBlur = Math.max(
+      0,
+      scaleSubtitlePx(subtitleSettings?.glowBlur ?? 0, previewContainerHeight)
+    );
+    const opacity = Math.max(0, Math.min(100, subtitleSettings?.opacity ?? 100)) / 100;
+    const baseShadow = shadowDepth > 0
+      ? `0 ${shadowDepth}px ${Math.max(1, shadowDepth * 2)}px ${subtitleSettings?.shadowColor ?? "#000000"}`
+      : "0 1px 3px rgba(0,0,0,0.85)";
+    const glowShadow = subtitleSettings?.enableGlow && glowBlur > 0
+      ? `, 0 0 ${glowBlur}px ${subtitleSettings?.outlineColor ?? "#000000"}`
+      : "";
+    const positionY = subtitleSettings?.positionY ?? 85;
+    const positionStyle: React.CSSProperties = positionY <= 20
+      ? { top: `${positionY}%` }
+      : { top: `${positionY}%`, transform: "translateY(-50%)" };
+
+    return (
+      <div
+        className="absolute left-2 right-2 z-[2] text-center pointer-events-none"
+        style={positionStyle}
+      >
+        <p
+          className="inline-block px-2 py-1 font-semibold leading-tight"
+          style={{
+            fontFamily: subtitleSettings?.fontFamily ?? "var(--font-montserrat), Montserrat, sans-serif",
+            fontSize: `${fontSize}px`,
+            color: subtitleSettings?.textColor ?? "#FFFFFF",
+            opacity,
+            textShadow: `${baseShadow}${glowShadow}`,
+            WebkitTextStroke: outlineWidth > 0
+              ? `${outlineWidth}px ${subtitleSettings?.outlineColor ?? "#000000"}`
+              : undefined,
+            paintOrder: "stroke fill",
+          }}
+        >
+          {subtitleText}
+        </p>
+      </div>
+    );
+  };
+
   return (
     <>
       {/* View toggle + Play Preview */}
@@ -1329,52 +1411,7 @@ export function TimelineEditor({
                 )}
 
                 {/* Subtitle overlay — respects subtitleSettings if provided */}
-                {matches[previewActiveIndex]?.srt_text && (() => {
-                  // Use same proportional scaling as subtitle-editor.tsx
-                  // ASS PlayRes reference height = 1920; scale to actual preview container height
-                  const ASS_REF_HEIGHT = 1920;
-                  const containerH = previewContainerRef.current?.clientHeight ?? 320;
-                  const scale = containerH / ASS_REF_HEIGHT;
-                  const fontSize = Math.max(8, (subtitleSettings?.fontSize ?? 48) * scale);
-                  const outlineW = (subtitleSettings?.outlineWidth ?? 3) * scale;
-                  const shadowDepth = ((subtitleSettings?.shadowDepth ?? 0)) * scale;
-                  const glowBlur = ((subtitleSettings?.glowBlur ?? 0)) * scale;
-                  const opacity = Math.max(0, Math.min(100, subtitleSettings?.opacity ?? 100)) / 100;
-                  const baseShadow = shadowDepth > 0
-                    ? `0 ${shadowDepth}px ${Math.max(1, shadowDepth * 2)}px ${subtitleSettings?.shadowColor ?? "#000000"}`
-                    : "0 1px 3px rgba(0,0,0,0.85)";
-                  const glowShadow = subtitleSettings?.enableGlow && glowBlur > 0
-                    ? `, 0 0 ${glowBlur}px ${subtitleSettings?.outlineColor ?? "#000000"}`
-                    : "";
-                  const positionY = subtitleSettings?.positionY ?? 85;
-                  const positionStyle: React.CSSProperties = positionY <= 20
-                    ? { top: `${positionY}%` }
-                    : { top: `${positionY}%`, transform: "translateY(-50%)" };
-
-                  return (
-                    <div
-                      className="absolute left-2 right-2 z-[2] text-center pointer-events-none"
-                      style={positionStyle}
-                    >
-                      <p
-                        className="inline-block px-2 py-1 font-semibold leading-tight"
-                        style={{
-                          fontFamily: subtitleSettings?.fontFamily ?? "var(--font-montserrat), Montserrat, sans-serif",
-                          fontSize: `${fontSize}px`,
-                          color: subtitleSettings?.textColor ?? "#FFFFFF",
-                          opacity,
-                          textShadow: `${baseShadow}${glowShadow}`,
-                          WebkitTextStroke: outlineW > 0
-                            ? `${outlineW}px ${subtitleSettings?.outlineColor ?? "#000000"}`
-                            : undefined,
-                          paintOrder: "stroke fill",
-                        }}
-                      >
-                        {matches[previewActiveIndex].srt_text}
-                      </p>
-                    </div>
-                  );
-                })()}
+                {renderPreviewSubtitleOverlay(8)}
               </div>
 
               {/* Controls */}
@@ -1497,50 +1534,7 @@ export function TimelineEditor({
                       </div>
                     )}
 
-                    {matches[previewActiveIndex]?.srt_text && (() => {
-                      const ASS_REF_HEIGHT = 1920;
-                      const containerH = previewContainerRef.current?.clientHeight ?? 720;
-                      const scale = containerH / ASS_REF_HEIGHT;
-                      const fontSize = Math.max(10, (subtitleSettings?.fontSize ?? 48) * scale);
-                      const outlineW = (subtitleSettings?.outlineWidth ?? 3) * scale;
-                      const shadowDepth = ((subtitleSettings?.shadowDepth ?? 0)) * scale;
-                      const glowBlur = ((subtitleSettings?.glowBlur ?? 0)) * scale;
-                      const opacity = Math.max(0, Math.min(100, subtitleSettings?.opacity ?? 100)) / 100;
-                      const baseShadow = shadowDepth > 0
-                        ? `0 ${shadowDepth}px ${Math.max(1, shadowDepth * 2)}px ${subtitleSettings?.shadowColor ?? "#000000"}`
-                        : "0 1px 3px rgba(0,0,0,0.85)";
-                      const glowShadow = subtitleSettings?.enableGlow && glowBlur > 0
-                        ? `, 0 0 ${glowBlur}px ${subtitleSettings?.outlineColor ?? "#000000"}`
-                        : "";
-                      const positionY = subtitleSettings?.positionY ?? 85;
-                      const positionStyle: React.CSSProperties = positionY <= 20
-                        ? { top: `${positionY}%` }
-                        : { top: `${positionY}%`, transform: "translateY(-50%)" };
-
-                      return (
-                        <div
-                          className="absolute left-2 right-2 z-[2] text-center pointer-events-none"
-                          style={positionStyle}
-                        >
-                          <p
-                            className="inline-block px-2 py-1 font-semibold leading-tight"
-                            style={{
-                              fontFamily: subtitleSettings?.fontFamily ?? "var(--font-montserrat), Montserrat, sans-serif",
-                              fontSize: `${fontSize}px`,
-                              color: subtitleSettings?.textColor ?? "#FFFFFF",
-                              opacity,
-                              textShadow: `${baseShadow}${glowShadow}`,
-                              WebkitTextStroke: outlineW > 0
-                                ? `${outlineW}px ${subtitleSettings?.outlineColor ?? "#000000"}`
-                                : undefined,
-                              paintOrder: "stroke fill",
-                            }}
-                          >
-                            {matches[previewActiveIndex].srt_text}
-                          </p>
-                        </div>
-                      );
-                    })()}
+                    {renderPreviewSubtitleOverlay(10)}
                   </div>
 
                   <div className="px-4 py-3 space-y-2">

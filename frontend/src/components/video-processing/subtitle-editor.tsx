@@ -41,10 +41,13 @@ import {
   CaptionPreset,
 } from "@/types/video-processing";
 import { apiPost } from "@/lib/api";
+import {
+  scaleSubtitlePx,
+  SUBTITLE_REFERENCE_HEIGHT,
+} from "@/lib/subtitle-preview-scale";
 
 // Bug #126: stable default to avoid invalidating useMemo on every render
-const DEFAULT_VIDEO_INFO: VideoInfo = { width: 1080, height: 1920, duration: 0, fps: 30, aspect_ratio: "9:16", is_vertical: true };
-const ASS_REFERENCE_HEIGHT = 1920;
+const DEFAULT_VIDEO_INFO: VideoInfo = { width: 1080, height: SUBTITLE_REFERENCE_HEIGHT, duration: 0, fps: 30, aspect_ratio: "9:16", is_vertical: true };
 
 interface SubtitleEditorProps {
   /** Current subtitle settings */
@@ -300,7 +303,7 @@ export function SubtitleEditor({
   // Preview calculations
   const previewDimensions = useMemo(() => {
     const safeWidth = videoInfo.width || 1080;
-    const safeHeight = videoInfo.height || 1920;
+    const safeHeight = videoInfo.height || SUBTITLE_REFERENCE_HEIGHT;
     const aspectRatio = safeWidth / safeHeight;
 
     if (videoInfo.is_vertical) {
@@ -319,11 +322,10 @@ export function SubtitleEditor({
     dimensions: { height: number },
     className = ""
   ) => {
-    const scale = dimensions.height / ASS_REFERENCE_HEIGHT;
-    const fontSize = Math.max(8, settings.fontSize * scale);
-    const outlineWidth = Math.max(0, settings.outlineWidth * scale);
-    const shadowDepth = Math.max(0, (settings.shadowDepth ?? 0) * scale);
-    const glowBlur = Math.max(0, (settings.glowBlur ?? 0) * scale);
+    const fontSize = Math.max(8, scaleSubtitlePx(settings.fontSize, dimensions.height));
+    const outlineWidth = Math.max(0, scaleSubtitlePx(settings.outlineWidth, dimensions.height));
+    const shadowDepth = Math.max(0, scaleSubtitlePx(settings.shadowDepth ?? 0, dimensions.height));
+    const glowBlur = Math.max(0, scaleSubtitlePx(settings.glowBlur ?? 0, dimensions.height));
     const opacity = Math.max(0, Math.min(100, settings.opacity ?? 100)) / 100;
     const baseShadow =
       shadowDepth > 0
@@ -426,7 +428,7 @@ export function SubtitleEditor({
           <div
             className="relative bg-black rounded-lg overflow-hidden mx-auto"
             style={{
-              aspectRatio: `${videoInfo.width || 1080} / ${videoInfo.height || 1920}`,
+              aspectRatio: `${videoInfo.width || 1080} / ${videoInfo.height || SUBTITLE_REFERENCE_HEIGHT}`,
               height: "min(85vh, 900px)",
               containerType: "size",
             }}
