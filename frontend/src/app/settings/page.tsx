@@ -1451,7 +1451,7 @@ export default function SettingsPage() {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                On blipost.com → Settings → “Connect a desktop”, generate a code and enter it here. The runner token is stored securely on this machine.
+                On blipost.com → Settings → “Connect a desktop for free rendering”, generate a code and enter it here. The runner token is stored securely on this machine.
               </p>
             </div>
           )}
