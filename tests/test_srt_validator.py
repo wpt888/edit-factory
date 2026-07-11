@@ -152,12 +152,14 @@ def test_sanitize_removes_script():
     assert "world" in result
 
 
-def test_sanitize_removes_html_tags():
-    """sanitize_srt_text strips HTML tags but keeps the text content."""
-    html_srt = "This is <b>bold</b> text"
+def test_sanitize_preserves_standard_srt_formatting_tags():
+    """Standard SRT formatting survives while unsupported HTML is stripped."""
+    html_srt = "<div>This is <b>bold</b> text</div>"
     result = sanitize_srt_text(html_srt)
-    assert "<b>" not in result
-    assert "</b>" not in result
+    assert "<div>" not in result
+    assert "</div>" not in result
+    assert "<b>" in result
+    assert "</b>" in result
     assert "bold" in result
     assert "This is" in result
     assert "text" in result
