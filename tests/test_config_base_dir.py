@@ -30,9 +30,12 @@ def test_windows_desktop_missing_appdata_falls_back(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setenv("DESKTOP_MODE", "true")
     monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     result = _get_app_base_dir()
-    # Falls back to project root (parent of app/)
-    assert result == Path(__import__("app.config", fromlist=["_"]).__file__).parent.parent
+    # Packaged installs can be read-only, so desktop mode falls back to a
+    # writable user directory rather than the project/install directory.
+    assert result == tmp_path / "EditFactory"
+    assert result.exists()
 
 
 def test_macos_desktop(monkeypatch, tmp_path):
@@ -89,6 +92,7 @@ def test_desktop_mode_off_returns_project_root(monkeypatch, tmp_path):
 def test_unknown_platform_falls_back(monkeypatch, tmp_path, caplog):
     monkeypatch.setattr(sys, "platform", "freebsd")
     monkeypatch.setenv("DESKTOP_MODE", "true")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     result = _get_app_base_dir()
-    import app.config as _cfg
-    assert result == Path(_cfg.__file__).parent.parent
+    assert result == tmp_path / "EditFactory"
+    assert result.exists()
