@@ -1,8 +1,9 @@
 """
-Unit tests for CostTracker local JSON log path (no Supabase).
+Unit tests for CostTracker local JSON and repository paths.
 
-All tests use a CostTracker with _supabase=None so all operations use
-cost_log.json written under tmp_path/logs/.
+Local-path tests use a CostTracker with _repo=None so all operations use
+cost_log.json written under tmp_path/logs/. Repository tests inject a mock
+that follows the current DataRepository contract.
 """
 import json
 import pytest
@@ -20,7 +21,7 @@ def make_tracker(tmp_path) -> CostTracker:
     from app.services.cost_tracker import CostTracker
     log_dir = tmp_path / "logs"
     tracker = CostTracker(log_dir=log_dir)
-    tracker._supabase = None
+    tracker._repo = None
     return tracker
 
 
@@ -247,56 +248,31 @@ def test_get_all_entries_filtered_by_profile(tmp_path, mock_settings):
 
 
 # ---------------------------------------------------------------------------
-# Supabase-path tests (mocked Supabase client)
+# Repository-path tests
 # ---------------------------------------------------------------------------
 
-def make_mock_supabase():
-    """Create a mock Supabase client."""
-    from unittest.mock import MagicMock
-    mock_sb = MagicMock()
-    mock_table = MagicMock()
-    mock_sb.table.return_value = mock_table
-
-    # insert chain
-    mock_insert = MagicMock()
-    mock_table.insert.return_value = mock_insert
-    mock_insert.execute.return_value = MagicMock(data=[{"id": "new-row"}])
-
-    # select chain
-    mock_select = MagicMock()
-    mock_table.select.return_value = mock_select
-    mock_select.eq.return_value = mock_select
-    mock_select.gte.return_value = mock_select
-    mock_select.order.return_value = mock_select
-    mock_select.limit.return_value = mock_select
-    mock_select.execute.return_value = MagicMock(data=[], count=0)
-
-    return mock_sb
-
-
-def make_supabase_tracker(tmp_path):
-    """Create a CostTracker with mocked Supabase."""
+def make_repository_tracker(tmp_path):
+    """Create a CostTracker with a mocked DataRepository."""
+    from app.repositories.models import QueryResult
     from app.services.cost_tracker import CostTracker
     log_dir = tmp_path / "logs"
     tracker = CostTracker(log_dir=log_dir)
-    tracker._supabase = make_mock_supabase()
+    tracker._repo = MagicMock()
+    tracker._repo.table_query.return_value = QueryResult(data=[], count=0)
     return tracker
 
 
-def test_save_to_supabase_called(tmp_path, mock_settings):
-    """_save_to_supabase is called when Supabase is configured."""
-    tracker = make_supabase_tracker(tmp_path)
-    entry = tracker.log_elevenlabs_tts(job_id="sb-el-1", characters=500, profile_id="profile-sb")
-    # Supabase table was called (for insert in _save_to_supabase)
-    assert tracker._supabase.table.called
-
-
+def test_save_to_repository_called(tmp_path, mock_settings):
+    """Cost entries are persisted through the current repository contract."""
+    tracker = make_repository_tracker(tmp_path)
+    tracker.log_elevenlabs_tts(job_id="sb-el-1", characters=500, profile_id="profile-sb")
+    tracker._repo.log_cost.assert_called_once()
 def test_save_to_supabase_no_connection(tmp_path, mock_settings):
-    """_save_to_supabase returns False when _supabase is None."""
+    """_save_to_supabase returns False when no repository is configured."""
     from app.services.cost_tracker import CostTracker, CostEntry
     from datetime import datetime, timezone
     tracker = CostTracker(log_dir=tmp_path / "logs")
-    tracker._supabase = None
+    tracker._repo = None
     entry = CostEntry(
         timestamp=datetime.now(timezone.utc).isoformat(),
         job_id="no-sb",
@@ -310,55 +286,40 @@ def test_save_to_supabase_no_connection(tmp_path, mock_settings):
     assert result is False
 
 
-def test_get_summary_supabase_path(tmp_path, mock_settings):
-    """get_summary uses Supabase when available."""
-    tracker = make_supabase_tracker(tmp_path)
-    mock_sb = tracker._supabase
-
-    # Setup full mock chain for all Supabase queries in _get_summary_from_supabase
-    mock_chain = mock_sb.table.return_value.select.return_value
-    mock_chain.eq.return_value = mock_chain
-    mock_chain.gte.return_value = mock_chain
-    mock_chain.order.return_value = mock_chain
-    mock_chain.limit.return_value = mock_chain
-    mock_chain.execute.return_value = MagicMock(data=[], count=0)
+def test_get_summary_repository_path(tmp_path, mock_settings):
+    """get_summary uses the repository when available."""
+    tracker = make_repository_tracker(tmp_path)
 
     summary = tracker.get_summary()
-    # Should come from Supabase path (source="supabase")
     assert "totals" in summary
+    assert tracker._repo.table_query.called
 
 
-def test_get_summary_supabase_fallback(tmp_path, mock_settings):
-    """get_summary falls back to local when Supabase raises."""
-    tracker = make_supabase_tracker(tmp_path)
-    # Make Supabase query fail
-    tracker._supabase.table.side_effect = Exception("Supabase down")
+def test_get_summary_repository_fallback(tmp_path, mock_settings):
+    """get_summary falls back to local when the repository raises."""
+    tracker = make_repository_tracker(tmp_path)
+    tracker._repo.table_query.side_effect = Exception("database down")
 
     summary = tracker.get_summary()
     # Should fall back to local
     assert summary["source"] == "local"
 
 
-def test_get_all_entries_supabase_path(tmp_path, mock_settings):
-    """get_all_entries uses Supabase path when available."""
-    tracker = make_supabase_tracker(tmp_path)
-    mock_sb = tracker._supabase
-    mock_chain = mock_sb.table.return_value.select.return_value
-    mock_chain.order.return_value = mock_chain
-    mock_chain.execute.return_value = MagicMock(data=[{"id": "row1"}])
+def test_get_all_entries_repository_path(tmp_path, mock_settings):
+    """get_all_entries uses the repository path when available."""
+    from app.repositories.models import QueryResult
+    tracker = make_repository_tracker(tmp_path)
+    tracker._repo.table_query.return_value = QueryResult(data=[{"id": "row1"}])
 
     entries = tracker.get_all_entries()
-    assert isinstance(entries, list)
+    assert entries == [{"id": "row1"}]
 
 
-def test_get_monthly_costs_supabase_path(tmp_path, mock_settings):
-    """get_monthly_costs uses Supabase query path."""
-    tracker = make_supabase_tracker(tmp_path)
-    mock_sb = tracker._supabase
-    mock_chain = mock_sb.table.return_value.select.return_value
-    mock_chain.eq.return_value = mock_chain
-    mock_chain.gte.return_value = mock_chain
-    mock_chain.execute.return_value = MagicMock(data=[{"cost": 0.5}, {"cost": 0.3}])
+def test_get_monthly_costs_repository_path(tmp_path, mock_settings):
+    """get_monthly_costs uses the repository query path."""
+    from app.repositories.models import QueryResult
+    tracker = make_repository_tracker(tmp_path)
+    tracker._repo.table_query.return_value = QueryResult(data=[{"cost": 0.5}, {"cost": 0.3}])
 
     total = tracker.get_monthly_costs(profile_id="profile-mb")
     assert total == pytest.approx(0.8, abs=1e-4)
