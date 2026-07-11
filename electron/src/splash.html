@@ -2,67 +2,247 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src file:;" />
-  <title>blipost</title>
+  <title>Blipost</title>
   <style>
-    /* blipost brand — warm near-black ink + electric lime */
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      color-scheme: dark;
+      --ink: #090b0a;
+      --panel: #0e110f;
+      --text: #f6f8f4;
+      --muted: #929a92;
+      --lime: #d7ff00;
+    }
+
+    * { box-sizing: border-box; }
+
     html, body {
-      width: 100%; height: 100%;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      color: oklch(0.965 0.008 107);
+      width: 100%;
+      height: 100%;
+      margin: 0;
       overflow: hidden;
+      background: transparent;
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
       user-select: none;
       cursor: default;
     }
+
     body {
-      display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-      gap: 22px;
-      background: radial-gradient(120% 120% at 50% 0%, oklch(0.19 0.007 110) 0%, oklch(0.145 0.005 110) 60%, oklch(0.12 0.005 110) 100%);
+      padding: 10px;
+      display: grid;
+      place-items: center;
     }
+
+    .splash {
+      position: relative;
+      display: grid;
+      grid-template-columns: 43% 57%;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      border-radius: 22px;
+      background: var(--ink);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+      -webkit-app-region: drag;
+    }
+
+    .brand-panel {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      padding: 36px 32px 29px;
+      background:
+        radial-gradient(circle at 16% 0%, rgba(215, 255, 0, 0.08), transparent 35%),
+        linear-gradient(145deg, #111411 0%, #090b0a 72%);
+    }
+
+    .brand-panel::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      right: -52px;
+      width: 92px;
+      height: 100%;
+      z-index: -1;
+      background: linear-gradient(90deg, var(--ink) 10%, transparent 100%);
+      pointer-events: none;
+    }
+
     .logo {
-      height: 34px; width: auto;
-      animation: pulse 1.6s ease-in-out infinite;
-      filter: drop-shadow(0 0 18px oklch(0.89 0.215 127 / 0.35));
+      width: 178px;
+      height: auto;
+      display: block;
+      filter: drop-shadow(0 0 18px rgba(215, 255, 0, 0.12));
     }
-    .bar {
-      width: 240px; height: 5px; border-radius: 99px;
-      background: rgba(255, 255, 255, 0.10); overflow: hidden;
+
+    .product-label {
+      margin-top: 16px;
+      color: var(--lime);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.17em;
+      text-transform: uppercase;
     }
+
+    .tagline {
+      max-width: 230px;
+      margin: 48px 0 0;
+      font-size: 25px;
+      font-weight: 590;
+      line-height: 1.12;
+      letter-spacing: -0.035em;
+    }
+
+    .tagline span { color: #adb5ac; }
+
+    .progress-area {
+      margin-top: auto;
+    }
+
+    .progress-copy {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 11px;
+    }
+
+    .status {
+      min-width: 0;
+      overflow: hidden;
+      color: #b9c0b8;
+      font-size: 11.5px;
+      line-height: 1.4;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .percentage {
+      flex: 0 0 auto;
+      color: var(--text);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 650;
+    }
+
+    .track {
+      position: relative;
+      width: 100%;
+      height: 4px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.105);
+    }
+
     .fill {
-      height: 100%; width: 8%; border-radius: 99px;
-      background: linear-gradient(90deg, oklch(0.78 0.17 127), oklch(0.89 0.215 127));
-      transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 6%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #aee900, var(--lime));
+      box-shadow: 0 0 14px rgba(215, 255, 0, 0.45);
+      transition: width 420ms cubic-bezier(0.22, 1, 0.36, 1);
     }
-    .status { font-size: 12.5px; color: oklch(0.68 0.015 110); letter-spacing: 0.2px; min-height: 16px; }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.7; }
+
+    .art-panel {
+      position: relative;
+      min-width: 0;
+      overflow: hidden;
+      background: #090b0a;
+    }
+
+    .artwork {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      object-position: 67% center;
+      transform: scale(1.015);
+      animation: settle 9s ease-out both;
+    }
+
+    .art-panel::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      background:
+        linear-gradient(90deg, rgba(9, 11, 10, 0.62), transparent 30%),
+        linear-gradient(0deg, rgba(9, 11, 10, 0.34), transparent 35%);
+      pointer-events: none;
+    }
+
+    .art-panel::after {
+      content: "";
+      position: absolute;
+      right: 20px;
+      bottom: 19px;
+      z-index: 2;
+      width: 62px;
+      height: 3px;
+      border-radius: 99px;
+      background: var(--lime);
+      box-shadow:
+        -74px 0 0 rgba(215, 255, 0, 0.38),
+        -110px 0 0 rgba(255, 255, 255, 0.16);
+      opacity: 0.82;
+    }
+
+    @keyframes settle {
+      from { transform: scale(1.055); filter: brightness(0.82); }
+      to { transform: scale(1.015); filter: brightness(1); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .artwork { animation: none; }
+      .fill { transition-duration: 0ms; }
     }
   </style>
 </head>
 <body>
-  <img class="logo" src="blipost-logo.png" alt="blipost" />
-  <div class="bar"><div class="fill" id="fill"></div></div>
-  <div class="status" id="status">Starting engine…</div>
+  <main class="splash" aria-label="Blipost is starting">
+    <section class="brand-panel">
+      <img class="logo" src="blipost-logo.png" alt="Blipost" />
+      <div class="product-label">Desktop creative studio</div>
+      <p class="tagline">From raw footage <span>to a finished story.</span></p>
+
+      <div class="progress-area" aria-live="polite">
+        <div class="progress-copy">
+          <div class="status" id="status">Launching Blipost…</div>
+          <div class="percentage" id="percentage">6%</div>
+        </div>
+        <div class="track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="6" id="track">
+          <div class="fill" id="fill"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="art-panel" aria-hidden="true">
+      <img class="artwork" src="splash-artwork.png" alt="" />
+    </section>
+  </main>
 
   <script>
-    // Driven from main.js via webContents.executeJavaScript(window.__setStatus(...)).
-    let _creep = 8;
-    window.__setStatus = function (backOk, frontOk, pct) {
+    let currentProgress = 6;
+
+    window.__setProgress = function (percentage, label) {
+      const next = Math.max(currentProgress, Math.min(100, Math.round(Number(percentage) || 0)));
+      currentProgress = next;
+
       const fill = document.getElementById('fill');
       const status = document.getElementById('status');
-      let target = 8;
-      let label = 'Starting engine…';
-      if (backOk && frontOk) { target = 100; label = 'Ready!'; }
-      else if (backOk)       { target = 70;  label = 'Engine started · starting interface…'; }
-      else                   { target = 35;  label = 'Starting engine…'; }
-      // Never go backwards; let a slow time-based creep nudge it so it never looks frozen.
-      if (typeof pct === 'number') _creep = Math.max(_creep, Math.min(pct, target));
-      const width = Math.max(_creep, target * 0.5, target === 100 ? 100 : 0);
-      fill.style.width = Math.min(100, Math.max(width, _creep)) + '%';
-      status.textContent = label;
+      const value = document.getElementById('percentage');
+      const track = document.getElementById('track');
+
+      fill.style.width = next + '%';
+      value.textContent = next + '%';
+      track.setAttribute('aria-valuenow', String(next));
+      if (typeof label === 'string' && label) status.textContent = label;
     };
   </script>
 </body>

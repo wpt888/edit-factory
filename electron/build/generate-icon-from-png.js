@@ -1,5 +1,5 @@
-// Generates icon.ico and icon.icns from blipost-icon.png (the real brand
-// logo). Resizing/PNG encoding uses `sharp` (already installed under
+// Generates a transparent source icon from the mark in src/blipost-logo.png,
+// then builds icon.ico and icon.icns. Resizing/PNG encoding uses `sharp` (installed under
 // frontend/node_modules — no new dependency); the ICO/ICNS container bytes
 // are hand-built, same approach the old procedural generators used.
 //
@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const sharp = require(path.join(__dirname, '..', '..', 'frontend', 'node_modules', 'sharp'));
 
+const LOGO_SRC = path.join(__dirname, '..', 'src', 'blipost-logo.png');
 const SRC = path.join(__dirname, 'blipost-icon.png');
 const ICO_SIZES = [16, 32, 48, 256];
 const ICNS_TYPES = [
@@ -27,6 +28,36 @@ function rgba(size) {
 }
 function pngAt(size) {
   return sharp(SRC).resize(size, size, { fit: 'cover' }).png().toBuffer();
+}
+
+async function buildTransparentSource() {
+  const metadata = await sharp(LOGO_SRC).metadata();
+  // The standalone mark occupies the first near-square region of the full
+  // wordmark. Keep its speed lines, trim empty alpha, then add icon-safe space.
+  const markRegionWidth = Math.min(metadata.width, Math.round(metadata.height * 1.1));
+  // Materialize the crop before trim/resize: libvips may otherwise reorder the
+  // geometry operations and attempt the original extract on trimmed bounds.
+  const croppedMark = await sharp(LOGO_SRC)
+    .extract({ left: 0, top: 0, width: markRegionWidth, height: metadata.height })
+    .png()
+    .toBuffer();
+  const mark = await sharp(croppedMark)
+    .trim({ background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .resize(824, 824, { fit: 'contain', withoutEnlargement: false })
+    .png()
+    .toBuffer();
+
+  await sharp({
+    create: {
+      width: 1024,
+      height: 1024,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .composite([{ input: mark, gravity: 'centre' }])
+    .png()
+    .toFile(SRC);
 }
 
 // ---------- ICO ----------
@@ -116,6 +147,9 @@ async function buildIcns() {
 }
 
 (async () => {
+  await buildTransparentSource();
+  console.log('blipost-icon.png: 1024px transparent source');
+
   const ico = await buildIco();
   fs.writeFileSync(path.join(__dirname, 'icon.ico'), ico);
   console.log(`icon.ico: ${ico.length} bytes (${ICO_SIZES.join(', ')}px)`);

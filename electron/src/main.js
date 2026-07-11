@@ -100,6 +100,7 @@ let backendProcess = null;
 let frontendProcess = null;
 let isQuitting = false;
 let trayHintShown = false;  // one-time "still running in tray" balloon (audit #30)
+let splashProgress = { percentage: 6, label: 'Launching Blipost…' };
 
 // Auto-restart state (backend + frontend resilience)
 const SERVICE_MAX_RESTARTS = 3;
@@ -469,18 +470,23 @@ async function checkStartupState() {
 // during the 30-60s two-runtime cold start instead of a hidden/frozen window.
 function createSplash() {
   splashWindow = new BrowserWindow({
-    width: 440,
-    height: 300,
+    width: 760,
+    height: 460,
     frame: false,
+    transparent: true,
     resizable: false,
     movable: true,
     show: true,
     center: true,
     alwaysOnTop: true,
-    backgroundColor: '#0a0a08', // blipost ink — oklch(0.145 0.005 110)
+    hasShadow: true,
+    backgroundColor: '#00000000',
     title: 'Blipost',
     icon: ICON_PATH,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
+  });
+  splashWindow.webContents.on('did-finish-load', () => {
+    updateSplash(splashProgress.percentage, splashProgress.label);
   });
   splashWindow.loadFile(path.join(__dirname, 'splash.html')).catch((e) => {
     logLine('launcher', `Splash load failed (non-fatal): ${e.message}`);
@@ -495,14 +501,31 @@ function closeSplash() {
   splashWindow = null;
 }
 
-function updateSplash(backOk, frontOk, elapsed) {
+function updateSplash(percentage, label) {
+  const nextPercentage = Math.max(
+    splashProgress.percentage,
+    Math.min(100, Math.round(Number(percentage) || 0))
+  );
+  splashProgress = { percentage: nextPercentage, label: label || splashProgress.label };
   if (!splashWindow || splashWindow.isDestroyed()) return;
-  // A coarse time-based creep (capped) keeps the bar inching forward between
-  // the two real milestones (API ready, UI ready) so it never looks frozen.
-  const pct = Math.min(90, Math.round((elapsed / MAX_WAIT_MS) * 100));
   splashWindow.webContents
-    .executeJavaScript(`window.__setStatus && window.__setStatus(${!!backOk}, ${!!frontOk}, ${pct})`)
+    .executeJavaScript(
+      `window.__setProgress && window.__setProgress(${nextPercentage}, ${JSON.stringify(splashProgress.label)})`
+    )
     .catch(() => {});
+}
+
+function updateServiceSplash(backOk, frontOk, elapsed) {
+  const timeRatio = Math.min(1, elapsed / MAX_WAIT_MS);
+  if (backOk && frontOk) {
+    updateSplash(88, 'Services ready');
+  } else if (backOk) {
+    updateSplash(62 + timeRatio * 20, 'Building workspace…');
+  } else if (frontOk) {
+    updateSplash(58 + timeRatio * 22, 'Connecting creative engine…');
+  } else {
+    updateSplash(28 + timeRatio * 30, 'Starting creative engine…');
+  }
 }
 
 function waitForServices() {
@@ -528,8 +551,8 @@ function waitForServices() {
         tray.setToolTip(`Blipost — ${status.join(', ')}`);
       }
 
-      // Update the branded splash progress bar
-      updateSplash(backOk, frontOk, elapsed);
+      // Reflect both real service milestones and bounded time-based progress.
+      updateServiceSplash(backOk, frontOk, elapsed);
 
       if (backOk && frontOk) {
         clearInterval(interval);
@@ -844,6 +867,7 @@ app.whenReady().then(async () => {
 
     // Branded splash — first thing visible; cold start can take 10-30s
     createSplash();
+    updateSplash(10, 'Preparing local workspace…');
 
     // SHELL-02: Create hidden window
     createWindow();
@@ -870,6 +894,7 @@ app.whenReady().then(async () => {
     // progress bar instead of a blank screen. Services must not start until
     // ports are free, otherwise uvicorn can fail to bind.
     await cleanupOrphans();
+    updateSplash(20, 'Workspace prepared');
 
     // Brief settle so killed listeners fully release their ports before we bind
     // (audit #29). On Windows, process exit != socket released immediately;
@@ -880,14 +905,17 @@ app.whenReady().then(async () => {
     // SHELL-01: Spawn services
     startBackend();
     startFrontend();
+    updateSplash(28, 'Starting creative engine…');
 
     // SHELL-02: Wait for services, then show window
     await waitForServices();
     servicesReady = true;
+    updateSplash(91, 'Restoring your workspace…');
     logLine('launcher', 'Services ready — checking startup state...');
 
     // WIZD-01 / LICS-02 / LICS-04: Determine correct startup URL
     const startupUrl = await checkStartupState();
+    updateSplash(95, 'Opening Blipost…');
 
     // Robust load (audit #20): set up reveal handlers BEFORE loadURL so a
     // failed or stuck load can never leave the frameless always-on-top splash
@@ -896,8 +924,10 @@ app.whenReady().then(async () => {
     const reveal = () => {
       if (windowRevealed) return;
       windowRevealed = true;
+      updateSplash(100, 'Ready');
       try { mainWindow.show(); } catch { /* window already gone */ }
-      closeSplash();  // Hand off from splash to the real window
+      // Let the final progress state register before handing off to the app.
+      setTimeout(closeSplash, 180);
     };
     mainWindow.once('ready-to-show', reveal);
     mainWindow.webContents.on('did-fail-load', (_e, code, desc, failedUrl) => {
