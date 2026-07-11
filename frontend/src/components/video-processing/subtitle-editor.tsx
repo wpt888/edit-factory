@@ -126,8 +126,23 @@ export function SubtitleEditor({
   const [ffmpegBackgroundUrl, setFfmpegBackgroundUrl] = useState<string | null>(null);
   const [ffmpegLoading, setFfmpegLoading] = useState(false);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
+  const [systemFonts, setSystemFonts] = useState<string[]>([]);
+  const [fontAccessError, setFontAccessError] = useState<string | null>(null);
   const ffmpegTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const prevFingerprint = useRef("");
+
+  const loadSystemFonts = () => {
+    const listFonts = window.editFactory?.listSystemFonts;
+    if (!listFonts) return;
+    setFontAccessError(null);
+    listFonts()
+      .then((fonts) => setSystemFonts(
+        [...new Set(fonts.map((font) => font.family).filter(Boolean))]
+          .filter((family) => !FONT_OPTIONS.some((font) => font.value === family))
+          .sort((a, b) => a.localeCompare(b)),
+      ))
+      .catch(() => setFontAccessError("System font access was denied. Use the font picker again to retry."));
+  };
   const latestSettingsRef = useRef(settings);
   // Monotonic request id — any response whose id is not the latest is
   // discarded so a slow earlier render can't overwrite a newer one.
@@ -572,7 +587,14 @@ export function SubtitleEditor({
 
       {/* Font Family */}
       <div className="space-y-2">
-        <Label>Font</Label>
+        <div className="flex items-center justify-between">
+          <Label>Font</Label>
+          {typeof window !== "undefined" && window.editFactory?.listSystemFonts && (
+            <Button type="button" variant="ghost" size="sm" onClick={loadSystemFonts}>
+              {systemFonts.length ? "Refresh system fonts" : "Load system fonts"}
+            </Button>
+          )}
+        </div>
         <Select
           value={settings.fontFamily}
           onValueChange={(value) => updateSetting("fontFamily", value)}
@@ -590,8 +612,20 @@ export function SubtitleEditor({
                 {font.label}
               </SelectItem>
             ))}
+            {systemFonts.map((family) => (
+              <SelectItem key={`system-${family}`} value={family} style={{ fontFamily: family }}>
+                {family} (System)
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
+        {fontAccessError && <p className="text-xs text-amber-500">{fontAccessError}</p>}
+        {!FONT_OPTIONS.some((font) => font.value === settings.fontFamily) &&
+          systemFonts.length > 0 && !systemFonts.includes(settings.fontFamily) && (
+            <p className="text-xs text-amber-500">
+              Font {settings.fontFamily} is unavailable on this computer; Montserrat will be used.
+            </p>
+          )}
       </div>
 
       {/* Colors Row */}

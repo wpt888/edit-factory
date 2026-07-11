@@ -8,6 +8,15 @@ contextBridge.exposeInMainWorld('editFactory', {
   // Native multi-select video picker. Resolves to string[] of absolute
   // paths; [] when the user cancels.
   selectVideoFiles: () => ipcRenderer.invoke('dialog:select-videos'),
+  // Browser-standard Local Font Access. The first call may show Chromium's
+  // permission prompt; keep the full metadata so family names remain exact.
+  listSystemFonts: async () => {
+    if (typeof globalThis.queryLocalFonts !== 'function') return [];
+    const fonts = await globalThis.queryLocalFonts();
+    return fonts.map(({ family, fullName, postscriptName, style }) => ({
+      family, fullName, postscriptName, style,
+    }));
+  },
   // Custom title bar controls (main window is frameless — see main.js createWindow)
   window: {
     minimize: () => ipcRenderer.send('window:minimize'),

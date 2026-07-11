@@ -1208,49 +1208,15 @@ class VideoEditor:
         logger.info(f"Subtitle: fontSize={font_size}px, outline={outline_width}px (video: {video_width}x{video_height})")
         logger.info(f"Position Y: {position_y}% -> Alignment: {alignment}, MarginV: {margin_v}px")
 
-        # Convert colors
-        def hex_to_ass(hex_color):
-            hex_color = hex_color.lstrip('#')
-            if len(hex_color) == 3:
-                hex_color = ''.join(c * 2 for c in hex_color)
-            if len(hex_color) < 6:
-                return "&H00FFFFFF"  # fallback to white
-            r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
-            return f"&H00{b:02X}{g:02X}{r:02X}"
-
-        primary_color = hex_to_ass(settings["textColor"])
-        outline_color = hex_to_ass(settings["outlineColor"])
-
-        # Extract font family name (without CSS variables)
-        font_family = settings['fontFamily']
-        # Remove CSS variable prefix if present
-        if 'var(--' in font_family:
-            # Extract actual font name: "var(--font-montserrat), Montserrat, sans-serif" -> "Montserrat"
-            parts = font_family.split(',')
-            for part in parts:
-                part = part.strip()
-                if not part.startswith('var(') and part not in ['sans-serif', 'serif', 'monospace']:
-                    font_family = part.strip("'\"")
-                    break
-
-        # PlayResX/PlayResY are essential for correct positioning on portrait videos
-        # Without them, ASS/libass assumes 4:3 resolution and miscalculates position
-        subtitle_style = (
-            f"PlayResX={video_width},"
-            f"PlayResY={video_height},"
-            f"FontName={font_family},"
-            f"FontSize={font_size},"
-            f"PrimaryColour={primary_color},"
-            f"OutlineColour={outline_color},"
-            f"Outline={outline_width},"
-            f"Shadow=1,"
-            f"Alignment={alignment},"
-            f"MarginV={margin_v},"
-            f"Bold=1"
+        # Legacy callers use the canonical builder so font matching, fontsdir,
+        # escaping and ASS styling cannot diverge from the primary path.
+        from app.services.video_effects.subtitle_styler import build_subtitle_filter
+        subtitle_filter = build_subtitle_filter(
+            srt_path=srt_path,
+            subtitle_settings=settings,
+            video_width=video_width,
+            video_height=video_height,
         )
-
-        # BUG-1.4: Use shared escape function for consistent path handling
-        srt_path_escaped = escape_srt_path_for_ffmpeg(srt_path)
 
         # IMPORTANT: For subtitles filter, we CANNOT use hwaccel with CPU filter
         # Subtitles filter ruleaza pe CPU, deci trebuie sa decodam pe CPU si sa encodam cu GPU
@@ -1261,7 +1227,7 @@ class VideoEditor:
             cmd = [
                 "ffmpeg", "-y",
                 "-i", str(video_path),
-                "-vf", f"subtitles='{srt_path_escaped}':force_style='{subtitle_style}'",
+                "-vf", subtitle_filter,
                 "-c:v", "libx264",
                 "-preset", "fast",
                 "-crf", "20",
@@ -1272,7 +1238,7 @@ class VideoEditor:
             cmd = [
                 "ffmpeg", "-y",
                 "-i", str(video_path),
-                "-vf", f"subtitles='{srt_path_escaped}':force_style='{subtitle_style}'",
+                "-vf", subtitle_filter,
                 "-c:v", self.video_codec,
                 "-preset", self.video_preset,
                 "-crf", self.video_quality,

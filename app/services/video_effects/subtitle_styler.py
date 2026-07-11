@@ -165,15 +165,7 @@ class SubtitleStyleConfig:
             except (ValueError, IndexError):
                 return "&H00FFFFFF"
 
-        # Extract font family
         font_family = settings.get('fontFamily', 'Montserrat')
-        if 'var(--' in font_family:
-            parts = font_family.split(',')
-            for part in parts:
-                part = part.strip()
-                if not part.startswith('var(') and part not in ['sans-serif', 'serif', 'monospace']:
-                    font_family = part.strip("'\"")
-                    break
 
         # Position to alignment and margin
         position_y = settings.get('positionY', 85)
@@ -375,6 +367,9 @@ def build_subtitle_filter(
         video_height=video_height
     )
 
+    from app.services.font_manager import prepare_render_fonts
+    effective_family, fonts_dir, _warning = prepare_render_fonts(style_config.font_family)
+    style_config.font_family = effective_family
     force_style = style_config.to_force_style_string()
 
     # DEBUG: Log the complete subtitle style config to diagnose transparency bug
@@ -429,8 +424,12 @@ def build_subtitle_filter(
     # PlayResX/PlayResY inside force_style don't help because those live in
     # the ASS [Script Info] section, not the [Style] line that force_style
     # can override.
+    fontsdir_clause = (
+        f":fontsdir='{escape_srt_path_for_ffmpeg(fonts_dir)}'" if fonts_dir else ""
+    )
     filter_str = (
         f"subtitles='{srt_path_escaped}'"
+        f"{fontsdir_clause}"
         f":original_size={video_width}x{video_height}"
         f":force_style='{force_style}'"
     )

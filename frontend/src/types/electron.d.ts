@@ -7,6 +7,12 @@ declare global {
       isDesktop: boolean;
       /** Native multi-select video picker. [] = user cancelled. */
       selectVideoFiles: () => Promise<string[]>;
+      listSystemFonts: () => Promise<Array<{
+        family: string;
+        fullName: string;
+        postscriptName: string;
+        style: string;
+      }>>;
       /** Custom title bar controls (main window runs frameless). */
       window: {
         minimize: () => void;

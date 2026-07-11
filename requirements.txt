@@ -80,6 +80,9 @@ python-magic==0.4.27
 # Subtitle Processing
 srt==3.5.3
 
+# OpenType name-table inspection for deterministic subtitle font matching
+fonttools==4.61.1
+
 # XML Feed Parsing (Google Shopping feeds)
 lxml==6.0.2
 

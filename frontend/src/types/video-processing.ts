@@ -170,17 +170,11 @@ export const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
 };
 
 export const FONT_OPTIONS = [
-  { value: "var(--font-montserrat), Montserrat, sans-serif", label: "Montserrat" },
-  { value: "var(--font-roboto), Roboto, sans-serif", label: "Roboto" },
-  { value: "var(--font-oswald), Oswald, sans-serif", label: "Oswald" },
-  { value: "var(--font-poppins), Poppins, sans-serif", label: "Poppins" },
-  { value: "var(--font-bebas-neue), 'Bebas Neue', sans-serif", label: "Bebas Neue" },
-  { value: "var(--font-anton), Anton, sans-serif", label: "Anton" },
-  { value: "var(--font-rubik), Rubik, sans-serif", label: "Rubik" },
-  { value: "var(--font-nunito), Nunito, sans-serif", label: "Nunito" },
-  { value: "var(--font-lato), Lato, sans-serif", label: "Lato" },
-  { value: "var(--font-inter), Inter, sans-serif", label: "Inter" },
-];
+  "Montserrat", "Roboto", "Oswald", "Poppins", "Bebas Neue", "Anton",
+  "Rubik", "Nunito", "Lato", "Inter", "Open Sans", "Merriweather",
+  "Playfair Display", "Roboto Slab", "Source Sans 3", "Ubuntu", "Raleway",
+  "Fira Sans", "Archivo Black", "DM Sans",
+].map((family) => ({ value: family, label: family }));
 
 export const COLOR_PRESETS = [
   "#FFFFFF", // White
@@ -259,7 +253,7 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
     description: "Large white text, thick black outline. Clean and readable.",
     settings: {
       fontSize: 52,
-      fontFamily: "var(--font-montserrat), Montserrat, sans-serif",
+      fontFamily: "Montserrat",
       textColor: "#FFFFFF",
       outlineColor: "#000000",
       outlineWidth: 4,
@@ -284,7 +278,7 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
     description: "Cyan text with glow effect. Eye-catching for night/club content.",
     settings: {
       fontSize: 44,
-      fontFamily: "var(--font-bebas-neue), 'Bebas Neue', sans-serif",
+      fontFamily: "Bebas Neue",
       textColor: "#00FFFF",
       outlineColor: "#0066FF",
       outlineWidth: 2,
@@ -309,7 +303,7 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
     description: "Small, subtle white text. Unobtrusive, video stays the focus.",
     settings: {
       fontSize: 36,
-      fontFamily: "var(--font-inter), Inter, sans-serif",
+      fontFamily: "Inter",
       textColor: "#FFFFFF",
       outlineColor: "#000000",
       outlineWidth: 1,
@@ -334,7 +328,7 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
     description: "Words highlight in sync with the voice (white → yellow). Submagic/CapCut style.",
     settings: {
       fontSize: 48,
-      fontFamily: "var(--font-anton), Anton, sans-serif",
+      fontFamily: "Anton",
       textColor: "#FFFFFF",
       outlineColor: "#000000",
       outlineWidth: 3,
@@ -361,7 +355,7 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
     description: "White text with heavy drop shadow. Works on any background.",
     settings: {
       fontSize: 46,
-      fontFamily: "var(--font-poppins), Poppins, sans-serif",
+      fontFamily: "Poppins",
       textColor: "#FFFFFF",
       outlineColor: "#333333",
       outlineWidth: 2,
@@ -386,7 +380,7 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
     description: "Warm cream text with orange outline, slight glow. Vintage feel.",
     settings: {
       fontSize: 44,
-      fontFamily: "var(--font-oswald), Oswald, sans-serif",
+      fontFamily: "Oswald",
       textColor: "#FFF5E1",
       outlineColor: "#CC6600",
       outlineWidth: 2,
