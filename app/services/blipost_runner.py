@@ -15,8 +15,10 @@ equivalent to one rendered on the cloud fleet — except the encoder swaps to
 Only runs when the user flips "Accept render jobs" on in Settings.
 """
 import asyncio
+import json
 import logging
 import tempfile
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -28,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 _API_PREFIX = "/api/render/v1"
 _POLL_INTERVAL_S = 5.0
+_MAX_BACKOFF_S = 300.0
+_ORPHAN_MAX_AGE_S = 120.0
+_RECOVERY_FILE = "recovery.json"
 _HEARTBEAT_INTERVAL_S = 60.0
 _LEASE_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 _DOWNLOAD_TIMEOUT = httpx.Timeout(600.0, connect=10.0)
@@ -388,6 +393,7 @@ class BlipostRenderRunner:
             self.running = True
             self.state = "idle"
             self.last_error = None
+            await self._recover_orphaned_renders(base_url.rstrip("/"), token)
             self._task = asyncio.create_task(self._loop(base_url.rstrip("/"), token))
             logger.info("[Blipost render] runner started (nvenc=%s)", is_nvenc_available())
 
@@ -411,6 +417,7 @@ class BlipostRenderRunner:
             "running": self.running,
             "state": self.state,
             "currentJob": self.current_job,
+            "lastError": self.last_error,
             "processed": self.processed[:_MAX_PROCESSED_HISTORY],
             "nvenc": is_nvenc_available(),
         }
@@ -423,20 +430,33 @@ class BlipostRenderRunner:
 
     async def _loop(self, base_url: str, token: str) -> None:
         headers = {"authorization": f"Bearer {token}", "content-type": "application/json"}
+        consecutive_errors = 0
         while self.running:
             try:
                 outcome = await self._lease_and_render(base_url, headers)
             except asyncio.CancelledError:
                 raise
+            except _PairingExpiredError as e:
+                logger.warning("[Blipost render] pairing rejected: %s", e)
+                self.state = "error"
+                self.last_error = str(e)
+                self.running = False
+                return
             except Exception as e:  # never let one cycle kill the loop
                 logger.warning("[Blipost render] cycle error: %s", e)
                 self.state = "error"
                 self.last_error = str(e)
                 outcome = "error"
+            if outcome == "error":
+                consecutive_errors += 1
+            else:
+                consecutive_errors = 0
+                self.last_error = None
             if outcome == "rendered":
                 continue  # queue may be hot — grab the next immediately
             self.state = "idle" if outcome != "error" else self.state
-            await asyncio.sleep(_POLL_INTERVAL_S)
+            delay = min(_POLL_INTERVAL_S * (2 ** max(0, consecutive_errors - 1)), _MAX_BACKOFF_S)
+            await asyncio.sleep(delay)
 
     async def _post(self, base_url: str, headers: dict, path: str, body: Optional[dict] = None) -> httpx.Response:
         async with httpx.AsyncClient(timeout=_LEASE_TIMEOUT) as client:
@@ -446,6 +466,8 @@ class BlipostRenderRunner:
         """One lease→render→complete cycle. Returns 'rendered' | 'idle' | 'error'.
         Mirrors runner.ts::leaseAndRender."""
         res = await self._post(base_url, headers, "/lease")
+        if res.status_code in (401, 403):
+            raise _PairingExpiredError("Blipost pairing expired or was revoked. Pair this device again.")
         if res.status_code != 200:
             raise RuntimeError(f"lease failed: {res.status_code} {res.text[:200]}")
         lease = res.json().get("lease")
@@ -464,6 +486,9 @@ class BlipostRenderRunner:
         aborted = asyncio.Event()
         hb_task = asyncio.create_task(self._heartbeat(base_url, headers, job_id, aborted))
         work_dir = Path(tempfile.mkdtemp(prefix="blipost-runner-"))
+        (work_dir / _RECOVERY_FILE).write_text(
+            json.dumps({"jobId": job_id, "profileId": self.profile_id}), encoding="utf-8"
+        )
         use_nvenc = is_nvenc_available()
 
         try:
@@ -515,6 +540,48 @@ class BlipostRenderRunner:
             self.current_job = None
             _rmtree(work_dir)
 
+    async def _recover_orphaned_renders(self, base_url: str, token: str) -> None:
+        """Report interrupted jobs as retriable and remove stale runner temp data.
+
+        Partial renders are intentionally not resumable; after a crash the web
+        job is re-queued and rendering starts again from its source.
+        """
+        headers = {"authorization": f"Bearer {token}", "content-type": "application/json"}
+        temp_root = Path(tempfile.gettempdir())
+        now = time.time()
+        for work_dir in temp_root.glob("blipost-runner-*"):
+            if not work_dir.is_dir():
+                continue
+            recovery_file = work_dir / _RECOVERY_FILE
+            if recovery_file.exists():
+                try:
+                    recovery = json.loads(recovery_file.read_text(encoding="utf-8"))
+                    job_id = recovery.get("jobId")
+                    if recovery.get("profileId") != self.profile_id:
+                        continue
+                    if job_id:
+                        response = await self._post(
+                            base_url, headers, f"/jobs/{job_id}/fail",
+                            {"error": "Desktop runner restarted during render", "retriable": True},
+                        )
+                        if response.status_code in (401, 403):
+                            raise _PairingExpiredError(
+                                "Blipost pairing expired or was revoked. Pair this device again."
+                            )
+                        self._record(job_id, 0, "interrupted")
+                except _PairingExpiredError:
+                    raise
+                except Exception as e:
+                    logger.warning("[Blipost render] could not report orphan %s: %s", work_dir, e)
+                _rmtree(work_dir)
+                continue
+            try:
+                age = now - work_dir.stat().st_mtime
+            except OSError:
+                continue
+            if age >= _ORPHAN_MAX_AGE_S:
+                _rmtree(work_dir)
+
     async def _heartbeat(self, base_url: str, headers: dict, job_id: str, aborted: asyncio.Event) -> None:
         """Extends the lease every 60s while rendering; a 409 means the lease was
         reclaimed (we ran past it) → signal the render loop to bail. Mirrors the
@@ -556,6 +623,10 @@ def _rmtree(path: Path) -> None:
         shutil.rmtree(path, ignore_errors=True)
     except Exception:
         pass
+
+
+class _PairingExpiredError(RuntimeError):
+    """The runner token is invalid and automatic retry cannot recover it."""
 
 
 # ---- singleton -------------------------------------------------------------

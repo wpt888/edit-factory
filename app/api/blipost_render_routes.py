@@ -48,6 +48,7 @@ class RenderStatusResponse(BaseModel):
     running: bool
     state: str
     currentJob: Optional[str] = None
+    lastError: Optional[str] = None
     processed: list = []
     nvenc: bool = False
 

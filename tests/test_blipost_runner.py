@@ -26,6 +26,7 @@ from app.services.blipost_runner import (
     expand_outputs,
     validate_recipe,
 )
+import app.services.blipost_runner as runner_module
 
 FFMPEG = "ffmpeg"
 
@@ -85,6 +86,76 @@ def test_validate_recipe():
     assert validate_recipe({"segments": [], "variants": [{}], "transcript": {"segments": []}})
     assert validate_recipe({"segments": [{"start": 5, "end": 2}], "variants": [{}], "transcript": {"segments": []}})
     assert validate_recipe("nope")
+
+
+def test_status_exposes_last_error():
+    runner = BlipostRenderRunner()
+    runner.last_error = "network unavailable"
+    assert runner.status()["lastError"] == "network unavailable"
+
+
+def test_auth_failure_stops_runner_and_requests_repair(monkeypatch):
+    runner = BlipostRenderRunner()
+    runner.running = True
+
+    async def rejected(*_args, **_kwargs):
+        return type("Response", (), {"status_code": 401, "text": "revoked"})()
+
+    monkeypatch.setattr(runner, "_post", rejected)
+    asyncio.run(runner._loop("https://example.invalid", "bad-token"))
+
+    assert runner.running is False
+    assert runner.state == "error"
+    assert "Pair this device again" in (runner.last_error or "")
+
+
+def test_transient_failures_use_exponential_backoff(monkeypatch):
+    runner = BlipostRenderRunner()
+    runner.running = True
+    delays = []
+
+    async def failing_cycle(*_args, **_kwargs):
+        if len(delays) == 3:
+            runner.running = False
+            return "idle"
+        raise RuntimeError("temporary outage")
+
+    async def record_sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr(runner, "_lease_and_render", failing_cycle)
+    monkeypatch.setattr(runner_module.asyncio, "sleep", record_sleep)
+    asyncio.run(runner._loop("https://example.invalid", "token"))
+
+    assert delays[:3] == [5.0, 10.0, 20.0]
+
+
+def test_start_recovers_interrupted_job(monkeypatch, tmp_path):
+    orphan = tmp_path / "blipost-runner-crashed"
+    orphan.mkdir()
+    (orphan / "recovery.json").write_text(
+        json.dumps({"jobId": "job-crashed", "profileId": "profile-1"}), encoding="utf-8"
+    )
+    reported = []
+    runner = BlipostRenderRunner()
+
+    async def report(_base_url, _headers, path, body=None):
+        reported.append((path, body))
+        return type("Response", (), {"status_code": 200})()
+
+    async def no_loop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(runner_module.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(runner, "_post", report)
+    monkeypatch.setattr(runner, "_loop", no_loop)
+    asyncio.run(runner.start("profile-1", "https://example.invalid", "token"))
+
+    assert reported == [("/jobs/job-crashed/fail", {
+        "error": "Desktop runner restarted during render", "retriable": True
+    })]
+    assert not orphan.exists()
+    assert runner.processed[0]["outcome"] == "interrupted"
 
 
 # ---------------------------------------------------------------------------

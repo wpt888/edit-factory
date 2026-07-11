@@ -256,6 +256,7 @@ export default function SettingsPage() {
     running: boolean
     state: string
     currentJob?: string | null
+    lastError?: string | null
     processed: { jobId: string; clips: number; outcome: string }[]
     nvenc: boolean
   }
@@ -1386,6 +1387,11 @@ export default function SettingsPage() {
                           : "Idle — waiting for jobs"
                       : "Off"}
                   </p>
+                  {renderStatus.lastError && (
+                    <p className="text-xs text-red-500 mt-1" role="alert">
+                      {renderStatus.lastError}
+                    </p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <Switch
