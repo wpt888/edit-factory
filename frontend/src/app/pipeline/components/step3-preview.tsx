@@ -71,7 +71,7 @@ import {
 } from "../pipeline-types";
 import { formatDuration } from "../pipeline-utils";
 import { SubtitleStylePreviewPanel } from "./subtitle-style-preview-panel";
-import type { Dispatch, SetStateAction } from "react";
+import { useEffect, useMemo, type Dispatch, type SetStateAction } from "react";
 
 /**
  * Timeline state contract consumed by the future CompositePreviewPlayer (F5).
@@ -196,6 +196,34 @@ export function Step3Preview({ ctx }: { ctx: any }) {
     setShowSkipDialog,
     handleRender,
   }: Step3Ctx = ctx;
+
+  const previewProxySourceIdsKey = useMemo(() => Array.from(new Set(
+    previewCards.flatMap((card) =>
+      (previews[card.key]?.matches ?? [])
+        .map((match) => match.source_video_id)
+        .filter((sourceVideoId): sourceVideoId is string => Boolean(sourceVideoId))
+    )
+  )).sort().join(","), [previewCards, previews]);
+
+  // This component only mounts while the workflow is in Step 3. Trigger proxy
+  // generation now so seek-friendly media can be ready before Preview is played.
+  useEffect(() => {
+    if (!currentProfile?.id || !previewProxySourceIdsKey) return;
+
+    const controller = new AbortController();
+    apiPost(
+      "/segments/source-videos/preview-proxies",
+      { video_ids: previewProxySourceIdsKey.split(",") },
+      { signal: controller.signal }
+    ).catch((error) => {
+      if (!controller.signal.aborted) {
+        console.warn("[Step3Preview] Failed to start eager preview proxies", error);
+      }
+    });
+
+    return () => controller.abort();
+  }, [currentProfile?.id, previewProxySourceIdsKey]);
+
   return (
           <div className="space-y-6">
             <div className="flex items-center justify-between">

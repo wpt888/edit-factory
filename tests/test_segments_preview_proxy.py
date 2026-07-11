@@ -44,6 +44,19 @@ class _FakeRepo:
         return self.supabase
 
 
+class _ProxyRepo:
+    def __init__(self, videos):
+        self.videos = videos
+        self.updates = []
+
+    def get_source_video(self, video_id):
+        return self.videos.get(video_id)
+
+    def update_source_video(self, video_id, data):
+        self.updates.append((video_id, data))
+        self.videos[video_id].update(data)
+
+
 def test_generate_preview_proxy_success(tmp_path, monkeypatch):
     source = tmp_path / "source.mp4"
     source.write_bytes(b"video")
@@ -82,6 +95,57 @@ def test_generate_preview_proxy_failure_does_not_raise(tmp_path, monkeypatch):
     assert result["preview_proxy_status"] == "failed"
     assert result["preview_proxy_path"] is None
     assert "bad codec" in result["preview_proxy_error"]
+
+
+def test_eager_preview_proxies_schedule_unique_owned_unproxied_videos(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    ready_proxy = tmp_path / "ready-proxy.mp4"
+    ready_proxy.write_bytes(b"proxy")
+    videos = {
+        "needs-proxy": {
+            "profile_id": "profile-id",
+            "file_path": str(source),
+            "status": "ready",
+            "preview_proxy_status": None,
+            "preview_proxy_path": None,
+        },
+        "already-ready": {
+            "profile_id": "profile-id",
+            "file_path": str(source),
+            "status": "ready",
+            "preview_proxy_status": "ready",
+            "preview_proxy_path": str(ready_proxy),
+        },
+        "other-profile": {
+            "profile_id": "other-profile",
+            "file_path": str(source),
+            "status": "ready",
+            "preview_proxy_status": None,
+            "preview_proxy_path": None,
+        },
+    }
+    repo = _ProxyRepo(videos)
+    monkeypatch.setattr(segments_routes, "get_repository", lambda: repo)
+    tasks = BackgroundTasks()
+
+    result = asyncio.run(segments_routes.generate_preview_proxies_eagerly(
+        segments_routes.PreviewProxyRequest(
+            video_ids=["needs-proxy", "needs-proxy", "already-ready", "other-profile"]
+        ),
+        tasks,
+        ProfileContext(profile_id="profile-id", user_id="user-id"),
+    ))
+
+    assert result == {
+        "scheduled_video_ids": ["needs-proxy"],
+        "scheduled_count": 1,
+    }
+    assert repo.updates == [(
+        "needs-proxy",
+        {"preview_proxy_status": "pending", "preview_proxy_error": None},
+    )]
+    assert len(tasks.tasks) == 1
 
 
 @pytest.mark.xfail(

@@ -58,6 +58,9 @@ class SourceVideoUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
 
+class PreviewProxyRequest(BaseModel):
+    video_ids: List[str] = Field(min_length=1, max_length=200)
+
 class SourceVideoResponse(BaseModel):
     id: str
     name: str
@@ -1139,6 +1142,62 @@ async def preview_stream_source_video(
         )
 
     return _video_file_response(original_path)
+
+
+@router.post("/source-videos/preview-proxies")
+async def generate_preview_proxies_eagerly(
+    body: PreviewProxyRequest,
+    background_tasks: BackgroundTasks,
+    profile: ProfileContext = Depends(get_profile_context),
+):
+    """Start seek-friendly proxy generation for videos referenced by Step 3."""
+    repo = get_repository()
+    scheduled_video_ids: List[str] = []
+
+    # Preserve request order while avoiding duplicate FFmpeg work when multiple
+    # preview variants reference the same source video.
+    for video_id in dict.fromkeys(body.video_ids):
+        video_data = await asyncio.to_thread(repo.get_source_video, video_id)
+        if not video_data or video_data.get("profile_id") != profile.profile_id:
+            continue
+
+        original_path = Path(normalize_path(video_data["file_path"]))
+        proxy_path_value = video_data.get("preview_proxy_path")
+        proxy_path = Path(normalize_path(proxy_path_value)) if proxy_path_value else None
+        proxy_is_ready = (
+            video_data.get("preview_proxy_status") == "ready"
+            and proxy_path is not None
+            and proxy_path.exists()
+        )
+        if (
+            proxy_is_ready
+            or video_data.get("status") == "processing"
+            or video_data.get("preview_proxy_status") in {"pending", "failed"}
+            or not original_path.exists()
+        ):
+            continue
+
+        try:
+            repo.update_source_video(video_id, {
+                "preview_proxy_status": "pending",
+                "preview_proxy_error": None,
+            })
+        except Exception as e:
+            logger.warning(f"Failed to mark eager preview proxy pending for {video_id}: {e}")
+            continue
+
+        background_tasks.add_task(
+            _generate_preview_proxy_background,
+            video_id,
+            original_path,
+            profile.profile_id,
+        )
+        scheduled_video_ids.append(video_id)
+
+    return {
+        "scheduled_video_ids": scheduled_video_ids,
+        "scheduled_count": len(scheduled_video_ids),
+    }
 
 
 # ============== WAVEFORM & VOICE DETECTION ==============

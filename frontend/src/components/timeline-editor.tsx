@@ -54,6 +54,11 @@ const expandedPreviewFrameStyle: React.CSSProperties = {
   maxWidth: "100%",
 };
 
+// Start staging before the current media window reaches its seam. Shorter
+// windows stage immediately; longer windows are re-checked by the rAF loop
+// until they enter this lead-time window.
+const PREVIEW_STAGE_LEAD_SECONDS = 3;
+
 // MatchPreview interface (mirrors pipeline/page.tsx)
 export interface MatchPreview {
   srt_index: number;
@@ -179,8 +184,12 @@ export function TimelineEditor({
     { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false },
     { sourceVideoId: null, segmentStartTime: null, preparedForIndex: null, ready: false },
   ]);
-  // Marker so the rAF loop stages the idle slot once per current index, not every frame.
+  // Target currently assigned to the idle slot. Re-arm only when the actual
+  // next cut changes, while readiness is validated on every frame.
   const preparedNextForIndexRef = useRef<number | null>(null);
+  // Invalidates late seek callbacks when a slot is repurposed before an async
+  // load/seek finishes (most likely after a fallback transition).
+  const slotPreparationIdRef = useRef([0, 0]);
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
 
   useLayoutEffect(() => {
@@ -354,19 +363,25 @@ export function TimelineEditor({
   // Stage the IDLE slot for a future segment: load + pre-seek + mark ready. The
   // slot stays PAUSED — a paused, seeked video already paints its target frame,
   // so committing later is just a visibility flip + play (no seek at the seam).
-  const prepareSlot = useCallback((slot: number, idx: number) => {
+  const prepareSlot = useCallback((slot: number, idx: number): boolean => {
     const match = matchesRef.current[idx];
     const el = previewSlotRefs.current[slot];
-    if (!el || !match?.source_video_id || match.segment_start_time == null) return;
+    if (!el || !match?.source_video_id || match.segment_start_time == null) return false;
     const st = slotStateRef.current[slot];
+    const preparationId = ++slotPreparationIdRef.current[slot];
     st.preparedForIndex = idx;
     st.ready = false;
     loadSlotSource(slot, match.source_video_id);
     const targetTime = match.segment_start_time;
     seekSlotTo(slot, targetTime, () => {
+      if (
+        slotPreparationIdRef.current[slot] !== preparationId ||
+        st.preparedForIndex !== idx
+      ) return;
       st.segmentStartTime = targetTime;
       st.ready = true;
     });
+    return true;
   }, [loadSlotSource, seekSlotTo]);
 
   // Make the ACTIVE slot show segment `idx` via a direct seek — the one acceptable
@@ -380,6 +395,7 @@ export function TimelineEditor({
     // Only the active slot ever plays — keep the idle one paused.
     const idleEl = previewSlotRefs.current[slot ^ 1];
     if (idleEl) idleEl.pause();
+    slotPreparationIdRef.current[slot ^ 1] += 1;
     slotStateRef.current[slot ^ 1].ready = false;
     if (!el || !match?.source_video_id || match.segment_start_time == null) {
       if (el) el.pause(); // no video for this segment → fallback UI shows
@@ -388,9 +404,14 @@ export function TimelineEditor({
     loadSlotSource(slot, match.source_video_id);
     const targetTime = match.segment_start_time;
     const st = slotStateRef.current[slot];
+    const preparationId = ++slotPreparationIdRef.current[slot];
     st.preparedForIndex = idx;
     seekGraceTimestampRef.current = performance.now();
     seekSlotTo(slot, targetTime, () => {
+      if (
+        slotPreparationIdRef.current[slot] !== preparationId ||
+        st.preparedForIndex !== idx
+      ) return;
       st.segmentStartTime = targetTime;
       st.ready = true;
       if (shouldPlay && isPreviewPlayingRef.current) {
@@ -415,6 +436,7 @@ export function TimelineEditor({
   // slot wasn't ready in time (very short segment / slow load) — never worse
   // than the pre-fix behavior.
   const commitTransition = useCallback((nextIdx: number) => {
+    const previousIdx = previewActiveIndexRef.current;
     const match = matchesRef.current[nextIdx];
 
     // Advance index/state + boundary first, so subtitle + counter track the
@@ -447,6 +469,17 @@ export function TimelineEditor({
       st.ready = false; // consumed
     } else {
       // Staging missed the deadline — degrade to seeking the active slot in place.
+      const previousMatch = matchesRef.current[previousIdx];
+      const previousDuration = previousMatch
+        ? Math.max(0, previousMatch.srt_end - previousMatch.srt_start)
+        : null;
+      console.warn("[TimelineEditor] Preview transition fallback used live seek", {
+        previousIndex: previousIdx,
+        nextIndex: nextIdx,
+        previousDuration,
+        idlePreparedForIndex: st.preparedForIndex,
+        idleReady: st.ready,
+      });
       seatActiveSlot(nextIdx, true);
     }
   }, [setSegmentEndBoundary, seatActiveSlot, applySlotVisibility]);
@@ -486,18 +519,41 @@ export function TimelineEditor({
           // Real cut: swap to the pre-staged idle slot (no seek at the seam).
           commitTransition(newIdx);
         }
-        preparedNextForIndexRef.current = null; // re-stage for the new "next"
       }
-
-      // Stage the idle slot for the next real cut, once per settled index. Segments
-      // are ~2-3s, so there's ample time to load + seek before the boundary.
+      // Stage by remaining media time and re-check the target every frame. This
+      // also avoids re-seeking for subtitle-only changes inside a merge group.
       const settledIdx = previewActiveIndexRef.current;
-      if (preparedNextForIndexRef.current !== settledIdx) {
-        const nextIdx = findNextTransitionIndex(settledIdx);
-        if (nextIdx != null) {
-          prepareSlot(activeSlotRef.current ^ 1, nextIdx);
+      const nextIdx = findNextTransitionIndex(settledIdx);
+      if (preparedNextForIndexRef.current !== nextIdx) {
+        preparedNextForIndexRef.current = null;
+      }
+      if (nextIdx != null) {
+        const activeVideo = previewSlotRefs.current[activeSlotRef.current];
+        const segmentStart = previewSegmentStartTimeRef.current;
+        const segmentEnd = previewSegmentEndTimeRef.current;
+        const hasMediaWindow =
+          activeVideo != null &&
+          segmentStart != null &&
+          segmentEnd != null &&
+          Number.isFinite(activeVideo.currentTime);
+        const nextCutTime = matchesRef.current[nextIdx]?.srt_start ?? time;
+        const timeUntilNextCut = Math.max(0, nextCutTime - time);
+        const remaining = hasMediaWindow
+          ? Math.min(segmentEnd - activeVideo.currentTime, timeUntilNextCut)
+          : timeUntilNextCut;
+        const shouldStage = remaining <= PREVIEW_STAGE_LEAD_SECONDS;
+
+        if (shouldStage) {
+          const idleSlot = activeSlotRef.current ^ 1;
+          const idleState = slotStateRef.current[idleSlot];
+          if (idleState.preparedForIndex === nextIdx) {
+            // Ready or still loading: keep validating this exact target on each
+            // frame without issuing duplicate seeks.
+            preparedNextForIndexRef.current = nextIdx;
+          } else if (prepareSlot(idleSlot, nextIdx)) {
+            preparedNextForIndexRef.current = nextIdx;
+          }
         }
-        preparedNextForIndexRef.current = settledIdx;
       }
 
       previewRafIdRef.current = requestAnimationFrame(loop);
@@ -731,7 +787,8 @@ export function TimelineEditor({
 
         const firstMatch = matchesRef.current[0];
 
-        // Start the audio + rAF loop, then stage the idle slot for the first cut.
+        // Start the audio + rAF loop. The loop stages the first cut when the
+        // current media window enters its remaining-time lead window.
         const startAudioAndLoop = () => {
           if (activationIdRef.current !== thisActivation) return; // stale — user clicked Stop
           startPreviewRafLoop();
@@ -739,8 +796,6 @@ export function TimelineEditor({
             isPreviewPlayingRef.current = false;
             setIsPreviewPlaying(false);
           });
-          const nextIdx = findNextTransitionIndex(0);
-          if (nextIdx != null) prepareSlot(1, nextIdx);
         };
 
         // Pre-seek the first segment into the ACTIVE slot BEFORE starting audio —
@@ -802,7 +857,7 @@ export function TimelineEditor({
       }
     };
     requestAnimationFrame(tryStart);
-  }, [startPreviewRafLoop, setSegmentEndBoundary, loadSlotSource, seekSlotTo, prepareSlot, findNextTransitionIndex]);
+  }, [startPreviewRafLoop, setSegmentEndBoundary, loadSlotSource, seekSlotTo]);
 
   const deactivatePreview = useCallback(() => {
     // Invalidate any pending async work from activatePreview (rAF retries, timeouts, event listeners)
