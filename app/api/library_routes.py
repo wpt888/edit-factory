@@ -855,8 +855,6 @@ async def generate_raw_clips(
     - video: uploaded file
     - video_path: local path to video file (for testing)
     """
-    repo = get_repository()
-
     settings = get_settings()
     settings.ensure_dirs()
 
@@ -1203,6 +1201,8 @@ async def generate_from_segments(
     # so FastAPI Depends() cannot read it — must check after body parse).
     if request.mute_source_voice:
         _enforce_ml_installed("voice_mute")
+
+    repo = get_repository()
 
     # Verify the project exists and belongs to the profile
     project_data = verify_project_ownership(project_id, profile.profile_id)
