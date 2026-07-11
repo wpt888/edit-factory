@@ -288,6 +288,7 @@ class TestLibraryErrorShapeConsistency:
         body = response.json()
         assert "detail" in body
 
+    @pytest.mark.xfail(reason=_PHASE_80_NO_503_REASON, strict=True)
     def test_list_clips_503_uses_detail(self, client):
         """All-clips 503 uses 'detail' key."""
         response = client.get("/api/v1/library/all-clips")
