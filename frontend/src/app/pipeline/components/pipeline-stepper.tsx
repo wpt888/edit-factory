@@ -43,10 +43,13 @@ export function PipelineStepper({ ctx }: { ctx: any }) {
   }: PipelineStepperCtx = ctx;
   // Step 2 -> 3 is unlocked by ready voice-overs, not previews: matching can
   // run on demand (handlePreviewAll reuses the audio and auto-advances).
+  const ttsMap = ttsResults as Record<number, { generating: boolean; stale: boolean }>;
   const allTtsReady =
     scripts.length > 0 &&
-    Object.values(ttsResults as Record<number, { generating: boolean; stale: boolean }>)
-      .filter((r) => !r.generating && !r.stale).length === scripts.length;
+    // Count over live script indices, not map entries: the backend can retain
+    // tts_info for deleted variants, leaving orphan keys that would push the
+    // count past scripts.length and wrongly lock this step (never "N === M").
+    scripts.filter((_: string, i: number) => { const r = ttsMap[i]; return !!r && !r.generating && !r.stale; }).length === scripts.length;
   return (
         <div className="mb-8">
           <div className="flex items-center justify-between">

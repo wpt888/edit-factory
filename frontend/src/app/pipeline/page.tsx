@@ -1480,7 +1480,7 @@ function PipelinePage() {
     // Snapshot ready-count BEFORE the loop. ttsResultsRef is mutated during the loop
     // (setTtsResults triggers re-renders that update the ref), so evaluating this after
     // the loop would always be "all ready" and trigger auto-advance incorrectly.
-    const initialReadyCount = Object.values(ttsResultsRef.current).filter(r => !r.generating && !r.stale).length;
+    const initialReadyCount = scripts.filter((_, i) => { const r = ttsResultsRef.current[i]; return !!r && !r.generating && !r.stale; }).length;
     const skipReview = initialReadyCount === scripts.length && scripts.length > 0;
 
     // FE-05: Wrap in try/finally to guarantee setPreviewingIndex(null) is always called

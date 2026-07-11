@@ -1139,7 +1139,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
 
             {/* Existing TTS banner */}
             {(() => {
-              const ttsCount = Object.values(ttsResults).filter(r => !r.generating && !r.stale).length;
+              const ttsCount = scripts.filter((_, i) => { const r = ttsResults[i]; return !!r && !r.generating && !r.stale; }).length;
               if (ttsCount === 0) return null;
               return (
                 <Alert className="border-success/20 bg-success/10">
@@ -1162,7 +1162,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
 
             {/* Reset segment diversity + Preview All button */}
             {(() => {
-              const readyTtsCount = Object.values(ttsResults).filter(r => !r.generating && !r.stale).length;
+              const readyTtsCount = scripts.filter((_, i) => { const r = ttsResults[i]; return !!r && !r.generating && !r.stale; }).length;
               const allTtsReady = readyTtsCount === scripts.length && scripts.length > 0;
               const previewTargetCount = allTtsReady ? previewCards.length : scripts.length;
               return (
@@ -1263,7 +1263,7 @@ export function Step2TTS({ ctx }: { ctx: any }) {
               </div>
             )}
             {(() => {
-              const readyCount = Object.values(ttsResults).filter(r => !r.generating && !r.stale).length;
+              const readyCount = scripts.filter((_, i) => { const r = ttsResults[i]; return !!r && !r.generating && !r.stale; }).length;
               const ttsReady = readyCount === scripts.length && scripts.length > 0;
               const hasPreviews = Object.keys(previews).length > 0;
               if (!hasPreviews && !ttsReady) return null;
