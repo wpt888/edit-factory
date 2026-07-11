@@ -405,7 +405,7 @@ export function GlobalTransformPanel({
                 <span className="font-medium">Add (offset)</span>
               </div>
               <span className="text-xs text-muted-foreground font-normal">
-                Values are added on top of each segment's existing transforms
+                Values are added on top of each segment&apos;s existing transforms
               </span>
             </Button>
           </div>

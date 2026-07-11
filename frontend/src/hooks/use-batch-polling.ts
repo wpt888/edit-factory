@@ -83,7 +83,7 @@ export function useBatchPolling(options: UseBatchPollingOptions): UseBatchPollin
 
   // Main polling function
   const poll = useCallback(
-    async (batchId: string) => {
+    async function pollBatch(batchId: string) {
       if (isCancelledRef.current) return;
       if (currentBatchIdRef.current !== batchId) return;  // Stale poll for previous batch
 
@@ -97,7 +97,7 @@ export function useBatchPolling(options: UseBatchPollingOptions): UseBatchPollin
         if (!status || typeof status.status !== "string" || typeof status.total !== "number") {
           console.warn("[useBatchPolling] Unexpected batch status shape:", status);
           if (!isCancelledRef.current) {
-            pollingRef.current = setTimeout(() => poll(batchId), interval);
+            pollingRef.current = setTimeout(() => pollBatch(batchId), interval);
           }
           return;
         }
@@ -109,13 +109,13 @@ export function useBatchPolling(options: UseBatchPollingOptions): UseBatchPollin
           onBatchCompleteRef.current?.(status);
         } else {
           // Still processing — schedule next poll
-          pollingRef.current = setTimeout(() => poll(batchId), interval);
+          pollingRef.current = setTimeout(() => pollBatch(batchId), interval);
         }
       } catch (error) {
         handleApiError(error, "Error updating status");
         // Retry on network errors with doubled interval
         if (!isCancelledRef.current) {
-          pollingRef.current = setTimeout(() => poll(batchId), interval * 2);
+          pollingRef.current = setTimeout(() => pollBatch(batchId), interval * 2);
         }
       }
     },

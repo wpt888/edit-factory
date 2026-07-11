@@ -29,6 +29,7 @@ export function useSubtitleSettings(storageKey?: string) {
 
   // Reload settings from localStorage when fullKey changes
   const prevFullKeyRef = useRef(fullKey);
+  /* eslint-disable react-hooks/set-state-in-effect -- A storage key change intentionally reloads that preset. */
   useEffect(() => {
     if (prevFullKeyRef.current === fullKey) return;
     prevFullKeyRef.current = fullKey;
@@ -47,6 +48,7 @@ export function useSubtitleSettings(storageKey?: string) {
       setSettings({ ...DEFAULT_SUBTITLE_SETTINGS });
     }
   }, [fullKey]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Persist to localStorage when settings change
   useEffect(() => {

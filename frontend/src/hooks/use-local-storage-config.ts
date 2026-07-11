@@ -30,6 +30,7 @@ export function useLocalStorageConfig<T>(
 
   // Reinitialize state when the key parameter changes
   const prevKeyRef = useRef(key);
+  /* eslint-disable react-hooks/set-state-in-effect -- A key change intentionally reloads the selected stored value. */
   useEffect(() => {
     if (prevKeyRef.current === key) return;
     prevKeyRef.current = key;
@@ -44,6 +45,7 @@ export function useLocalStorageConfig<T>(
       setValue(stableDefault);
     }
   }, [key, stableDefault]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Sync to localStorage when value changes (only after hydration to avoid
   // overwriting stored values with defaults on first render)

@@ -73,6 +73,7 @@ export function GenerateAiSegmentDialog({ open, onOpenChange, initialPrompt, onG
   const busy = phase === "submitting" || phase === "generating";
 
   // Reset + fetch balance whenever the dialog opens.
+  /* eslint-disable react-hooks/set-state-in-effect -- Opening the dialog intentionally resets its form state. */
   useEffect(() => {
     if (!open) {
       if (pollRef.current) clearTimeout(pollRef.current);
@@ -97,6 +98,7 @@ export function GenerateAiSegmentDialog({ open, onOpenChange, initialPrompt, onG
       if (pollRef.current) clearTimeout(pollRef.current);
     };
   }, [open, initialPrompt]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Keywords for the generated segment come from the ORIGINAL phrase (not the
   // possibly-edited prompt), so a reused clip still matches that phrase.

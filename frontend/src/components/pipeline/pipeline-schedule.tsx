@@ -703,7 +703,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
               <div className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
                 <div className="flex items-center gap-2 text-sm text-destructive">
                   <AlertCircle className="size-4" />
-                  Couldn't load Postiz integrations. Check your Postiz connection.
+                  Couldn&apos;t load Postiz integrations. Check your Postiz connection.
                 </div>
                 <Button
                   variant="outline"
@@ -892,7 +892,7 @@ export function PipelineSchedule({ completedClips, initialCaptions, projectId, a
               <div className="flex items-center gap-2 rounded-md border border-yellow-300 bg-yellow-50 dark:bg-yellow-950/30 dark:border-yellow-800 p-2.5 text-sm">
                 <AlertCircle className="size-4 text-yellow-600 dark:text-yellow-400 shrink-0" />
                 <span className="text-yellow-800 dark:text-yellow-300">
-                  Some clips haven't been saved to the library yet. Smart Schedule will be available once that's done.
+                  Some clips haven&apos;t been saved to the library yet. Smart Schedule will be available once that&apos;s done.
                 </span>
               </div>
             )}

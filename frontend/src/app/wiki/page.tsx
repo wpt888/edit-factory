@@ -274,7 +274,7 @@ export default function WikiPage() {
                     </AlertDialogTrigger>
                     <AlertDialogContent>
                       <AlertDialogHeader>
-                        <AlertDialogTitle>Delete "{current.title}"?</AlertDialogTitle>
+                        <AlertDialogTitle>Delete &ldquo;{current.title}&rdquo;?</AlertDialogTitle>
                         <AlertDialogDescription>
                           This action cannot be undone.
                         </AlertDialogDescription>

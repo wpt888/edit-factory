@@ -548,7 +548,7 @@ function PipelinePage() {
     pipelineIdRef.current = pipelineId;
     // Sync pipeline ID to URL so it's always visible and shareable
     updateUrlParams(step, pipelineId);
-  }, [pipelineId]); // eslint-disable-line react-hooks/exhaustive-deps — step read intentionally from current value
+  }, [pipelineId]); // eslint-disable-line react-hooks/exhaustive-deps -- step read intentionally from current value
 
   // Mark component as unmounted — must be a separate effect with [] deps
   // so the cleanup only runs on actual unmount, not on every pipelineId change.
@@ -1060,7 +1060,7 @@ function PipelinePage() {
         newThumbnails[card.key]?.imageUrl !== variantThumbnails[card.key]?.imageUrl
     );
     if (changed) setVariantThumbnails(newThumbnails);
-  }, [previews, previewCards]); // eslint-disable-line react-hooks/exhaustive-deps — variantThumbnails read intentionally from current value
+  }, [previews, previewCards]); // eslint-disable-line react-hooks/exhaustive-deps -- variantThumbnails read intentionally from current value
 
   // Fetch product groups when source video selection changes
   useEffect(() => {

@@ -570,7 +570,7 @@ export function BulkScheduleDialog({ open, onOpenChange, clips, onScheduled }: B
             <div className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
               <div className="flex items-center gap-2 text-sm text-destructive">
                 <AlertCircle className="size-4" />
-                Couldn't load Postiz integrations.
+                Couldn&apos;t load Postiz integrations.
               </div>
               <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => fetchIntegrations(true)}>
                 <RefreshCw className="size-3" /> Retry

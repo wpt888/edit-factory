@@ -17,7 +17,7 @@ export function WikiMarkdown({ content }: { content: string }) {
   if (!trimmed) {
     return (
       <p className="text-sm text-muted-foreground italic">
-        This page is empty. Click "Edit" to add content.
+        This page is empty. Click &ldquo;Edit&rdquo; to add content.
       </p>
     );
   }

@@ -14,12 +14,14 @@ export function useDebouncedInput(
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastCommittedRef = useRef(value);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- Parent value changes intentionally reset the editable draft. */
   useEffect(() => {
     if (value !== lastCommittedRef.current) {
       setDraft(value);
       lastCommittedRef.current = value;
     }
   }, [value]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     return () => {
