@@ -47,14 +47,14 @@ def test_segment_duration_zero():
 
 
 def test_segment_combined_score_formula():
-    """combined_score uses: motion*0.40 + variance*0.20 + blur*0.20 + contrast*0.15 + (1-|brightness-0.5|)*0.05."""
+    """combined_score uses the full-range brightness penalty around 0.5."""
     seg = make_segment(motion=0.8, variance=0.6, brightness=0.5, blur=0.9, contrast=0.7)
     expected = (
         0.8 * 0.40 +
         0.6 * 0.20 +
         0.9 * 0.20 +
         0.7 * 0.15 +
-        (1 - abs(0.5 - 0.5)) * 0.05
+        (1 - 2 * abs(0.5 - 0.5)) * 0.05
     )
     assert seg.combined_score == pytest.approx(expected, abs=1e-6)
 
@@ -69,10 +69,9 @@ def test_segment_combined_score_perfect():
 
 
 def test_segment_combined_score_zero():
-    """All scores at zero — brightness component contributes 0.025 (1-|0-0.5|=0.5)."""
+    """All scores at zero, including fully dark brightness, produce zero."""
     seg = make_segment(motion=0.0, variance=0.0, brightness=0.0, blur=0.0, contrast=0.0)
-    # (1 - abs(0.0 - 0.5)) * 0.05 = 0.5 * 0.05 = 0.025
-    expected = 0.0 + 0.0 + 0.0 + 0.0 + 0.5 * 0.05
+    expected = 0.0
     assert seg.combined_score == pytest.approx(expected, abs=1e-6)
 
 
@@ -80,7 +79,7 @@ def test_segment_combined_score_brightness_penalty():
     """Brightness far from 0.5 reduces combined_score."""
     seg_good = make_segment(motion=0.5, variance=0.5, brightness=0.5, blur=0.5, contrast=0.5)
     seg_dark = make_segment(motion=0.5, variance=0.5, brightness=0.0, blur=0.5, contrast=0.5)
-    # seg_dark gets (1-0.5)*0.05 = 0.025, seg_good gets 1.0*0.05 = 0.05
+    # Full-range mapping gives dark=0.0 and neutral brightness=0.05.
     assert seg_good.combined_score > seg_dark.combined_score
 
 
@@ -89,7 +88,8 @@ def test_segment_to_dict_keys():
     seg = make_segment()
     d = seg.to_dict()
     expected_keys = {"start", "end", "duration", "motion_score", "variance_score",
-                     "blur_score", "contrast_score", "combined_score"}
+                     "blur_score", "contrast_score", "avg_brightness",
+                     "combined_score", "gemini_estimated"}
     assert set(d.keys()) == expected_keys
 
 
@@ -100,6 +100,8 @@ def test_segment_to_dict_values():
     assert d["start"] == 0.0
     assert d["end"] == 5.123456
     assert d["motion_score"] == round(0.12345678, 4)
+    assert d["avg_brightness"] == 0.5
+    assert d["gemini_estimated"] is False
     assert d["combined_score"] == round(seg.combined_score, 4)
 
 
