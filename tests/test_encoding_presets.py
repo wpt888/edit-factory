@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 from app.services.encoding_presets import (
     EncodingPreset,
+    apply_quality_mode,
     get_preset,
     list_presets,
     PRESETS,
@@ -113,10 +114,10 @@ def test_ffmpeg_params_cpu():
     preset_idx = params.index("-preset")
     assert params[preset_idx + 1] == "medium"
 
-    # Check CRF
-    assert "-crf" in params
-    crf_idx = params.index("-crf")
-    assert params[crf_idx + 1] == "20"
+    # Default presets use CPU VBR 2-pass, so bitrate controls replace CRF.
+    assert "-crf" not in params
+    bitrate_idx = params.index("-b:v")
+    assert params[bitrate_idx + 1] == "10000k"
 
     # Check keyframe params
     assert "-g" in params
@@ -130,12 +131,12 @@ def test_ffmpeg_params_cpu():
     # Check audio
     assert "-b:a" in params
     bitrate_idx = params.index("-b:a")
-    assert params[bitrate_idx + 1] == "192k"
+    assert params[bitrate_idx + 1] == "320k"
 
 
 def test_ffmpeg_params_gpu():
-    """Test that to_ffmpeg_params(use_gpu=True) uses h264_nvenc."""
-    preset = PRESET_REELS
+    """Balanced GPU mode resolves VBR 2-pass presets to NVENC single-pass."""
+    preset = apply_quality_mode(PRESET_REELS, "balanced", gpu_available=True)
     params = preset.to_ffmpeg_params(use_gpu=True)
 
     # Check GPU codec
@@ -146,7 +147,7 @@ def test_ffmpeg_params_gpu():
     # Check NVENC preset
     assert "-preset" in params
     preset_idx = params.index("-preset")
-    assert params[preset_idx + 1] == "p4"
+    assert params[preset_idx + 1] == "p5"
 
     # Check CQ instead of CRF
     assert "-cq" in params
@@ -156,15 +157,16 @@ def test_ffmpeg_params_gpu():
     # Should not have -crf when using GPU
     assert "-crf" not in params
 
-    # Keyframe params should still be present
+    # GOP is shared, while libx264-only keyint_min is omitted for NVENC.
     assert "-g" in params
-    assert "-keyint_min" in params
+    assert "-keyint_min" not in params
+    assert params[params.index("-multipass") + 1] == "fullres"
 
 
-def test_audio_bitrate_192k():
-    """Test that all presets use 192k audio bitrate."""
+def test_audio_bitrate_320k():
+    """Test that all presets use the current high-quality 320k audio bitrate."""
     for preset_id, preset in PRESETS.items():
-        assert preset.audio_bitrate == "192k", f"Preset {preset_id} should have 192k audio"
+        assert preset.audio_bitrate == "320k", f"Preset {preset_id} should have 320k audio"
 
 
 def test_keyframe_params():
@@ -199,4 +201,4 @@ def test_list_presets():
     assert tiktok_info["name"] == "TikTok"
     assert tiktok_info["platform"] == "tiktok"
     assert tiktok_info["crf"] == 20
-    assert tiktok_info["audio_bitrate"] == "192k"
+    assert tiktok_info["audio_bitrate"] == "320k"
