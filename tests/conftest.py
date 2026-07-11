@@ -103,7 +103,10 @@ def client(tmp_path):
     import app.db as _db_module
     _db_module._supabase_client = None
 
-    # Reset job storage singleton so each test gets a fresh in-memory store
+    # Reset job storage singleton so each test gets a fresh in-memory store.
+    # Repository fallback now selects SQLite when Supabase is unavailable, so
+    # merely clearing the Supabase client is no longer enough to prevent tests
+    # from reading and writing the developer's real data.db.
     import app.services.job_storage as _job_storage_module
     _job_storage_module._job_storage = None
 
@@ -111,8 +114,13 @@ def client(tmp_path):
     from fastapi.testclient import TestClient
 
     with patch("app.db.get_supabase", return_value=None), \
-         patch("app.db._supabase_client", None):
-        test_client = TestClient(app, raise_server_exceptions=False)
+         patch("app.db._supabase_client", None), \
+         patch.object(_job_storage_module.JobStorage, "_init_supabase", return_value=None):
+        test_client = TestClient(
+            app,
+            raise_server_exceptions=False,
+            headers={"X-Profile-Id": "00000000-0000-0000-0000-000000000000"},
+        )
         yield test_client
 
     # Cleanup: clear settings cache after test
