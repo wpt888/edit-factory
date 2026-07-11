@@ -74,6 +74,18 @@ def _get_render_token(profile_id: str) -> str:
     return get_vault_manager().get_api_key_or_default(profile_id, _VAULT_SERVICE)
 
 
+def _delete_render_token(profile_id: str) -> None:
+    """Delete locally stored runner credentials for a profile."""
+    from app.services.credentials.vault import get_vault_manager
+    vault = get_vault_manager()
+    for key in vault.list_keys(profile_id, _VAULT_SERVICE):
+        if not key.get("is_env_default"):
+            try:
+                vault.delete_key(profile_id, key["id"])
+            except ValueError:
+                pass
+
+
 # ============== PAIRING ==============
 
 @router.post("/pair", response_model=PairResponse)
@@ -126,19 +138,55 @@ async def pair(body: PairRequest, profile: ProfileContext = Depends(get_profile_
 
 @router.delete("/pair")
 async def unpair(profile: ProfileContext = Depends(get_profile_context)):
-    """Forget the runner token and stop the runner — this device leaves the fleet.
-    (The web side still lists the device until the user revokes it there.)"""
-    from app.services.credentials.vault import get_vault_manager
+    """Revoke this runner on Blipost, then remove its local credentials.
+
+    If the web service cannot be reached, the local token is deliberately kept
+    so the user can retry. This prevents Blipost from advertising a desktop
+    runner that was only removed locally.
+    """
     from app.services.blipost_runner import get_render_runner
 
+    token = _get_render_token(profile.profile_id)
     await get_render_runner().stop()
-    vault = get_vault_manager()
-    for key in vault.list_keys(profile.profile_id, _VAULT_SERVICE):
-        if not key.get("is_env_default"):
+
+    if token:
+        base_url = get_settings().blipost_platform_base_url.rstrip("/")
+        try:
+            async with httpx.AsyncClient(timeout=_PAIR_TIMEOUT) as client:
+                resp = await client.delete(
+                    f"{base_url}/api/render/v1/pair",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+        except Exception as e:
+            logger.warning("[Profile %s] Blipost unpair request failed: %s", profile.profile_id, e)
+            raise HTTPException(
+                status_code=502,
+                detail="Could not reach Blipost. This device remains paired locally; reconnect and try again.",
+            )
+
+        if resp.status_code == 401:
+            # No active web runner owns this token, so there is nothing left to
+            # revoke remotely and the stale local credential can be discarded.
+            logger.info("[Profile %s] Blipost runner token was already revoked", profile.profile_id)
+        elif resp.status_code != 200:
+            detail = "Blipost could not revoke this desktop. It remains paired locally; try again."
             try:
-                vault.delete_key(profile.profile_id, key["id"])
-            except ValueError:
+                detail = resp.json().get("error") or detail
+            except Exception:
                 pass
+            raise HTTPException(status_code=502, detail=detail)
+        else:
+            try:
+                revoked = resp.json().get("revoked") is True
+            except Exception:
+                revoked = False
+            if not revoked:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Blipost returned an invalid revoke response. This device remains paired locally; try again.",
+                )
+
+    _delete_render_token(profile.profile_id)
     logger.info("[Profile %s] Blipost render device unpaired", profile.profile_id)
     return {"status": "unpaired"}
 
