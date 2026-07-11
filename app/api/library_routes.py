@@ -855,6 +855,8 @@ async def generate_raw_clips(
     - video: uploaded file
     - video_path: local path to video file (for testing)
     """
+    repo = get_repository()
+
     settings = get_settings()
     settings.ensure_dirs()
 
@@ -1192,8 +1194,6 @@ async def generate_from_segments(
         generate_tts: Dacă să genereze audio TTS
         mute_source_voice: Dacă să suprime vocea din video sursă
     """
-    repo = get_repository()
-
     settings = get_settings()
     settings.ensure_dirs()
 
