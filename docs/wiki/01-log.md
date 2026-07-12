@@ -90,3 +90,9 @@ See [Subtitle preview scaling](09-subtitle-preview-scaling.md).
 - Karaoke-only Highlight Color control added (backend highlightColor was previously unreachable).
 
 See [Subtitle Style panel](11-subtitle-style-panel.md).
+
+## 2026-07-12 — Expanded preview subtitle under-scaling
+
+- Split the shared preview height measurement into per-view hook instances (compact vs expanded) with a callback-ref observer, fixing subtitles rendering ~2.3x too small in the Expanded Preview dialog.
+
+See [Subtitle preview scaling](09-subtitle-preview-scaling.md).

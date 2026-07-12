@@ -21,3 +21,7 @@ No endpoint font-size multiplier is appropriate: changing its reference to 540x9
 The Step-3 MP4 preview must receive the already resolved style for its preview card (default + its A/B override or Meta fallback), rather than rebuilding a subset of fields and then asking the backend to apply another Meta style overlay. The client now sends that exact object, including karaoke fields, with `apply_meta_subtitle_style=false`.
 
 `visual_version` remains present for the Meta segment offset and preview-cache key; it no longer changes the subtitle style for this request. The backend retains its server-side Meta fallback for legacy callers that omit the new flag. Final renders continue to resolve the same A/B fallback/override precedence before `_render_with_preset`.
+
+## 2026-07-12 — Per-view height measurement
+
+The compact and expanded timeline previews previously shared a single measurement ref, so opening the Expanded dialog kept the compact container's ~320px height and rendered overlay subtitles ~2.3x too small relative to the ~750px expanded frame. `useSubtitlePreviewHeight` now uses a callback ref — it observes whichever element actually mounts, robust to portal/dialog mount timing — and each view (compact, expanded, style-editor fallback) owns its own hook instance and passes its own height into the overlay renderer.
