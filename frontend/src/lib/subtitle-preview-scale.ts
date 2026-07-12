@@ -6,9 +6,9 @@ export const SUBTITLE_REFERENCE_HEIGHT = 1920;
 export function scaleSubtitlePx(
   px: number,
   containerHeightPx: number,
-  referenceHeightPx = SUBTITLE_REFERENCE_HEIGHT
+  min = 8
 ): number {
-  return px * (containerHeightPx / referenceHeightPx);
+  return Math.max(min, px * (containerHeightPx / SUBTITLE_REFERENCE_HEIGHT));
 }
 
 export function observeSubtitlePreviewHeight(

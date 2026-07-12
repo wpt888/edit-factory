@@ -344,10 +344,10 @@ export function SubtitleEditor({
     dimensions: { height: number },
     className = ""
   ) => {
-    const fontSize = Math.max(8, scaleSubtitlePx(settings.fontSize, dimensions.height));
-    const outlineWidth = Math.max(0, scaleSubtitlePx(settings.outlineWidth, dimensions.height));
-    const shadowDepth = Math.max(0, scaleSubtitlePx(settings.shadowDepth ?? 0, dimensions.height));
-    const glowBlur = Math.max(0, scaleSubtitlePx(settings.glowBlur ?? 0, dimensions.height));
+    const fontSize = scaleSubtitlePx(settings.fontSize, dimensions.height);
+    const outlineWidth = scaleSubtitlePx(settings.outlineWidth, dimensions.height, 0);
+    const shadowDepth = scaleSubtitlePx(settings.shadowDepth ?? 0, dimensions.height, 0);
+    const glowBlur = scaleSubtitlePx(settings.glowBlur ?? 0, dimensions.height, 0);
     const opacity = Math.max(0, Math.min(100, settings.opacity ?? 100)) / 100;
     const baseShadow =
       shadowDepth > 0

@@ -1278,21 +1278,25 @@ export function TimelineEditor({
     const subtitleText = matches[previewActiveIndex]?.srt_text;
     if (!subtitleText || previewContainerHeight <= 0) return null;
 
-    const fontSize = Math.max(
-      minimumFontSize,
-      scaleSubtitlePx(subtitleSettings?.fontSize ?? 48, previewContainerHeight)
+    const fontSize = scaleSubtitlePx(
+      subtitleSettings?.fontSize ?? 48,
+      previewContainerHeight,
+      minimumFontSize
     );
-    const outlineWidth = Math.max(
-      0,
-      scaleSubtitlePx(subtitleSettings?.outlineWidth ?? 3, previewContainerHeight)
+    const outlineWidth = scaleSubtitlePx(
+      subtitleSettings?.outlineWidth ?? 3,
+      previewContainerHeight,
+      0
     );
-    const shadowDepth = Math.max(
-      0,
-      scaleSubtitlePx(subtitleSettings?.shadowDepth ?? 0, previewContainerHeight)
+    const shadowDepth = scaleSubtitlePx(
+      subtitleSettings?.shadowDepth ?? 0,
+      previewContainerHeight,
+      0
     );
-    const glowBlur = Math.max(
-      0,
-      scaleSubtitlePx(subtitleSettings?.glowBlur ?? 0, previewContainerHeight)
+    const glowBlur = scaleSubtitlePx(
+      subtitleSettings?.glowBlur ?? 0,
+      previewContainerHeight,
+      0
     );
     const opacity = Math.max(0, Math.min(100, subtitleSettings?.opacity ?? 100)) / 100;
     const baseShadow = shadowDepth > 0
