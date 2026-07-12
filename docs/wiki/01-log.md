@@ -1,4 +1,11 @@
 # Engineering Change Log
+## 2026-07-12 - Step-3 MP4 subtitle-style fidelity
+
+- Changed the variant-preview MP4 request to submit the resolved A/B subtitle-style object shown by the editor, including karaoke fields.
+- Kept the Meta visual version for segment selection and cache addressing while preventing a second backend Meta overlay from replacing the submitted style.
+- Preserved the legacy backend fallback for non-Step-3 callers and verified the focused preview/frame tests plus the frontend typecheck.
+
+See [Subtitle preview scaling](09-subtitle-preview-scaling.md).
 
 ## 2026-07-12 — Subtitle frame-preview parity verification
 
