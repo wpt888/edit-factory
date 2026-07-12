@@ -3,7 +3,8 @@
 The desktop app generates text-to-video assets through FAL's
 `bytedance/seedance-2.0/text-to-video` queue using the existing profile-scoped
 FAL credential (or `FAL_API_KEY` fallback). The backend owns the key and queue
-polling; browser code never receives it.
+polling; browser code never receives it. `FAL_SEEDANCE_MODEL_ID` defaults to
+that model ID and can be overridden for a compatible provider tier/version.
 
 ## Asset lifecycle
 
