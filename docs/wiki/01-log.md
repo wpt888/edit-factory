@@ -1,5 +1,23 @@
 # Engineering Change Log
 
+## 2026-07-12 — Subtitle frame-preview parity verification
+
+- Measured the exact frame-preview and preview-render FFmpeg chains with FontSize=107; both preserve the same glyph-to-frame ratio.
+- Confirmed the frame-preview endpoint keeps `original_size=1080x1920`, matching the render path, and that the frontend sends raw font-size values.
+- Reactivated and updated the endpoint regression test to guard the shared subtitle reference.
+
+See [Subtitle preview scaling](09-subtitle-preview-scaling.md).
+
+## 2026-07-12 — Session navigation cache
+
+- Added a profile-scoped, renderer-memory cache to the shared API client so data already loaded by any sidebar section is reused when returning to it.
+- Excluded live status, progress, health, log, and event reads from the cache.
+- Cleared the shared cache after every API write to keep subsequent page visits authoritative.
+- Preserved Pipeline source videos across the Pipeline → Segments → Pipeline flow and kept their cache fresh after source-video library changes.
+- Restored the selected source video when returning to Segments through the sidebar.
+
+See [Session navigation cache](10-session-navigation-cache.md).
+
 ## 2026-07-11 — Desktop application health audit
 
 - Made API tests independent of the developer's SQLite database and updated stale tests to the repository, encoding, subtitle, scoring, and desktop-path contracts.
