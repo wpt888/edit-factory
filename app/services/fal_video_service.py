@@ -18,6 +18,7 @@ class FalVideoGenerator:
     """Server-side client for Seedance's long-running FAL queue endpoint."""
 
     def __init__(self, api_key: str):
+        self._model_id = get_settings().fal_seedance_model_id or SEEDANCE_MODEL_ID
         self._client = httpx.Client(
             timeout=httpx.Timeout(90.0, connect=10.0),
             headers={"Authorization": f"Key {api_key}", "Content-Type": "application/json"},
@@ -36,7 +37,7 @@ class FalVideoGenerator:
             "bitrate_mode": bitrate_mode,
             "end_user_id": end_user_id,
         }
-        submit = self._client.post(f"https://queue.fal.run/{SEEDANCE_MODEL_ID}", json=payload)
+        submit = self._client.post(f"https://queue.fal.run/{self._model_id}", json=payload)
         submit.raise_for_status()
         queued = submit.json()
         status_url = queued.get("status_url")

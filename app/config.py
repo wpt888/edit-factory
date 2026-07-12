@@ -100,6 +100,8 @@ class Settings(BaseSettings):
     # fal.ai
     fal_api_key: str = ""
     fal_base_url: str = "https://fal.run"
+    # Seedance queue model can be overridden if FAL publishes a compatible tier/version.
+    fal_seedance_model_id: str = "bytedance/seedance-2.0/text-to-video"
 
     # Google Drive
     google_drive_folder_id: str = ""
