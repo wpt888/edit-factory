@@ -230,6 +230,13 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               </Button>
             </div>
 
+            {/*
+              Step 3 is an editing workspace, not a sequence of form cards.
+              Keep the controls in a persistent left inspector and leave the
+              right-hand canvas for the variant timelines and previews.
+            */}
+            <div className="grid items-start gap-5 min-[1180px]:grid-cols-[minmax(22rem,0.82fr)_minmax(0,1.6fr)]">
+              <aside className="min-w-0 space-y-5 min-[1180px]:sticky min-[1180px]:top-4">
             {/* Preset selector */}
             <Card>
               <CardHeader>
@@ -617,8 +624,12 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               </CardContent>
             </Card>
 
+              </aside>
+
+              <section className="min-w-0 space-y-5" aria-label="Variant previews">
+
             {/* Variant preview grid */}
-            <div className="grid grid-cols-1 gap-4 min-[1100px]:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 min-[1480px]:grid-cols-2">
               {previewCards.map((card) => {
                 const preview = previews[card.key];
                 if (!preview) return null;
@@ -989,6 +1000,9 @@ export function Step3Preview({ ctx }: { ctx: any }) {
               )}
               {isCheckingRender ? "Se verifica..." : isRendering ? "Rendering..." : `Render Selected (${selectedVariants.size}${metaMultiplication ? ` × 2 = ${selectedVariants.size * 2}` : ""})`}
             </Button>
+            <p className="text-center text-xs text-muted-foreground">
+              Free — renders on your machine
+            </p>
 
             {/* Skip render dialog */}
             {skipCheckResults && (
@@ -999,6 +1013,8 @@ export function Step3Preview({ ctx }: { ctx: any }) {
                 onConfirm={(skipVars, _renderVars) => handleRender(skipVars)}
               />
             )}
+              </section>
+            </div>
           </div>
   );
 }
