@@ -1,5 +1,20 @@
 # Engineering Change Log
 
+## 2026-07-13 — Pre-launch cosmetic pass
+
+- Hid legacy Postiz/Buffer config cards in Settings behind a collapsed
+  "Legacy integrations" section (`SHOW_LEGACY_INTEGRATIONS` flag); Schedule
+  and Calendar remain fully functional on the Postiz backend.
+- Renamed "Clips" to "Local Projects" in the sidebar nav and the Library
+  page title (route `/librarie` unchanged), reducing the naming collision
+  with the web app's AI clipping pipeline.
+- Added a "Free — renders on your machine" caption under the primary
+  render button in Pipeline Step 3.
+- Updated the `blipost-parity` skill: closed the theme-propagation
+  watchlist item and logged the Clips rename.
+
+See [Pre-launch cosmetic pass](14-pre-launch-cosmetics.md).
+
 ## 2026-07-12 â€” AI Video with Seedance 2.0
 
 - Added Seedance 2.0 text-to-video generation through the existing FAL credential flow.
